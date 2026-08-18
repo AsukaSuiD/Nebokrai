@@ -1,0 +1,32 @@
+# Локальные оригиналы и рабочие данные
+/archive/
+/.local/
+/Nebokrai/.exe/
+
+# Окружения, сборка и кэши
+**/.venv/
+/build/
+/out/
+/target/
+.cache/
+__pycache__/
+*.py[cod]
+
+# IDE и системные файлы
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
+desktop.ini
+/.stignore
+
+# Секреты и временные файлы
+.env
+.env.*
+*.log
+*.tmp
+*.temp
+*.dmp

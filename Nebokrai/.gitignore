@@ -1,0 +1,4 @@
+.exe/
+reports/re-agent/*/candidates/
+reports/re-agent/*/.cache/
+reports/re-agent/*/re-agent-progress.json
