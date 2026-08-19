@@ -167,6 +167,7 @@ class CMessage;
 namespace Login
 {
 class AuthManager;
+class CGasThread;
 class IAuthListener;
 
 class TagPwdChecked
@@ -419,6 +420,8 @@ struct LoginQueueRunReport
 
 class CLoginQueue
 {
+    friend class CGasThread;
+
 public:
     using KickOutCallback = std::function<void(std::span<const std::uint8_t>)>;
 
