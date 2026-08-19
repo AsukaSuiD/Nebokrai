@@ -62,6 +62,10 @@ class CMessage;
  * неизвестной границей и не превращаются в придуманный отказ. matrix_register
  * заменяет старую запись с кодом F, выбирает три modulo-0x50 позиции системным
  * RNG, игнорирует исходный result matrix_add и всегда после него отправляет B.
+ * Прямой disassembly EXE 0x0041BAA7..0x0041BAD2 уточняет wire B: account идёт
+ * через CMessage::Add(const char*) как raw C-string+NUL, позиции — через
+ * CMessage::Add(void*,3) как raw три байта, без length-prefix. Это место
+ * намеренно не повторяет ошибочный helper поздней Rust-реконструкции.
  * Direct CGame::PrepareEnter сам вызывает matrix_register; пока CGame-owner ещё
  * не материализован, MatrixRegistrationRequired является узкой переходной
  * границей интерфейса. После восстановления CGame этот side effect вернётся

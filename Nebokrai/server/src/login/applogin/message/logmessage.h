@@ -56,7 +56,10 @@
  * change-time и отправляет J + account + explicit 0x70B6 + RAW BMP; frequent/
  * missing дают O/P, socket mismatch — no-op. Важно: текущий CBaseMessage::AddEx
  * сам пишет length-prefix, поэтому после explicit 0x70B6 здесь используется
- * обычный Add(raw), иначе wire получил бы лишние четыре байта.
+ * обычный Add(raw), иначе wire получил бы лишние четыре байта. Это подтверждено
+ * непосредственно EXE: 0x0041BE99/0x00480671 пишут long 0x70B6 через Add(long),
+ * а 0x0041BEBE/0x00480696 вызывают raw Add(void*,0x70B6). Поздняя Rust-карта,
+ * использовавшая здесь AddEx после explicit long, в этом месте была неточна.
  *
  * World 0x1FF02/03/04/05/07 меняют opcode ТОГО ЖЕ CMessage и пересылают его
  * client identity: cursor-чтение payload не удаляет. 0x1FF01 при status 0x1D
