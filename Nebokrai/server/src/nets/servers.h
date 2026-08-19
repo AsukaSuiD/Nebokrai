@@ -306,6 +306,22 @@ public:
                                      std::uint32_t forbidTimeMs,
                                      std::uint32_t maximumMessageLength,
                                      std::int32_t permittedSendBytes) noexcept;
+    void ConfigureClientTransportForReload(bool checkReceiveRate,
+                                           bool checkMessageContent,
+                                           std::uint32_t receiveRateLimit,
+                                           std::uint32_t forbidTimeMs,
+                                           std::int32_t maxClients,
+                                           std::int32_t maxInFlightSends,
+                                           std::uint32_t maximumMessageLength,
+                                           std::int32_t permittedSendBytes) noexcept;
+    void ConfigureWorldTransportForReload(bool checkReceiveRate,
+                                          bool checkMessageContent,
+                                          std::uint32_t receiveRateLimit,
+                                          std::uint32_t forbidTimeMs,
+                                          std::int32_t maxClients,
+                                          std::int32_t maxInFlightSends,
+                                          std::uint32_t maximumMessageLength,
+                                          std::int32_t permittedSendBytes) noexcept;
     void ConfigureAcceptLimitsAfterHost(std::int32_t maxBacklog,
                                         std::int32_t newAcceptTimeoutMs) noexcept;
 

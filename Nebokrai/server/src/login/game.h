@@ -20,6 +20,7 @@ class CMyNetServerWorld;
 
 namespace Login
 {
+class AuthManager;
 class CLoginQueue;
 
 /*
@@ -30,7 +31,8 @@ class CLoginQueue;
  *
  * Setup owner: tagSetup ctor 0x0040C6E0, ChangeAllWorldSate 0x004075E0,
  * LoadSetupEx 0x0040D9E0, ReLoadSetupEx 0x0040DC60,
- * LoadSetup 0x0040E690, CGame ctor defaults 0x00414350.
+ * LoadSetup 0x0040E690, ReLoadSetup 0x0040F4E0,
+ * CGame ctor defaults 0x00414350.
  */
 class CGame
 {
@@ -124,6 +126,9 @@ public:
     };
 
     [[nodiscard]] bool LoadSetup();
+    // Direct EXE used global gAuthMgr. The Linux reconstruction keeps the same
+    // timeout side effect but passes the already-explicit AuthManager owner.
+    [[nodiscard]] bool ReLoadSetup(AuthManager& authManager);
     [[nodiscard]] bool LoadSetupEx();
     [[nodiscard]] bool ReLoadSetupEx();
 

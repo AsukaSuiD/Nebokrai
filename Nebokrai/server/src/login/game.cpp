@@ -1,5 +1,6 @@
 #include "game.h"
 
+#include "authmanager.h"
 #include "loginqueue.h"
 #include "../dbaccess/myadobase.h"
 #include "../public/tools.h"
@@ -346,6 +347,49 @@ bool CGame::LoadSetup()
     }
 
     // Direct owner only appends success AddLogText after this point.
+    return true;
+}
+
+bool CGame::ReLoadSetup(AuthManager& authManager)
+{
+    // VERIFIED_ASSEMBLY 0x0040F4E9: return value is deliberately ignored.
+    static_cast<void>(LoadSetup());
+
+    if (s_pNetServer_Client == nullptr) {
+        // Direct EXE would dereference null here. Preserve valid-state behavior
+        // and expose the impossible owner gap as a technical boundary instead.
+        RecordTechnicalError("ReLoadSetup: client server owner is missing");
+        return false;
+    }
+    s_pNetServer_Client->ConfigureClientTransportForReload(
+        m_Setup.bCheckNet,
+        m_Setup.bCheckMsgCon,
+        m_Setup.dwMaxByteNum,
+        m_Setup.dwBanIPTime,
+        m_Setup.lMaxConnectNum,
+        m_Setup.lMaxIOSendNum,
+        m_Setup.dwMaxMsgLen,
+        m_Setup.lMaxClientSendBuf);
+
+    if (s_pNetServer_World == nullptr) {
+        // This boundary is intentionally after the client update, matching the
+        // direct crash point: client settings may already have been rewritten.
+        RecordTechnicalError("ReLoadSetup: world server owner is missing");
+        return false;
+    }
+    s_pNetServer_World->ConfigureWorldTransportForReload(
+        m_Setup.bWorldCheckNet,
+        m_Setup.bWorldCheckMsgCon,
+        m_Setup.dwWorldMaxByteNum,
+        m_Setup.dwWorldBanIPTime,
+        m_Setup.lWorldMaxConnectNum,
+        m_Setup.lWorldMaxIOSendNum,
+        m_Setup.dwWorldMaxMsgLen,
+        m_Setup.lWorldMaxClientSendBuf);
+
+    // Direct owner writes gAuthMgr._time_out last. gAuthMgr itself is not
+    // resurrected; AuthManager is already explicit elsewhere in this recovery.
+    authManager.SetTimeout(m_Setup.authTimeOut);
     return true;
 }
 

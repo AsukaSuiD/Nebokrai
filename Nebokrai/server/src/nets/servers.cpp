@@ -709,6 +709,46 @@ void CServer::ConfigureTransportAfterHost(bool checkReceiveRate,
     m_PermittedSendBytes = permittedSendBytes;
 }
 
+void CServer::ConfigureClientTransportForReload(bool checkReceiveRate,
+                                                 bool checkMessageContent,
+                                                 std::uint32_t receiveRateLimit,
+                                                 std::uint32_t forbidTimeMs,
+                                                 std::int32_t maxClients,
+                                                 std::int32_t maxInFlightSends,
+                                                 std::uint32_t maximumMessageLength,
+                                                 std::int32_t permittedSendBytes) noexcept
+{
+    // VERIFIED_ASSEMBLY CGame::ReLoadSetup 0x0040F52D..0x0040F563.
+    m_CheckReceiveRate = checkReceiveRate;
+    m_CheckMessageContent = checkMessageContent;
+    m_ReceiveRateLimit = std::bit_cast<std::int32_t>(receiveRateLimit);
+    m_ForbidTimeMs = std::bit_cast<std::int32_t>(forbidTimeMs);
+    m_MaxClients = maxClients;
+    m_MaxInFlightSends = maxInFlightSends;
+    m_MaximumMessageLength = maximumMessageLength;
+    m_PermittedSendBytes = permittedSendBytes;
+}
+
+void CServer::ConfigureWorldTransportForReload(bool checkReceiveRate,
+                                                bool checkMessageContent,
+                                                std::uint32_t receiveRateLimit,
+                                                std::uint32_t forbidTimeMs,
+                                                std::int32_t maxClients,
+                                                std::int32_t maxInFlightSends,
+                                                std::uint32_t maximumMessageLength,
+                                                std::int32_t permittedSendBytes) noexcept
+{
+    // VERIFIED_ASSEMBLY CGame::ReLoadSetup 0x0040F5A8..0x0040F5DE.
+    m_CheckReceiveRate = checkReceiveRate;
+    m_CheckMessageContent = checkMessageContent;
+    m_ReceiveRateLimit = std::bit_cast<std::int32_t>(receiveRateLimit);
+    m_MaxInFlightSends = maxInFlightSends;
+    m_ForbidTimeMs = std::bit_cast<std::int32_t>(forbidTimeMs);
+    m_MaxClients = maxClients;
+    m_MaximumMessageLength = maximumMessageLength;
+    m_PermittedSendBytes = permittedSendBytes;
+}
+
 void CServer::ConfigureAcceptLimitsAfterHost(std::int32_t maxBacklog,
                                              std::int32_t newAcceptTimeoutMs) noexcept
 {
