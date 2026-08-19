@@ -253,6 +253,8 @@ public:
                             bool legacyFlag,
                             std::error_code& error);
 
+    void StopListening() noexcept;
+
     [[nodiscard]] AcceptStart BeginAccept() const noexcept;
     [[nodiscard]] asio::awaitable<AcceptedTransport> AcceptOne();
     [[nodiscard]] AdmissionResult QueueAccepted(std::shared_ptr<asio::ip::tcp::socket> socket,

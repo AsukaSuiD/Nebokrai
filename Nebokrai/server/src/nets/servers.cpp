@@ -303,6 +303,16 @@ bool CServer::Host(std::uint32_t port,
     return true;
 }
 
+void CServer::StopListening() noexcept
+{
+    if (!m_Acceptor) {
+        return;
+    }
+    asio::error_code ignored;
+    m_Acceptor->cancel(ignored);
+    m_Acceptor->close(ignored);
+}
+
 AcceptStart CServer::BeginAccept() const noexcept
 {
     if (m_ClientCount >= m_MaxClients) {
