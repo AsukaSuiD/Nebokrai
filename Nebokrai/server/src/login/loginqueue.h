@@ -18,6 +18,7 @@ class ClientSendQueue;
 
 namespace LoginNet
 {
+class AuthClientEventPublisher;
 class CMessage;
 }
 
@@ -38,8 +39,8 @@ class CMessage;
  * IsValidQuest 0x000172C0, PushLoginList 0x0001AAB0,
  * ClearTimeoutList 0x00017330, IsValidErrManyTimes 0x000163E0,
  * matrices_timeout 0x000183D0, ValidCodeOvertime 0x00018610,
- * CheckValidErr 0x00018700, AddGasQueue 0x000199A0 и
- * OnQuestCdkey 0x0001A130.
+ * CheckValidErr 0x00018700, AddGasQueue 0x000199A0,
+ * OnQuestCdkey 0x0001A130 и Run 0x0001D500.
  *
  * TagPwdChecked сохраняет signed socket ID, исходный IPv4, byte-exact account,
  * World и matrix-флаг. Duplicate password-result ищется под тем же lock;
@@ -105,10 +106,14 @@ class CMessage;
  *
  * GAS имеет ДВА разных состояния, как в layout оригинала: m_GasQueue —
  * thread-safe входной CGasQueue для отдельного GAS worker (Add/Pop/Clear), а
- * m_GasQuest — отдельный result-list, который позже дренирует Run. Их нельзя
- * объединять: AddGasQueue direct assembly адресует CGasQueue по this+0x84,
- * тогда как Run читает m_GasQuest по this+0x64. STL value ownership заменяет
- * только исходные heap pointers внутри CGasQueue.
+ * m_GasQuest — отдельный legacy-list, который читает Run. Их нельзя объединять:
+ * AddGasQueue direct assembly адресует CGasQueue по this+0x84, тогда как Run
+ * читает m_GasQuest по this+0x64. Полный direct bridge показывает m_GasQuest
+ * только в ctor/dtor/Run; CGasThread::Run 0x00021720 берёт m_GasQueue, сам
+ * обрабатывает и удаляет quest, назад в m_GasQuest ничего не пишет. Поэтому
+ * producer для m_GasQuest НЕ придумывается: поле сохраняется как фактически
+ * мёртвый legacy-state. STL value ownership заменяет только heap pointers
+ * исходного CGasQueue.
  *
  * OnQuestCdkey сохраняет исходный authentication split. Непустой World
  * немедленно идёт PrepareEnter/EnterGame и обходит password/DB. При пустом
@@ -124,6 +129,20 @@ class CMessage;
  * localtime заменяют GetLocalTime; raw OLE DATE остаётся результатом DB-owner,
  * а его DecodeVariantTime отдан compatibility adapter/library. Порядок exact:
  * raw ban -> local-now -> decode OLE -> compare local-now < expiry.
+ *
+ * Run 0x0001D500 сохраняет исходную фазность. Сначала legacy m_GasQuest; если
+ * он вдруг непуст, каждый элемент повторно идёт OnQuestCdkey, сам list НЕ
+ * очищается, зато ошибочно очищается m_NoQueueQuestCdkey — этот явный баг EXE
+ * сохранён. Затем no-queue CD-key/player-list/player-data дренируются целиком.
+ * Один boot tick DVar9 снимается после них: log cadence обрабатывает максимум
+ * один normal CD-key, затем ВСЕГДА HandlePwdChecked, затем World cadence — по
+ * одному player-list и player-data на каждый World. После этого тем же DVar9
+ * обновляются 1-based AF507 queue-position notices для оставшихся normal FIFO.
+ * Далее ClearTimeoutList, AuthManager::Run и три независимых fresh ticks:
+ * matrix/valid-code при last+1000 < now только если map непуст, valid-error при
+ * last+3000 < now без map guard. Timer fields стартуют с нуля как в ctor.
+ * RunReport содержит только typed diagnostics безопасных reconstruction-boundary
+ * ошибок; wire/очереди/timers от его наличия не ветвятся.
  *
  * Timeout helpers сохраняют отдельные one-shot maps. Matrix timeout истекает
  * только при matrix_timeout < now - added и отправляет E; valid-code — при
@@ -141,9 +160,9 @@ class CMessage;
  * lowercase high-bit bytes помечаются безопасной неизвестной границей вместо
  * воспроизведения старого uninitialized/overflow/locale поведения.
  *
- * Полный Run, GAS worker и cadence ещё не материализованы: их нельзя закрывать
- * заглушками только ради сборки. Queue-side OnQuestCdkey/AddGasQueue уже есть,
- * но фактический CGasThread/CGasOperator остаётся отдельным owner-узлом.
+ * Queue-side Run/cadence теперь материализован. Фактический CGasThread/
+ * CGasOperator остаётся отдельным owner-узлом; Run не подделывает worker и не
+ * создаёт producer для мёртвого m_GasQuest.
  */
 namespace Login
 {
@@ -260,8 +279,15 @@ public:
     [[nodiscard]] virtual bool IsConnectAS() const noexcept = 0;
     [[nodiscard]] virtual ClientSendQueue* AuthSendQueue() noexcept = 0;
     [[nodiscard]] virtual IAuthListener* AuthListener() noexcept = 0;
+    [[nodiscard]] virtual LoginNet::AuthClientEventPublisher AuthEventPublisher() const = 0;
     virtual void KickOut(std::span<const std::uint8_t> account) = 0;
 
+    [[nodiscard]] virtual bool L2WPlayerBaseSend(
+        std::span<const std::uint8_t> worldServer,
+        std::span<const std::uint8_t> account) = 0;
+    virtual void SetLoginCdkeyWorldServer(
+        std::span<const std::uint8_t> account,
+        std::span<const std::uint8_t> worldServer) = 0;
     virtual void L2WQuestDetailSend(
         std::optional<std::span<const std::uint8_t>> worldServer,
         std::span<const std::uint8_t> account,
@@ -377,6 +403,20 @@ struct HandlePwdCheckedReport
     std::vector<PwdCheckedError> errors;
 };
 
+struct RunQuestCdkeyError
+{
+    std::vector<std::uint8_t> account;
+    QuestCdkeyError error;
+};
+
+struct LoginQueueRunReport
+{
+    HandlePwdCheckedReport pwdChecked;
+    std::size_t queuePositionMessages{};
+    std::size_t authTimeoutsPublished{};
+    std::vector<RunQuestCdkeyError> questCdkeyErrors;
+};
+
 class CLoginQueue
 {
 public:
@@ -388,6 +428,8 @@ public:
                    std::uint32_t sendMessageIntervalMs,
                    std::uint32_t worldMaxPlayers);
     void SetWorldCount(std::uint32_t worldCount);
+    [[nodiscard]] LoginQueueRunReport Run(ILoginQueueContext& context,
+                                          AuthManager& authManager);
 
     [[nodiscard]] NoQueueAccountsLoadResult
     LoadNoQueueCdkeyList(const std::filesystem::path& runtimeDirectory);
@@ -524,10 +566,13 @@ private:
     mutable std::mutex m_SetupMutex;
     std::uint32_t m_IntervalMs{};
     std::uint32_t m_SendMessageIntervalMs{};
-    std::uint32_t m_WorldMaxPlayers{};
-    std::uint32_t m_WorldCount{};
+    std::int32_t m_WorldMaxPlayers{};
+    std::int32_t m_WorldCount{};
     std::uint32_t m_LogQueueTime{};
     std::uint32_t m_WorldQueueTime{};
+    std::uint32_t m_MatricesLastTimeout{};
+    std::uint32_t m_ValidCodeLastOvertime{};
+    std::uint32_t m_CheckValidErrInterval{};
 
     mutable std::mutex m_NoQueueMutex;
     std::set<std::vector<std::uint8_t>> m_NoQueueAccounts;
@@ -536,8 +581,8 @@ private:
     std::deque<QuestCdkey> m_QuestCdkey;
     std::deque<QuestCdkey> m_NoQueueQuestCdkey;
 
-    // m_GasQuest — completed/result list. В оригинальном Run отдельного lock
-    // вокруг него нет; producer lifecycle будет восстановлен с GAS owner.
+    // m_GasQuest — legacy-list: direct EXE не содержит producer-а; Run его
+    // читает, но не очищает. Отдельного lock вокруг него в оригинале нет.
     std::deque<QuestCdkey> m_GasQuest;
 
     mutable std::mutex m_GasQueueMutex;

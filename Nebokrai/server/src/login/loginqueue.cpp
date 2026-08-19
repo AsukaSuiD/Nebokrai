@@ -28,6 +28,7 @@ namespace
 {
 constexpr std::int32_t kLoginResponseMessageType = 0x000AF501;
 constexpr std::int32_t kPlayerDataRejectMessageType = 0x000AF503;
+constexpr std::int32_t kQueuePositionMessageType = 0x000AF507;
 constexpr std::size_t kNoQueueAccountBufferSize = 0x100U;
 
 std::span<const std::uint8_t> LegacyCStringPrefix(std::span<const std::uint8_t> value)
@@ -228,6 +229,15 @@ void SendLoginCode(ILoginQueueContext& context,
     context.SendToClient(response, socketId);
 }
 
+void SendQueuePosition(ILoginQueueContext& context,
+                       std::int32_t socketId,
+                       std::int32_t position)
+{
+    LoginNet::CMessage response(kQueuePositionMessageType);
+    response.Base().Add(position);
+    context.SendToClient(response, socketId);
+}
+
 template <typename Queue>
 bool EraseFirstAccount(Queue& queue, std::span<const std::uint8_t> account)
 {
@@ -306,7 +316,7 @@ void CLoginQueue::OnInitial(std::uint32_t intervalMs,
     std::lock_guard guard(m_SetupMutex);
     m_IntervalMs = intervalMs;
     m_SendMessageIntervalMs = sendMessageIntervalMs;
-    m_WorldMaxPlayers = worldMaxPlayers;
+    m_WorldMaxPlayers = std::bit_cast<std::int32_t>(worldMaxPlayers);
     if (m_WorldCount == 0U) {
         m_WorldCount = 1U;
     }
@@ -319,7 +329,211 @@ void CLoginQueue::OnInitial(std::uint32_t intervalMs,
 void CLoginQueue::SetWorldCount(std::uint32_t worldCount)
 {
     std::lock_guard guard(m_SetupMutex);
-    m_WorldCount = worldCount;
+    m_WorldCount = std::bit_cast<std::int32_t>(worldCount);
+}
+
+LoginQueueRunReport CLoginQueue::Run(ILoginQueueContext& context,
+                                     AuthManager& authManager)
+{
+    LoginQueueRunReport report;
+    const auto recordQuestError = [&](const QuestCdkey& quest,
+                                      std::optional<QuestCdkeyError> error) {
+        if (!error) {
+            return;
+        }
+        report.questCdkeyErrors.push_back(RunQuestCdkeyError{
+            .account = quest.account,
+            .error = std::move(*error),
+        });
+    };
+
+    // VERIFIED_DISASSEMBLY/ASSEMBLY 0x0041D51B..0x0041D56F:
+    // m_GasQuest (+0x64/+0x68) не очищается. Если list непуст, после его
+    // полного прохода EXE ошибочно clear-ит m_NoQueueQuestCdkey (+0x34).
+    if (!m_GasQuest.empty()) {
+        for (const QuestCdkey& quest : m_GasQuest) {
+            recordQuestError(quest, OnQuestCdkey(context, authManager, quest));
+        }
+        std::lock_guard guard(m_QuestCdkeyMutex);
+        m_NoQueueQuestCdkey.clear();
+    }
+
+    // No-queue CD-key обрабатываются целиком без cadence.
+    {
+        std::lock_guard guard(m_QuestCdkeyMutex);
+        if (!m_NoQueueQuestCdkey.empty()) {
+            for (const QuestCdkey& quest : m_NoQueueQuestCdkey) {
+                recordQuestError(quest, OnQuestCdkey(context, authManager, quest));
+            }
+            m_NoQueueQuestCdkey.clear();
+        }
+    }
+
+    // No-queue player-list/data тоже полностью дренируются до первого DVar9.
+    {
+        std::lock_guard guard(m_PlayerQuestMutex);
+        if (!m_NoQueueQuestPlayerList.empty()) {
+            for (auto& [world, quests] : m_NoQueueQuestPlayerList) {
+                static_cast<void>(world);
+                for (const QuestPlayerList& quest : quests) {
+                    if (context.L2WPlayerBaseSend(quest.worldServer, quest.account)) {
+                        context.SetLoginCdkeyWorldServer(quest.account, quest.worldServer);
+                    }
+                }
+            }
+            m_NoQueueQuestPlayerList.clear();
+        }
+        if (!m_NoQueueQuestPlayerData.empty()) {
+            for (auto& [world, quests] : m_NoQueueQuestPlayerData) {
+                static_cast<void>(world);
+                for (const QuestPlayerData& quest : quests) {
+                    OnQuestPlayerData(context, quest);
+                }
+            }
+            m_NoQueueQuestPlayerData.clear();
+        }
+    }
+
+    // DVar9 снимается ОДИН раз и далее используется log cadence, World cadence
+    // и всеми queue-position notices. Поздние timeout-группы берут новые ticks.
+    const std::uint32_t queueNow = LegacyTickMs();
+
+    bool doLogQueue = false;
+    {
+        std::lock_guard guard(m_SetupMutex);
+        if (m_LogQueueTime <= queueNow) {
+            doLogQueue = true;
+            m_LogQueueTime = m_WorldCount == 0U
+                ? queueNow + 1000U
+                : queueNow +
+                    (m_IntervalMs / std::bit_cast<std::uint32_t>(m_WorldCount));
+        }
+    }
+    if (doLogQueue) {
+        std::lock_guard guard(m_QuestCdkeyMutex);
+        if (!m_QuestCdkey.empty()) {
+            QuestCdkey& quest = m_QuestCdkey.front();
+            recordQuestError(quest, OnQuestCdkey(context, authManager, quest));
+            // Исходник удаляет front после void OnQuestCdkey независимо от
+            // результата внутренних send/routing операций.
+            m_QuestCdkey.pop_front();
+        }
+    }
+
+    report.pwdChecked = HandlePwdChecked(context);
+
+    bool doWorldQueue = false;
+    std::int32_t worldMaxPlayers = 0;
+    {
+        std::lock_guard guard(m_SetupMutex);
+        if (m_WorldQueueTime <= queueNow) {
+            doWorldQueue = true;
+            m_WorldQueueTime = queueNow + m_IntervalMs;
+        }
+        worldMaxPlayers = m_WorldMaxPlayers;
+    }
+    if (doWorldQueue) {
+        std::lock_guard guard(m_PlayerQuestMutex);
+        for (auto& [world, quests] : m_QuestPlayerList) {
+            const std::int32_t currentPlayers = context.LoginWorldPlayerNumByName(world);
+            if (currentPlayers < worldMaxPlayers && !quests.empty()) {
+                const QuestPlayerList& quest = quests.front();
+                if (context.L2WPlayerBaseSend(quest.worldServer, quest.account)) {
+                    context.SetLoginCdkeyWorldServer(quest.account, quest.worldServer);
+                }
+                quests.pop_front();
+            }
+        }
+        for (auto& [world, quests] : m_QuestPlayerData) {
+            static_cast<void>(world);
+            if (!quests.empty()) {
+                OnQuestPlayerData(context, quests.front());
+                quests.pop_front();
+            }
+        }
+    }
+
+    const std::uint32_t sendInterval = SendMessageIntervalMs();
+    {
+        std::lock_guard guard(m_QuestCdkeyMutex);
+        std::int32_t position = 1;
+        for (QuestCdkey& quest : m_QuestCdkey) {
+            if (quest.sendMessageTime <= queueNow) {
+                quest.sendMessageTime = queueNow + sendInterval;
+                SendQueuePosition(context, quest.socketId, position);
+                ++report.queuePositionMessages;
+            }
+            position = static_cast<std::int32_t>(
+                std::bit_cast<std::uint32_t>(position) + 1U);
+        }
+    }
+    {
+        std::lock_guard guard(m_PlayerQuestMutex);
+        for (auto& [world, quests] : m_QuestPlayerList) {
+            static_cast<void>(world);
+            std::int32_t position = 1;
+            for (QuestPlayerList& quest : quests) {
+                if (quest.sendMessageTime <= queueNow) {
+                    quest.sendMessageTime = queueNow + sendInterval;
+                    SendQueuePosition(context, quest.socketId, position);
+                    ++report.queuePositionMessages;
+                }
+                position = static_cast<std::int32_t>(
+                    std::bit_cast<std::uint32_t>(position) + 1U);
+            }
+        }
+        for (auto& [world, quests] : m_QuestPlayerData) {
+            static_cast<void>(world);
+            std::int32_t position = 1;
+            for (QuestPlayerData& quest : quests) {
+                if (quest.sendMessageTime <= queueNow) {
+                    quest.sendMessageTime = queueNow + sendInterval;
+                    SendQueuePosition(context, quest.socketId, position);
+                    ++report.queuePositionMessages;
+                }
+                position = static_cast<std::int32_t>(
+                    std::bit_cast<std::uint32_t>(position) + 1U);
+            }
+        }
+    }
+
+    ClearTimeoutList(context);
+    report.authTimeoutsPublished =
+        authManager.Run(context.AuthEventPublisher()).publishedTimeouts;
+
+    std::uint32_t now = LegacyTickMs();
+    if (m_MatricesLastTimeout + 1000U < now) {
+        bool hasMatrices = false;
+        {
+            std::lock_guard guard(m_MatrixMutex);
+            hasMatrices = !m_Matrices.empty();
+        }
+        if (hasMatrices) {
+            m_MatricesLastTimeout = now;
+            MatricesTimeout(context);
+        }
+    }
+
+    now = LegacyTickMs();
+    if (m_ValidCodeLastOvertime + 1000U < now) {
+        bool hasValidCodes = false;
+        {
+            std::lock_guard guard(m_ValidCodeMutex);
+            hasValidCodes = !m_ValidCodes.empty();
+        }
+        if (hasValidCodes) {
+            m_ValidCodeLastOvertime = now;
+            ValidCodeOvertime(context);
+        }
+    }
+
+    now = LegacyTickMs();
+    if (m_CheckValidErrInterval + 3000U < now) {
+        m_CheckValidErrInterval = now;
+        CheckValidErr(now);
+    }
+
+    return report;
 }
 
 NoQueueAccountsLoadResult CLoginQueue::LoadNoQueueCdkeyList(
