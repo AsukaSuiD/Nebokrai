@@ -30,8 +30,9 @@
  * sp_auth/getAccInfo, sp_authex/GetAccount, sp_lock/suspendAccount и
  * sp_writelog/PutOnlineLog сохраняют параметры, output и result mapping.
  * Windows ADO/COM не является семантикой и заменяется IAuthDatabase. Конкретный
- * MSSQL driver/ODBC/TDS adapter реализует этот интерфейс отдельно; authproc и
- * CGame не зависят от транспортной библиотеки БД. Другие backend-ы здесь не
+ * MSSQL driver adapter реализует этот интерфейс отдельно; текущая Linux-
+ * реализация находится в `mssql_odbc.{h,cpp}` и использует ODBC/unixODBC.
+ * authproc и CGame не зависят от транспортной библиотеки БД. Другие backend-ы здесь не
  * предполагаются и не влияют на восстановление baseline.
  *
  * Каждый worker сначала обновляет Auth connection settings из одного config
