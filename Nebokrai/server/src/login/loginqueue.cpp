@@ -557,8 +557,9 @@ void CLoginQueue::AddValidErr(std::span<const std::uint8_t> account,
     if (inserted) {
         found->second.errorTimes = 1;
     } else {
-        found->second.errorTimes = static_cast<std::int32_t>(
-            static_cast<std::uint32_t>(found->second.errorTimes) + 1U);
+        const std::uint32_t wrapped =
+            std::bit_cast<std::uint32_t>(found->second.errorTimes) + 1U;
+        found->second.errorTimes = std::bit_cast<std::int32_t>(wrapped);
     }
     found->second.nextLoginTime = nextLoginTime;
 }
@@ -571,23 +572,19 @@ MatrixValidationOutcome CLoginQueue::ValidateMatrix(
     std::span<const std::uint8_t, 3> answer)
 {
     const auto accountKey = OwnedLegacyString(account);
-    MatrixEntry entry;
-    {
-        std::lock_guard guard(m_MatrixMutex);
-        const auto found = m_Matrices.find(accountKey);
-        if (found == m_Matrices.end()) {
-            return {};
-        }
-        entry = found->second;
-        if (entry.clientIp != clientIp || entry.socketId != socketId) {
-            m_Matrices.erase(found);
-            return {};
-        }
+    std::lock_guard guard(m_MatrixMutex);
+    const auto found = m_Matrices.find(accountKey);
+    if (found == m_Matrices.end()) {
+        return {};
+    }
+    if (found->second.clientIp != clientIp || found->second.socketId != socketId) {
+        m_Matrices.erase(found);
+        return {};
     }
 
     const auto validation = context.ValidateMatrixCard(
         accountKey,
-        std::span<const std::uint8_t, 3>(entry.positions),
+        std::span<const std::uint8_t, 3>(found->second.positions),
         answer);
     if (validation.kind == MatrixCardValidationKind::OwnerMissing) {
         return MatrixValidationOutcome{
@@ -602,13 +599,11 @@ MatrixValidationOutcome CLoginQueue::ValidateMatrix(
         };
     }
 
-    {
-        std::lock_guard guard(m_MatrixMutex);
-        m_Matrices.erase(accountKey);
-    }
+    const bool accepted = validation.accepted;
+    m_Matrices.erase(found);
     return MatrixValidationOutcome{
-        .kind = validation.accepted ? MatrixValidationOutcomeKind::Accepted
-                                    : MatrixValidationOutcomeKind::Rejected,
+        .kind = accepted ? MatrixValidationOutcomeKind::Accepted
+                         : MatrixValidationOutcomeKind::Rejected,
     };
 }
 
