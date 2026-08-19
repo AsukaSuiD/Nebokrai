@@ -1,91 +1,180 @@
 #include "loginqueue.h"
 
+#include "authmanager.h"
 #include "../nets/netlogin/message.h"
 
 #include <algorithm>
 #include <bit>
-#include <chrono>
+#include <cerrno>
+#include <exception>
 #include <fstream>
+#include <iterator>
 #include <random>
-#include <string>
+#include <string_view>
+#include <system_error>
 #include <utility>
 
 #if defined(__linux__)
-#include <time.h>
+#include <sys/random.h>
 #endif
 
 namespace Login
 {
 namespace
 {
-constexpr std::size_t kNoQueueTokenBufferSize = 0x100U;
-constexpr std::int32_t kAuthFailedMessageType = 0x000AF501;
+constexpr std::int32_t kLoginResponseMessageType = 0x000AF501;
+constexpr std::size_t kNoQueueAccountBufferSize = 0x100U;
 
-std::vector<std::uint8_t> Key(std::span<const std::uint8_t> value)
+std::span<const std::uint8_t> LegacyCStringPrefix(std::span<const std::uint8_t> value)
 {
-    const auto end = std::find(value.begin(), value.end(), std::uint8_t{0});
-    return {value.begin(), end};
+    const auto terminator = std::find(value.begin(), value.end(), std::uint8_t{0});
+    return value.first(static_cast<std::size_t>(std::distance(value.begin(), terminator)));
 }
 
-bool Same(std::span<const std::uint8_t> left,
-          std::span<const std::uint8_t> right)
+std::vector<std::uint8_t> OwnedLegacyString(std::span<const std::uint8_t> value)
+{
+    const auto prefix = LegacyCStringPrefix(value);
+    return {prefix.begin(), prefix.end()};
+}
+
+bool BytesEqual(std::span<const std::uint8_t> left,
+                std::span<const std::uint8_t> right)
 {
     return left.size() == right.size() &&
            std::equal(left.begin(), left.end(), right.begin());
 }
 
-bool AsciiCaseEqual(std::string left, std::string right)
+bool AsciiEqualInsensitive(std::string_view left, std::string_view right)
 {
-    const auto lower = [](unsigned char value) {
-        if ('A' <= value && value <= 'Z') {
-            return static_cast<char>(value - 'A' + 'a');
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        auto l = static_cast<unsigned char>(left[index]);
+        auto r = static_cast<unsigned char>(right[index]);
+        if (l >= 'A' && l <= 'Z') l = static_cast<unsigned char>(l - 'A' + 'a');
+        if (r >= 'A' && r <= 'Z') r = static_cast<unsigned char>(r - 'A' + 'a');
+        if (l != r) {
+            return false;
         }
-        return static_cast<char>(value);
-    };
-    std::transform(left.begin(), left.end(), left.begin(), lower);
-    std::transform(right.begin(), right.end(), right.begin(), lower);
-    return left == right;
+    }
+    return true;
 }
 
-std::optional<std::filesystem::path>
-ResolveNoQueueFile(const std::filesystem::path& runtimeDirectory)
+std::optional<std::filesystem::path> ResolveWindowsAsset(
+    const std::filesystem::path& directory,
+    std::string_view requested,
+    std::error_code& error)
 {
-    const auto exact = runtimeDirectory / "NoQueueAccounts.conf";
-    std::error_code error;
-    if (std::filesystem::is_regular_file(exact, error)) {
-        return exact;
-    }
     error.clear();
-    for (const auto& entry : std::filesystem::directory_iterator(runtimeDirectory, error)) {
-        if (error) {
-            break;
+    const auto direct = directory / std::string(requested);
+    if (std::filesystem::exists(direct, error)) {
+        return direct;
+    }
+    if (error) {
+        return std::nullopt;
+    }
+
+    std::filesystem::directory_iterator iterator(directory, error);
+    const std::filesystem::directory_iterator end;
+    while (!error && iterator != end) {
+        const auto filename = iterator->path().filename().string();
+        if (AsciiEqualInsensitive(filename, requested)) {
+            return iterator->path();
         }
-        if (AsciiCaseEqual(entry.path().filename().string(), "NoQueueAccounts.conf")) {
-            return entry.path();
-        }
+        iterator.increment(error);
     }
     return std::nullopt;
 }
 
-std::array<std::uint8_t, 3> RandomMatrixPositions()
+bool IsAsciiWhitespace(std::uint8_t byte)
 {
-    // В поздней Linux-реконструкции системный RNG заменял старый технический
-    // источник случайности; доменная семантика здесь только modulo 0x50.
-    std::random_device random;
-    return {
-        static_cast<std::uint8_t>(random() % 0x50U),
-        static_cast<std::uint8_t>(random() % 0x50U),
-        static_cast<std::uint8_t>(random() % 0x50U),
-    };
+    return byte == ' ' || byte == '\t' || byte == '\n' || byte == '\r' ||
+           byte == '\f' || byte == '\v';
 }
 
-void AddLegacyString(CBaseMessage& message, std::span<const std::uint8_t> value)
+void LowerAscii(std::vector<std::uint8_t>& value)
 {
-    const auto prefix = Key(value);
-    if (!prefix.empty()) {
-        message.Add(prefix.data(), static_cast<std::int32_t>(prefix.size()));
+    for (auto& byte : value) {
+        if (byte >= 'A' && byte <= 'Z') {
+            byte = static_cast<std::uint8_t>(byte - 'A' + 'a');
+        }
     }
-    message.Add(std::uint8_t{0});
+}
+
+std::uint32_t LegacyTickMs()
+{
+    return AuthManager::LegacyTickMs();
+}
+
+std::optional<MatrixRegisterError> RandomWord(std::uint32_t& value)
+{
+#if defined(__linux__)
+    auto* output = reinterpret_cast<std::uint8_t*>(&value);
+    std::size_t filled = 0;
+    while (filled < sizeof(value)) {
+        const ssize_t received = ::getrandom(output + filled, sizeof(value) - filled, 0);
+        if (received > 0) {
+            filled += static_cast<std::size_t>(received);
+            continue;
+        }
+        if (received < 0 && errno == EINTR) {
+            continue;
+        }
+        return MatrixRegisterError{
+            .kind = MatrixRegisterErrorKind::Random,
+            .detail = "getrandom не вернул 32-битное значение matrix",
+        };
+    }
+    return std::nullopt;
+#else
+    try {
+        static thread_local std::random_device source;
+        value = static_cast<std::uint32_t>(source());
+        return std::nullopt;
+    } catch (const std::exception& exception) {
+        return MatrixRegisterError{
+            .kind = MatrixRegisterErrorKind::Random,
+            .detail = exception.what(),
+        };
+    }
+#endif
+}
+
+void AddLegacyString(LoginNet::CMessage& message, std::span<const std::uint8_t> value)
+{
+    const auto prefix = LegacyCStringPrefix(value);
+    if (!prefix.empty()) {
+        message.Base().Add(prefix.data(), static_cast<std::int32_t>(prefix.size()));
+    }
+    message.Base().Add(std::uint8_t{0});
+}
+
+template <typename Queue>
+bool EraseFirstAccount(Queue& queue, std::span<const std::uint8_t> account)
+{
+    const auto found = std::find_if(queue.begin(), queue.end(), [&](const auto& pending) {
+        return BytesEqual(pending.account, account);
+    });
+    if (found == queue.end()) {
+        return false;
+    }
+    queue.erase(found);
+    return true;
+}
+
+template <typename Map>
+std::size_t EraseFirstAccountFromEachWorld(Map& queues,
+                                           std::span<const std::uint8_t> account)
+{
+    std::size_t removed = 0;
+    for (auto& [world, queue] : queues) {
+        static_cast<void>(world);
+        if (EraseFirstAccount(queue, account)) {
+            ++removed;
+        }
+    }
+    return removed;
 }
 }
 
@@ -102,92 +191,157 @@ TagPwdChecked::TagPwdChecked(std::int32_t socketId,
 {
 }
 
-std::int32_t TagPwdChecked::SocketID() const noexcept { return m_SocketID; }
-std::uint32_t TagPwdChecked::ClientIP() const noexcept { return m_ClientIP; }
-std::span<const std::uint8_t> TagPwdChecked::Account() const noexcept { return m_Account; }
-std::span<const std::uint8_t> TagPwdChecked::WorldServer() const noexcept { return m_WorldServer; }
-bool TagPwdChecked::HasMatrix() const noexcept { return m_HasMatrix; }
-
-CLoginQueue::CLoginQueue()
+std::int32_t TagPwdChecked::SocketID() const noexcept
 {
-    static_cast<void>(LoadNoQueueCdkeyList(std::filesystem::current_path()));
+    return m_SocketID;
+}
+
+std::uint32_t TagPwdChecked::ClientIP() const noexcept
+{
+    return m_ClientIP;
+}
+
+std::span<const std::uint8_t> TagPwdChecked::Account() const noexcept
+{
+    return m_Account;
+}
+
+std::span<const std::uint8_t> TagPwdChecked::WorldServer() const noexcept
+{
+    return m_WorldServer;
+}
+
+bool TagPwdChecked::HasMatrix() const noexcept
+{
+    return m_HasMatrix;
+}
+
+CLoginQueue::CLoginQueue(const std::filesystem::path& runtimeDirectory)
+{
+    static_cast<void>(LoadNoQueueCdkeyList(runtimeDirectory));
 }
 
 void CLoginQueue::OnInitial(std::uint32_t intervalMs,
                             std::uint32_t sendMessageIntervalMs,
                             std::uint32_t worldMaxPlayers)
 {
-    std::lock_guard<std::mutex> lock(m_SetupMutex);
-    m_Setup.intervalMs = intervalMs;
-    m_Setup.sendMessageIntervalMs = sendMessageIntervalMs;
-    m_Setup.worldMaxPlayers = worldMaxPlayers;
-    if (m_Setup.worldCount == 0U) {
-        m_Setup.worldCount = 1U;
+    std::lock_guard guard(m_SetupMutex);
+    m_IntervalMs = intervalMs;
+    m_SendMessageIntervalMs = sendMessageIntervalMs;
+    m_WorldMaxPlayers = worldMaxPlayers;
+    if (m_WorldCount == 0U) {
+        m_WorldCount = 1U;
     }
+
     const std::uint32_t now = LegacyTickMs();
-    m_Setup.worldQueueTime = now + intervalMs;
-    m_Setup.logQueueTime = now + intervalMs / m_Setup.worldCount;
+    m_WorldQueueTime = now + m_IntervalMs;
+    m_LogQueueTime = now + (m_IntervalMs / m_WorldCount);
 }
 
-NoQueueLoadResult
-CLoginQueue::LoadNoQueueCdkeyList(const std::filesystem::path& runtimeDirectory)
+void CLoginQueue::SetWorldCount(std::uint32_t worldCount)
 {
-    std::lock_guard<std::mutex> lock(m_NoQueueMutex);
-    m_NoQueueAccounts.clear();
+    std::lock_guard guard(m_SetupMutex);
+    m_WorldCount = worldCount;
+}
 
-    const auto path = ResolveNoQueueFile(runtimeDirectory);
+NoQueueAccountsLoadResult CLoginQueue::LoadNoQueueCdkeyList(
+    const std::filesystem::path& runtimeDirectory)
+{
+    {
+        std::lock_guard guard(m_NoQueueMutex);
+        m_NoQueueAccounts.clear();
+    }
+
+    std::error_code filesystemError;
+    const auto path = ResolveWindowsAsset(runtimeDirectory, "NoQueueAccounts.conf", filesystemError);
     if (!path) {
-        return {.status = NoQueueLoadStatus::IoError};
+        return NoQueueAccountsLoadResult{
+            .error = NoQueueAccountsLoadError{
+                .kind = NoQueueAccountsLoadErrorKind::Io,
+                .detail = filesystemError ? filesystemError.message()
+                                          : "NoQueueAccounts.conf не найден",
+            },
+        };
     }
 
-    std::ifstream input(*path, std::ios::binary);
-    if (!input) {
-        return {.status = NoQueueLoadStatus::IoError};
+    std::ifstream stream(*path, std::ios::binary);
+    if (!stream.is_open()) {
+        return NoQueueAccountsLoadResult{
+            .error = NoQueueAccountsLoadError{
+                .kind = NoQueueAccountsLoadErrorKind::Io,
+                .detail = "NoQueueAccounts.conf не открыт",
+            },
+        };
     }
 
-    std::size_t extracted = 0U;
-    std::string token;
-    while (input >> token) {
-        const std::size_t tokenIndex = extracted;
-        if (token.size() >= kNoQueueTokenBufferSize) {
-            return {
-                .status = NoQueueLoadStatus::TokenTooLong,
-                .extractedAccounts = extracted,
-                .uniqueAccounts = m_NoQueueAccounts.size(),
-                .tokenIndex = tokenIndex,
-                .tokenLength = token.size(),
-            };
+    const std::vector<std::uint8_t> bytes(
+        std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+    std::size_t extracted = 0;
+    std::size_t cursor = 0;
+    while (cursor < bytes.size()) {
+        while (cursor < bytes.size() && IsAsciiWhitespace(bytes[cursor])) {
+            ++cursor;
         }
-        if (std::any_of(token.begin(), token.end(), [](unsigned char byte) {
-                return byte >= 0x80U;
-            })) {
-            return {
-                .status = NoQueueLoadStatus::NonAsciiCaseMappingUnknown,
+        if (cursor == bytes.size()) {
+            break;
+        }
+
+        const std::size_t begin = cursor;
+        while (cursor < bytes.size() && !IsAsciiWhitespace(bytes[cursor])) {
+            ++cursor;
+        }
+        const std::size_t tokenIndex = extracted + 1U;
+        const std::size_t tokenLength = cursor - begin;
+        if (tokenLength >= kNoQueueAccountBufferSize) {
+            std::lock_guard guard(m_NoQueueMutex);
+            return NoQueueAccountsLoadResult{
                 .extractedAccounts = extracted,
                 .uniqueAccounts = m_NoQueueAccounts.size(),
-                .tokenIndex = tokenIndex,
-                .tokenLength = token.size(),
+                .error = NoQueueAccountsLoadError{
+                    .kind = NoQueueAccountsLoadErrorKind::TokenTooLongLegacyOverflow,
+                    .tokenIndex = tokenIndex,
+                    .actualLength = tokenLength,
+                },
             };
         }
 
-        std::vector<std::uint8_t> account(token.begin(), token.end());
-        for (auto& byte : account) {
-            if ('A' <= byte && byte <= 'Z') {
-                byte = static_cast<std::uint8_t>(byte - 'A' + 'a');
-            }
+        std::vector<std::uint8_t> account(bytes.begin() + static_cast<std::ptrdiff_t>(begin),
+                                          bytes.begin() + static_cast<std::ptrdiff_t>(cursor));
+        const auto nul = std::find(account.begin(), account.end(), std::uint8_t{0});
+        account.erase(nul, account.end());
+        if (std::any_of(account.begin(), account.end(),
+                        [](std::uint8_t byte) { return byte >= 0x80U; })) {
+            std::lock_guard guard(m_NoQueueMutex);
+            return NoQueueAccountsLoadResult{
+                .extractedAccounts = extracted,
+                .uniqueAccounts = m_NoQueueAccounts.size(),
+                .error = NoQueueAccountsLoadError{
+                    .kind = NoQueueAccountsLoadErrorKind::NonAsciiCaseMappingUnknown,
+                    .tokenIndex = tokenIndex,
+                    .actualLength = account.size(),
+                },
+            };
         }
-        m_NoQueueAccounts.insert(std::move(account));
+
+        LowerAscii(account);
+        {
+            std::lock_guard guard(m_NoQueueMutex);
+            m_NoQueueAccounts.insert(std::move(account));
+        }
         ++extracted;
     }
 
+    std::lock_guard guard(m_NoQueueMutex);
     if (extracted == 0U) {
-        return {
-            .status = NoQueueLoadStatus::EmptyFileLegacyReadUndefined,
+        return NoQueueAccountsLoadResult{
+            .extractedAccounts = 0,
             .uniqueAccounts = m_NoQueueAccounts.size(),
+            .error = NoQueueAccountsLoadError{
+                .kind = NoQueueAccountsLoadErrorKind::EmptyFileLegacyReadUnknown,
+            },
         };
     }
-    return {
-        .status = NoQueueLoadStatus::Loaded,
+    return NoQueueAccountsLoadResult{
         .extractedAccounts = extracted,
         .uniqueAccounts = m_NoQueueAccounts.size(),
     };
@@ -195,43 +349,36 @@ CLoginQueue::LoadNoQueueCdkeyList(const std::filesystem::path& runtimeDirectory)
 
 bool CLoginQueue::IsInNoQueueList(std::span<const std::uint8_t> account) const
 {
-    const auto key = Key(account);
-    std::lock_guard<std::mutex> lock(m_NoQueueMutex);
-    return m_NoQueueAccounts.contains(key);
+    const auto key = OwnedLegacyString(account);
+    std::lock_guard guard(m_NoQueueMutex);
+    return m_NoQueueAccounts.find(key) != m_NoQueueAccounts.end();
 }
 
 void CLoginQueue::AddQuestCdkey(std::int32_t socketId,
                                 std::uint32_t clientIp,
                                 std::int32_t loginType,
                                 std::int32_t version,
-                                std::vector<std::uint8_t> account,
-                                std::vector<std::uint8_t> passwordDigest,
+                                std::span<const std::uint8_t> account,
+                                std::span<const std::uint8_t> passwordDigest,
                                 std::int16_t clientCode,
                                 std::int32_t encryptionKey,
-                                std::vector<std::uint8_t> worldServer)
+                                std::span<const std::uint8_t> worldServer)
 {
-    std::uint32_t sendInterval = 0U;
-    {
-        std::lock_guard<std::mutex> lock(m_SetupMutex);
-        sendInterval = m_Setup.sendMessageIntervalMs;
-    }
-    const std::uint32_t sendTime = LegacyTickMs() + sendInterval;
-    const bool noQueue = IsInNoQueueList(account);
-
     QuestCdkey quest{
         .socketId = socketId,
         .clientIp = clientIp,
         .loginType = static_cast<std::int8_t>(loginType),
         .version = version,
-        .account = std::move(account),
-        .passwordDigest = std::move(passwordDigest),
+        .account = OwnedLegacyString(account),
+        .passwordDigest = {passwordDigest.begin(), passwordDigest.end()},
         .clientCode = clientCode,
         .encryptionKey = encryptionKey,
-        .worldServer = std::move(worldServer),
-        .sendMessageTime = sendTime,
+        .worldServer = OwnedLegacyString(worldServer),
+        .sendMessageTime = LegacyTickMs() + SendMessageIntervalMs(),
     };
 
-    std::lock_guard<std::mutex> lock(m_CdkeyQuestMutex);
+    const bool noQueue = IsInNoQueueList(quest.account);
+    std::lock_guard guard(m_QuestCdkeyMutex);
     if (noQueue) {
         m_NoQueueQuestCdkey.push_back(std::move(quest));
     } else {
@@ -244,27 +391,23 @@ bool CLoginQueue::AddQuestPlayerList(ILoginQueueContext& context,
                                      std::span<const std::uint8_t> account,
                                      std::span<const std::uint8_t> worldServer)
 {
-    if (!context.IsExitWorld(worldServer) ||
-        !context.LoginCdkeyWorldServer(account).has_value() ||
-        context.LoginWorldPlayerNumByName(worldServer) == -1) {
+    const auto accountKey = OwnedLegacyString(account);
+    const auto worldKey = OwnedLegacyString(worldServer);
+    if (!context.IsExitWorld(worldKey) ||
+        !context.LoginCdkeyWorldServer(accountKey).has_value() ||
+        context.LoginWorldPlayerNumByName(worldKey) == -1) {
         return false;
     }
 
-    std::uint32_t sendInterval = 0U;
-    {
-        std::lock_guard<std::mutex> lock(m_SetupMutex);
-        sendInterval = m_Setup.sendMessageIntervalMs;
-    }
     QuestPlayerList quest{
         .socketId = socketId,
-        .account = Key(account),
-        .worldServer = Key(worldServer),
-        .sendMessageTime = LegacyTickMs() + sendInterval,
+        .account = accountKey,
+        .worldServer = worldKey,
+        .sendMessageTime = LegacyTickMs() + SendMessageIntervalMs(),
     };
-    const auto worldKey = quest.worldServer;
-    const bool noQueue = IsInNoQueueList(account);
+    const bool noQueue = IsInNoQueueList(accountKey);
 
-    std::lock_guard<std::mutex> lock(m_PlayerListQuestMutex);
+    std::lock_guard guard(m_PlayerQuestMutex);
     auto& queues = noQueue ? m_NoQueueQuestPlayerList : m_QuestPlayerList;
     queues[worldKey].push_back(std::move(quest));
     return true;
@@ -276,110 +419,72 @@ bool CLoginQueue::AddQuestPlayerData(ILoginQueueContext& context,
                                      std::int32_t playerId,
                                      std::uint32_t clientIp)
 {
-    const auto worldServer = context.LoginCdkeyWorldServer(account);
+    const auto accountKey = OwnedLegacyString(account);
+    const auto worldServer = context.LoginCdkeyWorldServer(accountKey);
     if (!worldServer) {
         return false;
     }
 
-    std::uint32_t sendInterval = 0U;
-    {
-        std::lock_guard<std::mutex> lock(m_SetupMutex);
-        sendInterval = m_Setup.sendMessageIntervalMs;
-    }
     QuestPlayerData quest{
         .socketId = socketId,
-        .account = Key(account),
+        .account = accountKey,
         .playerId = playerId,
         .clientIp = clientIp,
-        .sendMessageTime = LegacyTickMs() + sendInterval,
+        .sendMessageTime = LegacyTickMs() + SendMessageIntervalMs(),
     };
-    const bool noQueue = IsInNoQueueList(account);
+    const bool noQueue = IsInNoQueueList(accountKey);
 
-    std::lock_guard<std::mutex> lock(m_PlayerDataQuestMutex);
+    std::lock_guard guard(m_PlayerQuestMutex);
     auto& queues = noQueue ? m_NoQueueQuestPlayerData : m_QuestPlayerData;
-    queues[Key(*worldServer)].push_back(std::move(quest));
+    queues[*worldServer].push_back(std::move(quest));
     return true;
 }
 
-ClientLostCleanupReport
-CLoginQueue::OnClientLost(std::span<const std::uint8_t> account)
+ClientLostCleanupReport CLoginQueue::OnClientLost(std::span<const std::uint8_t> account)
 {
-    const auto key = Key(account);
+    const auto accountKey = OwnedLegacyString(account);
     ClientLostCleanupReport report;
-
     {
-        std::lock_guard<std::mutex> lock(m_CdkeyQuestMutex);
-        const auto found = std::find_if(m_QuestCdkey.begin(), m_QuestCdkey.end(),
-                                        [&](const QuestCdkey& quest) {
-                                            return quest.account == key;
-                                        });
-        if (found != m_QuestCdkey.end()) {
-            m_QuestCdkey.erase(found);
-            report.cdkeyRemoved = true;
-        }
+        std::lock_guard guard(m_QuestCdkeyMutex);
+        report.cdkeyRemoved = EraseFirstAccount(m_QuestCdkey, accountKey);
     }
-
     {
-        std::lock_guard<std::mutex> lock(m_PlayerListQuestMutex);
-        for (auto& [_, queue] : m_QuestPlayerList) {
-            const auto found = std::find_if(queue.begin(), queue.end(),
-                                            [&](const QuestPlayerList& quest) {
-                                                return quest.account == key;
-                                            });
-            if (found != queue.end()) {
-                queue.erase(found);
-                ++report.playerListRemoved;
-            }
-        }
+        std::lock_guard guard(m_PlayerQuestMutex);
+        report.playerListRemoved = EraseFirstAccountFromEachWorld(m_QuestPlayerList, accountKey);
+        report.playerDataRemoved = EraseFirstAccountFromEachWorld(m_QuestPlayerData, accountKey);
     }
-
-    {
-        std::lock_guard<std::mutex> lock(m_PlayerDataQuestMutex);
-        for (auto& [_, queue] : m_QuestPlayerData) {
-            const auto found = std::find_if(queue.begin(), queue.end(),
-                                            [&](const QuestPlayerData& quest) {
-                                                return quest.account == key;
-                                            });
-            if (found != queue.end()) {
-                queue.erase(found);
-                ++report.playerDataRemoved;
-            }
-        }
-    }
-
     return report;
 }
 
 void CLoginQueue::PushBackPwdChecked(TagPwdChecked checked,
                                      const KickOutCallback& kickOut)
 {
-    std::lock_guard<std::mutex> lock(m_PwdCheckedMutex);
-    const auto found = std::find_if(m_PwdChecked.begin(), m_PwdChecked.end(),
-                                    [&](const TagPwdChecked& pending) {
-                                        return Same(pending.Account(), checked.Account());
-                                    });
-    if (found != m_PwdChecked.end()) {
+    std::lock_guard guard(m_PwdCheckedMutex);
+    const auto duplicate = std::find_if(
+        m_PwdChecked.begin(), m_PwdChecked.end(), [&](const TagPwdChecked& pending) {
+            return BytesEqual(pending.Account(), checked.Account());
+        });
+    if (duplicate != m_PwdChecked.end()) {
         if (kickOut) {
-            kickOut(found->Account());
+            kickOut(duplicate->Account());
         }
-        m_PwdChecked.erase(found);
+        m_PwdChecked.erase(duplicate);
     }
     m_PwdChecked.push_back(std::move(checked));
 }
 
 std::size_t CLoginQueue::PendingPwdChecked() const
 {
-    std::lock_guard<std::mutex> lock(m_PwdCheckedMutex);
+    std::lock_guard guard(m_PwdCheckedMutex);
     return m_PwdChecked.size();
 }
 
-CheckMessageInfo
-CLoginQueue::CheckMsgInfo(std::span<const std::uint8_t> account,
-                          std::int32_t socketId) const
+CheckMessageInfo CLoginQueue::CheckMsgInfo(std::span<const std::uint8_t> account,
+                                           std::int32_t socketId) const
 {
-    const auto key = Key(account);
-    std::lock_guard<std::mutex> lock(m_ValidCodeMutex);
-    const auto found = m_ValidCodes.find(key);
+    const auto accountKey = OwnedLegacyString(account);
+    std::lock_guard guard(m_ValidCodeMutex);
+    const auto found = m_ValidCodes.find(accountKey);
     if (found == m_ValidCodes.end()) {
         return CheckMessageInfo::Missing;
     }
@@ -392,36 +497,16 @@ CLoginQueue::CheckMsgInfo(std::span<const std::uint8_t> account,
     return CheckMessageInfo::Success;
 }
 
-void CLoginQueue::PutValidCode(std::int32_t socketId,
-                               std::uint32_t clientIp,
-                               std::span<const std::uint8_t> account,
-                               std::span<const std::uint8_t> validCode,
-                               std::span<const std::uint8_t> worldServer,
-                               bool hasMatrix)
+ValidateValidCodeOutcome CLoginQueue::ValidateValidCode(
+    std::int32_t socketId,
+    std::uint32_t clientIp,
+    std::span<const std::uint8_t> suppliedCode,
+    std::span<const std::uint8_t> account)
 {
-    const std::uint32_t now = LegacyTickMs();
-    std::lock_guard<std::mutex> lock(m_ValidCodeMutex);
-    m_ValidCodes[Key(account)] = ValidCodeEntry{
-        .socketId = socketId,
-        .clientIp = clientIp,
-        .addedTime = now,
-        .validCode = Key(validCode),
-        .worldServer = Key(worldServer),
-        .hasMatrix = hasMatrix,
-        .changeTime = 0U,
-    };
-}
-
-ValidateValidCodeResult
-CLoginQueue::ValidateValidCode(std::int32_t socketId,
-                               std::uint32_t clientIp,
-                               std::span<const std::uint8_t> suppliedCode,
-                               std::span<const std::uint8_t> account)
-{
-    const auto key = Key(account);
-    const auto supplied = Key(suppliedCode);
-    std::lock_guard<std::mutex> lock(m_ValidCodeMutex);
-    const auto found = m_ValidCodes.find(key);
+    const auto accountKey = OwnedLegacyString(account);
+    const auto code = OwnedLegacyString(suppliedCode);
+    std::lock_guard guard(m_ValidCodeMutex);
+    const auto found = m_ValidCodes.find(accountKey);
     if (found == m_ValidCodes.end()) {
         return {};
     }
@@ -429,52 +514,164 @@ CLoginQueue::ValidateValidCode(std::int32_t socketId,
         m_ValidCodes.erase(found);
         return {};
     }
-    if (found->second.validCode != supplied) {
+    if (found->second.validCode != code) {
         return {};
     }
 
-    ValidateValidCodeResult result{
+    ValidateValidCodeOutcome outcome{
         .accepted = true,
         .worldServer = found->second.worldServer,
         .hasMatrix = found->second.hasMatrix,
     };
     m_ValidCodes.erase(found);
-    return result;
+    return outcome;
 }
 
 void CLoginQueue::ChangeValidCode(std::span<const std::uint8_t> account,
                                   std::span<const std::uint8_t> validCode)
 {
-    const auto key = Key(account);
-    std::lock_guard<std::mutex> lock(m_ValidCodeMutex);
-    const auto found = m_ValidCodes.find(key);
+    const auto accountKey = OwnedLegacyString(account);
+    std::lock_guard guard(m_ValidCodeMutex);
+    const auto found = m_ValidCodes.find(accountKey);
     if (found == m_ValidCodes.end()) {
         return;
     }
     found->second.changeTime = LegacyTickMs();
-    found->second.validCode = Key(validCode);
+    found->second.validCode = OwnedLegacyString(validCode);
 }
 
 void CLoginQueue::DelValidCode(std::span<const std::uint8_t> account)
 {
-    std::lock_guard<std::mutex> lock(m_ValidCodeMutex);
-    m_ValidCodes.erase(Key(account));
+    const auto accountKey = OwnedLegacyString(account);
+    std::lock_guard guard(m_ValidCodeMutex);
+    m_ValidCodes.erase(accountKey);
 }
 
 void CLoginQueue::AddValidErr(std::span<const std::uint8_t> account,
                               std::uint32_t stayTimeMs)
 {
+    const auto accountKey = OwnedLegacyString(account);
     const std::uint32_t nextLoginTime = LegacyTickMs() + stayTimeMs;
-    const auto key = Key(account);
-    std::lock_guard<std::mutex> lock(m_ValidErrMutex);
-    const auto found = m_ValidErrors.find(key);
-    if (found == m_ValidErrors.end()) {
-        m_ValidErrors.emplace(key, ValidErrEntry{1, nextLoginTime});
-        return;
+    std::lock_guard guard(m_ValidErrMutex);
+    auto [found, inserted] = m_ValidErrors.try_emplace(accountKey);
+    if (inserted) {
+        found->second.errorTimes = 1;
+    } else {
+        found->second.errorTimes = static_cast<std::int32_t>(
+            static_cast<std::uint32_t>(found->second.errorTimes) + 1U);
     }
-    const auto wrapped = std::bit_cast<std::uint32_t>(found->second.errorTimes) + 1U;
-    found->second.errorTimes = std::bit_cast<std::int32_t>(wrapped);
     found->second.nextLoginTime = nextLoginTime;
+}
+
+MatrixValidationOutcome CLoginQueue::ValidateMatrix(
+    ILoginQueueContext& context,
+    std::int32_t socketId,
+    std::uint32_t clientIp,
+    std::span<const std::uint8_t> account,
+    std::span<const std::uint8_t, 3> answer)
+{
+    const auto accountKey = OwnedLegacyString(account);
+    MatrixEntry entry;
+    {
+        std::lock_guard guard(m_MatrixMutex);
+        const auto found = m_Matrices.find(accountKey);
+        if (found == m_Matrices.end()) {
+            return {};
+        }
+        entry = found->second;
+        if (entry.clientIp != clientIp || entry.socketId != socketId) {
+            m_Matrices.erase(found);
+            return {};
+        }
+    }
+
+    const auto validation = context.ValidateMatrixCard(
+        accountKey,
+        std::span<const std::uint8_t, 3>(entry.positions),
+        answer);
+    if (validation.kind == MatrixCardValidationKind::OwnerMissing) {
+        return MatrixValidationOutcome{
+            .kind = MatrixValidationOutcomeKind::OwnerMissing,
+        };
+    }
+    if (validation.kind == MatrixCardValidationKind::ValueTooShort) {
+        return MatrixValidationOutcome{
+            .kind = MatrixValidationOutcomeKind::ValueTooShort,
+            .actualLength = validation.actualLength,
+            .requiredLength = validation.requiredLength,
+        };
+    }
+
+    {
+        std::lock_guard guard(m_MatrixMutex);
+        m_Matrices.erase(accountKey);
+    }
+    return MatrixValidationOutcome{
+        .kind = validation.accepted ? MatrixValidationOutcomeKind::Accepted
+                                    : MatrixValidationOutcomeKind::Rejected,
+    };
+}
+
+std::optional<MatrixRegisterError> CLoginQueue::MatrixRegister(
+    ILoginQueueContext& context,
+    const TagPwdChecked& checked)
+{
+    if (checked.SocketID() == 0 || checked.ClientIP() == 0U) {
+        return std::nullopt;
+    }
+
+    std::array<std::uint8_t, 3> positions{};
+    for (auto& position : positions) {
+        std::uint32_t random = 0;
+        if (auto error = RandomWord(random)) {
+            return error;
+        }
+        position = static_cast<std::uint8_t>(random % 0x50U);
+    }
+
+    std::optional<std::int32_t> previousSocket;
+    {
+        std::lock_guard guard(m_MatrixMutex);
+        const auto found = m_Matrices.find(OwnedLegacyString(checked.Account()));
+        if (found != m_Matrices.end()) {
+            previousSocket = found->second.socketId;
+        }
+    }
+    if (previousSocket) {
+        LoginNet::CMessage previous(kLoginResponseMessageType);
+        previous.Base().Add(static_cast<char>('F'));
+        context.SendToClient(previous, *previousSocket);
+        std::lock_guard guard(m_MatrixMutex);
+        m_Matrices.erase(OwnedLegacyString(checked.Account()));
+    }
+
+    static_cast<void>(AddMatrix(checked.SocketID(),
+                                checked.ClientIP(),
+                                checked.Account(),
+                                std::span<const std::uint8_t, 3>(positions)));
+
+    LoginNet::CMessage response(kLoginResponseMessageType);
+    response.Base().Add(static_cast<char>('B'));
+    AddLegacyString(response, checked.Account());
+    response.Base().Add(positions.data(), static_cast<std::int32_t>(positions.size()));
+    context.SendToClient(response, checked.SocketID());
+    return std::nullopt;
+}
+
+std::optional<MatrixRegisterError> CLoginQueue::ContinueValidatedLogin(
+    ILoginQueueContext& context,
+    const TagPwdChecked& checked)
+{
+    switch (context.PrepareEnter(checked)) {
+    case PrepareEnterOutcome::Continue:
+        context.EnterGame(checked, IsInNoQueueList(checked.Account()));
+        return std::nullopt;
+    case PrepareEnterOutcome::Finished:
+        return std::nullopt;
+    case PrepareEnterOutcome::MatrixRegistrationRequired:
+        return MatrixRegister(context, checked);
+    }
+    return std::nullopt;
 }
 
 bool CLoginQueue::AddMatrix(std::int32_t socketId,
@@ -485,118 +682,24 @@ bool CLoginQueue::AddMatrix(std::int32_t socketId,
     if (socketId == 0 || clientIp == 0U) {
         return false;
     }
-    const auto key = Key(account);
-    std::lock_guard<std::mutex> lock(m_MatrixMutex);
-    if (m_Matrices.contains(key)) {
+    const auto accountKey = OwnedLegacyString(account);
+    std::lock_guard guard(m_MatrixMutex);
+    if (m_Matrices.find(accountKey) != m_Matrices.end()) {
         return false;
     }
-    m_Matrices.emplace(key, MatrixEntry{
-        .socketId = socketId,
-        .clientIp = clientIp,
-        .positions = {positions[0], positions[1], positions[2]},
-        .addedTime = LegacyTickMs(),
-    });
+    m_Matrices.emplace(accountKey,
+                       MatrixEntry{
+                           .socketId = socketId,
+                           .clientIp = clientIp,
+                           .positions = {positions[0], positions[1], positions[2]},
+                           .addedTime = LegacyTickMs(),
+                       });
     return true;
 }
 
-MatrixValidationOutcome
-CLoginQueue::ValidateMatrix(ILoginQueueContext& context,
-                            std::int32_t socketId,
-                            std::uint32_t clientIp,
-                            std::span<const std::uint8_t> account,
-                            std::span<const std::uint8_t, 3> answer)
+std::uint32_t CLoginQueue::SendMessageIntervalMs() const
 {
-    const auto key = Key(account);
-    std::lock_guard<std::mutex> lock(m_MatrixMutex);
-    const auto found = m_Matrices.find(key);
-    if (found == m_Matrices.end()) {
-        return MatrixValidationOutcome::Rejected;
-    }
-    if (found->second.clientIp != clientIp || found->second.socketId != socketId) {
-        m_Matrices.erase(found);
-        return MatrixValidationOutcome::Rejected;
-    }
-
-    const auto positions = std::span<const std::uint8_t, 3>(found->second.positions);
-    const MatrixCardValidation validation =
-        context.ValidateMatrixCard(account, positions, answer);
-    if (validation.kind == MatrixCardValidationKind::DatabaseOwnerMissing) {
-        return MatrixValidationOutcome::DatabaseOwnerMissing;
-    }
-    if (validation.kind == MatrixCardValidationKind::ValueTooShort) {
-        return MatrixValidationOutcome::DatabaseValueTooShort;
-    }
-
-    const bool accepted = validation.accepted;
-    m_Matrices.erase(found);
-    return accepted ? MatrixValidationOutcome::Accepted
-                    : MatrixValidationOutcome::Rejected;
-}
-
-void CLoginQueue::ContinueValidatedLogin(ILoginQueueContext& context,
-                                         const TagPwdChecked& checked)
-{
-    const bool noQueue = IsInNoQueueList(checked.Account());
-    switch (context.PrepareEnter(checked)) {
-    case PrepareEnterOutcome::Continue:
-        context.EnterGame(checked, noQueue);
-        break;
-    case PrepareEnterOutcome::Finished:
-        break;
-    case PrepareEnterOutcome::MatrixRegistrationRequired:
-        MatrixRegister(context, checked);
-        break;
-    }
-}
-
-void CLoginQueue::MatrixRegister(ILoginQueueContext& context,
-                                 const TagPwdChecked& checked)
-{
-    if (checked.SocketID() == 0 || checked.ClientIP() == 0U) {
-        return;
-    }
-    const auto positions = RandomMatrixPositions();
-    const auto key = Key(checked.Account());
-
-    std::optional<std::int32_t> previousSocket;
-    {
-        std::lock_guard<std::mutex> lock(m_MatrixMutex);
-        const auto found = m_Matrices.find(key);
-        if (found != m_Matrices.end()) {
-            previousSocket = found->second.socketId;
-        }
-    }
-    if (previousSocket) {
-        LoginNet::CMessage previous(kAuthFailedMessageType);
-        previous.Base().Add('F');
-        context.SendToClient(previous, *previousSocket);
-        std::lock_guard<std::mutex> lock(m_MatrixMutex);
-        m_Matrices.erase(key);
-    }
-
-    static_cast<void>(AddMatrix(checked.SocketID(), checked.ClientIP(),
-                                checked.Account(), positions));
-
-    LoginNet::CMessage response(kAuthFailedMessageType);
-    response.Base().Add('B');
-    AddLegacyString(response.Base(), checked.Account());
-    response.Base().AddEx(positions.data(), static_cast<std::int32_t>(positions.size()));
-    context.SendToClient(response, checked.SocketID());
-}
-
-std::uint32_t CLoginQueue::LegacyTickMs() noexcept
-{
-#if defined(__linux__) && defined(CLOCK_BOOTTIME)
-    timespec now{};
-    if (::clock_gettime(CLOCK_BOOTTIME, &now) == 0) {
-        const std::uint64_t milliseconds =
-            static_cast<std::uint64_t>(now.tv_sec) * 1000ULL +
-            static_cast<std::uint64_t>(now.tv_nsec) / 1'000'000ULL;
-        return static_cast<std::uint32_t>(milliseconds);
-    }
-#endif
-    const auto now = std::chrono::steady_clock::now().time_since_epoch();
-    return static_cast<std::uint32_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
+    std::lock_guard guard(m_SetupMutex);
+    return m_SendMessageIntervalMs;
 }
 }
