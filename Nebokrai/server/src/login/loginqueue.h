@@ -31,7 +31,8 @@ class CMessage;
  * PushBackPwdChecked 0x00019880, CheckMsgInfo 0x00016200,
  * ChangeValidCode 0x00016300, ValidateValidCode 0x000184B0,
  * matrix_add 0x0001B870, matrix_register 0x0001B950,
- * matirx_validate 0x00019800 и LoadNoQueueCdkeyList 0x000195E0.
+ * matirx_validate 0x00019800, LoadNoQueueCdkeyList 0x000195E0 и
+ * HandlePwdChecked 0x0001BB20.
  *
  * TagPwdChecked сохраняет signed socket ID, исходный IPv4, byte-exact account,
  * World и matrix-флаг. Duplicate password-result ищется под тем же lock;
@@ -71,15 +72,29 @@ class CMessage;
  * границей интерфейса. После восстановления CGame этот side effect вернётся
  * внутрь PrepareEnter без изменения внешней state-machine.
  *
+ * HandlePwdChecked полностью дренирует password-result FIFO под ОДНИМ
+ * исходным lockPwdChecked. Invalid endpoint — только socket==0 либо IP==0;
+ * пустой std::string-account исходник отдельно не отбрасывал. Valid-error
+ * upper limit даёт Q. При включённой captcha любая уже существующая запись
+ * account сначала получает N на её сохранённый socket — даже если socket тот
+ * же самый, donor-проверка `old != new` в EXE отсутствует. Затем запись
+ * безусловно заменяется новым code/world/matrix и отправляется exact
+ * J + account + long 0x70B6 + raw 0x70B6 BMP. Ошибка библиотечного генератора
+ * остаётся typed technical boundary без придуманного client-кода. При
+ * выключенной captcha выполняется PrepareEnter -> EnterGame; временный
+ * MatrixRegistrationRequired компенсирует ещё не материализованный side effect
+ * точного CGame::PrepareEnter через уже восстановленный matrix_register.
+ *
  * NoQueueAccounts.conf остаётся owner-данными CLoginQueue. std::filesystem и
  * owned STL-контейнеры заменяют Win32 case-insensitive filesystem, char[0x100],
  * std::list/map/set и ручное владение. Пустой файл, token >= 0x100 и ANSI
  * lowercase high-bit bytes помечаются безопасной неизвестной границей вместо
  * воспроизведения старого uninitialized/overflow/locale поведения.
  *
- * Полный Run, GAS, OnQuestCdkey/пароль, HandlePwdChecked и cadence ещё не
- * материализованы: их нельзя закрывать заглушками только ради сборки. Текущая
- * часть содержит ровно состояние и переходы, которых достигает logmessage.cpp.
+ * Полный Run, GAS, OnQuestCdkey/пароль и cadence ещё не материализованы: их
+ * нельзя закрывать заглушками только ради сборки. Текущая часть уже содержит
+ * client-message state и post-password HandlePwdChecked, но не подменяет
+ * отсутствующий auth/GAS owner.
  */
 namespace Login
 {
@@ -139,6 +154,8 @@ public:
     LoginCdkeyWorldServer(std::span<const std::uint8_t> account) const = 0;
     [[nodiscard]] virtual std::int32_t
     LoginWorldPlayerNumByName(std::span<const std::uint8_t> worldName) const = 0;
+    [[nodiscard]] virtual bool ValidCodeEnabled() const noexcept = 0;
+    [[nodiscard]] virtual std::int32_t ValidErrorUpperLimit() const noexcept = 0;
 
     [[nodiscard]] virtual PrepareEnterOutcome
     PrepareEnter(const TagPwdChecked& checked) = 0;
@@ -224,6 +241,29 @@ struct NoQueueAccountsLoadResult
     std::optional<NoQueueAccountsLoadError> error;
 };
 
+enum class PwdCheckedErrorKind
+{
+    ValidCodeGeneration,
+    MatrixRandom,
+};
+
+struct PwdCheckedError
+{
+    PwdCheckedErrorKind kind{};
+    std::vector<std::uint8_t> account;
+    std::string detail;
+};
+
+struct HandlePwdCheckedReport
+{
+    std::size_t processed{};
+    std::size_t droppedInvalidEndpoint{};
+    std::size_t rejectedByValidErrors{};
+    std::size_t generatedValidCodes{};
+    std::size_t enteredWithoutValidCode{};
+    std::vector<PwdCheckedError> errors;
+};
+
 class CLoginQueue
 {
 public:
@@ -263,6 +303,7 @@ public:
 
     void PushBackPwdChecked(TagPwdChecked checked, const KickOutCallback& kickOut);
     [[nodiscard]] std::size_t PendingPwdChecked() const;
+    [[nodiscard]] HandlePwdCheckedReport HandlePwdChecked(ILoginQueueContext& context);
 
     [[nodiscard]] CheckMessageInfo
     CheckMsgInfo(std::span<const std::uint8_t> account, std::int32_t socketId) const;

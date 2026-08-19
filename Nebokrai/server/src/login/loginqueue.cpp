@@ -1,6 +1,7 @@
 #include "loginqueue.h"
 
 #include "authmanager.h"
+#include "applogin/validcode.h"
 #include "../nets/netlogin/message.h"
 
 #include <algorithm>
@@ -477,6 +478,123 @@ std::size_t CLoginQueue::PendingPwdChecked() const
 {
     std::lock_guard guard(m_PwdCheckedMutex);
     return m_PwdChecked.size();
+}
+
+HandlePwdCheckedReport CLoginQueue::HandlePwdChecked(ILoginQueueContext& context)
+{
+    HandlePwdCheckedReport report;
+
+    // VERIFIED_DISASSEMBLY 0x0041BB4A..0x0041C0CC: исходный
+    // lockPwdChecked берётся один раз ДО проверки размера и освобождается
+    // только после полного drain. Не сокращаем critical section до pop_front.
+    std::lock_guard pwdGuard(m_PwdCheckedMutex);
+    while (!m_PwdChecked.empty()) {
+        TagPwdChecked checked = std::move(m_PwdChecked.front());
+        m_PwdChecked.pop_front();
+        ++report.processed;
+
+        // pt_account в исходнике — std::string::c_str()-совместимый указатель и
+        // для пустой строки не null. Поэтому проверяются только реальные
+        // endpoint-поля; donor empty-account guard сюда не переносится.
+        if (checked.SocketID() == 0 || checked.ClientIP() == 0U) {
+            ++report.droppedInvalidEndpoint;
+            continue;
+        }
+
+        bool tooManyValidErrors = false;
+        {
+            const auto accountKey = OwnedLegacyString(checked.Account());
+            std::lock_guard validErrGuard(m_ValidErrMutex);
+            const auto found = m_ValidErrors.find(accountKey);
+            tooManyValidErrors =
+                found != m_ValidErrors.end() &&
+                context.ValidErrorUpperLimit() <= found->second.errorTimes;
+        }
+        if (tooManyValidErrors) {
+            LoginNet::CMessage response(kLoginResponseMessageType);
+            response.Base().Add(static_cast<char>('Q'));
+            context.SendToClient(response, checked.SocketID());
+            ++report.rejectedByValidErrors;
+            continue;
+        }
+
+        if (context.ValidCodeEnabled()) {
+            const auto accountKey = OwnedLegacyString(checked.Account());
+
+            // VERIFIED_ASSEMBLY 0x0041BCB2..0x0041BD5D: map::find(account),
+            // iterator != end -> N отправляется сохранённому socket без
+            // сравнения с новым socket. Старый Linux donor добавлял сравнение,
+            // которого в RU EXE нет.
+            std::optional<std::int32_t> previousSocket;
+            {
+                std::lock_guard validCodeGuard(m_ValidCodeMutex);
+                const auto found = m_ValidCodes.find(accountKey);
+                if (found != m_ValidCodes.end()) {
+                    previousSocket = found->second.socketId;
+                }
+            }
+            if (previousSocket) {
+                LoginNet::CMessage previous(kLoginResponseMessageType);
+                previous.Base().Add(static_cast<char>('N'));
+                context.SendToClient(previous, *previousSocket);
+            }
+
+            CValidCode validCode;
+            if (auto error = CValidCode::Generate(std::filesystem::path{"."}, validCode)) {
+                report.errors.push_back(PwdCheckedError{
+                    .kind = PwdCheckedErrorKind::ValidCodeGeneration,
+                    .account = accountKey,
+                    .detail = error->detail,
+                });
+                continue;
+            }
+
+            const std::uint32_t now = LegacyTickMs();
+            {
+                std::lock_guard validCodeGuard(m_ValidCodeMutex);
+                m_ValidCodes[accountKey] = ValidCodeEntry{
+                    .socketId = checked.SocketID(),
+                    .clientIp = checked.ClientIP(),
+                    .addedTime = now,
+                    .validCode = std::vector<std::uint8_t>(validCode.ValidCode().begin(),
+                                                           validCode.ValidCode().end()),
+                    .worldServer = OwnedLegacyString(checked.WorldServer()),
+                    .hasMatrix = checked.HasMatrix(),
+                    .changeTime = 0U,
+                };
+            }
+
+            LoginNet::CMessage response(kLoginResponseMessageType);
+            response.Base().Add(std::uint8_t{'J'});
+            AddLegacyString(response, checked.Account());
+            response.Base().Add(static_cast<std::int32_t>(kValidCodeBitmapLength));
+            const auto bitmap = validCode.Bitmap();
+            response.Base().Add(bitmap.data(), static_cast<std::int32_t>(bitmap.size()));
+            context.SendToClient(response, checked.SocketID());
+            ++report.generatedValidCodes;
+            continue;
+        }
+
+        switch (context.PrepareEnter(checked)) {
+        case PrepareEnterOutcome::Continue:
+            context.EnterGame(checked, IsInNoQueueList(checked.Account()));
+            ++report.enteredWithoutValidCode;
+            break;
+        case PrepareEnterOutcome::Finished:
+            break;
+        case PrepareEnterOutcome::MatrixRegistrationRequired:
+            if (auto error = MatrixRegister(context, checked)) {
+                report.errors.push_back(PwdCheckedError{
+                    .kind = PwdCheckedErrorKind::MatrixRandom,
+                    .account = OwnedLegacyString(checked.Account()),
+                    .detail = error->detail,
+                });
+            }
+            break;
+        }
+    }
+
+    return report;
 }
 
 CheckMessageInfo CLoginQueue::CheckMsgInfo(std::span<const std::uint8_t> account,
