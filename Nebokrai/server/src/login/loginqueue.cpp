@@ -511,6 +511,60 @@ void CLoginQueue::ClearTimeoutList(ILoginQueueContext& context)
     }
 }
 
+bool CLoginQueue::IsValidErrManyTimes(ILoginQueueContext& context,
+                                         std::span<const std::uint8_t> account) const
+{
+    const auto accountKey = OwnedLegacyString(account);
+    std::lock_guard guard(m_ValidErrMutex);
+    const auto found = m_ValidErrors.find(accountKey);
+    return found != m_ValidErrors.end() &&
+           context.ValidErrorUpperLimit() <= found->second.errorTimes;
+}
+
+void CLoginQueue::MatricesTimeout(ILoginQueueContext& context)
+{
+    std::lock_guard guard(m_MatrixMutex);
+    for (auto current = m_Matrices.begin(); current != m_Matrices.end();) {
+        const std::uint32_t now = LegacyTickMs();
+        if (context.MatrixTimeoutMs() < now - current->second.addedTime) {
+            LoginNet::CMessage response(kLoginResponseMessageType);
+            response.Base().Add(static_cast<char>('E'));
+            context.SendToClient(response, current->second.socketId);
+            current = m_Matrices.erase(current);
+        } else {
+            ++current;
+        }
+    }
+}
+
+void CLoginQueue::ValidCodeOvertime(ILoginQueueContext& context)
+{
+    std::lock_guard guard(m_ValidCodeMutex);
+    for (auto current = m_ValidCodes.begin(); current != m_ValidCodes.end();) {
+        const std::uint32_t now = LegacyTickMs();
+        if (context.ValidCodeOvertimeMs() < now - current->second.addedTime) {
+            LoginNet::CMessage response(kLoginResponseMessageType);
+            response.Base().Add(static_cast<char>('M'));
+            context.SendToClient(response, current->second.socketId);
+            current = m_ValidCodes.erase(current);
+        } else {
+            ++current;
+        }
+    }
+}
+
+void CLoginQueue::CheckValidErr(std::uint32_t now)
+{
+    std::lock_guard guard(m_ValidErrMutex);
+    for (auto current = m_ValidErrors.begin(); current != m_ValidErrors.end();) {
+        if (current->second.nextLoginTime < now) {
+            current = m_ValidErrors.erase(current);
+        } else {
+            ++current;
+        }
+    }
+}
+
 ClientLostCleanupReport CLoginQueue::OnClientLost(std::span<const std::uint8_t> account)
 {
     const auto accountKey = OwnedLegacyString(account);
@@ -571,16 +625,7 @@ HandlePwdCheckedReport CLoginQueue::HandlePwdChecked(ILoginQueueContext& context
             continue;
         }
 
-        bool tooManyValidErrors = false;
-        {
-            const auto accountKey = OwnedLegacyString(checked.Account());
-            std::lock_guard validErrGuard(m_ValidErrMutex);
-            const auto found = m_ValidErrors.find(accountKey);
-            tooManyValidErrors =
-                found != m_ValidErrors.end() &&
-                context.ValidErrorUpperLimit() <= found->second.errorTimes;
-        }
-        if (tooManyValidErrors) {
+        if (IsValidErrManyTimes(context, checked.Account())) {
             LoginNet::CMessage response(kLoginResponseMessageType);
             response.Base().Add(static_cast<char>('Q'));
             context.SendToClient(response, checked.SocketID());

@@ -33,8 +33,10 @@ class CMessage;
  * matrix_add 0x0001B870, matrix_register 0x0001B950,
  * matirx_validate 0x00019800, LoadNoQueueCdkeyList 0x000195E0,
  * HandlePwdChecked 0x0001BB20, OnQuestPlayerData 0x0001B3F0,
- * IsValidQuest 0x000172C0, PushLoginList 0x0001AAB0 и
- * ClearTimeoutList 0x00017330.
+ * IsValidQuest 0x000172C0, PushLoginList 0x0001AAB0,
+ * ClearTimeoutList 0x00017330, IsValidErrManyTimes 0x000163E0,
+ * matrices_timeout 0x000183D0, ValidCodeOvertime 0x00018610 и
+ * CheckValidErr 0x00018700.
  *
  * TagPwdChecked сохраняет signed socket ID, исходный IPv4, byte-exact account,
  * World и matrix-флаг. Duplicate password-result ищется под тем же lock;
@@ -97,6 +99,16 @@ class CMessage;
  * ClearTimeoutList проверяет boot tick отдельно для каждой записи и удаляет
  * только при added + interval < now. std::map/mutex заменяют старый raw tree;
  * 32-bit tick arithmetic остаётся wrapping.
+ *
+ * Timeout helpers сохраняют отдельные one-shot maps. Matrix timeout истекает
+ * только при matrix_timeout < now - added и отправляет E; valid-code — при
+ * valid_overtime < now - added и отправляет M. В обоих случаях boot tick
+ * читается заново на каждой записи, затем запись удаляется. Valid-error
+ * считается заблокированным только при существующей записи и
+ * upper_limit <= error_times. CheckValidErr удаляет строго при
+ * next_login_time < now: равенство ещё живо. Старые nullable heap pointers
+ * valid-error заменены value-map, поэтому исходная ветка null-entry становится
+ * невозможным техническим состоянием, а не отдельной игровой семантикой.
  *
  * NoQueueAccounts.conf остаётся owner-данными CLoginQueue. std::filesystem и
  * owned STL-контейнеры заменяют Win32 case-insensitive filesystem, char[0x100],
@@ -170,6 +182,8 @@ public:
     [[nodiscard]] virtual bool ValidCodeEnabled() const noexcept = 0;
     [[nodiscard]] virtual std::int32_t ValidErrorUpperLimit() const noexcept = 0;
     [[nodiscard]] virtual std::uint32_t QuestPlayerDataIntervalMs() const noexcept = 0;
+    [[nodiscard]] virtual std::uint32_t MatrixTimeoutMs() const noexcept = 0;
+    [[nodiscard]] virtual std::uint32_t ValidCodeOvertimeMs() const noexcept = 0;
 
     virtual void L2WQuestDetailSend(
         std::optional<std::span<const std::uint8_t>> worldServer,
@@ -413,6 +427,11 @@ private:
     [[nodiscard]] bool IsValidQuest(ILoginQueueContext& context, std::int32_t playerId);
     [[nodiscard]] bool PushLoginList(std::int32_t playerId);
     void ClearTimeoutList(ILoginQueueContext& context);
+    [[nodiscard]] bool IsValidErrManyTimes(ILoginQueueContext& context,
+                                           std::span<const std::uint8_t> account) const;
+    void MatricesTimeout(ILoginQueueContext& context);
+    void ValidCodeOvertime(ILoginQueueContext& context);
+    void CheckValidErr(std::uint32_t now);
 
     [[nodiscard]] bool AddMatrix(std::int32_t socketId,
                                  std::uint32_t clientIp,
