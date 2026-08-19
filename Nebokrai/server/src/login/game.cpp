@@ -1,6 +1,7 @@
 #include "game.h"
 
 #include "loginqueue.h"
+#include "../dbaccess/myadobase.h"
 #include "../nets/netlogin/message.h"
 #include "../nets/netlogin/mynetserver_client.h"
 #include "../nets/netlogin/mynetserver_world.h"
@@ -10,11 +11,10 @@
 #include <sqlext.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cerrno>
-#include <chrono>
 #include <cstring>
-#include <ctime>
 #include <span>
 #include <string>
 #include <string_view>
@@ -29,7 +29,6 @@ constexpr std::int32_t kLoginResponseMessageType = 0x000AF501;
 constexpr std::int32_t kPlayerBaseMessageType = 0x0004FB01;
 constexpr std::int32_t kKickWorldAccountMessageType = 0x0004FB07;
 constexpr std::size_t kLegacyAccountLogBufferSize = 0x200U;
-constexpr std::size_t kLegacyExecuteConnectionBufferSize = 0x400U;
 
 std::span<const std::uint8_t> CStringBytes(const char* value)
 {
@@ -51,30 +50,6 @@ std::string LegacyIpv4Text(std::uint32_t address)
            std::to_string((address >> 8U) & 0xFFU) + '.' +
            std::to_string((address >> 16U) & 0xFFU) + '.' +
            std::to_string((address >> 24U) & 0xFFU);
-}
-
-std::optional<std::string> LegacyLocalTimeText()
-{
-    const std::time_t now = std::chrono::system_clock::to_time_t(
-        std::chrono::system_clock::now());
-    std::tm local{};
-#if defined(_WIN32)
-    if (::localtime_s(&local, &now) != 0) {
-        return std::nullopt;
-    }
-#else
-    if (::localtime_r(&now, &local) == nullptr) {
-        return std::nullopt;
-    }
-#endif
-    // VERIFIED CMyAdoBase::GetTimeString 0x00464210:
-    // "%d-%d-%d %d:%d:%d", без zero-padding.
-    return std::to_string(local.tm_year + 1900) + '-' +
-           std::to_string(local.tm_mon + 1) + '-' +
-           std::to_string(local.tm_mday) + ' ' +
-           std::to_string(local.tm_hour) + ':' +
-           std::to_string(local.tm_min) + ':' +
-           std::to_string(local.tm_sec);
 }
 
 struct ConvertedText
@@ -289,8 +264,9 @@ void CGame::AccountEnterLog(const char* account, std::uint32_t ip)
         return;
     }
 
-    const auto time = LegacyLocalTimeText();
-    if (!time) {
+    std::array<char, 64> time{};
+    static_cast<void>(CMyAdoBase::GetTimeString(time.data(), time.size()));
+    if (time[0] == '\0') {
         RecordTechnicalError("AccountEnterLog: localtime conversion failed");
         return;
     }
@@ -299,7 +275,7 @@ void CGame::AccountEnterLog(const char* account, std::uint32_t ip)
     std::string sql = "INSERT INTO LogInfo(Account,AccountEnterTime,IP) VALUES('";
     sql += account;
     sql += "','";
-    sql += *time;
+    sql += time.data();
     sql += "','";
     sql += ipText;
     sql += "')";
