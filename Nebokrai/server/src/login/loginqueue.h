@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+class ClientSendQueue;
+
 namespace LoginNet
 {
 class CMessage;
@@ -35,8 +37,9 @@ class CMessage;
  * HandlePwdChecked 0x0001BB20, OnQuestPlayerData 0x0001B3F0,
  * IsValidQuest 0x000172C0, PushLoginList 0x0001AAB0,
  * ClearTimeoutList 0x00017330, IsValidErrManyTimes 0x000163E0,
- * matrices_timeout 0x000183D0, ValidCodeOvertime 0x00018610 и
- * CheckValidErr 0x00018700.
+ * matrices_timeout 0x000183D0, ValidCodeOvertime 0x00018610,
+ * CheckValidErr 0x00018700, AddGasQueue 0x000199A0 и
+ * OnQuestCdkey 0x0001A130.
  *
  * TagPwdChecked сохраняет signed socket ID, исходный IPv4, byte-exact account,
  * World и matrix-флаг. Duplicate password-result ищется под тем же lock;
@@ -100,6 +103,21 @@ class CMessage;
  * только при added + interval < now. std::map/mutex заменяют старый raw tree;
  * 32-bit tick arithmetic остаётся wrapping.
  *
+ * OnQuestCdkey сохраняет исходный authentication split. Непустой World
+ * немедленно идёт PrepareEnter/EnterGame и обходит password/DB. При пустом
+ * World inside-mode 0 кладёт owned-копию в отдельную GAS FIFO, mode !=0/1 —
+ * точный no-op, mode 1 выполняет numeric FixPtAcc -> ban -> allow -> forbid ->
+ * between -> matrix -> password. Первые ровно 16 digest bytes кодируются в 32
+ * uppercase hex; только AuthServer-ветка lowercases account и hex перед уже
+ * восстановленным AuthManager. Local password success кладёт canonical userid
+ * в PwdChecked и сохраняет matrix flag. Короткий digest, отсутствующий
+ * CRsCDKey/setup/Auth transport и ошибка чтения local time остаются typed
+ * technical boundaries вместо OOB/ложного успеха. Ban wire exact:
+ * 0x10, 0, затем пять short year/month/day/hour/minute. std::chrono + системный
+ * localtime заменяют GetLocalTime; raw OLE DATE остаётся результатом DB-owner,
+ * а его DecodeVariantTime отдан compatibility adapter/library. Порядок exact:
+ * raw ban -> local-now -> decode OLE -> compare local-now < expiry.
+ *
  * Timeout helpers сохраняют отдельные one-shot maps. Matrix timeout истекает
  * только при matrix_timeout < now - added и отправляет E; valid-code — при
  * valid_overtime < now - added и отправляет M. В обоих случаях boot tick
@@ -116,13 +134,15 @@ class CMessage;
  * lowercase high-bit bytes помечаются безопасной неизвестной границей вместо
  * воспроизведения старого uninitialized/overflow/locale поведения.
  *
- * Полный Run, GAS, OnQuestCdkey/пароль и cadence ещё не материализованы: их
- * нельзя закрывать заглушками только ради сборки. Текущая часть уже содержит
- * client-message state и post-password HandlePwdChecked, но не подменяет
- * отсутствующий auth/GAS owner.
+ * Полный Run, GAS worker и cadence ещё не материализованы: их нельзя закрывать
+ * заглушками только ради сборки. Queue-side OnQuestCdkey/AddGasQueue уже есть,
+ * но фактический CGasThread/CGasOperator остаётся отдельным owner-узлом.
  */
 namespace Login
 {
+class AuthManager;
+class IAuthListener;
+
 class TagPwdChecked
 {
 public:
@@ -168,6 +188,34 @@ struct MatrixCardValidation
     std::size_t requiredLength{};
 };
 
+struct LocalDateTime
+{
+    std::uint16_t year{};
+    std::uint16_t month{};
+    std::uint16_t day{};
+    std::uint16_t hour{};
+    std::uint16_t minute{};
+    std::uint16_t second{};
+    std::uint16_t milliseconds{};
+};
+
+enum class QuestCdkeyErrorKind
+{
+    InsideModeMissing,
+    DatabaseOwnerMissing,
+    PasswordDigestTooShort,
+    AuthTransportMissing,
+    LocalTimeUnavailable,
+    VariantTimeConversionFailed,
+};
+
+struct QuestCdkeyError
+{
+    QuestCdkeyErrorKind kind{};
+    std::size_t actualLength{};
+    std::string detail;
+};
+
 class ILoginQueueContext
 {
 public:
@@ -184,6 +232,28 @@ public:
     [[nodiscard]] virtual std::uint32_t QuestPlayerDataIntervalMs() const noexcept = 0;
     [[nodiscard]] virtual std::uint32_t MatrixTimeoutMs() const noexcept = 0;
     [[nodiscard]] virtual std::uint32_t ValidCodeOvertimeMs() const noexcept = 0;
+    [[nodiscard]] virtual std::optional<std::int32_t> InsideUseMode() const noexcept = 0;
+
+    [[nodiscard]] virtual bool HasRsCdKeyOwner() const noexcept = 0;
+    [[nodiscard]] virtual std::vector<std::uint8_t>
+    FixPtAccount(std::span<const std::uint8_t> account) = 0;
+    [[nodiscard]] virtual double
+    BanVariantTime(std::span<const std::uint8_t> account) = 0;
+    [[nodiscard]] virtual std::optional<LocalDateTime>
+    DecodeVariantTime(double variantTime) = 0;
+    [[nodiscard]] virtual bool IpIsAllowed(std::uint32_t clientIp) = 0;
+    [[nodiscard]] virtual bool IpIsForbidden(std::uint32_t clientIp) = 0;
+    [[nodiscard]] virtual bool IsBetweenIp(std::span<const std::uint8_t> account,
+                                           std::uint32_t clientIp) = 0;
+    [[nodiscard]] virtual bool MatrixUsed(std::span<const std::uint8_t> account) = 0;
+    [[nodiscard]] virtual std::optional<std::vector<std::uint8_t>>
+    ValidateLocalPassword(std::span<const std::uint8_t> account,
+                          std::span<const std::uint8_t> passwordHex) = 0;
+
+    [[nodiscard]] virtual bool IsConnectAS() const noexcept = 0;
+    [[nodiscard]] virtual ClientSendQueue* AuthSendQueue() noexcept = 0;
+    [[nodiscard]] virtual IAuthListener* AuthListener() noexcept = 0;
+    virtual void KickOut(std::span<const std::uint8_t> account) = 0;
 
     virtual void L2WQuestDetailSend(
         std::optional<std::span<const std::uint8_t>> worldServer,
@@ -423,6 +493,9 @@ private:
         std::uint32_t addedTime{};
     };
 
+    void AddGasQueue(const QuestCdkey& quest);
+    [[nodiscard]] std::optional<QuestCdkeyError>
+    OnQuestCdkey(ILoginQueueContext& context, AuthManager& authManager, const QuestCdkey& quest);
     void OnQuestPlayerData(ILoginQueueContext& context, const QuestPlayerData& quest);
     [[nodiscard]] bool IsValidQuest(ILoginQueueContext& context, std::int32_t playerId);
     [[nodiscard]] bool PushLoginList(std::int32_t playerId);
@@ -453,6 +526,9 @@ private:
     mutable std::mutex m_QuestCdkeyMutex;
     std::deque<QuestCdkey> m_QuestCdkey;
     std::deque<QuestCdkey> m_NoQueueQuestCdkey;
+
+    mutable std::mutex m_GasQuestMutex;
+    std::deque<QuestCdkey> m_GasQuest;
 
     mutable std::mutex m_PlayerQuestMutex;
     std::map<std::vector<std::uint8_t>, std::deque<QuestPlayerList>> m_QuestPlayerList;

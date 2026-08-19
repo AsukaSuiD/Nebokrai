@@ -7,12 +7,15 @@
 #include <algorithm>
 #include <bit>
 #include <cerrno>
+#include <chrono>
+#include <ctime>
 #include <exception>
 #include <fstream>
 #include <iterator>
 #include <random>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <utility>
 
 #if defined(__linux__)
@@ -150,6 +153,79 @@ void AddLegacyString(LoginNet::CMessage& message, std::span<const std::uint8_t> 
         message.Base().Add(prefix.data(), static_cast<std::int32_t>(prefix.size()));
     }
     message.Base().Add(std::uint8_t{0});
+}
+
+std::optional<LocalDateTime> CurrentLocalDateTime()
+{
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t time = std::chrono::system_clock::to_time_t(now);
+    std::tm local{};
+#if defined(_WIN32)
+    if (::localtime_s(&local, &time) != 0) {
+        return std::nullopt;
+    }
+#else
+    if (::localtime_r(&time, &local) == nullptr) {
+        return std::nullopt;
+    }
+#endif
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            now.time_since_epoch())
+                            .count();
+    const auto millisecond = static_cast<std::uint16_t>(
+        static_cast<std::uint64_t>(millis) % 1000ULL);
+    return LocalDateTime{
+        .year = static_cast<std::uint16_t>(local.tm_year + 1900),
+        .month = static_cast<std::uint16_t>(local.tm_mon + 1),
+        .day = static_cast<std::uint16_t>(local.tm_mday),
+        .hour = static_cast<std::uint16_t>(local.tm_hour),
+        .minute = static_cast<std::uint16_t>(local.tm_min),
+        .second = static_cast<std::uint16_t>(local.tm_sec),
+        .milliseconds = millisecond,
+    };
+}
+
+bool EarlierThan(const LocalDateTime& left, const LocalDateTime& right)
+{
+    return std::tie(left.year, left.month, left.day, left.hour, left.minute,
+                    left.second, left.milliseconds) <
+           std::tie(right.year, right.month, right.day, right.hour, right.minute,
+                    right.second, right.milliseconds);
+}
+
+bool IsAsciiNumeric(std::span<const std::uint8_t> value)
+{
+    return std::all_of(value.begin(), value.end(), [](std::uint8_t byte) {
+        return byte >= '0' && byte <= '9';
+    });
+}
+
+std::optional<std::vector<std::uint8_t>> PasswordDigestHex(
+    std::span<const std::uint8_t> digest)
+{
+    if (digest.size() < 16U) {
+        return std::nullopt;
+    }
+    static constexpr std::array<std::uint8_t, 16> kHex{
+        '0', '1', '2', '3', '4', '5', '6', '7',
+        '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
+    };
+    std::vector<std::uint8_t> result(32U);
+    for (std::size_t index = 0; index < 16U; ++index) {
+        const std::uint8_t byte = digest[index];
+        result[index * 2U] = kHex[(byte >> 4U) & 0x0FU];
+        result[index * 2U + 1U] = kHex[byte & 0x0FU];
+    }
+    return result;
+}
+
+void SendLoginCode(ILoginQueueContext& context,
+                   std::int32_t socketId,
+                   std::uint8_t code)
+{
+    LoginNet::CMessage response(kLoginResponseMessageType);
+    response.Base().Add(static_cast<char>(code));
+    context.SendToClient(response, socketId);
 }
 
 template <typename Queue>
@@ -386,6 +462,148 @@ void CLoginQueue::AddQuestCdkey(std::int32_t socketId,
     } else {
         m_QuestCdkey.push_back(std::move(quest));
     }
+}
+
+void CLoginQueue::AddGasQueue(const QuestCdkey& quest)
+{
+    std::lock_guard guard(m_GasQuestMutex);
+    m_GasQuest.push_back(quest);
+}
+
+std::optional<QuestCdkeyError> CLoginQueue::OnQuestCdkey(
+    ILoginQueueContext& context,
+    AuthManager& authManager,
+    const QuestCdkey& quest)
+{
+    if (!quest.worldServer.empty()) {
+        TagPwdChecked checked(quest.socketId, quest.clientIp, quest.account,
+                              quest.worldServer, false);
+        switch (context.PrepareEnter(checked)) {
+        case PrepareEnterOutcome::Continue:
+            context.EnterGame(checked, IsInNoQueueList(checked.Account()));
+            break;
+        case PrepareEnterOutcome::Finished:
+        case PrepareEnterOutcome::MatrixRegistrationRequired:
+            // hasMatrix=false делает matrix-register недостижимым в точном
+            // CGame::PrepareEnter; временный outcome не добавляет side effect.
+            break;
+        }
+        return std::nullopt;
+    }
+
+    const auto insideMode = context.InsideUseMode();
+    if (!insideMode) {
+        return QuestCdkeyError{
+            .kind = QuestCdkeyErrorKind::InsideModeMissing,
+            .detail = "m_lIsInsideUse ещё не материализован",
+        };
+    }
+    if (*insideMode != 1) {
+        if (*insideMode == 0) {
+            AddGasQueue(quest);
+        }
+        return std::nullopt;
+    }
+
+    if (!context.HasRsCdKeyOwner()) {
+        return QuestCdkeyError{
+            .kind = QuestCdkeyErrorKind::DatabaseOwnerMissing,
+            .detail = "CRsCDKey owner для OnQuestCdkey отсутствует",
+        };
+    }
+
+    std::vector<std::uint8_t> account = quest.account;
+    // Исходный byte-loop считает пустую строку полностью цифровой и тоже
+    // вызывает FixPtAcc; std::all_of сохраняет именно эту vacuous-ветку.
+    if (IsAsciiNumeric(account)) {
+        account = context.FixPtAccount(account);
+    }
+
+    const double banVariantTime = context.BanVariantTime(account);
+    if (banVariantTime != 0.0) {
+        // VERIFIED_DISASSEMBLY 0x0041A2A4..0x0041A35A: GetLocalTime
+        // происходит до VariantTimeToSystemTime. Оставляем этот порядок даже
+        // при вынесенном compatibility decoder.
+        const auto now = CurrentLocalDateTime();
+        if (!now) {
+            return QuestCdkeyError{
+                .kind = QuestCdkeyErrorKind::LocalTimeUnavailable,
+                .detail = "системный localtime не вернул локальное время",
+            };
+        }
+        const auto banTime = context.DecodeVariantTime(banVariantTime);
+        if (!banTime) {
+            return QuestCdkeyError{
+                .kind = QuestCdkeyErrorKind::VariantTimeConversionFailed,
+                .detail = "OLE DATE ban_time не преобразован в календарное время",
+            };
+        }
+        if (EarlierThan(*now, *banTime)) {
+            LoginNet::CMessage response(kLoginResponseMessageType);
+            response.Base().Add(static_cast<char>(0x10));
+            response.Base().Add(static_cast<char>(0));
+            response.Base().Add(static_cast<std::int16_t>(banTime->year));
+            response.Base().Add(static_cast<std::int16_t>(banTime->month));
+            response.Base().Add(static_cast<std::int16_t>(banTime->day));
+            response.Base().Add(static_cast<std::int16_t>(banTime->hour));
+            response.Base().Add(static_cast<std::int16_t>(banTime->minute));
+            context.SendToClient(response, quest.socketId);
+            return std::nullopt;
+        }
+    }
+
+    if (!context.IpIsAllowed(quest.clientIp)) {
+        SendLoginCode(context, quest.socketId, 0x12U);
+        return std::nullopt;
+    }
+    if (context.IpIsForbidden(quest.clientIp)) {
+        SendLoginCode(context, quest.socketId, 0x12U);
+        return std::nullopt;
+    }
+    if (!context.IsBetweenIp(account, quest.clientIp)) {
+        SendLoginCode(context, quest.socketId, 0x11U);
+        return std::nullopt;
+    }
+
+    const bool hasMatrix = context.MatrixUsed(account);
+    auto passwordHex = PasswordDigestHex(quest.passwordDigest);
+    if (!passwordHex) {
+        return QuestCdkeyError{
+            .kind = QuestCdkeyErrorKind::PasswordDigestTooShort,
+            .actualLength = quest.passwordDigest.size(),
+            .detail = "password digest короче исходных 16 байт",
+        };
+    }
+
+    if (context.IsConnectAS()) {
+        LowerAscii(account);
+        LowerAscii(*passwordHex);
+        ClientSendQueue* sender = context.AuthSendQueue();
+        IAuthListener* listener = context.AuthListener();
+        if (sender == nullptr || listener == nullptr) {
+            return QuestCdkeyError{
+                .kind = QuestCdkeyErrorKind::AuthTransportMissing,
+                .detail = "IsConnectAS=true без Auth send queue/listener",
+            };
+        }
+        static_cast<void>(authManager.AddQuest(
+            quest.clientIp, quest.socketId, account, *passwordHex, *sender, *listener));
+        return std::nullopt;
+    }
+
+    const auto canonicalAccount = context.ValidateLocalPassword(account, *passwordHex);
+    if (!canonicalAccount) {
+        SendLoginCode(context, quest.socketId, 7U);
+        return std::nullopt;
+    }
+
+    PushBackPwdChecked(
+        TagPwdChecked(quest.socketId, quest.clientIp, *canonicalAccount,
+                      quest.worldServer, hasMatrix),
+        [&context](std::span<const std::uint8_t> duplicateAccount) {
+            context.KickOut(duplicateAccount);
+        });
+    return std::nullopt;
 }
 
 bool CLoginQueue::AddQuestPlayerList(ILoginQueueContext& context,
