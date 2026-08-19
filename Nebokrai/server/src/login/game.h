@@ -32,6 +32,8 @@ class CLoginQueue;
  * Setup owner: tagSetup ctor 0x0040C6E0, ChangeAllWorldSate 0x004075E0,
  * LoadSetupEx 0x0040D9E0, ReLoadSetupEx 0x0040DC60,
  * LoadSetup 0x0040E690, ReLoadSetup 0x0040F4E0,
+ * LoadWorldSetup 0x00410F30, SetListWorldInfoBySetup 0x00411170,
+ * ReLoadWorldSetup 0x00411FF0, UpdateWorldInfoToAllClient 0x00407860,
  * CGame ctor defaults 0x00414350.
  */
 class CGame
@@ -131,6 +133,10 @@ public:
     [[nodiscard]] bool ReLoadSetup(AuthManager& authManager);
     [[nodiscard]] bool LoadSetupEx();
     [[nodiscard]] bool ReLoadSetupEx();
+    [[nodiscard]] bool LoadWorldSetup();
+    void SetListWorldInfoBySetup();
+    void UpdateWorldInfoToAllClient();
+    [[nodiscard]] bool ReLoadWorldSetup();
 
     [[nodiscard]] std::int32_t GetWorldIDByName(const char* worldName) const;
     [[nodiscard]] bool WorldServerIsOpenState(std::int32_t worldId) const;

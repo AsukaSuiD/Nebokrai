@@ -3,6 +3,7 @@
 #include "authmanager.h"
 #include "loginqueue.h"
 #include "../dbaccess/myadobase.h"
+#include "../public/readwrite.h"
 #include "../public/tools.h"
 #include "../nets/netlogin/message.h"
 #include "../nets/netlogin/mynetserver_client.h"
@@ -34,6 +35,7 @@ namespace Login
 namespace
 {
 constexpr std::int32_t kLoginResponseMessageType = 0x000AF501;
+constexpr std::int32_t kWorldInfoUpdateMessageType = 0x000AF509;
 constexpr std::int32_t kPlayerBaseMessageType = 0x0004FB01;
 constexpr std::int32_t kKickWorldAccountMessageType = 0x0004FB07;
 constexpr std::size_t kLegacyAccountLogBufferSize = 0x200U;
@@ -443,6 +445,81 @@ bool CGame::ReLoadSetupEx()
     s_pNetServer_World->ConfigureAcceptLimitsAfterHost(
         m_SetupEx.lWorldMaxBlockConNum,
         m_SetupEx.lWorldValidDelayRecDataTime);
+    return true;
+}
+
+bool CGame::LoadWorldSetup()
+{
+    // VERIFIED_DECOMPILE 0x00410F30: clear happens before the file open, so an
+    // open failure deliberately leaves the setup map empty.
+    m_WorldInfoSetup.clear();
+
+    std::ifstream input("WorldInfoSetup.ini");
+    if (!input.is_open()) {
+        return false;
+    }
+
+    while (ReadTo(input, "#")) {
+        std::int32_t worldId;
+        std::string worldName;
+        std::int32_t state;
+        if (!(input >> worldId >> worldName >> state)) {
+            // Direct code would consume uninitialized stack values after a bad
+            // extraction. Invalid config is kept as a technical boundary.
+            RecordTechnicalError("LoadWorldSetup: incomplete world entry");
+            return false;
+        }
+
+        auto& world = m_WorldInfoSetup[worldId];
+        world.strName = std::move(worldName);
+        world.lStateLvl = state;
+    }
+    return true;
+}
+
+void CGame::SetListWorldInfoBySetup()
+{
+    // VERIFIED_DECOMPILE 0x00411170: clear/copy the setup map, then force every
+    // live state to zero; names and map keys remain identical to setup.
+    m_listWorldInfo = m_WorldInfoSetup;
+    for (auto& [worldId, world] : m_listWorldInfo) {
+        static_cast<void>(worldId);
+        world.lStateLvl = 0;
+    }
+}
+
+void CGame::UpdateWorldInfoToAllClient()
+{
+    // VERIFIED_DIRECT 0x00407860: only accounts whose saved World is empty get
+    // the 0xAF509 refresh. Iteration order is m_LoginCdkeyWorld map order.
+    for (const auto& [account, worldServer] : m_LoginCdkeyWorld) {
+        if (!worldServer.empty()) {
+            continue;
+        }
+
+        LoginNet::CMessage response(kWorldInfoUpdateMessageType);
+        AddWorldInfoToMsg(response, account.c_str());
+        if (s_pNetServer_Client == nullptr) {
+            // Direct CMessage::SendToClient would reach the missing client owner
+            // only when an eligible account exists.
+            RecordTechnicalError(
+                "UpdateWorldInfoToAllClient: client server owner is missing");
+            return;
+        }
+        static_cast<void>(response.SendToClientCdkey(
+            s_pNetServer_Client->CommandHandle(), CStringBytes(account.c_str())));
+    }
+}
+
+bool CGame::ReLoadWorldSetup()
+{
+    // VERIFIED_DIRECT 0x00411FF0: both return values/side effects are
+    // unconditional; LoadWorldSetup failure is deliberately ignored.
+    static_cast<void>(LoadWorldSetup());
+    UpdateWorldInfoToAllClient();
+
+    // The final original call, UpdateDisplayWorldInfo(), only rebuilt a Win32
+    // admin listbox through SendMessageA. It has no server/wire state in Linux.
     return true;
 }
 
