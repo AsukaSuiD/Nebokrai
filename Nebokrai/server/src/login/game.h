@@ -50,6 +50,24 @@ public:
         std::int32_t m_lVerifiSignUpper{};
     };
 
+    struct tagSetupEx
+    {
+        std::int32_t iAreaId{};
+        std::int32_t lClientMaxBlockConNum{};
+        std::int32_t lClientValidDelayRecDataTime{};
+        std::int32_t lWorldMaxBlockConNum{};
+        std::int32_t lWorldValidDelayRecDataTime{};
+        std::int32_t lQuestPlayerDataInterval{};
+        std::int32_t matrix_timeout{};
+        std::int32_t bValidCode{};
+        std::int32_t lValidCodeOvertime{};
+        std::int32_t iValidErrUpperLimit{};
+        std::uint32_t dwValidErrStayTime{};
+    };
+
+    [[nodiscard]] bool LoadSetupEx();
+    [[nodiscard]] bool ReLoadSetupEx();
+
     [[nodiscard]] std::int32_t GetWorldIDByName(const char* worldName) const;
     [[nodiscard]] bool WorldServerIsOpenState(std::int32_t worldId) const;
     void AddWorldInfoToMsg(LoginNet::CMessage& message, const char* account) const;
@@ -95,6 +113,7 @@ private:
     std::map<std::int32_t, tagWorldInfo> m_listWorldInfo;
     std::map<std::int32_t, tagWorldInfo> m_WorldInfoSetup;
     tagSetup m_Setup;
+    tagSetupEx m_SetupEx;
     AccLogQueue _acc_logs;
 
     mutable std::mutex m_TechnicalErrorMutex;

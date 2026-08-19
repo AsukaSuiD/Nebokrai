@@ -15,6 +15,7 @@
 #include <bit>
 #include <cerrno>
 #include <cstring>
+#include <fstream>
 #include <span>
 #include <string>
 #include <string_view>
@@ -130,6 +131,59 @@ std::string OdbcDiagnostic(SQLSMALLINT handleType,
     }
     return detail;
 }
+}
+
+bool CGame::LoadSetupEx()
+{
+    // VERIFIED_DECOMPILE 0x0040D9E0: literal lowercase filename, обычный
+    // whitespace stream; каждая подпись читается и отбрасывается перед value.
+    // После успешного open исходник НЕ проверяет failbit и всегда возвращает
+    // true, поэтому partial extraction намеренно оставляет уже прочитанные поля.
+    std::ifstream input("setupex.ini");
+    if (!input.is_open()) {
+        return false;
+    }
+
+    std::string label;
+    input >> label >> m_SetupEx.iAreaId
+          >> label >> m_SetupEx.lClientMaxBlockConNum
+          >> label >> m_SetupEx.lClientValidDelayRecDataTime
+          >> label >> m_SetupEx.lWorldMaxBlockConNum
+          >> label >> m_SetupEx.lWorldValidDelayRecDataTime
+          >> label >> m_SetupEx.lQuestPlayerDataInterval
+          >> label >> m_SetupEx.matrix_timeout
+          >> label >> m_SetupEx.bValidCode
+          >> label >> m_SetupEx.lValidCodeOvertime
+          >> label >> m_SetupEx.iValidErrUpperLimit
+          >> label >> m_SetupEx.dwValidErrStayTime;
+
+    // Direct owner затем только AddLogText("load setupex.ini...ok!"). Общий
+    // logger ещё не восстановлен; success-log не является state-machine side effect.
+    return true;
+}
+
+bool CGame::ReLoadSetupEx()
+{
+    // VERIFIED_DECOMPILE 0x0040DC60.
+    if (!LoadSetupEx()) {
+        return false;
+    }
+
+    if (s_pNetServer_Client == nullptr || s_pNetServer_World == nullptr) {
+        // EXE здесь напрямую разыменовывает оба owner-а. В Linux не повторяем
+        // null-deref; это typed technical boundary, а не новый login result.
+        RecordTechnicalError("ReLoadSetupEx: network server owner is missing");
+        return false;
+    }
+
+    // Direct CServer +0x160/+0x164 = m_lMaxBlockConnetNum/m_lSendInterTime.
+    s_pNetServer_Client->ConfigureAcceptLimitsAfterHost(
+        m_SetupEx.lClientMaxBlockConNum,
+        m_SetupEx.lClientValidDelayRecDataTime);
+    s_pNetServer_World->ConfigureAcceptLimitsAfterHost(
+        m_SetupEx.lWorldMaxBlockConNum,
+        m_SetupEx.lWorldValidDelayRecDataTime);
+    return true;
 }
 
 std::int32_t CGame::GetWorldIDByName(const char* worldName) const
