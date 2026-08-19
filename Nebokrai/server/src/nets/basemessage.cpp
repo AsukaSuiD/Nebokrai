@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include <iterator>
+#include <utility>
 
 namespace
 {
@@ -148,6 +149,40 @@ bool CBaseMessage::DecodeRLE_SAFE(std::span<const std::uint8_t> source,
     }
 
     return true;
+}
+
+RleDecodeResult CBaseMessage::DecodeRLE(std::span<const std::uint8_t> source,
+                                              std::size_t outputCapacity)
+{
+    if (source.empty()) {
+        return {{}, RleDecodeError::EmptyInput};
+    }
+
+    std::vector<std::uint8_t> output;
+    std::size_t inputOffset = 0;
+    while (inputOffset < source.size()) {
+        const std::uint8_t marker = source[inputOffset++];
+        if (marker < kRleFirstMarker) {
+            if (output.size() + 1 >= outputCapacity) {
+                return {{}, RleDecodeError::OutputCapacityReached};
+            }
+            output.push_back(marker);
+            continue;
+        }
+
+        if (inputOffset >= source.size()) {
+            return {{}, RleDecodeError::TrailingMarkerReactionUnknown};
+        }
+
+        const std::uint8_t value = source[inputOffset++];
+        const std::size_t runLength = marker - kRleMarkerBase;
+        if (output.size() + runLength >= outputCapacity) {
+            return {{}, RleDecodeError::OutputCapacityReached};
+        }
+        output.insert(output.end(), runLength, value);
+    }
+
+    return {std::move(output), std::nullopt};
 }
 
 void CBaseMessage::Update()

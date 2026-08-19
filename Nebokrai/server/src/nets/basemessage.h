@@ -8,6 +8,24 @@
 
 class CGUID;
 
+enum class RleDecodeError
+{
+    EmptyInput,
+    OutputCapacityReached,
+    TrailingMarkerReactionUnknown,
+};
+
+struct RleDecodeResult
+{
+    std::vector<std::uint8_t> bytes;
+    std::optional<RleDecodeError> error;
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return !error.has_value();
+    }
+};
+
 /*
  * Owner: nets/basemessage.h + nets/basemessage.cpp
  *
@@ -41,6 +59,8 @@ public:
     [[nodiscard]] static bool DecodeRLE_SAFE(std::span<const std::uint8_t> source,
                                              std::span<std::uint8_t> destination,
                                              std::size_t& decodedSize);
+    [[nodiscard]] static RleDecodeResult DecodeRLE(std::span<const std::uint8_t> source,
+                                                   std::size_t outputCapacity);
 
     void Update();
 
