@@ -103,6 +103,13 @@ class CMessage;
  * только при added + interval < now. std::map/mutex заменяют старый raw tree;
  * 32-bit tick arithmetic остаётся wrapping.
  *
+ * GAS имеет ДВА разных состояния, как в layout оригинала: m_GasQueue —
+ * thread-safe входной CGasQueue для отдельного GAS worker (Add/Pop/Clear), а
+ * m_GasQuest — отдельный result-list, который позже дренирует Run. Их нельзя
+ * объединять: AddGasQueue direct assembly адресует CGasQueue по this+0x84,
+ * тогда как Run читает m_GasQuest по this+0x64. STL value ownership заменяет
+ * только исходные heap pointers внутри CGasQueue.
+ *
  * OnQuestCdkey сохраняет исходный authentication split. Непустой World
  * немедленно идёт PrepareEnter/EnterGame и обходит password/DB. При пустом
  * World inside-mode 0 кладёт owned-копию в отдельную GAS FIFO, mode !=0/1 —
@@ -494,6 +501,8 @@ private:
     };
 
     void AddGasQueue(const QuestCdkey& quest);
+    [[nodiscard]] std::optional<QuestCdkey> PopGasQueue();
+    void ClearGasQueue();
     [[nodiscard]] std::optional<QuestCdkeyError>
     OnQuestCdkey(ILoginQueueContext& context, AuthManager& authManager, const QuestCdkey& quest);
     void OnQuestPlayerData(ILoginQueueContext& context, const QuestPlayerData& quest);
@@ -527,8 +536,12 @@ private:
     std::deque<QuestCdkey> m_QuestCdkey;
     std::deque<QuestCdkey> m_NoQueueQuestCdkey;
 
-    mutable std::mutex m_GasQuestMutex;
+    // m_GasQuest — completed/result list. В оригинальном Run отдельного lock
+    // вокруг него нет; producer lifecycle будет восстановлен с GAS owner.
     std::deque<QuestCdkey> m_GasQuest;
+
+    mutable std::mutex m_GasQueueMutex;
+    std::deque<QuestCdkey> m_GasQueue;
 
     mutable std::mutex m_PlayerQuestMutex;
     std::map<std::vector<std::uint8_t>, std::deque<QuestPlayerList>> m_QuestPlayerList;

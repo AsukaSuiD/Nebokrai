@@ -466,8 +466,25 @@ void CLoginQueue::AddQuestCdkey(std::int32_t socketId,
 
 void CLoginQueue::AddGasQueue(const QuestCdkey& quest)
 {
-    std::lock_guard guard(m_GasQuestMutex);
-    m_GasQuest.push_back(quest);
+    std::lock_guard guard(m_GasQueueMutex);
+    m_GasQueue.push_back(quest);
+}
+
+std::optional<CLoginQueue::QuestCdkey> CLoginQueue::PopGasQueue()
+{
+    std::lock_guard guard(m_GasQueueMutex);
+    if (m_GasQueue.empty()) {
+        return std::nullopt;
+    }
+    QuestCdkey quest = std::move(m_GasQueue.front());
+    m_GasQueue.pop_front();
+    return quest;
+}
+
+void CLoginQueue::ClearGasQueue()
+{
+    std::lock_guard guard(m_GasQueueMutex);
+    m_GasQueue.clear();
 }
 
 std::optional<QuestCdkeyError> CLoginQueue::OnQuestCdkey(
