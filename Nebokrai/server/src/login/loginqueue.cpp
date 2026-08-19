@@ -653,22 +653,6 @@ std::optional<MatrixRegisterError> CLoginQueue::MatrixRegister(
     return std::nullopt;
 }
 
-std::optional<MatrixRegisterError> CLoginQueue::ContinueValidatedLogin(
-    ILoginQueueContext& context,
-    const TagPwdChecked& checked)
-{
-    switch (context.PrepareEnter(checked)) {
-    case PrepareEnterOutcome::Continue:
-        context.EnterGame(checked, IsInNoQueueList(checked.Account()));
-        return std::nullopt;
-    case PrepareEnterOutcome::Finished:
-        return std::nullopt;
-    case PrepareEnterOutcome::MatrixRegistrationRequired:
-        return MatrixRegister(context, checked);
-    }
-    return std::nullopt;
-}
-
 bool CLoginQueue::AddMatrix(std::int32_t socketId,
                             std::uint32_t clientIp,
                             std::span<const std::uint8_t> account,

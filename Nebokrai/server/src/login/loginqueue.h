@@ -62,6 +62,10 @@ class CMessage;
  * неизвестной границей и не превращаются в придуманный отказ. matrix_register
  * заменяет старую запись с кодом F, выбирает три modulo-0x50 позиции системным
  * RNG, игнорирует исходный result matrix_add и всегда после него отправляет B.
+ * Direct CGame::PrepareEnter сам вызывает matrix_register; пока CGame-owner ещё
+ * не материализован, MatrixRegistrationRequired является узкой переходной
+ * границей интерфейса. После восстановления CGame этот side effect вернётся
+ * внутрь PrepareEnter без изменения внешней state-machine.
  *
  * NoQueueAccounts.conf остаётся owner-данными CLoginQueue. std::filesystem и
  * owned STL-контейнеры заменяют Win32 case-insensitive filesystem, char[0x100],
@@ -277,8 +281,6 @@ public:
         std::span<const std::uint8_t, 3> answer);
     [[nodiscard]] std::optional<MatrixRegisterError>
     MatrixRegister(ILoginQueueContext& context, const TagPwdChecked& checked);
-    [[nodiscard]] std::optional<MatrixRegisterError>
-    ContinueValidatedLogin(ILoginQueueContext& context, const TagPwdChecked& checked);
 
 private:
     struct QuestCdkey
