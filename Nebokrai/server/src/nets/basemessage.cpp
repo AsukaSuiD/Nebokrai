@@ -2,7 +2,9 @@
 
 #include "../public/guid.h"
 
+#include <algorithm>
 #include <cstring>
+#include <iterator>
 
 namespace
 {
@@ -63,6 +65,19 @@ CBaseMessage::CBaseMessage()
       m_lPtr(static_cast<std::int32_t>(kHeaderSize))
 {
     SetSize(static_cast<std::uint32_t>(kHeaderSize));
+}
+
+CBaseMessage::CBaseMessage(std::span<const std::uint8_t, kHeaderSize> header,
+                           std::span<const std::uint8_t> payload)
+    : m_MsgData(header.begin(), header.end()),
+      m_lPtr(static_cast<std::int32_t>(kHeaderSize))
+{
+    // CreateMessage* сохранял остальные три слова header буквально, но первое
+    // нормализовал по реально добавленному payload.
+    SetSize(static_cast<std::uint32_t>(kHeaderSize));
+    if (!payload.empty()) {
+        AppendBytes(payload.data(), payload.size());
+    }
 }
 
 std::optional<std::vector<std::uint8_t>> CBaseMessage::DoRLE(std::span<const std::uint8_t> source)
@@ -259,6 +274,33 @@ bool CBaseMessage::GetGUID(CGUID& guid)
     }
 
     return Get(&guid, static_cast<std::int32_t>(kGuidSize)) != nullptr;
+}
+
+std::vector<std::uint8_t> CBaseMessage::GetCStringBytes()
+{
+    if (m_lPtr < 0) {
+        return {};
+    }
+
+    const std::size_t begin = static_cast<std::size_t>(m_lPtr);
+    if (begin >= m_MsgData.size()) {
+        return {};
+    }
+
+    const auto terminator = std::find(m_MsgData.begin() + static_cast<std::ptrdiff_t>(begin),
+                                      m_MsgData.end(),
+                                      std::uint8_t{0});
+    if (terminator == m_MsgData.end()) {
+        // Auth CMessage::GetStr дочитывал до конца и затем снова очищал result.
+        m_lPtr = static_cast<std::int32_t>(m_MsgData.size());
+        return {};
+    }
+
+    std::vector<std::uint8_t> value(
+        m_MsgData.begin() + static_cast<std::ptrdiff_t>(begin), terminator);
+    m_lPtr = static_cast<std::int32_t>(
+        std::distance(m_MsgData.begin(), terminator) + 1);
+    return value;
 }
 
 void CBaseMessage::Add(char value)

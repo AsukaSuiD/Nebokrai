@@ -33,6 +33,8 @@ public:
     static constexpr std::size_t kGuidSize = 16;
 
     CBaseMessage();
+    CBaseMessage(std::span<const std::uint8_t, kHeaderSize> header,
+                 std::span<const std::uint8_t> payload);
     virtual ~CBaseMessage() = default;
 
     [[nodiscard]] static std::optional<std::vector<std::uint8_t>> DoRLE(std::span<const std::uint8_t> source);
@@ -52,6 +54,7 @@ public:
     [[nodiscard]] float GetFloat();
     [[nodiscard]] void* Get(void* destination, std::int32_t size);
     [[nodiscard]] bool GetGUID(CGUID& guid);
+    [[nodiscard]] std::vector<std::uint8_t> GetCStringBytes();
 
     void Add(char value);
     void Add(std::uint8_t value);
