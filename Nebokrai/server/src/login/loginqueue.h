@@ -31,8 +31,10 @@ class CMessage;
  * PushBackPwdChecked 0x00019880, CheckMsgInfo 0x00016200,
  * ChangeValidCode 0x00016300, ValidateValidCode 0x000184B0,
  * matrix_add 0x0001B870, matrix_register 0x0001B950,
- * matirx_validate 0x00019800, LoadNoQueueCdkeyList 0x000195E0 и
- * HandlePwdChecked 0x0001BB20.
+ * matirx_validate 0x00019800, LoadNoQueueCdkeyList 0x000195E0,
+ * HandlePwdChecked 0x0001BB20, OnQuestPlayerData 0x0001B3F0,
+ * IsValidQuest 0x000172C0, PushLoginList 0x0001AAB0 и
+ * ClearTimeoutList 0x00017330.
  *
  * TagPwdChecked сохраняет signed socket ID, исходный IPv4, byte-exact account,
  * World и matrix-флаг. Duplicate password-result ищется под тем же lock;
@@ -84,6 +86,17 @@ class CMessage;
  * выключенной captcha выполняется PrepareEnter -> EnterGame; временный
  * MatrixRegistrationRequired компенсирует ещё не материализованный side effect
  * точного CGame::PrepareEnter через уже восстановленный matrix_register.
+ *
+ * Player-data detail имеет отдельный cooldown-map player_id -> boot tick.
+ * IsValidQuest разрешает отсутствующий id, запрещает его при
+ * now <= added + interval и при строго просроченной записи сначала удаляет её.
+ * PushLoginList вставляет только отсутствующий id и никогда не обновляет время
+ * существующего. OnQuestPlayerData при разрешении делает void World-send и
+ * ВСЕГДА затем PushLoginList, независимо от внутреннего результата routing;
+ * повторный id получает 0xAF503 + byte 0x1C + account через identity-send.
+ * ClearTimeoutList проверяет boot tick отдельно для каждой записи и удаляет
+ * только при added + interval < now. std::map/mutex заменяют старый raw tree;
+ * 32-bit tick arithmetic остаётся wrapping.
  *
  * NoQueueAccounts.conf остаётся owner-данными CLoginQueue. std::filesystem и
  * owned STL-контейнеры заменяют Win32 case-insensitive filesystem, char[0x100],
@@ -156,6 +169,15 @@ public:
     LoginWorldPlayerNumByName(std::span<const std::uint8_t> worldName) const = 0;
     [[nodiscard]] virtual bool ValidCodeEnabled() const noexcept = 0;
     [[nodiscard]] virtual std::int32_t ValidErrorUpperLimit() const noexcept = 0;
+    [[nodiscard]] virtual std::uint32_t QuestPlayerDataIntervalMs() const noexcept = 0;
+
+    virtual void L2WQuestDetailSend(
+        std::optional<std::span<const std::uint8_t>> worldServer,
+        std::span<const std::uint8_t> account,
+        std::int32_t playerId,
+        std::uint32_t clientIp) = 0;
+    virtual void SendToClientCdkey(const LoginNet::CMessage& message,
+                                   std::span<const std::uint8_t> account) = 0;
 
     [[nodiscard]] virtual PrepareEnterOutcome
     PrepareEnter(const TagPwdChecked& checked) = 0;
@@ -387,6 +409,11 @@ private:
         std::uint32_t addedTime{};
     };
 
+    void OnQuestPlayerData(ILoginQueueContext& context, const QuestPlayerData& quest);
+    [[nodiscard]] bool IsValidQuest(ILoginQueueContext& context, std::int32_t playerId);
+    [[nodiscard]] bool PushLoginList(std::int32_t playerId);
+    void ClearTimeoutList(ILoginQueueContext& context);
+
     [[nodiscard]] bool AddMatrix(std::int32_t socketId,
                                  std::uint32_t clientIp,
                                  std::span<const std::uint8_t> account,
@@ -413,6 +440,9 @@ private:
     std::map<std::vector<std::uint8_t>, std::deque<QuestPlayerList>> m_NoQueueQuestPlayerList;
     std::map<std::vector<std::uint8_t>, std::deque<QuestPlayerData>> m_QuestPlayerData;
     std::map<std::vector<std::uint8_t>, std::deque<QuestPlayerData>> m_NoQueueQuestPlayerData;
+
+    mutable std::mutex m_LoginListMutex;
+    std::map<std::int32_t, std::uint32_t> m_LoginList;
 
     mutable std::mutex m_PwdCheckedMutex;
     std::deque<TagPwdChecked> m_PwdChecked;

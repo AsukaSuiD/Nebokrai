@@ -24,6 +24,7 @@ namespace Login
 namespace
 {
 constexpr std::int32_t kLoginResponseMessageType = 0x000AF501;
+constexpr std::int32_t kPlayerDataRejectMessageType = 0x000AF503;
 constexpr std::size_t kNoQueueAccountBufferSize = 0x100U;
 
 std::span<const std::uint8_t> LegacyCStringPrefix(std::span<const std::uint8_t> value)
@@ -439,6 +440,75 @@ bool CLoginQueue::AddQuestPlayerData(ILoginQueueContext& context,
     auto& queues = noQueue ? m_NoQueueQuestPlayerData : m_QuestPlayerData;
     queues[*worldServer].push_back(std::move(quest));
     return true;
+}
+
+void CLoginQueue::OnQuestPlayerData(ILoginQueueContext& context,
+                                    const QuestPlayerData& quest)
+{
+    const auto worldServer = context.LoginCdkeyWorldServer(quest.account);
+    if (IsValidQuest(context, quest.playerId)) {
+        const auto world = worldServer
+            ? std::optional<std::span<const std::uint8_t>>(std::span<const std::uint8_t>(*worldServer))
+            : std::nullopt;
+        context.L2WQuestDetailSend(world, quest.account, quest.playerId, quest.clientIp);
+
+        // VERIFIED_ASSEMBLY 0x0041B447..0x0041B463: World-send — void;
+        // PushLoginList вызывается сразу после него без проверки результата.
+        static_cast<void>(PushLoginList(quest.playerId));
+        return;
+    }
+
+    LoginNet::CMessage response(kPlayerDataRejectMessageType);
+    response.Base().Add(static_cast<char>(0x1C));
+    AddLegacyString(response, quest.account);
+    context.SendToClientCdkey(response, quest.account);
+}
+
+bool CLoginQueue::IsValidQuest(ILoginQueueContext& context, std::int32_t playerId)
+{
+    std::lock_guard guard(m_LoginListMutex);
+    const auto found = m_LoginList.find(playerId);
+    if (found == m_LoginList.end()) {
+        return true;
+    }
+
+    const std::uint32_t now = LegacyTickMs();
+    const std::uint32_t deadline =
+        found->second + context.QuestPlayerDataIntervalMs();
+    if (now <= deadline) {
+        return false;
+    }
+
+    m_LoginList.erase(found);
+    return true;
+}
+
+bool CLoginQueue::PushLoginList(std::int32_t playerId)
+{
+    std::lock_guard guard(m_LoginListMutex);
+    if (m_LoginList.find(playerId) != m_LoginList.end()) {
+        return false;
+    }
+    m_LoginList.emplace(playerId, LegacyTickMs());
+    return true;
+}
+
+void CLoginQueue::ClearTimeoutList(ILoginQueueContext& context)
+{
+    std::lock_guard guard(m_LoginListMutex);
+    for (auto current = m_LoginList.begin(); current != m_LoginList.end();) {
+        // VERIFIED_ASSEMBLY 0x00417350..0x00417364: GetGame/timeGetTime и
+        // interval-read происходят на КАЖДОЙ итерации, а условие удаления
+        // строгое: now > added + interval. Не hoist-им now за цикл.
+        const std::uint32_t now = LegacyTickMs();
+        const std::uint32_t deadline =
+            current->second + context.QuestPlayerDataIntervalMs();
+        if (now > deadline) {
+            current = m_LoginList.erase(current);
+        } else {
+            ++current;
+        }
+    }
 }
 
 ClientLostCleanupReport CLoginQueue::OnClientLost(std::span<const std::uint8_t> account)
