@@ -2,6 +2,7 @@
 
 #include "loginqueue.h"
 #include "../dbaccess/myadobase.h"
+#include "../public/tools.h"
 #include "../nets/netlogin/message.h"
 #include "../nets/netlogin/mynetserver_client.h"
 #include "../nets/netlogin/mynetserver_world.h"
@@ -14,8 +15,13 @@
 #include <array>
 #include <bit>
 #include <cerrno>
+#include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <limits>
+#include <new>
+#include <sstream>
 #include <span>
 #include <string>
 #include <string_view>
@@ -131,6 +137,216 @@ std::string OdbcDiagnostic(SQLSMALLINT handleType,
     }
     return detail;
 }
+
+template <typename Value>
+void ReadLabeled(std::istream& input, std::string& label, Value& value)
+{
+    input >> label >> value;
+}
+
+void ReadLegacySetupBody(std::istream& input, CGame::tagSetup& setup)
+{
+    std::string label;
+    // VERIFIED_DECOMPILE 0x0040E690 setup.dat branch: legacy schema starts
+    // directly with Client/World ports and ends at _bindPort.
+    ReadLabeled(input, label, setup.dwListenPort_Client);
+    ReadLabeled(input, label, setup.dwListenPort_World);
+    ReadLabeled(input, label, setup.strSqlConType);
+    ReadLabeled(input, label, setup.strSqlServerIP);
+    ReadLabeled(input, label, setup.strSqlUserName);
+    ReadLabeled(input, label, setup.strSqlPassWord);
+    ReadLabeled(input, label, setup.strDBName);
+    ReadLabeled(input, label, setup.bCheckNet);
+    ReadLabeled(input, label, setup.dwMaxByteNum);
+    ReadLabeled(input, label, setup.dwMaxMsgLen);
+    ReadLabeled(input, label, setup.dwBanIPTime);
+    ReadLabeled(input, label, setup.bCheckMsgCon);
+    ReadLabeled(input, label, setup.lMaxConnectNum);
+    ReadLabeled(input, label, setup.lMaxIOSendNum);
+    ReadLabeled(input, label, setup.lMaxClientSendBuf);
+    ReadLabeled(input, label, setup.bWorldCheckNet);
+    ReadLabeled(input, label, setup.dwWorldMaxByteNum);
+    ReadLabeled(input, label, setup.dwWorldMaxMsgLen);
+    ReadLabeled(input, label, setup.dwWorldBanIPTime);
+    ReadLabeled(input, label, setup.bWorldCheckMsgCon);
+    ReadLabeled(input, label, setup.lWorldMaxConnectNum);
+    ReadLabeled(input, label, setup.lWorldMaxIOSendNum);
+    ReadLabeled(input, label, setup.lWorldMaxClientSendBuf);
+    ReadLabeled(input, label, setup.dwRefeashInfoTime);
+    ReadLabeled(input, label, setup.dwSaveInfoTime);
+    ReadLabeled(input, label, setup.dwDoQueueInter);
+    ReadLabeled(input, label, setup.dwSendMsgToQueInter);
+    ReadLabeled(input, label, setup.dwWorldMaxPlayers);
+    ReadLabeled(input, label, setup.fWorldBusyScale);
+    ReadLabeled(input, label, setup.fWorldFullScale);
+    ReadLabeled(input, label, setup.dwPingWorldServerTime);
+    ReadLabeled(input, label, setup.dwPingWorldServerErrorTime);
+    ReadLabeled(input, label, setup.bCheckForbidIP);
+    ReadLabeled(input, label, setup.bCheckAllowIP);
+    ReadLabeled(input, label, setup.bCheckBetweenIP);
+    ReadLabeled(input, label, setup.dwServerInfoLogTime);
+    ReadLabeled(input, label, setup.strServerInfoLogProvider);
+    ReadLabeled(input, label, setup.strServerInfoLogUID);
+    ReadLabeled(input, label, setup.strServerInfoLogPWD);
+    ReadLabeled(input, label, setup.strServerInfoLogIP);
+    ReadLabeled(input, label, setup.strServerInfoLogDB);
+    ReadLabeled(input, label, setup.authTimeOut);
+    ReadLabeled(input, label, setup._bindIP);
+    ReadLabeled(input, label, setup._bindPort);
+}
+
+void ReadPlainSetup(std::istream& input, CGame::tagSetup& setup)
+{
+    std::string label;
+    // Plain setup.ini has one newer prefix field, then the exact legacy body.
+    ReadLabeled(input, label, setup._server_version);
+    ReadLegacySetupBody(input, setup);
+
+    // VERIFIED_DECOMPILE plaintext-only extension after _bindPort.
+    ReadLabeled(input, label, setup.lforbitTime);
+    ReadLabeled(input, label, setup.lforbitNum);
+    ReadLabeled(input, label, setup.lMode);
+    ReadLabeled(input, label, setup.strGasAreaUserID);
+    ReadLabeled(input, label, setup.strGasAreaPasswd);
+    ReadLabeled(input, label, setup._db_ip);
+    ReadLabeled(input, label, setup._db_billing_name);
+    ReadLabeled(input, label, setup._db_user);
+    ReadLabeled(input, label, setup._db_psd);
+    ReadLabeled(input, label, setup.m_lIsInsideUse);
+    ReadLabeled(input, label, setup.m_strVerificationAddr);
+    ReadLabeled(input, label, setup.m_lVerifiSignUpper);
+}
+
+std::optional<std::int32_t> LegacyScaledWorldLevel(std::uint32_t worldMax,
+                                                    float scale)
+{
+    // VERIFIED_ASSEMBLY 0x0040EDA2 / 0x0040F402: MSVC converts unsigned dword
+    // through signed FILD and adds exact 2^32 when the high bit is set.
+    const long double product = static_cast<long double>(worldMax) *
+                                static_cast<long double>(scale);
+    if (!std::isfinite(product) ||
+        product < static_cast<long double>(std::numeric_limits<std::int32_t>::min()) ||
+        product > static_cast<long double>(std::numeric_limits<std::int32_t>::max())) {
+        return std::nullopt;
+    }
+    return static_cast<std::int32_t>(product);
+}
+}
+
+CGame::tagSetup::tagSetup()
+{
+    // VERIFIED_DIRECT tagSetup::tagSetup 0x0040C6E0. Fundamental fields not
+    // mentioned here were not explicitly initialized by the original ctor.
+    bCheckNet = true;
+    dwMaxByteNum = 5000U;
+    dwMaxMsgLen = 0x19000U;
+    dwBanIPTime = 10U;
+    bCheckMsgCon = true;
+    dwRefeashInfoTime = 1000U;
+    dwSaveInfoTime = 60000U;
+    authTimeOut = 5000U;
+    _bindIP = "0.0.0.0";
+    _bindPort = 0U;
+    lMode = 0;
+    strGasAreaUserID.clear();
+    strGasAreaPasswd.clear();
+    _db_ip.clear();
+    _db_billing_name.clear();
+    _db_user.clear();
+    _db_psd.clear();
+    m_lIsInsideUse = 1;
+}
+
+bool CGame::LoadSetup()
+{
+    // VERIFIED_DIRECT 0x0040E690: plaintext setup.ini has priority. setup.dat
+    // is consulted only when setup.ini cannot be opened.
+    std::ifstream plain("setup.ini");
+    if (plain.is_open()) {
+        ReadPlainSetup(plain, m_Setup);
+        if (plain.fail()) {
+            // Direct code would continue with whatever remained in raw scalar
+            // storage. Linux makes that invalid-input UB an explicit technical
+            // boundary before those values feed world thresholds/timers.
+            RecordTechnicalError("LoadSetup: incomplete setup.ini stream");
+            return false;
+        }
+    } else {
+        char setupDatName[] = "setup.dat";
+        const int fileLength = GetFileLength(setupDatName);
+        std::FILE* encodedFile = std::fopen(setupDatName, "rb");
+        if (encodedFile == nullptr) {
+            return false;
+        }
+
+        if (fileLength < 0 ||
+            static_cast<std::size_t>(fileLength) >
+                (std::numeric_limits<std::size_t>::max() - 2U) / 2U) {
+            std::fclose(encodedFile);
+            RecordTechnicalError("LoadSetup: setup.dat length is not representable");
+            return false;
+        }
+
+        try {
+            // VERIFIED_ASSEMBLY: encoded buffer = len+1, decoded = len*2+2;
+            // both are zero-filled before fread/IniDecoder.
+            std::vector<char> encoded(static_cast<std::size_t>(fileLength) + 1U, '\0');
+            std::vector<char> decoded(static_cast<std::size_t>(fileLength) * 2U + 2U, '\0');
+
+            // Direct owner ignores fread result. Because the source buffer was
+            // pre-zeroed, a short read leaves zero bytes in the unread tail.
+            static_cast<void>(std::fread(encoded.data(),
+                                         static_cast<std::size_t>(fileLength),
+                                         1U,
+                                         encodedFile));
+            std::fclose(encodedFile);
+            encodedFile = nullptr;
+
+            IniDecoder(encoded.data(), decoded.data(), fileLength);
+
+            // Direct code inserts decoded C-string into stringstream then seekg(0),
+            // so an embedded NUL truncates the parse even though decoded is 2*len+2.
+            std::stringstream decodedStream;
+            decodedStream << decoded.data();
+            decodedStream.seekg(0, std::ios::beg);
+            ReadLegacySetupBody(decodedStream, m_Setup);
+            if (decodedStream.fail()) {
+                RecordTechnicalError("LoadSetup: incomplete decoded setup.dat stream");
+                return false;
+            }
+        } catch (const std::bad_alloc&) {
+            if (encodedFile != nullptr) {
+                std::fclose(encodedFile);
+            }
+            RecordTechnicalError("LoadSetup: setup.dat buffer allocation failed");
+            return false;
+        }
+    }
+
+    const auto busyLevel =
+        LegacyScaledWorldLevel(m_Setup.dwWorldMaxPlayers, m_Setup.fWorldBusyScale);
+    const auto fullLevel =
+        LegacyScaledWorldLevel(m_Setup.dwWorldMaxPlayers, m_Setup.fWorldFullScale);
+    if (!busyLevel || !fullLevel) {
+        RecordTechnicalError("LoadSetup: world state threshold is outside legacy long range");
+        return false;
+    }
+
+    // VERIFIED x87 post-parse sequence in both setup.ini and setup.dat branches.
+    m_StateLvl[0] = -1;
+    m_StateLvl[1] = *busyLevel;
+    m_StateLvl[2] = *fullLevel;
+    m_StateLvl[3] = std::bit_cast<std::int32_t>(m_Setup.dwWorldMaxPlayers);
+    ChangeAllWorldSate();
+
+    if (m_pLoginQueue != nullptr) {
+        m_pLoginQueue->OnInitial(m_Setup.dwDoQueueInter,
+                                 m_Setup.dwSendMsgToQueInter,
+                                 m_Setup.dwWorldMaxPlayers);
+    }
+
+    // Direct owner only appends success AddLogText after this point.
+    return true;
 }
 
 bool CGame::LoadSetupEx()
@@ -184,6 +400,31 @@ bool CGame::ReLoadSetupEx()
         m_SetupEx.lWorldMaxBlockConNum,
         m_SetupEx.lWorldValidDelayRecDataTime);
     return true;
+}
+
+void CGame::ChangeAllWorldSate()
+{
+    // VERIFIED_ASSEMBLY 0x004075E0. Only worlds that already have an
+    // s_listCdkey entry are recalculated; absent entries keep their old state.
+    for (auto& [worldId, world] : m_listWorldInfo) {
+        const auto accounts = s_listCdkey.find(worldId);
+        if (accounts == s_listCdkey.end()) {
+            continue;
+        }
+
+        const std::uint32_t rawCount =
+            static_cast<std::uint32_t>(accounts->second.size());
+        const std::int32_t signedCount = std::bit_cast<std::int32_t>(rawCount);
+
+        std::int32_t state = 1;
+        while (state <= 3 && signedCount >= m_StateLvl[static_cast<std::size_t>(state)]) {
+            ++state;
+        }
+        if (state > 3) {
+            state = 3;
+        }
+        world.lStateLvl = state;
+    }
 }
 
 std::int32_t CGame::GetWorldIDByName(const char* worldName) const
