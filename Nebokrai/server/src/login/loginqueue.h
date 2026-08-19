@@ -75,10 +75,10 @@ class CMessage;
  * через CMessage::Add(const char*) как raw C-string+NUL, позиции — через
  * CMessage::Add(void*,3) как raw три байта, без length-prefix. Это место
  * намеренно не повторяет ошибочный helper поздней Rust-реконструкции.
- * Direct CGame::PrepareEnter сам вызывает matrix_register; пока CGame-owner ещё
- * не материализован, MatrixRegistrationRequired является узкой переходной
- * границей интерфейса. После восстановления CGame этот side effect вернётся
- * внутрь PrepareEnter без изменения внешней state-machine.
+ * Direct CGame::PrepareEnter сам вызывает matrix_register. Материализованный
+ * CGame теперь вызывает тот же core через ClientSendCallback; старый
+ * MatrixRegistrationRequired остаётся только переходной веткой ещё не
+ * переведённых ILoginQueueContext-adapter'ов и не дублирует state-machine.
  *
  * HandlePwdChecked полностью дренирует password-result FIFO под ОДНИМ
  * исходным lockPwdChecked. Invalid endpoint — только socket==0 либо IP==0;
@@ -89,9 +89,9 @@ class CMessage;
  * безусловно заменяется новым code/world/matrix и отправляется exact
  * J + account + long 0x70B6 + raw 0x70B6 BMP. Ошибка библиотечного генератора
  * остаётся typed technical boundary без придуманного client-кода. При
- * выключенной captcha выполняется PrepareEnter -> EnterGame; временный
- * MatrixRegistrationRequired компенсирует ещё не материализованный side effect
- * точного CGame::PrepareEnter через уже восстановленный matrix_register.
+ * выключенной captcha выполняется PrepareEnter -> EnterGame. Совместимость со
+ * старыми context-adapter'ами пока допускает MatrixRegistrationRequired, но
+ * прямой CGame::PrepareEnter уже сам владеет matrix_register, как в EXE.
  *
  * Player-data detail имеет отдельный cooldown-map player_id -> boot tick.
  * IsValidQuest разрешает отсутствующий id, запрещает его при
@@ -424,6 +424,8 @@ class CLoginQueue
 
 public:
     using KickOutCallback = std::function<void(std::span<const std::uint8_t>)>;
+    using ClientSendCallback =
+        std::function<void(const LoginNet::CMessage&, std::int32_t)>;
 
     explicit CLoginQueue(const std::filesystem::path& runtimeDirectory = ".");
 
@@ -484,6 +486,8 @@ public:
         std::span<const std::uint8_t, 3> answer);
     [[nodiscard]] std::optional<MatrixRegisterError>
     MatrixRegister(ILoginQueueContext& context, const TagPwdChecked& checked);
+    [[nodiscard]] std::optional<MatrixRegisterError>
+    MatrixRegister(const TagPwdChecked& checked, const ClientSendCallback& sendToClient);
 
 private:
     struct QuestCdkey

@@ -1293,6 +1293,17 @@ std::optional<MatrixRegisterError> CLoginQueue::MatrixRegister(
     ILoginQueueContext& context,
     const TagPwdChecked& checked)
 {
+    return MatrixRegister(
+        checked,
+        [&context](const LoginNet::CMessage& message, std::int32_t socketId) {
+            context.SendToClient(message, socketId);
+        });
+}
+
+std::optional<MatrixRegisterError> CLoginQueue::MatrixRegister(
+    const TagPwdChecked& checked,
+    const ClientSendCallback& sendToClient)
+{
     if (checked.SocketID() == 0 || checked.ClientIP() == 0U) {
         return std::nullopt;
     }
@@ -1317,7 +1328,7 @@ std::optional<MatrixRegisterError> CLoginQueue::MatrixRegister(
     if (previousSocket) {
         LoginNet::CMessage previous(kLoginResponseMessageType);
         previous.Base().Add(static_cast<char>('F'));
-        context.SendToClient(previous, *previousSocket);
+        sendToClient(previous, *previousSocket);
         std::lock_guard guard(m_MatrixMutex);
         m_Matrices.erase(OwnedLegacyString(checked.Account()));
     }
@@ -1331,7 +1342,7 @@ std::optional<MatrixRegisterError> CLoginQueue::MatrixRegister(
     response.Base().Add(static_cast<char>('B'));
     AddLegacyString(response, checked.Account());
     response.Base().Add(positions.data(), static_cast<std::int32_t>(positions.size()));
-    context.SendToClient(response, checked.SocketID());
+    sendToClient(response, checked.SocketID());
     return std::nullopt;
 }
 
