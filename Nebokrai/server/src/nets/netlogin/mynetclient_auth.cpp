@@ -27,6 +27,38 @@ std::uint32_t ReadU32(std::span<const std::uint8_t> bytes) noexcept
 }
 }
 
+AuthClientEventPublisher::AuthClientEventPublisher(
+    std::shared_ptr<CMsgQueue<AuthClientEvent>> events)
+    : m_Events(std::move(events))
+{
+}
+
+void AuthClientEventPublisher::PublishMessage(std::unique_ptr<CMessage> message) const
+{
+    if (!m_Events || !message) {
+        return;
+    }
+    auto event = std::make_unique<AuthClientEvent>();
+    event->payload = std::move(message);
+    static_cast<void>(m_Events->PushMessage(std::move(event)));
+}
+
+void AuthClientEventPublisher::PublishReconnected(
+    std::shared_ptr<CMyNetClientAuth> client) const
+{
+    if (!m_Events || !client) {
+        return;
+    }
+    auto event = std::make_unique<AuthClientEvent>();
+    event->payload = AuthClientReconnected{std::move(client)};
+    static_cast<void>(m_Events->PushMessage(std::move(event)));
+}
+
+AuthClientEventPublisher::operator bool() const noexcept
+{
+    return static_cast<bool>(m_Events);
+}
+
 CMyNetClientAuth::CMyNetClientAuth(asio::any_io_executor executor)
     : m_Socket(std::move(executor)),
       m_Events(std::make_shared<CMsgQueue<AuthClientEvent>>())
@@ -253,9 +285,12 @@ std::unique_ptr<AuthClientEvent> CMyNetClientAuth::PopEvent()
 
 void CMyNetClientAuth::PublishReconnected(std::shared_ptr<CMyNetClientAuth> client)
 {
-    auto event = std::make_unique<AuthClientEvent>();
-    event->payload = AuthClientReconnected{std::move(client)};
-    static_cast<void>(m_Events->PushMessage(std::move(event)));
+    EventPublisher().PublishReconnected(std::move(client));
+}
+
+AuthClientEventPublisher CMyNetClientAuth::EventPublisher() const
+{
+    return AuthClientEventPublisher(m_Events);
 }
 
 std::size_t CMyNetClientAuth::PendingBytes() const noexcept
@@ -265,9 +300,7 @@ std::size_t CMyNetClientAuth::PendingBytes() const noexcept
 
 void CMyNetClientAuth::PublishMessage(std::unique_ptr<CMessage> message)
 {
-    auto event = std::make_unique<AuthClientEvent>();
-    event->payload = std::move(message);
-    static_cast<void>(m_Events->PushMessage(std::move(event)));
+    EventPublisher().PublishMessage(std::move(message));
 }
 
 void CMyNetClientAuth::DiscardPending() noexcept

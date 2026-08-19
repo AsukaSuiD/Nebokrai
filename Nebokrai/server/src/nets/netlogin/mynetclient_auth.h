@@ -46,6 +46,22 @@ struct AuthClientEvent
     AuthClientEventPayload payload;
 };
 
+class AuthClientEventPublisher
+{
+public:
+    AuthClientEventPublisher() = default;
+
+    void PublishMessage(std::unique_ptr<CMessage> message) const;
+    void PublishReconnected(std::shared_ptr<CMyNetClientAuth> client) const;
+    [[nodiscard]] explicit operator bool() const noexcept;
+
+private:
+    friend class CMyNetClientAuth;
+    explicit AuthClientEventPublisher(std::shared_ptr<CMsgQueue<AuthClientEvent>> events);
+
+    std::shared_ptr<CMsgQueue<AuthClientEvent>> m_Events;
+};
+
 enum class AuthClientReceiveErrorKind
 {
     LengthChecksumMismatch,
@@ -109,6 +125,7 @@ public:
     [[nodiscard]] std::int32_t PendingEvents() const;
     [[nodiscard]] std::unique_ptr<AuthClientEvent> PopEvent();
     void PublishReconnected(std::shared_ptr<CMyNetClientAuth> client);
+    [[nodiscard]] AuthClientEventPublisher EventPublisher() const;
     [[nodiscard]] std::size_t PendingBytes() const noexcept;
 
 private:
