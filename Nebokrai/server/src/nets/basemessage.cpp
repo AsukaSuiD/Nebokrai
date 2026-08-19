@@ -338,6 +338,33 @@ std::vector<std::uint8_t> CBaseMessage::GetCStringBytes()
     return value;
 }
 
+std::optional<std::vector<std::uint8_t>>
+CBaseMessage::GetStrBytes(std::size_t maximum)
+{
+    if (maximum == 0U) {
+        return std::nullopt;
+    }
+
+    std::vector<std::uint8_t> value;
+    value.reserve(std::min(maximum, m_MsgData.size()));
+    for (std::size_t index = 0; index < maximum; ++index) {
+        if (!CanRead(1)) {
+            // Исходный GetStr при исчерпанном message занулял первый байт output.
+            return std::vector<std::uint8_t>{};
+        }
+
+        const std::uint8_t byte =
+            m_MsgData[static_cast<std::size_t>(m_lPtr++)];
+        if (byte == 0U) {
+            return value;
+        }
+        value.push_back(byte);
+    }
+
+    // Ровно достигнутый limit без NUL очищал output[0], но курсор уже сдвинут.
+    return std::vector<std::uint8_t>{};
+}
+
 void CBaseMessage::Add(char value)
 {
     AppendBytes(&value, sizeof(value));

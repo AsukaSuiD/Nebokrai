@@ -40,9 +40,10 @@ struct RleDecodeResult
  * частью wire-контракта: поздний аудит send-path показал, что отправители
  * копируют переданный буфер до возврата. Здесь их заменяют владеющие std::vector.
  *
- * Остаются отдельными неизвестностями malformed-пути ограниченного GetStr,
- * GetEx и RLE marker без следующего байта. Им не назначается новая реакция
- * только ради удобства безопасного C++ API.
+ * Ограниченный GetStr восстановлен для положительного maxLength: он двигает
+ * курсор до NUL либо ровно на лимит, а строку без NUL на границе возвращает
+ * пустой. maxLength<=0, GetEx и RLE marker без следующего байта остаются
+ * отдельными неизвестностями и не получают придуманной безопасной реакции.
  */
 class CBaseMessage
 {
@@ -75,6 +76,8 @@ public:
     [[nodiscard]] void* Get(void* destination, std::int32_t size);
     [[nodiscard]] bool GetGUID(CGUID& guid);
     [[nodiscard]] std::vector<std::uint8_t> GetCStringBytes();
+    [[nodiscard]] std::optional<std::vector<std::uint8_t>>
+    GetStrBytes(std::size_t maximum);
 
     void Add(char value);
     void Add(std::uint8_t value);
