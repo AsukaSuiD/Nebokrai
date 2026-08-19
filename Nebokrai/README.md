@@ -14,6 +14,8 @@ server/
 ├─ src/
 │  ├─ nets/
 │  ├─ public/
+│  ├─ dbaccess/
+│  ├─ serverupdate/
 │  ├─ auth/
 │  ├─ login/
 │  ├─ billing/
