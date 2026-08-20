@@ -1,390 +1,86 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Поиск товаров при обходе контейнера исторического `WorldServer`.
+//!
+//! Статус конструктора RVA `0x000D6980`, деструктора `0x000D6610`,
+//! `SetTarget` `0x000D6460` и `OnTraversingContainer` `0x000D6A10` —
+//! `IMPLEMENTED`. Точная пара:
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
+//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
+//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Исходный владелец PDB:
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp:13,18,23,31`.
+//!
+//! Exact constructor `0x004D6980..0x004D6996` задаёт target `0` и пустой
+//! `std::vector<CGUID>`; `Vec<CGuid>` и `Drop` заменяют его storage/destructor.
+//! `SetTarget` `0x004D6460..0x004D6478` при null не меняет прежний target, а
+//! при non-null сохраняет результат `CGoodsFactory::QueryGoodsIDByOriginalName`.
+//! В частности, он не очищает уже собранный список — это сохранено буквально.
+//! Очищенный `Nebokrai/server/cpp` принимает готовый numeric id и очищает
+//! результаты в setter-е; Rust намеренно не переносит эти два удобных, но не
+//! подтверждённых EXE изменения. Старый Linux-донор здесь совпадает с exact.
+//!
+//! Exact traversal `0x004D6A10..0x004D6A54` делает RTTI cast к `CGoods`,
+//! сравнивает `GetBasePropertiesIndex()` с target, копирует GUID из поля
+//! товара `+0xC` в конец vector и при любом объекте возвращает `1`. Safe enum
+//! из base owner-а заменяет только RTTI-механику и явно сохраняет non-goods
+//! ветку; container-параметр не представлен, потому что exact тело его не
+//! читает. Неинициализированный в C++ товар не материализуется как случайный
+//! `u32`: Rust `None` не совпадает ни с каким target.
+//!
+//! Приписанные translation unit тела `CAuctionLog::stLogNode`, ADO wrappers,
+//! `Catch@...`, `Unwind@...` и внутренности `std::vector` относятся к другим
+//! owner-ам либо к библиотечной/компиляторной форме и не получают Rust-копий.
 
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
+use std::ffi::CStr;
 
-// ============================================================================
-// FUNCTION: CAuctionLog::stLogNode::stLogNode
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x000495E0
-// ADDRESS: 004495e0
-// PROTOTYPE: undefined __thiscall stLogNode(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+use crate::public::guid::CGuid;
+use crate::worldserver::appworld::goods::cgoodsfactory::{
+    GoodsOriginalNameIndex, query_goods_id_by_original_name,
+};
+use crate::worldserver::appworld::listener::ccontainerlistener::{
+    CContainerListener, TraversedContainerObject,
+};
 
-// ============================================================================
-// FUNCTION: CAuctionLog::stLogNode::~stLogNode
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x00049630
-// ADDRESS: 00449630
-// PROTOTYPE: void __thiscall ~stLogNode(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+/// Safe Rust-состояние исходного `CSeekGoodsListener`.
+#[derive(Default)]
+pub(crate) struct CSeekGoodsListener {
+    target_goods_index: u32,
+    goods_ids: Vec<CGuid>,
+}
 
-// ============================================================================
-// FUNCTION: CAuctionLog::stLogNode::operator=
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x000496A0
-// ADDRESS: 004496a0
-// PROTOTYPE: stLogNode * __thiscall operator=(stLogNode * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl CSeekGoodsListener {
+    /// Создаёт listener с exact target `0` и пустым списком результатов.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
 
+    /// Назначает target по legacy original-name; `None` оставляет его прежним.
+    pub(crate) fn set_target(
+        &mut self,
+        original_name: Option<&CStr>,
+        original_name_index: &GoodsOriginalNameIndex,
+    ) {
+        let Some(original_name) = original_name else {
+            return;
+        };
 
+        self.target_goods_index =
+            query_goods_id_by_original_name(original_name_index, Some(original_name));
+    }
 
+    /// Заимствует GUID в исходном порядке traversal-а, включая дубликаты.
+    pub(crate) fn goods_ids(&self) -> &[CGuid] {
+        &self.goods_ids
+    }
+}
 
+impl CContainerListener for CSeekGoodsListener {
+    fn on_traversing_container(&mut self, object: TraversedContainerObject<'_>) -> i32 {
+        if let TraversedContainerObject::Goods(goods) = object
+            && goods.get_base_properties_index() == Some(self.target_goods_index)
+        {
+            self.goods_ids.push(*goods.get_ex_id());
+        }
 
-// ============================================================================
-// FUNCTION: Recordset15::GetCollect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x000498E0
-// ADDRESS: 004498e0
-// PROTOTYPE: _variant_t __thiscall GetCollect(_variant_t * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-// ============================================================================
-// FUNCTION: Catch@0044ace2
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x0004ACE2
-// ADDRESS: 0044ace2
-// PROTOTYPE: undefined Catch@0044ace2()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0044afc3
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x0004AFC3
-// ADDRESS: 0044afc3
-// PROTOTYPE: undefined Catch@0044afc3()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0044b08b
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x0004B08B
-// ADDRESS: 0044b08b
-// PROTOTYPE: undefined Catch@0044b08b()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CSeekGoodsListener::SetTarget
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp:23
-// RVA: 0x000D6460
-// ADDRESS: 004d6460
-// PROTOTYPE: void __thiscall SetTarget(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CSeekGoodsListener::~CSeekGoodsListener
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp:18
-// RVA: 0x000D6610
-// ADDRESS: 004d6610
-// PROTOTYPE: void __thiscall ~CSeekGoodsListener(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CSeekGoodsListener::CSeekGoodsListener
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp:13
-// RVA: 0x000D6980
-// ADDRESS: 004d6980
-// PROTOTYPE: undefined __thiscall CSeekGoodsListener(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CSeekGoodsListener::OnTraversingContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp:31
-// RVA: 0x000D6A10
-// ADDRESS: 004d6a10
-// PROTOTYPE: int __thiscall OnTraversingContainer(CContainer * param_1, CBaseObject * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@0052e5b0
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x0012E5B0
-// ADDRESS: 0052e5b0
-// PROTOTYPE: undefined Unwind@0052e5b0()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// ============================================================================
-// FUNCTION: Unwind@0052e610
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x0012E610
-// ADDRESS: 0052e610
-// PROTOTYPE: undefined Unwind@0052e610()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// ============================================================================
-// FUNCTION: Unwind@0052e623
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x0012E623
-// ADDRESS: 0052e623
-// PROTOTYPE: undefined Unwind@0052e623()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@0052e688
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x0012E688
-// ADDRESS: 0052e688
-// PROTOTYPE: undefined Unwind@0052e688()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-// ============================================================================
-// FUNCTION: Unwind@0052e71b
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x0012E71B
-// ADDRESS: 0052e71b
-// PROTOTYPE: undefined Unwind@0052e71b()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// ============================================================================
-// FUNCTION: Unwind@0052e72e
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x0012E72E
-// ADDRESS: 0052e72e
-// PROTOTYPE: undefined Unwind@0052e72e()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@0052e736
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x0012E736
-// ADDRESS: 0052e736
-// PROTOTYPE: undefined Unwind@0052e736()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-// ============================================================================
-// FUNCTION: Unwind@0052e776
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x0012E776
-// ADDRESS: 0052e776
-// PROTOTYPE: undefined Unwind@0052e776()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// ============================================================================
-// FUNCTION: Unwind@0052e78c
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x0012E78C
-// ADDRESS: 0052e78c
-// PROTOTYPE: undefined Unwind@0052e78c()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@0052e797
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x0012E797
-// ADDRESS: 0052e797
-// PROTOTYPE: undefined Unwind@0052e797()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-// ============================================================================
-// FUNCTION: Unwind@0052e83a
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x0012E83A
-// ADDRESS: 0052e83a
-// PROTOTYPE: undefined Unwind@0052e83a()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// ============================================================================
-// FUNCTION: Unwind@0052e934
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x0012E934
-// ADDRESS: 0052e934
-// PROTOTYPE: undefined Unwind@0052e934()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@0052e960
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x0012E960
-// ADDRESS: 0052e960
-// PROTOTYPE: undefined Unwind@0052e960()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@0052e98c
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\listener\cseekgoodslistener.cpp
-// RVA: 0x0012E98C
-// ADDRESS: 0052e98c
-// PROTOTYPE: undefined Unwind@0052e98c()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-// COMPONENT_VARIANT_END: WorldServer
+        1
+    }
+}

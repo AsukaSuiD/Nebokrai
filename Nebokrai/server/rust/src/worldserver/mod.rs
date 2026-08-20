@@ -93,6 +93,14 @@ pub(crate) mod appworld {
     }
     pub(crate) mod jjcsystem;
     pub(crate) mod leiting;
+    #[allow(
+        dead_code,
+        reason = "listener-контракт подключён перед materialized CPlayer packet traversal"
+    )]
+    pub(crate) mod listener {
+        pub(crate) mod ccontainerlistener;
+        pub(crate) mod cseekgoodslistener;
+    }
     pub(crate) mod message {
         #[allow(
             dead_code,
