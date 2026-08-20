@@ -9,15 +9,14 @@
 #include <vector>
 
 /*
- * Owner: loginserver/applogin/message/servermessage.cpp
+ * Исходный владелец: loginserver/applogin/message/servermessage.cpp
  *
  * Точная пара: LoginServer/loginserver.exe + LoginServer/LoginServer.pdb.
- * Исходный путь PDB:
- * d:\\complite_version\\fengyun_russia\\trunk\\server\\loginserver\\applogin\\message\\servermessage.cpp
- * OnServerMessage RVA 0x00080850.
+ * Путь владельца в PDB: d:\\complite_version\\fengyun_russia\\trunk\\server\\loginserver\\applogin\\message\\servermessage.cpp
+ * RVA OnServerMessage: 0x00080850.
  *
  * Восстановлены все достигнутые case: 0x1FE01/0xFF01 — World lifecycle,
- * 0x1FE02/0x1FE03 — snapshot/clear CD-key, 0x1FE04 — World/Game telemetry,
+ * 0x1FE02/0x1FE03 — снимок/очистка CD-key, 0x1FE04 — телеметрия World/Game,
  * 0x1FE05/0x1FE06/0x1FE08 — очередь server-info log. Неизвестный opcode
  * остаётся исходным no-op.
  *
@@ -29,10 +28,10 @@
  *
  * 0x1FE02 сохраняет исходный short-circuit: world_id==0 не читает count;
  * count==0 не запускает DB update; отрицательный ненулевой count не читает
- * строки, но всё равно передаёт пустой snapshot DB-owner. Для положительного
+ * строки, но всё равно передаёт пустой снимок владельцу БД. Для положительного
  * count каждый account сначала идёт в AddCdkey и независимо попадает в DB
  * snapshot. Никакие защитные capacity-лимиты старого Linux-донора сюда не
- * перенесены: точный owner их не имел.
+ * перенесены: точный владелец их не имел.
  *
  * 0x1FE04 хранит 32-битные bit-pattern player/port полей и dotted IPv4 из
  * исходного little-endian m_dwIP. 0x1FE05/06/08 проверяют dwServerInfoLogTime
@@ -42,8 +41,8 @@
  * исходные _strdate/_strtime.
  *
  * IServerMessageContext заменяет только старый глобальный GetGame() и содержит
- * ровно вызовы CGame, достигнутые этим owner-ом. Сетевой I/O, DB worker и FIFO
- * остаются у своих владельцев; handler не реализует их повторно.
+ * ровно вызовы CGame, достигнутые этим владельцем. Сетевой ввод-вывод, рабочий
+ * поток БД и FIFO остаются у своих владельцев; обработчик не реализует их повторно.
  */
 namespace Login
 {

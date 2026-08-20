@@ -6,11 +6,11 @@
 #include <cstdint>
 
 /*
- * Owner: nets/mysocket.cpp / nets/mysocket.h
+ * Исходный владелец: nets/mysocket.cpp / nets/mysocket.h
  *
  * Источник истины: оригинальные EXE/PDB Auth, Login, Billing, Misc, Game и
  * World. Поздняя Rust-реконструкция сохраняет уже выполненный reverse этого
- * общего owner-а; старый Miracle_server_linux используется только как C++-донор.
+ * общего владельца; старый Miracle_server_linux используется только как C++-донор.
  *
  * Все варианты подтверждают общие исходные значения CMySocket: SOCK_STREAM
  * (1), IPv4 127.0.0.1, port 5000, invalid socket, нулевой последний UDP-port и
@@ -23,19 +23,19 @@
  * runtime принадлежал CClient/CServer/CServerClient. В новом Linux-коде
  * создание, bind/listen/connect, readiness, recv/send и lifetime socket-а также
  * остаются у clients/servers и будут выражены зрелым networking backend-ом.
- * Этот owner не создаёт второй самодельный аналог WinSock поверх Linux.
+ * Этот владелец не создаёт второй самодельный аналог WinSock поверх Linux.
  *
  * PDB также подтверждает SetNonblocking, SetNodelay, SetReuseaddr,
  * SetKeepalive, SetRecvbuf и SetSendbuf. Их контракт — FIONBIO/TCP_NODELAY/
  * SO_REUSEADDR/SO_KEEPALIVE/SO_RCVBUF/SO_SNDBUF с 32-битным legacy value.
- * Эти настройки должны применяться непосредственным transport-owner-ом через
+ * Эти настройки должен применять непосредственный владелец транспорта через
  * выбранный backend; отдельные raw POSIX wrappers здесь не материализуются.
  *
  * GetSocketID увеличивал process-global signed 32-bit значение, начавшееся с
  * нуля. В старых отдельных EXE у каждого процесса был собственный счётчик.
  * Поскольку новый сервер может объединять бывшие процессы, один общий global
  * изменил бы исторические последовательности ID. Поэтому allocator является
- * отдельным объектом и создаётся каждым service-owner-ом самостоятельно.
+ * отдельным объектом и создаётся каждым владельцем службы самостоятельно.
  */
 
 using IPv4Octets = std::array<std::uint8_t, 4>;

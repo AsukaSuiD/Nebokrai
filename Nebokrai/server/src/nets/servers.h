@@ -19,7 +19,7 @@
 #include <vector>
 
 /*
- * Owner: nets/servers.cpp / nets/servers.h
+ * Исходный владелец: nets/servers.cpp / nets/servers.h
  *
  * Общий CServer подтверждён Auth/Billing/Login/Game/World EXE/PDB. Поздняя
  * Rust-реконструкция уже восстановила Host/admission, socket-command snapshot,
@@ -27,7 +27,8 @@
  * counters и точный порядок close/send. Старый Miracle_server_linux полезен
  * только как C++-донор: его poll/eventfd/IOCP-замены не являются оригиналом.
  *
- * Новый Linux-owner использует standalone Asio для listener/read/write/shutdown.
+ * Новый владелец Linux использует самостоятельный Asio для приёма,
+ * чтения, записи и завершения работы.
  * Это техническая замена WinSock/IOCP, а не новая игровая семантика. Один
  * CServer по-прежнему является единственным владельцем client/maps state;
  * producers меняют его только через CSocketCommands.
@@ -39,7 +40,8 @@
  * переполнении удаляет client в другом порядке, чем обычный SendBy*.
  *
  * Конкретные CMessage/parser/OnClose/OnAccept реакции не получают default
- * no-op. Производный service-owner обязан явно реализовать callbacks ниже.
+ * пустую реализацию. Производный владелец службы обязан явно реализовать
+ * обратные вызовы ниже.
  */
 
 inline constexpr std::size_t kServerReceiveChunk = 0x2000;

@@ -24,12 +24,12 @@
 #include <vector>
 
 /*
- * Owner: authserver/src/cgame.cpp / cgame.h
+ * Исходный владелец: authserver/src/cgame.cpp / cgame.h
  *
  * Точная пара: AuthServer/authserver.exe + AuthServer/authserver.pdb.
- * Исходные owner-пути PDB:
- * h:\fengyun\fy_russia\src\server\authserver\src\cgame.cpp/.h
- * RVA: ProcessMessage 0x00002090, InitNetServer_Auth 0x00002AF0,
+ * Исходные пути владельца в PDB:
+ * Путь владельца в PDB: h:\fengyun\fy_russia\src\server\authserver\src\cgame.cpp/.h
+ * Подтверждённые RVA: ProcessMessage 0x00002090, InitNetServer_Auth 0x00002AF0,
  * Release 0x000034C0, Send*Result 0x00004370/0x00004460/0x000045C0,
  * ProcessDBResult 0x00004E70, PushDBQuest 0x00005EC0,
  * UpdateServerInfo 0x00006310, MainLoop 0x00006890, GameThreadFunc 0x000068C0.

@@ -304,7 +304,7 @@ std::optional<std::string> CGasThread::MD5vec2str(
     if (digest.size() < 16U) {
         error = Error(GasThreadErrorKind::PasswordDigestTooShort,
                       account,
-                      "GAS MD5vec2str requires the first 16 digest bytes",
+                      "GAS MD5vec2str требует первые 16 байт дайджеста",
                       digest.size());
         return std::nullopt;
     }
@@ -333,7 +333,7 @@ std::optional<std::string> CGasThread::FormContent(
     if (signSource.size() >= kLegacySignSourceBufferSize) {
         error = Error(GasThreadErrorKind::SignSourceTooLong,
                       quest.account,
-                      "GAS sign source does not fit legacy char[512]",
+                      "исходная строка подписи GAS не помещается в старый char[512]",
                       signSource.size());
         return std::nullopt;
     }
@@ -342,7 +342,7 @@ std::optional<std::string> CGasThread::FormContent(
     if (!digest) {
         error = Error(GasThreadErrorKind::Md5Unavailable,
                       quest.account,
-                      "OpenSSL EVP could not compute legacy MD5");
+                      "OpenSSL EVP не смог вычислить старый MD5");
         return std::nullopt;
     }
     std::string hash = HexLower(std::span<const std::uint8_t, 16>(*digest));
@@ -361,7 +361,7 @@ std::optional<std::string> CGasThread::FormContent(
     if (content.size() >= kLegacyFormContentBufferSize) {
         error = Error(GasThreadErrorKind::FormContentTooLong,
                       quest.account,
-                      "GAS POST content does not fit legacy char[1024]",
+                      "содержимое POST для GAS не помещается в старый char[1024]",
                       content.size());
         return std::nullopt;
     }
@@ -455,7 +455,7 @@ std::optional<GasThreadError> CGasThread::ProcessQuest(
     if (!check.state) {
         return Error(GasThreadErrorKind::CheckAccInvariant,
                      quest.account,
-                     "CheckAcc produced neither GAS state nor technical error");
+                     "CheckAcc не вернул ни состояние GAS, ни техническую ошибку");
     }
     if (*check.state != 0) {
         if (SendGasFailureForState(m_Context, quest.socketId, *check.state)) {
@@ -469,7 +469,7 @@ std::optional<GasThreadError> CGasThread::ProcessQuest(
     if (!m_Context.HasRsCdKeyOwner()) {
         return Error(GasThreadErrorKind::DatabaseOwnerMissing,
                      quest.account,
-                     "CRsCDKey owner for successful GAS authentication is missing");
+                     "для успешной авторизации GAS отсутствует владелец CRsCDKey");
     }
 
     const double banVariantTime = m_Context.BanVariantTime(quest.account);
@@ -480,13 +480,13 @@ std::optional<GasThreadError> CGasThread::ProcessQuest(
         if (!now) {
             return Error(GasThreadErrorKind::LocalTimeUnavailable,
                          quest.account,
-                         "system localtime failed in GAS worker");
+                         "рабочему потоку GAS не удалось получить локальное время");
         }
         const auto banTime = m_Context.DecodeVariantTime(banVariantTime);
         if (!banTime) {
             return Error(GasThreadErrorKind::VariantTimeConversionFailed,
                          quest.account,
-                         "OLE DATE ban_time was not decoded in GAS worker");
+                         "рабочий поток GAS не декодировал OLE DATE ban_time");
         }
         if (EarlierThan(*now, *banTime)) {
             LoginNet::CMessage response(kLoginResponseMessageType);
@@ -536,7 +536,7 @@ std::optional<GasThreadError> CGasThread::ProcessQuest(
     if (gasOperator == nullptr) {
         return Error(GasThreadErrorKind::GasOperatorUnavailable,
                      quest.account,
-                     "CGasOperator allocation failed after GAS success");
+                     "после успешного GAS не удалось выделить CGasOperator");
     }
     const std::string clientIp = gasOperator->GetIP(quest.clientIp);
 

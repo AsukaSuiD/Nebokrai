@@ -12,12 +12,13 @@
 #include <optional>
 
 /*
- * Owner: nets/netlogin/mynetserver_world.cpp
+ * Исходный владелец: nets/netlogin/mynetserver_world.cpp
  *
- * LoginServer EXE/PDB: ctor 0x0006A9B0, CreateServerClient 0x0006A9F0;
+ * LoginServer EXE/PDB: конструктор 0x0006A9B0, CreateServerClient 0x0006A9F0;
  * связанные CGame::InitNetServer_World 0x2F90 и ReLoadSetup 0xF4E0.
  *
- * Defaults: max in-flight sends = 100, per-client send limit = 0x1000000.
+ * По умолчанию: не более 100 незавершённых отправок, ограничение отправки
+ * на клиента = 0x1000000.
  * World parser всегда проверяет content CRC независимо от bWorldCheckMsgCon;
  * parser errors не ставят IP-ban/QUIT. Общий receive-rate guard при включении
  * сохраняет собственный ban/QUIT.

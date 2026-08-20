@@ -23,11 +23,11 @@ class CMessage;
 }
 
 /*
- * Owner: loginserver/loginqueue.cpp / loginqueue.h
+ * Исходный владелец: loginserver/loginqueue.cpp / loginqueue.h
  *
  * Точная пара: LoginServer/loginserver.exe + LoginServer/LoginServer.pdb.
  * Исходные пути PDB:
- * d:\\complite_version\\fengyun_russia\\trunk\\server\\loginserver\\loginserver\\loginqueue.cpp
+ * Путь владельца в PDB: d:\\complite_version\\fengyun_russia\\trunk\\server\\loginserver\\loginserver\\loginqueue.cpp
  * и loginqueue.h. Для материализованной части подтверждены RVA:
  * AddQuestCdkey 0x0001CAD0, AddQuestPlayerList 0x0001E740,
  * AddQuestPlayerData 0x0001E880, OnClientLost 0x0001A800,
@@ -66,8 +66,8 @@ class CMessage;
  *
  * Matrix — одноразовая account-запись endpoint + три позиции 0..79. Endpoint
  * mismatch удаляет её. Совпавшая запись передаёт позиции/ответ фактическому
- * CRsCDKey-owner через ILoginQueueContext и удаляется после доказанного C/D;
- * отсутствие DB-owner либо недостаточная длина его blob остаются явной
+ * владелец CRsCDKey через ILoginQueueContext и удаляется после доказанного C/D;
+ * отсутствие владельца БД либо недостаточная длина его блока остаются явной
  * неизвестной границей и не превращаются в придуманный отказ. matrix_register
  * заменяет старую запись с кодом F, выбирает три modulo-0x50 позиции системным
  * RNG, игнорирует исходный result matrix_add и всегда после него отправляет B.
@@ -126,9 +126,10 @@ class CMessage;
  * CRsCDKey/setup/Auth transport и ошибка чтения local time остаются typed
  * technical boundaries вместо OOB/ложного успеха. Ban wire exact:
  * 0x10, 0, затем пять short year/month/day/hour/minute. std::chrono + системный
- * localtime заменяют GetLocalTime; raw OLE DATE остаётся результатом DB-owner,
+ * localtime заменяет GetLocalTime; исходный OLE DATE остаётся результатом владельца БД,
  * а его DecodeVariantTime отдан compatibility adapter/library. Порядок exact:
- * raw ban -> local-now -> decode OLE -> compare local-now < expiry.
+ * Исходный ban -> текущее локальное время -> декодирование OLE ->
+ * сравнение текущего локального времени со сроком окончания.
  *
  * Run 0x0001D500 сохраняет исходную фазность. Сначала legacy m_GasQuest; если
  * он вдруг непуст, каждый элемент повторно идёт OnQuestCdkey, сам list НЕ
@@ -154,14 +155,14 @@ class CMessage;
  * valid-error заменены value-map, поэтому исходная ветка null-entry становится
  * невозможным техническим состоянием, а не отдельной игровой семантикой.
  *
- * NoQueueAccounts.conf остаётся owner-данными CLoginQueue. std::filesystem и
+ * NoQueueAccounts.conf остаётся данными владельца CLoginQueue. std::filesystem и
  * owned STL-контейнеры заменяют Win32 case-insensitive filesystem, char[0x100],
  * std::list/map/set и ручное владение. Пустой файл, token >= 0x100 и ANSI
  * lowercase high-bit bytes помечаются безопасной неизвестной границей вместо
  * воспроизведения старого uninitialized/overflow/locale поведения.
  *
  * Queue-side Run/cadence теперь материализован. Фактический CGasThread/
- * CGasOperator остаётся отдельным owner-узлом; Run не подделывает worker и не
+ * CGasOperator остаётся отдельным узлом-владельцем; Run не подделывает рабочий поток и не
  * создаёт producer для мёртвого m_GasQuest.
  */
 namespace Login

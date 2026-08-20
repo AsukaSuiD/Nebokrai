@@ -8,13 +8,12 @@
 #include <string_view>
 
 /*
- * Owner: authserver/src/configreader.cpp / configreader.h
+ * Исходный владелец: authserver/src/configreader.cpp / configreader.h
  *
  * Точная пара: AuthServer/authserver.exe + AuthServer/authserver.pdb.
- * Исходный путь PDB:
- * h:\fengyun\fy_russia\src\server\authserver\src\configreader.cpp
- * RVA: getDBSP 0x00009560, reset 0x0000A380, set_sp_name 0x0000A940,
- * constructor 0x0000AA60, load 0x0000AB60.
+ * Путь владельца в PDB: h:\fengyun\fy_russia\src\server\authserver\src\configreader.cpp
+ * Подтверждённые RVA: getDBSP 0x00009560, reset 0x0000A380,
+ * set_sp_name 0x0000A940, конструктор 0x0000AA60, load 0x0000AB60.
  *
  * setup.ini здесь не является обычным INI. Оригинал двадцать раз читает
  * whitespace-token label, не проверяет его текст, затем значение фиксированного

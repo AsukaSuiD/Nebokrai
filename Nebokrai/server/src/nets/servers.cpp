@@ -242,8 +242,8 @@ asio::awaitable<void> RunServerIoAction(ServerIoAction action, ServerCommandHand
         co_return;
     }
 
-    // Partial success deliberately publishes SENDEND as the original IOCP
-    // completion did; the unsent tail of this server-side batch is lost.
+    // При частичном успехе намеренно публикуется SENDEND, как это делало
+    // исходное завершение IOCP; неотправленный хвост серверной пачки теряется.
     commands.PublishSendEnd(send.socketId);
 }
 
@@ -718,7 +718,7 @@ void CServer::ConfigureClientTransportForReload(bool checkReceiveRate,
                                                  std::uint32_t maximumMessageLength,
                                                  std::int32_t permittedSendBytes) noexcept
 {
-    // VERIFIED_ASSEMBLY CGame::ReLoadSetup 0x0040F52D..0x0040F563.
+    // ПОДТВЕРЖДЕНО АССЕМБЛЕРОМ: CGame::ReLoadSetup 0x0040F52D..0x0040F563.
     m_CheckReceiveRate = checkReceiveRate;
     m_CheckMessageContent = checkMessageContent;
     m_ReceiveRateLimit = std::bit_cast<std::int32_t>(receiveRateLimit);
@@ -738,7 +738,7 @@ void CServer::ConfigureWorldTransportForReload(bool checkReceiveRate,
                                                 std::uint32_t maximumMessageLength,
                                                 std::int32_t permittedSendBytes) noexcept
 {
-    // VERIFIED_ASSEMBLY CGame::ReLoadSetup 0x0040F5A8..0x0040F5DE.
+    // ПОДТВЕРЖДЕНО АССЕМБЛЕРОМ: CGame::ReLoadSetup 0x0040F5A8..0x0040F5DE.
     m_CheckReceiveRate = checkReceiveRate;
     m_CheckMessageContent = checkMessageContent;
     m_ReceiveRateLimit = std::bit_cast<std::int32_t>(receiveRateLimit);

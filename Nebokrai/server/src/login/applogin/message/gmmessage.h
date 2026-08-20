@@ -8,11 +8,11 @@
 #include <variant>
 
 /*
- * Owner: loginserver/applogin/message/gmmessage.cpp
+ * Исходный владелец: loginserver/applogin/message/gmmessage.cpp
  *
  * Точная пара: LoginServer/loginserver.exe + LoginServer/LoginServer.pdb.
- * OnGMMessage RVA 0x0007F0A0. Исходный путь PDB:
- * d:\complite_version\fengyun_russia\trunk\server\loginserver\applogin\message\gmmessage.cpp
+ * RVA OnGMMessage: 0x0007F0A0.
+ * Путь владельца в PDB: d:\complite_version\fengyun_russia\trunk\server\loginserver\applogin\message\gmmessage.cpp
  *
  * Единственный подтверждённый opcode 0x20001 читает account через GetStr с
  * limit 0x100, затем signed Windows long duration и синхронно вызывает
@@ -21,7 +21,7 @@
  * Неизвестный opcode остаётся no-op.
  *
  * Глобальный GetGame заменён узким IGmMessageContext. Добавленные в старом
- * Linux-доноре ban-list opcode 0x20002/0x20003 отсутствуют в точном owner-е и
+ * Linux-доноре коды списка блокировок 0x20002/0x20003 отсутствуют у точного владельца и
  * намеренно не переносятся. Stack char[256], STL cleanup и compiler noise
  * заменены owned bytes и стандартными контейнерами.
  */
@@ -32,7 +32,7 @@ class IGmMessageContext
 public:
     virtual ~IGmMessageContext() = default;
 
-    // nullopt означает, что CGame ещё не присоединил исходный CRsCDKey owner.
+    // nullopt означает, что CGame ещё не присоединил исходного владельца CRsCDKey.
     [[nodiscard]] virtual std::optional<bool>
     CdKeyBan(std::span<const std::uint8_t> account,
              std::int32_t durationMinutes) = 0;

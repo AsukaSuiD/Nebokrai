@@ -7,14 +7,14 @@
 #include <utility>
 
 /*
- * Owner: nets/msgqueue.cpp / nets/msgqueue.h
+ * Исходный владелец: nets/msgqueue.cpp / nets/msgqueue.h
  *
  * Точные EXE/PDB всех шести серверов подтверждают один контракт: FIFO,
  * добавление в хвост, извлечение из головы, размер под тем же lock, очистка и
  * атомарная передача всего текущего snapshot. Старые CRITICAL_SECTION,
  * std::deque<CBaseMessage*> и ручное delete являются технической формой.
  *
- * Очередь типизирована, потому что конкретные net-owner-ы всегда знают свой
+ * Очередь типизирована, потому что конкретные сетевые владельцы всегда знают свой
  * CMessage. Это сохраняет исходное единственное владение, но не заставляет
  * позднее делать небезопасный downcast из CBaseMessage после PopMessage.
  * eventfd, condition_variable, лимиты и control reserve старого Linux-донора

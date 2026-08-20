@@ -9,14 +9,14 @@
 #include <utility>
 
 /*
- * Owner: authserver/src/kl_multi_list.h
+ * Исходный владелец: authserver/src/kl_multi_list.h
  *
  * Точная пара: AuthServer/authserver.exe + AuthServer/authserver.pdb.
- * Исходный owner PDB:
- * h:\fengyun\fy_russia\src\server\authserver\src\kl_multi_list.h
- * RVA db_element_type: size 0x2CB0, ctor 0x46A0, dtor 0x4710,
- * pop_front 0x4750, push_back 0x5B10; ServerInfo: ctor 0x5220,
- * push_back 0x16C40, pop_all 0x191D0.
+ * Исходный путь владельца в PDB:
+ * Путь владельца в PDB: h:\fengyun\fy_russia\src\server\authserver\src\kl_multi_list.h
+ * Подтверждённые RVA для db_element_type: размер 0x2CB0, конструктор 0x46A0,
+ * деструктор 0x4710, pop_front 0x4750, push_back 0x5B10; для ServerInfo:
+ * конструктор 0x5220, push_back 0x16C40, pop_all 0x191D0.
  *
  * Доказанный контракт — FIFO под одним lock. Wait-pop спит на пустой очереди;
  * push будит одного ожидающего только при переходе empty -> non-empty. Size —

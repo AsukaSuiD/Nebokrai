@@ -273,7 +273,7 @@ float CBaseMessage::GetFloat()
         return 0.0F;
     }
 
-    static_assert(sizeof(float) == 4, "Legacy wire requires 32-bit float");
+    static_assert(sizeof(float) == 4, "Старый сетевой формат требует 32-битный float");
     float value = 0.0F;
     std::memcpy(&value, m_MsgData.data() + m_lPtr, sizeof(value));
     m_lPtr += static_cast<std::int32_t>(sizeof(value));
@@ -406,7 +406,7 @@ void CBaseMessage::Add(std::int64_t value)
 
 void CBaseMessage::Add(float value)
 {
-    static_assert(sizeof(float) == 4, "Legacy wire requires 32-bit float");
+    static_assert(sizeof(float) == 4, "Старый сетевой формат требует 32-битный float");
     std::uint32_t bits = 0;
     std::memcpy(&bits, &value, sizeof(bits));
     Add(bits);

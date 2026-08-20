@@ -25,7 +25,7 @@ void CGasOperator::ReleaseInstance() noexcept
 
 std::string CGasOperator::GetIP(std::uint32_t ip) const
 {
-    // VERIFIED_ASSEMBLY 0x00421500..0x0042157F: sprintf("%u.%u.%u.%u")
+    // ПОДТВЕРЖДЕНО АССЕМБЛЕРОМ 0x00421500..0x0042157F: sprintf("%u.%u.%u.%u")
     // получает байты raw IPv4 именно от младшего к старшему.
     return std::to_string(ip & 0xFFU) + "." +
            std::to_string((ip >> 8U) & 0xFFU) + "." +

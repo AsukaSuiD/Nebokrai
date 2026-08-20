@@ -13,17 +13,17 @@
 #include <vector>
 
 /*
- * Owner: nets/netlogin/message.cpp / message.h
+ * Исходный владелец: nets/netlogin/message.cpp / message.h
  *
  * Точная пара: LoginServer/loginserver.exe + LoginServer/LoginServer.pdb.
- * Исходный путь PDB:
- * d:\complite_version\fengyun_russia\trunk\nets\netlogin\message.cpp
- * RVA: Run 0x00065490, ctor 0x00065540, CreateMessage 0x000655C0,
+ * Путь владельца в PDB: d:\complite_version\fengyun_russia\trunk\nets\netlogin\message.cpp
+ * Подтверждённые RVA: Run 0x00065490, конструктор 0x00065540,
+ * CreateMessage 0x000655C0,
  * CreateMessageWithoutRLE 0x00065710, GetString 0x000657D0,
- * client send 0x00065190/0x000651E0, World send
- * 0x00065230/0x000652C0/0x00065350, Auth send 0x000653E0.
+ * отправка клиенту 0x00065190/0x000651E0, отправка World
+ * 0x00065230/0x000652C0/0x00065350, отправка Auth 0x000653E0.
  *
- * Client wire: [rle_len + 4, rle(full CBaseMessage)]. World/Auth wire:
+ * Формат клиента: [rle_len + 4, rle(полный CBaseMessage)]. Формат World/Auth:
  * [total_len, crc(total_len), crc(message), message]. Только SendToAS имел
  * отдельную сериализацию общего scratch-buffer; в новом C++ она сохраняется
  * mutex вокруг build/queue, но сам scratch заменён owned std::vector.

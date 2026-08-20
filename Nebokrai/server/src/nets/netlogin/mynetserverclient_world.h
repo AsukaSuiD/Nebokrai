@@ -8,9 +8,9 @@
 #include <optional>
 
 /*
- * Owner: nets/netlogin/mynetserverclient_world.cpp
+ * Исходный владелец: nets/netlogin/mynetserverclient_world.cpp
  *
- * LoginServer EXE/PDB: ctor 0x0006EC60, OnClose 0x0006ED10,
+ * LoginServer EXE/PDB: конструктор 0x0006EC60, OnClose 0x0006ED10,
  * SetSendRevBuf 0x0006EDA0, OnReceive 0x0006EDF0.
  *
  * World envelope всегда [len, crc(len), crc(normalized message), message].

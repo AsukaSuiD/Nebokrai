@@ -52,20 +52,20 @@ int CMyWinInet::Init(const char* url)
         return 0;
     }
     if (url == nullptr) {
-        SetError(MyWinInetErrorKind::InvalidUrl, "verification URL is null");
+        SetError(MyWinInetErrorKind::InvalidUrl, "URL проверки равен null");
         return 0;
     }
 
     const std::string_view candidate(url);
     if (candidate.size() >= kLegacyUrlBufferSize) {
         SetError(MyWinInetErrorKind::UrlTooLong,
-                 "verification URL does not fit legacy char[256]");
+                 "URL проверки не помещается в старый char[256]");
         return 0;
     }
 
     CURLU* parsed = curl_url();
     if (parsed == nullptr) {
-        SetError(MyWinInetErrorKind::CurlInit, "curl_url allocation failed");
+        SetError(MyWinInetErrorKind::CurlInit, "не удалось выделить curl_url");
         return 0;
     }
 
@@ -82,7 +82,7 @@ int CMyWinInet::Init(const char* url)
     if (!accepted) {
         const CURLUcode error = setResult != CURLUE_OK ? setResult : schemeResult;
         SetError(MyWinInetErrorKind::InvalidUrl,
-                 error == CURLUE_OK ? "verification URL is not http/https"
+                 error == CURLUE_OK ? "URL проверки не использует http/https"
                                     : curl_url_strerror(error));
     }
 
@@ -104,14 +104,14 @@ int CMyWinInet::Send(const char* content)
     m_LastError.reset();
     if (m_Url.empty() || content == nullptr) {
         SetError(MyWinInetErrorKind::InvalidUrl,
-                 m_Url.empty() ? "Init did not provide verification URL"
-                               : "POST content is null");
+                 m_Url.empty() ? "Init не передал URL проверки"
+                               : "содержимое POST равно null");
         return 0;
     }
 
     CURL* curl = curl_easy_init();
     if (curl == nullptr) {
-        SetError(MyWinInetErrorKind::CurlInit, "curl_easy_init failed");
+        SetError(MyWinInetErrorKind::CurlInit, "curl_easy_init завершился ошибкой");
         return 0;
     }
 
@@ -119,7 +119,7 @@ int CMyWinInet::Send(const char* content)
     if (headers == nullptr) {
         curl_easy_cleanup(curl);
         SetError(MyWinInetErrorKind::CurlOptions,
-                 "curl_slist_append failed for Accept header");
+                 "curl_slist_append не добавил заголовок Accept");
         return 0;
     }
     curl_slist* extended = curl_slist_append(
@@ -128,7 +128,7 @@ int CMyWinInet::Send(const char* content)
         curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
         SetError(MyWinInetErrorKind::CurlOptions,
-                 "curl_slist_append failed for Content-Type header");
+                 "curl_slist_append не добавил заголовок Content-Type");
         return 0;
     }
     headers = extended;
@@ -208,14 +208,14 @@ std::size_t CMyWinInet::WriteResponse(char* data,
     }
     if (size != 0U && count > std::numeric_limits<std::size_t>::max() / size) {
         self->SetError(MyWinInetErrorKind::ResponseTooLarge,
-                       "libcurl response chunk size overflow");
+                       "переполнение размера блока ответа libcurl");
         return 0U;
     }
 
     const std::size_t bytes = size * count;
     if (bytes > (kLegacyResponseBufferSize - 1U) - self->m_Data.size()) {
         self->SetError(MyWinInetErrorKind::ResponseTooLarge,
-                       "verification response exceeds safe legacy char[1024]");
+                       "ответ проверки превышает безопасный старый char[1024]");
         return 0U;
     }
     self->m_Data.append(data, bytes);

@@ -5,9 +5,9 @@
 #include <span>
 
 /*
- * Owner: public/crc32static.cpp
+ * Исходный владелец: public/crc32static.cpp
  *
- * Исходный owner PDB: public/crc32static.cpp; DataCrc32 подтверждён во всех
+ * Исходный путь владельца в PDB: public/crc32static.cpp; DataCrc32 подтверждён во всех
  * шести серверных EXE/PDB (Auth RVA 0x15F80, Billing 0x13530, Login 0x7F050,
  * Misc 0x5730, Game 0x7B0A0, World 0xA43A0). Варианты подтверждают один и тот же
  * reflected IEEE CRC-32: начальный регистр 0xFFFFFFFF, стандартный reflected

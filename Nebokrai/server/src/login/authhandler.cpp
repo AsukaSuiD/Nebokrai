@@ -17,7 +17,7 @@ AuthHandler::AuthHandler(IAuthHandlerContext& context) noexcept
 void AuthHandler::OnQuest(const AuthQuest& quest)
 {
     static_cast<void>(quest);
-    // Exact virtual slot 0x004664B0: ret 4.
+    // Точный виртуальный слот 0x004664B0: ret 4.
 }
 
 void AuthHandler::OnResponse(const AuthResult& result)

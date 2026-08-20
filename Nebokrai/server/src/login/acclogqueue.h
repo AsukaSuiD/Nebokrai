@@ -7,11 +7,12 @@
 #include <string>
 
 /*
- * Owner: loginserver/acclogqueue.cpp / acclogqueue.h
+ * Исходный владелец: loginserver/acclogqueue.cpp / acclogqueue.h
  *
  * Точная пара: LoginServer/loginserver.exe + LoginServer/LoginServer.pdb.
- * PDB layout: Semaphore + Mutex + deque<string>, size 56.
- * RVA: pop 0x00401850, ctor 0x00401A10, dtor 0x00401A50,
+ * Компоновка из PDB: Semaphore + Mutex + deque<string>, размер 56.
+ * Подтверждённые RVA: pop 0x00401850, конструктор 0x00401A10,
+ * деструктор 0x00401A50,
  * clear 0x00401A90, push 0x00401B20.
  *
  * Исходный push под lock добавляет C-string в хвост и ReleaseSemaphore(1).
@@ -21,7 +22,7 @@
  * stale token после clear даёт пустой Pop, как обнулённый char[2048] caller-а,
  * а push сверх 10000 всё ещё кладёт строку в deque, но не создаёт новый token.
  * std::condition_variable + mutex заменяют только Win32 plumbing. Ёмкости deque,
- * deduplicate или retry исходный owner не добавлял.
+ * устранение дублей или повтор исходный владелец не добавлял.
  */
 namespace Login
 {

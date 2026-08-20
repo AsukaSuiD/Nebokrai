@@ -76,7 +76,7 @@ ConvertedText Windows1251ToUtf8(std::string_view source)
 
     iconv_t converter = iconv_open("UTF-8", "WINDOWS-1251");
     if (converter == reinterpret_cast<iconv_t>(-1)) {
-        return ConvertedText{.error = "iconv WINDOWS-1251 -> UTF-8 unavailable"};
+        return ConvertedText{.error = "iconv не поддерживает преобразование WINDOWS-1251 -> UTF-8"};
     }
     struct Closer
     {
@@ -96,7 +96,7 @@ ConvertedText Windows1251ToUtf8(std::string_view source)
               &destination,
               &destinationLeft) == static_cast<std::size_t>(-1)) {
         return ConvertedText{
-            .error = "iconv WINDOWS-1251 -> UTF-8 failed, errno=" +
+            .error = "iconv не преобразовал WINDOWS-1251 в UTF-8, errno=" +
                      std::to_string(errno)};
     }
     output.resize(output.size() - destinationLeft);
@@ -128,7 +128,7 @@ std::string OdbcDiagnostic(SQLSMALLINT handleType,
     if (OdbcSucceeded(result)) {
         detail += ": SQLSTATE=";
         detail += reinterpret_cast<const char*>(state);
-        detail += ", native=" + std::to_string(native);
+        detail += ", системный код=" + std::to_string(native);
         if (length > 0) {
             detail += ", ";
             const std::size_t copied = std::min<std::size_t>(
@@ -136,7 +136,7 @@ std::string OdbcDiagnostic(SQLSMALLINT handleType,
             detail.append(reinterpret_cast<const char*>(message), copied);
         }
     } else {
-        detail += ": ODBC diagnostic unavailable";
+        detail += ": диагностические сведения ODBC недоступны";
     }
     return detail;
 }
@@ -147,11 +147,11 @@ void ReadLabeled(std::istream& input, std::string& label, Value& value)
     input >> label >> value;
 }
 
-void ReadLegacySetupBody(std::istream& input, CGame::tagSetup& setup)
+bool ReadLegacySetupBody(std::istream& input, CGame::tagSetup& setup)
 {
     std::string label;
-    // VERIFIED_DECOMPILE 0x0040E690 setup.dat branch: legacy schema starts
-    // directly with Client/World ports and ends at _bindPort.
+    // ПОДТВЕРЖДЕНО ДЕКОМПИЛЯЦИЕЙ 0x0040E690, ветка setup.dat: старая схема
+    // начинается сразу с портов Client/World и заканчивается на _bindPort.
     ReadLabeled(input, label, setup.dwListenPort_Client);
     ReadLabeled(input, label, setup.dwListenPort_World);
     ReadLabeled(input, label, setup.strSqlConType);
@@ -196,16 +196,17 @@ void ReadLegacySetupBody(std::istream& input, CGame::tagSetup& setup)
     ReadLabeled(input, label, setup.authTimeOut);
     ReadLabeled(input, label, setup._bindIP);
     ReadLabeled(input, label, setup._bindPort);
+    return !input.fail();
 }
 
-void ReadPlainSetup(std::istream& input, CGame::tagSetup& setup)
+bool ReadPlainSetup(std::istream& input, CGame::tagSetup& setup)
 {
     std::string label;
-    // Plain setup.ini has one newer prefix field, then the exact legacy body.
+    // Открытый setup.ini содержит одно новое поле-префикс, затем точное старое тело.
     ReadLabeled(input, label, setup._server_version);
-    ReadLegacySetupBody(input, setup);
+    const bool legacyBodyComplete = ReadLegacySetupBody(input, setup);
 
-    // VERIFIED_DECOMPILE plaintext-only extension after _bindPort.
+    // ПОДТВЕРЖДЕНО ДЕКОМПИЛЯЦИЕЙ: расширение только открытого файла после _bindPort.
     ReadLabeled(input, label, setup.lforbitTime);
     ReadLabeled(input, label, setup.lforbitNum);
     ReadLabeled(input, label, setup.lMode);
@@ -215,16 +216,18 @@ void ReadPlainSetup(std::istream& input, CGame::tagSetup& setup)
     ReadLabeled(input, label, setup._db_billing_name);
     ReadLabeled(input, label, setup._db_user);
     ReadLabeled(input, label, setup._db_psd);
+    const bool requiredExtensionComplete = !input.fail();
     ReadLabeled(input, label, setup.m_lIsInsideUse);
     ReadLabeled(input, label, setup.m_strVerificationAddr);
     ReadLabeled(input, label, setup.m_lVerifiSignUpper);
+    return legacyBodyComplete && requiredExtensionComplete;
 }
 
 std::optional<std::int32_t> LegacyScaledWorldLevel(std::uint32_t worldMax,
                                                     float scale)
 {
-    // VERIFIED_ASSEMBLY 0x0040EDA2 / 0x0040F402: MSVC converts unsigned dword
-    // through signed FILD and adds exact 2^32 when the high bit is set.
+    // ПОДТВЕРЖДЕНО АССЕМБЛЕРОМ 0x0040EDA2 / 0x0040F402: MSVC преобразует
+    // беззнаковый dword через знаковый FILD и добавляет ровно 2^32 при старшем бите.
     const long double product = static_cast<long double>(worldMax) *
                                 static_cast<long double>(scale);
     if (!std::isfinite(product) ||
@@ -238,8 +241,8 @@ std::optional<std::int32_t> LegacyScaledWorldLevel(std::uint32_t worldMax,
 
 CGame::tagSetup::tagSetup()
 {
-    // VERIFIED_DIRECT tagSetup::tagSetup 0x0040C6E0. Fundamental fields not
-    // mentioned here were not explicitly initialized by the original ctor.
+    // ПОДТВЕРЖДЕНО НАПРЯМУЮ: tagSetup::tagSetup 0x0040C6E0. Фундаментальные
+    // поля, не перечисленные здесь, исходный конструктор явно не инициализировал.
     bCheckNet = true;
     dwMaxByteNum = 5000U;
     dwMaxMsgLen = 0x19000U;
@@ -262,18 +265,24 @@ CGame::tagSetup::tagSetup()
 
 bool CGame::LoadSetup()
 {
-    // VERIFIED_DIRECT 0x0040E690: plaintext setup.ini has priority. setup.dat
-    // is consulted only when setup.ini cannot be opened.
+    // ПОДТВЕРЖДЕНО НАПРЯМУЮ 0x0040E690: открытый setup.ini имеет приоритет.
+    // setup.dat читается только тогда, когда setup.ini открыть невозможно.
     std::ifstream plain("setup.ini");
     if (plain.is_open()) {
-        ReadPlainSetup(plain, m_Setup);
-        if (plain.fail()) {
-            // Direct code would continue with whatever remained in raw scalar
-            // storage. Linux makes that invalid-input UB an explicit technical
-            // boundary before those values feed world thresholds/timers.
-            RecordTechnicalError("LoadSetup: incomplete setup.ini stream");
+        const bool requiredFieldsComplete = ReadPlainSetup(plain, m_Setup);
+        if (!requiredFieldsComplete) {
+            // Обязательная часть заканчивается на _db_psd: сохранённый штатный
+            // setup.ini содержит все эти 54 пары. Их отсутствие оставило бы
+            // сетевые, временные или DB-поля без доказанного значения.
+            RecordTechnicalError("LoadSetup: обязательная часть setup.ini неполна");
             return false;
         }
+
+        // Сохранённый штатный setup.ini содержит ровно 54 пары и заканчивается
+        // после _db_psd. Три последующих извлечения исходно получают состояние
+        // ошибки, но полная обязательная часть остаётся успехом; значения
+        // конструктора m_lIsInsideUse/m_strVerificationAddr сохраняются без
+        // выдуманных значений хвоста.
     } else {
         char setupDatName[] = "setup.dat";
         const int fileLength = GetFileLength(setupDatName);
@@ -286,18 +295,18 @@ bool CGame::LoadSetup()
             static_cast<std::size_t>(fileLength) >
                 (std::numeric_limits<std::size_t>::max() - 2U) / 2U) {
             std::fclose(encodedFile);
-            RecordTechnicalError("LoadSetup: setup.dat length is not representable");
+            RecordTechnicalError("LoadSetup: длина setup.dat не помещается в допустимый диапазон");
             return false;
         }
 
         try {
-            // VERIFIED_ASSEMBLY: encoded buffer = len+1, decoded = len*2+2;
-            // both are zero-filled before fread/IniDecoder.
+            // ПОДТВЕРЖДЕНО АССЕМБЛЕРОМ: кодированный буфер = len+1,
+            // декодированный = len*2+2; оба обнуляются перед fread/IniDecoder.
             std::vector<char> encoded(static_cast<std::size_t>(fileLength) + 1U, '\0');
             std::vector<char> decoded(static_cast<std::size_t>(fileLength) * 2U + 2U, '\0');
 
-            // Direct owner ignores fread result. Because the source buffer was
-            // pre-zeroed, a short read leaves zero bytes in the unread tail.
+            // Прямой владелец игнорирует результат fread. Исходный буфер заранее
+            // обнулён, поэтому короткое чтение оставляет нули в непрочитанном хвосте.
             static_cast<void>(std::fread(encoded.data(),
                                          static_cast<std::size_t>(fileLength),
                                          1U,
@@ -307,21 +316,22 @@ bool CGame::LoadSetup()
 
             IniDecoder(encoded.data(), decoded.data(), fileLength);
 
-            // Direct code inserts decoded C-string into stringstream then seekg(0),
-            // so an embedded NUL truncates the parse even though decoded is 2*len+2.
+            // Прямой код помещает декодированную C-строку в stringstream и
+            // вызывает seekg(0), поэтому встроенный NUL обрывает разбор при
+            // размере 2*len+2.
             std::stringstream decodedStream;
             decodedStream << decoded.data();
             decodedStream.seekg(0, std::ios::beg);
-            ReadLegacySetupBody(decodedStream, m_Setup);
-            if (decodedStream.fail()) {
-                RecordTechnicalError("LoadSetup: incomplete decoded setup.dat stream");
+            if (!ReadLegacySetupBody(decodedStream, m_Setup)) {
+                RecordTechnicalError(
+                    "LoadSetup: обязательная часть декодированного setup.dat неполна");
                 return false;
             }
         } catch (const std::bad_alloc&) {
             if (encodedFile != nullptr) {
                 std::fclose(encodedFile);
             }
-            RecordTechnicalError("LoadSetup: setup.dat buffer allocation failed");
+            RecordTechnicalError("LoadSetup: не удалось выделить буфер для setup.dat");
             return false;
         }
     }
@@ -331,11 +341,11 @@ bool CGame::LoadSetup()
     const auto fullLevel =
         LegacyScaledWorldLevel(m_Setup.dwWorldMaxPlayers, m_Setup.fWorldFullScale);
     if (!busyLevel || !fullLevel) {
-        RecordTechnicalError("LoadSetup: world state threshold is outside legacy long range");
+        RecordTechnicalError("LoadSetup: порог состояния мира не помещается в старый long");
         return false;
     }
 
-    // VERIFIED x87 post-parse sequence in both setup.ini and setup.dat branches.
+    // ПОДТВЕРЖДЕНА последовательность x87 после разбора в обеих ветках.
     m_StateLvl[0] = -1;
     m_StateLvl[1] = *busyLevel;
     m_StateLvl[2] = *fullLevel;
@@ -348,19 +358,19 @@ bool CGame::LoadSetup()
                                  m_Setup.dwWorldMaxPlayers);
     }
 
-    // Direct owner only appends success AddLogText after this point.
+    // Прямой владелец добавляет успешный AddLogText только после этой точки.
     return true;
 }
 
 bool CGame::ReLoadSetup(AuthManager& authManager)
 {
-    // VERIFIED_ASSEMBLY 0x0040F4E9: return value is deliberately ignored.
+    // ПОДТВЕРЖДЕНО АССЕМБЛЕРОМ 0x0040F4E9: результат намеренно игнорируется.
     static_cast<void>(LoadSetup());
 
     if (s_pNetServer_Client == nullptr) {
-        // Direct EXE would dereference null here. Preserve valid-state behavior
-        // and expose the impossible owner gap as a technical boundary instead.
-        RecordTechnicalError("ReLoadSetup: client server owner is missing");
+        // Прямой EXE разыменовал бы здесь null. Сохраняем поведение допустимого
+        // состояния, а невозможный пробел владельца обозначаем технической границей.
+        RecordTechnicalError("ReLoadSetup: отсутствует владелец клиентского сервера");
         return false;
     }
     s_pNetServer_Client->ConfigureClientTransportForReload(
@@ -374,9 +384,9 @@ bool CGame::ReLoadSetup(AuthManager& authManager)
         m_Setup.lMaxClientSendBuf);
 
     if (s_pNetServer_World == nullptr) {
-        // This boundary is intentionally after the client update, matching the
-        // direct crash point: client settings may already have been rewritten.
-        RecordTechnicalError("ReLoadSetup: world server owner is missing");
+        // Эта граница намеренно расположена после обновления клиента, как и точка
+        // падения прямого кода: настройки клиента уже могли быть перезаписаны.
+        RecordTechnicalError("ReLoadSetup: отсутствует владелец сервера мира");
         return false;
     }
     s_pNetServer_World->ConfigureWorldTransportForReload(
@@ -389,18 +399,19 @@ bool CGame::ReLoadSetup(AuthManager& authManager)
         m_Setup.dwWorldMaxMsgLen,
         m_Setup.lWorldMaxClientSendBuf);
 
-    // Direct owner writes gAuthMgr._time_out last. gAuthMgr itself is not
-    // resurrected; AuthManager is already explicit elsewhere in this recovery.
+    // Прямой владелец последним записывает gAuthMgr._time_out. Сам gAuthMgr не
+    // воскрешается: AuthManager уже явно представлен в другой части восстановления.
     authManager.SetTimeout(m_Setup.authTimeOut);
     return true;
 }
 
 bool CGame::LoadSetupEx()
 {
-    // VERIFIED_DECOMPILE 0x0040D9E0: literal lowercase filename, обычный
-    // whitespace stream; каждая подпись читается и отбрасывается перед value.
-    // После успешного open исходник НЕ проверяет failbit и всегда возвращает
-    // true, поэтому partial extraction намеренно оставляет уже прочитанные поля.
+    // ПОДТВЕРЖДЕНО ДЕКОМПИЛЯЦИЕЙ 0x0040D9E0: буквальное имя файла в нижнем
+    // регистре и обычный поток с пробельным разделением; каждая подпись читается
+    // и отбрасывается перед значением. После успешного открытия исходник НЕ
+    // проверяет failbit и всегда возвращает true, поэтому неполное извлечение
+    // намеренно оставляет уже прочитанные поля.
     std::ifstream input("setupex.ini");
     if (!input.is_open()) {
         return false;
@@ -419,26 +430,28 @@ bool CGame::LoadSetupEx()
           >> label >> m_SetupEx.iValidErrUpperLimit
           >> label >> m_SetupEx.dwValidErrStayTime;
 
-    // Direct owner затем только AddLogText("load setupex.ini...ok!"). Общий
-    // logger ещё не восстановлен; success-log не является state-machine side effect.
+    // Затем прямой владелец только вызывает AddLogText("load setupex.ini...ok!").
+    // Общий журнал ещё не восстановлен; запись об успехе не является побочным
+    // эффектом машины состояний.
     return true;
 }
 
 bool CGame::ReLoadSetupEx()
 {
-    // VERIFIED_DECOMPILE 0x0040DC60.
+    // ПОДТВЕРЖДЕНО ДЕКОМПИЛЯЦИЕЙ 0x0040DC60.
     if (!LoadSetupEx()) {
         return false;
     }
 
     if (s_pNetServer_Client == nullptr || s_pNetServer_World == nullptr) {
-        // EXE здесь напрямую разыменовывает оба owner-а. В Linux не повторяем
-        // null-deref; это typed technical boundary, а не новый login result.
-        RecordTechnicalError("ReLoadSetupEx: network server owner is missing");
+        // EXE здесь напрямую разыменовывает обоих владельцев. В Linux не повторяем
+        // разыменование null: это типизированная техническая граница, а не новый
+        // результат входа.
+        RecordTechnicalError("ReLoadSetupEx: отсутствует владелец сетевого сервера");
         return false;
     }
 
-    // Direct CServer +0x160/+0x164 = m_lMaxBlockConnetNum/m_lSendInterTime.
+    // Прямые поля CServer +0x160/+0x164 = m_lMaxBlockConnetNum/m_lSendInterTime.
     s_pNetServer_Client->ConfigureAcceptLimitsAfterHost(
         m_SetupEx.lClientMaxBlockConNum,
         m_SetupEx.lClientValidDelayRecDataTime);
@@ -450,11 +463,21 @@ bool CGame::ReLoadSetupEx()
 
 bool CGame::LoadWorldSetup()
 {
-    // VERIFIED_DECOMPILE 0x00410F30: clear happens before the file open, so an
-    // open failure deliberately leaves the setup map empty.
+    // ПОДТВЕРЖДЕНО ДЕКОМПИЛЯЦИЕЙ 0x00410F30: clear выполняется до открытия,
+    // поэтому ошибка открытия намеренно оставляет карту настроек пустой.
     m_WorldInfoSetup.clear();
 
-    std::ifstream input("WorldInfoSetup.ini");
+    std::error_code pathError;
+    const auto path = ResolveLegacyFileAsciiCase(
+        std::filesystem::path{"."}, "WorldInfoSetup.ini", pathError);
+    if (!path) {
+        RecordTechnicalError(
+            "LoadWorldSetup: не удалось просмотреть рабочий каталог: " +
+            pathError.message());
+        return false;
+    }
+
+    std::ifstream input(*path);
     if (!input.is_open()) {
         return false;
     }
@@ -464,10 +487,12 @@ bool CGame::LoadWorldSetup()
         std::string worldName;
         std::int32_t state;
         if (!(input >> worldId >> worldName >> state)) {
-            // Direct code would consume uninitialized stack values after a bad
-            // extraction. Invalid config is kept as a technical boundary.
-            RecordTechnicalError("LoadWorldSetup: incomplete world entry");
-            return false;
+            // После неудачного извлечения прямой код использовал бы
+            // неинициализированные значения стека. Linux сохраняет уже разобранную
+            // карту и останавливается до неопределённой записи; успешное открытие
+            // остаётся успешным.
+            RecordTechnicalError("LoadWorldSetup: неполная запись мира");
+            break;
         }
 
         auto& world = m_WorldInfoSetup[worldId];
@@ -479,8 +504,8 @@ bool CGame::LoadWorldSetup()
 
 void CGame::SetListWorldInfoBySetup()
 {
-    // VERIFIED_DECOMPILE 0x00411170: clear/copy the setup map, then force every
-    // live state to zero; names and map keys remain identical to setup.
+    // ПОДТВЕРЖДЕНО ДЕКОМПИЛЯЦИЕЙ 0x00411170: очистить/скопировать карту настроек,
+    // затем принудительно обнулить каждое живое состояние; имена и ключи те же.
     m_listWorldInfo = m_WorldInfoSetup;
     for (auto& [worldId, world] : m_listWorldInfo) {
         static_cast<void>(worldId);
@@ -490,8 +515,8 @@ void CGame::SetListWorldInfoBySetup()
 
 void CGame::UpdateWorldInfoToAllClient()
 {
-    // VERIFIED_DIRECT 0x00407860: only accounts whose saved World is empty get
-    // the 0xAF509 refresh. Iteration order is m_LoginCdkeyWorld map order.
+    // ПОДТВЕРЖДЕНО НАПРЯМУЮ 0x00407860: обновление 0xAF509 получают только
+    // учётные записи с пустым сохранённым World. Порядок задаёт m_LoginCdkeyWorld.
     for (const auto& [account, worldServer] : m_LoginCdkeyWorld) {
         if (!worldServer.empty()) {
             continue;
@@ -500,10 +525,10 @@ void CGame::UpdateWorldInfoToAllClient()
         LoginNet::CMessage response(kWorldInfoUpdateMessageType);
         AddWorldInfoToMsg(response, account.c_str());
         if (s_pNetServer_Client == nullptr) {
-            // Direct CMessage::SendToClient would reach the missing client owner
-            // only when an eligible account exists.
+            // Прямой CMessage::SendToClient достигал отсутствующего владельца
+            // клиента только при наличии подходящей учётной записи.
             RecordTechnicalError(
-                "UpdateWorldInfoToAllClient: client server owner is missing");
+                "UpdateWorldInfoToAllClient: отсутствует владелец клиентского сервера");
             return;
         }
         static_cast<void>(response.SendToClientCdkey(
@@ -513,20 +538,20 @@ void CGame::UpdateWorldInfoToAllClient()
 
 bool CGame::ReLoadWorldSetup()
 {
-    // VERIFIED_DIRECT 0x00411FF0: both return values/side effects are
-    // unconditional; LoadWorldSetup failure is deliberately ignored.
+    // ПОДТВЕРЖДЕНО НАПРЯМУЮ 0x00411FF0: оба результата/побочных эффекта
+    // безусловны; ошибка LoadWorldSetup намеренно игнорируется.
     static_cast<void>(LoadWorldSetup());
     UpdateWorldInfoToAllClient();
 
-    // The final original call, UpdateDisplayWorldInfo(), only rebuilt a Win32
-    // admin listbox through SendMessageA. It has no server/wire state in Linux.
+    // Последний исходный вызов UpdateDisplayWorldInfo() лишь перестраивал список
+    // администратора Win32 через SendMessageA; сетевого состояния в Linux нет.
     return true;
 }
 
 void CGame::ChangeAllWorldSate()
 {
-    // VERIFIED_ASSEMBLY 0x004075E0. Only worlds that already have an
-    // s_listCdkey entry are recalculated; absent entries keep their old state.
+    // ПОДТВЕРЖДЕНО АССЕМБЛЕРОМ 0x004075E0. Пересчитываются только миры с уже
+    // существующей записью s_listCdkey; отсутствующие сохраняют прежнее состояние.
     for (auto& [worldId, world] : m_listWorldInfo) {
         const auto accounts = s_listCdkey.find(worldId);
         if (accounts == s_listCdkey.end()) {
@@ -683,7 +708,7 @@ void CGame::AccountEnterLog(const char* account, std::uint32_t ip)
     std::array<char, 64> time{};
     static_cast<void>(CMyAdoBase::GetTimeString(time.data(), time.size()));
     if (time[0] == '\0') {
-        RecordTechnicalError("AccountEnterLog: localtime conversion failed");
+        RecordTechnicalError("AccountEnterLog: не удалось получить локальное время");
         return;
     }
 
@@ -696,11 +721,11 @@ void CGame::AccountEnterLog(const char* account, std::uint32_t ip)
     sql += ipText;
     sql += "')";
 
-    // Direct owner uses char[512] + sprintf. Reached login accounts are <=31
-    // bytes, therefore normal behavior is byte-identical. Oversize external
-    // input is an explicit technical boundary instead of reproducing stack OOB.
+    // Прямой владелец использует char[512] + sprintf. Дошедшие сюда имена учётных
+    // записей не длиннее 31 байта, поэтому штатное поведение побайтно совпадает.
+    // Слишком большой внешний ввод — явная граница вместо выхода за стек.
     if (sql.size() >= kLegacyAccountLogBufferSize) {
-        RecordTechnicalError("AccountEnterLog: SQL exceeds legacy char[512]");
+        RecordTechnicalError("AccountEnterLog: SQL не помещается в старый char[512]");
         return;
     }
     _acc_logs.Push(std::move(sql));
@@ -717,8 +742,8 @@ std::int32_t CGame::PrepareEnter(const char* account,
     }
 
     if (worldServer[0] == '\0' && KickOut(account)) {
-        // VERIFIED_ASSEMBLY 0x0041198C..0x004119B4: unlike old Linux donor,
-        // original sends 0x08 to the NEW socket and returns immediately.
+        // ПОДТВЕРЖДЕНО АССЕМБЛЕРОМ 0x0041198C..0x004119B4: в отличие от старого
+        // Linux-донора оригинал отправляет 0x08 в НОВЫЙ сокет и сразу возвращается.
         LoginNet::CMessage response(kLoginResponseMessageType);
         response.Base().Add(static_cast<char>(0x08));
         if (s_pNetServer_Client != nullptr) {
@@ -732,7 +757,7 @@ std::int32_t CGame::PrepareEnter(const char* account,
         static_cast<void>(
             s_pNetServer_Client->SetClientMapName(socketId, CStringBytes(account)));
     } else {
-        RecordTechnicalError("PrepareEnter: client server owner is missing");
+        RecordTechnicalError("PrepareEnter: отсутствует владелец клиентского сервера");
     }
 
     AccountEnterLog(account, ip);
@@ -743,7 +768,7 @@ std::int32_t CGame::PrepareEnter(const char* account,
     }
 
     if (m_pLoginQueue == nullptr) {
-        RecordTechnicalError("PrepareEnter: login queue owner is missing for matrix_register");
+        RecordTechnicalError("PrepareEnter: для matrix_register отсутствует владелец очереди входа");
         return 1;
     }
 
@@ -797,7 +822,7 @@ bool CGame::ExecuteProce(std::string userId,
     // VERIFIED_ASSEMBLY 0x00407AB0..0x0040822C: этот аргумент не читается.
     static_cast<void>(unusedResult);
     if (passwordHex == nullptr) {
-        RecordTechnicalError("ExecuteProce: UserPwd pointer is null");
+        RecordTechnicalError("ExecuteProce: указатель UserPwd равен null");
         return false;
     }
 
@@ -820,9 +845,9 @@ bool CGame::ExecuteProce(std::string userId,
         }
     }
 
-    // ADO/COM is Windows-only plumbing. The existing Linux server stack uses
-    // unixODBC with Microsoft ODBC Driver 18; game semantics/procedure contract
-    // remain in this original CGame owner.
+    // ADO/COM — техническая обвязка только Windows. Серверный стек Linux использует
+    // unixODBC с Microsoft ODBC Driver 18; игровая семантика и контракт процедуры
+    // остаются в исходном владельце CGame.
     std::string connection = "DRIVER={ODBC Driver 18 for SQL Server};SERVER=";
     connection += *host.value;
     connection += ";DATABASE=";
@@ -868,7 +893,7 @@ bool CGame::ExecuteProce(std::string userId,
     SQLRETURN result =
         SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &environment.handle);
     if (!OdbcSucceeded(result)) {
-        RecordTechnicalError("ExecuteProce: SQLAllocHandle(ENV) failed");
+        RecordTechnicalError("ExecuteProce: SQLAllocHandle(ENV) завершился ошибкой");
         return false;
     }
     result = SQLSetEnvAttr(environment.handle,
@@ -911,7 +936,7 @@ bool CGame::ExecuteProce(std::string userId,
         return false;
     }
 
-    // Original ADODB CommandType=4 (stored procedure), CommandText=getAccInfoEx.
+    // В оригинале ADODB CommandType=4 (хранимая процедура), CommandText=getAccInfoEx.
     SQLCHAR procedure[] = "{CALL getAccInfoEx(?,?,?,?)}";
     result = SQLPrepare(statement.handle, procedure, SQL_NTS);
     if (!OdbcSucceeded(result)) {
@@ -954,7 +979,7 @@ bool CGame::ExecuteProce(std::string userId,
         return true;
     };
 
-    // VERIFIED_ASSEMBLY: @UserID adVarChar input size 0x20,
+    // ПОДТВЕРЖДЕНО АССЕМБЛЕРОМ: входной @UserID типа adVarChar имеет размер 0x20,
     // @UserIP size 0x18, @UserPwd size 0x40, затем @Result adInteger OUTPUT.
     if (!bindText(1, parameterUser, 0x20U, userLength) ||
         !bindText(2, parameterIp, 0x18U, ipLength) ||
@@ -986,7 +1011,7 @@ bool CGame::ExecuteProce(std::string userId,
         return false;
     }
 
-    // Direct EXE не читает output @Result и на success тоже делает xor al,al.
+    // Прямой EXE не читает выходной @Result и при успехе тоже делает xor al,al.
     static_cast<void>(procedureResult);
     return false;
 }

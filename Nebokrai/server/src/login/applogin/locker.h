@@ -3,12 +3,12 @@
 #include <mutex>
 
 /*
- * Owner: loginserver/applogin/locker.cpp
+ * Исходный владелец: loginserver/applogin/locker.cpp
  *
  * Точная пара: LoginServer/loginserver.exe + LoginServer/LoginServer.pdb.
- * Исходный путь PDB:
- * d:\complite_version\fengyun_russia\trunk\server\loginserver\applogin\locker.cpp
- * RVA: ctor 0x00023CD0, dtor 0x00023CE0, Acquire 0x00023CF0,
+ * Путь владельца в PDB: d:\complite_version\fengyun_russia\trunk\server\loginserver\applogin\locker.cpp
+ * Подтверждённые RVA: конструктор 0x00023CD0, деструктор 0x00023CE0,
+ * Acquire 0x00023CF0,
  * Release 0x00023D00.
  *
  * Все четыре функции — тонкая оболочка над Win32 CRITICAL_SECTION:

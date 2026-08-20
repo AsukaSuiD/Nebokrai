@@ -45,13 +45,13 @@ std::string OdbcDiagnostic(SQLSMALLINT handleType,
                                                 &length);
     std::string detail(operation);
     if (!OdbcSucceeded(diagnostic)) {
-        detail += ": ODBC diagnostic unavailable";
+        detail += ": диагностические сведения ODBC недоступны";
         return detail;
     }
 
     detail += ": SQLSTATE=";
     detail += reinterpret_cast<const char*>(state);
-    detail += ", native=" + std::to_string(native);
+    detail += ", системный код=" + std::to_string(native);
     if (length > 0) {
         const std::size_t copied = std::min<std::size_t>(
             static_cast<std::size_t>(length), sizeof(message) - 1U);
@@ -76,7 +76,7 @@ ConvertedText Windows1251ToUtf8(std::string_view source)
 
     iconv_t converter = iconv_open("UTF-8", "WINDOWS-1251");
     if (converter == reinterpret_cast<iconv_t>(-1)) {
-        return ConvertedText{.error = "iconv WINDOWS-1251 -> UTF-8 unavailable"};
+        return ConvertedText{.error = "iconv не поддерживает преобразование WINDOWS-1251 -> UTF-8"};
     }
     struct Closer
     {
@@ -96,7 +96,7 @@ ConvertedText Windows1251ToUtf8(std::string_view source)
               &destination,
               &destinationLeft) == static_cast<std::size_t>(-1)) {
         return ConvertedText{
-            .error = "iconv WINDOWS-1251 -> UTF-8 failed, errno=" +
+            .error = "iconv не преобразовал WINDOWS-1251 в UTF-8, errno=" +
                      std::to_string(errno)};
     }
     output.resize(output.size() - destinationLeft);
@@ -176,14 +176,14 @@ bool CMyAdoBase::Initialize(std::string provider,
                             "; PWD=" + m_strPassword +
                             "; OLE DB Services=-1; Driver={SQL Server}";
 
-    // CoInitialize(NULL) из старого owner не имеет Linux-эквивалента и был
-    // исключительно COM plumbing.
+    // CoInitialize(NULL) из старого владельца не имеет эквивалента в Linux и был
+    // исключительно обвязкой COM.
     return true;
 }
 
 bool CMyAdoBase::Uninitalize() noexcept
 {
-    // Direct owner только CoUninitialize() + true.
+    // Прямой владелец выполнял только CoUninitialize() + true.
     return true;
 }
 
@@ -199,7 +199,7 @@ bool CMyAdoBase::CreateCn(Connection& connection)
         SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &connection.environment);
     if (!OdbcSucceeded(result)) {
         connection.environment = SQL_NULL_HENV;
-        connection.lastError = "SQLAllocHandle(SQL_HANDLE_ENV) failed";
+        connection.lastError = "SQLAllocHandle(SQL_HANDLE_ENV) завершился ошибкой";
         return false;
     }
     result = SQLSetEnvAttr(connection.environment,
@@ -208,7 +208,7 @@ bool CMyAdoBase::CreateCn(Connection& connection)
                            0);
     if (!OdbcSucceeded(result)) {
         connection.lastError = OdbcDiagnostic(
-            SQL_HANDLE_ENV, connection.environment, "SQLSetEnvAttr(ODBC 3) failed");
+            SQL_HANDLE_ENV, connection.environment, "ошибка SQLSetEnvAttr(ODBC 3)");
         SQLFreeHandle(SQL_HANDLE_ENV, connection.environment);
         connection.environment = SQL_NULL_HENV;
         return false;
@@ -217,7 +217,7 @@ bool CMyAdoBase::CreateCn(Connection& connection)
         SQL_HANDLE_DBC, connection.environment, &connection.handle);
     if (!OdbcSucceeded(result)) {
         connection.lastError = OdbcDiagnostic(
-            SQL_HANDLE_ENV, connection.environment, "SQLAllocHandle(SQL_HANDLE_DBC) failed");
+            SQL_HANDLE_ENV, connection.environment, "ошибка SQLAllocHandle(SQL_HANDLE_DBC)");
         SQLFreeHandle(SQL_HANDLE_ENV, connection.environment);
         connection.environment = SQL_NULL_HENV;
         connection.handle = SQL_NULL_HDBC;
@@ -232,7 +232,7 @@ bool CMyAdoBase::OpenCn(Connection& connection)
 {
     connection.lastError.clear();
     if (!connection.created || connection.handle == SQL_NULL_HDBC) {
-        connection.lastError = "OpenCn called without CreateCn";
+        connection.lastError = "OpenCn вызван без предварительного CreateCn";
         return false;
     }
 
@@ -257,7 +257,7 @@ bool CMyAdoBase::OpenCn(Connection& connection)
         SQL_DRIVER_NOPROMPT);
     if (!OdbcSucceeded(result)) {
         connection.lastError = OdbcDiagnostic(
-            SQL_HANDLE_DBC, connection.handle, "SQLDriverConnect failed");
+            SQL_HANDLE_DBC, connection.handle, "ошибка SQLDriverConnect");
         return false;
     }
     connection.open = true;
@@ -269,7 +269,8 @@ bool CMyAdoBase::ExecuteCn(const char* sql, Connection& connection)
     connection.lastError.clear();
     if (sql == nullptr || !connection.open || connection.handle == SQL_NULL_HDBC) {
         connection.lastError =
-            sql == nullptr ? "ExecuteCn SQL is null" : "ExecuteCn connection is not open";
+            sql == nullptr ? "ExecuteCn получил SQL=null"
+                           : "ExecuteCn получил неоткрытое подключение";
         return false;
     }
 
@@ -278,7 +279,7 @@ bool CMyAdoBase::ExecuteCn(const char* sql, Connection& connection)
         SQLAllocHandle(SQL_HANDLE_STMT, connection.handle, &statement);
     if (!OdbcSucceeded(result)) {
         connection.lastError = OdbcDiagnostic(
-            SQL_HANDLE_DBC, connection.handle, "SQLAllocHandle(SQL_HANDLE_STMT) failed");
+            SQL_HANDLE_DBC, connection.handle, "ошибка SQLAllocHandle(SQL_HANDLE_STMT)");
         return false;
     }
 
@@ -287,7 +288,7 @@ bool CMyAdoBase::ExecuteCn(const char* sql, Connection& connection)
                            SQL_NTS);
     if (!OdbcSucceeded(result) && result != SQL_NO_DATA) {
         connection.lastError =
-            OdbcDiagnostic(SQL_HANDLE_STMT, statement, "SQLExecDirect failed");
+            OdbcDiagnostic(SQL_HANDLE_STMT, statement, "ошибка SQLExecDirect");
         SQLFreeHandle(SQL_HANDLE_STMT, statement);
         return false;
     }
@@ -306,7 +307,7 @@ bool CMyAdoBase::CloseCn(Connection& connection)
     const SQLRETURN result = SQLDisconnect(connection.handle);
     if (!OdbcSucceeded(result)) {
         connection.lastError =
-            OdbcDiagnostic(SQL_HANDLE_DBC, connection.handle, "SQLDisconnect failed");
+            OdbcDiagnostic(SQL_HANDLE_DBC, connection.handle, "ошибка SQLDisconnect");
         return false;
     }
     connection.open = false;

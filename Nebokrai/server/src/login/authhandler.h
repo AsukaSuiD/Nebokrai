@@ -10,7 +10,7 @@
 #include <vector>
 
 /*
- * Owner: loginserver/authhandler.cpp
+ * Исходный владелец: loginserver/authhandler.cpp
  *
  * Точная пара: LoginServer/loginserver.exe + LoginServer/LoginServer.pdb.
  * OnResponse RVA 0x000025D0; vtable 0x004847EC. Первый virtual slot точечно
@@ -22,7 +22,7 @@
  * синхронный CDKeyBan и удаление счётчика независимо от DB result.
  *
  * Старый handler находил глобальный CGame через GetGame(). Новый non-owning
- * IAuthHandlerContext выражает только три фактических вызова owner-а и не
+ * IAuthHandlerContext выражает только три фактических вызова владельца и не
  * переносит доменную state-machine из CGame/CLoginQueue внутрь handler-а.
  */
 namespace Login

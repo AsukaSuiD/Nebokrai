@@ -8,7 +8,7 @@
 #include <vector>
 
 /*
- * Owner: nets/serverclient.cpp / nets/serverclient.h
+ * Исходный владелец: nets/serverclient.cpp / nets/serverclient.h
  *
  * Поздняя реконструкция подтверждает общий CServerClient во всех пяти
  * входящих направлениях Auth/Billing/Login/Game/World. Источник истины —
@@ -18,7 +18,7 @@
  * Живой общий контракт: metadata принятого соединения, накопитель TCP receive,
  * накопитель server-side send, строгий send-limit, число незавершённых send
  * operations, двухступенчатый close flag и per-client receive-rate. Конкретный
- * 12-байтовый envelope и CMessage принадлежат service-specific net-owner-ам.
+ * 12-байтовая обёртка и CMessage принадлежат сетевым владельцам конкретных служб.
  *
  * Старые IOCP/PER_IO_OPERATION_DATA, raw buffers и ручные realloc/delete не
  * переносятся. Владение bytes выражено std::vector, а одна исходная WSASend

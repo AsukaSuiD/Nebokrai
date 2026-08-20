@@ -15,23 +15,24 @@
 #include <vector>
 
 /*
- * Owner: authserver/appauth/message/message_func.cpp
+ * Исходный владелец: authserver/appauth/message/message_func.cpp
  *
  * Все девять функций Auth InitMsgFuncPool восстановлены по точной паре
- * authserver.exe/authserver.pdb. RVA: GM kick 0x00016010, kick response
- * 0x00016220, GM lock 0x000163F0, auth/auth-ex 0x00016550/0x00016720,
- * LS connect/disconnect/get-info 0x00016900/0x00016AD0/0x00016BD0,
- * server-info response 0x00016CD0.
+ * authserver.exe/authserver.pdb. Подтверждённые RVA: отключение через GM
+ * 0x00016010, ответ на отключение 0x00016220, блокировка через GM 0x000163F0,
+ * обычная/расширенная авторизация 0x00016550/0x00016720, подключение,
+ * отключение и запрос сведений LS 0x00016900/0x00016AD0/0x00016BD0,
+ * ответ со сведениями о сервере 0x00016CD0.
  *
  * Здесь сохраняется доменная маршрутизация LoginServer: area->socket map,
  * IP allow-filter, создание DB quest, coalesced ServerInfo и GM forwarding.
  * Старые MFC ListBox/AddLogText side effects представлены структурированными
- * notices; Linux logging-owner сможет вывести их позже без GUI-зависимости.
+ * уведомления; владелец журнала Linux сможет вывести их позже без зависимости от GUI.
  *
- * CGame остаётся фактическим владельцем DB queues. Чтобы этот source-owner не
+ * CGame остаётся фактическим владельцем очередей БД. Чтобы этот владелец исходника не
  * тянул полувосстановленный глобальный singleton, два доказанных действия
  * передаются callback-ами: PushDBQuest и PushServerInfo. Это граница вызова, а
- * не новый долговечный owner/архитектура.
+ * не новый долговечный владелец или архитектура.
  */
 
 struct LoginServerConnectedNotice

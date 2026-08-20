@@ -10,16 +10,15 @@
 #include <vector>
 
 /*
- * Owner: loginserver/applogin/message/asmessage.cpp
+ * Исходный владелец: loginserver/applogin/message/asmessage.cpp
  *
  * Точная пара: LoginServer/loginserver.exe + LoginServer/LoginServer.pdb.
- * Исходный путь PDB:
- * d:\complite_version\fengyun_russia\trunk\server\loginserver\applogin\message\asmessage.cpp
- * RVA: OnGMAKickPlayer 0x0007F110, OnGMAMessage 0x0007F2A0,
+ * Путь владельца в PDB: d:\complite_version\fengyun_russia\trunk\server\loginserver\applogin\message\asmessage.cpp
+ * Подтверждённые RVA: OnGMAKickPlayer 0x0007F110, OnGMAMessage 0x0007F2A0,
  * OnASMessage 0x0007F320.
  *
  * OnASMessage сохраняет три существенных пути: 0xCF301 сначала закрывает
- * текущий Auth client и только затем запускает reconnect-owner, игнорируя
+ * текущий клиент Auth и только затем запускает владельца переподключения, игнорируя
  * исходный bool результата StartReconnectThread; 0xCF601 передаётся
  * AuthManager; диапазон GMA уходит в OnGMAMessage. Исторический
  * 0xCF302 содержал process-local pointer и потому не является допустимым wire
@@ -29,10 +28,10 @@
  * GMA сохраняет исходное изменение opcode перед пересылкой, byte-exact имена
  * world/account и sentinel world id -1. Оба GetStr имеют limit 0x100. Для
  * invalid world diagnostic vararg с именем мира подтверждён машинным кодом
- * LoginServer 0x0047F1CF..0x0047F1E4.
+ * LoginServer: 0x0047F1CF..0x0047F1E4.
  *
  * Старые глобальные g_pGame/gAuthMgr не воспроизводятся. AuthManager остаётся
- * явным owner, а IAsMessageContext выражает только фактические CGame-вызовы
+ * явным владельцем, а IAsMessageContext выражает только фактические вызовы CGame
  * этого файла. Это техническая граница владения, не новая доменная архитектура.
  */
 namespace Login

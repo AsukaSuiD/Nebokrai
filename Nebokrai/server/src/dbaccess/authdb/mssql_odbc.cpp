@@ -53,14 +53,14 @@ AuthDatabaseError OdbcDiagnostic(SQLSMALLINT handleType,
     if (OdbcSucceeded(diagnostic)) {
         detail += ": SQLSTATE=";
         detail.append(reinterpret_cast<const char*>(state));
-        detail += ", native=" + std::to_string(native);
+        detail += ", системный код=" + std::to_string(native);
         if (messageLength > 0) {
             detail += ", ";
             detail.append(reinterpret_cast<const char*>(message),
                           static_cast<std::size_t>(messageLength));
         }
     } else {
-        detail += ": ODBC diagnostic unavailable";
+        detail += ": диагностические сведения ODBC недоступны";
     }
     return {OdbcErrorCode(native), std::move(detail)};
 }
@@ -108,7 +108,7 @@ Windows1251ToUtf8(std::string_view source)
               &destinationLeft) == static_cast<std::size_t>(-1)) {
         return AuthDatabaseError{
             std::error_code(errno, std::generic_category()),
-            "не удалось преобразовать Windows-1251 bytes в UTF-8"};
+            "не удалось преобразовать байты Windows-1251 в UTF-8"};
     }
 
     output.resize(output.size() - destinationLeft);
@@ -143,7 +143,7 @@ BuildConnectionString(const AuthDatabaseSettings& settings,
 {
     if (options.driver.empty()) {
         return LocalError(std::errc::invalid_argument,
-                          "имя MSSQL ODBC driver не задано");
+                          "имя драйвера MSSQL ODBC не задано");
     }
 
     const auto host = Windows1251ToUtf8(settings.host);
@@ -182,7 +182,7 @@ std::variant<std::string, AuthDatabaseError> QuoteProcedure(std::string_view pro
 {
     if (procedure.empty()) {
         return LocalError(std::errc::invalid_argument,
-                          "пустое имя MSSQL stored procedure");
+                          "пустое имя хранимой процедуры MSSQL");
     }
 
     std::string quoted;
@@ -197,7 +197,7 @@ std::variant<std::string, AuthDatabaseError> QuoteProcedure(std::string_view pro
                 return std::isalnum(ch) != 0 || ch == '_';
             })) {
             return LocalError(std::errc::invalid_argument,
-                              "имя MSSQL stored procedure содержит недопустимый identifier");
+                              "имя хранимой процедуры MSSQL содержит недопустимый идентификатор");
         }
         if (!quoted.empty()) {
             quoted.push_back('.');
@@ -360,7 +360,7 @@ struct OdbcStatement
         const SQLRETURN result = SQLFetch(handle);
         if (result == SQL_NO_DATA) {
             return LocalError(std::errc::no_message_available,
-                              "MSSQL stored procedure не вернула output row");
+                              "хранимая процедура MSSQL не вернула строку результата");
         }
         if (!OdbcSucceeded(result)) {
             return OdbcDiagnostic(SQL_HANDLE_STMT, handle, "SQLFetch");
@@ -471,7 +471,7 @@ ReadInt(SQLHSTMT statement, SQLUSMALLINT column)
     }
     if (indicator == SQL_NULL_DATA) {
         return LocalError(std::errc::no_message_available,
-                          "MSSQL stored procedure вернула NULL integer output");
+                          "хранимая процедура MSSQL вернула NULL вместо целого результата");
     }
     return static_cast<std::int32_t>(value);
 }
@@ -495,7 +495,7 @@ ReadOptionalBinary80(SQLHSTMT statement, SQLUSMALLINT column)
     }
     if (indicator != static_cast<SQLLEN>(value.size())) {
         return LocalError(std::errc::message_size,
-                          "@Assure имеет длину, отличную от 80 bytes");
+                          "@Assure имеет длину, отличную от 80 байт");
     }
     return std::optional<std::array<std::uint8_t, 80>>(value);
 }
@@ -532,7 +532,7 @@ ReadOptionalSuspended(SQLHSTMT statement)
             return !value.has_value();
         })) {
         return LocalError(std::errc::invalid_argument,
-                          "@suspended вернул неполный набор date parts");
+                          "@suspended вернул неполный набор частей даты");
     }
 
     return std::optional<AuthDb::LockUntil>(AuthDb::LockUntil{
@@ -575,7 +575,7 @@ AdvanceToFirstRowset(SQLHSTMT statement)
         const SQLRETURN more = SQLMoreResults(statement);
         if (more == SQL_NO_DATA) {
             return LocalError(std::errc::no_message_available,
-                              "MSSQL stored procedure не вернула SELECT output");
+                              "хранимая процедура MSSQL не вернула результат SELECT");
         }
         if (!OdbcSucceeded(more)) {
             return OdbcDiagnostic(SQL_HANDLE_STMT, statement, "SQLMoreResults");
@@ -709,7 +709,7 @@ MssqlOdbcAuthDatabase::AuthenticateExtended(std::string_view procedure,
     }
     if (output.result == 1 && !output.assure) {
         return LocalError(std::errc::message_size,
-                          "sp_authex вернул result=1 без 80-byte @Assure");
+                          "sp_authex вернул result=1 без 80-байтного @Assure");
     }
     if (output.result == -3 && !output.suspended) {
         return LocalError(std::errc::invalid_argument,
