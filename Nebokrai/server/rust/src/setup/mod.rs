@@ -1,5 +1,10 @@
 //! Общие setup-owner-ы исторических серверов Miracle.
 
+#[allow(
+    dead_code,
+    reason = "contribute setup подключён к initial-config до общего setup lifecycle"
+)]
+pub(crate) mod contributesetup;
 pub(crate) mod emotion;
 pub(crate) mod hitlevelsetup;
 #[allow(

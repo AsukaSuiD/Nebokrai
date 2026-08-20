@@ -88,8 +88,9 @@
 //! отправляется как subtype `6`. `CTradeList` сохраняет следующий ordered
 //! `C-string + count + 8-byte goods records` payload и уходит subtype `3`.
 //! Singleton `CIncrementShopList` следом кодирует ordered multimap, точные
-//! 24-байтные item-prefix-ы и affiche как subtype `4`; следующая граница —
-//! `CContributeSetup`.
+//! 24-байтные item-prefix-ы и affiche как subtype `4`. `CContributeSetup`
+//! затем передаёт одиннадцать positional scalars и contribution items subtype
+//! `5`; следующая точная граница — singleton `PrisonConf`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -148,6 +149,7 @@ use crate::nets::basemessage::CBaseMessage;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::networld::mynetclient::CMyNetClient;
 use crate::nets::servers::ServerCommandHandle;
+use crate::setup::contributesetup::{CContributeSetup, ContributeSetupSerializeError};
 use crate::setup::emotion::{CEmotion, EmotionSerializeError};
 use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelSerializeError};
 use crate::setup::incrementshoplist::{CIncrementShopList, IncrementShopSerializeError};
@@ -401,6 +403,20 @@ pub(crate) enum WorldIncrementShopConfigurationCompletion {
 pub(crate) struct WorldIncrementShopConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldIncrementShopConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после `CContributeSetup`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldContributeConfigurationCompletion {
+    ContributeSetup(ContributeSetupSerializeError),
+    PrisonConfigurationPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/5` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldContributeConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldContributeConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1169,6 +1185,34 @@ pub(crate) fn continue_game_server_increment_shop_configuration(
             &payload,
         )),
         completion: WorldIncrementShopConfigurationCompletion::ContributeSetupPending { socket_id },
+    }
+}
+
+/// Кодирует и отправляет точный `CContributeSetup` initial-config packet.
+pub(crate) fn continue_game_server_contribute_configuration(
+    game: &CGame,
+    socket_id: i32,
+    contribute: &CContributeSetup,
+) -> WorldContributeConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = contribute.add_to_byte_array(&mut payload) {
+        return WorldContributeConfigurationReport {
+            delivery: None,
+            completion: WorldContributeConfigurationCompletion::ContributeSetup(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldContributeConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            5,
+            &payload,
+        )),
+        completion: WorldContributeConfigurationCompletion::PrisonConfigurationPending {
+            socket_id,
+        },
     }
 }
 
