@@ -82,8 +82,10 @@
 //! `count + 12-byte records` owner-а и переводит ветку к `CPlayerList`.
 //! `CPlayerList` кодирует пять доказанных секций и адресно отправляет subtype
 //! `1`; следующая граница ветки — process-global `CEmotion::Serialize`.
-//! Восстановленный `CEmotion` отправляется следом как `0x7F801/0x15`, после
-//! чего ветка достигает ещё сырого `CSkillFactory::Serialize`.
+//! Восстановленный `CEmotion` отправляется следом как `0x7F801/0x15`.
+//! `CSkillFactory` затем сохраняет ordered slot framing и исторические восемь
+//! байт padding каждого record-а, но обнуляет прежний heap-мусор, и адресно
+//! отправляется как subtype `6`. Следующая точная граница — `CTradeList`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -156,6 +158,9 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
 use crate::worldserver::appworld::organizingsystem::factionwarsys::CFactionWarSys;
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
 use crate::worldserver::appworld::player::{PlayerCodecError, PlayerPropertyCoefficients};
+use crate::worldserver::appworld::skills::skillfactory::{
+    CSkillFactory, SkillFactorySerializeError,
+};
 use crate::worldserver::worldserver::game::{
     CGame, WorldCdkeySnapshot, WorldCdkeySnapshotError, WorldGameServerLookupError,
     WorldGenerateDbDataBlock, WorldGenerateDbDataReport, WorldGlobeVariablesDelivery,
@@ -348,6 +353,20 @@ pub(crate) enum WorldEmotionConfigurationCompletion {
 pub(crate) struct WorldEmotionConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldEmotionConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после `CSkillFactory`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldSkillConfigurationCompletion {
+    SkillFactory(SkillFactorySerializeError),
+    TradeListPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/6` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldSkillConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldSkillConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1038,6 +1057,32 @@ pub(crate) fn continue_game_server_emotion_configuration(
             &payload,
         )),
         completion: WorldEmotionConfigurationCompletion::SkillFactoryPending { socket_id },
+    }
+}
+
+/// Кодирует и отправляет точный `CSkillFactory` initial-config packet.
+pub(crate) fn continue_game_server_skill_configuration(
+    game: &CGame,
+    socket_id: i32,
+    skills: &CSkillFactory,
+) -> WorldSkillConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = skills.serialize(&mut payload) {
+        return WorldSkillConfigurationReport {
+            delivery: None,
+            completion: WorldSkillConfigurationCompletion::SkillFactory(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldSkillConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            6,
+            &payload,
+        )),
+        completion: WorldSkillConfigurationCompletion::TradeListPending { socket_id },
     }
 }
 
