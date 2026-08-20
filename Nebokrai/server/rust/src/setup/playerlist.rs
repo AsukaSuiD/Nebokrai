@@ -1,6 +1,237 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Базовые свойства игрока и progression setup исторического Miracle.
+//!
+//! Статус World `CPlayerList::AddToByteArray` RVA `0x0002C4D0`:
+//! `IMPLEMENTED`; loaders, lookup-ы и Game decoder ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
+//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
+//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Исходный владелец PDB:
+//! `e:\svn\fengyun_russia_dev\server\setup\playerlist.cpp:247`.
+//!
+//! Wire строго состоит из пяти секций: ordered player map с raw records по
+//! `0x58` байт, vector level-exp по четыре байта и ordered upgrade map для
+//! Fighter, Hunter, Taoist именно в таком порядке. Ключ player map не пишется;
+//! ключ каждого upgrade map пишется как level перед шестью `u32`, одним `u16`
+//! и NUL-terminated notification. Все count — signed Windows `long`.
+//!
+//! Exact bulk-copy `0x58` захватывал три padding-участка, а World loader не
+//! назначал часть current-state полей до вставки записи. Поэтому старый wire
+//! мог зависеть от неинициализированного stack state. У такого UB нет
+//! стабильного значения для совместимости: Rust кодирует padding нулями, а
+//! current YP/RP остаются обычными явно инициализированными полями. Полезные
+//! offsets и порядок сохраняются без объявления Rust layout копией MSVC ABI.
+//! `BTreeMap`/`Vec` заменяют process-global STL owners; legacy-строки остаются
+//! byte arrays и завершаются на первом NUL.
+
+use std::collections::BTreeMap;
+use std::error::Error;
+use std::fmt;
+
+/// Содержимое одного исходного 88-байтового player-property record.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerBaseProperties {
+    pub(crate) occupation: u8,
+    pub(crate) sex: u8,
+    pub(crate) hot_hit: u32,
+    pub(crate) remain_point: u16,
+    pub(crate) yp: u16,
+    pub(crate) hp: u32,
+    pub(crate) mp: u32,
+    pub(crate) rp: u16,
+    pub(crate) base_maximum_hp: u32,
+    pub(crate) base_maximum_mp: u32,
+    pub(crate) base_maximum_yp: u16,
+    pub(crate) base_maximum_rp: u16,
+    pub(crate) base_strength: u32,
+    pub(crate) base_dexterity: u32,
+    pub(crate) base_constitution: u32,
+    pub(crate) base_intelligence: u32,
+    pub(crate) base_minimum_attack: u32,
+    pub(crate) base_maximum_attack: u32,
+    pub(crate) base_hit: u16,
+    pub(crate) base_burden: u16,
+    pub(crate) base_cch: u16,
+    pub(crate) base_defence: u32,
+    pub(crate) base_dodge: u16,
+    pub(crate) base_attack_speed: u16,
+    pub(crate) base_element_resistant: u32,
+    pub(crate) base_hp_recover_speed: u16,
+    pub(crate) base_mp_recover_speed: u16,
+    pub(crate) constitution_to_maximum_hp: u16,
+    pub(crate) intelligence_to_maximum_mp: u16,
+}
+
+/// Одно level-keyed приращение свойств и локализованное уведомление.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerPropertiesUpgrade {
+    pub(crate) base_maximum_hp: u32,
+    pub(crate) base_maximum_mp: u32,
+    pub(crate) base_strength: u32,
+    pub(crate) base_dexterity: u32,
+    pub(crate) base_constitution: u32,
+    pub(crate) base_intelligence: u32,
+    pub(crate) base_burden: u16,
+    pub(crate) notification: Vec<u8>,
+}
+
+pub(crate) type PlayerBasePropertiesMap = BTreeMap<u32, PlayerBaseProperties>;
+pub(crate) type PlayerPropertiesUpgradeMap = BTreeMap<u32, PlayerPropertiesUpgrade>;
+
+/// Value-owner пяти точных секций World/Game setup-а.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CPlayerList {
+    player_properties: PlayerBasePropertiesMap,
+    player_experience: Vec<u32>,
+    fighter_upgrades: PlayerPropertiesUpgradeMap,
+    hunter_upgrades: PlayerPropertiesUpgradeMap,
+    taoist_upgrades: PlayerPropertiesUpgradeMap,
+}
+
+impl CPlayerList {
+    /// Создаёт owner из уже проверенных loader-ом секций без global state.
+    pub(crate) fn from_parts(
+        player_properties: PlayerBasePropertiesMap,
+        player_experience: Vec<u32>,
+        fighter_upgrades: PlayerPropertiesUpgradeMap,
+        hunter_upgrades: PlayerPropertiesUpgradeMap,
+        taoist_upgrades: PlayerPropertiesUpgradeMap,
+    ) -> Self {
+        Self {
+            player_properties,
+            player_experience,
+            fighter_upgrades,
+            hunter_upgrades,
+            taoist_upgrades,
+        }
+    }
+
+    /// Дописывает exact пять секций `CPlayerList::AddToByteArray`.
+    pub(crate) fn add_to_byte_array(
+        &self,
+        destination: &mut Vec<u8>,
+    ) -> Result<(), PlayerListSerializeError> {
+        append_count(
+            destination,
+            "player property map",
+            self.player_properties.len(),
+        )?;
+        for properties in self.player_properties.values() {
+            append_player_properties(destination, properties);
+        }
+
+        append_count(
+            destination,
+            "player experience vector",
+            self.player_experience.len(),
+        )?;
+        for experience in &self.player_experience {
+            destination.extend_from_slice(&experience.to_le_bytes());
+        }
+
+        append_upgrade_map(destination, "fighter upgrade map", &self.fighter_upgrades)?;
+        append_upgrade_map(destination, "hunter upgrade map", &self.hunter_upgrades)?;
+        append_upgrade_map(destination, "taoist upgrade map", &self.taoist_upgrades)?;
+        Ok(())
+    }
+}
+
+/// Безопасная граница размера старого signed `long` count.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerListSerializeError {
+    pub(crate) owner: &'static str,
+    pub(crate) count: usize,
+}
+
+impl fmt::Display for PlayerListSerializeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} содержит {} элементов вне signed 32-битного диапазона",
+            self.owner, self.count
+        )
+    }
+}
+
+impl Error for PlayerListSerializeError {}
+
+fn append_player_properties(destination: &mut Vec<u8>, value: &PlayerBaseProperties) {
+    destination.extend_from_slice(&[value.occupation, value.sex, 0, 0]);
+    destination.extend_from_slice(&value.hot_hit.to_le_bytes());
+    destination.extend_from_slice(&value.remain_point.to_le_bytes());
+    destination.extend_from_slice(&value.yp.to_le_bytes());
+    destination.extend_from_slice(&value.hp.to_le_bytes());
+    destination.extend_from_slice(&value.mp.to_le_bytes());
+    destination.extend_from_slice(&value.rp.to_le_bytes());
+    destination.extend_from_slice(&0_u16.to_le_bytes());
+    destination.extend_from_slice(&value.base_maximum_hp.to_le_bytes());
+    destination.extend_from_slice(&value.base_maximum_mp.to_le_bytes());
+    destination.extend_from_slice(&value.base_maximum_yp.to_le_bytes());
+    destination.extend_from_slice(&value.base_maximum_rp.to_le_bytes());
+    for scalar in [
+        value.base_strength,
+        value.base_dexterity,
+        value.base_constitution,
+        value.base_intelligence,
+        value.base_minimum_attack,
+        value.base_maximum_attack,
+    ] {
+        destination.extend_from_slice(&scalar.to_le_bytes());
+    }
+    destination.extend_from_slice(&value.base_hit.to_le_bytes());
+    destination.extend_from_slice(&value.base_burden.to_le_bytes());
+    destination.extend_from_slice(&value.base_cch.to_le_bytes());
+    destination.extend_from_slice(&0_u16.to_le_bytes());
+    destination.extend_from_slice(&value.base_defence.to_le_bytes());
+    destination.extend_from_slice(&value.base_dodge.to_le_bytes());
+    destination.extend_from_slice(&value.base_attack_speed.to_le_bytes());
+    destination.extend_from_slice(&value.base_element_resistant.to_le_bytes());
+    destination.extend_from_slice(&value.base_hp_recover_speed.to_le_bytes());
+    destination.extend_from_slice(&value.base_mp_recover_speed.to_le_bytes());
+    destination.extend_from_slice(&value.constitution_to_maximum_hp.to_le_bytes());
+    destination.extend_from_slice(&value.intelligence_to_maximum_mp.to_le_bytes());
+}
+
+fn append_upgrade_map(
+    destination: &mut Vec<u8>,
+    owner: &'static str,
+    upgrades: &PlayerPropertiesUpgradeMap,
+) -> Result<(), PlayerListSerializeError> {
+    append_count(destination, owner, upgrades.len())?;
+    for (&level, properties) in upgrades {
+        destination.extend_from_slice(&level.to_le_bytes());
+        for scalar in [
+            properties.base_maximum_hp,
+            properties.base_maximum_mp,
+            properties.base_strength,
+            properties.base_dexterity,
+            properties.base_constitution,
+            properties.base_intelligence,
+        ] {
+            destination.extend_from_slice(&scalar.to_le_bytes());
+        }
+        destination.extend_from_slice(&properties.base_burden.to_le_bytes());
+        append_legacy_string(destination, &properties.notification);
+    }
+    Ok(())
+}
+
+fn append_count(
+    destination: &mut Vec<u8>,
+    owner: &'static str,
+    count: usize,
+) -> Result<(), PlayerListSerializeError> {
+    let count = i32::try_from(count).map_err(|_| PlayerListSerializeError { owner, count })?;
+    destination.extend_from_slice(&count.to_le_bytes());
+    Ok(())
+}
+
+fn append_legacy_string(destination: &mut Vec<u8>, value: &[u8]) {
+    destination.extend_from_slice(value.split(|byte| *byte == 0).next().unwrap_or_default());
+    destination.push(0);
+}
+
+// Остальной сырой C++ ниже является комментарием, а не Rust-реализацией.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -218,14 +449,6 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer
 
@@ -501,8 +724,6 @@
 //
 //
 
-
-
 // ============================================================================
 // FUNCTION: Unwind@0052e480
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -516,14 +737,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: WorldServer

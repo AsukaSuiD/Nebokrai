@@ -80,6 +80,8 @@
 //! подключившемуся socket; его результат также не управляет продолжением.
 //! `CHitLevelSetup` затем строит `0x7F801/0x14` из своего восстановленного
 //! `count + 12-byte records` owner-а и переводит ветку к `CPlayerList`.
+//! `CPlayerList` кодирует пять доказанных секций и адресно отправляет subtype
+//! `1`; следующая граница ветки — process-global `CEmotion::Serialize`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -142,6 +144,7 @@ use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelSerializeError};
 use crate::setup::monsterlist::{
     MonsterDropRegistry, MonsterListSerializeError, MonsterRegistry, serialize_monster_list,
 };
+use crate::setup::playerlist::{CPlayerList, PlayerListSerializeError};
 use crate::worldserver::appworld::country::country::CountryKingSaveLimits;
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
@@ -314,6 +317,20 @@ pub(crate) enum WorldHitLevelConfigurationCompletion {
 pub(crate) struct WorldHitLevelConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldHitLevelConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после `CPlayerList`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldPlayerListConfigurationCompletion {
+    PlayerList(PlayerListSerializeError),
+    EmotionPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/1` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerListConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldPlayerListConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -952,6 +969,32 @@ pub(crate) fn continue_game_server_hit_level_configuration(
             &payload,
         )),
         completion: WorldHitLevelConfigurationCompletion::PlayerListPending { socket_id },
+    }
+}
+
+/// Кодирует и отправляет точный `CPlayerList` initial-config packet.
+pub(crate) fn continue_game_server_player_list_configuration(
+    game: &CGame,
+    socket_id: i32,
+    player_list: &CPlayerList,
+) -> WorldPlayerListConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = player_list.add_to_byte_array(&mut payload) {
+        return WorldPlayerListConfigurationReport {
+            delivery: None,
+            completion: WorldPlayerListConfigurationCompletion::PlayerList(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldPlayerListConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            1,
+            &payload,
+        )),
+        completion: WorldPlayerListConfigurationCompletion::EmotionPending { socket_id },
     }
 }
 

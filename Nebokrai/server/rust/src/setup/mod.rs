@@ -2,3 +2,4 @@
 
 pub(crate) mod hitlevelsetup;
 pub(crate) mod monsterlist;
+pub(crate) mod playerlist;
