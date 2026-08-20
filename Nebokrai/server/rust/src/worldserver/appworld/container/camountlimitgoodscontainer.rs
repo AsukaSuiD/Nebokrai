@@ -137,6 +137,7 @@ use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, create_goods, query_goods_base_properties, unserialize_goods,
 };
+use super::cgoodscontainer::CGoodsContainerState;
 
 /// Ошибка безопасной границы amount-container codec-а.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -191,8 +192,7 @@ impl From<GoodsCodecError> for AmountContainerCodecError {
 
 /// Достигнутая owning-часть `CAmountLimitGoodsContainer`.
 pub(crate) struct CAmountLimitGoodsContainer {
-    owner_type: i32,
-    owner_id: i32,
+    container_base: CGoodsContainerState,
     goods: BTreeMap<CGuid, Box<CGoods>>,
     goods_amount_limit: u32,
     locked_goods: Vec<CGuid>,
@@ -202,8 +202,7 @@ impl CAmountLimitGoodsContainer {
     /// Создаёт точные defaults constructor-а.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
-            owner_type: 0,
-            owner_id: 0,
+            container_base: CGoodsContainerState::with_constructor_defaults(),
             goods: BTreeMap::new(),
             goods_amount_limit: 1,
             locked_goods: Vec::new(),
@@ -222,8 +221,7 @@ impl CAmountLimitGoodsContainer {
 
     /// Сохраняет два signed owner scalar без дополнительных эффектов.
     pub(crate) const fn set_owner(&mut self, owner_type: i32, owner_id: i32) {
-        self.owner_type = owner_type;
-        self.owner_id = owner_id;
+        self.container_base.set_owner(owner_type, owner_id);
     }
 
     /// Считает только товары с non-null base-properties lookup.
@@ -350,8 +348,7 @@ impl CAmountLimitGoodsContainer {
         self.goods_amount_limit = 1;
         self.goods.clear();
         self.locked_goods.clear();
-        self.owner_type = 0;
-        self.owner_id = 0;
+        self.container_base.release();
     }
 
     /// Копирует World-набор `limit + goods`, сохраняя owner/locked target-а.

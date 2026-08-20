@@ -77,6 +77,7 @@ use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsbaseproperties::GOODS_TYPE_EQUIPMENT;
 use super::super::goods::cgoodsfactory::{GoodsBasePropertiesRegistry, unserialize_goods};
 use super::camountlimitgoodscontainer::AmountContainerCodecError;
+use super::cgoodscontainer::CGoodsContainerState;
 use super::cvolumelimitgoodscontainer::{CVolumeLimitGoodsContainer, VolumeContainerCodecError};
 
 const EQUIPMENT_FULL_LIMIT: usize = 9;
@@ -204,8 +205,7 @@ impl From<GoodsCodecError> for EquipmentContainerCodecError {
 
 /// Достигнутая owning-часть исходного `CEquipmentContainer`.
 pub(crate) struct CEquipmentContainer {
-    owner_type: i32,
-    owner_id: i32,
+    container_base: CGoodsContainerState,
     equipment: BTreeMap<EquipmentColumn, Box<CGoods>>,
 }
 
@@ -213,8 +213,7 @@ impl CEquipmentContainer {
     /// Создаёт exact пустое состояние constructor-а с base-owner `0/0`.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
-            owner_type: 0,
-            owner_id: 0,
+            container_base: CGoodsContainerState::with_constructor_defaults(),
             equipment: BTreeMap::new(),
         }
     }
@@ -324,8 +323,7 @@ impl CEquipmentContainer {
     /// Уничтожает текущие map-товары и сбрасывает inherited owner `0/0`.
     pub(crate) fn release(&mut self) {
         self.equipment.clear();
-        self.owner_type = 0;
-        self.owner_id = 0;
+        self.container_base.release();
     }
 
     /// Возвращает товар exact numeric equipment-column либо `None`.

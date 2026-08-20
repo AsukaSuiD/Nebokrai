@@ -1,8 +1,10 @@
 //! Владелец общего goods-container исторического `WorldServer`.
 //!
-//! Статус positional `CGoodsContainer::Add` RVA `0x000E07F0` —
-//! `IMPLEMENTED`; остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
-//! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
+//! Статус constructor/destructor/Clear/Release/SetOwner RVA
+//! `0x000E05A0/0x000E05C0/0x000E05F0/0x000E0600/0x000E0610` и positional
+//! `Add` RVA `0x000E07F0` — `IMPLEMENTED`; остальной корпус ниже остаётся
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
 //! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
 //! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
 //! Исходный владелец PDB:
@@ -22,10 +24,64 @@
 //! достигнутый embedded listener amount-owner-а имеет оба слота
 //! `mov eax,1; ret 0xC`, а других override-ов в exact World PDB нет. После
 //! ответа reverse прекращён.
+//!
+//! Exact ASM base-state подтверждает owner type/ID по `+0x14/+0x18`.
+//! `Clear` — folded пустой `ret 4`, а `Release` сначала обнуляет owner и затем
+//! освобождает только listener-vector `CContainer`. Rust выражает inheritance
+//! композицией двух safe state-owner-ов; embedded listeners конкретных goods-
+//! контейнеров пока не регистрируются, поскольку оба их callback-а доказанно
+//! сведены линкером к no-op `0x004DBD10`.
 
 use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsbaseproperties::GAP_PARTICULAR_ATTRIBUTE;
 use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
+use super::ccontainer::{CContainerState, SharedContainerListener};
+
+/// Достигнутое base-состояние исходного `CGoodsContainer`, не копия ABI.
+pub(crate) struct CGoodsContainerState {
+    container_base: CContainerState,
+    owner_type: i32,
+    owner_id: i32,
+}
+
+impl CGoodsContainerState {
+    /// Создаёт exact base defaults constructor-а `0x004E05A0`.
+    pub(crate) const fn with_constructor_defaults() -> Self {
+        Self {
+            container_base: CContainerState::with_constructor_defaults(),
+            owner_type: 0,
+            owner_id: 0,
+        }
+    }
+
+    /// Base `Clear` доказанно не меняет ни owner, ни listeners.
+    pub(crate) const fn clear(&mut self) {}
+
+    /// Сбрасывает owner до очистки non-owning listener registry.
+    pub(crate) fn release(&mut self) {
+        self.owner_type = 0;
+        self.owner_id = 0;
+        self.container_base.release();
+    }
+
+    /// Сохраняет два signed owner scalar без дополнительных эффектов.
+    pub(crate) const fn set_owner(&mut self, owner_type: i32, owner_id: i32) {
+        self.owner_type = owner_type;
+        self.owner_id = owner_id;
+    }
+
+    pub(crate) const fn owner_type(&self) -> i32 {
+        self.owner_type
+    }
+
+    pub(crate) const fn owner_id(&self) -> i32 {
+        self.owner_id
+    }
+
+    pub(crate) fn add_listener(&mut self, listener: Option<&SharedContainerListener>) -> i32 {
+        self.container_base.add_listener(listener)
+    }
+}
 
 /// Выполняет exact stacking-ветку для уже занятой позиции.
 pub(crate) fn add_to_occupied_position(
@@ -64,7 +120,7 @@ pub(crate) fn add_to_occupied_position(
 
 // ============================================================================
 // FUNCTION: CGoodsContainer::CGoodsContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cgoodscontainer.cpp:19
@@ -72,13 +128,14 @@ pub(crate) fn add_to_occupied_position(
 // ADDRESS: 004e05a0
 // PROTOTYPE: undefined __thiscall CGoodsContainer(void)
 //
+// IMPLEMENTED выше как `CGoodsContainerState::with_constructor_defaults`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGoodsContainer::~CGoodsContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cgoodscontainer.cpp:35
@@ -86,6 +143,8 @@ pub(crate) fn add_to_occupied_position(
 // ADDRESS: 004e05c0
 // PROTOTYPE: void __thiscall ~CGoodsContainer(void)
 //
+// IMPLEMENTED обычным `Drop`; exact ASM обнуляет owner перед base destructor,
+// что не имеет внешнего эффекта для уничтожаемого Rust value.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -106,7 +165,7 @@ pub(crate) fn add_to_occupied_position(
 
 // ============================================================================
 // FUNCTION: CGoodsContainer::Clear
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cgoodscontainer.cpp:143
@@ -114,13 +173,14 @@ pub(crate) fn add_to_occupied_position(
 // ADDRESS: 004e05f0
 // PROTOTYPE: void __thiscall Clear(void * param_1)
 //
+// Exact target `0x004B4CC0` состоит из `ret 4`; IMPLEMENTED как `clear`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGoodsContainer::Release
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cgoodscontainer.cpp:151
@@ -128,13 +188,15 @@ pub(crate) fn add_to_occupied_position(
 // ADDRESS: 004e0600
 // PROTOTYPE: void __thiscall Release(void)
 //
+// IMPLEMENTED выше; exact tail target `0x0043EAD0` очищает vector storage, а
+// не weather-state, ошибочно приписанный folded телу декомпилятором.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGoodsContainer::SetOwner
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cgoodscontainer.cpp:230
@@ -142,6 +204,7 @@ pub(crate) fn add_to_occupied_position(
 // ADDRESS: 004e0610
 // PROTOTYPE: void __thiscall SetOwner(long param_1, long param_2)
 //
+// IMPLEMENTED выше как `set_owner`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -244,7 +307,6 @@ pub(crate) fn add_to_occupied_position(
 //
 //
 
-
 // ============================================================================
 // FUNCTION: Unwind@005355c0
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -272,6 +334,5 @@ pub(crate) fn add_to_occupied_position(
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // COMPONENT_VARIANT_END: WorldServer

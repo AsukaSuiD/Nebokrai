@@ -49,12 +49,11 @@ use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
 
 use super::super::goods::cgoods::{CGoods, GoodsCodecError, GoodsDbSnapshotBlock};
 use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
-use super::cgoodscontainer::add_to_occupied_position;
+use super::cgoodscontainer::{CGoodsContainerState, add_to_occupied_position};
 
 /// Достигнутое состояние исходного `CWallet`, не копия его 32-битного ABI.
 pub(crate) struct CWallet {
-    pub(super) owner_type: i32,
-    pub(super) owner_id: i32,
+    pub(super) container_base: CGoodsContainerState,
     pub(super) gold_coins: Option<Box<CGoods>>,
 }
 
@@ -62,8 +61,7 @@ impl CWallet {
     /// Создаёт точные defaults base-owner-а и пустого wallet slot-а.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
-            owner_type: 0,
-            owner_id: 0,
+            container_base: CGoodsContainerState::with_constructor_defaults(),
             gold_coins: None,
         }
     }

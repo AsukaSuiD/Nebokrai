@@ -1,6 +1,59 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Владелец базового контейнера исторического `WorldServer`.
+//!
+//! Статус constructor/destructor RVA `0x000E0DB0/0x000E0AE0` и
+//! `AddListener` RVA `0x000E0DF0` — `IMPLEMENTED`; virtual find/remove ниже
+//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально) до конкретного storage-owner-а. Точная пара:
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
+//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
+//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Исходный владелец PDB:
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\ccontainer.cpp:22,34,237`.
+//!
+//! Original vector хранит не владеющие `CContainerListener*`, отвергает null
+//! и повторный pointer, а destructor/`Release` освобождает только сам vector.
+//! Rust сохраняет эту семантику через стандартные `Rc/Weak`: контейнер не
+//! продлевает жизнь listener-а, duplicate определяется по identity control
+//! block-а, а dangling pointer не возникает. Compiler/STL capacity и ручной
+//! `delete` не переносятся.
+
+use std::cell::RefCell;
+use std::rc::{Rc, Weak};
+
+use crate::worldserver::appworld::listener::ccontainerlistener::CContainerListener;
+
+pub(crate) type SharedContainerListener = Rc<RefCell<dyn CContainerListener>>;
+
+/// Безопасное owning-состояние исходного `CContainer`, не копия его ABI.
+pub(crate) struct CContainerState {
+    listeners: Vec<Weak<RefCell<dyn CContainerListener>>>,
+}
+
+impl CContainerState {
+    /// Создаёт exact пустой listener-vector constructor-а `0x004E0DB0`.
+    pub(crate) const fn with_constructor_defaults() -> Self {
+        Self {
+            listeners: Vec::new(),
+        }
+    }
+
+    /// Регистрирует non-null listener один раз по identity исходного pointer-а.
+    pub(crate) fn add_listener(&mut self, listener: Option<&SharedContainerListener>) -> i32 {
+        let Some(listener) = listener else {
+            return 0;
+        };
+        let weak = Rc::downgrade(listener);
+        if self.listeners.iter().any(|current| current.ptr_eq(&weak)) {
+            return 0;
+        }
+        self.listeners.push(weak);
+        1
+    }
+
+    /// Освобождает только non-owning registry, как folded base `Release`.
+    pub(crate) fn release(&mut self) {
+        self.listeners.clear();
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
@@ -94,7 +147,7 @@
 
 // ============================================================================
 // FUNCTION: CContainer::~CContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\ccontainer.cpp:34
@@ -102,13 +155,15 @@
 // ADDRESS: 004e0ae0
 // PROTOTYPE: void __thiscall ~CContainer(void)
 //
+// IMPLEMENTED обычным `Drop` для vector `Weak`; listener-ы не принадлежат
+// контейнеру и не уничтожаются вместе с ним.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CContainer::CContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\ccontainer.cpp:22
@@ -116,13 +171,14 @@
 // ADDRESS: 004e0db0
 // PROTOTYPE: undefined __thiscall CContainer(void)
 //
+// IMPLEMENTED выше как `CContainerState::with_constructor_defaults`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CContainer::AddListener
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\ccontainer.cpp:237
@@ -130,10 +186,11 @@
 // ADDRESS: 004e0df0
 // PROTOTYPE: int __thiscall AddListener(CContainerListener * param_1)
 //
+// IMPLEMENTED выше как `add_listener`; `Weak::ptr_eq` заменяет raw pointer
+// identity, сохраняя ответы `0/1` и порядок vector-а.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // ============================================================================
 // FUNCTION: Unwind@00535540

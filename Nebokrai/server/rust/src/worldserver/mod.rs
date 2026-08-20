@@ -20,6 +20,11 @@ pub(crate) mod appworld {
         pub(crate) mod cbattlefairycontainer;
         #[allow(
             dead_code,
+            reason = "базовый container-state подключён перед listener notification graph"
+        )]
+        pub(crate) mod ccontainer;
+        #[allow(
+            dead_code,
             reason = "depot owner подключён перед точной CPlayer container sequence"
         )]
         pub(crate) mod cdepot;

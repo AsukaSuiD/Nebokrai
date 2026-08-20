@@ -221,8 +221,7 @@ impl CWallet {
 
     /// Сбрасывает inherited owner type/ID и уничтожает единственный товар.
     pub(crate) fn release(&mut self) {
-        self.owner_type = 0;
-        self.owner_id = 0;
+        self.container_base.release();
         self.gold_coins = None;
     }
 
