@@ -1,7 +1,9 @@
 //! Владелец equipment-container и соседнего exported volume decoder-а.
 //!
 //! Статус `CEquipmentContainer` constructor/destructor RVA
-//! `0x000D9F70/0x000D9E70`, positional `Add` RVA `0x000DA020`,
+//! `0x000D9F70/0x000D9E70`, auto/positional `Add` RVA
+//! `0x000D8B30/0x000DA020`, `Remove/AddFromDB` RVA
+//! `0x000D9B30/0x000DA280`,
 //! `Clear/Release` RVA `0x000D8E40/0x000D8F30`, `GetGoods/GetGoodsAmount`
 //! RVA `0x000D9470/0x000D94B0`, `Serialize` RVA `0x000D9530` и разделяемого
 //! с `CVolumeLimitGoodsContainer` `Unserialize` RVA `0x000D8DA0`, а также
@@ -9,7 +11,7 @@
 //! `0x000D92F0/0x000D9350/0x000D93E0/0x000DA530` — `IMPLEMENTED`;
 //! остальные operations ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Функции остаются именно в этом `.rs`, потому что их точный PDB source-owner —
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:22,36,135,158,173,210,237,291,648,670,694,713,731,745,773,813,834`.
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:22,36,43,135,158,173,210,237,257,291,470,648,670,694,713,731,745,773,813,834`.
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
 //! SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -52,6 +54,11 @@
 //! — все 16 байт GUID, обход идёт в numeric map-order. Legacy
 //! `GetGoods(index, vector-by-value)` не возвращал наполненную копию; этот
 //! внутренний дефект исправлен Rust iterator-ом с тем же base-index фильтром.
+//! Auto-`Add` выбирает exact колонку по equip-place; ornaments сначала пробует
+//! `6`, затем `7`. Exact ASM исправляет ошибку raw и передаёт исходный context
+//! в обе ветви, но встроенные callbacks всё равно no-op. `AddFromDB` выполняет
+//! те же type/place/column проверки и прямую вставку без callback. `Remove`
+//! передаёт ownership первого GUID-совпадения вызывающему.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -237,6 +244,73 @@ impl CEquipmentContainer {
         }
         self.equipment.insert(column, goods);
         Ok(None)
+    }
+
+    /// Выбирает exact equipment-column и делегирует positional `Add`.
+    pub(crate) fn add(
+        &mut self,
+        goods: Box<CGoods>,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, EquipmentContainerCodecError> {
+        let index = goods
+            .get_base_properties_index()
+            .ok_or(GoodsCodecError::MissingBasePropertiesIndex)?;
+        let Some(properties) =
+            super::super::goods::cgoodsfactory::query_goods_base_properties(registry, index)
+        else {
+            return Ok(Some(goods));
+        };
+        if properties.get_goods_type() != GOODS_TYPE_EQUIPMENT {
+            return Ok(Some(goods));
+        }
+
+        let column = match properties.get_equip_place() {
+            1 => EquipmentColumn::Head,
+            2 => EquipmentColumn::Body,
+            3 => EquipmentColumn::Hand,
+            4 => EquipmentColumn::Glove,
+            5 => EquipmentColumn::Boot,
+            6 if !self.equipment.contains_key(&EquipmentColumn::OrnamentsOne) => {
+                EquipmentColumn::OrnamentsOne
+            }
+            6 if !self.equipment.contains_key(&EquipmentColumn::OrnamentsTwo) => {
+                EquipmentColumn::OrnamentsTwo
+            }
+            6 => return Ok(Some(goods)),
+            7 => EquipmentColumn::Medal,
+            8 => EquipmentColumn::Posterior,
+            9 => EquipmentColumn::Jewelry,
+            10 => EquipmentColumn::Headgear,
+            11 => EquipmentColumn::Talisman,
+            12 => EquipmentColumn::Frock,
+            13 => EquipmentColumn::Wing,
+            14 => EquipmentColumn::Manteau,
+            15 => EquipmentColumn::Fairy,
+            16 => EquipmentColumn::Lingbao,
+            _ => return Ok(Some(goods)),
+        };
+
+        self.add_at(column as u32, goods, registry)
+    }
+
+    /// Вставляет DB-товар с exact slot/type/place validation без callback.
+    pub(crate) fn add_from_db(
+        &mut self,
+        position: u32,
+        goods: Box<CGoods>,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, EquipmentContainerCodecError> {
+        self.add_at(position, goods, registry)
+    }
+
+    /// Вынимает первое GUID-совпадение и передаёт ownership вызывающему.
+    pub(crate) fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
+        let column = self
+            .equipment
+            .iter()
+            .find(|(_, goods)| goods.get_ex_id() == ex_id)
+            .map(|(column, _)| *column)?;
+        self.equipment.remove(&column)
     }
 
     /// Очищает map после no-op removed callbacks, исправляя внутреннюю leak.
@@ -505,7 +579,7 @@ fn read_equipment_u32(
 
 // ============================================================================
 // FUNCTION: CEquipmentContainer::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:43
@@ -513,6 +587,8 @@ fn read_equipment_u32(
 // ADDRESS: 004d8b30
 // PROTOTYPE: int __thiscall Add(CBaseObject * param_1, void * param_2)
 //
+// IMPLEMENTED выше как typed `CGoods` API. Exact ASM подтверждает equipment-
+// type check, equip-place routing, ornaments `6 -> 7` и original context.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -729,7 +805,7 @@ fn read_equipment_u32(
 
 // ============================================================================
 // FUNCTION: CEquipmentContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:257
@@ -737,6 +813,7 @@ fn read_equipment_u32(
 // ADDRESS: 004d9b30
 // PROTOTYPE: CBaseObject * __thiscall Remove(CGUID * param_1, void * param_2)
 //
+// IMPLEMENTED выше; no-op removed callbacks не материализуются.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -782,7 +859,7 @@ fn read_equipment_u32(
 
 // ============================================================================
 // FUNCTION: CEquipmentContainer::AddFromDB
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:470
@@ -790,6 +867,7 @@ fn read_equipment_u32(
 // ADDRESS: 004da280
 // PROTOTYPE: int __thiscall AddFromDB(CGoods * param_1, ulong param_2)
 //
+// IMPLEMENTED выше через общий validation helper без debug/CRT plumbing.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
