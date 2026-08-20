@@ -2,7 +2,8 @@
 //!
 //! Статус `QueryGoodsBaseProperties` RVA `0x00055DB0`,
 //! `UnserializeGoods` RVA `0x00055E20` и `QueryGoodsIDByOriginalName` RVA
-//! `0x000566F0`, `CreateGoods` RVA `0x00059460` — `IMPLEMENTED`; остальной корпус ниже остаётся
+//! `0x000566F0`, `CreateGoods/CreateGoodsNoProbability` RVA
+//! `0x00059460/0x000597C0` — `IMPLEMENTED`; остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -100,12 +101,7 @@ where
     Random: FnMut(i32) -> i32,
 {
     let properties = query_goods_base_properties(registry, index)?;
-    let mut goods = Box::new(CGoods::with_constructor_base_and_type());
-    goods.set_base_properties_index(index);
-    goods.set_name(properties.get_name());
-    goods.set_goods_description(properties.get_description());
-    goods.set_price(properties.get_price());
-    goods.set_graphics_id(properties.get_icon_id(ICON_TYPE_GROUND) as i32);
+    let mut goods = create_goods_base(index, properties);
 
     for property_type in properties.valid_addon_property_types() {
         if random(10_000) as u32 >= properties.get_occur_probability(property_type) {
@@ -138,6 +134,43 @@ where
     }
 
     Some(goods)
+}
+
+/// Создаёт только гарантированные addon-ы без probability/modifier roll-ов.
+pub(crate) fn create_goods_no_probability(
+    registry: &GoodsBasePropertiesRegistry,
+    index: u32,
+) -> Option<Box<CGoods>> {
+    let properties = query_goods_base_properties(registry, index)?;
+    let mut goods = create_goods_base(index, properties);
+
+    for property_type in properties.valid_addon_property_types() {
+        if properties.get_occur_probability(property_type) != 10_000 {
+            continue;
+        }
+        let values = properties
+            .get_addon_property_values(property_type)
+            .iter()
+            .map(|source| (source.id(), source.base_value(), 0))
+            .collect();
+        goods.push_factory_addon_property(
+            property_type,
+            properties.is_implicit(property_type),
+            values,
+        );
+    }
+
+    Some(goods)
+}
+
+fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGoods> {
+    let mut goods = Box::new(CGoods::with_constructor_base_and_type());
+    goods.set_base_properties_index(index);
+    goods.set_name(properties.get_name());
+    goods.set_goods_description(properties.get_description());
+    goods.set_price(properties.get_price());
+    goods.set_graphics_id(properties.get_icon_id(ICON_TYPE_GROUND) as i32);
+    goods
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
@@ -340,7 +373,7 @@ where
 
 // ============================================================================
 // FUNCTION: CGoodsFactory::CreateGoodsNoProbability
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsfactory.cpp:243
@@ -348,6 +381,8 @@ where
 // ADDRESS: 004597c0
 // PROTOTYPE: CGoods * __cdecl CreateGoodsNoProbability(ulong param_1)
 //
+// IMPLEMENTED выше; выбираются только enabled типы с probability ровно `10000`,
+// все modifier-ы остаются нулевыми, technical debug-log не материализуется.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
