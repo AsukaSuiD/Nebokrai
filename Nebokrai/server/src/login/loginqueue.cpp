@@ -567,7 +567,7 @@ NoQueueAccountsLoadResult CLoginQueue::LoadNoQueueCdkeyList(
     }
 
     const std::vector<std::uint8_t> bytes(
-        std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+        std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>{});
     std::size_t extracted = 0;
     std::size_t cursor = 0;
     while (cursor < bytes.size()) {

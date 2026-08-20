@@ -2,10 +2,15 @@
 
 #include "acclogqueue.h"
 
+#include <asio.hpp>
+
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <list>
 #include <map>
+#include <memory>
+#include <optional>
 #include <string>
 
 namespace LoginNet
@@ -33,20 +38,33 @@ class CLoginQueue;
  * LoadSetup 0x0040E690, ReLoadSetup 0x0040F4E0,
  * LoadWorldSetup 0x00410F30, SetListWorldInfoBySetup 0x00411170,
  * ReLoadWorldSetup 0x00411FF0, UpdateWorldInfoToAllClient 0x00407860,
- * значения конструктора CGame по умолчанию 0x00414350.
+ * load_listen_port 0x0040DCB0, InitNetServer_Client 0x00402DA0,
+ * InitNetServer_World 0x00402F90, Release 0x00405C60 и значения
+ * конструктора CGame по умолчанию 0x00414350.
+ *
+ * Asio заменяет WinSock/IOCP только в технической части. Отдельные порты из
+ * port.ini, порядок пересоздания владельцев, сетевые пределы и локальный IPv4
+ * сохраняются. Полный Release будет дополнен по мере появления остальных
+ * фоновых владельцев; текущий срез освобождает только уже материализованную сеть.
  */
 class CGame
 {
 public:
+    CGame();
+    ~CGame();
+
+    CGame(const CGame&) = delete;
+    CGame& operator=(const CGame&) = delete;
+
     struct tagWorldInfo
     {
         std::string strName;
         std::int32_t lStateLvl{};
     };
 
-    // Полный PDB-field set исходного tagSetup, необходимый LoadSetup.
-    // Constructor defaults восстановлены отдельно из tagSetup::tagSetup 0x40C6E0;
-    // неинициализированные там scalar-поля намеренно не получают fake zero-default.
+    // Полный набор PDB-полей исходного tagSetup, необходимый для LoadSetup.
+    // Значения конструктора восстановлены отдельно из tagSetup::tagSetup 0x40C6E0;
+    // неинициализированные скалярные поля намеренно не получают фиктивные нули.
     struct tagSetup
     {
         tagSetup();
@@ -126,9 +144,25 @@ public:
         std::uint32_t dwValidErrStayTime{180000U};
     };
 
+    struct ListenPorts
+    {
+        std::optional<std::uint32_t> client;
+        std::optional<std::uint32_t> world;
+    };
+
     [[nodiscard]] bool LoadSetup();
+    [[nodiscard]] bool load_listen_port(
+        const std::filesystem::path& runtimeDirectory = ".");
+    [[nodiscard]] bool InitNetServer_Client();
+    [[nodiscard]] bool InitNetServer_World();
+    void ReleaseNetworkOwners() noexcept;
+
+    [[nodiscard]] LoginNet::CMyNetServerClient* GetNetServer_Client() noexcept;
+    [[nodiscard]] const LoginNet::CMyNetServerClient* GetNetServer_Client() const noexcept;
+    [[nodiscard]] LoginNet::CMyNetServerWorld* GetNetServer_World() noexcept;
+    [[nodiscard]] const LoginNet::CMyNetServerWorld* GetNetServer_World() const noexcept;
     // Прямой EXE использовал глобальный gAuthMgr. Реконструкция Linux сохраняет
-    // тот же побочный эффект timeout, но передаёт уже явного владельца AuthManager.
+    // тот же побочный эффект тайм-аута, но передаёт явного владельца AuthManager.
     [[nodiscard]] bool ReLoadSetup(AuthManager& authManager);
     [[nodiscard]] bool LoadSetupEx();
     [[nodiscard]] bool ReLoadSetupEx();
@@ -173,8 +207,9 @@ private:
     void RecordTechnicalError(std::string detail);
 
     CLoginQueue* m_pLoginQueue{};
-    LoginNet::CMyNetServerClient* s_pNetServer_Client{};
-    LoginNet::CMyNetServerWorld* s_pNetServer_World{};
+    asio::io_context m_IoContext;
+    std::unique_ptr<LoginNet::CMyNetServerClient> s_pNetServer_Client;
+    std::unique_ptr<LoginNet::CMyNetServerWorld> s_pNetServer_World;
 
     std::map<std::string, std::string> m_LoginCdkeyWorld;
     std::map<std::int32_t, std::list<std::string>> s_listCdkey;
@@ -183,6 +218,7 @@ private:
     std::map<std::int32_t, tagWorldInfo> m_WorldInfoSetup;
     tagSetup m_Setup;
     tagSetupEx m_SetupEx;
+    ListenPorts m_ListenPorts;
     AccLogQueue _acc_logs;
 };
 }

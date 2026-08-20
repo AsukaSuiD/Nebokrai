@@ -15,6 +15,12 @@ find_package(spdlog CONFIG REQUIRED)
 find_package(Iconv REQUIRED)
 find_package(ODBC REQUIRED)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Статический unixODBC из vcpkg использует libltdl, но его CMake-цель
+    # не передаёт эту зависимость конечному исполняемому файлу.
+    find_library(LIBLTDL_LIBRARY NAMES ltdl REQUIRED)
+endif()
+
 file(GLOB_RECURSE NEBOKRAI_SERVER_CANDIDATES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -56,3 +62,7 @@ target_link_libraries(nebokrai_server
         spdlog::spdlog
         Iconv::Iconv
         ODBC::ODBC)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(nebokrai_server PRIVATE "${LIBLTDL_LIBRARY}")
+endif()

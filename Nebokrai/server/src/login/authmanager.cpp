@@ -164,11 +164,11 @@ std::size_t AuthManager::PendingCount() const noexcept
 std::uint32_t AuthManager::LegacyTickMs() noexcept
 {
 #if defined(__linux__) && defined(CLOCK_BOOTTIME)
-    timespec now{};
-    if (::clock_gettime(CLOCK_BOOTTIME, &now) == 0) {
+    timespec bootTime{};
+    if (::clock_gettime(CLOCK_BOOTTIME, &bootTime) == 0) {
         const std::uint64_t milliseconds =
-            static_cast<std::uint64_t>(now.tv_sec) * 1000ULL +
-            static_cast<std::uint64_t>(now.tv_nsec) / 1'000'000ULL;
+            static_cast<std::uint64_t>(bootTime.tv_sec) * 1000ULL +
+            static_cast<std::uint64_t>(bootTime.tv_nsec) / 1'000'000ULL;
         return static_cast<std::uint32_t>(milliseconds);
     }
 #endif

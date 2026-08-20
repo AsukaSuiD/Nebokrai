@@ -7,6 +7,7 @@
 #include "../public/readwrite.h"
 #include "../public/textcodec.h"
 #include "../public/tools.h"
+#include "../nets/mysocket.h"
 #include "../nets/netlogin/message.h"
 #include "../nets/netlogin/mynetserver_client.h"
 #include "../nets/netlogin/mynetserver_world.h"
@@ -38,6 +39,7 @@ constexpr std::int32_t kWorldInfoUpdateMessageType = 0x000AF509;
 constexpr std::int32_t kPlayerBaseMessageType = 0x0004FB01;
 constexpr std::int32_t kKickWorldAccountMessageType = 0x0004FB07;
 constexpr std::size_t kLegacyAccountLogBufferSize = 0x200U;
+constexpr std::int32_t kLegacySocketType = 1;
 
 std::span<const std::uint8_t> CStringBytes(const char* value)
 {
@@ -157,6 +159,47 @@ std::optional<std::int32_t> LegacyScaledWorldLevel(std::uint32_t worldMax,
     }
     return static_cast<std::int32_t>(product);
 }
+
+std::optional<asio::ip::address_v4> ResolveFirstLocalIPv4(asio::io_context& ioContext)
+{
+    try {
+        const std::string host = asio::ip::host_name();
+        asio::ip::tcp::resolver resolver(ioContext);
+        const auto results = resolver.resolve(asio::ip::tcp::v4(), host, "0");
+        for (const auto& entry : results) {
+            if (entry.endpoint().address().is_v4()) {
+                return entry.endpoint().address().to_v4();
+            }
+        }
+    } catch (...) {
+        // Поиск локального адреса был вспомогательной частью исходного Host.
+        // Ошибка не отменяет уже открытый слушающий сокет и оставляет нулевой адрес.
+    }
+    return std::nullopt;
+}
+
+void ApplyLocalIdentity(CServer& server, asio::io_context& ioContext)
+{
+    const auto address = ResolveFirstLocalIPv4(ioContext);
+    if (!address) {
+        server.SetLocalIdentity({}, 0U);
+        return;
+    }
+
+    const auto bytes = address->to_bytes();
+    const std::string text = address->to_string();
+    server.SetLocalIdentity(
+        std::span<const std::uint8_t>(
+            reinterpret_cast<const std::uint8_t*>(text.data()), text.size()),
+        LegacyIPv4Word(IPv4Octets{bytes[0], bytes[1], bytes[2], bytes[3]}));
+}
+}
+
+CGame::CGame() = default;
+
+CGame::~CGame()
+{
+    ReleaseNetworkOwners();
 }
 
 CGame::tagSetup::tagSetup()
@@ -181,6 +224,151 @@ CGame::tagSetup::tagSetup()
     _db_user.clear();
     _db_psd.clear();
     m_lIsInsideUse = 1;
+}
+
+bool CGame::load_listen_port(const std::filesystem::path& runtimeDirectory)
+{
+    // ПОДТВЕРЖДЕНО поздней реконструкцией CGame::load_listen_port: отдельный
+    // port.ini читается после основного setup. Подписи слева от значений
+    // игнорируются, а успешное открытие остаётся исходным успехом даже при
+    // неполной следующей паре. Неизвестное значение при этом не выдумывается.
+    std::ifstream input(runtimeDirectory / "port.ini");
+    if (!input.is_open()) {
+        return false;
+    }
+
+    std::string label;
+    std::uint32_t port = 0;
+    if (input >> label >> port) {
+        m_ListenPorts.client = port;
+    }
+    if (input >> label >> port) {
+        m_ListenPorts.world = port;
+    }
+    return true;
+}
+
+bool CGame::InitNetServer_Client()
+{
+    // Исходный CGame пересоздавал владельца перед каждым InitNetServer_Client.
+    // В текущем срезе цикл приёма и чтения ещё не запускается, поэтому здесь
+    // создаётся и настраивается только доказанный слушающий владелец.
+    if (s_pNetServer_Client) {
+        s_pNetServer_Client->StopListening();
+        s_pNetServer_Client.reset();
+    }
+    if (!m_ListenPorts.client) {
+        RecordTechnicalError("В port.ini не задан порт игровых клиентов");
+        return false;
+    }
+
+    s_pNetServer_Client = std::make_unique<LoginNet::CMyNetServerClient>(
+        m_IoContext.get_executor(), AuthManager::LegacyTickMs());
+
+    std::error_code error;
+    if (!s_pNetServer_Client->Host(
+            *m_ListenPorts.client,
+            std::nullopt,
+            kLegacySocketType,
+            true,
+            error)) {
+        RecordTechnicalError(
+            "Не удалось открыть порт игровых клиентов: " + error.message());
+        return false;
+    }
+
+    ApplyLocalIdentity(*s_pNetServer_Client, m_IoContext);
+    s_pNetServer_Client->ConfigureReceive(
+        m_Setup.bCheckNet,
+        m_Setup.bCheckMsgCon,
+        m_Setup.dwMaxByteNum,
+        m_Setup.dwBanIPTime,
+        m_Setup.dwMaxMsgLen);
+    s_pNetServer_Client->ConfigureConnectionLimits(
+        m_Setup.lMaxConnectNum,
+        m_Setup.lMaxIOSendNum,
+        m_Setup.lMaxClientSendBuf);
+    s_pNetServer_Client->ConfigureAcceptLimitsAfterHost(
+        m_SetupEx.lClientMaxBlockConNum,
+        m_SetupEx.lClientValidDelayRecDataTime);
+    return true;
+}
+
+bool CGame::InitNetServer_World()
+{
+    if (s_pNetServer_World) {
+        s_pNetServer_World->StopListening();
+        s_pNetServer_World.reset();
+    }
+    if (!m_ListenPorts.world) {
+        RecordTechnicalError("В port.ini не задан порт WorldServer");
+        return false;
+    }
+
+    s_pNetServer_World = std::make_unique<LoginNet::CMyNetServerWorld>(
+        m_IoContext.get_executor(), AuthManager::LegacyTickMs());
+
+    std::error_code error;
+    if (!s_pNetServer_World->Host(
+            *m_ListenPorts.world,
+            std::nullopt,
+            kLegacySocketType,
+            true,
+            error)) {
+        RecordTechnicalError(
+            "Не удалось открыть порт WorldServer: " + error.message());
+        return false;
+    }
+
+    ApplyLocalIdentity(*s_pNetServer_World, m_IoContext);
+    s_pNetServer_World->ConfigureReceive(
+        m_Setup.bWorldCheckNet,
+        m_Setup.dwWorldMaxByteNum,
+        m_Setup.dwWorldBanIPTime);
+    s_pNetServer_World->ConfigureConnectionLimits(
+        m_Setup.lWorldMaxConnectNum,
+        m_Setup.lWorldMaxIOSendNum,
+        m_Setup.lWorldMaxClientSendBuf);
+    s_pNetServer_World->ConfigureAcceptLimitsAfterHost(
+        m_SetupEx.lWorldMaxBlockConNum,
+        m_SetupEx.lWorldValidDelayRecDataTime);
+    return true;
+}
+
+void CGame::ReleaseNetworkOwners() noexcept
+{
+    // Полный CGame::Release позднее дополнит этот срез остановкой задач приёма
+    // и ввода-вывода и обработкой исходных OnClose. Пока эти задачи ещё не создаются,
+    // достаточно закрыть слушающие сокеты и уничтожить принадлежащие CGame сокеты.
+    if (s_pNetServer_World) {
+        s_pNetServer_World->StopListening();
+        s_pNetServer_World.reset();
+    }
+    if (s_pNetServer_Client) {
+        s_pNetServer_Client->StopListening();
+        s_pNetServer_Client.reset();
+    }
+    m_IoContext.restart();
+}
+
+LoginNet::CMyNetServerClient* CGame::GetNetServer_Client() noexcept
+{
+    return s_pNetServer_Client.get();
+}
+
+const LoginNet::CMyNetServerClient* CGame::GetNetServer_Client() const noexcept
+{
+    return s_pNetServer_Client.get();
+}
+
+LoginNet::CMyNetServerWorld* CGame::GetNetServer_World() noexcept
+{
+    return s_pNetServer_World.get();
+}
+
+const LoginNet::CMyNetServerWorld* CGame::GetNetServer_World() const noexcept
+{
+    return s_pNetServer_World.get();
 }
 
 bool CGame::LoadSetup()
