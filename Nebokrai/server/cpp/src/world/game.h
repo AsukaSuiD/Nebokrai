@@ -25,6 +25,10 @@
 #include "appworld/session/csessionfactory.h"
 #include "appworld/worldregion.h"
 #include "../public/stringtable.h"
+#include "../setup/contributesetup.h"
+#include "../setup/emotion.h"
+#include "../setup/hitlevelsetup.h"
+#include "../setup/honorelimilateconfig.h"
 
 #include <cstdint>
 #include <deque>
@@ -138,6 +142,10 @@ public:
     [[nodiscard]] CSessionFactory& Sessions() noexcept { return m_Sessions; }
     [[nodiscard]] const StringTable& Strings() const noexcept { return m_Strings; }
     [[nodiscard]] const GlobeVariable& GlobeVariables() const noexcept { return m_GlobeVariables; }
+    [[nodiscard]] const CHitLevelSetup& HitLevels() const noexcept { return m_HitLevels; }
+    [[nodiscard]] const CEmotion& Emotions() const noexcept { return m_Emotions; }
+    [[nodiscard]] const CContributeSetup& ContributeSetup() const noexcept { return m_ContributeSetup; }
+    [[nodiscard]] const HonorElimilateConfig& HonorEliminateSetup() const noexcept { return m_HonorEliminateSetup; }
 
     bool AddRegion(std::unique_ptr<CWorldRegion>, std::uint32_t gameServerIndex,
                    RegionType type);
@@ -212,6 +220,10 @@ private:
     CCountryHandler m_Countries;
     CCountryParam m_CountryParameters;
     StringTable m_Strings;
+    CHitLevelSetup m_HitLevels;
+    CEmotion m_Emotions;
+    CContributeSetup m_ContributeSetup;
+    HonorElimilateConfig m_HonorEliminateSetup;
     CVariableList m_Variables;
     CJJcSystem m_Jjc;
     CountryWarSys m_CountryWars;

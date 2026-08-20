@@ -619,6 +619,15 @@ bool CWorldServer::SendInitialGameServerState(
     if (!m_Game->Strings().Serialize(payload) || !sendSetup(0x2F, payload)) return false;
 
     payload.clear();
+    if (!m_Game->HitLevels().Serialize(payload) || !sendSetup(0x14, payload)) return false;
+
+    payload.clear();
+    if (!m_Game->Emotions().Serialize(payload) || !sendSetup(0x15, payload)) return false;
+
+    payload.clear();
+    if (!m_Game->ContributeSetup().Serialize(payload) || !sendSetup(0x05, payload)) return false;
+
+    payload.clear();
     if (!m_Game->CountryParameters().AddToByteArray(payload) ||
         !sendSetup(0x18, payload)) return false;
 
@@ -644,6 +653,10 @@ bool CWorldServer::SendInitialGameServerState(
             }
         }
     }
+
+    payload.clear();
+    m_Game->HonorEliminateSetup().Serialize(payload);
+    if (!sendSetup(0x26, payload)) return false;
 
     payload.clear();
     if (!m_Game->Variables().Serialize(payload) || !sendSetup(0x0C, payload)) return false;

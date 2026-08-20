@@ -146,6 +146,22 @@ bool CGame::LoadStaticConfiguration(const std::filesystem::path& runtimeDirector
         error = "не удалось прочитать data/factionparam.ini";
         return false;
     }
+    if (!m_HitLevels.Load(runtimeDirectory / "data" / "hitlevel.ini")) {
+        error = "не удалось прочитать data/hitlevel.ini";
+        return false;
+    }
+    if (!m_Emotions.Load(runtimeDirectory / "data" / "emotions.ini")) {
+        error = "не удалось прочитать data/emotions.ini";
+        return false;
+    }
+    if (!m_ContributeSetup.Load(runtimeDirectory / "data" / "contributesetup.ini")) {
+        error = "не удалось прочитать data/contributesetup.ini";
+        return false;
+    }
+    if (!m_HonorEliminateSetup.Load(runtimeDirectory / "data" / "honorelimilate.ini")) {
+        error = "не удалось прочитать data/honorelimilate.ini";
+        return false;
+    }
 
     std::ifstream factionWars(runtimeDirectory / "data" / "factionwarsys.ini");
     if (!factionWars) {
