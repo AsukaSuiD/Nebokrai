@@ -50,12 +50,18 @@
 //! Короткий source в соседнем decoder-е сохраняет ранний `Clear`, cursor и уже
 //! добавленные записи, затем возвращает typed `BLOCKED_MISSING_FACT` вместо
 //! legacy overread.
+//!
+//! `CPlayer::CheckGoodsInPacket` вызывает у packet-а унаследованные vtable
+//! slots `Find(long, GUID)` и `TraversingContainer`. Узкие Rust wrappers ниже
+//! только делегируют достигнутому `CAmountLimitGoodsContainer`: собственную
+//! volume-политику или новый порядок обхода они не вводят.
 
 use std::error::Error;
 use std::fmt;
 
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
 use crate::public::guid::CGuid;
+use crate::worldserver::appworld::listener::ccontainerlistener::CContainerListener;
 
 use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsfactory::{
@@ -157,6 +163,16 @@ impl CVolumeLimitGoodsContainer {
             .iter()
             .position(|cell| cell == ex_id)
             .and_then(|position| u32::try_from(position).ok())
+    }
+
+    /// Делегирует exact inherited `Find(long, GUID)` typed amount-owner-у.
+    pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
+        self.amount_base.find(ex_id)
+    }
+
+    /// Делегирует exact inherited traversal без собственной volume-фильтрации.
+    pub(crate) fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
+        self.amount_base.traversing_container(listener);
     }
 
     /// Замораживает concrete traversal и младший байт его cell-position.
@@ -645,7 +661,6 @@ impl CVolumeLimitGoodsContainer {
 //
 //
 
-
 // ============================================================================
 // FUNCTION: Unwind@00535390
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -673,6 +688,5 @@ impl CVolumeLimitGoodsContainer {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // COMPONENT_VARIANT_END: WorldServer

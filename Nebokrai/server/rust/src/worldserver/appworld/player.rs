@@ -1,7 +1,8 @@
 //! Владелец игрока исторического `WorldServer`.
 //!
 //! Статус `CPlayer::GetAccount` RVA `0x00002F90`, `CPlayer::SaveData` RVA
-//! `0x0005B4E0`, inherited `GetName`, reached `ProcessPlayerDataQueue`
+//! `0x0005B4E0`, `CPlayer::CheckGoodsInPacket` RVA `0x0005BA90`, inherited
+//! `GetName`, reached `ProcessPlayerDataQueue`
 //! accessors для level/friends и inherited `CShape::SetState`,
 //! достигнутого base-подобъекта `CMoveShape`, поля `m_bGetFactionData` в
 //! `CPlayer::CPlayer` RVA `0x0005EB10` и `CPlayer::~CPlayer` RVA
@@ -79,6 +80,16 @@
 //! отдельными Rust-owner-ами; повторный wallet-release не требует второго
 //! Rust-действия, поскольку первый уже оставляет null slot. Полный raw-
 //! деструктор и его STL/EH noise удалены.
+//!
+//! `CheckGoodsInPacket` создаёт точный `CSeekGoodsListener`, назначает target
+//! через original-name index, обходит `m_cPacket`, затем для каждого GUID снова
+//! вызывает у packet-а `Find(700, GUID)`. Эта вторая lookup-фаза существенна:
+//! traversal видит locked-товары, а `Find` их отбрасывает. Exact
+//! `0x0045BB40..0x0045BB47` складывает unsigned amount инструкцией `ADD EBP,EAX`;
+//! Rust сохраняет 32-битное переполнение через `i32::wrapping_add`. Type `700`
+//! не переносится, потому что safe packet API уже возвращает только `CGoods`.
+//! Null `char*` выражен `Option<&CStr>` и по-прежнему возвращает `0` до
+//! создания listener-а. MSVC vector/RTTI/SEH заменены `Vec`, enum и `Drop`.
 
 //! Frozen DB-проекция теперь также `IMPLEMENTED`. Она читает byte-exact
 //! `tagBaseProperty[0x194]`, shape, JJC, skills/friends/things/quests и все
@@ -239,6 +250,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
+use std::ffi::CStr;
 use std::fmt;
 
 use crate::dbaccess::worlddb::dbgoods::{DbGoodsOwner, PlayerGoodsFiledSnapshot};
@@ -269,7 +281,8 @@ use super::container::cwallet::CWallet;
 use super::container::cyuanbao::CYuanBao;
 use super::goods::cgoods::{GoodsCodecError, GoodsDbSnapshotBlock};
 use super::goods::cgoodsbaseproperties::GAP_WEAPON_LEVEL;
-use super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
+use super::goods::cgoodsfactory::{GoodsBasePropertiesRegistry, GoodsOriginalNameIndex};
+use super::listener::cseekgoodslistener::CSeekGoodsListener;
 use super::moveshape::CMoveShape;
 use super::shape::{ShapeDecodeError, ShapeTileCoordinateBlock};
 
@@ -1186,6 +1199,27 @@ impl CPlayer {
             },
             faction_data_received: false,
         }
+    }
+
+    /// Считает unlocked amount товаров packet-а с точным original-name.
+    pub(crate) fn check_goods_in_packet(
+        &self,
+        original_name: Option<&CStr>,
+        original_name_index: &GoodsOriginalNameIndex,
+    ) -> i32 {
+        let Some(original_name) = original_name else {
+            return 0;
+        };
+
+        let mut listener = CSeekGoodsListener::new();
+        listener.set_target(Some(original_name), original_name_index);
+        self.packet.traversing_container(Some(&mut listener));
+
+        listener.goods_ids().iter().fold(0i32, |amount, ex_id| {
+            self.packet.find(ex_id).map_or(amount, |goods| {
+                amount.wrapping_add(goods.get_amount() as i32)
+            })
+        })
     }
 
     /// Возвращает сохранённые account-байты без придуманной перекодировки.
@@ -2628,7 +2662,7 @@ fn read_player_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CPlayer::CheckGoodsInPacket
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:766
@@ -2636,9 +2670,7 @@ fn read_player_array<const N: usize>(
 // ADDRESS: 0045ba90
 // PROTOTYPE: long __thiscall CheckGoodsInPacket(char * param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; locked-фильтр остаётся во второй packet `Find` фазе.
 
 // ============================================================================
 // FUNCTION: CPlayer::AddByteCiQing
@@ -2869,9 +2901,5 @@ fn read_player_array<const N: usize>(
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
 
 // COMPONENT_VARIANT_END: WorldServer

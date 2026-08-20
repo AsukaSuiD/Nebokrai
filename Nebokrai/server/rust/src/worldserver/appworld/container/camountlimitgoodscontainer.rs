@@ -1,6 +1,8 @@
 //! Владелец amount-limited goods-container исторического `WorldServer`.
 //!
-//! Статус constructor RVA `0x000DC700`, `IsFull/Set/GetLimit` RVA
+//! Статус constructor RVA `0x000DC700`, `Find(long, GUID)` RVA `0x000D5F50`,
+//! `Find(GUID)/IsLocked/TraversingContainer` RVA
+//! `0x000DC180/0x000DBDC0/0x000DBE10`, `IsFull/Set/GetLimit` RVA
 //! `0x000DBCC0/0x000DBCE0/0x000DBCF0`, `SetOwner` RVA `0x000DBD00`,
 //! `Unserialize/Serialize` RVA `0x000DBD50/0x000DC070`, `GetGoodsAmount` RVA
 //! `0x000DC030`, основного `Add` RVA `0x000DC790`, `Clear/Release` RVA
@@ -12,7 +14,7 @@
 //! Исходные владельцы PDB:
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.h`
 //! и
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:19,42,114,139,563,608,629`.
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:19,42,114,139,176,415,464,563,602,608,629`.
 //!
 //! Exact PDB задаёт старый размер `0x60`: `CGoodsContainer`/secondary
 //! `CContainerListener` prefix, `stdext::hash_map<CGUID, CGoods*>` по `+0x24`,
@@ -53,6 +55,18 @@
 //! `MissingBasePropertiesIndex`. Короткий source также останавливается typed
 //! ошибкой, сохраняя ранний `Clear` и уже добавленные records; legacy helper не
 //! получал длину и мог читать за buffer (`BLOCKED_MISSING_FACT`).
+//!
+//! Exact `Find(GUID)` сначала ищет hash-node, затем вызывает virtual
+//! `IsLocked`; совпадение любого из четырёх DWORD GUID в locked-vector
+//! недостаточно — `0x004DBDE0..0x004DBDED` сравнивает все 16 байт. Typed
+//! `Find(long, GUID)` через thunks `0x004D5F50/0x004E0660` приходит в
+//! `0x004E0A00`, читает только GUID из второго аргумента и делегирует этому
+//! методу, поэтому safe Rust не носит лишний type `700` рядом с уже typed
+//! `CGoods`. Traversal при
+//! null listener ничего не делает, иначе посещает все map-values и игнорирует
+//! callback-result. `BTreeMap` сохраняет уже принятую storage-замену; для
+//! достигнутого `CheckGoodsInPacket` порядок ненаблюдаем, поскольку итоговая
+//! 32-битная wrapping-сумма коммутативна.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -60,6 +74,9 @@ use std::fmt;
 
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
 use crate::public::guid::CGuid;
+use crate::worldserver::appworld::listener::ccontainerlistener::{
+    CContainerListener, TraversedContainerObject,
+};
 
 use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsfactory::{
@@ -218,6 +235,30 @@ impl CAmountLimitGoodsContainer {
         self.owner_id = 0;
     }
 
+    /// Ищет exact GUID и скрывает товар, если тот присутствует в locked-vector.
+    pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
+        let goods = self.goods.get(ex_id).map(Box::as_ref)?;
+        (!self.is_locked(goods)).then_some(goods)
+    }
+
+    /// Проверяет полное 16-байтовое совпадение GUID в linear locked-vector.
+    fn is_locked(&self, goods: &CGoods) -> bool {
+        self.locked_goods
+            .iter()
+            .any(|locked| locked == goods.get_ex_id())
+    }
+
+    /// Передаёт listener-у все map-values и игнорирует его `int` результат.
+    pub(crate) fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
+        let Some(listener) = listener else {
+            return;
+        };
+
+        for goods in self.goods.values().map(Box::as_ref) {
+            let _ = listener.on_traversing_container(TraversedContainerObject::Goods(goods));
+        }
+    }
+
     /// Даёт derived-container-у read-only обход единственного goods-owner-а.
     pub(super) fn goods(&self) -> impl Iterator<Item = &CGoods> {
         self.goods.values().map(Box::as_ref)
@@ -343,7 +384,7 @@ fn read_amount_u32(
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:602
@@ -351,9 +392,7 @@ fn read_amount_u32(
 // ADDRESS: 004d5f50
 // PROTOTYPE: CBaseObject * __thiscall Find(long param_1, CGUID * param_2)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше как typed `find`; legacy type `700` не читался.
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::IsFull
@@ -460,7 +499,7 @@ fn read_amount_u32(
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::IsLocked
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:464
@@ -468,13 +507,11 @@ fn read_amount_u32(
 // ADDRESS: 004dbdc0
 // PROTOTYPE: int __thiscall IsLocked(CGoods * param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; safe receiver исключает исходный null-goods случай.
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::TraversingContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:176
@@ -482,9 +519,7 @@ fn read_amount_u32(
 // ADDRESS: 004dbe10
 // PROTOTYPE: void __thiscall TraversingContainer(CContainerListener * param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; callback-result по exact ASM не управляет обходом.
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::GetContentsWeight
@@ -610,7 +645,7 @@ fn read_amount_u32(
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:415
@@ -618,9 +653,7 @@ fn read_amount_u32(
 // ADDRESS: 004dc180
 // PROTOTYPE: CBaseObject * __thiscall Find(CGUID * param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; hash miss и locked result дают один `None`.
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::Remove
@@ -782,7 +815,6 @@ fn read_amount_u32(
 //
 // Rust field-drop повторяет `Release`/map/vector cleanup без vtable/EH/STL
 // plumbing; отдельный `Drop` не нужен.
-
 
 // ============================================================================
 // FUNCTION: Unwind@00535580
