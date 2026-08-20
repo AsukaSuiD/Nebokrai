@@ -4,13 +4,14 @@
 //! destructor ownership RVA `0x000D5FC0`, `GetGoldCoinsAmount` RVA
 //! `0x000D5F40`, query-family RVA `0x000D5E80/0x000D5EA0/0x000D63F0`,
 //! `AddFromDB` RVA `0x000D6090` и обеих перегрузок `Add` RVA
-//! `0x000D61F0/0x000D63B0` — `IMPLEMENTED`; остальной корпус ниже остаётся
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `0x000D61F0/0x000D63B0`, а также `AddGoldCoinOfLargess` RVA `0x000D6290`
+//! — `IMPLEMENTED`; остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
+//! пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
 //! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cwallet.cpp:18,34,41,55,83,211,224,247,349`.
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cwallet.cpp:18,34,41,55,83,211,224,247,349,422`.
 //!
 //! Exact PDB задаёт единственное собственное поле `m_pGoldCoins` по `+0x24`;
 //! inherited `CGoodsContainer` хранит signed owner type/ID по `+0x14/+0x18`.
@@ -36,6 +37,13 @@
 //! vector по значению и уничтожает наполненную копию, поэтому не способен
 //! вернуть результат. Этот внутренний дефект сигнатуры без ожидаемого внешнего
 //! эффекта исправлен естественным Rust iterator-ом; критерий выбора сохранён.
+//!
+//! `AddGoldCoinOfLargess` сравнивает base-index двух товаров, но использует
+//! отдельный global gold limit вместо обычного max-stack. Вычитание остатка и
+//! сложение количества — подтверждённая `u32` wrapping-арифметика; она
+//! сохранена, поскольку меняет итоговый баланс. Единственный exact call site
+//! передаёт позицию `0` и статически вызывает `CWallet` на bank-base, обходя
+//! bank lock.
 
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
 
@@ -131,6 +139,36 @@ impl CWallet {
         registry: &GoodsBasePropertiesRegistry,
     ) -> Result<Option<Box<CGoods>>, GoodsCodecError> {
         self.add_at(0, goods, gold_coin_index, registry)
+    }
+
+    /// Начисляет largess с отдельным global limit и exact wrapping-арифметикой.
+    pub(crate) fn add_gold_coin_of_largess(
+        &mut self,
+        position: u32,
+        goods: Box<CGoods>,
+        gold_coin_limit: u32,
+    ) -> Result<Option<Box<CGoods>>, GoodsCodecError> {
+        let Some(existing) = ((position == 0).then_some(self.gold_coins.as_deref_mut())).flatten()
+        else {
+            self.gold_coins = Some(goods);
+            return Ok(None);
+        };
+
+        let existing_index = existing
+            .get_base_properties_index()
+            .ok_or(GoodsCodecError::MissingBasePropertiesIndex)?;
+        let incoming_index = goods
+            .get_base_properties_index()
+            .ok_or(GoodsCodecError::MissingBasePropertiesIndex)?;
+        if existing_index != incoming_index
+            || goods.get_amount() > gold_coin_limit.wrapping_sub(existing.get_amount())
+        {
+            return Ok(Some(goods));
+        }
+
+        existing.set_amount(existing.get_amount().wrapping_add(goods.get_amount()));
+        drop(goods);
+        Ok(None)
     }
 
     /// Вставляет DB-товар после positional collision-check без factory-validation.
@@ -265,7 +303,7 @@ impl CWallet {
 
 // ============================================================================
 // FUNCTION: CWallet::AddGoldCoinOfLargess
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cwallet.cpp:422
@@ -273,6 +311,8 @@ impl CWallet {
 // ADDRESS: 004d6290
 // PROTOTYPE: int __thiscall AddGoldCoinOfLargess(CGoods * param_1, ulong param_2, void * param_3)
 //
+// IMPLEMENTED выше; global limit передаётся явно, no-op callbacks и
+// `GarbageCollect` заменены Rust ownership.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

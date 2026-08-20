@@ -3,8 +3,8 @@
 //! Статус `CWallet::Release/IsFull/GetGoods/GetGoodsAmount/Serialize/Unserialize`
 //! RVA `0x000D5E30/0x000D5E50/0x000D5EC0/0x000D5EE0/0x000D5EF0/0x000D6030`
 //! и `Clear/QueryGoodsPosition/Find/Remove` RVA
-//! `0x000D8670/0x000D8350/0x000D8370/0x000D87C0/0x000D8A10`, а также
-//! constructor/destructor-state `CJiFen`
+//! `0x000D8670/0x000D8350/0x000D8370/0x000D87C0/0x000D8A10`, traversal RVA
+//! `0x000D8690`, а также constructor/destructor-state `CJiFen`
 //! RVA `0x000D8280/0x000D82E0` и его folded container-контракт —
 //! `IMPLEMENTED`; остальные wallet-операции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Точная пара:
@@ -45,6 +45,7 @@
 
 use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsfactory::{GoodsBasePropertiesRegistry, unserialize_goods};
+use super::super::listener::ccontainerlistener::{CContainerListener, TraversedContainerObject};
 use super::cwallet::CWallet;
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
 use crate::public::guid::CGuid;
@@ -188,6 +189,14 @@ impl CWallet {
     /// Возвращает единственную позицию `0` при полном GUID-совпадении.
     pub(crate) fn query_goods_position(&self, ex_id: &CGuid) -> Option<u32> {
         self.find(ex_id).map(|_| 0)
+    }
+
+    /// Передаёт единственный non-null slot listener-у и игнорирует его `int` result.
+    pub(crate) fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
+        let (Some(listener), Some(goods)) = (listener, self.gold_coins.as_deref()) else {
+            return;
+        };
+        let _ = listener.on_traversing_container(TraversedContainerObject::Goods(goods));
     }
 
     /// Кодирует marker и возможный полный goods-wire.
@@ -482,7 +491,7 @@ impl CWallet {
 
 // ============================================================================
 // FUNCTION: CWallet::TraversingContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cjifen.cpp:158
@@ -490,6 +499,7 @@ impl CWallet {
 // ADDRESS: 004d8690
 // PROTOTYPE: void __thiscall TraversingContainer(CContainerListener * param_1)
 //
+// IMPLEMENTED выше через общий safe listener trait; null не вызывает callback.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

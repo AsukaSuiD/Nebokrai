@@ -37,6 +37,9 @@
 //! lock. DB diagnostic logging исключён как техническая замена, не влияющая на
 //! ownership или результат. Process-global gold index передаётся wallet-слою
 //! явно уже разрешённым значением.
+//! `CLargess::AddGoldCoin` делает статически qualified base-вызов и тем самым
+//! намеренно обходит bank lock; Rust compatibility-adapter ниже делегирует без
+//! собственной lock-проверки.
 
 use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
@@ -138,6 +141,17 @@ impl CBank {
             return Some(goods);
         }
         self.wallet_state.add_from_db(position, goods)
+    }
+
+    /// Сохраняет exact qualified `CWallet`-вызов largess, обходящий bank lock.
+    pub(crate) fn add_gold_coin_of_largess(
+        &mut self,
+        position: u32,
+        goods: Box<CGoods>,
+        gold_coin_limit: u32,
+    ) -> Result<Option<Box<CGoods>>, GoodsCodecError> {
+        self.wallet_state
+            .add_gold_coin_of_largess(position, goods, gold_coin_limit)
     }
 
     /// Замораживает единственный bank-slot без изменения lock-state.
