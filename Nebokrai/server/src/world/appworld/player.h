@@ -108,6 +108,11 @@ public:
     void SetFactionDataReceived(bool value) noexcept { m_FactionDataReceived = value; }
     void SetCountry(std::uint8_t value) noexcept { m_Country = value; }
     void SetContribute(std::int32_t value) noexcept { m_Contribute = value; }
+    void UpdateJjcSummary(std::uint8_t level,
+                          std::uint32_t jjcLevel,
+                          std::uint32_t jjcScore,
+                          std::span<const std::uint16_t, 8> counters) noexcept;
+    void UpdateJjcApplication(std::uint8_t level, std::uint32_t jjcLevel) noexcept;
 
     [[nodiscard]] std::span<std::uint8_t, BasePropertyWireSize> BaseProperty() noexcept
     { return m_BaseProperty; }

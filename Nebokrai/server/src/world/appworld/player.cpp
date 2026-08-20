@@ -36,6 +36,8 @@ constexpr std::size_t LightningFlagsOffset = 0x180;
 constexpr std::size_t LightningUp60Offset = 0x184;
 constexpr std::size_t LightningPillOffset = 0x186;
 constexpr std::size_t LightningStampOffset = 0x188;
+constexpr std::size_t JjcLevelOffset = 0x174;
+constexpr std::size_t JjcScoreOffset = 0x178;
 
 template <class T>
 void Append(std::vector<std::uint8_t>& output, const T& value)
@@ -188,6 +190,24 @@ CPlayer::CPlayer(const CGoodsFactory& goodsFactory)
 std::uint8_t CPlayer::GetLevel() const noexcept
 {
     return m_BaseProperty[LevelOffset];
+}
+
+void CPlayer::UpdateJjcSummary(const std::uint8_t level,
+                               const std::uint32_t jjcLevel,
+                               const std::uint32_t jjcScore,
+                               const std::span<const std::uint16_t, 8> counters) noexcept
+{
+    m_BaseProperty[LevelOffset] = level;
+    Write(m_BaseProperty, JjcLevelOffset, jjcLevel);
+    Write(m_BaseProperty, JjcScoreOffset, jjcScore);
+    std::memcpy(m_JjcData.data(), counters.data(), m_JjcData.size());
+}
+
+void CPlayer::UpdateJjcApplication(const std::uint8_t level,
+                                   const std::uint32_t jjcLevel) noexcept
+{
+    m_BaseProperty[LevelOffset] = level;
+    Write(m_BaseProperty, JjcLevelOffset, jjcLevel);
 }
 
 bool CPlayer::AddToByteArray(std::vector<std::uint8_t>& output, bool includeChild) const

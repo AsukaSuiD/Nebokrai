@@ -303,6 +303,22 @@ bool CGame::LoadRegions(const std::filesystem::path& runtimeDirectory, std::stri
                 error = "повреждены параметры войны региона " + std::to_string(id); return false;
             }
         }
+        if (auto* countryWar = dynamic_cast<WorldCountryWarRegion*>(region.get())) {
+            const auto countrySetup = regionFile({".country", ".Country"});
+            if (!countrySetup || !countryWar->LoadCountrySetup(*countrySetup)) {
+                error = "повреждены параметры войны стран региона " + std::to_string(id);
+                return false;
+            }
+        }
+        if (auto* city = dynamic_cast<CWorldCityRegion*>(region.get())) {
+            const auto citySetup = regionFile({".city", ".City"});
+            if (!citySetup || !city->LoadCitySetup(*citySetup, [this](const std::string_view id) {
+                    return m_Strings.Resolve(id);
+                })) {
+                error = "повреждены параметры города региона " + std::to_string(id);
+                return false;
+            }
+        }
         if (!AddRegion(std::move(region), gameServerIndex, type)) {
             error = "повторяющийся регион " + std::to_string(id); return false;
         }

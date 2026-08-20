@@ -19,6 +19,12 @@ bool CJJcSystem::Apply(const std::int32_t player,JjcInfo info)
 
 bool CJJcSystem::Quit(const std::int32_t player){return m_Queue.erase(player)>0;}
 
+const JjcInfo* CJJcSystem::QueryPlayer(const std::int32_t player) const noexcept
+{const auto value=m_Queue.find(player);return value==m_Queue.end()?nullptr:&value->second;}
+
+const JjcFight* CJJcSystem::QueryFight(const std::int32_t region) const noexcept
+{const auto value=m_Fights.find(region);return value==m_Fights.end()?nullptr:&value->second;}
+
 std::int32_t CJJcSystem::LevelStep(const std::uint32_t level) const noexcept
 {for(const auto& [range,step]:m_LevelSteps)if(level>=static_cast<std::uint32_t>(range.first)&&level<=static_cast<std::uint32_t>(range.second))return step;return 0;}
 
@@ -31,11 +37,28 @@ std::optional<std::int32_t> CJJcSystem::MatchOpponent(const std::int32_t player)
 std::optional<std::int32_t> CJJcSystem::AcquireRegion()
 {if(m_AvailableRegions.empty())return std::nullopt;const auto id=*m_AvailableRegions.begin();m_AvailableRegions.erase(m_AvailableRegions.begin());m_UsedRegions.insert(id);return id;}
 
+bool CJJcSystem::ReleaseRegion(const std::int32_t region) noexcept
+{
+    if(m_Fights.contains(region)||m_UsedRegions.erase(region)==0)return false;
+    m_AvailableRegions.insert(region);return true;
+}
+
 bool CJJcSystem::StartFight(const std::int32_t region,const std::int32_t first,const std::int32_t second,const std::int32_t now)
-{if(!m_UsedRegions.contains(region)||!m_Queue.contains(first)||!m_Queue.contains(second))return false;m_Queue.erase(first);m_Queue.erase(second);return m_Fights.emplace(region,JjcFight{region,first,second,now}).second;}
+{
+    if(!m_UsedRegions.contains(region)||!m_Queue.contains(first)||!m_Queue.contains(second)||m_Fights.contains(region))return false;
+    auto& firstInfo=m_Queue.at(first);auto& secondInfo=m_Queue.at(second);
+    firstInfo.opponentId=second;secondInfo.opponentId=first;
+    firstInfo.jjcRegionId=region;secondInfo.jjcRegionId=region;
+    firstInfo.startTime=now;secondInfo.startTime=now;
+    return m_Fights.emplace(region,JjcFight{region,first,second,now}).second;
+}
 
 bool CJJcSystem::EndFight(const std::int32_t region)
-{if(m_Fights.erase(region)==0)return false;m_UsedRegions.erase(region);m_AvailableRegions.insert(region);return true;}
+{
+    const auto fight=m_Fights.find(region);if(fight==m_Fights.end())return false;
+    m_Queue.erase(fight->second.firstPlayerId);m_Queue.erase(fight->second.secondPlayerId);
+    m_Fights.erase(fight);m_UsedRegions.erase(region);m_AvailableRegions.insert(region);return true;
+}
 
 CJJcSystem::RunResult CJJcSystem::Run(const std::int32_t now,const std::int32_t day,const std::int32_t hour,const std::int32_t minute,const std::int32_t timeout)
 {

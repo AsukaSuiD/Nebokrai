@@ -61,6 +61,7 @@ private:
     void HandlePlayerMessage(WorldNet::CMessage& message);
     void HandleCountryMessage(WorldNet::CMessage& message);
     void HandleTeamMessage(WorldNet::CMessage& message);
+    void HandleJjcMessage(WorldNet::CMessage& message);
     void HandleUnhandledMessage(std::string_view family, WorldNet::CMessage& message);
     void QueueServerIo(ServerSnapshot snapshot, std::size_t& count);
 

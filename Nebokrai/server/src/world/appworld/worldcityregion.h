@@ -3,6 +3,7 @@
 #include "worldwarregion.h"
 
 #include <array>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -15,10 +16,13 @@ public:
     CWorldCityRegion() { SetSymbols(3, 3, 2); }
     bool AddToByteArray(std::vector<std::uint8_t>& output,
                         bool includeChild) const override;
-    void SetDefenceSetup(const Setup& setup) noexcept { m_DefenceSetup = setup; }
+    [[nodiscard]] bool LoadCitySetup(
+        std::string_view text,
+        const std::function<std::string(std::string_view)>& resolveName);
+    void SetDefenceSetup(const Setup& setup) noexcept;
     [[nodiscard]] std::vector<Build>& Gates() noexcept { return m_Gates; }
 
 private:
-    std::optional<Setup> m_DefenceSetup;
+    std::array<std::optional<std::int32_t>, 8> m_DefenceSetup;
     std::vector<Build> m_Gates;
 };

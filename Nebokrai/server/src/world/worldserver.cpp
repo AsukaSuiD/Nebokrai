@@ -19,7 +19,9 @@
 #include <chrono>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <limits>
 #include <optional>
 #include <string_view>
@@ -236,18 +238,175 @@ void CWorldServer::InstallMessageHandlers()
         [this](WorldNet::CMessage& message) { HandlePlayerMessage(message); });
     m_Game->MessageHandlers().Set(WorldMessageFamily::Team,
         [this](WorldNet::CMessage& message) { HandleTeamMessage(message); });
+    m_Game->MessageHandlers().Set(WorldMessageFamily::Jjc,
+        [this](WorldNet::CMessage& message) { HandleJjcMessage(message); });
     const std::pair<WorldMessageFamily, std::string_view> unhandled[] = {
         {WorldMessageFamily::Log, "log"}, {WorldMessageFamily::Gma, "gma"},
         {WorldMessageFamily::Other, "other"},
         {WorldMessageFamily::Gm, "gm"},
         {WorldMessageFamily::Organizing, "organizing"}, {WorldMessageFamily::WriteLog, "write-log"},
-        {WorldMessageFamily::ServerAuction, "server-auction"}, {WorldMessageFamily::Jjc, "jjc"},
+        {WorldMessageFamily::ServerAuction, "server-auction"},
         {WorldMessageFamily::MiscAuction, "misc-auction"},
     };
     for (const auto [family, name] : unhandled)
         m_Game->MessageHandlers().Set(family, [this, name](WorldNet::CMessage& message) {
             HandleUnhandledMessage(name, message);
         });
+}
+
+void CWorldServer::HandleJjcMessage(WorldNet::CMessage& message)
+{
+    if (!m_Server || message.MapID() <= 0 || message.SocketID() <= 0 ||
+        m_Server->GetSocketIDByMapID(message.MapID()) != message.SocketID()) {
+        spdlog::warn("WorldServer: JJC-сообщение пришло не от текущего GameServer");
+        return;
+    }
+    const auto bytes = message.WireBytes();
+    std::size_t offset = CBaseMessage::kHeaderSize;
+    auto invalid = [&] { HandleUnhandledMessage("jjc-invalid", message); };
+    auto ownedPlayer = [&](const std::int32_t playerId) -> CPlayer* {
+        CPlayer* player = m_Game->GetPlayer(playerId);
+        const auto* owner = m_Game->GetPlayerGameServer(playerId);
+        return player && owner && owner->connected &&
+                       owner->index == static_cast<std::uint32_t>(message.MapID())
+                   ? player : nullptr;
+    };
+    const auto sender = m_Server->CommandHandle();
+
+    switch (message.GetType()) {
+    case 0x00060901U: {
+        std::int32_t playerId{};
+        std::uint8_t level{};
+        std::uint32_t jjcLevel{}, jjcScore{};
+        std::array<std::uint16_t, 8> counters{};
+        if (!ReadPacket(bytes, offset, playerId) || !ReadPacket(bytes, offset, level) ||
+            !ReadPacket(bytes, offset, jjcLevel) || !ReadPacket(bytes, offset, jjcScore)) {
+            invalid(); return;
+        }
+        for (auto& counter : counters) {
+            if (!ReadPacket(bytes, offset, counter)) { invalid(); return; }
+        }
+        CPlayer* player = ownedPlayer(playerId);
+        if (!player || level == 0 || jjcLevel > std::numeric_limits<std::int32_t>::max() ||
+            jjcScore > std::numeric_limits<std::int32_t>::max() || offset != bytes.size()) {
+            invalid(); return;
+        }
+        player->UpdateJjcSummary(level, jjcLevel, jjcScore, counters);
+        break;
+    }
+    case 0x00060902U: {
+        std::int32_t playerId{}, oldRegion{}, posX{}, posY{};
+        std::uint8_t level{};
+        std::uint32_t jjcLevel{};
+        if (!ReadPacket(bytes, offset, playerId) || !ReadPacket(bytes, offset, level) ||
+            !ReadPacket(bytes, offset, jjcLevel) || !ReadPacket(bytes, offset, oldRegion) ||
+            !ReadPacket(bytes, offset, posX) || !ReadPacket(bytes, offset, posY) ||
+            offset != bytes.size() || level == 0 || oldRegion <= 0) {
+            invalid(); return;
+        }
+        CPlayer* player = ownedPlayer(playerId);
+        if (!player) { invalid(); return; }
+        player->UpdateJjcApplication(level, jjcLevel);
+        JjcInfo info{jjcLevel, oldRegion, posX, posY, 0, 0, 0};
+        std::int32_t result{};
+        if (!m_Game->Jjc().Apply(playerId, info)) {
+            result = 1;
+        } else {
+            const auto region = m_Game->Jjc().AcquireRegion();
+            if (!region) {
+                static_cast<void>(m_Game->Jjc().Quit(playerId)); result = 4;
+            } else if (const auto opponent = m_Game->Jjc().MatchOpponent(playerId)) {
+                const auto now = static_cast<std::int32_t>(std::time(nullptr));
+                if (!m_Game->Jjc().StartFight(*region, playerId, *opponent, now)) {
+                    static_cast<void>(m_Game->Jjc().ReleaseRegion(*region));
+                    static_cast<void>(m_Game->Jjc().Quit(playerId)); result = 4;
+                } else {
+                    const JjcInfo* first = m_Game->Jjc().QueryPlayer(playerId);
+                    const JjcInfo* second = m_Game->Jjc().QueryPlayer(*opponent);
+                    if (!first || !second) { invalid(); return; }
+                    WorldNet::CMessage regionStart(0x00080503);
+                    regionStart.Add(first, sizeof(*first));
+                    regionStart.Add(second, sizeof(*second));
+                    const auto regionMap = m_Game->GetRegionGameServer(*region).value_or(0);
+                    static_cast<void>(regionStart.SendToMapID(
+                        &sender, static_cast<std::int32_t>(regionMap)));
+                    for (const auto id : {playerId, *opponent}) {
+                        if (const auto* gameServer = m_Game->GetPlayerGameServer(id)) {
+                            WorldNet::CMessage move(0x00080504);
+                            move.Add(id); move.Add(*region);
+                            static_cast<void>(move.SendToMapID(
+                                &sender, static_cast<std::int32_t>(gameServer->index)));
+                        }
+                    }
+                }
+            } else {
+                static_cast<void>(m_Game->Jjc().ReleaseRegion(*region));
+                result = 3;
+            }
+        }
+        if (result != 0) {
+            WorldNet::CMessage response(0x00080502);
+            response.Add(result); response.Add(playerId);
+            static_cast<void>(response.SendToMapID(&sender, message.MapID()));
+        }
+        break;
+    }
+    case 0x00060903U: {
+        std::int32_t playerId{}, regionId{};
+        if (!ReadPacket(bytes, offset, playerId) || !ReadPacket(bytes, offset, regionId) ||
+            offset != bytes.size() || !ownedPlayer(playerId)) { invalid(); return; }
+        if (const JjcInfo* info = m_Game->Jjc().QueryPlayer(playerId);
+            info && info->jjcRegionId != 0 && m_Game->Jjc().QueryFight(info->jjcRegionId)) {
+            static_cast<void>(m_Game->Jjc().EndFight(info->jjcRegionId));
+        } else {
+            static_cast<void>(m_Game->Jjc().Quit(playerId));
+        }
+        break;
+    }
+    case 0x00060904U: {
+        std::int32_t regionId{}, playerId{};
+        if (!ReadPacket(bytes, offset, regionId) || !ReadPacket(bytes, offset, playerId) ||
+            offset != bytes.size()) { invalid(); return; }
+        const JjcFight* fight = m_Game->Jjc().QueryFight(regionId);
+        const auto regionOwner = m_Game->GetRegionGameServer(regionId).value_or(0);
+        if (!fight || regionOwner != static_cast<std::uint32_t>(message.MapID()) ||
+            (fight->firstPlayerId != playerId && fight->secondPlayerId != playerId) ||
+            !m_Game->Jjc().EndFight(regionId)) { invalid(); return; }
+        break;
+    }
+    case 0x00060905U: {
+        std::int32_t playerId{}, requested{};
+        if (!ReadPacket(bytes, offset, playerId) || !ReadPacket(bytes, offset, requested) ||
+            offset != bytes.size() || requested <= 0 || requested > 100 ||
+            !ownedPlayer(playerId)) { invalid(); return; }
+        const auto count = std::min<std::size_t>(
+            static_cast<std::size_t>(requested), m_Game->Jjc().Ranks().size());
+        WorldNet::CMessage response(0x00080508);
+        response.Add(playerId); response.Add(static_cast<std::int32_t>(count));
+        for (std::size_t index{}; index < count; ++index)
+            response.Add(&m_Game->Jjc().Ranks()[index], sizeof(JjcRank));
+        static_cast<void>(response.SendToMapID(&sender, message.MapID()));
+        break;
+    }
+    case 0x00060906U:
+    case 0x00060907U: {
+        std::int32_t timestamp{};
+        if (!ReadPacket(bytes, offset, timestamp) || offset != bytes.size() || timestamp <= 0 ||
+            std::llabs(static_cast<long long>(std::time(nullptr)) - timestamp) > 300) {
+            invalid(); return;
+        }
+        // Имена процедур сброса в PDB не сохранились: подтверждённое событие
+        // рассылается, но выдуманная DB-команда намеренно не выполняется.
+        WorldNet::CMessage response(
+            message.GetType() == 0x00060906U ? 0x00080509 : 0x0008050A);
+        response.Add(timestamp);
+        static_cast<void>(response.SendAll(&sender));
+        break;
+    }
+    default:
+        HandleUnhandledMessage("jjc", message);
+        break;
+    }
 }
 
 void CWorldServer::HandleTeamMessage(WorldNet::CMessage& message)

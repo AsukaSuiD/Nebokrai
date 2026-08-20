@@ -37,8 +37,11 @@ public:
     void ConfigureLevelStep(std::int32_t minimum, std::int32_t maximum, std::int32_t step);
     bool Apply(std::int32_t playerId, JjcInfo info);
     bool Quit(std::int32_t playerId);
+    [[nodiscard]] const JjcInfo* QueryPlayer(std::int32_t playerId) const noexcept;
+    [[nodiscard]] const JjcFight* QueryFight(std::int32_t regionId) const noexcept;
     [[nodiscard]] std::optional<std::int32_t> MatchOpponent(std::int32_t playerId) const noexcept;
     [[nodiscard]] std::optional<std::int32_t> AcquireRegion();
+    bool ReleaseRegion(std::int32_t regionId) noexcept;
     bool StartFight(std::int32_t regionId, std::int32_t first, std::int32_t second, std::int32_t now);
     bool EndFight(std::int32_t regionId);
     [[nodiscard]] RunResult Run(std::int32_t now,

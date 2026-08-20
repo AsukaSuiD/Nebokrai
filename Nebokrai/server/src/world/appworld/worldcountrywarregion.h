@@ -15,6 +15,7 @@ public:
 
     bool AddToByteArray(std::vector<std::uint8_t>& output,
                         bool includeChild) const override;
+    [[nodiscard]] bool LoadCountrySetup(std::string_view text);
 
     [[nodiscard]] std::vector<Gate>& DefendGates() noexcept { return m_DefendGates; }
     [[nodiscard]] std::vector<Gate>& AttackGates() noexcept { return m_AttackGates; }
