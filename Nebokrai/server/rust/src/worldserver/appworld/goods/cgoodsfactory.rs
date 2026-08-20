@@ -1,9 +1,12 @@
 //! Фабрика товаров исторического `WorldServer`.
 //!
-//! Статус `QueryGoodsBaseProperties` RVA `0x00055DB0`,
+//! Статус `QueryGoodsBaseProperties/QueryGoodsName` RVA
+//! `0x00055DB0/0x00055DE0`,
 //! `UnserializeGoods` RVA `0x00055E20` и `QueryGoodsIDByOriginalName` RVA
-//! `0x000566F0`, `CreateGoods/CreateGoodsNoProbability` RVA
-//! `0x00059460/0x000597C0` — `IMPLEMENTED`; остальной корпус ниже остаётся
+//! `0x000566F0`, `QueryGoodsBasePropertiesByOriginalName` RVA `0x00057390`,
+//! `CreateGoods/CreateGoodsNoProbability` RVA
+//! `0x00059460/0x000597C0`, `Release/Load` RVA
+//! `0x00058380/0x00059EE0` — `IMPLEMENTED`; остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -43,12 +46,23 @@
 //! process-global PRNG не подменяется другим алгоритмом: caller передаёт узкий
 //! callback с exact legacy `random(bound)` семантикой. Rust `Box/Vec` заменяют
 //! только allocation/STL plumbing и автоматически освобождают частичный result.
+//!
+//! `Load` открывает файл через `std::fs`, а parser принимает byte-slice и
+//! сохраняет exact `GOODS`-формат, порядок
+//! двух StringTable lookup-ов и построения трёх map-ов. Старые unchecked
+//! `CRFile::ReadData`, ручные `new[]` и утечки при duplicate-id заменены
+//! проверяемым reader-ом и Rust ownership. Для повреждённого/обрезанного файла
+//! возвращается typed-ошибка, а registry остаётся очищенным, как в безопасном
+//! donor-пути; валидный вход и его observable state не меняются.
 
 use std::collections::BTreeMap;
 use std::ffi::CStr;
+use std::path::Path;
 
 use super::cgoods::{CGoods, GoodsCodecError};
-use super::cgoodsbaseproperties::{CGoodsBaseProperties, ICON_TYPE_GROUND};
+use super::cgoodsbaseproperties::{
+    CGoodsBaseProperties, ICON_TYPE_CONTAINER, ICON_TYPE_EQUIPPED, ICON_TYPE_GROUND,
+};
 
 /// Достигнутая lookup-форма static base-properties map.
 pub(crate) type GoodsBasePropertiesRegistry = BTreeMap<u32, Option<CGoodsBaseProperties>>;
@@ -56,12 +70,252 @@ pub(crate) type GoodsBasePropertiesRegistry = BTreeMap<u32, Option<CGoodsBasePro
 /// Достигнутый индекс exact legacy original-name в unsigned goods id.
 pub(crate) type GoodsOriginalNameIndex = BTreeMap<Vec<u8>, u32>;
 
+/// Достигнутый индекс exact legacy localized-name в unsigned goods id.
+pub(crate) type GoodsNameIndex = BTreeMap<Vec<u8>, u32>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GoodsRegistryLoadError {
+    InvalidHeader,
+    UnexpectedEnd {
+        offset: usize,
+        requested: usize,
+        remaining: usize,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum GoodsRegistryFileLoadError {
+    Io(std::io::Error),
+    Format(GoodsRegistryLoadError),
+}
+
+/// Очищает три owner-map в exact исходном порядке.
+pub(crate) fn release_goods_registry(
+    registry: &mut GoodsBasePropertiesRegistry,
+    original_name_index: &mut GoodsOriginalNameIndex,
+    name_index: &mut GoodsNameIndex,
+) {
+    registry.clear();
+    original_name_index.clear();
+    name_index.clear();
+}
+
+/// Открывает config стандартной библиотекой и передаёт exact format parser-у.
+pub(crate) fn load_goods_registry_from_file<ResolveString>(
+    path: impl AsRef<Path>,
+    registry: &mut GoodsBasePropertiesRegistry,
+    original_name_index: &mut GoodsOriginalNameIndex,
+    name_index: &mut GoodsNameIndex,
+    resolve_string_id: &mut ResolveString,
+) -> Result<(), GoodsRegistryFileLoadError>
+where
+    ResolveString: FnMut(&[u8]) -> Option<Vec<u8>>,
+{
+    release_goods_registry(registry, original_name_index, name_index);
+    let source = std::fs::read(path).map_err(GoodsRegistryFileLoadError::Io)?;
+    load_goods_registry(
+        &source,
+        registry,
+        original_name_index,
+        name_index,
+        resolve_string_id,
+    )
+    .map_err(GoodsRegistryFileLoadError::Format)
+}
+
+/// Загружает exact `GOODS`-поток и разрешает два legacy StringTable id записи.
+pub(crate) fn load_goods_registry<ResolveString>(
+    source: &[u8],
+    registry: &mut GoodsBasePropertiesRegistry,
+    original_name_index: &mut GoodsOriginalNameIndex,
+    name_index: &mut GoodsNameIndex,
+    resolve_string_id: &mut ResolveString,
+) -> Result<(), GoodsRegistryLoadError>
+where
+    ResolveString: FnMut(&[u8]) -> Option<Vec<u8>>,
+{
+    release_goods_registry(registry, original_name_index, name_index);
+
+    let mut reader = GoodsConfigReader::new(source);
+    if reader.read_exact(5)? != b"GOODS" {
+        return Err(GoodsRegistryLoadError::InvalidHeader);
+    }
+    let _version = reader.read_u32()?;
+    let goods_count = reader.read_i32()?;
+
+    let mut loaded_registry = GoodsBasePropertiesRegistry::new();
+    let mut loaded_original_name_index = GoodsOriginalNameIndex::new();
+    let mut loaded_name_index = GoodsNameIndex::new();
+    for _ in 0..goods_count.max(0) {
+        let goods_id = reader.read_u32()?;
+        let properties = load_base_properties(&mut reader, resolve_string_id)?;
+        let original_name = properties.get_original_name().to_vec();
+        let name = properties.get_name().to_vec();
+
+        loaded_registry.insert(goods_id, Some(properties));
+        loaded_original_name_index.insert(original_name, goods_id);
+        loaded_name_index.insert(name, goods_id);
+    }
+
+    *registry = loaded_registry;
+    *original_name_index = loaded_original_name_index;
+    *name_index = loaded_name_index;
+    Ok(())
+}
+
+fn load_base_properties<ResolveString>(
+    reader: &mut GoodsConfigReader<'_>,
+    resolve_string_id: &mut ResolveString,
+) -> Result<CGoodsBaseProperties, GoodsRegistryLoadError>
+where
+    ResolveString: FnMut(&[u8]) -> Option<Vec<u8>>,
+{
+    let mut properties = CGoodsBaseProperties::with_constructor_defaults();
+    let original_name = reader.read_legacy_string()?;
+    let name_id = reader.read_legacy_string()?;
+    let name = resolve_legacy_string(resolve_string_id, &name_id);
+    let _ignored_byte = reader.read_u8()?;
+    let price = reader.read_u32()?;
+    let raw_type = reader.read_u32()?;
+    let weight = reader.read_u32()?;
+    properties.set_loaded_scalars(price, weight, raw_type);
+
+    for icon_type in [ICON_TYPE_CONTAINER, ICON_TYPE_GROUND, ICON_TYPE_EQUIPPED] {
+        properties.push_loaded_icon(icon_type, reader.read_u32()?);
+    }
+
+    let _ignored_dword_1 = reader.read_u32()?;
+    let _ignored_dword_2 = reader.read_u32()?;
+    let _ignored_dword_3 = reader.read_u32()?;
+    let _ignored_byte = reader.read_u8()?;
+    let _ignored_dword_4 = reader.read_u32()?;
+    let description_id = reader.read_legacy_string()?;
+    let description = resolve_legacy_string(resolve_string_id, &description_id);
+    properties.set_loaded_names(original_name, name, description);
+
+    let addon_count = reader.read_i32()?;
+    for _ in 0..addon_count.max(0) {
+        let property_type = reader.read_u16()?;
+        let is_enabled = reader.read_u8()? != 0;
+        let is_implicit_attribute = reader.read_u8()? != 0;
+        let first_base_value = reader.read_i32()?;
+        let second_base_value = reader.read_i32()?;
+        let occur_probability = reader.read_u16()?;
+        properties.push_loaded_addon_property(
+            property_type,
+            is_enabled,
+            is_implicit_attribute,
+            first_base_value,
+            second_base_value,
+            occur_probability,
+        );
+    }
+
+    for property_index in 0..addon_count.max(0) as usize {
+        let modifier_count = reader.read_i32()?;
+        for _ in 0..modifier_count.max(0) {
+            let raw = reader.read_exact(16)?;
+            let value_id = u32::from(raw[0]) + 1;
+            let lower_limit = i32::from_le_bytes(raw[4..8].try_into().unwrap());
+            let upper_limit = i32::from_le_bytes(raw[8..12].try_into().unwrap());
+            let probability = u16::from_le_bytes(raw[12..14].try_into().unwrap());
+            let _ = properties.push_loaded_modifier(
+                property_index,
+                value_id,
+                lower_limit,
+                upper_limit,
+                probability,
+            );
+        }
+    }
+    Ok(properties)
+}
+
+fn resolve_legacy_string<ResolveString>(
+    resolve_string_id: &mut ResolveString,
+    string_id: &[u8],
+) -> Vec<u8>
+where
+    ResolveString: FnMut(&[u8]) -> Option<Vec<u8>>,
+{
+    let resolved = resolve_string_id(string_id).unwrap_or_default();
+    truncate_at_nul(&resolved).to_vec()
+}
+
+fn truncate_at_nul(value: &[u8]) -> &[u8] {
+    let length = value
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(value.len());
+    &value[..length]
+}
+
+struct GoodsConfigReader<'source> {
+    source: &'source [u8],
+    cursor: usize,
+}
+
+impl<'source> GoodsConfigReader<'source> {
+    const fn new(source: &'source [u8]) -> Self {
+        Self { source, cursor: 0 }
+    }
+
+    fn read_exact(&mut self, requested: usize) -> Result<&'source [u8], GoodsRegistryLoadError> {
+        let remaining = self.source.len().saturating_sub(self.cursor);
+        let Some(end) = self.cursor.checked_add(requested) else {
+            return Err(GoodsRegistryLoadError::UnexpectedEnd {
+                offset: self.cursor,
+                requested,
+                remaining,
+            });
+        };
+        let Some(value) = self.source.get(self.cursor..end) else {
+            return Err(GoodsRegistryLoadError::UnexpectedEnd {
+                offset: self.cursor,
+                requested,
+                remaining,
+            });
+        };
+        self.cursor = end;
+        Ok(value)
+    }
+
+    fn read_u8(&mut self) -> Result<u8, GoodsRegistryLoadError> {
+        Ok(self.read_exact(1)?[0])
+    }
+
+    fn read_u16(&mut self) -> Result<u16, GoodsRegistryLoadError> {
+        Ok(u16::from_le_bytes(self.read_exact(2)?.try_into().unwrap()))
+    }
+
+    fn read_u32(&mut self) -> Result<u32, GoodsRegistryLoadError> {
+        Ok(u32::from_le_bytes(self.read_exact(4)?.try_into().unwrap()))
+    }
+
+    fn read_i32(&mut self) -> Result<i32, GoodsRegistryLoadError> {
+        Ok(i32::from_le_bytes(self.read_exact(4)?.try_into().unwrap()))
+    }
+
+    fn read_legacy_string(&mut self) -> Result<Vec<u8>, GoodsRegistryLoadError> {
+        let length = self.read_u32()? as usize;
+        Ok(truncate_at_nul(self.read_exact(length)?).to_vec())
+    }
+}
+
 /// Возвращает non-null base-properties для точного unsigned index.
 pub(crate) fn query_goods_base_properties(
     registry: &GoodsBasePropertiesRegistry,
     index: u32,
 ) -> Option<&CGoodsBaseProperties> {
     registry.get(&index).and_then(Option::as_ref)
+}
+
+/// Возвращает byte-exact localized-name известного non-null товара.
+pub(crate) fn query_goods_name(
+    registry: &GoodsBasePropertiesRegistry,
+    index: u32,
+) -> Option<&[u8]> {
+    query_goods_base_properties(registry, index).map(CGoodsBaseProperties::get_name)
 }
 
 /// Возвращает goods id по точному legacy original-name или исходный `0`.
@@ -72,6 +326,16 @@ pub(crate) fn query_goods_id_by_original_name(
     original_name
         .and_then(|name| index.get(name.to_bytes()).copied())
         .unwrap_or(0)
+}
+
+/// Сохраняет исходную двухступенчатую семантику: missing name сначала даёт id 0.
+pub(crate) fn query_goods_base_properties_by_original_name<'registry>(
+    registry: &'registry GoodsBasePropertiesRegistry,
+    original_name_index: &GoodsOriginalNameIndex,
+    original_name: Option<&CStr>,
+) -> Option<&'registry CGoodsBaseProperties> {
+    let goods_id = query_goods_id_by_original_name(original_name_index, original_name);
+    query_goods_base_properties(registry, goods_id)
 }
 
 /// Декодирует heap-owned товар и отбрасывает неизвестный base-properties index.
@@ -207,7 +471,7 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 
 // ============================================================================
 // FUNCTION: CGoodsFactory::QueryGoodsName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsfactory.cpp:76
@@ -215,6 +479,8 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 // ADDRESS: 00455de0
 // PROTOTYPE: char * __cdecl QueryGoodsName(ulong param_1)
 //
+// IMPLEMENTED выше как `query_goods_name`; lookup miss и null mapped-value
+// остаются одним `None`, successful result заимствует bytes owner-записи.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -329,7 +595,7 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 
 // ============================================================================
 // FUNCTION: CGoodsFactory::QueryGoodsBasePropertiesByOriginalName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsfactory.cpp:50
@@ -337,13 +603,15 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 // ADDRESS: 00457390
 // PROTOTYPE: CGoodsBaseProperties * __cdecl QueryGoodsBasePropertiesByOriginalName(char * param_1)
 //
+// IMPLEMENTED выше как `query_goods_base_properties_by_original_name`; важная
+// двухступенчатая семантика id `0` при отсутствующем имени сохранена буквально.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGoodsFactory::Release
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsfactory.cpp:312
@@ -351,6 +619,8 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 // ADDRESS: 00458380
 // PROTOTYPE: void __cdecl Release(void)
 //
+// IMPLEMENTED выше как `release_goods_registry`; три `BTreeMap::clear`
+// сохраняют exact порядок очистки, а Rust `Drop` заменяет ручной delete/STL.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -389,7 +659,7 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 
 // ============================================================================
 // FUNCTION: CGoodsFactory::Load
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsfactory.cpp:396
@@ -397,6 +667,9 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 // ADDRESS: 00459ee0
 // PROTOTYPE: int __cdecl Load(char * param_1)
 //
+// IMPLEMENTED выше как `load_goods_registry`; exact ASM `0x00459EE0..0045A7B9`
+// подтверждает layout, signed loop-counts, type/equip mapping, resolver-order и
+// три финальных map insert-а. `std::fs` заменяет только CRFile/debug plumbing.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
