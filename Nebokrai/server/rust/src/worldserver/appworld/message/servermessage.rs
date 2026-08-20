@@ -2,6 +2,7 @@
 //!
 //! Статус владельца: `IMPLEMENTED` для `gameserv_conn_log`,
 //! внутрипроцессного события `0x3FC03`,
+//! начальной части регистрации GameServer в `0x5FA01`,
 //! snapshot/cleanup хвоста `0x5FA03`, обычных opcode `0x4FC01..=0x4FC03` и
 //! `0x5FA0A..=0x5FA0D` из
 //! `OnServerMessage` RVA `0x000ADCF0`;
@@ -33,6 +34,26 @@
 //! и неприоритетно ставит его текущему nullable LoginServer client. Оба поля
 //! остаются беззнаковыми 32-битными словами; отсутствие client сохраняет
 //! исходный нулевой результат, а проигнорированный `Send` доступен вызывающему.
+//!
+//! Начальная часть `0x5FA01` читает signed `char`, 32-битный порт и ограниченную
+//! C-строку IP, ищет её в настроенном реестре GameServer, ставит
+//! `bConnected`, затем строго по порядку назначает socket map-ID, достигает
+//! операторского сообщения о подключении, условно рассылает `0x80403` для
+//! индекса `5`,
+//! посылает `0x7F80D` и вызывает `gameserv_conn_log`. Неизвестный адрес
+//! прекращает ветку после чтения payload. Отсутствующий сетевой owner и ещё не
+//! материализованный `CGlobeSetup::bAuction` выражены позиционными безопасными
+//! границами после уже выполненных эффектов, а не выдуманными значениями.
+//!
+//! Реальные `serverSetup.ini` содержат канонический `95.78.126.81` и hostname
+//! `miracle_misc`: первый переводится в x86 IPv4 word, второй точно даёт
+//! `INADDR_NONE`. Для иных числовых форм, которые старый `inet_addr` мог читать
+//! как octal/hex/сокращённый адрес, отправка `0x1FE05` останавливается отдельной
+//! границей после `0x7F80D`; строгий parser стандартной библиотеки не выдаётся
+//! за полную Winsock-грамматику. Ненулевой sync flag завершает ветку, нулевой
+//! возвращает типизированную обязанность продолжить большую цепочку начальной
+//! конфигурации —
+//! она не объявляется отправленной частично.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -97,9 +118,10 @@ use crate::worldserver::appworld::organizingsystem::factionwarsys::CFactionWarSy
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
 use crate::worldserver::appworld::player::PlayerPropertyCoefficients;
 use crate::worldserver::worldserver::game::{
-    CGame, WorldCdkeySnapshot, WorldCdkeySnapshotError, WorldGenerateDbDataBlock,
-    WorldGenerateDbDataReport, WorldPingGameServerInfo, WorldSaveThreadHandleState,
-    WorldSaveThreadLaunchRequest, prepare_save_thread_launch,
+    CGame, WorldCdkeySnapshot, WorldCdkeySnapshotError, WorldGameServerLookupError,
+    WorldGenerateDbDataBlock, WorldGenerateDbDataReport, WorldGlobeVariablesDelivery,
+    WorldPingGameServerInfo, WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest,
+    prepare_save_thread_launch,
 };
 use crate::worldserver::worldserver::honorranks::CHonorRanks;
 
@@ -134,6 +156,7 @@ pub(crate) struct WorldCompletedSaveResponseLaunchReport {
 /// Результат исполненного обычного opcode `OnServerMessage`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldServerMessageOutcome {
+    GameServerConnection(WorldGameServerConnectionReport),
     GameServerBroadcast(WorldGameServerBroadcast),
     GameServerPingResponseRecorded(WorldGameServerPingResponse),
     GameServerPingStarted(WorldGameServerPingStart),
@@ -141,6 +164,50 @@ pub(crate) enum WorldServerMessageOutcome {
     LoginServerIdentityAssigned(WorldLoginServerIdentity),
     OpaqueFieldsRead(WorldOpaqueServerFields),
     RegionMessageRelayed(WorldRegionMessageRelay),
+}
+
+/// Следующая точная позиция ветки `0x5FA01` после достигнутой начальной части.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldGameServerConnectionContinuation {
+    NotConfigured,
+    NetworkOwnerUnavailable,
+    AuctionStateUnavailable,
+    LegacyIpv4SyntaxUnknown,
+    Complete,
+    InitialConfigurationPending {
+        socket_id: i32,
+        game_server_index: u32,
+    },
+    RegistryPortUnavailable {
+        game_server_index: u32,
+    },
+}
+
+/// Условный broadcast auction-state для специального GameServer `5`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldGameServerAuctionBroadcast {
+    pub(crate) message_type: i32,
+    pub(crate) enabled: bool,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+/// Наблюдаемые эффекты достигнутой части `OnServerMessage(0x5FA01)`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldGameServerConnectionReport {
+    pub(crate) sync_flag: i8,
+    pub(crate) sync_flag_complete: bool,
+    pub(crate) port: u32,
+    pub(crate) port_complete: bool,
+    pub(crate) ip: Vec<u8>,
+    pub(crate) socket_id: i32,
+    pub(crate) game_server_index: Option<u32>,
+    pub(crate) previous_connected: Option<bool>,
+    pub(crate) route_assignment: Option<i32>,
+    pub(crate) connected_notice: bool,
+    pub(crate) auction: Option<WorldGameServerAuctionBroadcast>,
+    pub(crate) globe_variables: Option<WorldGlobeVariablesDelivery>,
+    pub(crate) login_log: Option<WorldGameServerConnectedLog>,
+    pub(crate) continuation: WorldGameServerConnectionContinuation,
 }
 
 /// Итог пустого broadcast из ветки `0x4FC02`.
@@ -412,6 +479,11 @@ pub(crate) fn on_server_message(
                 }),
             )
         }
+        0x0005_FA01 => {
+            WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::GameServerConnection(
+                on_game_server_connected(game, &mut message, None),
+            ))
+        }
         0x0005_FA0A => {
             let decoded = message.base_mut().get_long();
             let player_count = decoded.unwrap_or(0);
@@ -518,6 +590,121 @@ pub(crate) fn on_server_message(
         }
         _ => WorldServerMessageDispatch::Pending(message),
     }
+}
+
+/// Исполняет начало `0x5FA01`; auction-state остаётся у отдельного setup-owner-а.
+pub(crate) fn on_game_server_connected(
+    game: &mut CGame,
+    message: &mut CMessage,
+    auction_enabled: Option<bool>,
+) -> WorldGameServerConnectionReport {
+    let decoded_sync_flag = message.base_mut().get_char();
+    let sync_flag = decoded_sync_flag.unwrap_or(0);
+    let decoded_port = message.base_mut().get_long();
+    let port = decoded_port.unwrap_or(0) as u32;
+    let ip = message
+        .base_mut()
+        .get_str_bytes(0x100)
+        .expect("ненулевая GetStr-граница задана точным owner-ом");
+    let socket_id = message.socket_id();
+
+    let mut report = WorldGameServerConnectionReport {
+        sync_flag,
+        sync_flag_complete: decoded_sync_flag.is_some(),
+        port,
+        port_complete: decoded_port.is_some(),
+        ip,
+        socket_id,
+        game_server_index: None,
+        previous_connected: None,
+        route_assignment: None,
+        connected_notice: false,
+        auction: None,
+        globe_variables: None,
+        login_log: None,
+        continuation: WorldGameServerConnectionContinuation::NotConfigured,
+    };
+
+    let connection = match game.connect_game_server_by_address(&report.ip, report.port) {
+        Ok(Some(connection)) => connection,
+        Ok(None) => return report,
+        Err(error) => {
+            let WorldGameServerLookupError::PortUnavailable { index } = error;
+            report.continuation = WorldGameServerConnectionContinuation::RegistryPortUnavailable {
+                game_server_index: index,
+            };
+            return report;
+        }
+    };
+    report.game_server_index = Some(connection.index);
+    report.previous_connected = Some(connection.previous_connected);
+
+    let Some(sender) = game.current_game_server_sender() else {
+        report.continuation = WorldGameServerConnectionContinuation::NetworkOwnerUnavailable;
+        return report;
+    };
+    report.route_assignment = Some(sender.set_client_map_id(socket_id, connection.index as i32));
+    report.connected_notice = true;
+
+    if connection.index == 5 {
+        let Some(enabled) = auction_enabled else {
+            report.continuation = WorldGameServerConnectionContinuation::AuctionStateUnavailable;
+            return report;
+        };
+        let mut notice = CMessage::new(0x0008_0403);
+        notice.base_mut().add_ulong(u32::from(enabled));
+        report.auction = Some(WorldGameServerAuctionBroadcast {
+            message_type: 0x0008_0403,
+            enabled,
+            delivery: notice.send_all(Some(&sender)),
+        });
+    }
+
+    report.globe_variables = Some(game.send_globe_variables_to_game_server(socket_id));
+    let peer_ipv4 = match observed_inet_addr(&report.ip) {
+        Ok(peer_ipv4) => peer_ipv4,
+        Err(()) => {
+            report.continuation = WorldGameServerConnectionContinuation::LegacyIpv4SyntaxUnknown;
+            return report;
+        }
+    };
+    report.login_log = Some(game_server_connected_log(game, peer_ipv4, connection.index));
+    report.continuation = if sync_flag == 0 {
+        WorldGameServerConnectionContinuation::InitialConfigurationPending {
+            socket_id,
+            game_server_index: connection.index,
+        }
+    } else {
+        WorldGameServerConnectionContinuation::Complete
+    };
+    report
+}
+
+fn observed_inet_addr(ip: &[u8]) -> Result<u32, ()> {
+    if let Ok(text) = std::str::from_utf8(ip)
+        && let Ok(address) = text.parse::<Ipv4Addr>()
+    {
+        return Ok(u32::from_le_bytes(address.octets()));
+    }
+    if looks_like_legacy_numeric_ipv4(ip) {
+        return Err(());
+    }
+    Ok(u32::MAX)
+}
+
+fn looks_like_legacy_numeric_ipv4(ip: &[u8]) -> bool {
+    if ip.is_empty() {
+        return false;
+    }
+    let parts = ip.split(|byte| *byte == b'.').collect::<Vec<_>>();
+    (1..=4).contains(&parts.len())
+        && parts.iter().all(|part| {
+            !part.is_empty()
+                && (part.iter().all(u8::is_ascii_digit)
+                    || (part.starts_with(b"0x") || part.starts_with(b"0X"))
+                        && part.len() > 2
+                        && part[2..].iter().all(u8::is_ascii_hexdigit))
+        })
 }
 
 fn format_legacy_ipv4(raw: u32) -> Vec<u8> {

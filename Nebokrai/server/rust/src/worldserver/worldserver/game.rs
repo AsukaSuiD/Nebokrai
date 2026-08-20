@@ -3927,6 +3927,13 @@ pub(crate) struct WorldGameServerEntry {
     pub(crate) received_player_data: Option<i32>,
 }
 
+/// Точный переход состояния `tagGameServer::bConnected = true` из `0x5FA01`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldGameServerConnectionState {
+    pub(crate) index: u32,
+    pub(crate) previous_connected: bool,
+}
+
 /// Безопасное содержимое точного 16-байтового `CGame::tagGlobeVariable`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct WorldGlobeVariables {
@@ -9196,6 +9203,30 @@ impl CGame {
             }
         }
         Ok(None)
+    }
+
+    /// Находит настроенный адрес и безусловно ставит его `bConnected`.
+    pub(crate) fn connect_game_server_by_address(
+        &mut self,
+        ip: &[u8],
+        port: u32,
+    ) -> Result<Option<WorldGameServerConnectionState>, WorldGameServerLookupError> {
+        let index = self
+            .game_server_by_address(ip, port)?
+            .map(|game_server| game_server.index);
+        let Some(index) = index else {
+            return Ok(None);
+        };
+        let game_server = self
+            .game_servers
+            .get_mut(&index)
+            .expect("адресный поиск вернул живой ключ того же реестра");
+        let previous_connected = game_server.connected;
+        game_server.connected = true;
+        Ok(Some(WorldGameServerConnectionState {
+            index,
+            previous_connected,
+        }))
     }
 
     /// Возвращает запись по unsigned numeric ID либо старый `nullptr` как `None`.
