@@ -6,7 +6,8 @@
 //! `0x000566F0`, `QueryGoodsBasePropertiesByOriginalName` RVA `0x00057390`,
 //! `CreateGoods/CreateGoodsNoProbability` RVA
 //! `0x00059460/0x000597C0`, `Release/Load` RVA
-//! `0x00058380/0x00059EE0` — `IMPLEMENTED`; остальной корпус ниже остаётся
+//! `0x00058380/0x00059EE0`, `Serialize` RVA `0x00056130` — `IMPLEMENTED`;
+//! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -56,12 +57,15 @@
 //! donor-пути; валидный вход и его observable state не меняются.
 
 use std::collections::BTreeMap;
+use std::error::Error;
 use std::ffi::CStr;
+use std::fmt;
 use std::path::Path;
 
 use super::cgoods::{CGoods, GoodsCodecError};
 use super::cgoodsbaseproperties::{
-    CGoodsBaseProperties, ICON_TYPE_CONTAINER, ICON_TYPE_EQUIPPED, ICON_TYPE_GROUND,
+    CGoodsBaseProperties, GoodsBasePropertiesCodecError, ICON_TYPE_CONTAINER, ICON_TYPE_EQUIPPED,
+    ICON_TYPE_GROUND,
 };
 
 /// Достигнутая lookup-форма static base-properties map.
@@ -87,6 +91,40 @@ pub(crate) enum GoodsRegistryLoadError {
 pub(crate) enum GoodsRegistryFileLoadError {
     Io(std::io::Error),
     Format(GoodsRegistryLoadError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GoodsRegistrySerializeError {
+    CollectionLengthOutsideLegacyRange { count: usize },
+    MissingBaseProperties { goods_id: u32 },
+    BaseProperties(GoodsBasePropertiesCodecError),
+}
+
+impl fmt::Display for GoodsRegistrySerializeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CollectionLengthOutsideLegacyRange { count } => write!(
+                formatter,
+                "registry содержит {count} записей вне 32-битного legacy-диапазона"
+            ),
+            Self::MissingBaseProperties { goods_id } => {
+                write!(
+                    formatter,
+                    "registry goods id {goods_id} содержит null properties"
+                )
+            }
+            Self::BaseProperties(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for GoodsRegistrySerializeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::BaseProperties(error) => Some(error),
+            _ => None,
+        }
+    }
 }
 
 /// Очищает три owner-map в exact исходном порядке.
@@ -160,6 +198,29 @@ where
     *registry = loaded_registry;
     *original_name_index = loaded_original_name_index;
     *name_index = loaded_name_index;
+    Ok(())
+}
+
+/// Кодирует registry в exact ascending-id wire фабрики.
+pub(crate) fn serialize_goods_registry(
+    registry: &GoodsBasePropertiesRegistry,
+    destination: &mut Vec<u8>,
+) -> Result<(), GoodsRegistrySerializeError> {
+    let count = u32::try_from(registry.len()).map_err(|_| {
+        GoodsRegistrySerializeError::CollectionLengthOutsideLegacyRange {
+            count: registry.len(),
+        }
+    })?;
+    destination.extend_from_slice(&count.to_le_bytes());
+    for (&goods_id, properties) in registry {
+        let properties = properties
+            .as_ref()
+            .ok_or(GoodsRegistrySerializeError::MissingBaseProperties { goods_id })?;
+        destination.extend_from_slice(&goods_id.to_le_bytes());
+        properties
+            .serialize(destination)
+            .map_err(GoodsRegistrySerializeError::BaseProperties)?;
+    }
     Ok(())
 }
 
@@ -513,7 +574,7 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 
 // ============================================================================
 // FUNCTION: CGoodsFactory::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsfactory.cpp:122
@@ -521,6 +582,8 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 // ADDRESS: 00456130
 // PROTOTYPE: int __cdecl Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, int param_2)
 //
+// IMPLEMENTED выше как `serialize_goods_registry`; `BTreeMap` сохраняет exact
+// ascending unsigned id-order, а null legacy pointer становится typed-ошибкой.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

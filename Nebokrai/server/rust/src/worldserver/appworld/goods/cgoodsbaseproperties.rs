@@ -1,6 +1,7 @@
 //! Владелец базовых свойств товаров исторического `WorldServer`.
 //!
-//! Статус constructor RVA `0x000D5010`,
+//! Статус constructor RVA `0x000D5010`, `Serialize` RVA `0x000D4BD0`,
+//! `tagAddonProperty::Serialize` RVA `0x000D4B20`,
 //! `GetPrice/GetWeight/GetName/GetDescribe/GetIconID` RVA
 //! `0x000D4930/0x000D4940/0x000D4960/0x000D4970/0x000D4980`,
 //! `GetGoodsType/GetEquipPlace` RVA `0x000DEA40/0x000DEA50`,
@@ -29,12 +30,17 @@
 //! `CGoodsFactory::Load`: original/localized name, описание, цену, вес, тип,
 //! equip-place, три icon-а и addon-ы с modifier-ами. Неиспользуемые поля
 //! входного формата фабрика только потребляет, как и оригинал.
+//! Serialize намеренно не включает description: exact wire-owner пишет два
+//! C-string имени, type/place/price/weight, icons и полное addon-дерево.
 //!
 //! `GetAddonPropertyValues` останавливается на первом property совпавшего типа
 //! и копирует все его values. Заимствованный slice заменяет временную копию
 //! только внутри синхронного read-only вызова `CGoods::GetMaxStackNumber`:
 //! порядок, первое совпадение и значения сохраняются, а STL allocation/copy/
 //! destruction не являются наблюдаемым контрактом.
+
+use std::error::Error;
+use std::fmt;
 
 pub(crate) const GOODS_TYPE_USELESS: i32 = 0;
 pub(crate) const GOODS_TYPE_CONSUMABLE: i32 = 1;
@@ -45,6 +51,24 @@ pub(crate) const GAP_WEAPON_LEVEL: i32 = 0x30;
 pub(crate) const ICON_TYPE_CONTAINER: i32 = 0;
 pub(crate) const ICON_TYPE_GROUND: i32 = 1;
 pub(crate) const ICON_TYPE_EQUIPPED: i32 = 2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GoodsBasePropertiesCodecError {
+    field: &'static str,
+    count: usize,
+}
+
+impl fmt::Display for GoodsBasePropertiesCodecError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "коллекция {} содержит {} элементов вне 32-битного legacy-диапазона",
+            self.field, self.count
+        )
+    }
+}
+
+impl Error for GoodsBasePropertiesCodecError {}
 
 struct GoodsBaseIcon {
     icon_type: i32,
@@ -180,6 +204,33 @@ impl CGoodsBaseProperties {
             .map_or(0, |property| property.occur_probability)
     }
 
+    /// Кодирует exact client-facing base-properties wire без description.
+    pub(crate) fn serialize(
+        &self,
+        destination: &mut Vec<u8>,
+    ) -> Result<(), GoodsBasePropertiesCodecError> {
+        append_c_string(destination, &self.original_name);
+        append_c_string(destination, &self.name);
+        destination.extend_from_slice(&self.goods_type.to_le_bytes());
+        destination.extend_from_slice(&self.equip_place.to_le_bytes());
+        destination.extend_from_slice(&self.price.to_le_bytes());
+        destination.extend_from_slice(&self.weight.to_le_bytes());
+        append_count(destination, "m_vIcons", self.icons.len())?;
+        for icon in &self.icons {
+            destination.extend_from_slice(&icon.icon_type.to_le_bytes());
+            destination.extend_from_slice(&icon.icon_id.to_le_bytes());
+        }
+        append_count(
+            destination,
+            "m_vAddonProperties",
+            self.addon_properties.len(),
+        )?;
+        for property in &self.addon_properties {
+            property.serialize(destination)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn set_loaded_names(
         &mut self,
         original_name: Vec<u8>,
@@ -286,6 +337,21 @@ impl GoodsBaseAddonPropertyValue {
     pub(super) fn modifiers(&self) -> &[GoodsBaseAddonPropertyValueModifier] {
         &self.modifiers
     }
+
+    fn serialize(&self, destination: &mut Vec<u8>) -> Result<(), GoodsBasePropertiesCodecError> {
+        destination.extend_from_slice(&self.id.to_le_bytes());
+        destination.extend_from_slice(&self.base_value.to_le_bytes());
+        destination.extend_from_slice(&self.is_modifier_enabled.to_le_bytes());
+        append_count(
+            destination,
+            "tagAddonPropertyValue.vModifiers",
+            self.modifiers.len(),
+        )?;
+        for modifier in &self.modifiers {
+            modifier.serialize(destination);
+        }
+        Ok(())
+    }
 }
 
 impl GoodsBaseAddonPropertyValueModifier {
@@ -300,6 +366,46 @@ impl GoodsBaseAddonPropertyValueModifier {
     pub(super) const fn upper_limit(&self) -> i32 {
         self.upper_limit
     }
+
+    fn serialize(&self, destination: &mut Vec<u8>) {
+        destination.extend_from_slice(&self.probability.to_le_bytes());
+        destination.extend_from_slice(&self.lower_limit.to_le_bytes());
+        destination.extend_from_slice(&self.upper_limit.to_le_bytes());
+    }
+}
+
+impl GoodsBaseAddonProperty {
+    fn serialize(&self, destination: &mut Vec<u8>) -> Result<(), GoodsBasePropertiesCodecError> {
+        destination.extend_from_slice(&self.property_type.to_le_bytes());
+        destination.extend_from_slice(&self.is_enabled.to_le_bytes());
+        destination.extend_from_slice(&self.is_implicit_attribute.to_le_bytes());
+        destination.extend_from_slice(&self.occur_probability.to_le_bytes());
+        append_count(destination, "tagAddonProperty.vValues", self.values.len())?;
+        for value in &self.values {
+            value.serialize(destination)?;
+        }
+        Ok(())
+    }
+}
+
+fn append_c_string(destination: &mut Vec<u8>, value: &[u8]) {
+    let visible = value
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(value.len());
+    destination.extend_from_slice(&value[..visible]);
+    destination.push(0);
+}
+
+fn append_count(
+    destination: &mut Vec<u8>,
+    field: &'static str,
+    count: usize,
+) -> Result<(), GoodsBasePropertiesCodecError> {
+    let legacy_count =
+        u32::try_from(count).map_err(|_| GoodsBasePropertiesCodecError { field, count })?;
+    destination.extend_from_slice(&legacy_count.to_le_bytes());
+    Ok(())
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
@@ -614,7 +720,7 @@ impl GoodsBaseAddonPropertyValueModifier {
 
 // ============================================================================
 // FUNCTION: CGoodsBaseProperties::tagAddonProperty::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsbaseproperties.cpp:425
@@ -622,13 +728,16 @@ impl GoodsBaseAddonPropertyValueModifier {
 // ADDRESS: 004d4b20
 // PROTOTYPE: int __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, int param_2)
 //
+// IMPLEMENTED выше; folded call к `CGoods::tagAddonProperty::Serialize` для
+// каждого value использует совпадающий layout четырёх scalar/count-полей и
+// 12-байтных элементов, что Rust выражает без type punning.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGoodsBaseProperties::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsbaseproperties.cpp:118
@@ -636,6 +745,7 @@ impl GoodsBaseAddonPropertyValueModifier {
 // ADDRESS: 004d4bd0
 // PROTOTYPE: int __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, int param_2)
 //
+// IMPLEMENTED выше; `param_2` не влияет на wire, description исходно не пишется.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
