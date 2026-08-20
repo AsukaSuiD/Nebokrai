@@ -74,6 +74,10 @@
 //! самым не объявляются восстановленными. Невозможный безопасный state
 //! registry товаров останавливает цепочку после уже отправленного prefix-а,
 //! вместо старого null-dereference либо выхода за 32-битный размер.
+//! Следующий `CMonsterList` уже использует восстановленный общий setup-owner:
+//! оба ordered registry кодируются им в пакет `0x7F801/2`, после чего точной
+//! следующей границей остаётся `CHitLevelSetup`. Это адресный send только
+//! подключившемуся socket; его результат также не управляет продолжением.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -132,6 +136,9 @@ use crate::nets::basemessage::CBaseMessage;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::networld::mynetclient::CMyNetClient;
 use crate::nets::servers::ServerCommandHandle;
+use crate::setup::monsterlist::{
+    MonsterDropRegistry, MonsterListSerializeError, MonsterRegistry, serialize_monster_list,
+};
 use crate::worldserver::appworld::country::country::CountryKingSaveLimits;
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
@@ -276,6 +283,20 @@ pub(crate) struct WorldInitialConfigurationPrefixReport {
     pub(crate) language_notice: bool,
     pub(crate) words_filter_notice: bool,
     pub(crate) completion: WorldInitialConfigurationPrefixCompletion,
+}
+
+/// Следующая позиция ветки после сериализации общего monster owner-а.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldMonsterConfigurationCompletion {
+    MonsterList(MonsterListSerializeError),
+    HitLevelSetupPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `CMonsterList` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldMonsterConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldMonsterConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -861,6 +882,33 @@ pub(crate) fn continue_game_server_initial_configuration_prefix(
         language_notice,
         words_filter_notice,
         completion: WorldInitialConfigurationPrefixCompletion::MonsterListPending { socket_id },
+    }
+}
+
+/// Кодирует и отправляет точный `0x7F801/2` monster-list packet.
+pub(crate) fn continue_game_server_monster_configuration(
+    game: &CGame,
+    socket_id: i32,
+    monsters: &MonsterRegistry,
+    drop_goods: &MonsterDropRegistry,
+) -> WorldMonsterConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = serialize_monster_list(monsters, drop_goods, &mut payload) {
+        return WorldMonsterConfigurationReport {
+            delivery: None,
+            completion: WorldMonsterConfigurationCompletion::MonsterList(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldMonsterConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            2,
+            &payload,
+        )),
+        completion: WorldMonsterConfigurationCompletion::HitLevelSetupPending { socket_id },
     }
 }
 

@@ -50,6 +50,11 @@ mod nets;
 mod public;
 #[allow(
     dead_code,
+    reason = "общие setup-owner-ы подключаются по мере восстановления World/Game конфигурации"
+)]
+mod setup;
+#[allow(
+    dead_code,
     reason = "Auth baseline использует первый CServer; остальные transport-границы ещё не подключены"
 )]
 mod transport;
