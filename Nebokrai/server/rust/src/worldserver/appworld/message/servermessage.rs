@@ -1,6 +1,7 @@
 //! Обработчики server-семейств исторического WorldServer.
 //!
-//! Статус владельца: `IMPLEMENTED` для внутрипроцессного события `0x3FC03`,
+//! Статус владельца: `IMPLEMENTED` для `gameserv_conn_log`,
+//! внутрипроцессного события `0x3FC03`,
 //! snapshot/cleanup хвоста `0x5FA03`, обычных opcode `0x4FC01..=0x4FC03` и
 //! `0x5FA0A..=0x5FA0D` из
 //! `OnServerMessage` RVA `0x000ADCF0`;
@@ -27,6 +28,11 @@
 //! исходный код ещё не выполнял. Ошибка сохраняет этот частичный эффект, не
 //! выбирая реакцию старого null-dereference. Полное сырьё реализованной ветви
 //! удалено; соседние server-opcode остаются рабочим материалом.
+//!
+//! `gameserv_conn_log` строит `0x1FE05 + peer IPv4 word + GameServer index`
+//! и неприоритетно ставит его текущему nullable LoginServer client. Оба поля
+//! остаются беззнаковыми 32-битными словами; отсутствие client сохраняет
+//! исходный нулевой результат, а проигнорированный `Send` доступен вызывающему.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -108,6 +114,14 @@ pub(crate) struct WorldLoginClientReplacement {
     pub(crate) cdkey_snapshot: WorldCdkeySnapshot,
     /// Исходно игнорировавшийся результат приоритетной регистрации мира.
     pub(crate) registration: Result<i32, SendMessageError>,
+}
+
+/// Наблюдаемый результат `gameserv_conn_log`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldGameServerConnectedLog {
+    pub(crate) peer_ipv4: u32,
+    pub(crate) game_server_index: u32,
+    pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
 /// Snapshot/cleanup хвост `0x5FA03` и достигнутый launch call-site.
@@ -257,6 +271,26 @@ impl fmt::Display for WorldServerMessageError {
 impl Error for WorldServerMessageError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.source)
+    }
+}
+
+/// Выполняет точный helper `gameserv_conn_log` перед продолжением `0x5FA01`.
+pub(crate) fn game_server_connected_log(
+    game: &CGame,
+    peer_ipv4: u32,
+    game_server_index: u32,
+) -> WorldGameServerConnectedLog {
+    let mut message = CMessage::new(0x0001_FE05);
+    message.base_mut().add_ulong(peer_ipv4);
+    message.base_mut().add_ulong(game_server_index);
+    let delivery = message.send(
+        game.current_login_client().map(CMyNetClient::send_queue),
+        false,
+    );
+    WorldGameServerConnectedLog {
+        peer_ipv4,
+        game_server_index,
+        delivery,
     }
 }
 
@@ -506,20 +540,6 @@ fn add_legacy_c_string(message: &mut CBaseMessage, bytes: &[u8]) {
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\servermessage.cpp
 
 // ============================================================================
-// FUNCTION: gameserv_conn_log
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\servermessage.cpp:76
-// RVA: 0x000AD600
-// ADDRESS: 004ad600
-// PROTOTYPE: void __cdecl gameserv_conn_log(ulong param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: OnServerMessage
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: WorldServer
@@ -532,6 +552,5 @@ fn add_legacy_c_string(message: &mut CBaseMessage, bytes: &[u8]) {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // COMPONENT_VARIANT_END: WorldServer
