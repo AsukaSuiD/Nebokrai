@@ -4,10 +4,12 @@
 //! `0x000D9F70/0x000D9E70`, positional `Add` RVA `0x000DA020`,
 //! `Clear/Release` RVA `0x000D8E40/0x000D8F30`, `GetGoods/GetGoodsAmount`
 //! RVA `0x000D9470/0x000D94B0`, `Serialize` RVA `0x000D9530` и разделяемого
-//! с `CVolumeLimitGoodsContainer` `Unserialize` RVA `0x000D8DA0` —
-//! `IMPLEMENTED`; остальные operations ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! с `CVolumeLimitGoodsContainer` `Unserialize` RVA `0x000D8DA0`, а также
+//! read-side family RVA `0x000D9000/0x000D90F0/0x000D9180/0x000D9280/`
+//! `0x000D92F0/0x000D9350/0x000D93E0/0x000DA530` — `IMPLEMENTED`;
+//! остальные operations ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Функции остаются именно в этом `.rs`, потому что их точный PDB source-owner —
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:22,36,135,158,291,731,773,813,834`.
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:22,36,135,158,173,210,237,291,648,670,694,713,731,745,773,813,834`.
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
 //! SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -29,30 +31,45 @@
 //! Rust `BTreeMap<EquipmentColumn, Box<CGoods>>` заменяет только MSVC tree и
 //! raw ownership, сохраняя numeric key-order wire-а. Старый `Clear` уведомлял
 //! listeners и удалял лишь map nodes без `GarbageCollect`; rejected factory-
-//! result decoder-а тоже терялся. `detached_goods` удерживает такие отдельные
-//! heap-объекты до уничтожения safe owner-а и не объявляется полем старого ABI.
-//! `Release` уничтожает только всё ещё находящиеся в map товары, сбрасывает
-//! inherited owner `0/0` и заново регистрирует тот же no-op listener.
+//! result decoder-а тоже терялся. Это внутренние leaks без внешних callback-
+//! эффектов, поэтому Rust исправляет их обычным `Drop`, а не сохраняет
+//! quarantine. `Release` сбрасывает inherited owner `0/0` и заново
+//! регистрирует тот же no-op listener.
 //!
 //! Decoder virtual-вызывает `Clear`, читает unsigned count, затем для каждой
 //! записи unsigned cell index и готовый `CGoodsFactory::UnserializeGoods`.
 //! Non-null результат передаётся positional `Add(index, goods, nullptr)`, чей
-//! bool намеренно игнорируется. False сохраняет factory-result в lifetime-
-//! quarantine. Rust receiver выбирает concrete volume/equipment owner, поэтому
-//! ранний virtual `Clear` и positional `Add` остаются вариантными.
+//! bool намеренно игнорируется. Rejected factory-result безопасно уничтожается.
+//! Rust receiver выбирает concrete volume/equipment owner, поэтому ранний
+//! virtual `Clear` и positional `Add` остаются вариантными.
 //! Короткий source сохраняет раннюю очистку, cursor и уже добавленные товары.
+//!
+//! Exact global `s_dwEquipmentLimit` по `0x0056BE18` имеет значение `9`.
+//! `IsFull` считает non-null map values и проверяет строгое равенство, поэтому
+//! десять предметов снова дают false. Старый Linux-донор подменил limit числом
+//! всех колонок `17`; Rust сохраняет подтверждённый результат EXE. Object-
+//! overload position-query сравнивает pointer identity, GUID-overload и `Find`
+//! — все 16 байт GUID, обход идёт в numeric map-order. Legacy
+//! `GetGoods(index, vector-by-value)` не возвращал наполненную копию; этот
+//! внутренний дефект исправлен Rust iterator-ом с тем же base-index фильтром.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
+use crate::public::guid::CGuid;
+use crate::worldserver::appworld::listener::ccontainerlistener::{
+    CContainerListener, TraversedContainerObject,
+};
 
 use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsbaseproperties::GOODS_TYPE_EQUIPMENT;
 use super::super::goods::cgoodsfactory::{GoodsBasePropertiesRegistry, unserialize_goods};
 use super::camountlimitgoodscontainer::AmountContainerCodecError;
 use super::cvolumelimitgoodscontainer::{CVolumeLimitGoodsContainer, VolumeContainerCodecError};
+
+const EQUIPMENT_FULL_LIMIT: usize = 9;
 
 /// Numeric equipment-column исходного `CEquipmentContainer`.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -180,11 +197,6 @@ pub(crate) struct CEquipmentContainer {
     owner_type: i32,
     owner_id: i32,
     equipment: BTreeMap<EquipmentColumn, Box<CGoods>>,
-    #[allow(
-        clippy::vec_box,
-        reason = "каждый потерянный CGoods* сохраняет отдельную heap-аллокацию и стабильный адрес"
-    )]
-    detached_goods: Vec<Box<CGoods>>,
 }
 
 impl CEquipmentContainer {
@@ -194,7 +206,6 @@ impl CEquipmentContainer {
             owner_type: 0,
             owner_id: 0,
             equipment: BTreeMap::new(),
-            detached_goods: Vec::new(),
         }
     }
 
@@ -228,10 +239,9 @@ impl CEquipmentContainer {
         Ok(None)
     }
 
-    /// Очищает map после no-op removed callbacks, сохраняя inherited owner.
+    /// Очищает map после no-op removed callbacks, исправляя внутреннюю leak.
     pub(crate) fn clear(&mut self) {
-        self.detached_goods
-            .extend(std::mem::take(&mut self.equipment).into_values());
+        self.equipment.clear();
     }
 
     /// Уничтожает текущие map-товары и сбрасывает inherited owner `0/0`.
@@ -246,6 +256,70 @@ impl CEquipmentContainer {
         EquipmentColumn::from_wire(position)
             .and_then(|column| self.equipment.get(&column))
             .map(Box::as_ref)
+    }
+
+    /// Передаёт все товары listener-у в exact numeric map-order.
+    pub(crate) fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
+        let Some(listener) = listener else {
+            return;
+        };
+        for goods in self.equipment.values().map(Box::as_ref) {
+            let _ = listener.on_traversing_container(TraversedContainerObject::Goods(goods));
+        }
+    }
+
+    /// Ищет первый товар с полным 16-байтовым GUID в numeric map-order.
+    pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
+        self.equipment
+            .values()
+            .map(Box::as_ref)
+            .find(|goods| goods.get_ex_id() == ex_id)
+    }
+
+    /// Возвращает numeric column по exact object identity.
+    pub(crate) fn query_goods_position_by_object(&self, goods: Option<&CGoods>) -> Option<u32> {
+        let goods = goods?;
+        self.equipment
+            .iter()
+            .find(|(_, stored)| std::ptr::eq(stored.as_ref(), goods))
+            .map(|(column, _)| *column as u32)
+    }
+
+    /// Возвращает numeric column первого полного GUID-совпадения.
+    pub(crate) fn query_goods_position(&self, ex_id: &CGuid) -> Option<u32> {
+        self.equipment
+            .iter()
+            .find(|(_, goods)| goods.get_ex_id() == ex_id)
+            .map(|(column, _)| *column as u32)
+    }
+
+    /// Сохраняет exact equality с global equipment limit `9`.
+    pub(crate) fn is_full(&self) -> bool {
+        self.equipment.len() == EQUIPMENT_FULL_LIMIT
+    }
+
+    /// Возвращает первый товар с exact base-properties index в map-order.
+    pub(crate) fn get_the_first_goods(&self, base_properties_index: u32) -> Option<&CGoods> {
+        self.equipment
+            .values()
+            .map(Box::as_ref)
+            .find(|goods| goods.get_base_properties_index() == Some(base_properties_index))
+    }
+
+    /// Проверяет наличие base-properties index через тот же map traversal.
+    pub(crate) fn is_goods_existed(&self, base_properties_index: u32) -> bool {
+        self.get_the_first_goods(base_properties_index).is_some()
+    }
+
+    /// Возвращает usable iterator вместо legacy vector-by-value копии.
+    pub(crate) fn get_goods_by_base_index(
+        &self,
+        base_properties_index: u32,
+    ) -> impl Iterator<Item = &CGoods> {
+        self.equipment
+            .values()
+            .map(Box::as_ref)
+            .filter(move |goods| goods.get_base_properties_index() == Some(base_properties_index))
     }
 
     /// Замораживает map traversal с exact numeric equipment-position.
@@ -319,10 +393,8 @@ impl CEquipmentContainer {
         let count = read_equipment_u32(source, cursor, "goods count")?;
         for _ in 0..count {
             let position = read_equipment_u32(source, cursor, "equipment column")?;
-            if let Some(goods) = unserialize_goods(source, cursor, registry)?
-                && let Some(rejected) = self.add_at(position, goods, registry)?
-            {
-                self.detached_goods.push(rejected);
+            if let Some(goods) = unserialize_goods(source, cursor, registry)? {
+                let _ = self.add_at(position, goods, registry)?;
             }
         }
         Ok(true)
@@ -486,7 +558,7 @@ fn read_equipment_u32(
 
 // ============================================================================
 // FUNCTION: CEquipmentContainer::TraversingContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:173
@@ -494,6 +566,7 @@ fn read_equipment_u32(
 // ADDRESS: 004d9000
 // PROTOTYPE: void __thiscall TraversingContainer(CContainerListener * param_1)
 //
+// IMPLEMENTED выше через общий safe listener trait в numeric map-order.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -514,7 +587,7 @@ fn read_equipment_u32(
 
 // ============================================================================
 // FUNCTION: CEquipmentContainer::IsGoodsExisted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:210
@@ -522,13 +595,14 @@ fn read_equipment_u32(
 // ADDRESS: 004d90f0
 // PROTOTYPE: int __thiscall IsGoodsExisted(ulong param_1)
 //
+// IMPLEMENTED выше через exact base-index traversal.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CEquipmentContainer::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:237
@@ -536,6 +610,7 @@ fn read_equipment_u32(
 // ADDRESS: 004d9180
 // PROTOTYPE: CBaseObject * __thiscall Find(CGUID * param_1)
 //
+// IMPLEMENTED выше с полным 16-байтовым GUID-равенством.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -556,7 +631,7 @@ fn read_equipment_u32(
 
 // ============================================================================
 // FUNCTION: CEquipmentContainer::IsFull
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:648
@@ -564,13 +639,14 @@ fn read_equipment_u32(
 // ADDRESS: 004d9280
 // PROTOTYPE: int __thiscall IsFull(void)
 //
+// IMPLEMENTED выше; exact global limit равен `9`, сравнение строгое.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CEquipmentContainer::QueryGoodsPosition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:670
@@ -578,13 +654,14 @@ fn read_equipment_u32(
 // ADDRESS: 004d92f0
 // PROTOTYPE: int __thiscall QueryGoodsPosition(CGoods * param_1, ulong * param_2)
 //
+// IMPLEMENTED выше через exact object identity; null выражен `None`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CEquipmentContainer::QueryGoodsPosition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:694
@@ -592,13 +669,14 @@ fn read_equipment_u32(
 // ADDRESS: 004d9350
 // PROTOTYPE: int __thiscall QueryGoodsPosition(CGUID * param_1, ulong * param_2)
 //
+// IMPLEMENTED выше; successful out-column выражена `Some(column)`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CEquipmentContainer::GetTheFirstGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:713
@@ -606,6 +684,7 @@ fn read_equipment_u32(
 // ADDRESS: 004d93e0
 // PROTOTYPE: CGoods * __thiscall GetTheFirstGoods(ulong param_1)
 //
+// IMPLEMENTED выше в numeric map-order.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -717,7 +796,7 @@ fn read_equipment_u32(
 
 // ============================================================================
 // FUNCTION: CEquipmentContainer::GetGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:745
@@ -725,10 +804,11 @@ fn read_equipment_u32(
 // ADDRESS: 004da530
 // PROTOTYPE: void __thiscall GetGoods(ulong param_1, vector<CGoods*,std::allocator<CGoods*>_> param_2)
 //
+// IMPLEMENTED выше как возвращаемый iterator; внутренний vector-by-value defect
+// исправлен без изменения base-index фильтра.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // ============================================================================
 // FUNCTION: Unwind@00535500
