@@ -32,6 +32,18 @@ bool CTeamate::IsPlugAvailable() const
     return m_PlayerStillExists;
 }
 
+void CTeamate::AcceptPlayerExistenceResponse(const std::int32_t regionId,
+                                              const std::int32_t ownerType,
+                                              const std::int32_t ownerId,
+                                              const bool exists) noexcept
+{
+    if (regionId != m_OwnerRegionId || ownerType != GetOwnerType() || ownerId != GetOwnerID()) {
+        return;
+    }
+    m_PlayerStillExists = exists;
+    m_LastProbeAt = Now();
+}
+
 bool CTeamate::OnChangeState(std::int32_t plugId, std::int32_t, std::span<const std::uint8_t>)
 {
     CSession* session = GetSession();

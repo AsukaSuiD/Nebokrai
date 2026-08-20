@@ -32,6 +32,7 @@ public:
     struct RunResult { std::vector<JjcFight> timedOut; std::vector<std::int32_t> recycledRegions; bool weeklyReset{}; bool seasonReset{}; };
 
     void ConfigureWeeklyReset(std::int32_t weekDay, std::int32_t hour, std::int32_t minute, std::int32_t second) noexcept;
+    void ConfigureRegion(std::int32_t region);
     void ConfigureRegions(std::int32_t first, std::int32_t last);
     void ConfigureLevelStep(std::int32_t minimum, std::int32_t maximum, std::int32_t step);
     bool Apply(std::int32_t playerId, JjcInfo info);

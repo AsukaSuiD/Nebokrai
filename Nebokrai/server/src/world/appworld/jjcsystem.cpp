@@ -5,8 +5,11 @@
 void CJJcSystem::ConfigureWeeklyReset(const std::int32_t day,const std::int32_t hour,const std::int32_t minute,const std::int32_t second) noexcept
 {m_ResetDay=day;m_ResetHour=hour;m_ResetMinute=minute;m_ResetSecond=second;}
 
+void CJJcSystem::ConfigureRegion(const std::int32_t region)
+{if(region>0)m_AvailableRegions.insert(region);}
+
 void CJJcSystem::ConfigureRegions(const std::int32_t first,const std::int32_t last)
-{for(auto id=first;id<=last;++id)m_AvailableRegions.insert(id);}
+{for(auto id=first;id<=last;++id)ConfigureRegion(id);}
 
 void CJJcSystem::ConfigureLevelStep(const std::int32_t minimum,const std::int32_t maximum,const std::int32_t step)
 {if(minimum<=maximum&&step>0)m_LevelSteps[{minimum,maximum}]=step;}

@@ -24,6 +24,16 @@ CPlug* CSessionFactory::QueryPlug(std::int32_t id) const noexcept
     const auto found = m_Plugs.find(id); return found == m_Plugs.end() ? nullptr : found->second.get();
 }
 
+CTeam* CSessionFactory::QueryTeam(const std::uint32_t teamId) const noexcept
+{
+    for (const auto& [id, session] : m_Sessions) {
+        static_cast<void>(id);
+        if (auto* team = dynamic_cast<CTeam*>(session.get());
+            team && team->GetTeamID() == teamId) return team;
+    }
+    return nullptr;
+}
+
 std::int32_t CSessionFactory::CreateSession(std::uint32_t minimumPlugs,
                                             std::uint32_t maximumPlugs,
                                             std::uint32_t lifetimeMs,

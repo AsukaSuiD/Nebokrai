@@ -29,6 +29,8 @@ public:
     void SetTeamName(std::string value) { m_TeamName = std::move(value); }
     void SetPassword(std::string value) { m_Password = std::move(value); }
     [[nodiscard]] std::int32_t GetLeaderID() const noexcept { return m_LeaderId; }
+    [[nodiscard]] std::uint32_t GetTeamID() const noexcept { return m_TeamId; }
+    bool KickPlayer(std::int32_t playerId);
     bool Serialize(std::vector<std::uint8_t>& output) const override;
     bool Unserialize(std::span<const std::uint8_t> input, std::size_t& offset) override;
 

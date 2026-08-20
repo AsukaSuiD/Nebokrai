@@ -8,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <functional>
 #include <vector>
 
 enum class RegionType : std::int32_t {
@@ -70,6 +71,11 @@ public:
     bool DecordRegionParamFromByteArray(std::span<const std::uint8_t> input,
                                         std::size_t& offset);
     bool LoadSetup(std::string_view text);
+    bool LoadNpcList(std::string_view text,
+                     const std::function<std::string(std::string_view)>& resolveName);
+    bool LoadMonsterList(std::string_view text, float countScale = 1.0F);
+    bool LoadWeatherSetup(std::optional<std::string_view> text);
+    bool LoadTaxParam(std::optional<std::string_view> text);
 
     void SetNoPk(bool value) noexcept { m_NoPk = value; }
     void SetNoContribute(bool value) noexcept { m_NoContribute = value; }

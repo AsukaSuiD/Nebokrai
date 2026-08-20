@@ -1,7 +1,9 @@
 #include "variablelist.h"
 
 #include <algorithm>
+#include <charconv>
 #include <limits>
+#include <sstream>
 
 namespace {
 template <class T> void Append(std::vector<std::uint8_t>& output, const T value)
@@ -36,6 +38,39 @@ bool CVariableList::AddString(std::string name, std::string initial)
     if (Find(name)) return false;
     auto saved = initial;
     m_Variables.push_back({std::move(name), {}, {}, std::move(initial), std::move(saved), true});
+    return true;
+}
+
+bool CVariableList::Restore(std::string name, std::string saved, std::string current)
+{
+    if (Find(name)) return false;
+    const auto unquote = [](std::string value) {
+        if (value.size() >= 2 && value.front() == '"' && value.back() == '"')
+            return value.substr(1, value.size() - 2);
+        return value;
+    };
+    if ((!saved.empty() && saved.front() == '"') || (!current.empty() && current.front() == '"')) {
+        m_Variables.push_back({std::move(name), {}, {}, unquote(std::move(current)),
+                               unquote(std::move(saved)), true});
+        return true;
+    }
+
+    const auto parse = [](const std::string& text, std::vector<std::int32_t>& output) {
+        std::istringstream input(text);
+        std::int64_t value{};
+        while (input >> value) {
+            if (value < std::numeric_limits<std::int32_t>::min() ||
+                value > std::numeric_limits<std::int32_t>::max()) return false;
+            output.push_back(static_cast<std::int32_t>(value));
+            while (input.peek() == ',' || input.peek() == ';') input.get();
+        }
+        return input.eof() && !output.empty();
+    };
+    std::vector<std::int32_t> savedValues, currentValues;
+    if (!parse(saved, savedValues) || !parse(current, currentValues) ||
+        savedValues.size() != currentValues.size()) return false;
+    m_Variables.push_back({std::move(name), std::move(currentValues), std::move(savedValues),
+                           {}, {}, false});
     return true;
 }
 

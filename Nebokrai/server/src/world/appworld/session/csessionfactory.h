@@ -15,6 +15,7 @@
  */
 class CPlug;
 class CSession;
+class CTeam;
 
 class CSessionFactory
 {
@@ -28,6 +29,7 @@ public:
 
     [[nodiscard]] CSession* QuerySession(std::int32_t id) const noexcept;
     [[nodiscard]] CPlug* QueryPlug(std::int32_t id) const noexcept;
+    [[nodiscard]] CTeam* QueryTeam(std::uint32_t teamId) const noexcept;
     [[nodiscard]] std::int32_t CreateSession(std::uint32_t minimumPlugs,
                                              std::uint32_t maximumPlugs,
                                              std::uint32_t lifetimeMs,

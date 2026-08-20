@@ -61,6 +61,7 @@ public:
     void SetTechnologyLevelUpExperience(std::int32_t value) noexcept { m_TechnologyLevelUpExperience = value; }
     void SetWarResult(std::int32_t value) noexcept { m_WarResult = value; }
     [[nodiscard]] std::int32_t GetWarResult() const noexcept { return m_WarResult; }
+    void Restore(const CountrySaveSnapshot& snapshot) noexcept;
 
 private:
     std::uint8_t m_CountryId{};

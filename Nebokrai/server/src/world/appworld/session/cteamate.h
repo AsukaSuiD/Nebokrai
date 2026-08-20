@@ -30,6 +30,10 @@ public:
     [[nodiscard]] std::int32_t GetOwnerRegionID() const noexcept { return m_OwnerRegionId; }
     [[nodiscard]] std::string_view GetOwnerName() const noexcept { return m_OwnerName; }
     void SetExistenceProbe(ExistenceProbe probe) { m_ExistenceProbe = std::move(probe); }
+    void AcceptPlayerExistenceResponse(std::int32_t regionId,
+                                       std::int32_t ownerType,
+                                       std::int32_t ownerId,
+                                       bool exists) noexcept;
     [[nodiscard]] bool IsPlugAvailable() const override;
     bool OnChangeState(std::int32_t plugId,
                        std::int32_t state,

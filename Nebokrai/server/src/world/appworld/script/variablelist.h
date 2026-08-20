@@ -29,6 +29,7 @@ public:
     bool AddScalar(std::string name, std::int32_t initialValue);
     bool AddArray(std::string name, std::vector<std::int32_t> initialValues);
     bool AddString(std::string name, std::string initialValue);
+    bool Restore(std::string name, std::string savedValue, std::string currentValue);
     bool Set(std::string_view name, std::size_t index, std::int32_t value) noexcept;
     bool Set(std::string_view name, std::string value);
     [[nodiscard]] std::optional<std::int32_t> Get(std::string_view name, std::size_t index = 0) const noexcept;

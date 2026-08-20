@@ -42,6 +42,12 @@ bool CTeam::SetLeader(std::int32_t playerId)
     return OnPlugChangeState(plug->GetID(), 4, {bytes, sizeof(playerId)}, true);
 }
 
+bool CTeam::KickPlayer(const std::int32_t playerId)
+{
+    CPlug* plug = QueryPlugByOwner(400, playerId);
+    return plug != nullptr && plug->Exit();
+}
+
 void CTeam::SetAllocationScheme(Allocation value)
 {
     m_Allocation = value;

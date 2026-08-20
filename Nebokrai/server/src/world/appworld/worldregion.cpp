@@ -1,9 +1,11 @@
 #include "worldregion.h"
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cstring>
 #include <limits>
+#include <sstream>
 #include <string_view>
 
 namespace
@@ -52,6 +54,35 @@ std::vector<std::string_view> Tokens(std::string_view text)
         text.remove_prefix(end);
     }
     return result;
+}
+
+template<class T>
+void WriteAt(auto& destination, const std::size_t offset, const T value)
+{
+    std::memcpy(destination.data() + offset, &value, sizeof(value));
+}
+
+std::string NormalizeScript(std::string value)
+{
+    std::ranges::transform(value, value.begin(), [](unsigned char ch) {
+        if (ch == '\\') ch = '/';
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value;
+}
+
+bool ParseColor(const std::string_view text, std::uint32_t& color)
+{
+    if (text.size() < 6) return false;
+    color = 0;
+    for (const char ch : text.substr(0, 6)) {
+        const std::uint32_t digit = ch >= '0' && ch <= '9' ? static_cast<std::uint32_t>(ch - '0')
+            : ch >= 'A' && ch <= 'F' ? static_cast<std::uint32_t>(ch - 'A' + 10)
+            : ch >= 'a' && ch <= 'f' ? static_cast<std::uint32_t>(ch - 'a' + 10) : 0U;
+        color = color * 16U + digit;
+    }
+    color |= 0xFF000000U;
+    return true;
 }
 }
 
@@ -154,6 +185,180 @@ bool CWorldRegion::LoadSetup(std::string_view text)
             m_ForbiddenMakeGoods.emplace_back(tokens[++index]);
         }
     }
+    return true;
+}
+
+bool CWorldRegion::LoadNpcList(
+    const std::string_view text,
+    const std::function<std::string(std::string_view)>& resolveName)
+{
+    if (!resolveName) return false;
+    const auto tokens = Tokens(text);
+    std::vector<NpcRecord> loaded;
+    for (std::size_t index{}; index < tokens.size(); ++index) {
+        if (tokens[index] != "#") continue;
+        if (tokens.size() - index - 1 < 10) return false;
+        std::int32_t values[8]{};
+        for (std::size_t field{}; field < 5; ++field) {
+            const auto token = tokens[++index];
+            const auto [end, ec] = std::from_chars(token.data(), token.data() + token.size(), values[field]);
+            if (ec != std::errc{} || end != token.data() + token.size()) return false;
+        }
+        const std::string_view stringId = tokens[++index];
+        for (std::size_t field = 5; field < 8; ++field) {
+            const auto token = tokens[++index];
+            const auto [end, ec] = std::from_chars(token.data(), token.data() + token.size(), values[field]);
+            if (ec != std::errc{} || end != token.data() + token.size()) return false;
+        }
+        NpcRecord record;
+        record.header[0] = static_cast<std::uint8_t>(values[0] != 0);
+        WriteAt(record.header, 4, values[5]);
+        WriteAt(record.header, 8, values[1]);
+        WriteAt(record.header, 0x0C, values[2]);
+        WriteAt(record.header, 0x10, values[3]);
+        WriteAt(record.header, 0x14, values[4]);
+        WriteAt(record.header, 0x18, values[6]);
+        WriteAt(record.header, 0x1C, values[7]);
+        record.name = resolveName(stringId);
+        record.script = NormalizeScript(std::string(tokens[++index]));
+        loaded.push_back(std::move(record));
+    }
+    m_Npcs = std::move(loaded);
+    return true;
+}
+
+bool CWorldRegion::LoadMonsterList(const std::string_view text, const float countScale)
+{
+    const auto tokens = Tokens(text);
+    std::size_t index{};
+    std::vector<MonsterRecord> monsters;
+    for (; index < tokens.size(); ++index) {
+        if (tokens[index] == "<end>") { ++index; break; }
+        if (tokens[index] != "#") continue;
+        if (tokens.size() - index - 1 < 9) return false;
+        std::int32_t fields[9]{};
+        for (auto& field : fields) {
+            const auto token = tokens[++index];
+            const auto [end, ec] = std::from_chars(token.data(), token.data() + token.size(), field);
+            if (ec != std::errc{} || end != token.data() + token.size()) return false;
+        }
+        if (fields[5] > 1) {
+            fields[5] = static_cast<std::int32_t>(static_cast<float>(fields[5]) * countScale);
+            if (fields[5] == 0) fields[5] = 1;
+        }
+        fields[6] *= 1000;
+        fields[7] *= 1000;
+        MonsterRecord record;
+        std::memcpy(record.header.data(), fields, sizeof(fields));
+        monsters.push_back(std::move(record));
+    }
+
+    MonsterRecord* current{};
+    std::uint16_t cumulative{};
+    for (; index < tokens.size(); ++index) {
+        if (tokens[index] == "id") {
+            if (++index == tokens.size()) return false;
+            std::int32_t id{};
+            const auto [end, ec] = std::from_chars(tokens[index].data(),
+                tokens[index].data() + tokens[index].size(), id);
+            if (ec != std::errc{} || end != tokens[index].data() + tokens[index].size()) return false;
+            current = nullptr;
+            for (auto& monster : monsters) {
+                std::int32_t candidate{};
+                std::memcpy(&candidate, monster.header.data(), sizeof(candidate));
+                if (candidate == id) { current = &monster; break; }
+            }
+            cumulative = 0;
+            continue;
+        }
+        if (tokens[index] == "<end>") { current = nullptr; continue; }
+        if (tokens[index] != "#") continue;
+        if (tokens.size() - index - 1 < 6) return false;
+        const std::string name(tokens[++index]);
+        std::uint16_t values[4]{};
+        for (auto& value : values) {
+            const auto token = tokens[++index];
+            unsigned parsed{};
+            const auto [end, ec] = std::from_chars(token.data(), token.data() + token.size(), parsed);
+            if (ec != std::errc{} || end != token.data() + token.size() || parsed > 0xFFFFU) return false;
+            value = static_cast<std::uint16_t>(parsed);
+        }
+        const std::string script = NormalizeScript(std::string(tokens[++index]));
+        if (!current) continue;
+        cumulative = static_cast<std::uint16_t>(cumulative + values[0]);
+        if (name.size() >= 0x10) return false;
+        MonsterVariant variant;
+        const std::uint16_t prefix[4]{cumulative, values[1], values[2], values[3]};
+        std::memcpy(variant.legacyPrefix.data(), prefix, sizeof(prefix));
+        std::memcpy(variant.legacyPrefix.data() + 0x0C, name.data(), name.size());
+        WriteAt(variant.legacyPrefix, 0x1C, static_cast<std::uint32_t>(name.size()));
+        WriteAt(variant.legacyPrefix, 0x20, static_cast<std::uint16_t>(0x0F));
+        variant.name = name;
+        variant.script = script;
+        current->variants.push_back(std::move(variant));
+    }
+    m_Monsters = std::move(monsters);
+    return true;
+}
+
+bool CWorldRegion::LoadWeatherSetup(const std::optional<std::string_view> text)
+{
+    m_Weather.clear();
+    if (!text) return true;
+    const auto tokens = Tokens(*text);
+    std::size_t index{};
+    while (index < tokens.size()) {
+        if (tokens[index++] != "time") continue;
+        if (tokens.size() - index < 3) return false;
+        WeatherTime time;
+        auto parseI32 = [&](std::int32_t& value) {
+            if (index >= tokens.size()) return false;
+            const auto token = tokens[index++];
+            const auto [end, ec] = std::from_chars(token.data(), token.data() + token.size(), value);
+            return ec == std::errc{} && end == token.data() + token.size();
+        };
+        std::int32_t optionCount{};
+        if (!parseI32(time.time) || tokens[index++] != "num" || !parseI32(optionCount) || optionCount < 0) return false;
+        std::int32_t cumulative{};
+        for (std::int32_t optionIndex{}; optionIndex < optionCount; ++optionIndex) {
+            WeatherOption option;
+            std::int32_t odds{}, weatherCount{};
+            if (!parseI32(odds) || !parseI32(weatherCount) || weatherCount < 0) return false;
+            cumulative += odds;
+            option.cumulativeOdds = cumulative;
+            for (std::int32_t weatherIndex{}; weatherIndex < weatherCount; ++weatherIndex) {
+                Weather weather;
+                if (!parseI32(weather.index)) return false;
+                if (weather.index / 100 == 4) {
+                    if (index >= tokens.size() || !ParseColor(tokens[index++], weather.fogColor)) return false;
+                }
+                option.weather.push_back(weather);
+            }
+            time.options.push_back(std::move(option));
+        }
+        m_Weather.push_back(std::move(time));
+    }
+    return true;
+}
+
+bool CWorldRegion::LoadTaxParam(const std::optional<std::string_view> text)
+{
+    if (text) {
+        const auto tokens = Tokens(*text);
+        const auto marker = std::ranges::find(tokens, "*");
+        if (marker != tokens.end()) {
+            const auto position = static_cast<std::size_t>(std::distance(tokens.begin(), marker));
+            if (tokens.size() - position - 1 < 3) return false;
+            std::int32_t* values[]{&m_Param.maxTaxRate, &m_Param.superiorRegionId,
+                                   &m_Param.turnInTaxRate};
+            for (std::size_t i{}; i < 3; ++i) {
+                const auto token = tokens[position + i + 1];
+                const auto [end, ec] = std::from_chars(token.data(), token.data() + token.size(), *values[i]);
+                if (ec != std::errc{} || end != token.data() + token.size()) return false;
+            }
+        }
+    }
+    m_Param.id = GetID();
     return true;
 }
 

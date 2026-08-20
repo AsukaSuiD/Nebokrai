@@ -1,0 +1,3 @@
+#include "rsgenvar.h"
+WorldDbResult CRsGenVar::Load(IWorldDbExecutor&db){return db.Execute({"SELECT * FROM CSL_GENVAR",{}});}
+bool CRsGenVar::Save(IWorldDbExecutor&db,const std::vector<GeneralVariableDbRow>&rows){for(const auto&r:rows){auto exists=db.Execute({"SELECT VarName FROM CSL_GENVAR WHERE VarName=@P1",{r.name}});if(!exists.success)return false;const bool present=!exists.rows.empty();WorldDbCommand c{present?"UPDATE CSL_GENVAR SET SValue=@P1,CValue=@P2 WHERE VarName=@P3":"INSERT INTO CSL_GENVAR(VarName,SValue,CValue) VALUES(@P1,@P2,@P3)",{}};if(present)c.parameters={r.savedValue,r.currentValue,r.name};else c.parameters={r.name,r.savedValue,r.currentValue};if(!db.Execute(c).success)return false;}return true;}

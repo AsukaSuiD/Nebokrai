@@ -32,6 +32,7 @@ void CMyServerClient::OnClose(CMsgQueue<CMessage>& messages)
 {
     auto message = std::make_unique<CMessage>(kGameServerDisconnected);
     message->Base().Add(MessageContext().mapId);
+    message->ApplyClientContext(MessageContext());
     static_cast<void>(messages.PushMessage(std::move(message)));
     MarkClosing();
 }

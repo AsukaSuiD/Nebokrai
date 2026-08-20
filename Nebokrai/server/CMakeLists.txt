@@ -98,3 +98,11 @@ target_link_libraries(nebokrai_miscserver
     PRIVATE
         Nebokrai::Server
         spdlog::spdlog)
+
+add_executable(nebokrai_worldserver
+    apps/worldserver/main.cpp)
+
+target_link_libraries(nebokrai_worldserver
+    PRIVATE
+        Nebokrai::Server
+        spdlog::spdlog)
