@@ -4,6 +4,9 @@
 //! byte-array wrappers `0x000516E0/0x00051700`, `Release` RVA `0x000533C0`,
 //! scalar `GetAddonPropertyValues` RVA `0x000517B0`, `GetMaxStackNumber` RVA
 //! `0x00052530`, `GetWeight` RVA `0x00051730`,
+//! `GetAllAddonProperties/GetGoodsName/IsAddonProperyExist` RVA
+//! `0x00051780/0x000517A0/0x00051880`, vector `GetAddonPropertyValues` RVA
+//! `0x00052760`, wire-based `Clone` RVA `0x000523B0`,
 //! `SetExID` RVA `0x000530E0`, base-подобъекта и defaults конструктора RVA
 //! `0x00053060`, а также непосредственной destructor-цепочки RVA `0x000534B0`
 //! и сломанный `CanUpgraded` RVA `0x000528E0`
@@ -158,13 +161,13 @@ pub(crate) enum GoodsDbSnapshotBlock {
 }
 
 #[derive(Clone, Copy)]
-struct GoodsAddonPropertyValue {
+pub(super) struct GoodsAddonPropertyValue {
     id: u32,
     base_value: i32,
     modifier: i32,
 }
 
-struct GoodsAddonProperty {
+pub(super) struct GoodsAddonProperty {
     property_type: i32,
     is_enabled: i32,
     is_implicit_attribute: i32,
@@ -226,6 +229,11 @@ impl CGoods {
         self.shape_base.set_name(name);
     }
 
+    /// Заимствует exact inherited goods-name без завершающего NUL.
+    pub(crate) fn get_goods_name(&self) -> &[u8] {
+        self.shape_base.get_name()
+    }
+
     /// Присваивает унаследованный signed graphics ID.
     pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
         self.shape_base.set_graphics_id(graphics_id);
@@ -253,11 +261,38 @@ impl CGoods {
 
     /// Возвращает сумму первого совпавшего addon-value либо signed ноль.
     pub(crate) fn get_addon_property_value(&self, property_type: i32, id: u32) -> i32 {
+        self.get_addon_property_values(property_type)
+            .iter()
+            .find(|value| value.id == id)
+            .map_or(0, |value| value.base_value.wrapping_add(value.modifier))
+    }
+
+    /// Заимствует все addon-ы в exact vector-order.
+    pub(super) fn get_all_addon_properties(&self) -> &[GoodsAddonProperty] {
+        &self.addon_properties
+    }
+
+    /// Заимствует все addon-ы для mutation в exact vector-order.
+    pub(super) fn get_all_addon_properties_mut(&mut self) -> &mut Vec<GoodsAddonProperty> {
+        &mut self.addon_properties
+    }
+
+    /// Проверяет наличие numeric-типа независимо от enabled-флага и values.
+    pub(crate) fn is_addon_property_exist(&self, property_type: i32) -> bool {
+        self.addon_properties
+            .iter()
+            .any(|property| property.property_type == property_type)
+    }
+
+    /// Возвращает values первого addon-а совпавшего numeric-типа.
+    pub(super) fn get_addon_property_values(
+        &self,
+        property_type: i32,
+    ) -> &[GoodsAddonPropertyValue] {
         self.addon_properties
             .iter()
             .find(|property| property.property_type == property_type)
-            .and_then(|property| property.values.iter().find(|value| value.id == id))
-            .map_or(0, |value| value.base_value.wrapping_add(value.modifier))
+            .map_or(&[], |property| property.values.as_slice())
     }
 
     /// Возвращает exact unsigned stacking-limit для текущих base-properties.
@@ -402,8 +437,19 @@ impl CGoods {
     pub(crate) fn release(&mut self) {
         self.base_properties_index = Some(0);
         self.amount = 0;
+        for property in &mut self.addon_properties {
+            property.clear();
+        }
         self.addon_properties.clear();
         self.description.clear();
+    }
+
+    /// Клонирует через exact virtual wire-путь исходного owner-а.
+    pub(crate) fn clone_into(&self, target: &mut CGoods) -> Result<bool, GoodsCodecError> {
+        let mut wire = Vec::new();
+        let _ = self.serialize(&mut wire, true)?;
+        let mut cursor = 0;
+        target.unserialize(&wire, &mut cursor, true)
     }
 
     /// Кодирует полный goods snapshot в точном legacy-порядке.
@@ -479,6 +525,25 @@ impl CGoods {
 }
 
 impl GoodsAddonProperty {
+    const fn with_constructor_defaults() -> Self {
+        Self {
+            property_type: 0,
+            is_enabled: 0,
+            is_implicit_attribute: 0,
+            values: Vec::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.property_type = 0;
+        self.is_enabled = 0;
+        self.is_implicit_attribute = 0;
+        for value in &mut self.values {
+            value.clear();
+        }
+        self.values.clear();
+    }
+
     fn serialize(&self, destination: &mut Vec<u8>) -> Result<(), GoodsCodecError> {
         destination.extend_from_slice(&self.property_type.to_le_bytes());
         destination.extend_from_slice(&self.is_enabled.to_le_bytes());
@@ -493,25 +558,36 @@ impl GoodsAddonProperty {
     }
 
     fn unserialize(source: &[u8], cursor: &mut usize) -> Result<Self, GoodsCodecError> {
-        let property_type = read_goods_i32(source, cursor, "tagAddonProperty.gapType")?;
-        let is_enabled = read_goods_i32(source, cursor, "tagAddonProperty.bIsEnabled")?;
-        let is_implicit_attribute =
+        let mut property = Self::with_constructor_defaults();
+        property.property_type = read_goods_i32(source, cursor, "tagAddonProperty.gapType")?;
+        property.is_enabled = read_goods_i32(source, cursor, "tagAddonProperty.bIsEnabled")?;
+        property.is_implicit_attribute =
             read_goods_i32(source, cursor, "tagAddonProperty.bIsImplicitAttribute")?;
         let count = read_goods_u32(source, cursor, "tagAddonProperty.vValues count")?;
-        let mut values = Vec::new();
         for _ in 0..count {
-            values.push(GoodsAddonPropertyValue {
-                id: read_goods_u32(source, cursor, "tagAddonPropertyValue.dwId")?,
-                base_value: read_goods_i32(source, cursor, "tagAddonPropertyValue.lBaseValue")?,
-                modifier: read_goods_i32(source, cursor, "tagAddonPropertyValue.lModifier")?,
-            });
+            let mut value = GoodsAddonPropertyValue::with_constructor_defaults();
+            value.id = read_goods_u32(source, cursor, "tagAddonPropertyValue.dwId")?;
+            value.base_value = read_goods_i32(source, cursor, "tagAddonPropertyValue.lBaseValue")?;
+            value.modifier = read_goods_i32(source, cursor, "tagAddonPropertyValue.lModifier")?;
+            property.values.push(value);
         }
-        Ok(Self {
-            property_type,
-            is_enabled,
-            is_implicit_attribute,
-            values,
-        })
+        Ok(property)
+    }
+}
+
+impl GoodsAddonPropertyValue {
+    const fn with_constructor_defaults() -> Self {
+        Self {
+            id: 0,
+            base_value: 0,
+            modifier: 0,
+        }
+    }
+
+    const fn clear(&mut self) {
+        self.id = 0;
+        self.base_value = 0;
+        self.modifier = 0;
     }
 }
 
@@ -721,7 +797,7 @@ fn read_goods_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CGoods::GetAllAddonProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoods.cpp:585
@@ -729,13 +805,15 @@ fn read_goods_array<const N: usize>(
 // ADDRESS: 00451780
 // PROTOTYPE: vector<CGoods::tagAddonProperty,std::allocator<CGoods::tagAddonProperty>_> * __thiscall GetAllAddonProperties(void)
 //
+// IMPLEMENTED выше как immutable/mutable borrow; Rust slice/Vec reference
+// сохраняют owner и exact vector-order без копирования.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGoods::tagAddonPropertyValue::Clear
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoods.cpp:407
@@ -743,13 +821,14 @@ fn read_goods_array<const N: usize>(
 // ADDRESS: 00451790
 // PROTOTYPE: void __thiscall Clear(void)
 //
+// IMPLEMENTED выше как прямое обнуление трёх scalar-полей.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGoods::GetGoodsName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoods.cpp:564
@@ -757,6 +836,7 @@ fn read_goods_array<const N: usize>(
 // ADDRESS: 004517a0
 // PROTOTYPE: char * __thiscall GetGoodsName(void)
 //
+// IMPLEMENTED выше как borrow inherited byte-string; SSO/heap branch — STL plumbing.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -777,7 +857,7 @@ fn read_goods_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CGoods::IsAddonProperyExist
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoods.cpp:256
@@ -785,6 +865,7 @@ fn read_goods_array<const N: usize>(
 // ADDRESS: 00451880
 // PROTOTYPE: bool __thiscall IsAddonProperyExist(GOODS_ADDON_PROPERTIES param_1)
 //
+// IMPLEMENTED выше; enabled/value state исходно не участвуют в сравнении типа.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -818,7 +899,7 @@ fn read_goods_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CGoods::Clone
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoods.cpp:276
@@ -826,6 +907,8 @@ fn read_goods_array<const N: usize>(
 // ADDRESS: 004523b0
 // PROTOTYPE: int __thiscall Clone(CBaseObject * param_1)
 //
+// IMPLEMENTED выше как exact `Serialize(true) -> Unserialize(true)`; Rust type
+// аргумента заменяет только RTTI cast, wire-copy и ранний failure сохранены.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -846,7 +929,7 @@ fn read_goods_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CGoods::tagAddonProperty::tagAddonProperty
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoods.cpp:441
@@ -854,13 +937,14 @@ fn read_goods_array<const N: usize>(
 // ADDRESS: 00452660
 // PROTOTYPE: undefined __thiscall tagAddonProperty(void)
 //
+// IMPLEMENTED выше как `with_constructor_defaults`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGoods::tagAddonProperty::~tagAddonProperty
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoods.cpp:450
@@ -868,13 +952,15 @@ fn read_goods_array<const N: usize>(
 // ADDRESS: 00452680
 // PROTOTYPE: void __thiscall ~tagAddonProperty(void)
 //
+// IMPLEMENTED через `clear` и естественный Rust `Drop`; повторный STL `_Tidy`
+// не является отдельным наблюдаемым действием.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGoods::GetAddonPropertyValues
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoods.cpp:192
@@ -882,6 +968,8 @@ fn read_goods_array<const N: usize>(
 // ADDRESS: 00452760
 // PROTOTYPE: void __thiscall GetAddonPropertyValues(GOODS_ADDON_PROPERTIES param_1, vector<CGoods::tagAddonPropertyValue,std::allocator<CGoods::tagAddonPropertyValue>_> * param_2)
 //
+// IMPLEMENTED выше как slice values первого совпавшего property; caller может
+// скопировать его, а lookup-order и отсутствие совпадения сохраняются.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -981,7 +1069,7 @@ fn read_goods_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CGoods::tagAddonPropertyValue::tagAddonPropertyValue
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoods.cpp:391
@@ -989,6 +1077,7 @@ fn read_goods_array<const N: usize>(
 // ADDRESS: 004d4950
 // PROTOTYPE: undefined __thiscall tagAddonPropertyValue(void)
 //
+// IMPLEMENTED выше как `with_constructor_defaults`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1007,7 +1096,7 @@ fn read_goods_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CGoods::tagAddonProperty::Clear
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoods.cpp:457
@@ -1015,6 +1104,7 @@ fn read_goods_array<const N: usize>(
 // ADDRESS: 004d4cf0
 // PROTOTYPE: void __thiscall Clear(void)
 //
+// IMPLEMENTED выше; scalar-ы и каждый value обнуляются до очистки vector-а.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
