@@ -8,6 +8,7 @@
 //! GUID-`Remove` RVA `0x000DA910`,
 //! `IsFull/QueryGoodsPosition(CGUID)/FindPositionForGoods/Add/GetGoodsAmount`
 //! RVA `0x000DA9A0/0x000DA9F0/0x000DAA50/0x000DAB30/0x000DAB90`,
+//! `AddFromDB` RVA `0x000DBAE0`,
 //! empty-cell branch positional `Add` RVA
 //! `0x000DB980`, а также его occupied-cell stacking-ветка через base Add RVA
 //! `0x000E07F0`,
@@ -78,6 +79,19 @@
 //! невидимость для вызывающего без преждевременного destructor-а. Контекст и
 //! RTTI удалены только потому, что единственные достигнутые callbacks no-op, а
 //! owner typed как `CGoods`.
+//!
+//! `AddFromDB` намеренно не делегирует обычному Add: сначала cell-`GetGoods`
+//! отличает unlocked collision для legacy debug-log, затем проверяются non-null
+//! incoming, `IsSpaceEnough` и factory lookup; amount-full и stacking здесь не
+//! участвуют. Успех напрямую вставляет GUID owner и заполняет cell без listener-
+//! callback. Rust возвращает rejected `Box` вместо сырого false, сохраняет
+//! duplicate overwrite через quarantine и не материализует технический
+//! `debug-DB` file sink.
+//!
+//! Оставшийся `Clone` наследует небезопасный shallow copy `CGoods*` amount-
+//! owner-а и дописывает только size/cells; `AI` наследует недостигнутый child-
+//! graph `CBaseObject`. Deep clone либо no-op здесь были бы выдуманной сменой
+//! lifecycle, поэтому эти два слота остаются явными неизвестностями owner-а.
 //!
 //! Короткий source в соседнем decoder-е сохраняет ранний `Clear`, cursor и уже
 //! добавленные записи, затем возвращает typed `BLOCKED_MISSING_FACT` вместо
@@ -345,6 +359,31 @@ impl CVolumeLimitGoodsContainer {
         };
         self.cells[position as usize] = CGuid::GUID_INVALID;
         Ok(Some(goods))
+    }
+
+    /// Вставляет DB-товар напрямую в доказанно пустую cell без full/stacking.
+    pub(crate) fn add_from_db(
+        &mut self,
+        position: u32,
+        goods: Box<CGoods>,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, VolumeContainerCodecError> {
+        if self.get_goods(position).is_some() || !self.is_space_enough(position) {
+            return Ok(Some(goods));
+        }
+
+        let Some(index) = goods.get_base_properties_index() else {
+            self.amount_base.retain_detached_goods(goods);
+            return Err(GoodsCodecError::MissingBasePropertiesIndex.into());
+        };
+        if query_goods_base_properties(registry, index).is_none() {
+            return Ok(Some(goods));
+        }
+
+        let ex_id = *goods.get_ex_id();
+        self.amount_base.insert_unchecked(goods);
+        self.cells[position as usize] = ex_id;
+        Ok(None)
     }
 
     /// Вставляет товар в пустую cell; `Some` возвращает ownership при false.
@@ -758,7 +797,7 @@ impl CVolumeLimitGoodsContainer {
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::AddFromDB
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cvolumelimitgoodscontainer.cpp:297
@@ -766,9 +805,9 @@ impl CVolumeLimitGoodsContainer {
 // ADDRESS: 004dbae0
 // PROTOTYPE: int __thiscall AddFromDB(CGoods * param_1, ulong param_2)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; exact ASM фиксирует порядок cell `GetGoods` -> space ->
+// factory -> direct map/cell insert, отсутствие full/stacking/listener и
+// literal `0/1` return. Collision debug-file остаётся технической заменой.
 
 // ============================================================================
 // FUNCTION: Unwind@00535390

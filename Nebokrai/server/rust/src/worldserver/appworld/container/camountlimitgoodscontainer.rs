@@ -8,7 +8,8 @@
 //! `0x000DBCC0/0x000DBCE0/0x000DBCF0`, `SetOwner` RVA `0x000DBD00`,
 //! `Remove` wrapper-ы и GUID-owner RVA `0x000DBD20/0x000DBD30/0x000DC1C0`,
 //! `Unserialize/Serialize` RVA `0x000DBD50/0x000DC070`, `GetGoodsAmount` RVA
-//! `0x000DC030`, основного `Add` RVA `0x000DC790`, `Clear/Release` RVA
+//! `0x000DC030`, основного `Add/AddFromDB` RVA `0x000DC790/0x000DC820`,
+//! `Clear/Release` RVA
 //! `0x000DC9A0/0x000DCAB0` и destructor RVA `0x000DCC10` — `IMPLEMENTED`;
 //! остальные операции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -95,6 +96,19 @@
 //! доказанные no-op listeners и лишь затем вынимает pointer из map; locked-
 //! vector при успехе не чистится. `BTreeMap::remove` заменяет legacy hash erase,
 //! а `Box<CGoods>` явно переносит возвращаемое ownership вызывающему.
+//!
+//! `AddFromDB` отдельно от обычного Add сначала проверяет full, затем ordinal
+//! `GetGoods(position)`: unlocked существующий товар даёт false и debug-log,
+//! locked товар скрывается и не блокирует последующий hash overwrite. Non-null
+//! incoming после этого вставляется без factory-validation и без listener-
+//! callback. Debug-file заменён отсутствием технического log sink; success/
+//! rejection и state-переходы сохранены, displaced pointer уходит в ту же
+//! lifetime-quarantine.
+//!
+//! Оставшийся `Clone` копирует сырые `CGoods*` shallow, а `AI` вызывает child-
+//! graph каждого товара через ещё не достигнутый `CBaseObject`; превращать их
+//! соответственно в deep clone и no-op было бы изменением lifecycle, поэтому
+//! оба слота остаются явным RAW до конкретного consumer/owner-контракта.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -240,11 +254,30 @@ impl CAmountLimitGoodsContainer {
         if self.is_full(registry)? {
             return Ok(Some(goods));
         }
+        self.insert_unchecked(goods);
+        Ok(None)
+    }
+
+    /// Воспроизводит DB-вставку: full и unlocked ordinal collision до insert.
+    pub(crate) fn add_from_db(
+        &mut self,
+        position: u32,
+        goods: Box<CGoods>,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, AmountContainerCodecError> {
+        if self.is_full(registry)? || self.get_goods(position).is_some() {
+            return Ok(Some(goods));
+        }
+        self.insert_unchecked(goods);
+        Ok(None)
+    }
+
+    /// Вставляет raw DB/legacy pointer по GUID с quarantine старого значения.
+    pub(super) fn insert_unchecked(&mut self, goods: Box<CGoods>) {
         let ex_id = *goods.get_ex_id();
         if let Some(displaced) = self.goods.insert(ex_id, goods) {
             self.detached_goods.push(displaced);
         }
-        Ok(None)
     }
 
     /// Вынимает unlocked товар по GUID и переносит ownership вызывающему.
@@ -847,7 +880,7 @@ fn read_amount_u32(
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::AddFromDB
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:72
@@ -855,9 +888,9 @@ fn read_amount_u32(
 // ADDRESS: 004dc820
 // PROTOTYPE: int __thiscall AddFromDB(CGoods * param_1, ulong param_2)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; exact ASM подтверждает ранний full, locked-aware ordinal
+// `GetGoods`, direct GUID hash insert и literal `0/1` return. Исторический
+// `debug-DB` collision-log не влияет на container state и не материализован.
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::Clear
