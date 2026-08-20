@@ -2,8 +2,10 @@
 //!
 //! Статус constructor/destructor RVA `0x000D77F0/0x000D7810`, собственных
 //! `Serialize/Unserialize` RVA `0x000D7860/0x000D7870` и folded
-//! `Clear/Release` RVA `0x000D7AA0/0x000D7AB0` — `IMPLEMENTED`; игровые
-//! `Add/Find/Remove/AddFromDB` остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `Clear/Release` RVA `0x000D7AA0/0x000D7AB0`,
+//! `Add/Add(position)/Find/Remove/AddFromDB` RVA
+//! `0x000D7AC0/0x000D7830/0x000D7840/0x000D7850/0x000D78A0` —
+//! `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -26,11 +28,17 @@
 //! Volume `0x11` задаёт будущий `CPlayer::DecordFromByteArray` отдельно между
 //! virtual `Release` и decoder-ом; constructor не получает его заранее.
 //! Совпадающие с `CFairyContainer` folded `Clear/Release` и игровые
-//! `Add/Find/Remove` не означают объединения двух nominal классов.
+//! `Add/Find/Remove` не означают объединения двух nominal классов. Все они
+//! остаются thin volume-tail-calls без дополнительной type-policy.
+//! `AddFromDB` выполняет derived collision lookup, затем base повторяет его и
+//! делает direct insert; различие battle-owner-а ограничено string-table
+//! `ZHGS0044` для технического `debug-DB` log, не меняющего state/return.
 
 use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use super::cvolumelimitgoodscontainer::{CVolumeLimitGoodsContainer, VolumeContainerCodecError};
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
+use crate::public::guid::CGuid;
+use crate::worldserver::appworld::goods::cgoods::CGoods;
 
 /// Достигнутое состояние исходного `CBattleFairyContainer` без собственного payload.
 pub(crate) struct CBattleFairyContainer {
@@ -58,6 +66,52 @@ impl CBattleFairyContainer {
     /// Сбрасывает inherited owner, товары, volume и cells.
     pub(crate) fn release(&mut self) {
         self.volume_state.release();
+    }
+
+    /// Делегирует folded automatic volume Add.
+    pub(crate) fn add(
+        &mut self,
+        goods: Box<CGoods>,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, VolumeContainerCodecError> {
+        self.volume_state.add(goods, registry)
+    }
+
+    /// Делегирует folded positional volume Add.
+    pub(crate) fn add_at(
+        &mut self,
+        position: u32,
+        goods: Box<CGoods>,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, VolumeContainerCodecError> {
+        self.volume_state.add_at(position, goods, registry)
+    }
+
+    /// Делегирует folded locked-aware GUID lookup.
+    pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
+        self.volume_state.find(ex_id)
+    }
+
+    /// Делегирует folded volume removal с exact post-remove checks.
+    pub(crate) fn remove(
+        &mut self,
+        ex_id: &CGuid,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, VolumeContainerCodecError> {
+        self.volume_state.remove(ex_id, registry)
+    }
+
+    /// Выполняет derived collision check до повторной base DB-проверки.
+    pub(crate) fn add_from_db(
+        &mut self,
+        position: u32,
+        goods: Box<CGoods>,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, VolumeContainerCodecError> {
+        if self.volume_state.get_goods(position).is_some() {
+            return Ok(Some(goods));
+        }
+        self.volume_state.add_from_db(position, goods, registry)
     }
 
     /// Замораживает inherited volume traversal без собственного payload.
@@ -123,7 +177,7 @@ impl CBattleFairyContainer {
 
 // ============================================================================
 // FUNCTION: CBattleFairyContainer::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cbattlefairycontainer.cpp:52
@@ -137,7 +191,7 @@ impl CBattleFairyContainer {
 
 // ============================================================================
 // FUNCTION: CBattleFairyContainer::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cbattlefairycontainer.cpp:86
@@ -151,7 +205,7 @@ impl CBattleFairyContainer {
 
 // ============================================================================
 // FUNCTION: CBattleFairyContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cbattlefairycontainer.cpp:92
@@ -189,7 +243,7 @@ impl CBattleFairyContainer {
 
 // ============================================================================
 // FUNCTION: CBattleFairyContainer::AddFromDB
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cbattlefairycontainer.cpp:59
@@ -197,6 +251,8 @@ impl CBattleFairyContainer {
 // ADDRESS: 004d78a0
 // PROTOTYPE: int __thiscall AddFromDB(CGoods * param_1, ulong param_2)
 //
+// IMPLEMENTED выше; exact collision-first и base-result сохранены, string-table
+// формат используется только историческим debug-file sink.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -227,7 +283,7 @@ impl CBattleFairyContainer {
 
 // ============================================================================
 // FUNCTION: CBattleFairyContainer::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cbattlefairycontainer.cpp:46

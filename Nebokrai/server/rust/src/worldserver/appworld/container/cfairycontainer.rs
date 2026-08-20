@@ -2,8 +2,10 @@
 //!
 //! Статус constructor/destructor-state RVA `0x000D7A70/0x000D7B20`,
 //! `Clear/Release` folded RVA `0x000D7AA0/0x000D7AB0` и собственного
-//! `Serialize/Unserialize` RVA `0x000D7AD0/0x000D7B80` — `IMPLEMENTED`;
-//! игровые `Add/Find/Remove/AddFromDB` остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `Serialize/Unserialize` RVA `0x000D7AD0/0x000D7B80`, folded
+//! `Add/Add(position)/Find/Remove` RVA
+//! `0x000D7AC0/0x000D7830/0x000D7840/0x000D7850` и `AddFromDB` RVA
+//! `0x000D7C10` — `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -30,13 +32,18 @@
 //! чтение выражено локальной typed `BLOCKED_MISSING_FACT`, а не дополнением
 //! нулями. Volume `0x0E` задаёт будущий `CPlayer::DecordFromByteArray` отдельно
 //! между `Release` и этим decoder-ом; constructor не получает его заранее.
-//! Folded `Add/Find/Remove` имеют общие RVA с `CBattleFairyContainer`, но их
-//! игровая семантика не нужна clone-codec-у и здесь не дублируется.
+//! Folded `Add/Find/Remove` имеют общие RVA с `CBattleFairyContainer` и являются
+//! тонкими volume-tail-calls без дополнительной type-policy. `AddFromDB`
+//! намеренно проверяет cell до делегирования, после чего base повторяет ту же
+//! проверку перед direct map/cell insert; collision возвращает false и писал
+//! только технический `debug-DB` log, который Rust не материализует.
 
 use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use super::camountlimitgoodscontainer::AmountContainerCodecError;
 use super::cvolumelimitgoodscontainer::{CVolumeLimitGoodsContainer, VolumeContainerCodecError};
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
+use crate::public::guid::CGuid;
+use crate::worldserver::appworld::goods::cgoods::CGoods;
 
 const HATCH_TIME_COUNT: usize = 5;
 
@@ -68,6 +75,52 @@ impl CFairyContainer {
     /// Сбрасывает inherited owner, товары и volume, сохраняя hatch-time.
     pub(crate) fn release(&mut self) {
         self.volume_state.release();
+    }
+
+    /// Делегирует folded automatic volume Add без новой fairy-policy.
+    pub(crate) fn add(
+        &mut self,
+        goods: Box<CGoods>,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, VolumeContainerCodecError> {
+        self.volume_state.add(goods, registry)
+    }
+
+    /// Делегирует folded positional volume Add.
+    pub(crate) fn add_at(
+        &mut self,
+        position: u32,
+        goods: Box<CGoods>,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, VolumeContainerCodecError> {
+        self.volume_state.add_at(position, goods, registry)
+    }
+
+    /// Делегирует folded locked-aware GUID lookup.
+    pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
+        self.volume_state.find(ex_id)
+    }
+
+    /// Делегирует folded volume removal с factory/cell/quarantine порядком.
+    pub(crate) fn remove(
+        &mut self,
+        ex_id: &CGuid,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, VolumeContainerCodecError> {
+        self.volume_state.remove(ex_id, registry)
+    }
+
+    /// Выполняет derived collision check до повторной base DB-проверки.
+    pub(crate) fn add_from_db(
+        &mut self,
+        position: u32,
+        goods: Box<CGoods>,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, VolumeContainerCodecError> {
+        if self.volume_state.get_goods(position).is_some() {
+            return Ok(Some(goods));
+        }
+        self.volume_state.add_from_db(position, goods, registry)
     }
 
     /// Замораживает inherited volume traversal, не сбрасывая hatch-time.
@@ -197,7 +250,7 @@ fn read_hatch_time(source: &[u8], cursor: &mut usize) -> Result<u32, VolumeConta
 
 // ============================================================================
 // FUNCTION: CFairyContainer::AddFromDB
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cfairycontainer.cpp:50
@@ -205,6 +258,8 @@ fn read_hatch_time(source: &[u8], cursor: &mut usize) -> Result<u32, VolumeConta
 // ADDRESS: 004d7c10
 // PROTOTYPE: int __thiscall AddFromDB(CGoods * param_1, ulong param_2)
 //
+// IMPLEMENTED выше; exact collision-first проверка и base-result сохранены,
+// различающий derived owner debug-file технически опущен.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
