@@ -1,7 +1,9 @@
 # Локальные оригиналы и рабочие данные
 /archive/
 /.local/
+/#SyncVersion/
 /Nebokrai/.exe/
+/Nebokrai/reports/
 
 # Окружения, сборка и кэши
 **/.venv/
