@@ -3,20 +3,19 @@
 #include "authmanager.h"
 #include "loginqueue.h"
 #include "../dbaccess/myadobase.h"
+#include "../dbaccess/odbc.h"
 #include "../public/readwrite.h"
+#include "../public/textcodec.h"
 #include "../public/tools.h"
 #include "../nets/netlogin/message.h"
 #include "../nets/netlogin/mynetserver_client.h"
 #include "../nets/netlogin/mynetserver_world.h"
 
-#include <iconv.h>
-#include <sql.h>
-#include <sqlext.h>
+#include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -60,85 +59,6 @@ std::string LegacyIpv4Text(std::uint32_t address)
            std::to_string((address >> 8U) & 0xFFU) + '.' +
            std::to_string((address >> 16U) & 0xFFU) + '.' +
            std::to_string((address >> 24U) & 0xFFU);
-}
-
-struct ConvertedText
-{
-    std::optional<std::string> value;
-    std::string error;
-};
-
-ConvertedText Windows1251ToUtf8(std::string_view source)
-{
-    if (source.empty()) {
-        return ConvertedText{.value = std::string{}};
-    }
-
-    iconv_t converter = iconv_open("UTF-8", "WINDOWS-1251");
-    if (converter == reinterpret_cast<iconv_t>(-1)) {
-        return ConvertedText{.error = "iconv не поддерживает преобразование WINDOWS-1251 -> UTF-8"};
-    }
-    struct Closer
-    {
-        iconv_t converter;
-        ~Closer() { iconv_close(converter); }
-    } closer{converter};
-
-    std::string output(source.size() * 4U + 4U, '\0');
-    char* input = const_cast<char*>(source.data());
-    std::size_t inputLeft = source.size();
-    char* destination = output.data();
-    std::size_t destinationLeft = output.size();
-    errno = 0;
-    if (iconv(converter,
-              &input,
-              &inputLeft,
-              &destination,
-              &destinationLeft) == static_cast<std::size_t>(-1)) {
-        return ConvertedText{
-            .error = "iconv не преобразовал WINDOWS-1251 в UTF-8, errno=" +
-                     std::to_string(errno)};
-    }
-    output.resize(output.size() - destinationLeft);
-    return ConvertedText{.value = std::move(output)};
-}
-
-bool OdbcSucceeded(SQLRETURN result) noexcept
-{
-    return result == SQL_SUCCESS || result == SQL_SUCCESS_WITH_INFO;
-}
-
-std::string OdbcDiagnostic(SQLSMALLINT handleType,
-                           SQLHANDLE handle,
-                           std::string_view operation)
-{
-    SQLCHAR state[6]{};
-    SQLINTEGER native = 0;
-    SQLCHAR message[1024]{};
-    SQLSMALLINT length = 0;
-    const SQLRETURN result = SQLGetDiagRec(handleType,
-                                            handle,
-                                            1,
-                                            state,
-                                            &native,
-                                            message,
-                                            static_cast<SQLSMALLINT>(sizeof(message)),
-                                            &length);
-    std::string detail(operation);
-    if (OdbcSucceeded(result)) {
-        detail += ": SQLSTATE=";
-        detail += reinterpret_cast<const char*>(state);
-        detail += ", системный код=" + std::to_string(native);
-        if (length > 0) {
-            detail += ", ";
-            const std::size_t copied = std::min<std::size_t>(
-                static_cast<std::size_t>(length), sizeof(message) - 1U);
-            detail.append(reinterpret_cast<const char*>(message), copied);
-        }
-    } else {
-        detail += ": диагностические сведения ODBC недоступны";
-    }
-    return detail;
 }
 
 template <typename Value>
@@ -713,22 +633,22 @@ void CGame::AccountEnterLog(const char* account, std::uint32_t ip)
     }
 
     const std::string ipText = LegacyIpv4Text(ip);
-    std::string sql = "INSERT INTO LogInfo(Account,AccountEnterTime,IP) VALUES('";
-    sql += account;
-    sql += "','";
-    sql += time.data();
-    sql += "','";
-    sql += ipText;
-    sql += "')";
-
     // Прямой владелец использует char[512] + sprintf. Дошедшие сюда имена учётных
     // записей не длиннее 31 байта, поэтому штатное поведение побайтно совпадает.
     // Слишком большой внешний ввод — явная граница вместо выхода за стек.
-    if (sql.size() >= kLegacyAccountLogBufferSize) {
+    constexpr std::size_t kLegacySqlLiteralSize =
+        sizeof("INSERT INTO LogInfo(Account,AccountEnterTime,IP) VALUES('','','')") - 1U;
+    if (kLegacySqlLiteralSize + std::strlen(account) + std::strlen(time.data()) +
+            ipText.size() >=
+        kLegacyAccountLogBufferSize) {
         RecordTechnicalError("AccountEnterLog: SQL не помещается в старый char[512]");
         return;
     }
-    _acc_logs.Push(std::move(sql));
+    _acc_logs.Push(AccLogRecord{
+        .account = account,
+        .enteredAt = time.data(),
+        .ip = ipText,
+    });
 }
 
 std::int32_t CGame::PrepareEnter(const char* account,
@@ -826,20 +746,14 @@ bool CGame::ExecuteProce(std::string userId,
         return false;
     }
 
-    const ConvertedText host = Windows1251ToUtf8(m_Setup._db_ip);
-    const ConvertedText database = Windows1251ToUtf8(m_Setup._db_billing_name);
-    const ConvertedText dbUser = Windows1251ToUtf8(m_Setup._db_user);
-    const ConvertedText dbPassword = Windows1251ToUtf8(m_Setup._db_psd);
-    const ConvertedText convertedUser = Windows1251ToUtf8(userId);
-    const ConvertedText convertedIp = Windows1251ToUtf8(userIp);
-    const ConvertedText convertedPassword = Windows1251ToUtf8(passwordHex);
+    const auto convertedUser = Nebokrai::Windows1251ToUtf8(userId);
+    const auto convertedIp = Nebokrai::Windows1251ToUtf8(userIp);
+    const auto convertedPassword = Nebokrai::Windows1251ToUtf8(passwordHex);
 
-    const ConvertedText* conversions[] = {
-        &host, &database, &dbUser, &dbPassword,
-        &convertedUser, &convertedIp, &convertedPassword,
-    };
-    for (const ConvertedText* conversion : conversions) {
-        if (!conversion->value) {
+    const Nebokrai::TextConversionResult* conversions[] = {
+        &convertedUser, &convertedIp, &convertedPassword};
+    for (const Nebokrai::TextConversionResult* conversion : conversions) {
+        if (!*conversion) {
             RecordTechnicalError("ExecuteProce: " + conversion->error);
             return false;
         }
@@ -848,101 +762,32 @@ bool CGame::ExecuteProce(std::string userId,
     // ADO/COM — техническая обвязка только Windows. Серверный стек Linux использует
     // unixODBC с Microsoft ODBC Driver 18; игровая семантика и контракт процедуры
     // остаются в исходном владельце CGame.
-    std::string connection = "DRIVER={ODBC Driver 18 for SQL Server};SERVER=";
-    connection += *host.value;
-    connection += ";DATABASE=";
-    connection += *database.value;
-    connection += ";UID=";
-    connection += *dbUser.value;
-    connection += ";PWD=";
-    connection += *dbPassword.value;
-    connection += ";Encrypt=no;TrustServerCertificate=yes;";
+    auto connectionText = Nebokrai::Database::BuildMssqlConnectionString(
+        m_Setup._db_ip,
+        m_Setup._db_billing_name,
+        m_Setup._db_user,
+        m_Setup._db_psd);
+    if (auto* error = std::get_if<Nebokrai::Database::OdbcError>(&connectionText)) {
+        RecordTechnicalError("ExecuteProce: " + error->detail);
+        return false;
+    }
 
-    struct Environment
-    {
-        SQLHENV handle{SQL_NULL_HENV};
-        ~Environment()
-        {
-            if (handle != SQL_NULL_HENV) {
-                SQLFreeHandle(SQL_HANDLE_ENV, handle);
-            }
-        }
-    } environment;
-    struct Connection
-    {
-        SQLHDBC handle{SQL_NULL_HDBC};
-        ~Connection()
-        {
-            if (handle != SQL_NULL_HDBC) {
-                SQLDisconnect(handle);
-                SQLFreeHandle(SQL_HANDLE_DBC, handle);
-            }
-        }
-    } db;
-    struct Statement
-    {
-        SQLHSTMT handle{SQL_NULL_HSTMT};
-        ~Statement()
-        {
-            if (handle != SQL_NULL_HSTMT) {
-                SQLFreeHandle(SQL_HANDLE_STMT, handle);
-            }
-        }
-    } statement;
-
-    SQLRETURN result =
-        SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &environment.handle);
-    if (!OdbcSucceeded(result)) {
-        RecordTechnicalError("ExecuteProce: SQLAllocHandle(ENV) завершился ошибкой");
+    Nebokrai::Database::OdbcConnection db;
+    if (auto error = db.Open(std::get<std::string>(connectionText))) {
+        RecordTechnicalError("ExecuteProce: " + error->detail);
         return false;
     }
-    result = SQLSetEnvAttr(environment.handle,
-                           SQL_ATTR_ODBC_VERSION,
-                           reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3),
-                           0);
-    if (!OdbcSucceeded(result)) {
-        RecordTechnicalError(
-            "ExecuteProce: " +
-            OdbcDiagnostic(SQL_HANDLE_ENV, environment.handle, "SQLSetEnvAttr"));
-        return false;
-    }
-    result = SQLAllocHandle(SQL_HANDLE_DBC, environment.handle, &db.handle);
-    if (!OdbcSucceeded(result)) {
-        RecordTechnicalError(
-            "ExecuteProce: " +
-            OdbcDiagnostic(SQL_HANDLE_ENV, environment.handle, "SQLAllocHandle(DBC)"));
-        return false;
-    }
-    result = SQLDriverConnect(
-        db.handle,
-        nullptr,
-        reinterpret_cast<SQLCHAR*>(connection.data()),
-        SQL_NTS,
-        nullptr,
-        0,
-        nullptr,
-        SQL_DRIVER_NOPROMPT);
-    if (!OdbcSucceeded(result)) {
-        RecordTechnicalError(
-            "ExecuteProce: " +
-            OdbcDiagnostic(SQL_HANDLE_DBC, db.handle, "SQLDriverConnect"));
-        return false;
-    }
-    result = SQLAllocHandle(SQL_HANDLE_STMT, db.handle, &statement.handle);
-    if (!OdbcSucceeded(result)) {
-        RecordTechnicalError(
-            "ExecuteProce: " +
-            OdbcDiagnostic(SQL_HANDLE_DBC, db.handle, "SQLAllocHandle(STMT)"));
+    Nebokrai::Database::OdbcStatement statement;
+    if (auto error = statement.Create(db)) {
+        RecordTechnicalError("ExecuteProce: " + error->detail);
         return false;
     }
 
     // В оригинале ADODB CommandType=4 (хранимая процедура), CommandText=getAccInfoEx.
     SQLCHAR procedure[] = "{CALL getAccInfoEx(?,?,?,?)}";
-    result = SQLPrepare(statement.handle, procedure, SQL_NTS);
-    if (!OdbcSucceeded(result)) {
-        RecordTechnicalError(
-            "ExecuteProce: " +
-            OdbcDiagnostic(SQL_HANDLE_STMT, statement.handle, "SQLPrepare(getAccInfoEx)"));
+    if (auto error = statement.Prepare(
+            std::string_view(reinterpret_cast<const char*>(procedure)))) {
+        RecordTechnicalError("ExecuteProce: " + error->detail);
         return false;
     }
 
@@ -960,7 +805,7 @@ bool CGame::ExecuteProce(std::string userId,
                               SQLULEN legacySize,
                               SQLLEN& length) -> bool {
         const SQLRETURN bound = SQLBindParameter(
-            statement.handle,
+            statement.NativeHandle(),
             number,
             SQL_PARAM_INPUT,
             SQL_C_CHAR,
@@ -970,10 +815,13 @@ bool CGame::ExecuteProce(std::string userId,
             value.data(),
             static_cast<SQLLEN>(value.size() + 1U),
             &length);
-        if (!OdbcSucceeded(bound)) {
+        if (!Nebokrai::Database::OdbcSucceeded(bound)) {
             RecordTechnicalError(
                 "ExecuteProce: " +
-                OdbcDiagnostic(SQL_HANDLE_STMT, statement.handle, "SQLBindParameter"));
+                Nebokrai::Database::OdbcDiagnostic(
+                    SQL_HANDLE_STMT,
+                    statement.NativeHandle(),
+                    "SQLBindParameter").detail);
             return false;
         }
         return true;
@@ -986,7 +834,7 @@ bool CGame::ExecuteProce(std::string userId,
         !bindText(3, parameterPassword, 0x40U, passwordLength)) {
         return false;
     }
-    result = SQLBindParameter(statement.handle,
+    SQLRETURN result = SQLBindParameter(statement.NativeHandle(),
                               4,
                               SQL_PARAM_OUTPUT,
                               SQL_C_SLONG,
@@ -996,18 +844,18 @@ bool CGame::ExecuteProce(std::string userId,
                               &procedureResult,
                               sizeof(procedureResult),
                               &resultLength);
-    if (!OdbcSucceeded(result)) {
+    if (!Nebokrai::Database::OdbcSucceeded(result)) {
         RecordTechnicalError(
             "ExecuteProce: " +
-            OdbcDiagnostic(SQL_HANDLE_STMT, statement.handle, "SQLBindParameter(@Result)"));
+            Nebokrai::Database::OdbcDiagnostic(
+                SQL_HANDLE_STMT,
+                statement.NativeHandle(),
+                "SQLBindParameter(@Result)").detail);
         return false;
     }
 
-    result = SQLExecute(statement.handle);
-    if (!OdbcSucceeded(result) && result != SQL_NO_DATA) {
-        RecordTechnicalError(
-            "ExecuteProce: " +
-            OdbcDiagnostic(SQL_HANDLE_STMT, statement.handle, "SQLExecute(getAccInfoEx)"));
+    if (auto error = statement.Execute()) {
+        RecordTechnicalError("ExecuteProce: " + error->detail);
         return false;
     }
 
@@ -1018,18 +866,6 @@ bool CGame::ExecuteProce(std::string userId,
 
 void CGame::RecordTechnicalError(std::string detail)
 {
-    std::lock_guard guard(m_TechnicalErrorMutex);
-    m_TechnicalErrors.push_back(std::move(detail));
-}
-
-std::optional<std::string> CGame::PopTechnicalError()
-{
-    std::lock_guard guard(m_TechnicalErrorMutex);
-    if (m_TechnicalErrors.empty()) {
-        return std::nullopt;
-    }
-    std::string detail = std::move(m_TechnicalErrors.front());
-    m_TechnicalErrors.pop_front();
-    return detail;
+    spdlog::error("{}", detail);
 }
 }

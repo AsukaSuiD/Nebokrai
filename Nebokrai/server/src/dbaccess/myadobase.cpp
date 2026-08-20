@@ -1,14 +1,11 @@
 #include "myadobase.h"
 
-#include <iconv.h>
-#include <sqlext.h>
+#include "odbc.h"
 
-#include <algorithm>
-#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
-#include <string_view>
+#include <memory>
 #include <utility>
 
 std::string CMyAdoBase::m_strConnectionString;
@@ -20,136 +17,12 @@ std::string CMyAdoBase::m_strPassword;
 std::string CMyAdoBase::m_strConnectTimeout;
 std::string CMyAdoBase::m_strIntegratedSecurity;
 
-namespace
+CMyAdoBase::Connection::Connection()
+    : implementation(std::make_unique<Nebokrai::Database::OdbcConnection>())
 {
-bool OdbcSucceeded(SQLRETURN result) noexcept
-{
-    return result == SQL_SUCCESS || result == SQL_SUCCESS_WITH_INFO;
 }
 
-std::string OdbcDiagnostic(SQLSMALLINT handleType,
-                           SQLHANDLE handle,
-                           std::string_view operation)
-{
-    SQLCHAR state[6]{};
-    SQLINTEGER native = 0;
-    SQLCHAR message[1024]{};
-    SQLSMALLINT length = 0;
-    const SQLRETURN diagnostic = SQLGetDiagRec(handleType,
-                                                handle,
-                                                1,
-                                                state,
-                                                &native,
-                                                message,
-                                                static_cast<SQLSMALLINT>(sizeof(message)),
-                                                &length);
-    std::string detail(operation);
-    if (!OdbcSucceeded(diagnostic)) {
-        detail += ": диагностические сведения ODBC недоступны";
-        return detail;
-    }
-
-    detail += ": SQLSTATE=";
-    detail += reinterpret_cast<const char*>(state);
-    detail += ", системный код=" + std::to_string(native);
-    if (length > 0) {
-        const std::size_t copied = std::min<std::size_t>(
-            static_cast<std::size_t>(length), sizeof(message) - 1U);
-        detail += ", ";
-        detail.append(reinterpret_cast<const char*>(message), copied);
-    }
-    return detail;
-}
-
-struct ConvertedText
-{
-    bool ok{};
-    std::string value;
-    std::string error;
-};
-
-ConvertedText Windows1251ToUtf8(std::string_view source)
-{
-    if (source.empty()) {
-        return ConvertedText{.ok = true};
-    }
-
-    iconv_t converter = iconv_open("UTF-8", "WINDOWS-1251");
-    if (converter == reinterpret_cast<iconv_t>(-1)) {
-        return ConvertedText{.error = "iconv не поддерживает преобразование WINDOWS-1251 -> UTF-8"};
-    }
-    struct Closer
-    {
-        iconv_t converter;
-        ~Closer() { iconv_close(converter); }
-    } closer{converter};
-
-    std::string output(source.size() * 4U + 4U, '\0');
-    char* input = const_cast<char*>(source.data());
-    std::size_t inputLeft = source.size();
-    char* destination = output.data();
-    std::size_t destinationLeft = output.size();
-    errno = 0;
-    if (iconv(converter,
-              &input,
-              &inputLeft,
-              &destination,
-              &destinationLeft) == static_cast<std::size_t>(-1)) {
-        return ConvertedText{
-            .error = "iconv не преобразовал WINDOWS-1251 в UTF-8, errno=" +
-                     std::to_string(errno)};
-    }
-    output.resize(output.size() - destinationLeft);
-    return ConvertedText{.ok = true, .value = std::move(output)};
-}
-
-std::string EscapeOdbcValue(std::string_view value)
-{
-    std::string escaped;
-    escaped.reserve(value.size() + 2U);
-    escaped.push_back('{');
-    for (const char ch : value) {
-        escaped.push_back(ch);
-        if (ch == '}') {
-            escaped.push_back('}');
-        }
-    }
-    escaped.push_back('}');
-    return escaped;
-}
-
-bool BuildOdbcConnectionString(std::string_view server,
-                               std::string_view database,
-                               std::string_view user,
-                               std::string_view password,
-                               std::string& output,
-                               std::string& error)
-{
-    const ConvertedText convertedServer = Windows1251ToUtf8(server);
-    const ConvertedText convertedDatabase = Windows1251ToUtf8(database);
-    const ConvertedText convertedUser = Windows1251ToUtf8(user);
-    const ConvertedText convertedPassword = Windows1251ToUtf8(password);
-    const ConvertedText* conversions[] = {
-        &convertedServer, &convertedDatabase, &convertedUser, &convertedPassword};
-    for (const ConvertedText* conversion : conversions) {
-        if (!conversion->ok) {
-            error = conversion->error;
-            return false;
-        }
-    }
-
-    output = "DRIVER={ODBC Driver 18 for SQL Server};SERVER=";
-    output += EscapeOdbcValue(convertedServer.value);
-    output += ";DATABASE=";
-    output += EscapeOdbcValue(convertedDatabase.value);
-    output += ";UID=";
-    output += EscapeOdbcValue(convertedUser.value);
-    output += ";PWD=";
-    output += EscapeOdbcValue(convertedPassword.value);
-    output += ";Encrypt=no;TrustServerCertificate=yes;";
-    return true;
-}
-}
+CMyAdoBase::Connection::~Connection() = default;
 
 bool CMyAdoBase::Initialize(std::string provider,
                             std::string dataSource,
@@ -189,38 +62,13 @@ bool CMyAdoBase::Uninitalize() noexcept
 
 bool CMyAdoBase::CreateCn(Connection& connection)
 {
-    if (connection.created || connection.environment != SQL_NULL_HENV ||
-        connection.handle != SQL_NULL_HDBC) {
+    if (connection.created) {
         ReleaseCn(connection);
     }
     connection.lastError.clear();
 
-    SQLRETURN result =
-        SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &connection.environment);
-    if (!OdbcSucceeded(result)) {
-        connection.environment = SQL_NULL_HENV;
-        connection.lastError = "SQLAllocHandle(SQL_HANDLE_ENV) завершился ошибкой";
-        return false;
-    }
-    result = SQLSetEnvAttr(connection.environment,
-                           SQL_ATTR_ODBC_VERSION,
-                           reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3),
-                           0);
-    if (!OdbcSucceeded(result)) {
-        connection.lastError = OdbcDiagnostic(
-            SQL_HANDLE_ENV, connection.environment, "ошибка SQLSetEnvAttr(ODBC 3)");
-        SQLFreeHandle(SQL_HANDLE_ENV, connection.environment);
-        connection.environment = SQL_NULL_HENV;
-        return false;
-    }
-    result = SQLAllocHandle(
-        SQL_HANDLE_DBC, connection.environment, &connection.handle);
-    if (!OdbcSucceeded(result)) {
-        connection.lastError = OdbcDiagnostic(
-            SQL_HANDLE_ENV, connection.environment, "ошибка SQLAllocHandle(SQL_HANDLE_DBC)");
-        SQLFreeHandle(SQL_HANDLE_ENV, connection.environment);
-        connection.environment = SQL_NULL_HENV;
-        connection.handle = SQL_NULL_HDBC;
+    if (auto error = connection.implementation->Create()) {
+        connection.lastError = std::move(error->detail);
         return false;
     }
     connection.created = true;
@@ -231,33 +79,21 @@ bool CMyAdoBase::CreateCn(Connection& connection)
 bool CMyAdoBase::OpenCn(Connection& connection)
 {
     connection.lastError.clear();
-    if (!connection.created || connection.handle == SQL_NULL_HDBC) {
+    if (!connection.created) {
         connection.lastError = "OpenCn вызван без предварительного CreateCn";
         return false;
     }
 
-    std::string odbcConnection;
-    if (!BuildOdbcConnectionString(m_strDataSource,
-                                   m_strInitialCatalog,
-                                   m_strUserID,
-                                   m_strPassword,
-                                   odbcConnection,
-                                   connection.lastError)) {
+    auto connectionText = Nebokrai::Database::BuildMssqlConnectionString(
+        m_strDataSource, m_strInitialCatalog, m_strUserID, m_strPassword);
+    if (auto* error = std::get_if<Nebokrai::Database::OdbcError>(&connectionText)) {
+        connection.lastError = std::move(error->detail);
         return false;
     }
 
-    const SQLRETURN result = SQLDriverConnect(
-        connection.handle,
-        nullptr,
-        reinterpret_cast<SQLCHAR*>(odbcConnection.data()),
-        SQL_NTS,
-        nullptr,
-        0,
-        nullptr,
-        SQL_DRIVER_NOPROMPT);
-    if (!OdbcSucceeded(result)) {
-        connection.lastError = OdbcDiagnostic(
-            SQL_HANDLE_DBC, connection.handle, "ошибка SQLDriverConnect");
+    if (auto error = connection.implementation->Open(
+            std::get<std::string>(connectionText))) {
+        connection.lastError = std::move(error->detail);
         return false;
     }
     connection.open = true;
@@ -267,47 +103,92 @@ bool CMyAdoBase::OpenCn(Connection& connection)
 bool CMyAdoBase::ExecuteCn(const char* sql, Connection& connection)
 {
     connection.lastError.clear();
-    if (sql == nullptr || !connection.open || connection.handle == SQL_NULL_HDBC) {
+    if (sql == nullptr || !connection.open) {
         connection.lastError =
             sql == nullptr ? "ExecuteCn получил SQL=null"
                            : "ExecuteCn получил неоткрытое подключение";
         return false;
     }
 
-    SQLHSTMT statement = SQL_NULL_HSTMT;
-    SQLRETURN result =
-        SQLAllocHandle(SQL_HANDLE_STMT, connection.handle, &statement);
-    if (!OdbcSucceeded(result)) {
-        connection.lastError = OdbcDiagnostic(
-            SQL_HANDLE_DBC, connection.handle, "ошибка SQLAllocHandle(SQL_HANDLE_STMT)");
+    Nebokrai::Database::OdbcStatement statement;
+    if (auto error = statement.Create(*connection.implementation)) {
+        connection.lastError = std::move(error->detail);
         return false;
     }
+    if (auto error = statement.ExecuteDirect(sql)) {
+        connection.lastError = std::move(error->detail);
+        return false;
+    }
+    return true;
+}
 
-    result = SQLExecDirect(statement,
-                           reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql)),
-                           SQL_NTS);
-    if (!OdbcSucceeded(result) && result != SQL_NO_DATA) {
+bool CMyAdoBase::ExecuteAccountEnterLog(std::string_view account,
+                                        std::string_view enteredAt,
+                                        std::string_view ip,
+                                        Connection& connection)
+{
+    connection.lastError.clear();
+    if (!connection.open) {
         connection.lastError =
-            OdbcDiagnostic(SQL_HANDLE_STMT, statement, "ошибка SQLExecDirect");
-        SQLFreeHandle(SQL_HANDLE_STMT, statement);
+            "ExecuteAccountEnterLog получил неоткрытое подключение";
         return false;
     }
 
-    SQLFreeHandle(SQL_HANDLE_STMT, statement);
+    Nebokrai::Database::OdbcStatement statement;
+    if (auto error = statement.Create(*connection.implementation)) {
+        connection.lastError = std::move(error->detail);
+        return false;
+    }
+    if (auto error = statement.Prepare(
+            "INSERT INTO LogInfo(Account,AccountEnterTime,IP) VALUES(?,?,?)")) {
+        connection.lastError = std::move(error->detail);
+        return false;
+    }
+
+    std::string values[] = {
+        std::string(account), std::string(enteredAt), std::string(ip)};
+    SQLLEN lengths[] = {
+        static_cast<SQLLEN>(values[0].size()),
+        static_cast<SQLLEN>(values[1].size()),
+        static_cast<SQLLEN>(values[2].size())};
+    const SQLULEN legacySizes[] = {0x20U, 0x20U, 0x18U};
+    for (SQLUSMALLINT index = 0; index < 3; ++index) {
+        const SQLRETURN result = SQLBindParameter(
+            statement.NativeHandle(),
+            static_cast<SQLUSMALLINT>(index + 1U),
+            SQL_PARAM_INPUT,
+            SQL_C_CHAR,
+            SQL_VARCHAR,
+            legacySizes[index],
+            0,
+            values[index].data(),
+            static_cast<SQLLEN>(values[index].size() + 1U),
+            &lengths[index]);
+        if (!Nebokrai::Database::OdbcSucceeded(result)) {
+            connection.lastError = Nebokrai::Database::OdbcDiagnostic(
+                SQL_HANDLE_STMT,
+                statement.NativeHandle(),
+                "SQLBindParameter(AccountEnterLog)").detail;
+            return false;
+        }
+    }
+
+    if (auto error = statement.Execute()) {
+        connection.lastError = std::move(error->detail);
+        return false;
+    }
     return true;
 }
 
 bool CMyAdoBase::CloseCn(Connection& connection)
 {
-    if (connection.handle == SQL_NULL_HDBC || !connection.open) {
+    if (!connection.open) {
         connection.open = false;
         return true;
     }
 
-    const SQLRETURN result = SQLDisconnect(connection.handle);
-    if (!OdbcSucceeded(result)) {
-        connection.lastError =
-            OdbcDiagnostic(SQL_HANDLE_DBC, connection.handle, "ошибка SQLDisconnect");
+    if (auto error = connection.implementation->Close()) {
+        connection.lastError = std::move(error->detail);
         return false;
     }
     connection.open = false;
@@ -319,14 +200,7 @@ void CMyAdoBase::ReleaseCn(Connection& connection) noexcept
     // VERIFIED_ASSEMBLY 0x00464B40: ReleaseCn сначала вызывает CloseCn, затем
     // Release/null. Ошибка close не меняет дальнейший release.
     static_cast<void>(CloseCn(connection));
-    if (connection.handle != SQL_NULL_HDBC) {
-        SQLFreeHandle(SQL_HANDLE_DBC, connection.handle);
-    }
-    if (connection.environment != SQL_NULL_HENV) {
-        SQLFreeHandle(SQL_HANDLE_ENV, connection.environment);
-    }
-    connection.handle = SQL_NULL_HDBC;
-    connection.environment = SQL_NULL_HENV;
+    connection.implementation->Reset();
     connection.created = false;
     connection.open = false;
 }

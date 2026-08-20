@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <string>
 
 /*
@@ -21,11 +22,20 @@
  * НЕ сбрасывает его count. Поэтому собственный token-count сохраняется отдельно:
  * stale token после clear даёт пустой Pop, как обнулённый char[2048] caller-а,
  * а push сверх 10000 всё ещё кладёт строку в deque, но не создаёт новый token.
- * std::condition_variable + mutex заменяют только Win32 plumbing. Ёмкости deque,
- * устранение дублей или повтор исходный владелец не добавлял.
+ * std::condition_variable + mutex заменяют только обвязку Win32. Текущий элемент
+ * очереди хранит поля записи отдельно, чтобы ODBC выполнял параметризованный
+ * запрос вместо склейки SQL. Порядок, token-count, отсутствие дублей и повторов
+ * остаются исходными.
  */
 namespace Login
 {
+struct AccLogRecord
+{
+    std::string account;
+    std::string enteredAt;
+    std::string ip;
+};
+
 class AccLogQueue
 {
 public:
@@ -34,8 +44,8 @@ public:
     AccLogQueue(const AccLogQueue&) = delete;
     AccLogQueue& operator=(const AccLogQueue&) = delete;
 
-    void Push(std::string sql);
-    [[nodiscard]] std::string Pop();
+    void Push(AccLogRecord record);
+    [[nodiscard]] std::optional<AccLogRecord> Pop();
     void Clear();
 
 private:
@@ -43,7 +53,7 @@ private:
 
     std::mutex m_Mutex;
     std::condition_variable m_NotEmpty;
-    std::deque<std::string> m_Logs;
+    std::deque<AccLogRecord> m_Logs;
     std::size_t m_SemaphoreCount{};
 };
 }

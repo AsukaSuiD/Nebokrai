@@ -24,7 +24,7 @@
  * Общий CServer подтверждён Auth/Billing/Login/Game/World EXE/PDB. Поздняя
  * Rust-реконструкция уже восстановила Host/admission, socket-command snapshot,
  * routing maps, временный forbid IPv4, таймер первого сообщения, traffic
- * counters и точный порядок close/send. Старый Miracle_server_linux полезен
+ * counters и точный порядок close/send. Архивная Linux-попытка полезна
  * только как C++-донор: его poll/eventfd/IOCP-замены не являются оригиналом.
  *
  * Новый владелец Linux использует самостоятельный Asio для приёма,

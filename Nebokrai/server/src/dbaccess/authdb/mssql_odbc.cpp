@@ -1,14 +1,11 @@
 #include "mssql_odbc.h"
 
+#include "../odbc.h"
 #include "../../auth/configreader.h"
-
-#include <iconv.h>
-#include <sql.h>
-#include <sqlext.h>
+#include "../../public/textcodec.h"
 
 #include <algorithm>
 #include <array>
-#include <cerrno>
 #include <cctype>
 #include <cstdint>
 #include <optional>
@@ -21,48 +18,15 @@ namespace
 {
 bool OdbcSucceeded(SQLRETURN result) noexcept
 {
-    return result == SQL_SUCCESS || result == SQL_SUCCESS_WITH_INFO;
-}
-
-std::error_code OdbcErrorCode(SQLINTEGER native) noexcept
-{
-    if (native == 0) {
-        return std::make_error_code(std::errc::io_error);
-    }
-    return {static_cast<int>(native), std::generic_category()};
+    return Nebokrai::Database::OdbcSucceeded(result);
 }
 
 AuthDatabaseError OdbcDiagnostic(SQLSMALLINT handleType,
                                  SQLHANDLE handle,
                                  std::string_view operation)
 {
-    SQLCHAR state[6]{};
-    SQLINTEGER native = 0;
-    SQLCHAR message[1024]{};
-    SQLSMALLINT messageLength = 0;
-    const SQLRETURN diagnostic = SQLGetDiagRec(handleType,
-                                                 handle,
-                                                 1,
-                                                 state,
-                                                 &native,
-                                                 message,
-                                                 static_cast<SQLSMALLINT>(sizeof(message)),
-                                                 &messageLength);
-
-    std::string detail(operation);
-    if (OdbcSucceeded(diagnostic)) {
-        detail += ": SQLSTATE=";
-        detail.append(reinterpret_cast<const char*>(state));
-        detail += ", системный код=" + std::to_string(native);
-        if (messageLength > 0) {
-            detail += ", ";
-            detail.append(reinterpret_cast<const char*>(message),
-                          static_cast<std::size_t>(messageLength));
-        }
-    } else {
-        detail += ": диагностические сведения ODBC недоступны";
-    }
-    return {OdbcErrorCode(native), std::move(detail)};
+    auto error = Nebokrai::Database::OdbcDiagnostic(handleType, handle, operation);
+    return {std::move(error.code), std::move(error.detail)};
 }
 
 AuthDatabaseError LocalError(std::errc code, std::string detail)
@@ -73,46 +37,12 @@ AuthDatabaseError LocalError(std::errc code, std::string detail)
 std::variant<std::string, AuthDatabaseError>
 Windows1251ToUtf8(std::string_view source)
 {
-    if (source.empty()) {
-        return std::string{};
+    auto converted = Nebokrai::Windows1251ToUtf8(source);
+    if (!converted) {
+        return LocalError(std::errc::illegal_byte_sequence,
+                          std::move(converted.error));
     }
-
-    iconv_t converter = iconv_open("UTF-8", "WINDOWS-1251");
-    if (converter == reinterpret_cast<iconv_t>(-1)) {
-        return LocalError(std::errc::not_supported,
-                          "iconv не поддерживает WINDOWS-1251 -> UTF-8");
-    }
-
-    struct IconvCloser
-    {
-        iconv_t converter;
-        ~IconvCloser()
-        {
-            iconv_close(converter);
-        }
-    } closer{converter};
-
-    std::string output;
-    output.resize(source.size() * 4U + 4U);
-
-    char* input = const_cast<char*>(source.data());
-    std::size_t inputLeft = source.size();
-    char* destination = output.data();
-    std::size_t destinationLeft = output.size();
-
-    errno = 0;
-    if (iconv(converter,
-              &input,
-              &inputLeft,
-              &destination,
-              &destinationLeft) == static_cast<std::size_t>(-1)) {
-        return AuthDatabaseError{
-            std::error_code(errno, std::generic_category()),
-            "не удалось преобразовать байты Windows-1251 в UTF-8"};
-    }
-
-    output.resize(output.size() - destinationLeft);
-    return output;
+    return std::move(*converted.value);
 }
 
 std::variant<std::string, AuthDatabaseError>
@@ -122,60 +52,23 @@ Windows1251ToUtf8(std::span<const std::uint8_t> source)
         reinterpret_cast<const char*>(source.data()), source.size()));
 }
 
-std::string EscapeOdbcValue(std::string_view value)
-{
-    std::string escaped;
-    escaped.reserve(value.size() + 2U);
-    escaped.push_back('{');
-    for (const char ch : value) {
-        escaped.push_back(ch);
-        if (ch == '}') {
-            escaped.push_back('}');
-        }
-    }
-    escaped.push_back('}');
-    return escaped;
-}
-
 std::variant<std::string, AuthDatabaseError>
 BuildConnectionString(const AuthDatabaseSettings& settings,
                       const MssqlOdbcOptions& options)
 {
-    if (options.driver.empty()) {
-        return LocalError(std::errc::invalid_argument,
-                          "имя драйвера MSSQL ODBC не задано");
+    auto result = Nebokrai::Database::BuildMssqlConnectionString(
+        settings.host,
+        settings.database,
+        settings.user,
+        settings.password,
+        Nebokrai::Database::MssqlConnectionOptions{
+            .driver = options.driver,
+            .encrypt = options.encrypt,
+            .trustServerCertificate = options.trustServerCertificate});
+    if (auto* error = std::get_if<Nebokrai::Database::OdbcError>(&result)) {
+        return AuthDatabaseError{error->code, std::move(error->detail)};
     }
-
-    const auto host = Windows1251ToUtf8(settings.host);
-    if (const auto* error = std::get_if<AuthDatabaseError>(&host)) {
-        return *error;
-    }
-    const auto database = Windows1251ToUtf8(settings.database);
-    if (const auto* error = std::get_if<AuthDatabaseError>(&database)) {
-        return *error;
-    }
-    const auto user = Windows1251ToUtf8(settings.user);
-    if (const auto* error = std::get_if<AuthDatabaseError>(&user)) {
-        return *error;
-    }
-    const auto password = Windows1251ToUtf8(settings.password);
-    if (const auto* error = std::get_if<AuthDatabaseError>(&password)) {
-        return *error;
-    }
-
-    std::string connection;
-    connection.reserve(256U + settings.host.size() + settings.database.size() +
-                       settings.user.size() + settings.password.size());
-    connection += "DRIVER=" + EscapeOdbcValue(options.driver) + ';';
-    connection += "SERVER=" + EscapeOdbcValue(std::get<std::string>(host)) + ';';
-    connection += "DATABASE=" + EscapeOdbcValue(std::get<std::string>(database)) + ';';
-    connection += "UID=" + EscapeOdbcValue(std::get<std::string>(user)) + ';';
-    connection += "PWD=" + EscapeOdbcValue(std::get<std::string>(password)) + ';';
-    connection += options.encrypt ? "Encrypt=yes;" : "Encrypt=no;";
-    connection += options.trustServerCertificate
-                      ? "TrustServerCertificate=yes;"
-                      : "TrustServerCertificate=no;";
-    return connection;
+    return std::get<std::string>(std::move(result));
 }
 
 std::variant<std::string, AuthDatabaseError> QuoteProcedure(std::string_view procedure)
@@ -247,134 +140,67 @@ SQL_TIMESTAMP_STRUCT ToTimestamp(const AuthLocalTime& value) noexcept
     return timestamp;
 }
 
-struct OdbcEnvironment
-{
-    SQLHENV handle{SQL_NULL_HENV};
-
-    ~OdbcEnvironment()
-    {
-        if (handle != SQL_NULL_HENV) {
-            SQLFreeHandle(SQL_HANDLE_ENV, handle);
-        }
-    }
-
-    std::optional<AuthDatabaseError> Open()
-    {
-        SQLRETURN result = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &handle);
-        if (!OdbcSucceeded(result)) {
-            return LocalError(std::errc::io_error,
-                              "SQLAllocHandle(SQL_HANDLE_ENV) завершился ошибкой");
-        }
-        result = SQLSetEnvAttr(handle,
-                               SQL_ATTR_ODBC_VERSION,
-                               reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3),
-                               0);
-        if (!OdbcSucceeded(result)) {
-            return OdbcDiagnostic(SQL_HANDLE_ENV, handle, "SQLSetEnvAttr(ODBC 3.8)");
-        }
-        return std::nullopt;
-    }
-};
-
 struct OdbcConnection
 {
-    OdbcEnvironment environment;
-    SQLHDBC handle{SQL_NULL_HDBC};
-
-    ~OdbcConnection()
-    {
-        if (handle != SQL_NULL_HDBC) {
-            SQLDisconnect(handle);
-            SQLFreeHandle(SQL_HANDLE_DBC, handle);
-        }
-    }
+    Nebokrai::Database::OdbcConnection implementation;
 
     std::optional<AuthDatabaseError> Open(std::string_view connectionString)
     {
-        if (auto error = environment.Open()) {
-            return error;
-        }
-
-        SQLRETURN result = SQLAllocHandle(SQL_HANDLE_DBC, environment.handle, &handle);
-        if (!OdbcSucceeded(result)) {
-            return OdbcDiagnostic(SQL_HANDLE_ENV,
-                                  environment.handle,
-                                  "SQLAllocHandle(SQL_HANDLE_DBC)");
-        }
-
-        result = SQLDriverConnect(
-            handle,
-            nullptr,
-            reinterpret_cast<SQLCHAR*>(const_cast<char*>(connectionString.data())),
-            static_cast<SQLSMALLINT>(connectionString.size()),
-            nullptr,
-            0,
-            nullptr,
-            SQL_DRIVER_NOPROMPT);
-        if (!OdbcSucceeded(result)) {
-            return OdbcDiagnostic(SQL_HANDLE_DBC, handle, "SQLDriverConnect");
+        if (auto error = implementation.Open(connectionString)) {
+            return AuthDatabaseError{std::move(error->code), std::move(error->detail)};
         }
         return std::nullopt;
+    }
+
+    [[nodiscard]] SQLHDBC Handle() const noexcept
+    {
+        return implementation.NativeHandle();
     }
 };
 
 struct OdbcStatement
 {
-    SQLHSTMT handle{SQL_NULL_HSTMT};
+    Nebokrai::Database::OdbcStatement implementation;
 
-    ~OdbcStatement()
+    std::optional<AuthDatabaseError> Prepare(OdbcConnection& connection,
+                                             std::string_view sql)
     {
-        if (handle != SQL_NULL_HSTMT) {
-            SQLFreeHandle(SQL_HANDLE_STMT, handle);
+        if (auto error = implementation.Create(connection.implementation)) {
+            return AuthDatabaseError{std::move(error->code), std::move(error->detail)};
         }
-    }
-
-    std::optional<AuthDatabaseError> Prepare(SQLHDBC connection, std::string_view sql)
-    {
-        SQLRETURN result = SQLAllocHandle(SQL_HANDLE_STMT, connection, &handle);
-        if (!OdbcSucceeded(result)) {
-            return OdbcDiagnostic(SQL_HANDLE_DBC,
-                                  connection,
-                                  "SQLAllocHandle(SQL_HANDLE_STMT)");
-        }
-        result = SQLPrepare(handle,
-                             reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql.data())),
-                             static_cast<SQLINTEGER>(sql.size()));
-        if (!OdbcSucceeded(result)) {
-            return OdbcDiagnostic(SQL_HANDLE_STMT, handle, "SQLPrepare");
+        if (auto error = implementation.Prepare(sql)) {
+            return AuthDatabaseError{std::move(error->code), std::move(error->detail)};
         }
         return std::nullopt;
     }
 
     std::optional<AuthDatabaseError> Execute()
     {
-        const SQLRETURN result = SQLExecute(handle);
-        if (!OdbcSucceeded(result) && result != SQL_NO_DATA) {
-            return OdbcDiagnostic(SQL_HANDLE_STMT, handle, "SQLExecute");
+        if (auto error = implementation.Execute()) {
+            return AuthDatabaseError{std::move(error->code), std::move(error->detail)};
         }
         return std::nullopt;
     }
 
     std::optional<AuthDatabaseError> FetchOne()
     {
-        const SQLRETURN result = SQLFetch(handle);
-        if (result == SQL_NO_DATA) {
-            return LocalError(std::errc::no_message_available,
-                              "хранимая процедура MSSQL не вернула строку результата");
-        }
-        if (!OdbcSucceeded(result)) {
-            return OdbcDiagnostic(SQL_HANDLE_STMT, handle, "SQLFetch");
+        if (auto error = implementation.FetchOne()) {
+            return AuthDatabaseError{std::move(error->code), std::move(error->detail)};
         }
         return std::nullopt;
     }
 
     std::optional<AuthDatabaseError> CloseCursor()
     {
-        const SQLRETURN result = SQLFreeStmt(handle, SQL_CLOSE);
-        if (!OdbcSucceeded(result)) {
-            return OdbcDiagnostic(SQL_HANDLE_STMT, handle, "SQLFreeStmt(SQL_CLOSE)");
+        if (auto error = implementation.CloseCursor()) {
+            return AuthDatabaseError{std::move(error->code), std::move(error->detail)};
         }
         return std::nullopt;
+    }
+
+    [[nodiscard]] SQLHSTMT Handle() const noexcept
+    {
+        return implementation.NativeHandle();
     }
 };
 
@@ -643,20 +469,20 @@ MssqlOdbcAuthDatabase::Authenticate(std::string_view procedure,
         "DECLARE @Result int; EXEC " + std::get<std::string>(quotedProcedure) +
         " @UserID=?, @UserPWDb=?, @UserIP=?, @Result=@Result OUTPUT; SELECT @Result;";
     OdbcStatement statement;
-    if (auto error = statement.Prepare(connection.handle, sql)) {
+    if (auto error = statement.Prepare(connection, sql)) {
         return *error;
     }
 
     TextBinding accountBinding{std::get<std::string>(std::move(account))};
     TextBinding passwordBinding{std::get<std::string>(std::move(password))};
     TextBinding ipBinding{LegacyIpv4Text(request.clientIp)};
-    if (auto error = BindText(statement.handle, 1, accountBinding)) return *error;
-    if (auto error = BindText(statement.handle, 2, passwordBinding)) return *error;
-    if (auto error = BindText(statement.handle, 3, ipBinding)) return *error;
+    if (auto error = BindText(statement.Handle(), 1, accountBinding)) return *error;
+    if (auto error = BindText(statement.Handle(), 2, passwordBinding)) return *error;
+    if (auto error = BindText(statement.Handle(), 3, ipBinding)) return *error;
     if (auto error = statement.Execute()) return *error;
-    if (auto error = AdvanceToFirstRowset(statement.handle)) return *error;
+    if (auto error = AdvanceToFirstRowset(statement.Handle())) return *error;
     if (auto error = statement.FetchOne()) return *error;
-    return ReadInt(statement.handle, 1);
+    return ReadInt(statement.Handle(), 1);
 }
 
 std::variant<AuthExtendedDatabaseResult, AuthDatabaseError>
@@ -681,21 +507,21 @@ MssqlOdbcAuthDatabase::AuthenticateExtended(std::string_view procedure,
         "DATEPART(month,@suspended), DATEPART(day,@suspended), DATEPART(hour,@suspended), "
         "DATEPART(minute,@suspended), DATEPART(second,@suspended);";
     OdbcStatement statement;
-    if (auto error = statement.Prepare(connection.handle, sql)) return *error;
+    if (auto error = statement.Prepare(connection, sql)) return *error;
 
     TextBinding accountBinding{std::get<std::string>(std::move(account))};
     TextBinding ipBinding{LegacyIpv4Text(request.clientIp)};
-    if (auto error = BindText(statement.handle, 1, accountBinding)) return *error;
-    if (auto error = BindText(statement.handle, 2, ipBinding)) return *error;
+    if (auto error = BindText(statement.Handle(), 1, accountBinding)) return *error;
+    if (auto error = BindText(statement.Handle(), 2, ipBinding)) return *error;
     if (auto error = statement.Execute()) return *error;
-    if (auto error = AdvanceToFirstRowset(statement.handle)) return *error;
+    if (auto error = AdvanceToFirstRowset(statement.Handle())) return *error;
     if (auto error = statement.FetchOne()) return *error;
 
-    auto result = ReadInt(statement.handle, 1);
+    auto result = ReadInt(statement.Handle(), 1);
     if (auto* error = std::get_if<AuthDatabaseError>(&result)) return *error;
-    auto assure = ReadOptionalBinary80(statement.handle, 2);
+    auto assure = ReadOptionalBinary80(statement.Handle(), 2);
     if (auto* error = std::get_if<AuthDatabaseError>(&assure)) return *error;
-    auto suspended = ReadOptionalSuspended(statement.handle);
+    auto suspended = ReadOptionalSuspended(statement.Handle());
     if (auto* error = std::get_if<AuthDatabaseError>(&suspended)) return *error;
 
     AuthExtendedDatabaseResult output{
@@ -736,17 +562,17 @@ MssqlOdbcAuthDatabase::Lock(std::string_view procedure,
         "DECLARE @Result int; EXEC " + std::get<std::string>(quotedProcedure) +
         " @Account=?, @SuspendTime=?, @Result=@Result OUTPUT; SELECT @Result;";
     OdbcStatement statement;
-    if (auto error = statement.Prepare(connection.handle, sql)) return *error;
+    if (auto error = statement.Prepare(connection, sql)) return *error;
 
     TextBinding accountBinding{std::get<std::string>(std::move(account))};
     TimestampBinding timeBinding{ToTimestamp(request.until)};
-    if (auto error = BindText(statement.handle, 1, accountBinding)) return *error;
-    if (auto error = BindTimestamp(statement.handle, 2, timeBinding)) return *error;
+    if (auto error = BindText(statement.Handle(), 1, accountBinding)) return *error;
+    if (auto error = BindTimestamp(statement.Handle(), 2, timeBinding)) return *error;
     if (auto error = statement.Execute()) return *error;
-    if (auto error = AdvanceToFirstRowset(statement.handle)) return *error;
+    if (auto error = AdvanceToFirstRowset(statement.Handle())) return *error;
     if (auto error = statement.FetchOne()) return *error;
 
-    auto result = ReadInt(statement.handle, 1);
+    auto result = ReadInt(statement.Handle(), 1);
     if (auto* error = std::get_if<AuthDatabaseError>(&result)) return *error;
     return std::get<std::int32_t>(result) == 0;
 }
@@ -772,18 +598,18 @@ MssqlOdbcAuthDatabase::WriteServerInfo(std::string_view procedure,
         "EXEC " + std::get<std::string>(quotedProcedure) +
         " @LogTime=?, @ls=?, @ws=?, @gs=?, @Amount=?;";
     OdbcStatement statement;
-    if (auto error = statement.Prepare(connection.handle, sql)) return error;
+    if (auto error = statement.Prepare(connection, sql)) return error;
 
     TimestampBinding timeBinding{ToTimestamp(loggedAt)};
     IntBinding loginBinding{};
     IntBinding worldBinding{};
     IntBinding gameBinding{};
     IntBinding amountBinding{};
-    if (auto error = BindTimestamp(statement.handle, 1, timeBinding)) return error;
-    if (auto error = BindInt(statement.handle, 2, loginBinding)) return error;
-    if (auto error = BindInt(statement.handle, 3, worldBinding)) return error;
-    if (auto error = BindInt(statement.handle, 4, gameBinding)) return error;
-    if (auto error = BindInt(statement.handle, 5, amountBinding)) return error;
+    if (auto error = BindTimestamp(statement.Handle(), 1, timeBinding)) return error;
+    if (auto error = BindInt(statement.Handle(), 2, loginBinding)) return error;
+    if (auto error = BindInt(statement.Handle(), 3, worldBinding)) return error;
+    if (auto error = BindInt(statement.Handle(), 4, gameBinding)) return error;
+    if (auto error = BindInt(statement.Handle(), 5, amountBinding)) return error;
 
     for (const AuthDb::ServerInfo& entry : entries) {
         loginBinding.value = static_cast<SQLINTEGER>(entry.loginServerId);
@@ -792,7 +618,7 @@ MssqlOdbcAuthDatabase::WriteServerInfo(std::string_view procedure,
         amountBinding.value = static_cast<SQLINTEGER>(entry.playerCount);
 
         if (auto error = statement.Execute()) return error;
-        if (auto error = DrainAllResults(statement.handle)) return error;
+        if (auto error = DrainAllResults(statement.Handle())) return error;
         if (auto error = statement.CloseCursor()) return error;
     }
     return std::nullopt;

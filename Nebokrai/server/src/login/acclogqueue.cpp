@@ -4,12 +4,12 @@
 
 namespace Login
 {
-void AccLogQueue::Push(std::string sql)
+void AccLogQueue::Push(AccLogRecord record)
 {
     bool released = false;
     {
         std::lock_guard guard(m_Mutex);
-        m_Logs.push_back(std::move(sql));
+        m_Logs.push_back(std::move(record));
         if (m_SemaphoreCount < kMaximumSemaphoreCount) {
             ++m_SemaphoreCount;
             released = true;
@@ -20,17 +20,17 @@ void AccLogQueue::Push(std::string sql)
     }
 }
 
-std::string AccLogQueue::Pop()
+std::optional<AccLogRecord> AccLogQueue::Pop()
 {
     std::unique_lock lock(m_Mutex);
     m_NotEmpty.wait(lock, [this] { return m_SemaphoreCount != 0U; });
     --m_SemaphoreCount;
     if (m_Logs.empty()) {
-        return {};
+        return std::nullopt;
     }
-    std::string sql = std::move(m_Logs.front());
+    AccLogRecord record = std::move(m_Logs.front());
     m_Logs.pop_front();
-    return sql;
+    return record;
 }
 
 void AccLogQueue::Clear()

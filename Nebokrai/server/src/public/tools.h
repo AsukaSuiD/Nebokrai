@@ -14,7 +14,7 @@
  * GetFileLength 0x00420710 и IniDecoder 0x00420A90.
  * ResolveLegacyFileAsciiCase — тонкая граница Linux поверх std::filesystem:
  * она сохраняет нечувствительный к ASCII-регистру поиск имени файла Windows,
- * но не меняет содержимое, формат или порядок чтения конфигурации Miracle.
+ * но не меняет содержимое, формат или порядок чтения конфигурации Nebokrai.
  */
 
 [[nodiscard]] int GetFileLength(char* name);

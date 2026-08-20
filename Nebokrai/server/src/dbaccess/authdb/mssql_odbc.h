@@ -7,7 +7,7 @@
 
 /*
  * Технический владелец Linux: адаптер MSSQL/ODBC для восстановленного
- * IAuthDatabase. Это не исходный владелец Miracle и не новая семантика БД.
+ * IAuthDatabase. Это не исходный владелец Nebokrai и не новая семантика БД.
  * Контракт процедур, параметров, fallback и result mapping остаётся в
  * authproc.cpp; здесь заменяется только Windows ADO/COM transport.
  *

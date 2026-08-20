@@ -3,9 +3,6 @@
 #include "../acclogqueue.h"
 #include "../../dbaccess/myadobase.h"
 
-#include <deque>
-#include <mutex>
-#include <optional>
 #include <string>
 
 /*
@@ -19,24 +16,18 @@
  * блокирующий Run, но не наследует отсутствующий Win32 Thread; AccLogQueue
  * передаётся ссылкой вместо прямого глобального поиска GetGame()->_acc_logs.
  *
- * Run: Pop в обнулённый char[2048]; пустая строка завершает рабочий поток. Для
- * каждой непустой строки создаётся НОВОЕ подключение, затем OpenCn -> ExecuteCn ->
+ * Исходный Run делал Pop в обнулённый char[2048], и пустая строка завершала
+ * рабочий поток. Текущий nullopt сохраняет ту же границу. Для каждой непустой
+ * записи создаётся НОВОЕ подключение, затем OpenCn -> параметризованная запись ->
  * CloseCn -> ReleaseCn. Ошибка Create/Open/Execute в EXE превращалась в
  * _com_error, обработчик делал PrintErr("Acc Log Err"), ReleaseCn и продолжал
- * со СЛЕДУЮЩЕЙ записью очереди. Повтор той же SQL и ожидание отсутствуют.
+ * со СЛЕДУЮЩЕЙ записью очереди. Повтор той же записи и ожидание отсутствуют.
  *
- * Пока общий владелец AddLogText не материализован, побочный эффект PrintErr
- * хранится только для наблюдаемости как AccLogThreadError. Он не влияет на
- * жизненный цикл SQL и очереди.
+ * Побочный эффект PrintErr передаётся общему техническому журналу `Nebokrai` и
+ * не влияет на жизненный цикл записи и очереди.
  */
 namespace Login
 {
-struct AccLogThreadError
-{
-    std::string label;
-    std::string detail;
-};
-
 class AccLogThread : public CMyAdoBase
 {
 public:
@@ -47,13 +38,9 @@ public:
 
     void Run();
 
-    [[nodiscard]] std::optional<AccLogThreadError> PopTechnicalError();
-
 private:
     void RecordError(std::string detail);
 
     AccLogQueue& m_Logs;
-    std::mutex m_ErrorMutex;
-    std::deque<AccLogThreadError> m_Errors;
 };
 }

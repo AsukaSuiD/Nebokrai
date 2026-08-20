@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "nebokrai-server",
+  "version-string": "0.1.0",
+  "builtin-baseline": "45f9f39362a4c52e2b1fbe57b7e649db7f3d96d4",
+  "dependencies": [
+    "asio",
+    {
+      "name": "curl",
+      "default-features": false,
+      "features": [
+        "openssl"
+      ]
+    },
+    "openssl",
+    "zlib",
+    "freetype",
+    "spdlog",
+    "libiconv",
+    {
+      "name": "unixodbc",
+      "platform": "!windows"
+    }
+  ]
+}

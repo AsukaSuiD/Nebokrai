@@ -4,11 +4,8 @@
 
 #include <array>
 #include <cstdint>
-#include <deque>
 #include <list>
 #include <map>
-#include <mutex>
-#include <optional>
 #include <string>
 
 namespace LoginNet
@@ -163,14 +160,13 @@ public:
                    std::int32_t socketId,
                    const char* worldServer) const;
 
-    // Direct EXE: getAccInfoEx side effect через ADO; fourth int и @Result не
-    // участвуют в state-machine, функция всегда возвращает false.
+    // В исходном EXE getAccInfoEx вызывается ради побочного эффекта через ADO;
+    // четвёртый int и @Result не участвуют в автомате состояний, функция всегда
+    // возвращает false.
     [[nodiscard]] bool ExecuteProce(std::string userId,
                                     std::string userIp,
                                     char* passwordHex,
                                     std::int32_t unusedResult);
-
-    [[nodiscard]] std::optional<std::string> PopTechnicalError();
 
 private:
     void ChangeAllWorldSate();
@@ -188,8 +184,5 @@ private:
     tagSetup m_Setup;
     tagSetupEx m_SetupEx;
     AccLogQueue _acc_logs;
-
-    mutable std::mutex m_TechnicalErrorMutex;
-    std::deque<std::string> m_TechnicalErrors;
 };
 }

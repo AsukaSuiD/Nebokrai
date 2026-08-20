@@ -12,7 +12,7 @@
  * Misc 0x5730, Game 0x7B0A0, World 0xA43A0). Варианты подтверждают один и тот же
  * reflected IEEE CRC-32: начальный регистр 0xFFFFFFFF, стандартный reflected
  * polynomial и финальная инверсия. Это стандартный алгоритм, а не особенность
- * Miracle, поэтому исходная статическая таблица и ручной цикл заменены zlib.
+ * Nebokrai, поэтому исходная статическая таблица и ручной цикл заменены zlib.
  *
  * ServerUpdate использовал тот же CRC для файлов через Windows file mapping.
  * Потоковое чтение сохраняет checksum, не перенося Windows mapping plumbing.

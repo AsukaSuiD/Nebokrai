@@ -29,7 +29,7 @@ class CMessage;
  * Win32 Thread/COM здесь не являются game semantics: Run остаётся тем же
  * blocking worker-loop, а sleep заменён std::this_thread::sleep_for.
  *
- * GAS protocol остаётся собственным кодом Miracle, а не библиотечной моделью:
+ * GAS-протокол остаётся собственным кодом Nebokrai, а не библиотечной моделью:
  * legacy response parser ищет literal "\"nickname\"" вручную и AnalysisRet
  * читает fixed state в response[10..11]. Его нельзя заменять JSON parser-ом.
  * Технические части заменены библиотеками: CMyWinInet использует libcurl,

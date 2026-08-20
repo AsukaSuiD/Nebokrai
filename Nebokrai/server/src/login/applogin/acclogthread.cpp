@@ -1,5 +1,7 @@
 #include "acclogthread.h"
 
+#include <spdlog/spdlog.h>
+
 #include <utility>
 
 namespace Login
@@ -19,12 +21,12 @@ void AccLogThread::Run()
     CMyAdoBase::Connection connection;
 
     for (;;) {
-        std::string sql = m_Logs.Pop();
+        std::optional<AccLogRecord> record = m_Logs.Pop();
 
         // ПОДТВЕРЖДЕНО АССЕМБЛЕРОМ 0x00420D98..0x00420DB0: strlen==0 —
         // единственное штатное условие выхода, включая устаревший токен
         // семафора после clear().
-        if (sql.empty()) {
+        if (!record) {
             CMyAdoBase::ReleaseCn(connection);
             return;
         }
@@ -33,7 +35,13 @@ void AccLogThread::Run()
         // проверки длины. Слишком большой ввод считается явной технической
         // границей вместо выхода за стек; извлечённый SQL не возвращается в
         // очередь, поскольку прямые пути исключений тоже переходили к следующему.
-        if (sql.size() >= kLegacySqlBufferSize) {
+        constexpr std::size_t kLegacySqlLiteralSize =
+            sizeof("INSERT INTO LogInfo(Account,AccountEnterTime,IP) VALUES('','','')") - 1U;
+        const std::size_t legacySqlSize = kLegacySqlLiteralSize +
+                                          record->account.size() +
+                                          record->enteredAt.size() +
+                                          record->ip.size();
+        if (legacySqlSize >= kLegacySqlBufferSize) {
             RecordError("SQL не помещается в старый буфер AccLogThread char[2048]");
             CMyAdoBase::ReleaseCn(connection);
             continue;
@@ -49,7 +57,10 @@ void AccLogThread::Run()
             CMyAdoBase::ReleaseCn(connection);
             continue;
         }
-        if (!CMyAdoBase::ExecuteCn(sql.c_str(), connection)) {
+        if (!CMyAdoBase::ExecuteAccountEnterLog(record->account,
+                                                record->enteredAt,
+                                                record->ip,
+                                                connection)) {
             RecordError(connection.lastError);
             CMyAdoBase::ReleaseCn(connection);
             continue;
@@ -64,23 +75,8 @@ void AccLogThread::Run()
     }
 }
 
-std::optional<AccLogThreadError> AccLogThread::PopTechnicalError()
-{
-    std::lock_guard guard(m_ErrorMutex);
-    if (m_Errors.empty()) {
-        return std::nullopt;
-    }
-    AccLogThreadError error = std::move(m_Errors.front());
-    m_Errors.pop_front();
-    return error;
-}
-
 void AccLogThread::RecordError(std::string detail)
 {
-    std::lock_guard guard(m_ErrorMutex);
-    m_Errors.push_back(AccLogThreadError{
-        .label = kAccLogErrorLabel,
-        .detail = std::move(detail),
-    });
+    spdlog::error("{}: {}", kAccLogErrorLabel, detail);
 }
 }

@@ -15,7 +15,7 @@
  * Исходный владелец: nets/clients.cpp / nets/clients.h
  *
  * Общий исходящий CClient подтверждён Login/Misc/Game/World EXE/PDB. Поздняя
- * Rust-реконструкция уже отделила Miracle-семантику от WinSock plumbing:
+ * Rust-реконструкция уже отделила семантику Nebokrai от обвязки WinSock:
  * send-команда немедленно владеет копией bytes, priority определяет front/back,
  * partial send продолжается с хвоста, а при terminal error текущий хвост и весь
  * оставшийся snapshot возвращаются перед командами, пришедшими параллельно.
