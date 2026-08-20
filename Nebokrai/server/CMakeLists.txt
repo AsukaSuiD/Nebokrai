@@ -66,3 +66,11 @@ target_link_libraries(nebokrai_server
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(nebokrai_server PRIVATE "${LIBLTDL_LIBRARY}")
 endif()
+
+add_executable(nebokrai_authserver
+    apps/authserver/main.cpp)
+
+target_link_libraries(nebokrai_authserver
+    PRIVATE
+        Nebokrai::Server
+        spdlog::spdlog)
