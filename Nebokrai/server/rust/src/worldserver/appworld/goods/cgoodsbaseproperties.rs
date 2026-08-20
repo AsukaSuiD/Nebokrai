@@ -7,7 +7,9 @@
 //! `GetGoodsType/GetEquipPlace` RVA `0x000DEA40/0x000DEA50`,
 //! `GetAddonPropertyValues/GetValidAddonProperties` RVA
 //! `0x000D4E50/0x000D4D90`, `GetOccurProbability/IsImplicit` RVA
-//! `0x000D49C0/0x000D4A10` — `IMPLEMENTED`; остальной корпус ниже остаётся
+//! `0x000D49C0/0x000D4A10`, lifecycle addon-ов RVA
+//! `0x000D4D70/0x000D4EE0/0x000D4F00/0x000D4F90` и destructor RVA
+//! `0x000D5080` — `IMPLEMENTED`; остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -38,6 +40,11 @@
 //! только внутри синхронного read-only вызова `CGoods::GetMaxStackNumber`:
 //! порядок, первое совпадение и значения сохраняются, а STL allocation/copy/
 //! destruction не являются наблюдаемым контрактом.
+//!
+//! Exact ASM destructor-а опровергает ложные ранние `return` декомпилятора:
+//! icons, addon-дерево и три строки освобождаются безусловно. В Rust тот же
+//! lifecycle обеспечивает владение `Vec`; порядок внутренних освобождений не
+//! наблюдаем, потому что у элементов нет внешних callback-ов.
 
 use std::error::Error;
 use std::fmt;
@@ -266,26 +273,23 @@ impl CGoodsBaseProperties {
         second_base_value: i32,
         occur_probability: u16,
     ) {
-        self.addon_properties.push(GoodsBaseAddonProperty {
-            property_type: i32::from(property_type),
-            is_enabled: i32::from(is_enabled),
-            is_implicit_attribute: i32::from(is_implicit_attribute),
-            occur_probability: u32::from(occur_probability),
-            values: vec![
-                GoodsBaseAddonPropertyValue {
-                    id: 1,
-                    base_value: first_base_value,
-                    is_modifier_enabled: 0,
-                    modifiers: Vec::new(),
-                },
-                GoodsBaseAddonPropertyValue {
-                    id: 2,
-                    base_value: second_base_value,
-                    is_modifier_enabled: 0,
-                    modifiers: Vec::new(),
-                },
-            ],
-        });
+        let mut property = GoodsBaseAddonProperty::with_constructor_defaults();
+        property.property_type = i32::from(property_type);
+        property.is_enabled = i32::from(is_enabled);
+        property.is_implicit_attribute = i32::from(is_implicit_attribute);
+        property.occur_probability = u32::from(occur_probability);
+
+        let mut first_value = GoodsBaseAddonPropertyValue::with_constructor_defaults();
+        first_value.id = 1;
+        first_value.base_value = first_base_value;
+        property.values.push(first_value);
+
+        let mut second_value = GoodsBaseAddonPropertyValue::with_constructor_defaults();
+        second_value.id = 2;
+        second_value.base_value = second_base_value;
+        property.values.push(second_value);
+
+        self.addon_properties.push(property);
     }
 
     /// Возвращает `false` только для неизвестного value-id, как original loop.
@@ -320,6 +324,24 @@ impl CGoodsBaseProperties {
 }
 
 impl GoodsBaseAddonPropertyValue {
+    /// Создаёт exact пустое scalar-состояние с пустым vector modifier-ов.
+    const fn with_constructor_defaults() -> Self {
+        Self {
+            id: 0,
+            base_value: 0,
+            is_modifier_enabled: 0,
+            modifiers: Vec::new(),
+        }
+    }
+
+    /// Восстанавливает scalar-ы и vector в исходное пустое состояние.
+    fn clear(&mut self) {
+        self.id = 0;
+        self.base_value = 0;
+        self.is_modifier_enabled = 0;
+        self.modifiers.clear();
+    }
+
     /// Возвращает exact unsigned идентификатор значения.
     pub(crate) const fn id(&self) -> u32 {
         self.id
@@ -375,6 +397,29 @@ impl GoodsBaseAddonPropertyValueModifier {
 }
 
 impl GoodsBaseAddonProperty {
+    /// Создаёт exact состояние constructor-а `0x004D4EE0`.
+    const fn with_constructor_defaults() -> Self {
+        Self {
+            property_type: 0,
+            is_enabled: 0,
+            is_implicit_attribute: 0,
+            occur_probability: 0,
+            values: Vec::new(),
+        }
+    }
+
+    /// Повторяет `Clear`: сначала scalar-ы, затем values в исходном порядке.
+    fn clear(&mut self) {
+        self.property_type = 0;
+        self.is_enabled = 0;
+        self.is_implicit_attribute = 0;
+        self.occur_probability = 0;
+        for value in &mut self.values {
+            value.clear();
+        }
+        self.values.clear();
+    }
+
     fn serialize(&self, destination: &mut Vec<u8>) -> Result<(), GoodsBasePropertiesCodecError> {
         destination.extend_from_slice(&self.property_type.to_le_bytes());
         destination.extend_from_slice(&self.is_enabled.to_le_bytes());
@@ -694,7 +739,7 @@ fn append_count(
 
 // ============================================================================
 // FUNCTION: CGoodsBaseProperties::GetOccurProbability
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsbaseproperties.cpp:198
@@ -752,7 +797,7 @@ fn append_count(
 
 // ============================================================================
 // FUNCTION: CGoodsBaseProperties::tagAddonPropertyValue::~tagAddonPropertyValue
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsbaseproperties.cpp:326
@@ -760,6 +805,8 @@ fn append_count(
 // ADDRESS: 004d4d70
 // PROTOTYPE: void __thiscall ~tagAddonPropertyValue(void)
 //
+// IMPLEMENTED безопасным владением `Vec`; `clear` сохраняет exact пустое
+// scalar-состояние для явного lifecycle без ручного STL `_Tidy`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -794,7 +841,7 @@ fn append_count(
 
 // ============================================================================
 // FUNCTION: CGoodsBaseProperties::tagAddonProperty::tagAddonProperty
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsbaseproperties.cpp:390
@@ -802,13 +849,14 @@ fn append_count(
 // ADDRESS: 004d4ee0
 // PROTOTYPE: undefined __thiscall tagAddonProperty(void)
 //
+// IMPLEMENTED выше как `with_constructor_defaults`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGoodsBaseProperties::tagAddonProperty::Clear
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsbaseproperties.cpp:407
@@ -816,13 +864,14 @@ fn append_count(
 // ADDRESS: 004d4f00
 // PROTOTYPE: void __thiscall Clear(void)
 //
+// IMPLEMENTED выше как `clear`; scalar-ы сбрасываются до очистки values.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGoodsBaseProperties::tagAddonProperty::~tagAddonProperty
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsbaseproperties.cpp:400
@@ -830,6 +879,7 @@ fn append_count(
 // ADDRESS: 004d4f90
 // PROTOTYPE: void __thiscall ~tagAddonProperty(void)
 //
+// IMPLEMENTED безопасным владением `Vec`; ручной повтор `_Tidy` не нужен.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -853,7 +903,7 @@ fn append_count(
 
 // ============================================================================
 // FUNCTION: CGoodsBaseProperties::~CGoodsBaseProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsbaseproperties.cpp:26
@@ -861,6 +911,9 @@ fn append_count(
 // ADDRESS: 004d5080
 // PROTOTYPE: void __thiscall ~CGoodsBaseProperties(void)
 //
+// Exact ASM `0x004D5080..0x004D5109` безусловно освобождает icons, addon-ы,
+// description, name и original name. Ложные ранние `return` ниже — артефакты
+// декомпилятора; Rust освобождает все владельцы автоматически.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
