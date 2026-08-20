@@ -1,9 +1,12 @@
 //! Фабрика товаров исторического `WorldServer`.
 //!
-//! Статус `QueryGoodsBaseProperties/QueryGoodsName` RVA
+//! Статус `GarbageCollect` RVA `0x00055C20`,
+//! `QueryGoodsBaseProperties/QueryGoodsName` RVA
 //! `0x00055DB0/0x00055DE0`,
 //! `UnserializeGoods` RVA `0x00055E20` и `QueryGoodsIDByOriginalName` RVA
 //! `0x000566F0`, `QueryGoodsBasePropertiesByOriginalName` RVA `0x00057390`,
+//! `GetGoldCoinIndex/GetYuanBaoIndex/GetJiFenIndex` RVA
+//! `0x00056810/0x000568B0/0x00056950`,
 //! `CreateGoods/CreateGoodsNoProbability` RVA
 //! `0x00059460/0x000597C0`, `Release/Load` RVA
 //! `0x00058380/0x00059EE0`, `Serialize` RVA `0x00056130` — `IMPLEMENTED`;
@@ -384,9 +387,7 @@ pub(crate) fn query_goods_id_by_original_name(
     index: &GoodsOriginalNameIndex,
     original_name: Option<&CStr>,
 ) -> u32 {
-    original_name
-        .and_then(|name| index.get(name.to_bytes()).copied())
-        .unwrap_or(0)
+    query_goods_id_by_original_name_bytes(index, original_name.map(CStr::to_bytes))
 }
 
 /// Сохраняет исходную двухступенчатую семантику: missing name сначала даёт id 0.
@@ -397,6 +398,66 @@ pub(crate) fn query_goods_base_properties_by_original_name<'registry>(
 ) -> Option<&'registry CGoodsBaseProperties> {
     let goods_id = query_goods_id_by_original_name(original_name_index, original_name);
     query_goods_base_properties(registry, goods_id)
+}
+
+/// Освобождает optional heap-owner; существующий slot возвращает success даже пустым.
+pub(crate) fn garbage_collect(goods: Option<&mut Option<Box<CGoods>>>) -> bool {
+    let Some(goods) = goods else {
+        return false;
+    };
+    let _ = goods.take();
+    true
+}
+
+pub(crate) fn get_gold_coin_index<ResolveString>(
+    original_name_index: &GoodsOriginalNameIndex,
+    resolve_string_id: &mut ResolveString,
+) -> u32
+where
+    ResolveString: FnMut(&[u8]) -> Option<Vec<u8>>,
+{
+    resolve_special_goods_index(original_name_index, b"WS0108", resolve_string_id)
+}
+
+pub(crate) fn get_yuan_bao_index<ResolveString>(
+    original_name_index: &GoodsOriginalNameIndex,
+    resolve_string_id: &mut ResolveString,
+) -> u32
+where
+    ResolveString: FnMut(&[u8]) -> Option<Vec<u8>>,
+{
+    resolve_special_goods_index(original_name_index, b"WS0109", resolve_string_id)
+}
+
+pub(crate) fn get_ji_fen_index<ResolveString>(
+    original_name_index: &GoodsOriginalNameIndex,
+    resolve_string_id: &mut ResolveString,
+) -> u32
+where
+    ResolveString: FnMut(&[u8]) -> Option<Vec<u8>>,
+{
+    resolve_special_goods_index(original_name_index, b"WS0110", resolve_string_id)
+}
+
+fn resolve_special_goods_index<ResolveString>(
+    original_name_index: &GoodsOriginalNameIndex,
+    string_id: &[u8],
+    resolve_string_id: &mut ResolveString,
+) -> u32
+where
+    ResolveString: FnMut(&[u8]) -> Option<Vec<u8>>,
+{
+    let original_name = resolve_legacy_string(resolve_string_id, string_id);
+    query_goods_id_by_original_name_bytes(original_name_index, Some(&original_name))
+}
+
+fn query_goods_id_by_original_name_bytes(
+    index: &GoodsOriginalNameIndex,
+    original_name: Option<&[u8]>,
+) -> u32 {
+    original_name
+        .and_then(|name| index.get(name).copied())
+        .unwrap_or(0)
 }
 
 /// Декодирует heap-owned товар и отбрасывает неизвестный base-properties index.
@@ -506,7 +567,7 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 
 // ============================================================================
 // FUNCTION: CGoodsFactory::GarbageCollect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsfactory.cpp:681
@@ -514,6 +575,8 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 // ADDRESS: 00455c20
 // PROTOTYPE: int __cdecl GarbageCollect(CGoods * * param_1)
 //
+// IMPLEMENTED выше как `garbage_collect`; внешний null slot даёт `false`,
+// существующий slot всегда `true` и после вызова пуст, Rust `Drop` заменяет vcall.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -616,7 +679,7 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 
 // ============================================================================
 // FUNCTION: CGoodsFactory::GetGoldCoinIndex
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsfactory.cpp:362
@@ -624,13 +687,15 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 // ADDRESS: 00456810
 // PROTOTYPE: ulong __cdecl GetGoldCoinIndex(void)
 //
+// IMPLEMENTED выше через exact StringTable id `WS0108`; Linux-donor fallback
+// `MONEY` отсутствует в EXE и намеренно не перенесён.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGoodsFactory::GetYuanBaoIndex
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsfactory.cpp:370
@@ -638,13 +703,14 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 // ADDRESS: 004568b0
 // PROTOTYPE: ulong __cdecl GetYuanBaoIndex(void)
 //
+// IMPLEMENTED выше через exact StringTable id `WS0109` без donor fallback.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGoodsFactory::GetJiFenIndex
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsfactory.cpp:379
@@ -652,6 +718,7 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 // ADDRESS: 00456950
 // PROTOTYPE: ulong __cdecl GetJiFenIndex(void)
 //
+// IMPLEMENTED выше через exact StringTable id `WS0110` без donor fallback.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
