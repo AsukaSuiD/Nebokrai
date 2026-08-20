@@ -14,7 +14,8 @@
 //! `0x000E07F0`,
 //! `Release/Clear` RVA `0x000DAE10/0x000DB5B0`, constructor/destructor RVA
 //! `0x000DB4A0/0x000DAF40` и оба `SetContainerVolume` RVA
-//! `0x000DB500/0x000DB560` — `IMPLEMENTED`; остальные операции ниже остаются
+//! `0x000DB500/0x000DB560`, `Clone` RVA `0x000DB600` — `IMPLEMENTED`;
+//! остальные операции ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). `Unserialize` RVA `0x000D8DA0` находится у точного PDB-
 //! владельца `cequipmentcontainer.cpp` и реализуется в соседнем экспортированном
 //! `.rs`. Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
@@ -88,10 +89,11 @@
 //! duplicate overwrite с безопасным уничтожением вытесненного товара и не
 //! материализует технический `debug-DB` file sink.
 //!
-//! Оставшийся `Clone` наследует небезопасный shallow copy `CGoods*` amount-
-//! owner-а и дописывает только size/cells; `AI` наследует недостигнутый child-
-//! graph `CBaseObject`. Deep clone либо no-op здесь были бы выдуманной сменой
-//! lifecycle, поэтому эти два слота остаются явными неизвестностями owner-а.
+//! `Clone` сначала выполняет достигнутый amount deep-copy с сохранением target
+//! owner/locked, затем присваивает size и cells. Так исправляется только
+//! внутренний shallow-pointer lifetime-дефект; World-набор полей и порядок
+//! side effects остаются exact. `AI` наследует недостигнутый child-graph
+//! `CBaseObject` и остаётся RAW.
 //!
 //! Короткий source в соседнем decoder-е сохраняет ранний `Clear`, cursor и уже
 //! добавленные записи, затем возвращает typed `BLOCKED_MISSING_FACT` вместо
@@ -413,6 +415,17 @@ impl CVolumeLimitGoodsContainer {
         }
         self.cells[position as usize] = ex_id;
         Ok(None)
+    }
+
+    /// Клонирует amount-owner первым, затем exact volume/cell state.
+    pub(crate) fn clone_into(
+        &self,
+        target: &mut CVolumeLimitGoodsContainer,
+    ) -> Result<bool, GoodsCodecError> {
+        let _ = self.amount_base.clone_into(&mut target.amount_base)?;
+        target.size = self.size;
+        target.cells.clone_from(&self.cells);
+        Ok(true)
     }
 
     /// Кодирует count, cell index и полный goods record.
@@ -758,7 +771,7 @@ impl CVolumeLimitGoodsContainer {
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::Clone
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cvolumelimitgoodscontainer.cpp:207
@@ -766,6 +779,8 @@ impl CVolumeLimitGoodsContainer {
 // ADDRESS: 004db600
 // PROTOTYPE: int __thiscall Clone(CGoodsContainer * param_1)
 //
+// IMPLEMENTED выше; Rust target type заменяет второй RTTI cast, а exact
+// `amount clone -> size -> cells` порядок сохраняется.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

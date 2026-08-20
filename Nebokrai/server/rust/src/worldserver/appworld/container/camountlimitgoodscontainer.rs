@@ -12,7 +12,8 @@
 //! `Unserialize/Serialize` RVA `0x000DBD50/0x000DC070`, `GetGoodsAmount` RVA
 //! `0x000DC030`, основного `Add/AddFromDB` RVA `0x000DC790/0x000DC820`,
 //! `Clear/Release` RVA
-//! `0x000DC9A0/0x000DCAB0` и destructor RVA `0x000DCC10` — `IMPLEMENTED`;
+//! `0x000DC9A0/0x000DCAB0`, `Clone` RVA `0x000DCBA0` и destructor RVA
+//! `0x000DCC10` — `IMPLEMENTED`;
 //! остальные операции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -114,10 +115,13 @@
 //! rejection и state-переходы сохранены, вытесненный pointer безопасно
 //! уничтожается как внутренний lifetime-дефект.
 //!
-//! Оставшийся `Clone` копирует сырые `CGoods*` shallow, а `AI` вызывает child-
-//! graph каждого товара через ещё не достигнутый `CBaseObject`; превращать их
-//! соответственно в deep clone и no-op было бы изменением lifecycle, поэтому
-//! оба слота остаются явным RAW до конкретного consumer/owner-контракта.
+//! Exact `Clone` присваивает target только limit и map сырых `CGoods*`; owner и
+//! locked-vector target сохраняются. World-корпус не содержит caller-а этого
+//! virtual slot-а, а shallow alias создаёт только double-free/use-after-free
+//! lifetime-дефект. Rust исправляет внутреннее владение deep clone-ом каждого
+//! товара через его подтверждённый wire-roundtrip, сохраняя набор полей и
+//! порядок target-эффектов. `AI` всё ещё требует child-graph `CBaseObject` и
+//! остаётся RAW.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -348,6 +352,23 @@ impl CAmountLimitGoodsContainer {
         self.locked_goods.clear();
         self.owner_type = 0;
         self.owner_id = 0;
+    }
+
+    /// Копирует World-набор `limit + goods`, сохраняя owner/locked target-а.
+    pub(crate) fn clone_into(
+        &self,
+        target: &mut CAmountLimitGoodsContainer,
+    ) -> Result<bool, GoodsCodecError> {
+        target.goods_amount_limit = self.goods_amount_limit;
+
+        let mut cloned_goods = BTreeMap::new();
+        for (&ex_id, goods) in &self.goods {
+            let mut cloned = Box::new(CGoods::with_constructor_base_and_type());
+            let _ = goods.as_ref().clone_into(cloned.as_mut())?;
+            cloned_goods.insert(ex_id, cloned);
+        }
+        target.goods = cloned_goods;
+        Ok(true)
     }
 
     /// Ищет exact GUID и скрывает товар, если тот присутствует в locked-vector.
@@ -977,7 +998,7 @@ fn read_amount_u32(
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::Clone
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:158
@@ -985,6 +1006,8 @@ fn read_amount_u32(
 // ADDRESS: 004dcba0
 // PROTOTYPE: int __thiscall Clone(CGoodsContainer * param_1)
 //
+// IMPLEMENTED выше; Rust target type заменяет RTTI, limit назначается первым,
+// map получает deep-owned товары. Owner/locked target-а исходно не копируются.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
