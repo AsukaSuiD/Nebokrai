@@ -1,6 +1,7 @@
 //! Владелец базовых свойств товаров исторического `WorldServer`.
 //!
-//! Статус `GetGoodsType/GetEquipPlace` RVA `0x000DEA40/0x000DEA50`,
+//! Статус `GetWeight` RVA `0x000D4940`,
+//! `GetGoodsType/GetEquipPlace` RVA `0x000DEA40/0x000DEA50`,
 //! `GetAddonPropertyValues` RVA `0x000D4E50` и `GetOccurProbability` RVA
 //! `0x000D49C0` — `IMPLEMENTED`; остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
@@ -15,12 +16,15 @@
 //! `GT_CONSUMABLE = 1`, `GT_EQUIPMENT = 2`, а соседний signed
 //! `EQUIP_PLACE m_epEquipPlace` лежит по `+0x60`. Его значения `0..16`
 //! буквально соответствуют `EP_UNKNOWN..EP_LINGBAO`. Он же подтверждает
+//! unsigned `m_dwWeight` по `+0x3C`; exact getter состоит из одной загрузки.
+//! PDB также подтверждает
 //! `GAP_PARTICULAR_ATTRIBUTE = 0x0D`, `GAP_GOODS_STACKING_LIMIT = 0x26`,
 //! `GAP_WEAPON_LEVEL = 0x30` и
 //! layout `tagAddonPropertyValue`: unsigned `dwId` по `+0`, signed
 //! `lBaseValue` по `+4`, modifier-флаг по `+8`, затем vector modifier-ов.
-//! Достигнутый Rust-owner пока хранит только поля, читаемые восстановленным
-//! stacking-путём; `Load/Serialize/Unserialize` и остальные поля остаются raw.
+//! Достигнутый Rust-owner пока хранит только поля, читаемые восстановленными
+//! stacking/weight-путями; `Load/Serialize/Unserialize` и остальные поля
+//! остаются raw.
 //!
 //! `GetAddonPropertyValues` останавливается на первом property совпавшего типа
 //! и копирует все его values. Заимствованный slice заменяет временную копию
@@ -49,12 +53,18 @@ struct GoodsBaseAddonProperty {
 
 /// Достигнутая stacking-часть исходного `CGoodsBaseProperties`.
 pub(crate) struct CGoodsBaseProperties {
+    weight: u32,
     goods_type: i32,
     equip_place: i32,
     addon_properties: Vec<GoodsBaseAddonProperty>,
 }
 
 impl CGoodsBaseProperties {
+    /// Возвращает exact unsigned вес одной единицы товара.
+    pub(crate) const fn get_weight(&self) -> u32 {
+        self.weight
+    }
+
     /// Возвращает exact signed `GOODS_TYPE` без дополнительных эффектов.
     pub(crate) const fn get_goods_type(&self) -> i32 {
         self.goods_type
@@ -329,7 +339,7 @@ impl GoodsBaseAddonPropertyValue {
 
 // ============================================================================
 // FUNCTION: CGoodsBaseProperties::GetWeight
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsbaseproperties.cpp:61
@@ -337,9 +347,7 @@ impl GoodsBaseAddonPropertyValue {
 // ADDRESS: 004d4940
 // PROTOTYPE: ulong __thiscall GetWeight(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше как прямой unsigned scalar-getter.
 
 // ============================================================================
 // FUNCTION: CGoodsBaseProperties::GetName
@@ -605,7 +613,6 @@ impl GoodsBaseAddonPropertyValue {
 //
 //
 
-
 // ============================================================================
 // FUNCTION: Unwind@0052f180
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -620,8 +627,6 @@ impl GoodsBaseAddonPropertyValue {
 //
 //
 
-
-
 // ============================================================================
 // FUNCTION: Unwind@0052f1c3
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -635,8 +640,6 @@ impl GoodsBaseAddonPropertyValue {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
 
 // ============================================================================
 // FUNCTION: Unwind@0052f20f
@@ -665,9 +668,6 @@ impl GoodsBaseAddonPropertyValue {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
 
 // ============================================================================
 // FUNCTION: Unwind@0052f2a1

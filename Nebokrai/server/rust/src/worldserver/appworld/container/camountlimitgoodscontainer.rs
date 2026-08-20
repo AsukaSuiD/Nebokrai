@@ -1,9 +1,10 @@
 //! Владелец amount-limited goods-container исторического `WorldServer`.
 //!
 //! Статус constructor RVA `0x000DC700`, `Find(long, GUID)` RVA `0x000D5F50`,
-//! `Find(GUID)/IsLocked/TraversingContainer` RVA
-//! `0x000DC180/0x000DBDC0/0x000DBE10`, query-family RVA
+//! `Find(GUID/object)/IsLocked/TraversingContainer` RVA
+//! `0x000DC180/0x000DBD40/0x000DBDC0/0x000DBE10`, query-family RVA
 //! `0x000DBE70/0x000DBEC0/0x000DBF20/0x000DBF60/0x000DBFE0/0x000DC5B0`,
+//! `GetContentsWeight` RVA `0x000DBE40`,
 //! `Lock/Unlock` RVA `0x000DC640/0x000DC260`, `IsFull/Set/GetLimit` RVA
 //! `0x000DBCC0/0x000DBCE0/0x000DBCF0`, `SetOwner` RVA `0x000DBD00`,
 //! `Remove` wrapper-ы и GUID-owner RVA `0x000DBD20/0x000DBD30/0x000DC1C0`,
@@ -64,11 +65,15 @@
 //! `Find(long, GUID)` через thunks `0x004D5F50/0x004E0660` приходит в
 //! `0x004E0A00`, читает только GUID из второго аргумента и делегирует этому
 //! методу, поэтому safe Rust не носит лишний type `700` рядом с уже typed
-//! `CGoods`. Traversal при
+//! `CGoods`. Object-overload через `0x004E0A40` проверяет null, берёт тот же
+//! embedded GUID по `+0x0C` и делегирует GUID-slot. Traversal при
 //! null listener ничего не делает, иначе посещает все map-values и игнорирует
 //! callback-result. `BTreeMap` сохраняет уже принятую storage-замену; для
 //! достигнутого `CheckGoodsInPacket` порядок ненаблюдаем, поскольку итоговая
 //! 32-битная wrapping-сумма коммутативна.
+//! `GetContentsWeight` также обходит все map-values без lock-фильтра и складывает
+//! exact wrapping-вес товаров; storage-order на коммутативный результат не
+//! влияет.
 //!
 //! Query-family намеренно различает locked-состояние. `GetGoods(position)`,
 //! `GetTheFirstGoods` и `GetGoods(base index, vector)` скрывают locked-товар;
@@ -300,6 +305,11 @@ impl CAmountLimitGoodsContainer {
         (!self.is_locked(goods)).then_some(goods)
     }
 
+    /// Делегирует object-overload точному GUID-поиску после null-check.
+    pub(crate) fn find_object(&self, goods: Option<&CGoods>) -> Option<&CGoods> {
+        self.find(goods?.get_ex_id())
+    }
+
     /// Возвращает ordinal map-элемент, если position ниже limit и он не locked.
     pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
         if position >= self.goods_amount_limit {
@@ -404,6 +414,16 @@ impl CAmountLimitGoodsContainer {
         for goods in self.goods.values().map(Box::as_ref) {
             let _ = listener.on_traversing_container(TraversedContainerObject::Goods(goods));
         }
+    }
+
+    /// Складывает exact unsigned вес всех товаров без lock-фильтра.
+    pub(crate) fn get_contents_weight(
+        &self,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<u32, AmountContainerCodecError> {
+        self.goods.values().try_fold(0u32, |weight, goods| {
+            Ok(weight.wrapping_add(goods.get_weight(registry)?))
+        })
     }
 
     /// Даёт derived-container-у read-only обход единственного goods-owner-а.
@@ -609,7 +629,7 @@ fn read_amount_u32(
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:596
@@ -617,9 +637,8 @@ fn read_amount_u32(
 // ADDRESS: 004dbd40
 // PROTOTYPE: CBaseObject * __thiscall Find(CBaseObject * param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше как `find_object`; exact ASM `0x004E0A40..0x004E0A56`
+// подтверждает null-check, GUID `object + 0x0C` и virtual GUID-slot `+0x04`.
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::Unserialize
@@ -660,7 +679,7 @@ fn read_amount_u32(
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::GetContentsWeight
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:200
@@ -668,6 +687,8 @@ fn read_amount_u32(
 // ADDRESS: 004dbe40
 // PROTOTYPE: ulong __thiscall GetContentsWeight(void)
 //
+// IMPLEMENTED выше; map-values и unsigned wrapping sum сохранены, null raw
+// pointer исключён owning `Box<CGoods>`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

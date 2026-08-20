@@ -5,7 +5,8 @@
 //! `0x000D8B30/0x000DA020`, `Remove/AddFromDB` RVA
 //! `0x000D9B30/0x000DA280`,
 //! `Clear/Release` RVA `0x000D8E40/0x000D8F30`, `GetGoods/GetGoodsAmount`
-//! RVA `0x000D9470/0x000D94B0`, `Serialize` RVA `0x000D9530` и разделяемого
+//! RVA `0x000D9470/0x000D94B0`, `GetContentsWeight` RVA `0x000D9080`,
+//! `Serialize` RVA `0x000D9530` и разделяемого
 //! с `CVolumeLimitGoodsContainer` `Unserialize` RVA `0x000D8DA0`, а также
 //! read-side family RVA `0x000D9000/0x000D90F0/0x000D9180/0x000D9280/`
 //! `0x000D92F0/0x000D9350/0x000D93E0/0x000DA530` — `IMPLEMENTED`;
@@ -59,6 +60,8 @@
 //! в обе ветви, но встроенные callbacks всё равно no-op. `AddFromDB` выполняет
 //! те же type/place/column проверки и прямую вставку без callback. `Remove`
 //! передаёт ownership первого GUID-совпадения вызывающему.
+//! Weight-family обходит все equipment values без фильтра и сохраняет unsigned
+//! wrapping-сумму; numeric tree-order на коммутативный результат не влияет.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -340,6 +343,16 @@ impl CEquipmentContainer {
         for goods in self.equipment.values().map(Box::as_ref) {
             let _ = listener.on_traversing_container(TraversedContainerObject::Goods(goods));
         }
+    }
+
+    /// Складывает exact unsigned вес всех equipment-товаров.
+    pub(crate) fn get_contents_weight(
+        &self,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<u32, EquipmentContainerCodecError> {
+        self.equipment.values().try_fold(0u32, |weight, goods| {
+            Ok(weight.wrapping_add(goods.get_weight(registry)?))
+        })
     }
 
     /// Ищет первый товар с полным 16-байтовым GUID в numeric map-order.
@@ -647,7 +660,7 @@ fn read_equipment_u32(
 
 // ============================================================================
 // FUNCTION: CEquipmentContainer::GetContentsWeight
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:193
@@ -655,6 +668,8 @@ fn read_equipment_u32(
 // ADDRESS: 004d9080
 // PROTOTYPE: ulong __thiscall GetContentsWeight(void)
 //
+// IMPLEMENTED выше; numeric map-values и unsigned wrapping sum сохранены, null
+// raw pointer исключён owning `Box<CGoods>`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

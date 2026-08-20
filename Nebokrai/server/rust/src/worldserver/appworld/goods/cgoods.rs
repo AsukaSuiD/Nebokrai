@@ -3,7 +3,7 @@
 //! Статус `CGoods::Serialize/Unserialize` RVA `0x000518E0/0x00053220`,
 //! byte-array wrappers `0x000516E0/0x00051700`, `Release` RVA `0x000533C0`,
 //! scalar `GetAddonPropertyValues` RVA `0x000517B0`, `GetMaxStackNumber` RVA
-//! `0x00052530`,
+//! `0x00052530`, `GetWeight` RVA `0x00051730`,
 //! `SetExID` RVA `0x000530E0`, base-подобъекта и defaults конструктора RVA
 //! `0x00053060`, а также непосредственной destructor-цепочки RVA `0x000534B0`
 //! — `IMPLEMENTED`;
@@ -56,6 +56,9 @@
 //! подтверждает возврат именно signed DWORD по `tagAddonPropertyValue +4`,
 //! побитово наблюдаемого как исходный `unsigned long`. После этих двух ответов
 //! точечный reverse прекращён.
+//! Weight запрашивает те же base-properties, возвращает `0` при отсутствии и
+//! умножает unsigned вес одной единицы на amount с точным 32-битным wrapping;
+//! exact EXE использует `IMUL EAX, ESI`.
 
 use std::error::Error;
 use std::fmt;
@@ -264,6 +267,21 @@ impl CGoods {
             .iter()
             .find(|value| value.id() == 1)
             .map_or(1, |value| value.base_value() as u32))
+    }
+
+    /// Возвращает exact unsigned общий вес с 32-битным переполнением.
+    pub(crate) fn get_weight(
+        &self,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<u32, GoodsCodecError> {
+        let index = self
+            .base_properties_index
+            .ok_or(GoodsCodecError::MissingBasePropertiesIndex)?;
+        Ok(
+            query_goods_base_properties(registry, index).map_or(0, |properties| {
+                properties.get_weight().wrapping_mul(self.amount)
+            }),
+        )
     }
 
     /// Присваивает исходную unsigned цену.
@@ -624,7 +642,7 @@ fn read_goods_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CGoods::GetWeight
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoods.cpp:509
@@ -632,9 +650,8 @@ fn read_goods_array<const N: usize>(
 // ADDRESS: 00451730
 // PROTOTYPE: ulong __thiscall GetWeight(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; explicit registry заменяет process-global factory, а
+// unsigned multiplication остаётся 32-битной wrapping-операцией.
 
 // ============================================================================
 // FUNCTION: CGoods::SetPrice
@@ -957,9 +974,5 @@ fn read_goods_array<const N: usize>(
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
 
 // COMPONENT_VARIANT_END: WorldServer
