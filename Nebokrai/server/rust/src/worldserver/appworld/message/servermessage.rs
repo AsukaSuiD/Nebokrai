@@ -63,6 +63,18 @@
 //! порядок наблюдаемых эффектов корректного сообщения, но не даёт входу
 //! вызвать неограниченный пустой цикл.
 //!
+//! Начальная конфигурация материализована до следующего owner-а
+//! `CMonsterList`: `0x7F801/0x2B` DaKong, `0x2F` StringTable, условный
+//! `0x31` валидного WordsFilter, `0` фабрики товаров и broadcast `0x36`
+//! ThingSetup. Первые четыре адресных сообщения уходят только новому socket,
+//! а `0x36` — всем GameServer, даже уже подключённым. Результаты send исходник
+//! игнорировал, поэтому ошибка очереди записывается в отчёт и не переставляет
+//! последующие пакеты. `CGoodsFactory::Serialize` уже заменён его точным
+//! serializer-ом; ещё сырые owner-ы передают готовые byte snapshots и тем
+//! самым не объявляются восстановленными. Невозможный безопасный state
+//! registry товаров останавливает цепочку после уже отправленного prefix-а,
+//! вместо старого null-dereference либо выхода за 32-битный размер.
+//!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
 //! сдвигает cursor только при наличии всех четырёх little-endian bytes; короткий
@@ -119,9 +131,12 @@ use std::net::Ipv4Addr;
 use crate::nets::basemessage::CBaseMessage;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::networld::mynetclient::CMyNetClient;
+use crate::nets::servers::ServerCommandHandle;
 use crate::worldserver::appworld::country::country::CountryKingSaveLimits;
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
-use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
+use crate::worldserver::appworld::goods::cgoodsfactory::{
+    GoodsBasePropertiesRegistry, GoodsRegistrySerializeError, serialize_goods_registry,
+};
 use crate::worldserver::appworld::organizingsystem::factionwarsys::CFactionWarSys;
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
 use crate::worldserver::appworld::player::{PlayerCodecError, PlayerPropertyCoefficients};
@@ -220,6 +235,47 @@ pub(crate) struct WorldGameServerConnectionReport {
     pub(crate) globe_variables: Option<WorldGlobeVariablesDelivery>,
     pub(crate) login_log: Option<WorldGameServerConnectedLog>,
     pub(crate) continuation: WorldGameServerConnectionContinuation,
+}
+
+/// Уже сериализованные owner-снимки достигнутого prefix-а initial-config.
+pub(crate) struct WorldGameServerInitialConfigurationPrefix<'a> {
+    pub(crate) da_kong_xiang_qian: &'a [u8],
+    pub(crate) string_table: &'a [u8],
+    pub(crate) valid_words_filter: Option<&'a [u8]>,
+    pub(crate) goods_registry: &'a GoodsBasePropertiesRegistry,
+    pub(crate) thing_setup: &'a [u8],
+}
+
+/// Получатель одного `0x7F801` initial-config сообщения.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldInitialConfigurationTarget {
+    Socket(i32),
+    AllGameServers,
+}
+
+/// Наблюдаемый результат одного send в initial-config prefix-е.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldInitialConfigurationDelivery {
+    pub(crate) subtype: i32,
+    pub(crate) payload_length: usize,
+    pub(crate) target: WorldInitialConfigurationTarget,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+/// Следующая точная позиция после достигнутого initial-config prefix-а.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldInitialConfigurationPrefixCompletion {
+    GoodsRegistry(GoodsRegistrySerializeError),
+    MonsterListPending { socket_id: i32 },
+}
+
+/// Отчёт prefix-а ветки `0x5FA01` с нулевым sync flag.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldInitialConfigurationPrefixReport {
+    pub(crate) deliveries: Vec<WorldInitialConfigurationDelivery>,
+    pub(crate) language_notice: bool,
+    pub(crate) words_filter_notice: bool,
+    pub(crate) completion: WorldInitialConfigurationPrefixCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -743,6 +799,102 @@ pub(crate) fn on_game_server_connected(
         }
     };
     report
+}
+
+/// Отправляет точный prefix начальной конфигурации до `CMonsterList`.
+pub(crate) fn continue_game_server_initial_configuration_prefix(
+    game: &CGame,
+    socket_id: i32,
+    snapshots: WorldGameServerInitialConfigurationPrefix<'_>,
+) -> WorldInitialConfigurationPrefixReport {
+    let sender = game.current_game_server_sender();
+    let mut deliveries = Vec::with_capacity(5);
+    deliveries.push(send_initial_configuration_to_socket(
+        sender.as_ref(),
+        socket_id,
+        0x2B,
+        snapshots.da_kong_xiang_qian,
+    ));
+    deliveries.push(send_initial_configuration_to_socket(
+        sender.as_ref(),
+        socket_id,
+        0x2F,
+        snapshots.string_table,
+    ));
+    let language_notice = true;
+
+    let words_filter_notice = if let Some(words_filter) = snapshots.valid_words_filter {
+        deliveries.push(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x31,
+            words_filter,
+        ));
+        true
+    } else {
+        false
+    };
+
+    let mut goods = Vec::new();
+    if let Err(error) = serialize_goods_registry(snapshots.goods_registry, &mut goods) {
+        return WorldInitialConfigurationPrefixReport {
+            deliveries,
+            language_notice,
+            words_filter_notice,
+            completion: WorldInitialConfigurationPrefixCompletion::GoodsRegistry(error),
+        };
+    }
+    deliveries.push(send_initial_configuration_to_socket(
+        sender.as_ref(),
+        socket_id,
+        0,
+        &goods,
+    ));
+    deliveries.push(send_initial_configuration_to_all(
+        sender.as_ref(),
+        0x36,
+        snapshots.thing_setup,
+    ));
+
+    WorldInitialConfigurationPrefixReport {
+        deliveries,
+        language_notice,
+        words_filter_notice,
+        completion: WorldInitialConfigurationPrefixCompletion::MonsterListPending { socket_id },
+    }
+}
+
+fn send_initial_configuration_to_socket(
+    sender: Option<&ServerCommandHandle>,
+    socket_id: i32,
+    subtype: i32,
+    payload: &[u8],
+) -> WorldInitialConfigurationDelivery {
+    let mut message = CMessage::new(0x0007_F801);
+    message.base_mut().add_long(subtype);
+    message.base_mut().add(payload);
+    WorldInitialConfigurationDelivery {
+        subtype,
+        payload_length: payload.len(),
+        target: WorldInitialConfigurationTarget::Socket(socket_id),
+        delivery: message.send_to_socket(sender, socket_id),
+    }
+}
+
+fn send_initial_configuration_to_all(
+    sender: Option<&ServerCommandHandle>,
+    subtype: i32,
+    payload: &[u8],
+) -> WorldInitialConfigurationDelivery {
+    let mut message = CMessage::new(0x0007_F801);
+    message.base_mut().add_long(subtype);
+    message.base_mut().add(payload);
+    WorldInitialConfigurationDelivery {
+        subtype,
+        payload_length: payload.len(),
+        target: WorldInitialConfigurationTarget::AllGameServers,
+        delivery: message.send_all(sender),
+    }
 }
 
 /// Продолжает точный reconnect player-data хвост после общего prefix-а.
