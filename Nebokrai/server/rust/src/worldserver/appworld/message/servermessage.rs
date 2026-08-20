@@ -2,7 +2,7 @@
 //!
 //! Статус владельца: `IMPLEMENTED` для `gameserv_conn_log`,
 //! внутрипроцессного события `0x3FC03`,
-//! начальной части регистрации GameServer в `0x5FA01`,
+//! регистрации GameServer и reconnect player-data хвоста в `0x5FA01`,
 //! snapshot/cleanup хвоста `0x5FA03`, обычных opcode `0x4FC01..=0x4FC03` и
 //! `0x5FA0A..=0x5FA0D` из
 //! `OnServerMessage` RVA `0x000ADCF0`;
@@ -53,7 +53,15 @@
 //! за полную Winsock-грамматику. Нулевой sync flag возвращает обязанность
 //! продолжить большую цепочку начальной конфигурации; ненулевой — отдельный
 //! хвост `count -> 0x8040E -> player snapshots -> CD-key snapshot`. Ни один
-//! хвост не объявляется исполненным частично.
+//! хвост не объявляется исполненным частично. Reconnect сначала безусловно
+//! отправляет пустой `0x8040E`, затем для каждого packet type `1` декодирует
+//! полный `CPlayer`, восстанавливает map/offline/online ownership и после
+//! цикла отправляет CD-key snapshot. Неизвестный packet type потребляет только
+//! собственный `long`, как исходник. Единственное техническое отличие — после
+//! уже достигнутой отправки `0x8040E` заведомо невозможный по оставшимся байтам
+//! положительный count останавливается typed-границей: это не меняет wire и
+//! порядок наблюдаемых эффектов корректного сообщения, но не даёт входу
+//! вызвать неограниченный пустой цикл.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -116,12 +124,12 @@ use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use crate::worldserver::appworld::organizingsystem::factionwarsys::CFactionWarSys;
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
-use crate::worldserver::appworld::player::PlayerPropertyCoefficients;
+use crate::worldserver::appworld::player::{PlayerCodecError, PlayerPropertyCoefficients};
 use crate::worldserver::worldserver::game::{
     CGame, WorldCdkeySnapshot, WorldCdkeySnapshotError, WorldGameServerLookupError,
     WorldGenerateDbDataBlock, WorldGenerateDbDataReport, WorldGlobeVariablesDelivery,
-    WorldPingGameServerInfo, WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest,
-    prepare_save_thread_launch,
+    WorldOnlinePlayerAppendOutcome, WorldPingGameServerInfo, WorldReconnectedPlayerDecode,
+    WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest, prepare_save_thread_launch,
 };
 use crate::worldserver::worldserver::honorranks::CHonorRanks;
 
@@ -167,7 +175,7 @@ pub(crate) enum WorldServerMessageOutcome {
 }
 
 /// Следующая точная позиция ветки `0x5FA01` после достигнутой начальной части.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WorldGameServerConnectionContinuation {
     NotConfigured,
     NetworkOwnerUnavailable,
@@ -180,6 +188,7 @@ pub(crate) enum WorldGameServerConnectionContinuation {
     ReconnectPlayerDataPending {
         socket_id: i32,
         game_server_index: u32,
+        remaining_payload: Vec<u8>,
     },
     RegistryPortUnavailable {
         game_server_index: u32,
@@ -211,6 +220,51 @@ pub(crate) struct WorldGameServerConnectionReport {
     pub(crate) globe_variables: Option<WorldGlobeVariablesDelivery>,
     pub(crate) login_log: Option<WorldGameServerConnectedLog>,
     pub(crate) continuation: WorldGameServerConnectionContinuation,
+}
+
+/// Один элемент reconnect-хвоста после обязательного packet type.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldGameServerReconnectRecord {
+    Skipped {
+        packet_type: i32,
+    },
+    Player {
+        packet_type: i32,
+        decoded: WorldReconnectedPlayerDecode,
+        online: WorldOnlinePlayerAppendOutcome,
+        trailing_value: i32,
+        trailing_complete: bool,
+    },
+}
+
+/// Точная достигнутая точка завершения reconnect player-data хвоста.
+#[derive(Debug)]
+pub(crate) enum WorldGameServerReconnectCompletion {
+    InvalidElementCount {
+        declared_count: i32,
+        minimum_bytes: usize,
+        available_bytes: usize,
+    },
+    UnexpectedEnd {
+        record_index: usize,
+        field: &'static str,
+    },
+    PlayerCodec {
+        record_index: usize,
+        error: PlayerCodecError,
+    },
+    CdkeySnapshot(Result<Option<WorldCdkeySnapshot>, WorldCdkeySnapshotError>),
+}
+
+/// Полный отчёт продолжения reconnect-ветки `0x5FA01` после общего prefix-а.
+#[derive(Debug)]
+pub(crate) struct WorldGameServerReconnectReport {
+    pub(crate) socket_id: i32,
+    pub(crate) declared_count: i32,
+    pub(crate) count_complete: bool,
+    pub(crate) acknowledgement: Result<i32, SendMessageError>,
+    pub(crate) records: Vec<WorldGameServerReconnectRecord>,
+    pub(crate) completion: WorldGameServerReconnectCompletion,
 }
 
 /// Итог пустого broadcast из ветки `0x4FC02`.
@@ -678,12 +732,115 @@ pub(crate) fn on_game_server_connected(
             game_server_index: connection.index,
         }
     } else {
+        let remaining_payload = {
+            let base = message.base_mut();
+            base.as_wire_bytes()[base.cursor()..].to_vec()
+        };
         WorldGameServerConnectionContinuation::ReconnectPlayerDataPending {
             socket_id,
             game_server_index: connection.index,
+            remaining_payload,
         }
     };
     report
+}
+
+/// Продолжает точный reconnect player-data хвост после общего prefix-а.
+pub(crate) fn continue_game_server_reconnect(
+    game: &mut CGame,
+    socket_id: i32,
+    payload: &[u8],
+    registry: &GoodsBasePropertiesRegistry,
+    organizing: &mut COrganizingCtrl,
+    coefficients: &PlayerPropertyCoefficients,
+) -> WorldGameServerReconnectReport {
+    let mut cursor = 0;
+    let decoded_count = read_reconnect_long(payload, &mut cursor);
+    let declared_count = decoded_count.unwrap_or(0);
+
+    let acknowledgement_message = CMessage::new(0x0008_040E);
+    let sender = game.current_game_server_sender();
+    let acknowledgement = acknowledgement_message.send_to_socket(sender.as_ref(), socket_id);
+    let mut records = Vec::new();
+
+    let completion = if declared_count > 0
+        && (declared_count as usize).saturating_mul(4) > payload.len().saturating_sub(cursor)
+    {
+        WorldGameServerReconnectCompletion::InvalidElementCount {
+            declared_count,
+            minimum_bytes: (declared_count as usize).saturating_mul(4),
+            available_bytes: payload.len().saturating_sub(cursor),
+        }
+    } else {
+        'decode: {
+            for record_index in 0..declared_count.max(0) as usize {
+                let Some(packet_type) = read_reconnect_long(payload, &mut cursor) else {
+                    break 'decode WorldGameServerReconnectCompletion::UnexpectedEnd {
+                        record_index,
+                        field: "packet type",
+                    };
+                };
+                if packet_type != 1 {
+                    records.push(WorldGameServerReconnectRecord::Skipped { packet_type });
+                    continue;
+                }
+
+                let Some(requested_player_id) = read_reconnect_long(payload, &mut cursor) else {
+                    break 'decode WorldGameServerReconnectCompletion::UnexpectedEnd {
+                        record_index,
+                        field: "player ID",
+                    };
+                };
+                let decoded = match game.decord_reconnected_player(
+                    requested_player_id as u32,
+                    payload,
+                    &mut cursor,
+                    registry,
+                    coefficients,
+                ) {
+                    Ok(decoded) => decoded,
+                    Err(error) => {
+                        break 'decode WorldGameServerReconnectCompletion::PlayerCodec {
+                            record_index,
+                            error,
+                        };
+                    }
+                };
+                let online = game.append_online_player_id(organizing, decoded.decoded_player_id);
+                let trailing = read_reconnect_long(payload, &mut cursor);
+                records.push(WorldGameServerReconnectRecord::Player {
+                    packet_type,
+                    decoded,
+                    online,
+                    trailing_value: trailing.unwrap_or(0),
+                    trailing_complete: trailing.is_some(),
+                });
+                if trailing.is_none() {
+                    break 'decode WorldGameServerReconnectCompletion::UnexpectedEnd {
+                        record_index,
+                        field: "trailing long",
+                    };
+                }
+            }
+            WorldGameServerReconnectCompletion::CdkeySnapshot(game.send_cdkey_to_login_server())
+        }
+    };
+
+    WorldGameServerReconnectReport {
+        socket_id,
+        declared_count,
+        count_complete: decoded_count.is_some(),
+        acknowledgement,
+        records,
+        completion,
+    }
+}
+
+fn read_reconnect_long(source: &[u8], cursor: &mut usize) -> Option<i32> {
+    let end = (*cursor).checked_add(4)?;
+    let bytes: [u8; 4] = source.get(*cursor..end)?.try_into().ok()?;
+    *cursor = end;
+    Some(i32::from_le_bytes(bytes))
 }
 
 fn observed_inet_addr(ip: &[u8]) -> Result<u32, ()> {

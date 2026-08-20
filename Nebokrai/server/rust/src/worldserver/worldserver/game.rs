@@ -1613,6 +1613,24 @@ pub(crate) struct WorldOnlinePlayerAppendOutcome {
     pub(crate) organizing: PlayerEnterGameOutcome,
 }
 
+/// Владение player после одного decode-элемента reconnect-хвоста `0x5FA01`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldReconnectedPlayerOwner {
+    Existing,
+    Created {
+        replaced_existing_decoded_id: bool,
+        offline_inserted: bool,
+    },
+}
+
+/// Итог decode-а одного player snapshot из reconnect-хвоста `0x5FA01`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldReconnectedPlayerDecode {
+    pub(crate) requested_player_id: u32,
+    pub(crate) decoded_player_id: i32,
+    pub(crate) owner: WorldReconnectedPlayerOwner,
+}
+
 /// Итог `list::remove` online-ID и следующего organizing exit callback-а.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldOnlinePlayerRemoveOutcome {
@@ -9316,7 +9334,15 @@ impl CGame {
         organizing: &mut COrganizingCtrl,
         player: &CPlayer,
     ) -> WorldOnlinePlayerAppendOutcome {
-        let player_id = player.get_id();
+        self.append_online_player_id(organizing, player.get_id())
+    }
+
+    /// Добавляет уже декодированный ID, сохраняя map до organizing callback-а.
+    pub(crate) fn append_online_player_id(
+        &mut self,
+        organizing: &mut COrganizingCtrl,
+        player_id: i32,
+    ) -> WorldOnlinePlayerAppendOutcome {
         let online_id = player_id as u32;
         let inserted = if self.online_players.contains(&online_id) {
             false
@@ -9329,6 +9355,40 @@ impl CGame {
             inserted,
             organizing,
         }
+    }
+
+    /// Декодирует существующий либо новый player reconnect-записи.
+    pub(crate) fn decord_reconnected_player(
+        &mut self,
+        requested_player_id: u32,
+        source: &[u8],
+        cursor: &mut usize,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<WorldReconnectedPlayerDecode, PlayerCodecError> {
+        if let Some(player) = self.players.get_mut(&requested_player_id) {
+            let _ = player.decord_from_byte_array(source, cursor, true, registry, coefficients)?;
+            return Ok(WorldReconnectedPlayerDecode {
+                requested_player_id,
+                decoded_player_id: player.get_id(),
+                owner: WorldReconnectedPlayerOwner::Existing,
+            });
+        }
+
+        let mut player = Box::new(CPlayer::with_clone_decode_constructor_state());
+        let _ = player.decord_from_byte_array(source, cursor, true, registry, coefficients)?;
+        let decoded_player_id = player.get_id();
+        let decoded_key = decoded_player_id as u32;
+        let replaced_existing_decoded_id = self.players.insert(decoded_key, player).is_some();
+        let offline_inserted = self.append_offline_player_id(decoded_key);
+        Ok(WorldReconnectedPlayerDecode {
+            requested_player_id,
+            decoded_player_id,
+            owner: WorldReconnectedPlayerOwner::Created {
+                replaced_existing_decoded_id,
+                offline_inserted,
+            },
+        })
     }
 
     /// Удаляет все совпадения online-ID и затем всегда вызывает exit.
