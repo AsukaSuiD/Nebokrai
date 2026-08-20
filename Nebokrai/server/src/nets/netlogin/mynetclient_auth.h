@@ -106,7 +106,8 @@ public:
     CMyNetClientAuth& operator=(const CMyNetClientAuth&) = delete;
 
     [[nodiscard]] asio::awaitable<ClientConnectResult>
-    Connect(const asio::ip::tcp::endpoint& remote);
+    Connect(const asio::ip::tcp::endpoint& remote,
+            std::optional<asio::ip::tcp::endpoint> local = std::nullopt);
     [[nodiscard]] std::int32_t Close();
     void HandleTransportClose();
 

@@ -9,6 +9,7 @@
 #include "../public/tools.h"
 #include "../nets/mysocket.h"
 #include "../nets/netlogin/message.h"
+#include "../nets/netlogin/mynetclient_auth.h"
 #include "../nets/netlogin/mynetserver_client.h"
 #include "../nets/netlogin/mynetserver_world.h"
 
@@ -36,6 +37,7 @@ namespace
 {
 constexpr std::int32_t kLoginResponseMessageType = 0x000AF501;
 constexpr std::int32_t kWorldInfoUpdateMessageType = 0x000AF509;
+constexpr std::int32_t kLoginServerInfoMessageType = 0x000CF503;
 constexpr std::int32_t kPlayerBaseMessageType = 0x0004FB01;
 constexpr std::int32_t kKickWorldAccountMessageType = 0x0004FB07;
 constexpr std::size_t kLegacyAccountLogBufferSize = 0x200U;
@@ -335,6 +337,168 @@ bool CGame::InitNetServer_World()
     return true;
 }
 
+bool CGame::LoadASList(const std::filesystem::path& path)
+{
+    // ПОДТВЕРЖДЕНО НАПРЯМУЮ 0x0040C630: старый список очищался ещё до
+    // открытия файла. После успешного открытия неполная последняя пара лишь
+    // завершала чтение, не отменяя уже принятые адреса и общий успех.
+    m_ASList.clear();
+
+    std::ifstream input(path);
+    if (!input.is_open()) {
+        return false;
+    }
+
+    std::string host;
+    std::uint16_t port = 0;
+    while (input >> host) {
+        if (!(input >> port)) {
+            break;
+        }
+        m_ASList.push_back(ASConfig{std::move(host), port});
+    }
+    return true;
+}
+
+asio::awaitable<CGame::AuthConnectResult> CGame::ConnectNewAuthClient()
+{
+    auto client = std::make_shared<LoginNet::CMyNetClientAuth>(
+        m_IoContext.get_executor());
+
+    asio::error_code bindAddressError;
+    const asio::ip::address_v4 bindAddress = m_Setup._bindIP.empty()
+        ? asio::ip::address_v4::any()
+        : asio::ip::make_address_v4(m_Setup._bindIP, bindAddressError);
+    if (bindAddressError) {
+        RecordTechnicalError(
+            "Некорректный локальный IPv4 для подключения к AuthServer");
+        co_return AuthConnectResult{std::move(client), std::nullopt};
+    }
+    const asio::ip::tcp::endpoint localEndpoint(bindAddress, m_Setup._bindPort);
+
+    for (const ASConfig& configured : m_ASList) {
+        asio::error_code remoteAddressError;
+        const asio::ip::address_v4 remoteAddress =
+            asio::ip::make_address_v4(configured._ip, remoteAddressError);
+        if (remoteAddressError) {
+            RecordTechnicalError(
+                "Пропущен некорректный IPv4 AuthServer: " + configured._ip);
+            continue;
+        }
+
+        const ClientConnectResult result = co_await client->Connect(
+            asio::ip::tcp::endpoint(remoteAddress, configured._port),
+            localEndpoint);
+        if (result.status == ClientConnectStatus::Connected) {
+            const auto connectedEndpoint = client->ConnectedEndpoint();
+            if (!connectedEndpoint) {
+                RecordTechnicalError(
+                    "Auth-клиент потерял адрес после успешного подключения");
+                continue;
+            }
+            co_return AuthConnectResult{
+                std::move(client),
+                ASConfig{connectedEndpoint->address().to_string(),
+                         connectedEndpoint->port()}};
+        }
+
+        if (result.status == ClientConnectStatus::Timeout) {
+            RecordTechnicalError(
+                "Истёк тайм-аут подключения к AuthServer " + configured._ip +
+                ':' + std::to_string(configured._port));
+        } else {
+            RecordTechnicalError(
+                "Не удалось подключиться к AuthServer " + configured._ip + ':' +
+                std::to_string(configured._port) + " (код " +
+                std::to_string(result.error.value()) + ')');
+        }
+    }
+
+    co_return AuthConnectResult{std::move(client), std::nullopt};
+}
+
+asio::awaitable<bool> CGame::InitAuthClient()
+{
+    // ПОДТВЕРЖДЕНО НАПРЯМУЮ 0x0040C9D0: прежний клиент уничтожался до новой
+    // попытки, а итог оставался true даже при пустом списке и полном неуспехе.
+    m_ASClient.reset();
+    AuthConnectResult connected = co_await ConnectNewAuthClient();
+    connected.client->EnableControlSend();
+    m_CurASCfg = std::move(connected.connected);
+    m_ASClient = std::move(connected.client);
+    static_cast<void>(SendLSInfoToAS());
+    co_return true;
+}
+
+bool CGame::IsConnectAS() const noexcept
+{
+    return m_ASClient && m_ASClient->IsConnected();
+}
+
+void CGame::DisconnectAS() noexcept
+{
+    if (m_ASClient) {
+        static_cast<void>(m_ASClient->Close());
+    }
+}
+
+asio::awaitable<bool> CGame::ReconnectAS()
+{
+    // ПОДТВЕРЖДЕНО НАПРЯМУЮ 0x00406240: новый владелец не заменяет текущий
+    // немедленно. Успех публикуется в FIFO прежнего Auth-клиента.
+    if (!m_ASClient) {
+        co_return false;
+    }
+
+    AuthConnectResult connected = co_await ConnectNewAuthClient();
+    if (!connected.connected) {
+        co_return false;
+    }
+    m_ASClient->PublishReconnected(std::move(connected.client));
+    co_return true;
+}
+
+bool CGame::ReassignAS(std::shared_ptr<LoginNet::CMyNetClientAuth> authClient)
+{
+    if (!authClient) {
+        return false;
+    }
+    const auto endpoint = authClient->ConnectedEndpoint();
+    if (!endpoint) {
+        return false;
+    }
+
+    if (m_ASClient && m_ASClient != authClient) {
+        static_cast<void>(m_ASClient->Close());
+    }
+    m_ASClient.reset();
+
+    authClient->EnableControlSend();
+    m_CurASCfg = ASConfig{
+        endpoint->address().to_string(), endpoint->port()};
+    m_ASClient = std::move(authClient);
+    static_cast<void>(SendLSInfoToAS());
+    return true;
+}
+
+std::int32_t CGame::SendLSInfoToAS()
+{
+    if (!m_ASClient) {
+        return 0;
+    }
+
+    LoginNet::CMessage message(kLoginServerInfoMessageType);
+    message.Add(m_SetupEx.iAreaId);
+    const auto result = message.SendToAuth(m_ASClient->SendQueue());
+    if (const auto* sent = std::get_if<std::int32_t>(&result)) {
+        return *sent;
+    }
+
+    RecordTechnicalError(
+        "Не удалось поставить сведения LoginServer в очередь AuthServer");
+    return 0;
+}
+
 void CGame::ReleaseNetworkOwners() noexcept
 {
     // Полный CGame::Release позднее дополнит этот срез остановкой задач приёма
@@ -348,6 +512,11 @@ void CGame::ReleaseNetworkOwners() noexcept
         s_pNetServer_Client->StopListening();
         s_pNetServer_Client.reset();
     }
+    if (m_ASClient) {
+        static_cast<void>(m_ASClient->Close());
+        m_ASClient.reset();
+    }
+    m_CurASCfg.reset();
     m_IoContext.restart();
 }
 
@@ -369,6 +538,16 @@ LoginNet::CMyNetServerWorld* CGame::GetNetServer_World() noexcept
 const LoginNet::CMyNetServerWorld* CGame::GetNetServer_World() const noexcept
 {
     return s_pNetServer_World.get();
+}
+
+LoginNet::CMyNetClientAuth* CGame::GetAuthClient() noexcept
+{
+    return m_ASClient.get();
+}
+
+const LoginNet::CMyNetClientAuth* CGame::GetAuthClient() const noexcept
+{
+    return m_ASClient.get();
 }
 
 bool CGame::LoadSetup()

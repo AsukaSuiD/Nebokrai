@@ -76,7 +76,8 @@ CMyNetClientAuth::~CMyNetClientAuth()
 }
 
 asio::awaitable<ClientConnectResult>
-CMyNetClientAuth::Connect(const asio::ip::tcp::endpoint& remote)
+CMyNetClientAuth::Connect(const asio::ip::tcp::endpoint& remote,
+                          std::optional<asio::ip::tcp::endpoint> local)
 {
     if (m_Socket.is_open()) {
         asio::error_code ignored;
@@ -87,6 +88,16 @@ CMyNetClientAuth::Connect(const asio::ip::tcp::endpoint& remote)
     m_Socket.open(asio::ip::tcp::v4(), openError);
     if (openError) {
         co_return ClientConnectResult{ClientConnectStatus::IoError, openError};
+    }
+
+    if (local) {
+        asio::error_code bindError;
+        m_Socket.bind(*local, bindError);
+        if (bindError) {
+            asio::error_code ignored;
+            m_Socket.close(ignored);
+            co_return ClientConnectResult{ClientConnectStatus::IoError, bindError};
+        }
     }
 
     ClientConnectResult result = co_await ConnectTcpIPv4(m_Socket, remote);

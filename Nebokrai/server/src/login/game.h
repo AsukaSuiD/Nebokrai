@@ -12,10 +12,12 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace LoginNet
 {
 class CMessage;
+class CMyNetClientAuth;
 class CMyNetServerClient;
 class CMyNetServerWorld;
 }
@@ -39,13 +41,18 @@ class CLoginQueue;
  * LoadWorldSetup 0x00410F30, SetListWorldInfoBySetup 0x00411170,
  * ReLoadWorldSetup 0x00411FF0, UpdateWorldInfoToAllClient 0x00407860,
  * load_listen_port 0x0040DCB0, InitNetServer_Client 0x00402DA0,
- * InitNetServer_World 0x00402F90, Release 0x00405C60 и значения
- * конструктора CGame по умолчанию 0x00414350.
+ * InitNetServer_World 0x00402F90, LoadASList 0x0040C630,
+ * InitAuthClient 0x0040C9D0, ReconnectAS 0x00406240,
+ * ReassignAS 0x00409BF0, Release 0x00405C60 и значения конструктора
+ * CGame по умолчанию 0x00414350.
  *
  * Asio заменяет WinSock/IOCP только в технической части. Отдельные порты из
  * port.ini, порядок пересоздания владельцев, сетевые пределы и локальный IPv4
  * сохраняются. Полный Release будет дополнен по мере появления остальных
  * фоновых владельцев; текущий срез освобождает только уже материализованную сеть.
+ * Исходящий Auth-клиент остаётся отдельным соединением с самостоятельным
+ * AuthServer-процессом. Частичное чтение aslist.ini, безусловный успех
+ * InitAuthClient и отложенная через FIFO замена клиента сохраняются явно.
  */
 class CGame
 {
@@ -150,17 +157,33 @@ public:
         std::optional<std::uint32_t> world;
     };
 
+    struct ASConfig
+    {
+        std::string _ip;
+        std::uint16_t _port{};
+    };
+
     [[nodiscard]] bool LoadSetup();
     [[nodiscard]] bool load_listen_port(
         const std::filesystem::path& runtimeDirectory = ".");
     [[nodiscard]] bool InitNetServer_Client();
     [[nodiscard]] bool InitNetServer_World();
+    [[nodiscard]] bool LoadASList(
+        const std::filesystem::path& path = "aslist.ini");
+    [[nodiscard]] asio::awaitable<bool> InitAuthClient();
+    [[nodiscard]] bool IsConnectAS() const noexcept;
+    void DisconnectAS() noexcept;
+    [[nodiscard]] asio::awaitable<bool> ReconnectAS();
+    [[nodiscard]] bool ReassignAS(
+        std::shared_ptr<LoginNet::CMyNetClientAuth> authClient);
     void ReleaseNetworkOwners() noexcept;
 
     [[nodiscard]] LoginNet::CMyNetServerClient* GetNetServer_Client() noexcept;
     [[nodiscard]] const LoginNet::CMyNetServerClient* GetNetServer_Client() const noexcept;
     [[nodiscard]] LoginNet::CMyNetServerWorld* GetNetServer_World() noexcept;
     [[nodiscard]] const LoginNet::CMyNetServerWorld* GetNetServer_World() const noexcept;
+    [[nodiscard]] LoginNet::CMyNetClientAuth* GetAuthClient() noexcept;
+    [[nodiscard]] const LoginNet::CMyNetClientAuth* GetAuthClient() const noexcept;
     // Прямой EXE использовал глобальный gAuthMgr. Реконструкция Linux сохраняет
     // тот же побочный эффект тайм-аута, но передаёт явного владельца AuthManager.
     [[nodiscard]] bool ReLoadSetup(AuthManager& authManager);
@@ -203,13 +226,24 @@ public:
                                     std::int32_t unusedResult);
 
 private:
+    struct AuthConnectResult
+    {
+        std::shared_ptr<LoginNet::CMyNetClientAuth> client;
+        std::optional<ASConfig> connected;
+    };
+
     void ChangeAllWorldSate();
     void RecordTechnicalError(std::string detail);
+    [[nodiscard]] asio::awaitable<AuthConnectResult> ConnectNewAuthClient();
+    [[nodiscard]] std::int32_t SendLSInfoToAS();
 
     CLoginQueue* m_pLoginQueue{};
     asio::io_context m_IoContext;
     std::unique_ptr<LoginNet::CMyNetServerClient> s_pNetServer_Client;
     std::unique_ptr<LoginNet::CMyNetServerWorld> s_pNetServer_World;
+    std::vector<ASConfig> m_ASList;
+    std::optional<ASConfig> m_CurASCfg;
+    std::shared_ptr<LoginNet::CMyNetClientAuth> m_ASClient;
 
     std::map<std::string, std::string> m_LoginCdkeyWorld;
     std::map<std::int32_t, std::list<std::string>> s_listCdkey;
