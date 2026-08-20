@@ -48,8 +48,8 @@ class CLoginQueue;
  *
  * Asio заменяет WinSock/IOCP только в технической части. Отдельные порты из
  * port.ini, порядок пересоздания владельцев, сетевые пределы и локальный IPv4
- * сохраняются. Полный Release будет дополнен по мере появления остальных
- * фоновых владельцев; текущий срез освобождает только уже материализованную сеть.
+ * сохраняются. Этот owner освобождает принадлежащую ему сеть; общий порядок
+ * остановки очередей, DB-владельцев и фонового журнала задаёт LoginServer runtime.
  * Исходящий Auth-клиент остаётся отдельным соединением с самостоятельным
  * AuthServer-процессом. Частичное чтение aslist.ini, безусловный успех
  * InitAuthClient и отложенная через FIFO замена клиента сохраняются явно.
@@ -188,6 +188,13 @@ public:
     [[nodiscard]] const LoginNet::CMyNetServerWorld* GetNetServer_World() const noexcept;
     [[nodiscard]] LoginNet::CMyNetClientAuth* GetAuthClient() noexcept;
     [[nodiscard]] const LoginNet::CMyNetClientAuth* GetAuthClient() const noexcept;
+    [[nodiscard]] asio::io_context& IoContext() noexcept;
+    [[nodiscard]] const tagSetup& Setup() const noexcept;
+    [[nodiscard]] const tagSetupEx& SetupEx() const noexcept;
+    [[nodiscard]] AccLogQueue& AccountLogs() noexcept;
+    void AttachLoginQueue(CLoginQueue* queue) noexcept;
+    [[nodiscard]] std::size_t ConfiguredWorldCount() const noexcept;
+    [[nodiscard]] std::size_t ActiveWorldCount() const noexcept;
     // Прямой EXE использовал глобальный gAuthMgr. Реконструкция Linux сохраняет
     // тот же побочный эффект тайм-аута, но передаёт явного владельца AuthManager.
     [[nodiscard]] bool ReLoadSetup(AuthManager& authManager);

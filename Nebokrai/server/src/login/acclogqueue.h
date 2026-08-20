@@ -2,6 +2,7 @@
 
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <optional>
@@ -23,17 +24,29 @@
  * stale token после clear даёт пустой Pop, как обнулённый char[2048] caller-а,
  * а push сверх 10000 всё ещё кладёт строку в deque, но не создаёт новый token.
  * std::condition_variable + mutex заменяют только обвязку Win32. Текущий элемент
- * очереди хранит поля записи отдельно, чтобы ODBC выполнял параметризованный
- * запрос вместо склейки SQL. Порядок, token-count, отсутствие дублей и повторов
- * остаются исходными.
+ * очереди хранит тип и поля account/role/leave-записи отдельно, а SQL формирует
+ * единственный AccLogThread. Порядок, token-count, отсутствие дублей и повторов
+ * остаются исходными. Stop — только Linux-граница штатного join при Release.
  */
 namespace Login
 {
+enum class AccLogKind
+{
+    AccountEnter,
+    AccountLeave,
+    RoleEnter,
+    SessionLeave,
+};
+
 struct AccLogRecord
 {
+    AccLogKind kind{AccLogKind::AccountEnter};
     std::string account;
-    std::string enteredAt;
+    std::string recordedAt;
     std::string ip;
+    std::string roleName;
+    std::uint8_t roleLevel{};
+    std::int32_t worldNumber{};
 };
 
 class AccLogQueue
@@ -47,6 +60,7 @@ public:
     void Push(AccLogRecord record);
     [[nodiscard]] std::optional<AccLogRecord> Pop();
     void Clear();
+    void Stop();
 
 private:
     static constexpr std::size_t kMaximumSemaphoreCount = 10000U;
@@ -55,5 +69,6 @@ private:
     std::condition_variable m_NotEmpty;
     std::deque<AccLogRecord> m_Logs;
     std::size_t m_SemaphoreCount{};
+    bool m_StopRequested{};
 };
 }

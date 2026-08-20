@@ -75,10 +75,9 @@
  *
  * ILogMessageContext выражает только достигнутые CGame calls. Очереди/valid/
  * matrix остаются у CLoginQueue; routing, account maps, logs и EnterGame — у
- * будущего CGame. Direct OnLogMessage сам вызывает PrepareEnter/EnterGame; это
- * сохранено. Только matrix_register временно вызывается по outcome интерфейса,
- * потому что точный CGame::PrepareEnter (который владеет этим вызовом) ещё не
- * материализован. Это граница частичной материализации, не новая архитектура.
+ * CGame. Direct OnLogMessage сам вызывает PrepareEnter/EnterGame; это сохранено.
+ * Matrix-register возвращается типизированным outcome и исполняется тем же
+ * CGame-владельцем, не перенося его state-machine внутрь handler-а.
  */
 namespace Login
 {

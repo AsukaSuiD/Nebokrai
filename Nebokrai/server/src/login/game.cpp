@@ -554,6 +554,41 @@ const LoginNet::CMyNetClientAuth* CGame::GetAuthClient() const noexcept
     return m_ASClient.get();
 }
 
+asio::io_context& CGame::IoContext() noexcept
+{
+    return m_IoContext;
+}
+
+const CGame::tagSetup& CGame::Setup() const noexcept
+{
+    return m_Setup;
+}
+
+const CGame::tagSetupEx& CGame::SetupEx() const noexcept
+{
+    return m_SetupEx;
+}
+
+AccLogQueue& CGame::AccountLogs() noexcept
+{
+    return _acc_logs;
+}
+
+void CGame::AttachLoginQueue(CLoginQueue* queue) noexcept
+{
+    m_pLoginQueue = queue;
+}
+
+std::size_t CGame::ConfiguredWorldCount() const noexcept
+{
+    return m_WorldInfoSetup.size();
+}
+
+std::size_t CGame::ActiveWorldCount() const noexcept
+{
+    return s_listCdkey.size();
+}
+
 bool CGame::LoadSetup()
 {
     // ПОДТВЕРЖДЕНО НАПРЯМУЮ 0x0040E690: открытый setup.ini имеет приоритет.
@@ -598,10 +633,9 @@ bool CGame::LoadSetup()
 
             // Прямой владелец игнорирует результат fread. Исходный буфер заранее
             // обнулён, поэтому короткое чтение оставляет нули в непрочитанном хвосте.
-            static_cast<void>(std::fread(encoded.data(),
-                                         static_cast<std::size_t>(fileLength),
-                                         1U,
-                                         encodedFile));
+            const std::size_t readCount = std::fread(
+                encoded.data(), static_cast<std::size_t>(fileLength), 1U, encodedFile);
+            static_cast<void>(readCount);
             std::fclose(encodedFile);
             encodedFile = nullptr;
 
@@ -1243,8 +1277,9 @@ void CGame::AccountEnterLog(const char* account, std::uint32_t ip)
         return;
     }
     _acc_logs.Push(AccLogRecord{
+        .kind = AccLogKind::AccountEnter,
         .account = account,
-        .enteredAt = time.data(),
+        .recordedAt = time.data(),
         .ip = ipText,
     });
 }

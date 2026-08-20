@@ -9,6 +9,9 @@ void AccLogQueue::Push(AccLogRecord record)
     bool released = false;
     {
         std::lock_guard guard(m_Mutex);
+        if (m_StopRequested) {
+            return;
+        }
         m_Logs.push_back(std::move(record));
         if (m_SemaphoreCount < kMaximumSemaphoreCount) {
             ++m_SemaphoreCount;
@@ -23,7 +26,12 @@ void AccLogQueue::Push(AccLogRecord record)
 std::optional<AccLogRecord> AccLogQueue::Pop()
 {
     std::unique_lock lock(m_Mutex);
-    m_NotEmpty.wait(lock, [this] { return m_SemaphoreCount != 0U; });
+    m_NotEmpty.wait(lock, [this] {
+        return m_StopRequested || m_SemaphoreCount != 0U;
+    });
+    if (m_StopRequested) {
+        return std::nullopt;
+    }
     --m_SemaphoreCount;
     if (m_Logs.empty()) {
         return std::nullopt;
@@ -37,5 +45,15 @@ void AccLogQueue::Clear()
 {
     std::lock_guard guard(m_Mutex);
     m_Logs.clear();
+}
+
+void AccLogQueue::Stop()
+{
+    {
+        std::lock_guard guard(m_Mutex);
+        m_StopRequested = true;
+        m_Logs.clear();
+    }
+    m_NotEmpty.notify_all();
 }
 }
