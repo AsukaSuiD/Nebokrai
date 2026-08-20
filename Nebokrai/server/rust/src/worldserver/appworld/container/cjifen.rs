@@ -2,7 +2,8 @@
 //!
 //! Статус `CWallet::Release/IsFull/GetGoods/GetGoodsAmount/Serialize/Unserialize`
 //! RVA `0x000D5E30/0x000D5E50/0x000D5EC0/0x000D5EE0/0x000D5EF0/0x000D6030`
-//! и `Clear` RVA `0x000D8670`, а также constructor/destructor-state `CJiFen`
+//! и `Clear/Find/Remove` RVA `0x000D8670/0x000D87C0/0x000D8A10`, а также
+//! constructor/destructor-state `CJiFen`
 //! RVA `0x000D8280/0x000D82E0` и его folded container-контракт —
 //! `IMPLEMENTED`; остальные wallet-операции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Точная пара:
@@ -42,6 +43,7 @@ use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsfactory::{GoodsBasePropertiesRegistry, unserialize_goods};
 use super::cwallet::CWallet;
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
+use crate::public::guid::CGuid;
 
 /// Отдельный достигнутый owner исходного `CJiFen`, не копия его 32-битного ABI.
 pub(crate) struct CJiFen {
@@ -153,6 +155,25 @@ impl CWallet {
     /// Возвращает число занятых wallet-slot-ов: ноль либо один.
     pub(crate) const fn get_goods_amount(&self) -> u32 {
         self.gold_coins.is_some() as u32
+    }
+
+    /// Ищет единственный товар по полному 16-байтовому legacy GUID.
+    pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
+        self.gold_coins
+            .as_deref()
+            .filter(|goods| goods.get_ex_id() == ex_id)
+    }
+
+    /// Передаёт ownership единственного совпавшего товара вызывающему.
+    pub(crate) fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
+        if self
+            .gold_coins
+            .as_deref()
+            .is_some_and(|goods| goods.get_ex_id() == ex_id)
+        {
+            return self.gold_coins.take();
+        }
+        None
     }
 
     /// Кодирует marker и возможный полный goods-wire.
@@ -459,7 +480,7 @@ impl CWallet {
 
 // ============================================================================
 // FUNCTION: CWallet::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cjifen.cpp:273
@@ -467,13 +488,14 @@ impl CWallet {
 // ADDRESS: 004d87c0
 // PROTOTYPE: CBaseObject * __thiscall Find(CGUID * param_1)
 //
+// IMPLEMENTED выше через полное равенство достигнутого `CGuid`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CWallet::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cjifen.cpp:289
@@ -481,6 +503,7 @@ impl CWallet {
 // ADDRESS: 004d8a10
 // PROTOTYPE: CBaseObject * __thiscall Remove(CGUID * param_1, void * param_2)
 //
+// IMPLEMENTED выше; доказанные no-op listener callbacks не материализуются.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -499,7 +522,6 @@ impl CWallet {
 //
 //
 
-
 // ============================================================================
 // FUNCTION: Unwind@00535750
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -513,8 +535,6 @@ impl CWallet {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
 
 // ============================================================================
 // FUNCTION: Unwind@005357b0

@@ -2,8 +2,9 @@
 //!
 //! Статус constructor/destructor-state RVA `0x000D7FE0/0x000D8060`,
 //! `Release/Clear` RVA `0x000D8040/0x000D8050` и унаследованного wallet-codec
-//! RVA `0x000D5EF0/0x000D6030` — `IMPLEMENTED`; lock-gated игровые операции
-//! `Find/Remove/Add/AddFromDB` ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! RVA `0x000D5EF0/0x000D6030`, а также lock-gated `Find/Remove/Add/AddFromDB`
+//! RVA `0x000D8000/0x000D8010/0x000D8020/0x000D8030/0x000D80E0` —
+//! `IMPLEMENTED`; остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -28,13 +29,20 @@
 //! `CWallet` служит узким compatibility-layer для доказанных base-state и
 //! codec-а. `Option<Box<CGoods>>` заменяет nullable pointer и
 //! `GarbageCollect`, а встроенный listener остаётся ранее доказанным no-op RVA
-//! `0x000DBD10`. Не реализованные `Lock/Unlock` и lock-gated игровые пути не
-//! нужны для clone-последовательности и не получают поведения по имени метода.
+//! `0x000DBD10`.
+//!
+//! `Find`, `Remove` и обе перегрузки `Add` проверяют lock до wallet-вызова.
+//! `AddFromDB` отличается: сначала inherited positional `GetGoods` проверяет
+//! collision даже у locked bank, и лишь для пустого результата проверяется
+//! lock. DB diagnostic logging исключён как техническая замена, не влияющая на
+//! ownership или результат. Process-global gold index передаётся wallet-слою
+//! явно уже разрешённым значением.
 
 use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use super::cwallet::CWallet;
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
+use crate::public::guid::CGuid;
 
 /// Достигнутое состояние исходного `CBank`, не копия его 32-битного ABI.
 pub(crate) struct CBank {
@@ -79,6 +87,57 @@ impl CBank {
     /// Возвращает число занятых bank-slot-ов: ноль либо один.
     pub(crate) const fn get_goods_amount(&self) -> u32 {
         self.wallet_state.get_goods_amount()
+    }
+
+    /// Ищет товар только в unlocked bank.
+    pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
+        (!self.locked)
+            .then(|| self.wallet_state.find(ex_id))
+            .flatten()
+    }
+
+    /// Вынимает товар только из unlocked bank.
+    pub(crate) fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
+        if self.locked {
+            return None;
+        }
+        self.wallet_state.remove(ex_id)
+    }
+
+    /// Делегирует object-перегрузку `Add` только из unlocked state.
+    pub(crate) fn add(
+        &mut self,
+        goods: Box<CGoods>,
+        gold_coin_index: u32,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, GoodsCodecError> {
+        if self.locked {
+            return Ok(Some(goods));
+        }
+        self.wallet_state.add(goods, gold_coin_index, registry)
+    }
+
+    /// Делегирует positional `Add` только из unlocked state.
+    pub(crate) fn add_at(
+        &mut self,
+        position: u32,
+        goods: Box<CGoods>,
+        gold_coin_index: u32,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, GoodsCodecError> {
+        if self.locked {
+            return Ok(Some(goods));
+        }
+        self.wallet_state
+            .add_at(position, goods, gold_coin_index, registry)
+    }
+
+    /// Проверяет positional collision раньше lock и затем делегирует DB-вставку.
+    pub(crate) fn add_from_db(&mut self, position: u32, goods: Box<CGoods>) -> Option<Box<CGoods>> {
+        if self.wallet_state.get_goods(position).is_some() || self.locked {
+            return Some(goods);
+        }
+        self.wallet_state.add_from_db(position, goods)
     }
 
     /// Замораживает единственный bank-slot без изменения lock-state.
@@ -137,7 +196,7 @@ impl CBank {
 
 // ============================================================================
 // FUNCTION: CBank::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cbank.cpp:36
@@ -145,13 +204,14 @@ impl CBank {
 // ADDRESS: 004d8000
 // PROTOTYPE: CBaseObject * __thiscall Find(CGUID * param_1)
 //
+// IMPLEMENTED выше как ранний lock-gate поверх wallet `Find`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CBank::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cbank.cpp:48
@@ -159,13 +219,14 @@ impl CBank {
 // ADDRESS: 004d8010
 // PROTOTYPE: CBaseObject * __thiscall Remove(CGUID * param_1, void * param_2)
 //
+// IMPLEMENTED выше как ранний lock-gate поверх wallet `Remove`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CBank::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cbank.cpp:62
@@ -173,13 +234,14 @@ impl CBank {
 // ADDRESS: 004d8020
 // PROTOTYPE: int __thiscall Add(CBaseObject * param_1, void * param_2)
 //
+// IMPLEMENTED выше; typed API принимает уже доказанный `CGoods` после cast-а.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CBank::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cbank.cpp:75
@@ -187,6 +249,7 @@ impl CBank {
 // ADDRESS: 004d8030
 // PROTOTYPE: int __thiscall Add(ulong param_1, CGoods * param_2, void * param_3)
 //
+// IMPLEMENTED выше с точным ранним lock-gate.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -229,7 +292,7 @@ impl CBank {
 
 // ============================================================================
 // FUNCTION: CBank::AddFromDB
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cbank.cpp:86
@@ -237,6 +300,7 @@ impl CBank {
 // ADDRESS: 004d80e0
 // PROTOTYPE: int __thiscall AddFromDB(CGoods * param_1, ulong param_2)
 //
+// IMPLEMENTED выше; positional collision-check намеренно предшествует lock.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

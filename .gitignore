@@ -9,7 +9,7 @@
 **/.venv/
 /build/
 /out/
-/target/
+**/target/
 .cache/
 __pycache__/
 *.py[cod]

@@ -1,9 +1,10 @@
 //! Владелец wallet-container исторического `WorldServer`.
 //!
 //! Статус constructor-state `CWallet::CWallet` RVA `0x000D5F60`,
-//! destructor ownership RVA `0x000D5FC0` и `GetGoldCoinsAmount` RVA
-//! `0x000D5F40` — `IMPLEMENTED`; игровые операции и остальной корпус ниже
-//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! destructor ownership RVA `0x000D5FC0`, `GetGoldCoinsAmount` RVA
+//! `0x000D5F40`, `AddFromDB` RVA `0x000D6090` и обеих перегрузок `Add` RVA
+//! `0x000D61F0/0x000D63B0` — `IMPLEMENTED`; остальной корпус ниже остаётся
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -18,11 +19,22 @@
 //! уничтожает товар один раз. Встроенный secondary listener регистрируется
 //! constructor-ом, но оба его callbacks сведены линкером к доказанному
 //! `mov eax,1; ret 0xC` по RVA `0x000DBD10`; отдельного состояния он не имеет.
+//!
+//! Exact positional `Add` проверяет gold-coin index только когда slot уже
+//! занят; первый товар принимается без currency-validation. Process-global
+//! `GetGoldCoinIndex` заменён явно переданным resolved index, а общая stacking-
+//! ветка — достигнутым адаптером `CGoodsContainer::Add`. `AddFromDB` сначала
+//! вызывает virtual positional `GetGoods`, поэтому ненулевая позиция способна
+//! перезаписать уже занятый единственный slot. Legacy теряет прежний указатель;
+//! Rust сохраняет наблюдаемую перезапись, но не воспроизводит внутреннюю утечку
+//! и освобождает вытесненный объект обычным ownership. Listener callbacks
+//! доказанно no-op и не материализуются.
 
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
 
-use super::super::goods::cgoods::{CGoods, GoodsDbSnapshotBlock};
+use super::super::goods::cgoods::{CGoods, GoodsCodecError, GoodsDbSnapshotBlock};
 use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
+use super::cgoodscontainer::add_to_occupied_position;
 
 /// Достигнутое состояние исходного `CWallet`, не копия его 32-битного ABI.
 pub(crate) struct CWallet {
@@ -47,6 +59,48 @@ impl CWallet {
             Some(goods) => goods.get_amount(),
             None => 0,
         }
+    }
+
+    /// Вставляет товар в exact позицию wallet-а; `Some` сохраняет ownership при false.
+    pub(crate) fn add_at(
+        &mut self,
+        position: u32,
+        goods: Box<CGoods>,
+        gold_coin_index: u32,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, GoodsCodecError> {
+        let Some(existing) = self.gold_coins.as_deref_mut() else {
+            self.gold_coins = Some(goods);
+            return Ok(None);
+        };
+
+        let incoming_index = goods
+            .get_base_properties_index()
+            .ok_or(GoodsCodecError::MissingBasePropertiesIndex)?;
+        if incoming_index != gold_coin_index || position != 0 {
+            return Ok(Some(goods));
+        }
+
+        add_to_occupied_position(existing, goods, registry)
+    }
+
+    /// Делегирует object-перегрузку exact позиции `0` после уже выполненного cast-а.
+    pub(crate) fn add(
+        &mut self,
+        goods: Box<CGoods>,
+        gold_coin_index: u32,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, GoodsCodecError> {
+        self.add_at(0, goods, gold_coin_index, registry)
+    }
+
+    /// Вставляет DB-товар после positional collision-check без factory-validation.
+    pub(crate) fn add_from_db(&mut self, position: u32, goods: Box<CGoods>) -> Option<Box<CGoods>> {
+        if self.get_goods(position).is_some() {
+            return Some(goods);
+        }
+        self.gold_coins = Some(goods);
+        None
     }
 
     /// Замораживает nullable wallet-slot для DB traversal с позицией `0`.
@@ -138,7 +192,7 @@ impl CWallet {
 
 // ============================================================================
 // FUNCTION: CWallet::AddFromDB
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cwallet.cpp:83
@@ -146,13 +200,15 @@ impl CWallet {
 // ADDRESS: 004d6090
 // PROTOTYPE: int __thiscall AddFromDB(CGoods * param_1, ulong param_2)
 //
+// IMPLEMENTED выше; exact positional collision-check сохранён, DB logging
+// исключён как технический side effect.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CWallet::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cwallet.cpp:55
@@ -160,6 +216,8 @@ impl CWallet {
 // ADDRESS: 004d61f0
 // PROTOTYPE: int __thiscall Add(ulong param_1, CGoods * param_2, void * param_3)
 //
+// IMPLEMENTED выше; resolved gold-coin index передаётся явно, no-op listener
+// callbacks не материализуются.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -180,7 +238,7 @@ impl CWallet {
 
 // ============================================================================
 // FUNCTION: CWallet::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cwallet.cpp:41
@@ -188,6 +246,7 @@ impl CWallet {
 // ADDRESS: 004d63b0
 // PROTOTYPE: int __thiscall Add(CBaseObject * param_1, void * param_2)
 //
+// IMPLEMENTED выше как typed `CGoods` API с делегированием позиции `0`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -205,7 +264,6 @@ impl CWallet {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // ============================================================================
 // FUNCTION: Unwind@00535620
@@ -234,6 +292,5 @@ impl CWallet {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // COMPONENT_VARIANT_END: WorldServer
