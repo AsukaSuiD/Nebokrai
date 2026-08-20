@@ -50,10 +50,10 @@
 //! `INADDR_NONE`. Для иных числовых форм, которые старый `inet_addr` мог читать
 //! как octal/hex/сокращённый адрес, отправка `0x1FE05` останавливается отдельной
 //! границей после `0x7F80D`; строгий parser стандартной библиотеки не выдаётся
-//! за полную Winsock-грамматику. Ненулевой sync flag завершает ветку, нулевой
-//! возвращает типизированную обязанность продолжить большую цепочку начальной
-//! конфигурации —
-//! она не объявляется отправленной частично.
+//! за полную Winsock-грамматику. Нулевой sync flag возвращает обязанность
+//! продолжить большую цепочку начальной конфигурации; ненулевой — отдельный
+//! хвост `count -> 0x8040E -> player snapshots -> CD-key snapshot`. Ни один
+//! хвост не объявляется исполненным частично.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -173,8 +173,11 @@ pub(crate) enum WorldGameServerConnectionContinuation {
     NetworkOwnerUnavailable,
     AuctionStateUnavailable,
     LegacyIpv4SyntaxUnknown,
-    Complete,
     InitialConfigurationPending {
+        socket_id: i32,
+        game_server_index: u32,
+    },
+    ReconnectPlayerDataPending {
         socket_id: i32,
         game_server_index: u32,
     },
@@ -675,7 +678,10 @@ pub(crate) fn on_game_server_connected(
             game_server_index: connection.index,
         }
     } else {
-        WorldGameServerConnectionContinuation::Complete
+        WorldGameServerConnectionContinuation::ReconnectPlayerDataPending {
+            socket_id,
+            game_server_index: connection.index,
+        }
     };
     report
 }
