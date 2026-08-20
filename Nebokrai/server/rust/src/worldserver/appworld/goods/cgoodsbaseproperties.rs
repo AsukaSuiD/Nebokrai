@@ -1,9 +1,11 @@
 //! Владелец базовых свойств товаров исторического `WorldServer`.
 //!
-//! Статус `GetWeight` RVA `0x000D4940`,
+//! Статус `GetPrice/GetWeight/GetName/GetDescribe/GetIconID` RVA
+//! `0x000D4930/0x000D4940/0x000D4960/0x000D4970/0x000D4980`,
 //! `GetGoodsType/GetEquipPlace` RVA `0x000DEA40/0x000DEA50`,
-//! `GetAddonPropertyValues` RVA `0x000D4E50` и `GetOccurProbability` RVA
-//! `0x000D49C0` — `IMPLEMENTED`; остальной корпус ниже остаётся
+//! `GetAddonPropertyValues/GetValidAddonProperties` RVA
+//! `0x000D4E50/0x000D4D90`, `GetOccurProbability/IsImplicit` RVA
+//! `0x000D49C0/0x000D4A10` — `IMPLEMENTED`; остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -38,28 +40,63 @@ pub(crate) const GOODS_TYPE_EQUIPMENT: i32 = 2;
 pub(crate) const GAP_PARTICULAR_ATTRIBUTE: i32 = 0x0d;
 pub(crate) const GAP_GOODS_STACKING_LIMIT: i32 = 0x26;
 pub(crate) const GAP_WEAPON_LEVEL: i32 = 0x30;
+pub(crate) const ICON_TYPE_GROUND: i32 = 1;
+
+struct GoodsBaseIcon {
+    icon_type: i32,
+    icon_id: u32,
+}
+
+pub(super) struct GoodsBaseAddonPropertyValueModifier {
+    probability: u32,
+    lower_limit: i32,
+    upper_limit: i32,
+}
 
 /// Достигнутые scalar-поля исходного `tagAddonPropertyValue`.
 pub(crate) struct GoodsBaseAddonPropertyValue {
     id: u32,
     base_value: i32,
+    is_modifier_enabled: i32,
+    modifiers: Vec<GoodsBaseAddonPropertyValueModifier>,
 }
 
 struct GoodsBaseAddonProperty {
     property_type: i32,
+    is_enabled: i32,
+    is_implicit_attribute: i32,
     occur_probability: u32,
     values: Vec<GoodsBaseAddonPropertyValue>,
 }
 
 /// Достигнутая stacking-часть исходного `CGoodsBaseProperties`.
 pub(crate) struct CGoodsBaseProperties {
+    name: Vec<u8>,
+    description: Vec<u8>,
+    price: u32,
     weight: u32,
+    icons: Vec<GoodsBaseIcon>,
     goods_type: i32,
     equip_place: i32,
     addon_properties: Vec<GoodsBaseAddonProperty>,
 }
 
 impl CGoodsBaseProperties {
+    /// Заимствует byte-exact имя без завершающего NUL.
+    pub(crate) fn get_name(&self) -> &[u8] {
+        &self.name
+    }
+
+    /// Заимствует byte-exact описание без завершающего NUL.
+    pub(crate) fn get_description(&self) -> &[u8] {
+        &self.description
+    }
+
+    /// Возвращает exact unsigned базовую цену.
+    pub(crate) const fn get_price(&self) -> u32 {
+        self.price
+    }
+
     /// Возвращает exact unsigned вес одной единицы товара.
     pub(crate) const fn get_weight(&self) -> u32 {
         self.weight
@@ -73,6 +110,30 @@ impl CGoodsBaseProperties {
     /// Возвращает exact signed `EQUIP_PLACE` без дополнительных эффектов.
     pub(crate) const fn get_equip_place(&self) -> i32 {
         self.equip_place
+    }
+
+    /// Возвращает icon первого совпавшего numeric-типа либо исходный `0`.
+    pub(crate) fn get_icon_id(&self, icon_type: i32) -> u32 {
+        self.icons
+            .iter()
+            .find(|icon| icon.icon_type == icon_type)
+            .map_or(0, |icon| icon.icon_id)
+    }
+
+    /// Обходит тип каждого enabled property в исходном vector-order.
+    pub(super) fn valid_addon_property_types(&self) -> impl Iterator<Item = i32> + '_ {
+        self.addon_properties
+            .iter()
+            .filter(|property| property.is_enabled == 1)
+            .map(|property| property.property_type)
+    }
+
+    /// Возвращает implicit-флаг первого property совпавшего типа.
+    pub(crate) fn is_implicit(&self, property_type: i32) -> i32 {
+        self.addon_properties
+            .iter()
+            .find(|property| property.property_type == property_type)
+            .map_or(0, |property| property.is_implicit_attribute)
     }
 
     /// Возвращает values первого property совпавшего numeric-типа.
@@ -104,6 +165,28 @@ impl GoodsBaseAddonPropertyValue {
     /// Возвращает exact signed базовое значение.
     pub(crate) const fn base_value(&self) -> i32 {
         self.base_value
+    }
+
+    pub(super) const fn is_modifier_enabled(&self) -> bool {
+        self.is_modifier_enabled != 0
+    }
+
+    pub(super) fn modifiers(&self) -> &[GoodsBaseAddonPropertyValueModifier] {
+        &self.modifiers
+    }
+}
+
+impl GoodsBaseAddonPropertyValueModifier {
+    pub(super) const fn probability(&self) -> u32 {
+        self.probability
+    }
+
+    pub(super) const fn lower_limit(&self) -> i32 {
+        self.lower_limit
+    }
+
+    pub(super) const fn upper_limit(&self) -> i32 {
+        self.upper_limit
     }
 }
 
@@ -325,7 +408,7 @@ impl GoodsBaseAddonPropertyValue {
 
 // ============================================================================
 // FUNCTION: CGoodsBaseProperties::GetPrice
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsbaseproperties.cpp:53
@@ -351,7 +434,7 @@ impl GoodsBaseAddonPropertyValue {
 
 // ============================================================================
 // FUNCTION: CGoodsBaseProperties::GetName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsbaseproperties.cpp:39
@@ -365,7 +448,7 @@ impl GoodsBaseAddonPropertyValue {
 
 // ============================================================================
 // FUNCTION: CGoodsBaseProperties::GetDescribe
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsbaseproperties.cpp:46
@@ -379,7 +462,7 @@ impl GoodsBaseAddonPropertyValue {
 
 // ============================================================================
 // FUNCTION: CGoodsBaseProperties::GetIconID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsbaseproperties.cpp:182
@@ -405,7 +488,7 @@ impl GoodsBaseAddonPropertyValue {
 
 // ============================================================================
 // FUNCTION: CGoodsBaseProperties::IsImplicit
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsbaseproperties.cpp:215
@@ -461,7 +544,7 @@ impl GoodsBaseAddonPropertyValue {
 
 // ============================================================================
 // FUNCTION: CGoodsBaseProperties::GetValidAddonProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsbaseproperties.cpp:303

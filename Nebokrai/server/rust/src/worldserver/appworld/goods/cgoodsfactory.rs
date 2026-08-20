@@ -2,7 +2,7 @@
 //!
 //! Статус `QueryGoodsBaseProperties` RVA `0x00055DB0`,
 //! `UnserializeGoods` RVA `0x00055E20` и `QueryGoodsIDByOriginalName` RVA
-//! `0x000566F0` — `IMPLEMENTED`; остальной корпус ниже остаётся
+//! `0x000566F0`, `CreateGoods` RVA `0x00059460` — `IMPLEMENTED`; остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -35,12 +35,19 @@
 //! возвращает mapped `u32` по `+0x28`. Два временных `std::string`, tree node
 //! и security-cookie являются библиотечной/компиляторной формой; Rust
 //! выполняет тот же точный поиск непосредственно в `BTreeMap`.
+//!
+//! `CreateGoods` сохраняет порядок всех observable roll-ов: один
+//! `random(10000)` на каждый enabled addon-type, затем ещё один на modifier и
+//! `random(upper-lower)` только для выбранного probability-interval. Сам
+//! process-global PRNG не подменяется другим алгоритмом: caller передаёт узкий
+//! callback с exact legacy `random(bound)` семантикой. Rust `Box/Vec` заменяют
+//! только allocation/STL plumbing и автоматически освобождают частичный result.
 
 use std::collections::BTreeMap;
 use std::ffi::CStr;
 
 use super::cgoods::{CGoods, GoodsCodecError};
-use super::cgoodsbaseproperties::CGoodsBaseProperties;
+use super::cgoodsbaseproperties::{CGoodsBaseProperties, ICON_TYPE_GROUND};
 
 /// Достигнутая lookup-форма static base-properties map.
 pub(crate) type GoodsBasePropertiesRegistry = BTreeMap<u32, Option<CGoodsBaseProperties>>;
@@ -81,6 +88,56 @@ pub(crate) fn unserialize_goods(
         return Ok(None);
     }
     Ok(Some(goods))
+}
+
+/// Создаёт товар и выполняет exact addon probability/modifier roll-order.
+pub(crate) fn create_goods<Random>(
+    registry: &GoodsBasePropertiesRegistry,
+    index: u32,
+    random: &mut Random,
+) -> Option<Box<CGoods>>
+where
+    Random: FnMut(i32) -> i32,
+{
+    let properties = query_goods_base_properties(registry, index)?;
+    let mut goods = Box::new(CGoods::with_constructor_base_and_type());
+    goods.set_base_properties_index(index);
+    goods.set_name(properties.get_name());
+    goods.set_goods_description(properties.get_description());
+    goods.set_price(properties.get_price());
+    goods.set_graphics_id(properties.get_icon_id(ICON_TYPE_GROUND) as i32);
+
+    for property_type in properties.valid_addon_property_types() {
+        if random(10_000) as u32 >= properties.get_occur_probability(property_type) {
+            continue;
+        }
+
+        let mut values = Vec::new();
+        for source in properties.get_addon_property_values(property_type) {
+            let mut rolled_modifier = 0;
+            if source.is_modifier_enabled() {
+                let roll = random(10_000);
+                let mut accumulated = 0i32;
+                for modifier in source.modifiers() {
+                    if (roll.wrapping_sub(accumulated) as u32) < modifier.probability() {
+                        let range = modifier.upper_limit().wrapping_sub(modifier.lower_limit());
+                        rolled_modifier = random(range).wrapping_add(modifier.lower_limit());
+                        break;
+                    }
+                    accumulated = accumulated.wrapping_add(modifier.probability() as i32);
+                }
+            }
+            values.push((source.id(), source.base_value(), rolled_modifier));
+        }
+
+        goods.push_factory_addon_property(
+            property_type,
+            properties.is_implicit(property_type),
+            values,
+        );
+    }
+
+    Some(goods)
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
@@ -267,7 +324,7 @@ pub(crate) fn unserialize_goods(
 
 // ============================================================================
 // FUNCTION: CGoodsFactory::CreateGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsfactory.cpp:165
@@ -275,6 +332,8 @@ pub(crate) fn unserialize_goods(
 // ADDRESS: 00459460
 // PROTOTYPE: CGoods * __cdecl CreateGoods(ulong param_1)
 //
+// IMPLEMENTED выше; registry и legacy-random передаются явно, allocation/STL/EH
+// заменены `Box/Vec`, порядок lookup и всех roll-ов сохранён.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

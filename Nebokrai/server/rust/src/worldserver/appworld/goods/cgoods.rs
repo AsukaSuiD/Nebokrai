@@ -216,6 +216,16 @@ impl CGoods {
         self.shape_base.set_ex_id(ex_id);
     }
 
+    /// Присваивает унаследованное byte-exact имя до первого NUL.
+    pub(crate) fn set_name(&mut self, name: &[u8]) {
+        self.shape_base.set_name(name);
+    }
+
+    /// Присваивает унаследованный signed graphics ID.
+    pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
+        self.shape_base.set_graphics_id(graphics_id);
+    }
+
     /// Возвращает назначенный unsigned индекс base-properties.
     pub(crate) const fn get_base_properties_index(&self) -> Option<u32> {
         self.base_properties_index
@@ -354,6 +364,28 @@ impl CGoods {
             .unwrap_or(description.len());
         self.description.clear();
         self.description.extend_from_slice(&description[..visible]);
+    }
+
+    /// Добавляет один factory-rolled addon в исходный vector-order.
+    pub(super) fn push_factory_addon_property(
+        &mut self,
+        property_type: i32,
+        is_implicit_attribute: i32,
+        values: Vec<(u32, i32, i32)>,
+    ) {
+        self.addon_properties.push(GoodsAddonProperty {
+            property_type,
+            is_enabled: 1,
+            is_implicit_attribute,
+            values: values
+                .into_iter()
+                .map(|(id, base_value, modifier)| GoodsAddonPropertyValue {
+                    id,
+                    base_value,
+                    modifier,
+                })
+                .collect(),
+        });
     }
 
     /// Сбрасывает точные собственные поля `CGoods::Release`.

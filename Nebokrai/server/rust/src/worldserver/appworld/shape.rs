@@ -176,6 +176,16 @@ impl CShape {
         self.base_object.get_name()
     }
 
+    /// Присваивает byte-exact имя через единственный base-owner.
+    pub(crate) fn set_name(&mut self, name: &[u8]) {
+        self.base_object.set_name(name);
+    }
+
+    /// Присваивает signed graphics ID через единственный base-owner.
+    pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
+        self.base_object.set_graphics_id(graphics_id);
+    }
+
     /// Возвращает signed region ID без преобразования битового шаблона.
     pub(crate) const fn get_region_id(&self) -> i32 {
         self.region_id
@@ -659,7 +669,6 @@ fn read_shape_array<const N: usize>(
 //
 //
 
-
 // ============================================================================
 // FUNCTION: Unwind@00530a70
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -673,8 +682,5 @@ fn read_shape_array<const N: usize>(
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
 
 // COMPONENT_VARIANT_END: WorldServer

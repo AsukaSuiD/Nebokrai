@@ -7,7 +7,8 @@
 //! `GetContentsWeight` RVA `0x000DBE40`,
 //! `Lock/Unlock` RVA `0x000DC640/0x000DC260`, `IsFull/Set/GetLimit` RVA
 //! `0x000DBCC0/0x000DBCE0/0x000DBCF0`, `SetOwner` RVA `0x000DBD00`,
-//! `Remove` wrapper-ы и GUID-owner RVA `0x000DBD20/0x000DBD30/0x000DC1C0`,
+//! positional `Remove` RVA `0x000D5E20`, `Remove` wrapper-ы и GUID-owner RVA
+//! `0x000DBD20/0x000DBD30/0x000DC1C0`,
 //! `Unserialize/Serialize` RVA `0x000DBD50/0x000DC070`, `GetGoodsAmount` RVA
 //! `0x000DC030`, основного `Add/AddFromDB` RVA `0x000DC790/0x000DC820`,
 //! `Clear/Release` RVA
@@ -99,6 +100,11 @@
 //! доказанные no-op listeners и лишь затем вынимает pointer из map; locked-
 //! vector при успехе не чистится. `BTreeMap::remove` заменяет legacy hash erase,
 //! а `Box<CGoods>` явно переносит возвращаемое ownership вызывающему.
+//! Positional `Remove(position, amount)` сначала использует locked-aware
+//! `GetGoods`. При частичном stack-remove он требует max-stack больше `1`,
+//! создаёт новый товар через exact factory, назначает requested amount и только
+//! затем вычитает его из исходного stack; равный amount делегирует GUID-remove.
+//! Точный ASM исправляет перепутанные raw-аргументы и сохраняет unsigned SUB.
 //!
 //! `AddFromDB` отдельно от обычного Add сначала проверяет full, затем ordinal
 //! `GetGoods(position)`: unlocked существующий товар даёт false и debug-log,
@@ -125,7 +131,7 @@ use crate::worldserver::appworld::listener::ccontainerlistener::{
 
 use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsfactory::{
-    GoodsBasePropertiesRegistry, query_goods_base_properties, unserialize_goods,
+    GoodsBasePropertiesRegistry, create_goods, query_goods_base_properties, unserialize_goods,
 };
 
 /// Ошибка безопасной границы amount-container codec-а.
@@ -282,6 +288,51 @@ impl CAmountLimitGoodsContainer {
             return None;
         }
         self.goods.remove(ex_id)
+    }
+
+    /// Вынимает exact amount из ordinal position, включая split-stack ветку.
+    pub(crate) fn remove_at<Random>(
+        &mut self,
+        position: u32,
+        amount: u32,
+        registry: &GoodsBasePropertiesRegistry,
+        random: &mut Random,
+    ) -> Result<Option<Box<CGoods>>, AmountContainerCodecError>
+    where
+        Random: FnMut(i32) -> i32,
+    {
+        let Some(goods) = self.get_goods(position) else {
+            return Ok(None);
+        };
+        if amount == 0 {
+            return Ok(None);
+        }
+
+        let current_amount = goods.get_amount();
+        if current_amount > amount {
+            if goods.get_max_stack_number(registry)? <= 1 {
+                return Ok(None);
+            }
+            let index = goods
+                .get_base_properties_index()
+                .ok_or(GoodsCodecError::MissingBasePropertiesIndex)?;
+            let ex_id = *goods.get_ex_id();
+            let Some(mut removed) = create_goods(registry, index, random) else {
+                return Ok(None);
+            };
+            removed.set_amount(amount);
+            let Some(stored) = self.goods_mut(&ex_id) else {
+                return Ok(None);
+            };
+            stored.set_amount(stored.get_amount().wrapping_sub(amount));
+            return Ok(Some(removed));
+        }
+
+        if current_amount == amount {
+            let ex_id = *goods.get_ex_id();
+            return Ok(self.remove(&ex_id));
+        }
+        Ok(None)
     }
 
     /// Очищает goods/locked storage, сохраняя owner и limit.
@@ -529,7 +580,7 @@ fn read_amount_u32(
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:648
@@ -537,6 +588,9 @@ fn read_amount_u32(
 // ADDRESS: 004d5e20
 // PROTOTYPE: CBaseObject * __thiscall Remove(ulong param_1, ulong param_2, void * param_3)
 //
+// IMPLEMENTED выше как `remove_at`; exact base ASM `0x004E0910..0x004E09F6`
+// исправляет raw: первый аргумент — position, второй — amount. Embedded
+// listener no-op, factory и обе amount-ветки сохранены.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
