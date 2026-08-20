@@ -1,0 +1,6 @@
+# Идентификация локального evidence source; не поставка бинарников.
+component = "ServerUpdate"
+artifact = "GameServer/ServerUpdate.exe + GameServer/ServerUpdate.pdb"
+exe_sha256 = "21CDB7E22DE1DD9F4530C29ACEEA0E337E251BD082E0DF6674B4FD90050B2252"
+pdb_sha256 = "FF4C7D2515C83D99253A9F518D7CAD7FE18BB060CA9BF934C8053024424F2E77"
+ghidra_version = "12.1.2"

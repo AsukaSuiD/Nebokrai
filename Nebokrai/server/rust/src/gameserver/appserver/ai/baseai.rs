@@ -1,0 +1,650 @@
+//! Достигнутая event-queue часть `CBaseAI` исторического GameServer.
+//!
+//! `AddAIEvent` RVA `0x000C8F90` имеет статус
+//! `IMPLEMENTED, VERIFIED_DISASSEMBLY`; точная пара
+//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`, исходник
+//! `server/gameserver/appserver/ai/baseai.cpp`. PDB подтверждает numeric
+//! `AI_SHAPE_ACTION` `0..8`, `ASA_FORCE_DWROD = 0xFF`, layout `AI_EVENT`
+//! `action/begin/delay/handling +0/+4/+8/+C` и три очереди active/passive/
+//! war-soul.
+//!
+//! `VecDeque` заменяет внутренности `std::queue<std::deque<...>>`, сохраняя
+//! FIFO и `push_back`. Runtime-clock передаётся точным `now_ms` в момент
+//! вызова: так Linux-owner не копирует `timeGetTime`, а `u32` сохраняет его
+//! wrapping. `STIFFEN/DIED/OPEN/DEFENSE` всегда идут в passive, остальные —
+//! в war-soul при любом ненулевом флаге и иначе в active.
+//!
+//! Это только достигнутая queue-проекция, а не общий AI tick: owner pointer,
+//! target, dormancy, обработчики и остальные методы ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально).
+
+use std::collections::VecDeque;
+
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AiShapeAction {
+    Stand = 0,
+    Move = 1,
+    Attack = 2,
+    Defense = 3,
+    Stiffen = 4,
+    SearchEnemy = 5,
+    ChangeSkill = 6,
+    Died = 7,
+    Open = 8,
+    ForceDwrod = 0xff,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AiEvent {
+    pub(crate) action: AiShapeAction,
+    pub(crate) beginning_time_ms: u32,
+    pub(crate) delay_ms: u32,
+    pub(crate) handling: i32,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CBaseAI {
+    active_actions: VecDeque<AiEvent>,
+    passive_actions: VecDeque<AiEvent>,
+    active_war_soul_actions: VecDeque<AiEvent>,
+}
+
+impl CBaseAI {
+    pub(crate) fn add_ai_event(
+        &mut self,
+        action: AiShapeAction,
+        delay_ms: u32,
+        war_soul_ai: i32,
+        now_ms: u32,
+    ) {
+        let event = AiEvent {
+            action,
+            beginning_time_ms: now_ms,
+            delay_ms,
+            handling: 0,
+        };
+        if matches!(
+            action,
+            AiShapeAction::Stiffen
+                | AiShapeAction::Died
+                | AiShapeAction::Open
+                | AiShapeAction::Defense
+        ) {
+            self.passive_actions.push_back(event);
+        } else if war_soul_ai != 0 {
+            self.active_war_soul_actions.push_back(event);
+        } else {
+            self.active_actions.push_back(event);
+        }
+    }
+
+    pub(crate) fn active_actions(&self) -> &VecDeque<AiEvent> {
+        &self.active_actions
+    }
+
+    pub(crate) fn passive_actions(&self) -> &VecDeque<AiEvent> {
+        &self.passive_actions
+    }
+
+    pub(crate) fn active_war_soul_actions(&self) -> &VecDeque<AiEvent> {
+        &self.active_war_soul_actions
+    }
+}
+
+// COMPONENT_VARIANT_BEGIN: GameServer
+// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
+// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
+// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp
+
+// ============================================================================
+// FUNCTION: CBaseAI::Hibernate
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:86
+// RVA: 0x000C7C10
+// ADDRESS: 004c7c10
+// PROTOTYPE: void __thiscall Hibernate(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::WakeUp
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:100
+// RVA: 0x000C7C30
+// ADDRESS: 004c7c30
+// PROTOTYPE: void __thiscall WakeUp(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::IsHibernated
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:113
+// RVA: 0x000C7C50
+// ADDRESS: 004c7c50
+// PROTOTYPE: int __thiscall IsHibernated(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::SetTarget
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:212
+// RVA: 0x000C7C60
+// ADDRESS: 004c7c60
+// PROTOTYPE: void __thiscall SetTarget(long param_1, long param_2)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::GetOwner
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:225
+// RVA: 0x000C7C80
+// ADDRESS: 004c7c80
+// PROTOTYPE: CMoveShape * __thiscall GetOwner(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::SetOwner
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:237
+// RVA: 0x000C7C90
+// ADDRESS: 004c7c90
+// PROTOTYPE: void __thiscall SetOwner(CMoveShape * param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::MoveTo
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:379
+// RVA: 0x000C7CB0
+// ADDRESS: 004c7cb0
+// PROTOTYPE: void __thiscall MoveTo(CRegion * param_1, long param_2, int param_3)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::Run
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:472
+// RVA: 0x000C7D10
+// ADDRESS: 004c7d10
+// PROTOTYPE: AI_EXEC_STATE __thiscall Run(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::ProcessBackStageAction
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:799
+// RVA: 0x000C7D90
+// ADDRESS: 004c7d90
+// PROTOTYPE: AI_EXEC_STATE __thiscall ProcessBackStageAction(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::OnLoseTarget
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:1110
+// RVA: 0x000C7DA0
+// ADDRESS: 004c7da0
+// PROTOTYPE: int __thiscall OnLoseTarget(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::WhenLoseTarget
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:1199
+// RVA: 0x000C7DC0
+// ADDRESS: 004c7dc0
+// PROTOTYPE: void __thiscall WhenLoseTarget(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::HasTarget
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:1350
+// RVA: 0x000C7DD0
+// ADDRESS: 004c7dd0
+// PROTOTYPE: int __thiscall HasTarget(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::CheckSkillIsWarSoul
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:1364
+// RVA: 0x000C7E00
+// ADDRESS: 004c7e00
+// PROTOTYPE: bool __thiscall CheckSkillIsWarSoul(tagSkillID param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::GetTarget
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:183
+// RVA: 0x000C7E10
+// ADDRESS: 004c7e10
+// PROTOTYPE: CMoveShape * __thiscall GetTarget(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::DoesBackStageSkillExist
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:1230
+// RVA: 0x000C7E80
+// ADDRESS: 004c7e80
+// PROTOTYPE: int __thiscall DoesBackStageSkillExist(tagSkillID param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::Clear
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:59
+// RVA: 0x000C7F70
+// ADDRESS: 004c7f70
+// PROTOTYPE: void __thiscall Clear(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::MoveTo
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:304
+// RVA: 0x000C7FF0
+// ADDRESS: 004c7ff0
+// PROTOTYPE: int __thiscall MoveTo(long param_1, long * param_2, long * param_3)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::GetCurrentActiveAction
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:252
+// RVA: 0x000C81B0
+// ADDRESS: 004c81b0
+// PROTOTYPE: AI_SHAPE_ACTION __thiscall GetCurrentActiveAction(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::ProcessActiveAction
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:531
+// RVA: 0x000C81D0
+// ADDRESS: 004c81d0
+// PROTOTYPE: AI_EXEC_STATE __thiscall ProcessActiveAction(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::ProcessActiveActionWarSoul
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:612
+// RVA: 0x000C8390
+// ADDRESS: 004c8390
+// PROTOTYPE: AI_EXEC_STATE __thiscall ProcessActiveActionWarSoul(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::ProcessPassiveAction
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:693
+// RVA: 0x000C84F0
+// ADDRESS: 004c84f0
+// PROTOTYPE: AI_EXEC_STATE __thiscall ProcessPassiveAction(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::OnBeenHurted
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:815
+// RVA: 0x000C8700
+// ADDRESS: 004c8700
+// PROTOTYPE: int __thiscall OnBeenHurted(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::OnStiffen
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:847
+// RVA: 0x000C8770
+// ADDRESS: 004c8770
+// PROTOTYPE: int __thiscall OnStiffen(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::~CBaseAI
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:43
+// RVA: 0x000C8890
+// ADDRESS: 004c8890
+// PROTOTYPE: void __thiscall ~CBaseAI(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::OnExecuteBackStageSkills
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:1003
+// RVA: 0x000C88E0
+// ADDRESS: 004c88e0
+// PROTOTYPE: int __thiscall OnExecuteBackStageSkills(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: Catch@004c8998
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:1039
+// RVA: 0x000C8998
+// ADDRESS: 004c8998
+// PROTOTYPE: undefined Catch@004c8998()
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::CBaseAI
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:20
+// RVA: 0x000C8EA0
+// ADDRESS: 004c8ea0
+// PROTOTYPE: undefined __thiscall CBaseAI(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// IMPLEMENTED: `CBaseAI::AddAIEvent` материализован выше; покрытый raw-блок
+// удалён.
+
+// ============================================================================
+// FUNCTION: CBaseAI::MoveTo
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:397
+// RVA: 0x000C9020
+// ADDRESS: 004c9020
+// PROTOTYPE: void __thiscall MoveTo(CRegion * param_1, long param_2, long param_3, int param_4)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::OnBeenKilled
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:916
+// RVA: 0x000C9220
+// ADDRESS: 004c9220
+// PROTOTYPE: int __thiscall OnBeenKilled(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::OnFighting
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:964
+// RVA: 0x000C9320
+// ADDRESS: 004c9320
+// PROTOTYPE: int __thiscall OnFighting(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::OnIdle
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:1134
+// RVA: 0x000C93A0
+// ADDRESS: 004c93a0
+// PROTOTYPE: void __thiscall OnIdle(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::WhenBeenHurted
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:1165
+// RVA: 0x000C93E0
+// ADDRESS: 004c93e0
+// PROTOTYPE: void __thiscall WhenBeenHurted(long param_1, long param_2, ulong param_3)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::WhenBeenKilled
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:1183
+// RVA: 0x000C9460
+// ADDRESS: 004c9460
+// PROTOTYPE: void __thiscall WhenBeenKilled(long param_1, long param_2)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::WhenAddBackStageSkill
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:1213
+// RVA: 0x000C94B0
+// ADDRESS: 004c94b0
+// PROTOTYPE: void __thiscall WhenAddBackStageSkill(tagSkillID param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::Tracing
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:1277
+// RVA: 0x000C94D0
+// ADDRESS: 004c94d0
+// PROTOTYPE: int __thiscall Tracing(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::SetAIType
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:147
+// RVA: 0x000D7040
+// ADDRESS: 004d7040
+// PROTOTYPE: void __thiscall SetAIType(long param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CTeamate::GetOwnerRegionID
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:171
+// RVA: 0x000EA290
+// ADDRESS: 004ea290
+// PROTOTYPE: long __thiscall GetOwnerRegionID(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CGoodsBaseProperties::GetGoodsType
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:159
+// RVA: 0x00104620
+// ADDRESS: 00504620
+// PROTOTYPE: GOODS_TYPE __thiscall GetGoodsType(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CBaseAI::GetDormancyInterval
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:124
+// RVA: 0x00106F10
+// ADDRESS: 00506f10
+// PROTOTYPE: ulong __thiscall GetDormancyInterval(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// COMPONENT_VARIANT_END: GameServer

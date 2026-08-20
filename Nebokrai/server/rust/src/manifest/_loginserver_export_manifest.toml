@@ -1,0 +1,6 @@
+# Идентификация локального evidence source; не поставка бинарников.
+component = "LoginServer"
+artifact = "LoginServer/loginserver.exe + LoginServer/LoginServer.pdb"
+exe_sha256 = "1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876"
+pdb_sha256 = "FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C"
+ghidra_version = "12.1.2"

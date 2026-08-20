@@ -1,0 +1,615 @@
+//! Владелец операторского журнала исторического `WorldServer`.
+//!
+//! `SaveLogText` RVA `0x0001E520`, `AddLogText` RVA `0x0001E630` и
+//! `RefeashInfoText` RVA `0x0001E810` имеют статус `IMPLEMENTED`; остальные
+//! владельцы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
+//! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
+//! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
+//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Исходный владелец PDB:
+//! `e:\svn\fengyun_russia_dev\server\worldserver\worldserver\worldserver.cpp:718,754`.
+//!
+//! `SaveLogText(false)` при первом вызове отдельно снимает initial tick, затем
+//! ещё один tick для проверки. Пока wrapping elapsed не превышает
+//! `tagSetup::dwSaveInfoTime` и операторский log короче 64000 ANSI-байт, flush
+//! не выполняется. Force, истёкший интервал либо достигнутый размер сначала
+//! снимают новый last tick, затем передают в `PutLogInfo` заголовок, отдельно
+//! снятое local time, не более 63999 байт текущего info-text, CRLF и footer;
+//! только между CRLF и footer очищается operator log.
+//!
+//! `AddLogText` всегда выполняет эту проверку до собственного `GetLocalTime`,
+//! строит `[MM-DD HH:MM:SS] `, дописывает уже материализованный payload и CRLF,
+//! сначала передаёт строку `PutLogInfo`, затем добавляет её в operator log.
+//! Windows edit-control заменён owned byte-буферами, а внешний файловый writer
+//! — синхронным callback: это сохраняет байты и порядок эффектов без Windows
+//! GUI/FFI. Адрес следующего буфера `AddErrorLogText` `0x0058DED0` минус адрес
+//! буфера `AddLogText` `0x0057E4D0` точно задаёт вместимость 64000 байт.
+//!
+//! Старый `_vsprintf` не ограничивал этот буфер. Safe Rust возвращает локальный
+//! `BLOCKED_MISSING_FACT`, если строка с CRLF и NUL не помещается, уже после
+//! достигнутых rotation/time эффектов. Отдельный no-arguments вход сохраняет
+//! второе форматирование `ShowSaveInfo`: `%%` превращается в `%`, а любой иной
+//! specifier требовал отсутствующий vararg и остаётся заблокированным, а не
+//! получает придуманное UB-поведение. Обычный вход принимает результат
+//! call-site форматирования, сознательно заменяя variadic ABI на byte-slice.
+//!
+//! `RefeashInfoText` принимает один caller-owned snapshot вместо повторных
+//! `GetGame()` и прямых чтений process-global containers. Он обновляет
+//! четырнадцать high-water значений в исходном порядке, дважды читает clock
+//! только при ненулевом save-start tick, строит точный operator payload и
+//! заменяет `SetWindowTextA` готовым `WorldLogTextOwner::set_info_text`.
+//! Отсутствующий network owner отсекается в `CGame` до этого вызова, как
+//! исходная guard-пара. Значения чужих team/Largess/write/load/reback owners
+//! передаются snapshot-ом и не превращаются в придуманные поля `CGame`.
+//! Потерянная экспортом вторая строка status-table точечно прочитана из exact
+//! EXE: таблица VA `0x0056A69C` содержит `0x0053FE54 -> "(Normal)"` и
+//! `0x0053FE44 -> "(Abnormal!!!!)"` (`VERIFIED_DISASSEMBLY`).
+
+const LEGACY_LOG_BUFFER_CAPACITY: usize = 64_000;
+const LEGACY_WINDOW_TEXT_CAPACITY: usize = 64_000;
+const SAVE_LOG_HEADER: &[u8] =
+    b"\r\n=============================== Start Save Log ===============================\r\n";
+const SAVE_LOG_FOOTER: &[u8] =
+    b"================================ End Save Log ================================\r\n";
+
+/// Значения одного исходного `GetLocalTime` без привязки к Windows ABI.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldLogLocalTime {
+    pub(crate) year: u16,
+    pub(crate) month: u16,
+    pub(crate) day: u16,
+    pub(crate) hour: u16,
+    pub(crate) minute: u16,
+    pub(crate) second: u16,
+}
+
+/// Выполнил ли `SaveLogText` текущий flush операторского журнала.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SaveLogTextDisposition {
+    Retained,
+    Flushed,
+}
+
+/// Неизвестный результат одного из двух исходных unbounded `_vsprintf`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AddLogTextBlock {
+    BufferOverflow { required_bytes_with_nul: usize },
+    MissingNoArgumentValue { percent_offset: usize },
+}
+
+/// Полностью материализованная строка, переданная file и operator sinks.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldLogLine {
+    /// ANSI-байты вместе с исходным завершающим CRLF, но без C NUL.
+    pub(crate) bytes: Vec<u8>,
+}
+
+/// Достигнутый результат `AddLogText` после обязательной rotation-проверки.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum AddLogTextDisposition {
+    Written {
+        rotation: SaveLogTextDisposition,
+        line: WorldLogLine,
+    },
+    BlockedMissingFact {
+        rotation: SaveLogTextDisposition,
+        local_time: WorldLogLocalTime,
+        block: AddLogTextBlock,
+    },
+}
+
+/// Caller-owned замена двух MFC edit-control и двух log-tick globals.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct WorldLogTextOwner {
+    initialized: bool,
+    last_save_tick_ms: u32,
+    info_text: Vec<u8>,
+    log_text: Vec<u8>,
+}
+
+/// Текущие четырнадцать значений одного `RefeashInfoText` snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldRefreshInfoCurrent {
+    pub(crate) connections: i32,
+    pub(crate) map_players: i32,
+    pub(crate) online_players: u32,
+    pub(crate) offline_players: u32,
+    pub(crate) login_players: u32,
+    pub(crate) creation_players: u32,
+    pub(crate) deletion_players: u32,
+    pub(crate) restore_players: u32,
+    pub(crate) saving_players: i32,
+    pub(crate) team_sessions: i32,
+    pub(crate) largess_entries: u32,
+    pub(crate) write_log_queue: u32,
+    pub(crate) player_load_queue: u32,
+    pub(crate) reback_messages: i32,
+}
+
+/// Process-global high-water значения operator info окна.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct WorldRefreshInfoHighWater {
+    pub(crate) connections: i32,
+    pub(crate) map_players: i32,
+    pub(crate) online_players: u32,
+    pub(crate) offline_players: u32,
+    pub(crate) login_players: u32,
+    pub(crate) creation_players: u32,
+    pub(crate) deletion_players: u32,
+    pub(crate) restore_players: u32,
+    pub(crate) saving_players: i32,
+    pub(crate) team_sessions: i32,
+    pub(crate) largess_entries: u32,
+    pub(crate) write_log_queue: u32,
+    pub(crate) player_load_queue: u32,
+    pub(crate) reback_messages: i32,
+}
+
+/// Четыре process-global save-значения, читаемые info-owner-ом.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldRefreshSaveState {
+    pub(crate) last_save_time: WorldLogLocalTime,
+    pub(crate) save_point_time_ms: u32,
+    pub(crate) last_save_tick_ms: u32,
+    pub(crate) this_save_start_tick_ms: u32,
+}
+
+/// Строка из exact двухэлементной status-table WorldServer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldRefreshSaveStatus {
+    Normal,
+    Abnormal,
+}
+
+impl WorldRefreshSaveStatus {
+    const fn as_bytes(self) -> &'static [u8] {
+        match self {
+            Self::Normal => b"(Normal)",
+            Self::Abnormal => b"(Abnormal!!!!)",
+        }
+    }
+}
+
+/// Полный результат одного выполненного `RefeashInfoText`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldRefreshInfoReport {
+    pub(crate) current: WorldRefreshInfoCurrent,
+    pub(crate) high_water: WorldRefreshInfoHighWater,
+    pub(crate) save_status: WorldRefreshSaveStatus,
+    pub(crate) this_save_seconds: u32,
+    pub(crate) text: Vec<u8>,
+}
+
+/// Обновляет high-water значения и публикует точный operator info payload.
+pub(crate) fn refresh_info_text<GetTick>(
+    owner: &mut WorldLogTextOwner,
+    current: WorldRefreshInfoCurrent,
+    high_water: &mut WorldRefreshInfoHighWater,
+    save: WorldRefreshSaveState,
+    mut get_tick: GetTick,
+) -> WorldRefreshInfoReport
+where
+    GetTick: FnMut() -> u32,
+{
+    high_water.connections = high_water.connections.max(current.connections);
+    high_water.map_players = high_water.map_players.max(current.map_players);
+    update_signed_u32_max(&mut high_water.online_players, current.online_players);
+    update_signed_u32_max(&mut high_water.offline_players, current.offline_players);
+    update_signed_u32_max(&mut high_water.login_players, current.login_players);
+    update_signed_u32_max(&mut high_water.creation_players, current.creation_players);
+    update_signed_u32_max(&mut high_water.deletion_players, current.deletion_players);
+    update_signed_u32_max(&mut high_water.restore_players, current.restore_players);
+    high_water.saving_players = high_water.saving_players.max(current.saving_players);
+    high_water.team_sessions = high_water.team_sessions.max(current.team_sessions);
+    update_signed_u32_max(&mut high_water.largess_entries, current.largess_entries);
+    update_signed_u32_max(&mut high_water.write_log_queue, current.write_log_queue);
+    update_signed_u32_max(&mut high_water.player_load_queue, current.player_load_queue);
+    high_water.reback_messages = high_water.reback_messages.max(current.reback_messages);
+
+    let status_tick_ms = get_tick();
+    let save_status =
+        if save.save_point_time_ms < status_tick_ms.wrapping_sub(save.last_save_tick_ms) {
+            WorldRefreshSaveStatus::Abnormal
+        } else {
+            WorldRefreshSaveStatus::Normal
+        };
+    let this_save_seconds = if save.this_save_start_tick_ms == 0 {
+        0
+    } else {
+        get_tick()
+            .wrapping_sub(save.this_save_start_tick_ms)
+            .wrapping_div(1_000)
+    };
+
+    let text = format!(
+        "Last Save Time : {:04}-{:02}-{:02} {:02}:{:02}:{:02} {}\r\nThis Save Time : {} sec  Saving = {}/{}\r\nConnects = {}/{}  Map = {}/{}  Online = {}/{}  Offline = {}/{}  Login = {}/{}  Create = {}/{}  Delete = {}/{}  Resume = {}/{}\r\nTeams = {}/{}  Largess = {}/{}  WriteLog = {}/{}  LoadPlayer = {}/{}  ReMsg = {}/{}\r\n",
+        save.last_save_time.year,
+        save.last_save_time.month,
+        save.last_save_time.day,
+        save.last_save_time.hour,
+        save.last_save_time.minute,
+        save.last_save_time.second,
+        String::from_utf8_lossy(save_status.as_bytes()),
+        this_save_seconds as i32,
+        current.saving_players,
+        high_water.saving_players,
+        current.connections,
+        high_water.connections,
+        current.map_players,
+        high_water.map_players,
+        current.online_players as i32,
+        high_water.online_players as i32,
+        current.offline_players as i32,
+        high_water.offline_players as i32,
+        current.login_players as i32,
+        high_water.login_players as i32,
+        current.creation_players as i32,
+        high_water.creation_players as i32,
+        current.deletion_players as i32,
+        high_water.deletion_players as i32,
+        current.restore_players as i32,
+        high_water.restore_players as i32,
+        current.team_sessions,
+        high_water.team_sessions,
+        current.largess_entries as i32,
+        high_water.largess_entries as i32,
+        current.write_log_queue as i32,
+        high_water.write_log_queue as i32,
+        current.player_load_queue as i32,
+        high_water.player_load_queue as i32,
+        current.reback_messages,
+        high_water.reback_messages,
+    )
+    .into_bytes();
+    owner.set_info_text(&text);
+    WorldRefreshInfoReport {
+        current,
+        high_water: *high_water,
+        save_status,
+        this_save_seconds,
+        text,
+    }
+}
+
+fn update_signed_u32_max(high_water: &mut u32, current: u32) {
+    if (*high_water as i32) < current as i32 {
+        *high_water = current;
+    }
+}
+
+impl WorldLogTextOwner {
+    /// Заменяет `SetWindowTextA(g_hInfoText, ...)` для будущих info-owner-ов.
+    pub(crate) fn set_info_text(&mut self, text: &[u8]) {
+        self.info_text.clear();
+        self.info_text
+            .extend_from_slice(legacy_c_string_prefix(text));
+    }
+
+    /// Текущее содержимое старого `g_hLogText` без C NUL.
+    pub(crate) fn log_text(&self) -> &[u8] {
+        &self.log_text
+    }
+
+    /// Воспроизводит `SaveLogText(force)` и точный порядок вызовов sink-а.
+    pub(crate) fn save_log_text<GetTick, GetLocalTime, PutLogInfo>(
+        &mut self,
+        force: bool,
+        save_info_time_ms: u32,
+        mut get_tick: GetTick,
+        mut get_local_time: GetLocalTime,
+        mut put_log_info: PutLogInfo,
+    ) -> SaveLogTextDisposition
+    where
+        GetTick: FnMut() -> u32,
+        GetLocalTime: FnMut() -> WorldLogLocalTime,
+        PutLogInfo: FnMut(&[u8]),
+    {
+        self.save_log_text_with(
+            force,
+            save_info_time_ms,
+            &mut get_tick,
+            &mut get_local_time,
+            &mut put_log_info,
+        )
+    }
+
+    /// Воспроизводит `AddLogText` после безопасной materialization его varargs.
+    pub(crate) fn add_log_text<GetTick, GetLocalTime, PutLogInfo>(
+        &mut self,
+        message: &[u8],
+        save_info_time_ms: u32,
+        mut get_tick: GetTick,
+        mut get_local_time: GetLocalTime,
+        mut put_log_info: PutLogInfo,
+    ) -> AddLogTextDisposition
+    where
+        GetTick: FnMut() -> u32,
+        GetLocalTime: FnMut() -> WorldLogLocalTime,
+        PutLogInfo: FnMut(&[u8]),
+    {
+        self.add_log_text_with(
+            message,
+            false,
+            save_info_time_ms,
+            &mut get_tick,
+            &mut get_local_time,
+            &mut put_log_info,
+        )
+    }
+
+    /// Сохраняет `AddLogText(local_104)` из `ShowSaveInfo` без varargs.
+    pub(crate) fn add_log_text_no_arguments<GetTick, GetLocalTime, PutLogInfo>(
+        &mut self,
+        format: &[u8],
+        save_info_time_ms: u32,
+        mut get_tick: GetTick,
+        mut get_local_time: GetLocalTime,
+        mut put_log_info: PutLogInfo,
+    ) -> AddLogTextDisposition
+    where
+        GetTick: FnMut() -> u32,
+        GetLocalTime: FnMut() -> WorldLogLocalTime,
+        PutLogInfo: FnMut(&[u8]),
+    {
+        self.add_log_text_with(
+            format,
+            true,
+            save_info_time_ms,
+            &mut get_tick,
+            &mut get_local_time,
+            &mut put_log_info,
+        )
+    }
+
+    fn add_log_text_with<GetTick, GetLocalTime, PutLogInfo>(
+        &mut self,
+        message: &[u8],
+        no_arguments_format: bool,
+        save_info_time_ms: u32,
+        get_tick: &mut GetTick,
+        get_local_time: &mut GetLocalTime,
+        put_log_info: &mut PutLogInfo,
+    ) -> AddLogTextDisposition
+    where
+        GetTick: FnMut() -> u32,
+        GetLocalTime: FnMut() -> WorldLogLocalTime,
+        PutLogInfo: FnMut(&[u8]),
+    {
+        let rotation = self.save_log_text_with(
+            false,
+            save_info_time_ms,
+            get_tick,
+            get_local_time,
+            put_log_info,
+        );
+        let local_time = get_local_time();
+        let message = legacy_c_string_prefix(message);
+        let message = if no_arguments_format {
+            match format_without_arguments(message) {
+                Ok(message) => message,
+                Err(block) => {
+                    return AddLogTextDisposition::BlockedMissingFact {
+                        rotation,
+                        local_time,
+                        block,
+                    };
+                }
+            }
+        } else {
+            message.to_vec()
+        };
+        let prefix = format!(
+            "[{:02}-{:02} {:02}:{:02}:{:02}] ",
+            local_time.month, local_time.day, local_time.hour, local_time.minute, local_time.second,
+        )
+        .into_bytes();
+        let required_bytes_with_nul = prefix.len() + message.len() + 2 + 1;
+        if required_bytes_with_nul > LEGACY_LOG_BUFFER_CAPACITY {
+            return AddLogTextDisposition::BlockedMissingFact {
+                rotation,
+                local_time,
+                block: AddLogTextBlock::BufferOverflow {
+                    required_bytes_with_nul,
+                },
+            };
+        }
+
+        let mut bytes = Vec::with_capacity(required_bytes_with_nul - 1);
+        bytes.extend_from_slice(&prefix);
+        bytes.extend_from_slice(&message);
+        bytes.extend_from_slice(b"\r\n");
+        put_log_info(&bytes);
+        self.log_text.extend_from_slice(&bytes);
+
+        AddLogTextDisposition::Written {
+            rotation,
+            line: WorldLogLine { bytes },
+        }
+    }
+
+    fn save_log_text_with<GetTick, GetLocalTime, PutLogInfo>(
+        &mut self,
+        force: bool,
+        save_info_time_ms: u32,
+        get_tick: &mut GetTick,
+        get_local_time: &mut GetLocalTime,
+        put_log_info: &mut PutLogInfo,
+    ) -> SaveLogTextDisposition
+    where
+        GetTick: FnMut() -> u32,
+        GetLocalTime: FnMut() -> WorldLogLocalTime,
+        PutLogInfo: FnMut(&[u8]),
+    {
+        if !self.initialized {
+            self.initialized = true;
+            self.last_save_tick_ms = get_tick();
+        }
+        if !force {
+            let now = get_tick();
+            if now.wrapping_sub(self.last_save_tick_ms) <= save_info_time_ms
+                && self.log_text.len() < LEGACY_LOG_BUFFER_CAPACITY
+            {
+                return SaveLogTextDisposition::Retained;
+            }
+        }
+
+        self.last_save_tick_ms = get_tick();
+        put_log_info(SAVE_LOG_HEADER);
+        let local_time = get_local_time();
+        let dated_separator = format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}\r\n\r\n",
+            local_time.year,
+            local_time.month,
+            local_time.day,
+            local_time.hour,
+            local_time.minute,
+            local_time.second,
+        );
+        put_log_info(dated_separator.as_bytes());
+        let info_text = legacy_c_string_prefix(&self.info_text);
+        let copied_len = info_text
+            .len()
+            .min(LEGACY_WINDOW_TEXT_CAPACITY.saturating_sub(1));
+        put_log_info(&info_text[..copied_len]);
+        put_log_info(b"\r\n");
+        self.log_text.clear();
+        put_log_info(SAVE_LOG_FOOTER);
+        SaveLogTextDisposition::Flushed
+    }
+}
+
+fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
+    value.split(|byte| *byte == 0).next().unwrap_or_default()
+}
+
+fn format_without_arguments(format: &[u8]) -> Result<Vec<u8>, AddLogTextBlock> {
+    let mut output = Vec::with_capacity(format.len());
+    let mut offset = 0;
+    while offset < format.len() {
+        if format[offset] != b'%' {
+            output.push(format[offset]);
+            offset += 1;
+            continue;
+        }
+        if format.get(offset + 1) == Some(&b'%') {
+            output.push(b'%');
+            offset += 2;
+            continue;
+        }
+        return Err(AddLogTextBlock::MissingNoArgumentValue {
+            percent_offset: offset,
+        });
+    }
+    Ok(output)
+}
+
+// COMPONENT_VARIANT_BEGIN: WorldServer
+// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
+// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
+// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\worldserver.cpp
+
+// ============================================================================
+// FUNCTION: AddPlayerList
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\worldserver.cpp:925
+// RVA: 0x00001000
+// ADDRESS: 00401000
+// PROTOTYPE: void __cdecl AddPlayerList(char * param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: InitInstance
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\worldserver.cpp:228
+// RVA: 0x0001E330
+// ADDRESS: 0041e330
+// PROTOTYPE: int __cdecl InitInstance(HINSTANCE__ * param_1, int param_2)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: About
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\worldserver.cpp:699
+// RVA: 0x0001E4E0
+// ADDRESS: 0041e4e0
+// PROTOTYPE: long __stdcall About(HWND__ * param_1, uint param_2, uint param_3, long param_4)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// IMPLEMENTED: `SaveLogText` RVA `0x0001E520` и `AddLogText` RVA
+// `0x0001E630` находятся выше.
+
+// ============================================================================
+// FUNCTION: AddErrorLogText
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\worldserver.cpp:782
+// RVA: 0x0001E720
+// ADDRESS: 0041e720
+// PROTOTYPE: void __cdecl AddErrorLogText(char * param_1, ...)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// IMPLEMENTED: `RefeashInfoText` RVA `0x0001E810` находится выше.
+
+// ============================================================================
+// FUNCTION: WndProc
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\worldserver.cpp:267
+// RVA: 0x0001EB10
+// ADDRESS: 0041eb10
+// PROTOTYPE: long __stdcall WndProc(HWND__ * param_1, uint param_2, uint param_3, long param_4)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: MyRegisterClass
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\worldserver.cpp:197
+// RVA: 0x0001F570
+// ADDRESS: 0041f570
+// PROTOTYPE: ushort __cdecl MyRegisterClass(HINSTANCE__ * param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: _WinMain@16
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\worldserver.cpp:115
+// RVA: 0x0001F600
+// ADDRESS: 0041f600
+// PROTOTYPE: undefined _WinMain@16()
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// COMPONENT_VARIANT_END: WorldServer

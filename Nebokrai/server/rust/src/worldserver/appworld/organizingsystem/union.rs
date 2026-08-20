@@ -1,0 +1,1153 @@
+//! Владелец союза исторического `WorldServer`.
+//!
+//! Статус достигнутой save-части `CUnion`, `CUnion::CloneSaveData` RVA
+//! `0x000C6380`, `SetChangeData` RVA `0x000C17D0` и `CUnion::IsMember` RVA
+//! `0x000BD840` — `IMPLEMENTED`;
+//! остальной корпус ниже остаётся
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
+//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
+//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Исходные владельцы PDB:
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h`
+//! и `union.cpp:1442`.
+//!
+//! Точный PDB задаёт старый `CUnion` размером `0x50`: signed ID `+0x4`, имя
+//! `+0x8`, signed master ID `+0x24`, ordered member-map `+0x28`, `tagTime`
+//! `+0x38` и signed dirty-mask `+0x48`. `CloneSaveData` возвращает null при
+//! нулевой mask; иначе создаёт отдельного `CUnion`, копирует ровно эти поля и
+//! весь member-map в signed key-order. `m_ApplyPerson` и
+//! `m_dwLastDemiseTime` clone не назначает и DB-owner не читает, поэтому они
+//! не получают выдуманного Rust-состояния.
+//!
+//! `Vec<u8>`, `BTreeMap` и обычный `Clone/Drop` заменяют только MSVC string,
+//! tree и `new/delete`. Rust-layout не выдаётся за старый ABI. Конструктор
+//! live-союза и `Initial` с organizing callbacks остаются raw; узкий
+//! `from_reached_save_state` создаёт только уже доказанную save-проекцию.
+//!
+//! PDB публикует `CUnion::IsMember(long)` на том же RVA `0x000BD840`, что и
+//! faction-вариант: identical-code folding допустим, потому что `m_lID` и
+//! `m_Members` у обоих concrete owners имеют одинаковые offsets `+0x4/+0x28`.
+//! Exact EXE ищет входной signed ID и возвращает собственный ID либо `0`.
+
+use std::collections::BTreeMap;
+
+use super::organizing::{TagMemInfo, TagTimeValue};
+
+/// Поля `CUnion`, которые буквально копирует и читает save-цепочка.
+pub(crate) struct CUnion {
+    union_id: i32,
+    name: Vec<u8>,
+    master_id: i32,
+    members: BTreeMap<i32, TagMemInfo>,
+    established_time: TagTimeValue,
+    change_data_type: i32,
+}
+
+impl CUnion {
+    /// Создаёт достигнутую save-проекцию, не имитируя live `Initial`.
+    pub(crate) fn from_reached_save_state(
+        union_id: i32,
+        name: Vec<u8>,
+        master_id: i32,
+        members: BTreeMap<i32, TagMemInfo>,
+        established_time: TagTimeValue,
+        change_data_type: i32,
+    ) -> Self {
+        Self {
+            union_id,
+            name,
+            master_id,
+            members,
+            established_time,
+            change_data_type,
+        }
+    }
+
+    /// Воспроизводит nullable результат virtual `CloneSaveData`.
+    pub(crate) fn clone_save_data(&self) -> Option<Self> {
+        (self.change_data_type != 0).then(|| Self {
+            union_id: self.union_id,
+            name: self.name.clone(),
+            master_id: self.master_id,
+            members: self.members.clone(),
+            established_time: self.established_time,
+            change_data_type: self.change_data_type,
+        })
+    }
+
+    /// Применяет точную bit-mask семантику virtual `SetChangeData`.
+    pub(crate) fn set_change_data(&mut self, change_data_type: i32) {
+        if change_data_type == 0 {
+            self.change_data_type = 0;
+        } else if self.change_data_type & change_data_type == 0 {
+            self.change_data_type |= change_data_type;
+        }
+    }
+
+    pub(crate) const fn union_id(&self) -> i32 {
+        self.union_id
+    }
+
+    pub(crate) fn name(&self) -> &[u8] {
+        &self.name
+    }
+
+    pub(crate) const fn master_id(&self) -> i32 {
+        self.master_id
+    }
+
+    pub(crate) const fn members(&self) -> &BTreeMap<i32, TagMemInfo> {
+        &self.members
+    }
+
+    /// Возвращает union ID только для существующего faction-member key.
+    pub(crate) fn is_member(&self, faction_id: i32) -> i32 {
+        if self.members.contains_key(&faction_id) {
+            self.union_id
+        } else {
+            0
+        }
+    }
+
+    pub(crate) const fn change_data_type(&self) -> i32 {
+        self.change_data_type
+    }
+}
+
+// COMPONENT_VARIANT_BEGIN: WorldServer
+// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
+// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
+// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp
+// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h
+
+// ============================================================================
+// FUNCTION: tagVilWarSetup::tagVilWarSetup
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp
+// RVA: 0x00069110
+// ADDRESS: 00469110
+// PROTOTYPE: undefined __thiscall tagVilWarSetup(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: Catch@00469565
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp
+// RVA: 0x00069565
+// ADDRESS: 00469565
+// PROTOTYPE: undefined Catch@00469565()
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: Catch@004696f9
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp
+// RVA: 0x000696F9
+// ADDRESS: 004696f9
+// PROTOTYPE: undefined Catch@004696f9()
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: tagVilWarSetup::tagVilWarSetup
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp
+// RVA: 0x00069740
+// ADDRESS: 00469740
+// PROTOTYPE: undefined __thiscall tagVilWarSetup(tagVilWarSetup * param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: tagVilWarSetup::operator=
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp
+// RVA: 0x00069860
+// ADDRESS: 00469860
+// PROTOTYPE: tagVilWarSetup * __thiscall operator=(tagVilWarSetup * param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: Catch@00469ddf
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp
+// RVA: 0x00069DDF
+// ADDRESS: 00469ddf
+// PROTOTYPE: undefined Catch@00469ddf()
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: Catch@0046adba
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp
+// RVA: 0x0006ADBA
+// ADDRESS: 0046adba
+// PROTOTYPE: undefined Catch@0046adba()
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: Catch@0046b7b4
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp
+// RVA: 0x0006B7B4
+// ADDRESS: 0046b7b4
+// PROTOTYPE: undefined Catch@0046b7b4()
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+
+// IMPLEMENTED выше: CUnion::SetChangeData RVA 0x000C17D0.
+
+// ============================================================================
+// FUNCTION: CUnion::ClearApplyList
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:785
+// RVA: 0x000C1840
+// ADDRESS: 004c1840
+// PROTOTYPE: bool __thiscall ClearApplyList(long param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: `public:_virtual_bool___thiscall_CUnion::Invite(long,long)'::__l22::InviteJoinConfeder::InviteJoinConfeder
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:847
+// RVA: 0x000C1870
+// ADDRESS: 004c1870
+// PROTOTYPE: undefined __thiscall InviteJoinConfeder(long param_1, long param_2, long param_3)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: `public:_virtual_bool___thiscall_CUnion::ApplyForJoin(long,long,long)'::__l24::PlayerApplyForJoinConfeder::Release
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:618
+// RVA: 0x000C18A0
+// ADDRESS: 004c18a0
+// PROTOTYPE: void __thiscall Release(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::DubAndSetJobLvl
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1171
+// RVA: 0x000C18B0
+// ADDRESS: 004c18b0
+// PROTOTYPE: bool __thiscall DubAndSetJobLvl(long param_1, long param_2, basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_3, long param_4)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::CheckOperValidate
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:471
+// RVA: 0x000C18D0
+// ADDRESS: 004c18d0
+// PROTOTYPE: bool __thiscall CheckOperValidate(long param_1, long param_2, ePurview param_3)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: FUN_004c18db
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:490
+// RVA: 0x000C18DB
+// ADDRESS: 004c18db
+// PROTOTYPE: undefined FUN_004c18db()
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::CheckOperValidate
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:494
+// RVA: 0x000C1970
+// ADDRESS: 004c1970
+// PROTOTYPE: bool __thiscall CheckOperValidate(long param_1, ePurview param_2)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: `public:_virtual_bool___thiscall_CUnion::ApplyForJoin(long,long,long)'::__l24::PlayerApplyForJoinConfeder::PlayerApplyForJoinConfeder
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:615
+// RVA: 0x000C19C0
+// ADDRESS: 004c19c0
+// PROTOTYPE: undefined __thiscall PlayerApplyForJoinConfeder(long param_1, long param_2)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::Save
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:83
+// RVA: 0x000C1A00
+// ADDRESS: 004c1a00
+// PROTOTYPE: bool __thiscall Save(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::GetEnemyList
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:321
+// RVA: 0x000C1A60
+// ADDRESS: 004c1a60
+// PROTOTYPE: void __thiscall GetEnemyList(list<COrganizing*,std::allocator<COrganizing*>_> param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: `public:_virtual_bool___thiscall_CUnion::ApplyForJoin(long,long,long)'::__l24::PlayerApplyForJoinConfeder::DoAsyncCall
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:621
+// RVA: 0x000C1A70
+// ADDRESS: 004c1a70
+// PROTOTYPE: void __thiscall DoAsyncCall(__int64 param_1, long param_2, char * param_3)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::GetMemberList
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:284
+// RVA: 0x000C1BB0
+// ADDRESS: 004c1bb0
+// PROTOTYPE: void __thiscall GetMemberList(list<long,std::allocator<long>_> * param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::GetEnemyList
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:308
+// RVA: 0x000C1C50
+// ADDRESS: 004c1c50
+// PROTOTYPE: set<long,std::less<long>,std::allocator<long>_> __thiscall GetEnemyList(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::IsUsingPV
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:425
+// RVA: 0x000C1D00
+// ADDRESS: 004c1d00
+// PROTOTYPE: bool __thiscall IsUsingPV(long param_1, ePurview param_2)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::SetMemPV
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:443
+// RVA: 0x000C1D70
+// ADDRESS: 004c1d70
+// PROTOTYPE: void __thiscall SetMemPV(long param_1, ePurview param_2)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::CUnion
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h:8
+// RVA: 0x000C1E30
+// ADDRESS: 004c1e30
+// PROTOTYPE: undefined __thiscall CUnion(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::EditLeaveWord
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h:51
+// RVA: 0x000C1EC0
+// ADDRESS: 004c1ec0
+// PROTOTYPE: bool __thiscall EditLeaveWord(long param_1, long param_2, eOperator param_3)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::OperatorTax
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1165
+// RVA: 0x000C1ED0
+// ADDRESS: 004c1ed0
+// PROTOTYPE: bool __thiscall OperatorTax(long param_1, long param_2)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::GetEstablishedTime
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h:125
+// RVA: 0x000C1F00
+// ADDRESS: 004c1f00
+// PROTOTYPE: tagTime * __thiscall GetEstablishedTime(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CShape::GetFigure
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h:126
+// RVA: 0x000C1F10
+// ADDRESS: 004c1f10
+// PROTOTYPE: uchar __thiscall GetFigure(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::SetControbuter
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h:177
+// RVA: 0x000C1F20
+// ADDRESS: 004c1f20
+// PROTOTYPE: void __thiscall SetControbuter(long param_1, long param_2, bool param_3)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::Upgrade
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h:57
+// RVA: 0x000C1F30
+// ADDRESS: 004c1f30
+// PROTOTYPE: bool __thiscall Upgrade(long param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::~CUnion
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:31
+// RVA: 0x000C1F40
+// ADDRESS: 004c1f40
+// PROTOTYPE: void __thiscall ~CUnion(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::Initial
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:36
+// RVA: 0x000C1FE0
+// ADDRESS: 004c1fe0
+// PROTOTYPE: bool __thiscall Initial(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::AddMembersToByteArray
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:154
+// RVA: 0x000C21D0
+// ADDRESS: 004c21d0
+// PROTOTYPE: bool __thiscall AddMembersToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::IsOwnedCity
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:193
+// RVA: 0x000C2340
+// ADDRESS: 004c2340
+// PROTOTYPE: long __thiscall IsOwnedCity(long param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::IsEnemyFaction
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:202
+// RVA: 0x000C23A0
+// ADDRESS: 004c23a0
+// PROTOTYPE: long __thiscall IsEnemyFaction(long param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::AddOwnedCity
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:210
+// RVA: 0x000C2400
+// ADDRESS: 004c2400
+// PROTOTYPE: void __thiscall AddOwnedCity(long param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::AddOwnedCity
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:224
+// RVA: 0x000C2490
+// ADDRESS: 004c2490
+// PROTOTYPE: void __thiscall AddOwnedCity(list<long,std::allocator<long>_> * param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::DelOwnedCity
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:237
+// RVA: 0x000C2510
+// ADDRESS: 004c2510
+// PROTOTYPE: bool __thiscall DelOwnedCity(long param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::ClearOwnedCity
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:250
+// RVA: 0x000C2570
+// ADDRESS: 004c2570
+// PROTOTYPE: bool __thiscall ClearOwnedCity(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::SetOwnedCity
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:265
+// RVA: 0x000C25F0
+// ADDRESS: 004c25f0
+// PROTOTYPE: void __thiscall SetOwnedCity(list<long,std::allocator<long>_> * param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::GetOwnedCities
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:274
+// RVA: 0x000C2650
+// ADDRESS: 004c2650
+// PROTOTYPE: list<long,std::allocator<long>_> * __thiscall GetOwnedCities(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::GetMemberList
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:296
+// RVA: 0x000C2710
+// ADDRESS: 004c2710
+// PROTOTYPE: void __thiscall GetMemberList(list<COrganizing*,std::allocator<COrganizing*>_> * param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::IsHaveEnymyFaction
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:334
+// RVA: 0x000C2810
+// ADDRESS: 004c2810
+// PROTOTYPE: bool __thiscall IsHaveEnymyFaction(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::IsHaveCityEnemyFaction
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:343
+// RVA: 0x000C2870
+// ADDRESS: 004c2870
+// PROTOTYPE: bool __thiscall IsHaveCityEnemyFaction(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::ClearEnemyFation
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:367
+// RVA: 0x000C28D0
+// ADDRESS: 004c28d0
+// PROTOTYPE: void __thiscall ClearEnemyFation(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::GetEnemyLeaderOrgnizingID
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:383
+// RVA: 0x000C2950
+// ADDRESS: 004c2950
+// PROTOTYPE: long __thiscall GetEnemyLeaderOrgnizingID(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::AddDefenceVictorCounts
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:392
+// RVA: 0x000C29B0
+// ADDRESS: 004c29b0
+// PROTOTYPE: void __thiscall AddDefenceVictorCounts(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::AddOffenseVictorCounts
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:402
+// RVA: 0x000C2A30
+// ADDRESS: 004c2a30
+// PROTOTYPE: void __thiscall AddOffenseVictorCounts(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::AddVillageWarVictorCounts
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:413
+// RVA: 0x000C2AB0
+// ADDRESS: 004c2ab0
+// PROTOTYPE: void __thiscall AddVillageWarVictorCounts(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::DelMember
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:536
+// RVA: 0x000C2B30
+// ADDRESS: 004c2b30
+// PROTOTYPE: bool __thiscall DelMember(long param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::ApplyForJoin
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:559
+// RVA: 0x000C2B90
+// ADDRESS: 004c2b90
+// PROTOTYPE: bool __thiscall ApplyForJoin(long param_1, long param_2, long param_3)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: `public:_virtual_bool___thiscall_CUnion::ApplyForJoin(long,long,long)'::__l24::PlayerApplyForJoinConfeder::OnAsyncCallback
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:636
+// RVA: 0x000C2EA0
+// ADDRESS: 004c2ea0
+// PROTOTYPE: void __thiscall OnAsyncCallback(tagAsyncResult * param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::AddFaction
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:720
+// RVA: 0x000C3170
+// ADDRESS: 004c3170
+// PROTOTYPE: void __thiscall AddFaction(long param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::Invite
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:795
+// RVA: 0x000C3660
+// ADDRESS: 004c3660
+// PROTOTYPE: bool __thiscall Invite(long param_1, long param_2)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: `public:_virtual_bool___thiscall_CUnion::Invite(long,long)'::__l22::InviteJoinConfeder::DoAsyncCall
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:853
+// RVA: 0x000C39B0
+// ADDRESS: 004c39b0
+// PROTOTYPE: void __thiscall DoAsyncCall(__int64 param_1, long param_2, char * param_3)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: `public:_virtual_bool___thiscall_CUnion::Invite(long,long)'::__l22::InviteJoinConfeder::OnAsyncCallback
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:871
+// RVA: 0x000C3B10
+// ADDRESS: 004c3b10
+// PROTOTYPE: void __thiscall OnAsyncCallback(tagAsyncResult * param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::Exit
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:914
+// RVA: 0x000C3DD0
+// ADDRESS: 004c3dd0
+// PROTOTYPE: bool __thiscall Exit(long param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::Disband
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:966
+// RVA: 0x000C43F0
+// ADDRESS: 004c43f0
+// PROTOTYPE: bool __thiscall Disband(long param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::FireOut
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1010
+// RVA: 0x000C49D0
+// ADDRESS: 004c49d0
+// PROTOTYPE: bool __thiscall FireOut(long param_1, long param_2)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::Demise
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1061
+// RVA: 0x000C5060
+// ADDRESS: 004c5060
+// PROTOTYPE: bool __thiscall Demise(long param_1, long param_2)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::UpdatePlayerFactionInfo
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1198
+// RVA: 0x000C5770
+// ADDRESS: 004c5770
+// PROTOTYPE: void __thiscall UpdatePlayerFactionInfo(long param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::UpdateMemberInfoToClient
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1217
+// RVA: 0x000C5840
+// ADDRESS: 004c5840
+// PROTOTYPE: void __thiscall UpdateMemberInfoToClient(long param_1, eOperator param_2)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::DeleteOrgaToClient
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1305
+// RVA: 0x000C5D20
+// ADDRESS: 004c5d20
+// PROTOTYPE: void __thiscall DeleteOrgaToClient(long param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::UpdateEnemyFactionToClient
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1355
+// RVA: 0x000C5FF0
+// ADDRESS: 004c5ff0
+// PROTOTYPE: void __thiscall UpdateEnemyFactionToClient(long param_1, eOperator param_2)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::UpdateCityWarEnemyFactionToClient
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1374
+// RVA: 0x000C60D0
+// ADDRESS: 004c60d0
+// PROTOTYPE: void __thiscall UpdateCityWarEnemyFactionToClient(long param_1, eOperator param_2)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::UpdateOwnedCityToClient
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1402
+// RVA: 0x000C61B0
+// ADDRESS: 004c61b0
+// PROTOTYPE: void __thiscall UpdateOwnedCityToClient(long param_1, eOperator param_2)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::SendInfoToAllMember
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1420
+// RVA: 0x000C6290
+// ADDRESS: 004c6290
+// PROTOTYPE: void __thiscall SendInfoToAllMember(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1, basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_2, long param_3, ulong param_4)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::GetPlayerHeader
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1431
+// RVA: 0x000C6320
+// ADDRESS: 004c6320
+// PROTOTYPE: long __thiscall GetPlayerHeader(void)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// IMPLEMENTED выше: `CUnion::CloneSaveData` RVA `0x000C6380`.
+
+// ============================================================================
+// FUNCTION: CUnion::CUnion
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:26
+// RVA: 0x000C64D0
+// ADDRESS: 004c64d0
+// PROTOTYPE: undefined __thiscall CUnion(long param_1, long param_2, basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_3)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::AddToByteArray
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:135
+// RVA: 0x000C6590
+// ADDRESS: 004c6590
+// PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+// ============================================================================
+// FUNCTION: CUnion::DoJoin
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:680
+// RVA: 0x000C66A0
+// ADDRESS: 004c66a0
+// PROTOTYPE: bool __thiscall DoJoin(long param_1, long param_2, long param_3, tagTime * param_4)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+
+// ============================================================================
+// FUNCTION: Unwind@0052ff60
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: WorldServer
+// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp
+// RVA: 0x0012FF60
+// ADDRESS: 0052ff60
+// PROTOTYPE: undefined Unwind@0052ff60()
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// COMPONENT_VARIANT_END: WorldServer

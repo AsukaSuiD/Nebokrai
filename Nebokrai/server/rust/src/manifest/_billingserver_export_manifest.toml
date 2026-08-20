@@ -1,0 +1,6 @@
+# Идентификация локального evidence source; не поставка бинарников.
+component = "BillingServer"
+artifact = "BillingServer/billingserver.exe + BillingServer/billingserver.pdb"
+exe_sha256 = "FA32E3C043CB49965686129696A4EB34B733ACA1D60CAF57D369F97D5E68FB19"
+pdb_sha256 = "F900CD0330BEFF32AC071B107AB653FD403CD18746896B3C0187C5751ACA0B21"
+ghidra_version = "12.1.2"

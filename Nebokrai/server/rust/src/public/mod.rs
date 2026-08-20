@@ -1,0 +1,60 @@
+//! Общие владельцы исходного каталога `public`.
+
+#[allow(
+    dead_code,
+    reason = "CRC подключён до восстановления межсерверного envelope и ServerUpdate"
+)]
+pub(crate) mod crc32static;
+
+#[allow(
+    dead_code,
+    reason = "GUID подключён к сборке до восстановления сообщений, БД и игровых владельцев"
+)]
+pub(crate) mod guid;
+
+#[allow(
+    dead_code,
+    reason = "CAuctionRoom подключён для восстановления MiscServer M2M до остальных auction-владельцев"
+)]
+#[path = "auctionroom/aucitionroom.rs"]
+pub(crate) mod aucitionroom;
+#[allow(
+    dead_code,
+    reason = "CGoodsNode подключён к AddItemToAuctionRoom и auction-handler 0x14ED01"
+)]
+#[path = "auctionroom/auctionnode.rs"]
+pub(crate) mod auctionnode;
+#[allow(
+    dead_code,
+    reason = "stPlayerOptNode хранит доказанное use-self поле, которое текущий фильтр не читает"
+)]
+#[path = "auctionroom/auctionroom.rs"]
+pub(crate) mod auctionroom;
+
+pub(crate) mod md5;
+
+#[allow(
+    dead_code,
+    reason = "CNetSessionManager подключён к World MainLoop; доменные async producers достигаются следующими owner-проходами"
+)]
+pub(crate) mod netsession;
+#[allow(
+    dead_code,
+    reason = "CNetSessionManager подключён к World MainLoop; Game call sites остаются в сыром компоненте"
+)]
+pub(crate) mod netsessionmanager;
+
+#[allow(
+    dead_code,
+    reason = "tagTime подключён для calendar-ветви CTimer; остальная арифметика owner-а ещё raw"
+)]
+pub(crate) mod date;
+
+#[allow(
+    dead_code,
+    reason = "CTimer подключён к World MainLoop до materialization всех registration callers"
+)]
+pub(crate) mod timer;
+
+pub(crate) mod readwrite;
+pub(crate) mod tools;

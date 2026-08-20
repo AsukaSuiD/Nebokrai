@@ -1,0 +1,6 @@
+# Идентификация локального evidence source; не поставка бинарников.
+component = "AuthServer"
+artifact = "AuthServer/authserver.exe + AuthServer/authserver.pdb"
+exe_sha256 = "AE0022429C135553092364F01838FA6EF8E631D558C96278123FF3ADE6AD3B15"
+pdb_sha256 = "26F8936605024F56B0A2C3BBB1923BCACD3DF9E17221FCC20AB38070E28403D5"
+ghidra_version = "12.1.2"

@@ -1,0 +1,6 @@
+# Идентификация локального evidence source; не поставка бинарников.
+component = "WorldServer"
+artifact = "WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb"
+exe_sha256 = "F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1"
+pdb_sha256 = "04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4"
+ghidra_version = "12.1.2"
