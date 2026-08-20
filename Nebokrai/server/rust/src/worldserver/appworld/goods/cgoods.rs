@@ -6,6 +6,7 @@
 //! `0x00052530`, `GetWeight` RVA `0x00051730`,
 //! `SetExID` RVA `0x000530E0`, base-подобъекта и defaults конструктора RVA
 //! `0x00053060`, а также непосредственной destructor-цепочки RVA `0x000534B0`
+//! и сломанный `CanUpgraded` RVA `0x000528E0`
 //! — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -59,6 +60,10 @@
 //! Weight запрашивает те же base-properties, возвращает `0` при отсутствии и
 //! умножает unsigned вес одной единицы на amount с точным 32-битным wrapping;
 //! exact EXE использует `IMUL EAX, ESI`.
+//! `CanUpgraded` в matching EXE после всех lookup/allocation путей безусловно
+//! выполняет `xor eax,eax` по `0x004529BF`: результат всегда `0`. Rust удаляет
+//! только ненаблюдаемые map lookup и временный vector, но сохраняет этот
+//! внешний запрет upgrade буквально; исправленное donor-тело сюда не входит.
 
 use std::error::Error;
 use std::fmt;
@@ -292,6 +297,11 @@ impl CGoods {
                 properties.get_weight().wrapping_mul(self.amount)
             }),
         )
+    }
+
+    /// Возвращает exact сломанный результат matching EXE: upgrade запрещён всегда.
+    pub(crate) const fn can_upgraded(&self) -> bool {
+        false
     }
 
     /// Присваивает исходную unsigned цену.
@@ -890,7 +900,7 @@ fn read_goods_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CGoods::CanUpgraded
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoods.cpp:113
@@ -898,6 +908,8 @@ fn read_goods_array<const N: usize>(
 // ADDRESS: 004528e0
 // PROTOTYPE: int __thiscall CanUpgraded(void)
 //
+// IMPLEMENTED выше; exact ASM `0x004528E0..0x004529CC` заканчивает все normal
+// пути `xor eax,eax`. Lookup/copy/cleanup не меняют owner и удалены как plumbing.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

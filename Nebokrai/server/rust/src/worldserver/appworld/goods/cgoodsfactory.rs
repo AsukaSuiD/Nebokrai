@@ -7,6 +7,7 @@
 //! `0x000566F0`, `QueryGoodsBasePropertiesByOriginalName` RVA `0x00057390`,
 //! `GetGoldCoinIndex/GetYuanBaoIndex/GetJiFenIndex` RVA
 //! `0x00056810/0x000568B0/0x00056950`,
+//! сломанный `UpgradeEquipment` RVA `0x000561C0`,
 //! `CreateGoods/CreateGoodsNoProbability` RVA
 //! `0x00059460/0x000597C0`, `Release/Load` RVA
 //! `0x00058380/0x00059EE0`, `Serialize` RVA `0x00056130` — `IMPLEMENTED`;
@@ -58,6 +59,10 @@
 //! проверяемым reader-ом и Rust ownership. Для повреждённого/обрезанного файла
 //! возвращается typed-ошибка, а registry остаётся очищенным, как в безопасном
 //! donor-пути; валидный вход и его observable state не меняются.
+//! `UpgradeEquipment` в matching EXE заблокирован exact всегда-нулевым
+//! `CGoods::CanUpgraded`; поэтому исправленное mutation-тело Linux-donor-а не
+//! является поведением этой версии. Private `Upgrade` остаётся raw и
+//! недостижимым из материализованного публичного контура.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -409,6 +414,18 @@ pub(crate) fn garbage_collect(goods: Option<&mut Option<Box<CGoods>>>) -> bool {
     true
 }
 
+/// Сохраняет exact ранний отказ matching EXE без мутаций и RNG-вызовов.
+pub(crate) fn upgrade_equipment(goods: Option<&mut CGoods>, target_level: i32) -> bool {
+    let Some(goods) = goods else {
+        return false;
+    };
+    let _ = target_level;
+    if !goods.can_upgraded() {
+        return false;
+    }
+    false
+}
+
 pub(crate) fn get_gold_coin_index<ResolveString>(
     original_name_index: &GoodsOriginalNameIndex,
     resolve_string_id: &mut ResolveString,
@@ -653,7 +670,7 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 
 // ============================================================================
 // FUNCTION: CGoodsFactory::UpgradeEquipment
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsfactory.cpp:731
@@ -661,6 +678,8 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 // ADDRESS: 004561c0
 // PROTOTYPE: int __cdecl UpgradeEquipment(CGoods * param_1, long param_2)
 //
+// IMPLEMENTED выше; exact вызов `CanUpgraded` по `0x004561D3` всегда получает
+// `0`, поэтому переход `0x004561DC -> 0x00456553` исключает mutation/RNG body.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
