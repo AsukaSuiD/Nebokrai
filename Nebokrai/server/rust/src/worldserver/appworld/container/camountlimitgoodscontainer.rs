@@ -6,6 +6,7 @@
 //! `0x000DBE70/0x000DBEC0/0x000DBF20/0x000DBF60/0x000DBFE0/0x000DC5B0`,
 //! `Lock/Unlock` RVA `0x000DC640/0x000DC260`, `IsFull/Set/GetLimit` RVA
 //! `0x000DBCC0/0x000DBCE0/0x000DBCF0`, `SetOwner` RVA `0x000DBD00`,
+//! `Remove` wrapper-ы и GUID-owner RVA `0x000DBD20/0x000DBD30/0x000DC1C0`,
 //! `Unserialize/Serialize` RVA `0x000DBD50/0x000DC070`, `GetGoodsAmount` RVA
 //! `0x000DC030`, основного `Add` RVA `0x000DC790`, `Clear/Release` RVA
 //! `0x000DC9A0/0x000DCAB0` и destructor RVA `0x000DCC10` — `IMPLEMENTED`;
@@ -89,6 +90,11 @@
 //! находит и удаляет первое совпадение, сдвигая хвост на один элемент. Новый
 //! C++ reference принимает GUID, требует `Find` и использует удаление всех
 //! совпадений; Rust сохраняет EXE-контракт через `Option<&CGoods>` и `Vec::remove`.
+//!
+//! Exact GUID-`Remove` ищет map-node, отклоняет locked товар, вызывает только
+//! доказанные no-op listeners и лишь затем вынимает pointer из map; locked-
+//! vector при успехе не чистится. `BTreeMap::remove` заменяет legacy hash erase,
+//! а `Box<CGoods>` явно переносит возвращаемое ownership вызывающему.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -239,6 +245,15 @@ impl CAmountLimitGoodsContainer {
             self.detached_goods.push(displaced);
         }
         Ok(None)
+    }
+
+    /// Вынимает unlocked товар по GUID и переносит ownership вызывающему.
+    pub(super) fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
+        let goods = self.goods.get(ex_id)?;
+        if self.is_locked(goods) {
+            return None;
+        }
+        self.goods.remove(ex_id)
     }
 
     /// Очищает goods/locked storage, сохраняя owner и limit.
@@ -553,7 +568,7 @@ fn read_amount_u32(
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:584
@@ -561,13 +576,12 @@ fn read_amount_u32(
 // ADDRESS: 004dbd20
 // PROTOTYPE: CBaseObject * __thiscall Remove(CBaseObject * param_1, void * param_2)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// Exact tail-chain проверяет null, извлекает GUID объекта по `+0x0c` и
+// вызывает GUID-slot. Typed Rust call sites передают GUID прямо в `remove`.
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:590
@@ -575,9 +589,8 @@ fn read_amount_u32(
 // ADDRESS: 004dbd30
 // PROTOTYPE: CBaseObject * __thiscall Remove(long param_1, CGUID * param_2, void * param_3)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// Exact tail-chain игнорирует type scalar и делегирует GUID-slot; typed owner
+// устраняет параметр, не влияющий на семантику.
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::Find
@@ -757,7 +770,7 @@ fn read_amount_u32(
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:433
@@ -765,9 +778,8 @@ fn read_amount_u32(
 // ADDRESS: 004dc1c0
 // PROTOTYPE: CBaseObject * __thiscall Remove(CGUID * param_1, void * param_2)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; exact `0x004DC1E7..0x004DC1F4` отклоняет locked товар,
+// no-op listener loop предшествует map erase, а locked-vector не меняется.
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::Unlock

@@ -1,9 +1,11 @@
 //! Владелец volume-limited goods-container исторического `WorldServer`.
 //!
 //! Статус `CSerializeContainer::OnTraversingContainer` RVA `0x000DA6B0`,
+//! `Remove` wrapper-ы RVA `0x000DA650/0x000DA660`,
 //! три inherited `Find` wrapper-а RVA `0x000DA670/0x000DA680/0x000DA690`,
 //! `QueryGoodsPosition(CGoods*)/Serialize/GetGoods` RVA
 //! `0x000DA7B0/0x000DA7D0/0x000DA8A0`,
+//! GUID-`Remove` RVA `0x000DA910`,
 //! `IsFull/QueryGoodsPosition(CGUID)/FindPositionForGoods/Add/GetGoodsAmount`
 //! RVA `0x000DA9A0/0x000DA9F0/0x000DAA50/0x000DAB30/0x000DAB90`,
 //! empty-cell branch positional `Add` RVA
@@ -67,6 +69,15 @@
 //! При нескольких подходящих стеках Rust сохраняет уже принятую `BTreeMap`-
 //! модель owner-а; bucket-order старого `stdext::_Hash` отдельно не восстановлен
 //! и остаётся явным неизвестным порядка выбора, а не скрытой гарантией exact.
+//!
+//! GUID-`Remove` сначала выполняет locked-aware removal amount-owner-а и лишь
+//! затем проверяет base-properties, ищет первый GUID cell и обнуляет его. Это
+//! отличается и от нового C++ reference, очищающего cell до base removal, и от
+//! Linux-донора, ищущего cell первым. При post-remove отказе legacy pointer уже
+//! терялся; Rust оставляет такой `Box<CGoods>` в lifetime-quarantine, сохраняя
+//! невидимость для вызывающего без преждевременного destructor-а. Контекст и
+//! RTTI удалены только потому, что единственные достигнутые callbacks no-op, а
+//! owner typed как `CGoods`.
 //!
 //! Короткий source в соседнем decoder-е сохраняет ранний `Clear`, cursor и уже
 //! добавленные записи, затем возвращает typed `BLOCKED_MISSING_FACT` вместо
@@ -309,6 +320,33 @@ impl CVolumeLimitGoodsContainer {
         self.add_at(position, goods, registry)
     }
 
+    /// Вынимает unlocked товар и очищает cell только после factory-validation.
+    pub(crate) fn remove(
+        &mut self,
+        ex_id: &CGuid,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, VolumeContainerCodecError> {
+        let Some(goods) = self.amount_base.remove(ex_id) else {
+            return Ok(None);
+        };
+
+        let Some(index) = goods.get_base_properties_index() else {
+            self.amount_base.retain_detached_goods(goods);
+            return Err(GoodsCodecError::MissingBasePropertiesIndex.into());
+        };
+        if query_goods_base_properties(registry, index).is_none() {
+            self.amount_base.retain_detached_goods(goods);
+            return Ok(None);
+        }
+
+        let Some(position) = self.query_goods_position(ex_id) else {
+            self.amount_base.retain_detached_goods(goods);
+            return Ok(None);
+        };
+        self.cells[position as usize] = CGuid::GUID_INVALID;
+        Ok(Some(goods))
+    }
+
     /// Вставляет товар в пустую cell; `Some` возвращает ownership при false.
     pub(crate) fn add_at(
         &mut self,
@@ -393,7 +431,7 @@ impl CVolumeLimitGoodsContainer {
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cvolumelimitgoodscontainer.cpp:419
@@ -401,13 +439,12 @@ impl CVolumeLimitGoodsContainer {
 // ADDRESS: 004da650
 // PROTOTYPE: CBaseObject * __thiscall Remove(CBaseObject * param_1, void * param_2)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// Exact inherited tail-chain проверяет null, берёт GUID по `+0x0c` и вызывает
+// GUID-slot; typed Rust boundary передаёт GUID напрямую в `remove`.
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cvolumelimitgoodscontainer.cpp:424
@@ -415,9 +452,8 @@ impl CVolumeLimitGoodsContainer {
 // ADDRESS: 004da660
 // PROTOTYPE: CBaseObject * __thiscall Remove(long param_1, CGUID * param_2, void * param_3)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// Exact inherited tail-chain игнорирует type scalar и делегирует GUID-slot;
+// Rust не носит рядом с typed GUID неиспользуемый `long`.
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::Find
@@ -538,7 +574,7 @@ impl CVolumeLimitGoodsContainer {
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cvolumelimitgoodscontainer.cpp:227
@@ -546,9 +582,9 @@ impl CVolumeLimitGoodsContainer {
 // ADDRESS: 004da910
 // PROTOTYPE: CBaseObject * __thiscall Remove(CGUID * param_1, void * param_2)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; exact порядок amount removal -> typed result -> factory
+// lookup -> first cell query -> `GUID_INVALID` сохранён. Post-remove false
+// удерживает потерянное ownership в quarantine и не очищает cell.
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::IsFull
@@ -706,7 +742,7 @@ impl CVolumeLimitGoodsContainer {
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cvolumelimitgoodscontainer.cpp:255
