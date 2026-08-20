@@ -2,7 +2,9 @@
 //!
 //! Статус constructor RVA `0x000DC700`, `Find(long, GUID)` RVA `0x000D5F50`,
 //! `Find(GUID)/IsLocked/TraversingContainer` RVA
-//! `0x000DC180/0x000DBDC0/0x000DBE10`, `IsFull/Set/GetLimit` RVA
+//! `0x000DC180/0x000DBDC0/0x000DBE10`, query-family RVA
+//! `0x000DBE70/0x000DBEC0/0x000DBF20/0x000DBF60/0x000DBFE0/0x000DC5B0`,
+//! `Lock/Unlock` RVA `0x000DC640/0x000DC260`, `IsFull/Set/GetLimit` RVA
 //! `0x000DBCC0/0x000DBCE0/0x000DBCF0`, `SetOwner` RVA `0x000DBD00`,
 //! `Unserialize/Serialize` RVA `0x000DBD50/0x000DC070`, `GetGoodsAmount` RVA
 //! `0x000DC030`, основного `Add` RVA `0x000DC790`, `Clear/Release` RVA
@@ -14,7 +16,7 @@
 //! Исходные владельцы PDB:
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.h`
 //! и
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:19,42,114,139,176,415,464,563,602,608,629`.
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:19,42,114,139,176,218,247,267,289,316,336,355,415,464,526,563,602,608,629`.
 //!
 //! Exact PDB задаёт старый размер `0x60`: `CGoodsContainer`/secondary
 //! `CContainerListener` prefix, `stdext::hash_map<CGUID, CGoods*>` по `+0x24`,
@@ -67,6 +69,26 @@
 //! callback-result. `BTreeMap` сохраняет уже принятую storage-замену; для
 //! достигнутого `CheckGoodsInPacket` порядок ненаблюдаем, поскольку итоговая
 //! 32-битная wrapping-сумма коммутативна.
+//!
+//! Query-family намеренно различает locked-состояние. `GetGoods(position)`,
+//! `GetTheFirstGoods` и `GetGoods(base index, vector)` скрывают locked-товар;
+//! `IsGoodsExisted` и обе формы `QueryGoodsPosition` locked-состояние не
+//! проверяют. Позиция остаётся ordinal позиции map traversal, включая locked-
+//! элементы. Object-overload сравнивает именно pointer identity, GUID-overload
+//! — все 16 байт идентификатора. Safe Rust выражает false без изменения out-
+//! параметра как `None` и использует `std::ptr::eq` без `unsafe`.
+//!
+//! PDB/mangled symbol для `GetGoods(base index, vector)` подтверждает передачу
+//! vector по значению, а exact `RET 0x14` и destructor временной копии — что
+//! собранный список не возвращается вызывающему. Rust сохраняет этот странный
+//! контракт принимаемым по значению `Vec<&CGoods>` и unit-result, не исправляя
+//! историческую сигнатуру в reference-output API.
+//!
+//! Exact `Lock` не проверяет принадлежность переданного товара контейнеру: он
+//! отвергает только null и уже locked GUID, затем копирует GUID. `Unlock`
+//! находит и удаляет первое совпадение, сдвигая хвост на один элемент. Новый
+//! C++ reference принимает GUID, требует `Find` и использует удаление всех
+//! совпадений; Rust сохраняет EXE-контракт через `Option<&CGoods>` и `Vec::remove`.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -241,6 +263,94 @@ impl CAmountLimitGoodsContainer {
         (!self.is_locked(goods)).then_some(goods)
     }
 
+    /// Возвращает ordinal map-элемент, если position ниже limit и он не locked.
+    pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
+        if position >= self.goods_amount_limit {
+            return None;
+        }
+
+        let goods = self
+            .goods
+            .values()
+            .nth(position as usize)
+            .map(Box::as_ref)?;
+        (!self.is_locked(goods)).then_some(goods)
+    }
+
+    /// Возвращает первый unlocked товар с exact base-properties index.
+    pub(crate) fn get_the_first_goods(&self, base_properties_index: u32) -> Option<&CGoods> {
+        self.goods.values().map(Box::as_ref).find(|goods| {
+            goods.get_base_properties_index() == Some(base_properties_index)
+                && !self.is_locked(goods)
+        })
+    }
+
+    /// Проверяет наличие base-properties index, намеренно не учитывая lock.
+    pub(crate) fn is_goods_existed(&self, base_properties_index: u32) -> bool {
+        self.goods
+            .values()
+            .any(|goods| goods.get_base_properties_index() == Some(base_properties_index))
+    }
+
+    /// Возвращает ordinal по exact object identity без lock-фильтра.
+    pub(crate) fn query_goods_position(&self, goods: Option<&CGoods>) -> Option<u32> {
+        let goods = goods?;
+        self.goods
+            .values()
+            .position(|stored| std::ptr::eq(stored.as_ref(), goods))
+            .and_then(|position| u32::try_from(position).ok())
+    }
+
+    /// Возвращает ordinal по полному GUID без lock-фильтра.
+    pub(crate) fn query_goods_position_by_guid(&self, ex_id: &CGuid) -> Option<u32> {
+        self.goods
+            .values()
+            .position(|goods| goods.get_ex_id() == ex_id)
+            .and_then(|position| u32::try_from(position).ok())
+    }
+
+    /// Сохраняет исходную by-value vector-сигнатуру: результат будет отброшен.
+    pub(crate) fn get_goods_by_base_index<'container>(
+        &'container self,
+        base_properties_index: u32,
+        mut output: Vec<&'container CGoods>,
+    ) {
+        output.extend(self.goods.values().map(Box::as_ref).filter(|goods| {
+            goods.get_base_properties_index() == Some(base_properties_index)
+                && !self.is_locked(goods)
+        }));
+    }
+
+    /// Копирует GUID любого non-null товара, если такой GUID ещё не locked.
+    pub(crate) fn lock(&mut self, goods: Option<&CGoods>) -> i32 {
+        let Some(goods) = goods else {
+            return 0;
+        };
+        if self.is_locked(goods) {
+            return 0;
+        }
+
+        self.locked_goods.push(*goods.get_ex_id());
+        1
+    }
+
+    /// Удаляет первое exact GUID-совпадение либо возвращает исходный `0`.
+    pub(crate) fn unlock(&mut self, goods: Option<&CGoods>) -> i32 {
+        let Some(goods) = goods else {
+            return 0;
+        };
+        let Some(position) = self
+            .locked_goods
+            .iter()
+            .position(|locked| locked == goods.get_ex_id())
+        else {
+            return 0;
+        };
+
+        self.locked_goods.remove(position);
+        1
+    }
+
     /// Проверяет полное 16-байтовое совпадение GUID в linear locked-vector.
     fn is_locked(&self, goods: &CGoods) -> bool {
         self.locked_goods
@@ -270,11 +380,10 @@ impl CAmountLimitGoodsContainer {
         registry: &GoodsBasePropertiesRegistry,
     ) -> Result<Vec<TraversedGoods>, super::super::goods::cgoods::GoodsDbSnapshotBlock> {
         self.goods()
-            .enumerate()
-            .map(|(position, goods)| {
+            .map(|goods| {
                 Ok(TraversedGoods {
                     goods: goods.db_save_snapshot(registry)?,
-                    position: position as u8,
+                    position: self.query_goods_position(Some(goods)).unwrap_or(0) as u8,
                 })
             })
             .collect()
@@ -537,7 +646,7 @@ fn read_amount_u32(
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::GetGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:218
@@ -545,13 +654,12 @@ fn read_amount_u32(
 // ADDRESS: 004dbe70
 // PROTOTYPE: CGoods * __thiscall GetGoods(ulong param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; ordinal включает locked entries, но выбранный locked
+// товар возвращается как `None`.
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::GetTheFirstGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:267
@@ -559,13 +667,11 @@ fn read_amount_u32(
 // ADDRESS: 004dbec0
 // PROTOTYPE: CGoods * __thiscall GetTheFirstGoods(ulong param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; matching locked entries пропускаются.
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::QueryGoodsPosition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:289
@@ -573,13 +679,11 @@ fn read_amount_u32(
 // ADDRESS: 004dbf20
 // PROTOTYPE: int __thiscall QueryGoodsPosition(CGoods * param_1, ulong * param_2)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; `std::ptr::eq` сохраняет object identity без `unsafe`.
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::IsGoodsExisted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:316
@@ -587,9 +691,7 @@ fn read_amount_u32(
 // ADDRESS: 004dbf60
 // PROTOTYPE: int __thiscall IsGoodsExisted(ulong param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; exact тело намеренно не вызывает `IsLocked`.
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::AI
@@ -607,7 +709,7 @@ fn read_amount_u32(
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::QueryGoodsPosition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:526
@@ -615,9 +717,7 @@ fn read_amount_u32(
 // ADDRESS: 004dbfe0
 // PROTOTYPE: int __thiscall QueryGoodsPosition(CGUID * param_1, ulong * param_2)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; GUID сравнивается полностью, lock не проверяется.
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::GetGoodsAmount
@@ -671,7 +771,7 @@ fn read_amount_u32(
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::Unlock
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:355
@@ -679,13 +779,12 @@ fn read_amount_u32(
 // ADDRESS: 004dc260
 // PROTOTYPE: int __thiscall Unlock(CGoods * param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; `Vec::remove` удаляет ровно первое совпадение и сдвигает
+// оставшийся хвост как exact `0x004DC2A1..0x004DC2DE`.
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::GetGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:247
@@ -693,13 +792,12 @@ fn read_amount_u32(
 // ADDRESS: 004dc5b0
 // PROTOTYPE: void __thiscall GetGoods(ulong param_1, vector<CGoods*,std::allocator<CGoods*>_> param_2)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; by-value output наполняется unlocked pointers и затем
+// уничтожается, как подтверждают mangled symbol и exact `RET 0x14`.
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::Lock
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:336
@@ -707,9 +805,7 @@ fn read_amount_u32(
 // ADDRESS: 004dc640
 // PROTOTYPE: int __thiscall Lock(CGoods * param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; принадлежность `goods` текущему container-у не проверяется.
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::CAmountLimitGoodsContainer
