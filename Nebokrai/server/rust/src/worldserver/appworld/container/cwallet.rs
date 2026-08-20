@@ -2,14 +2,15 @@
 //!
 //! Статус constructor-state `CWallet::CWallet` RVA `0x000D5F60`,
 //! destructor ownership RVA `0x000D5FC0`, `GetGoldCoinsAmount` RVA
-//! `0x000D5F40`, `AddFromDB` RVA `0x000D6090` и обеих перегрузок `Add` RVA
+//! `0x000D5F40`, query-family RVA `0x000D5E80/0x000D5EA0/0x000D63F0`,
+//! `AddFromDB` RVA `0x000D6090` и обеих перегрузок `Add` RVA
 //! `0x000D61F0/0x000D63B0` — `IMPLEMENTED`; остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
 //! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cwallet.cpp:18,34,349`.
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cwallet.cpp:18,34,41,55,83,211,224,247,349`.
 //!
 //! Exact PDB задаёт единственное собственное поле `m_pGoldCoins` по `+0x24`;
 //! inherited `CGoodsContainer` хранит signed owner type/ID по `+0x14/+0x18`.
@@ -29,6 +30,12 @@
 //! Rust сохраняет наблюдаемую перезапись, но не воспроизводит внутреннюю утечку
 //! и освобождает вытесненный объект обычным ownership. Listener callbacks
 //! доказанно no-op и не материализуются.
+//!
+//! Три base-index query используют resolved gold-coin index, а не индекс
+//! фактически сохранённого товара. Exact `GetGoods(index, vector)` принимает
+//! vector по значению и уничтожает наполненную копию, поэтому не способен
+//! вернуть результат. Этот внутренний дефект сигнатуры без ожидаемого внешнего
+//! эффекта исправлен естественным Rust iterator-ом; критерий выбора сохранён.
 
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
 
@@ -59,6 +66,38 @@ impl CWallet {
             Some(goods) => goods.get_amount(),
             None => 0,
         }
+    }
+
+    /// Проверяет наличие wallet-slot-а для resolved gold-coin index.
+    pub(crate) fn is_goods_existed(
+        &self,
+        base_properties_index: u32,
+        gold_coin_index: u32,
+    ) -> bool {
+        self.gold_coins.is_some() && base_properties_index == gold_coin_index
+    }
+
+    /// Возвращает единственный slot только для resolved gold-coin index.
+    pub(crate) fn get_the_first_goods(
+        &self,
+        base_properties_index: u32,
+        gold_coin_index: u32,
+    ) -> Option<&CGoods> {
+        (base_properties_index == gold_coin_index)
+            .then_some(self.gold_coins.as_deref())
+            .flatten()
+    }
+
+    /// Возвращает usable Rust-view вместо бесполезной legacy vector-by-value копии.
+    pub(crate) fn get_goods_by_base_index(
+        &self,
+        base_properties_index: u32,
+        gold_coin_index: u32,
+    ) -> impl Iterator<Item = &CGoods> {
+        self.gold_coins
+            .iter()
+            .map(Box::as_ref)
+            .filter(move |_| base_properties_index == gold_coin_index)
     }
 
     /// Вставляет товар в exact позицию wallet-а; `Some` сохраняет ownership при false.
@@ -128,7 +167,7 @@ impl CWallet {
 
 // ============================================================================
 // FUNCTION: CWallet::IsGoodsExisted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cwallet.cpp:211
@@ -136,13 +175,14 @@ impl CWallet {
 // ADDRESS: 004d5e80
 // PROTOTYPE: int __thiscall IsGoodsExisted(ulong param_1)
 //
+// IMPLEMENTED выше; process-global gold index передаётся resolved значением.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CWallet::GetTheFirstGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cwallet.cpp:224
@@ -150,6 +190,7 @@ impl CWallet {
 // ADDRESS: 004d5ea0
 // PROTOTYPE: CGoods * __thiscall GetTheFirstGoods(ulong param_1)
 //
+// IMPLEMENTED выше; пустой slot остаётся `None`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -253,7 +294,7 @@ impl CWallet {
 
 // ============================================================================
 // FUNCTION: CWallet::GetGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cwallet.cpp:247
@@ -261,6 +302,8 @@ impl CWallet {
 // ADDRESS: 004d63f0
 // PROTOTYPE: void __thiscall GetGoods(ulong param_1, vector<CGoods*,std::allocator<CGoods*>_> param_2)
 //
+// IMPLEMENTED выше как возвращаемый iterator; критерий exact, внутренний
+// vector-by-value defect намеренно исправлен.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

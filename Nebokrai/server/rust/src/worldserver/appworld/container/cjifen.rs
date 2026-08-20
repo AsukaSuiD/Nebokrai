@@ -2,7 +2,8 @@
 //!
 //! Статус `CWallet::Release/IsFull/GetGoods/GetGoodsAmount/Serialize/Unserialize`
 //! RVA `0x000D5E30/0x000D5E50/0x000D5EC0/0x000D5EE0/0x000D5EF0/0x000D6030`
-//! и `Clear/Find/Remove` RVA `0x000D8670/0x000D87C0/0x000D8A10`, а также
+//! и `Clear/QueryGoodsPosition/Find/Remove` RVA
+//! `0x000D8670/0x000D8350/0x000D8370/0x000D87C0/0x000D8A10`, а также
 //! constructor/destructor-state `CJiFen`
 //! RVA `0x000D8280/0x000D82E0` и его folded container-контракт —
 //! `IMPLEMENTED`; остальные wallet-операции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
@@ -11,7 +12,7 @@
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
 //! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cjifen.cpp:18,34,124,133,142,236,261,322,336`.
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cjifen.cpp:18,34,124,133,142,180,193,236,261,273,289,322,336`.
 //!
 //! Wallet хранит не коллекцию, а один nullable `CGoods*`. Wire начинается с
 //! одного marker-байта: `0` завершает запись, любое ненулевое значение включает
@@ -28,6 +29,9 @@
 //! wallet callbacks имеют общий no-op RVA `0x000DBD10`, поэтому в достигнутых
 //! операциях нет скрытой мутации. Безразмерное legacy-чтение marker-а выражено
 //! локальным `BLOCKED_MISSING_FACT` через typed short-source ошибку.
+//! Object-перегрузка `QueryGoodsPosition` не сравнивает pointer identity: exact
+//! ASM `0x004D835A..0x004D8366` передаёт GUID товара в virtual GUID-overload.
+//! Поэтому другой объект с тем же полным GUID также получает позицию `0`.
 //!
 //! Exact PDB задаёт `CJiFen` как отдельный класс размера `0x28`: bases
 //! `CGoodsContainer +0x0`, `CContainerListener +0x20` и единственное поле
@@ -174,6 +178,16 @@ impl CWallet {
             return self.gold_coins.take();
         }
         None
+    }
+
+    /// Запрашивает позицию non-null объекта через его GUID, как exact virtual call.
+    pub(crate) fn query_goods_position_by_object(&self, goods: Option<&CGoods>) -> Option<u32> {
+        self.query_goods_position(goods?.get_ex_id())
+    }
+
+    /// Возвращает единственную позицию `0` при полном GUID-совпадении.
+    pub(crate) fn query_goods_position(&self, ex_id: &CGuid) -> Option<u32> {
+        self.find(ex_id).map(|_| 0)
     }
 
     /// Кодирует marker и возможный полный goods-wire.
@@ -370,7 +384,7 @@ impl CWallet {
 
 // ============================================================================
 // FUNCTION: CWallet::QueryGoodsPosition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cjifen.cpp:180
@@ -378,13 +392,14 @@ impl CWallet {
 // ADDRESS: 004d8350
 // PROTOTYPE: int __thiscall QueryGoodsPosition(CGoods * param_1, ulong * param_2)
 //
+// IMPLEMENTED выше как GUID-routing; null и отсутствие дают `None`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CWallet::QueryGoodsPosition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cjifen.cpp:193
@@ -392,6 +407,7 @@ impl CWallet {
 // ADDRESS: 004d8370
 // PROTOTYPE: int __thiscall QueryGoodsPosition(CGUID * param_1, ulong * param_2)
 //
+// IMPLEMENTED выше; successful out-position `0` выражена `Some(0)`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
