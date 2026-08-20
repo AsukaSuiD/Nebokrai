@@ -39,6 +39,10 @@ constexpr std::int32_t kLoginResponseMessageType = 0x000AF501;
 constexpr std::int32_t kWorldInfoUpdateMessageType = 0x000AF509;
 constexpr std::int32_t kLoginServerInfoMessageType = 0x000CF503;
 constexpr std::int32_t kPlayerBaseMessageType = 0x0004FB01;
+constexpr std::int32_t kDeleteRoleMessageType = 0x0004FB02;
+constexpr std::int32_t kRestoreRoleMessageType = 0x0004FB03;
+constexpr std::int32_t kCreateRoleMessageType = 0x0004FB04;
+constexpr std::int32_t kQuestDetailMessageType = 0x0004FB05;
 constexpr std::int32_t kKickWorldAccountMessageType = 0x0004FB07;
 constexpr std::size_t kLegacyAccountLogBufferSize = 0x200U;
 constexpr std::int32_t kLegacySocketType = 1;
@@ -339,7 +343,7 @@ bool CGame::InitNetServer_World()
 
 bool CGame::LoadASList(const std::filesystem::path& path)
 {
-    // ПОДТВЕРЖДЕНО НАПРЯМУЮ 0x0040C630: старый список очищался ещё до
+    // ПОДТВЕРЖДЕНО НАПРЯМУЮ 0x004100F0: старый список очищался ещё до
     // открытия файла. После успешного открытия неполная последняя пара лишь
     // завершала чтение, не отменяя уже принятые адреса и общий успех.
     m_ASList.clear();
@@ -839,25 +843,30 @@ void CGame::ChangeAllWorldSate()
 {
     // ПОДТВЕРЖДЕНО АССЕМБЛЕРОМ 0x004075E0. Пересчитываются только миры с уже
     // существующей записью s_listCdkey; отсутствующие сохраняют прежнее состояние.
-    for (auto& [worldId, world] : m_listWorldInfo) {
-        const auto accounts = s_listCdkey.find(worldId);
-        if (accounts == s_listCdkey.end()) {
-            continue;
-        }
-
-        const std::uint32_t rawCount =
-            static_cast<std::uint32_t>(accounts->second.size());
-        const std::int32_t signedCount = std::bit_cast<std::int32_t>(rawCount);
-
-        std::int32_t state = 1;
-        while (state <= 3 && signedCount >= m_StateLvl[static_cast<std::size_t>(state)]) {
-            ++state;
-        }
-        if (state > 3) {
-            state = 3;
-        }
-        world.lStateLvl = state;
+    for (const auto& [worldId, world] : m_listWorldInfo) {
+        static_cast<void>(world);
+        UpdateWorldStateFromCdkeyCount(worldId);
     }
+}
+
+void CGame::UpdateWorldStateFromCdkeyCount(std::int32_t worldId)
+{
+    const auto accounts = s_listCdkey.find(worldId);
+    const auto world = m_listWorldInfo.find(worldId);
+    if (accounts == s_listCdkey.end() || world == m_listWorldInfo.end()) {
+        return;
+    }
+
+    const std::uint32_t rawCount =
+        static_cast<std::uint32_t>(accounts->second.size());
+    const std::int32_t signedCount = std::bit_cast<std::int32_t>(rawCount);
+
+    std::int32_t state = 1;
+    while (state <= 3 &&
+           signedCount >= m_StateLvl[static_cast<std::size_t>(state)]) {
+        ++state;
+    }
+    world->second.lStateLvl = std::min(state, 3);
 }
 
 std::int32_t CGame::GetWorldIDByName(const char* worldName) const
@@ -873,10 +882,36 @@ std::int32_t CGame::GetWorldIDByName(const char* worldName) const
     return -1;
 }
 
+const char* CGame::GetWorldNameByID(std::int32_t worldId) const
+{
+    const auto found = m_listWorldInfo.find(worldId);
+    return found == m_listWorldInfo.end() ? nullptr : found->second.strName.c_str();
+}
+
 bool CGame::WorldServerIsOpenState(std::int32_t worldId) const
 {
     const auto found = m_WorldInfoSetup.find(worldId);
     return found != m_WorldInfoSetup.end() && found->second.lStateLvl != 0;
+}
+
+bool CGame::IsExitWorld(const char* worldName) const
+{
+    return worldName != nullptr && GetWorldIDByName(worldName) != -1;
+}
+
+std::int32_t
+CGame::GetLoginWorldPlayerNumByWorldName(const char* worldName) const
+{
+    const std::int32_t worldId = GetWorldIDByName(worldName);
+    if (worldId == -1) {
+        return -1;
+    }
+    const auto found = s_listCdkey.find(worldId);
+    if (found == s_listCdkey.end()) {
+        return -1;
+    }
+    return std::bit_cast<std::int32_t>(
+        static_cast<std::uint32_t>(found->second.size()));
 }
 
 void CGame::AddWorldInfoToMsg(LoginNet::CMessage& message, const char* account) const
@@ -898,6 +933,17 @@ void CGame::AddWorldInfoToMsg(LoginNet::CMessage& message, const char* account) 
     }
 }
 
+bool CGame::SendMsg2World(const LoginNet::CMessage& message,
+                          std::int32_t worldId) const
+{
+    if (s_pNetServer_World == nullptr) {
+        return false;
+    }
+    const auto sent = message.SendToWorldMap(
+        s_pNetServer_World->CommandHandle(), worldId);
+    return std::holds_alternative<std::int32_t>(sent);
+}
+
 std::int32_t CGame::FindCdkey(const char* account) const
 {
     if (account == nullptr) {
@@ -909,6 +955,62 @@ std::int32_t CGame::FindCdkey(const char* account) const
         }
     }
     return -1;
+}
+
+bool CGame::AddCdkey(const char* account, std::int32_t worldId)
+{
+    if (account == nullptr) {
+        return false;
+    }
+    const auto worldAccounts = s_listCdkey.find(worldId);
+    if (worldAccounts == s_listCdkey.end()) {
+        return false;
+    }
+
+    auto& accounts = worldAccounts->second;
+    if (std::find(accounts.begin(), accounts.end(), account) != accounts.end()) {
+        return false;
+    }
+    accounts.emplace_back(account);
+    UpdateWorldStateFromCdkeyCount(worldId);
+    return true;
+}
+
+void CGame::ClearLoginCdkey(const char* account)
+{
+    if (account != nullptr) {
+        m_LoginCdkeyWorld.erase(account);
+    }
+}
+
+void CGame::ClearCDKey(const char* account)
+{
+    if (account == nullptr) {
+        return;
+    }
+
+    for (auto& [worldId, accounts] : s_listCdkey) {
+        const auto found = std::find(accounts.begin(), accounts.end(), account);
+        if (found == accounts.end()) {
+            continue;
+        }
+
+        // ПОДТВЕРЖДЕНО АССЕМБЛЕРОМ 0x00411829..0x00411875: найденный
+        // World-account удаляется и пересчитывает state, но login-map здесь не
+        // очищается. ClearLoginCdkey вызывается только при полном отсутствии.
+        accounts.erase(found);
+        UpdateWorldStateFromCdkeyCount(worldId);
+        return;
+    }
+    ClearLoginCdkey(account);
+}
+
+void CGame::ClearCDKeyByWorldServerID(std::int32_t worldId)
+{
+    const auto found = s_listCdkey.find(worldId);
+    if (found != s_listCdkey.end()) {
+        found->second.clear();
+    }
 }
 
 bool CGame::L2W_PlayerBase_Send(const char* worldName, const char* account) const
@@ -939,6 +1041,135 @@ bool CGame::L2W_PlayerBase_Send(const char* worldName, const char* account) cons
     }
     // Direct EXE возвращает true после логических проверок и не анализирует send.
     return true;
+}
+
+bool CGame::L2W_DeleteRole_Send(const char* worldName,
+                                const char* account,
+                                std::int32_t playerId,
+                                std::uint32_t ip) const
+{
+    if (worldName == nullptr || account == nullptr || account[0] == '\0') {
+        return false;
+    }
+    const std::int32_t worldId = GetWorldIDByName(worldName);
+    if (worldId == -1) {
+        return false;
+    }
+
+    LoginNet::CMessage message(kDeleteRoleMessageType);
+    message.Base().Add(account);
+    message.Base().Add(playerId);
+    message.Base().Add(ip);
+    return SendMsg2World(message, worldId);
+}
+
+bool CGame::L2W_RestoreRole_Send(const char* worldName,
+                                 const char* account,
+                                 std::uint32_t playerId) const
+{
+    if (worldName == nullptr || account == nullptr) {
+        return false;
+    }
+    const std::int32_t worldId = GetWorldIDByName(worldName);
+    if (worldId == -1) {
+        return false;
+    }
+
+    LoginNet::CMessage message(kRestoreRoleMessageType);
+    message.Base().Add(account);
+    message.Base().Add(playerId);
+    return SendMsg2World(message, worldId);
+}
+
+bool CGame::L2W_CreateRole_Send(const char* worldName,
+                                const char* account,
+                                LoginNet::CMessage& message) const
+{
+    if (worldName == nullptr || account == nullptr) {
+        return false;
+    }
+    const std::int32_t worldId = GetWorldIDByName(worldName);
+    if (worldId == -1) {
+        return false;
+    }
+
+    message.SetMessageType(kCreateRoleMessageType);
+    message.Base().Add(account);
+    return SendMsg2World(message, worldId);
+}
+
+bool CGame::L2W_QuestDetail_Send(const char* worldName,
+                                 const char* account,
+                                 std::int32_t playerId,
+                                 std::uint32_t ip) const
+{
+    if (worldName == nullptr || account == nullptr || account[0] == '\0') {
+        return false;
+    }
+    const std::int32_t worldId = GetWorldIDByName(worldName);
+    if (worldId == -1) {
+        return false;
+    }
+
+    LoginNet::CMessage message(kQuestDetailMessageType);
+    message.Base().Add(playerId);
+    message.Base().Add(account);
+    message.Base().Add(ip);
+    return SendMsg2World(message, worldId);
+}
+
+std::int32_t CGame::AddWorld(std::int32_t worldId, const char* worldName)
+{
+    if (worldName == nullptr) {
+        return -1;
+    }
+    const auto world = m_listWorldInfo.find(worldId);
+    if (world == m_listWorldInfo.end() || world->second.strName != worldName) {
+        RecordTechnicalError("Отклонено подключение неизвестного WorldServer");
+        return -1;
+    }
+
+    world->second.lStateLvl = 1;
+    UpdateWorldInfoToAllClient();
+    const std::int32_t worldCount = std::bit_cast<std::int32_t>(
+        static_cast<std::uint32_t>(m_listWorldInfo.size()));
+    if (m_pLoginQueue != nullptr) {
+        m_pLoginQueue->SetWorldCount(std::bit_cast<std::uint32_t>(worldCount));
+    }
+    s_listCdkey[worldId].clear();
+    return worldCount;
+}
+
+std::int32_t CGame::DelWorld(std::int32_t worldId)
+{
+    const auto world = m_listWorldInfo.find(worldId);
+    if (world != m_listWorldInfo.end()) {
+        world->second.lStateLvl = 0;
+    }
+
+    UpdateWorldInfoToAllClient();
+    const std::int32_t worldCount = std::bit_cast<std::int32_t>(
+        static_cast<std::uint32_t>(m_listWorldInfo.size()));
+    if (m_pLoginQueue != nullptr) {
+        m_pLoginQueue->SetWorldCount(std::bit_cast<std::uint32_t>(worldCount));
+    }
+    s_listCdkey.erase(worldId);
+    return worldCount;
+}
+
+std::int32_t CGame::GetLoginWorldCdkeyNumbers() const noexcept
+{
+    std::uint32_t count = 0;
+    for (const auto& [worldId, accounts] : s_listCdkey) {
+        static_cast<void>(worldId);
+        count += static_cast<std::uint32_t>(accounts.size());
+    }
+    return std::bit_cast<std::int32_t>(count);
+}
+
+std::uint32_t CGame::GetCdkeyCount() const noexcept
+{
+    return std::bit_cast<std::uint32_t>(GetLoginWorldCdkeyNumbers());
 }
 
 const char* CGame::GetLoginCdkeyWorldServer(const char* account) const

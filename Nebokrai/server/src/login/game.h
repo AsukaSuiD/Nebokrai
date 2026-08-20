@@ -41,7 +41,7 @@ class CLoginQueue;
  * LoadWorldSetup 0x00410F30, SetListWorldInfoBySetup 0x00411170,
  * ReLoadWorldSetup 0x00411FF0, UpdateWorldInfoToAllClient 0x00407860,
  * load_listen_port 0x0040DCB0, InitNetServer_Client 0x00402DA0,
- * InitNetServer_World 0x00402F90, LoadASList 0x0040C630,
+ * InitNetServer_World 0x00402F90, LoadASList 0x004100F0,
  * InitAuthClient 0x0040C9D0, ReconnectAS 0x00406240,
  * ReassignAS 0x00409BF0, Release 0x00405C60 и значения конструктора
  * CGame по умолчанию 0x00414350.
@@ -53,6 +53,10 @@ class CLoginQueue;
  * Исходящий Auth-клиент остаётся отдельным соединением с самостоятельным
  * AuthServer-процессом. Частичное чтение aslist.ini, безусловный успех
  * InitAuthClient и отложенная через FIFO замена клиента сохраняются явно.
+ * Блок World/CD-key и маршруты ролей перенесены целиком: AddWorld 0x00412910,
+ * DelWorld 0x00412A60, AddCdkey 0x0040F600, ClearCDKey 0x00411720 и сообщения
+ * 0x4FB02..0x4FB05. Ошибочная очистка login-map из Linux-донора не перенесена:
+ * подтверждённый ClearCDKey очищает её только когда account не найден в World.
  */
 class CGame
 {
@@ -195,12 +199,42 @@ public:
     [[nodiscard]] bool ReLoadWorldSetup();
 
     [[nodiscard]] std::int32_t GetWorldIDByName(const char* worldName) const;
+    [[nodiscard]] const char* GetWorldNameByID(std::int32_t worldId) const;
     [[nodiscard]] bool WorldServerIsOpenState(std::int32_t worldId) const;
+    [[nodiscard]] bool IsExitWorld(const char* worldName) const;
+    [[nodiscard]] std::int32_t
+    GetLoginWorldPlayerNumByWorldName(const char* worldName) const;
     void AddWorldInfoToMsg(LoginNet::CMessage& message, const char* account) const;
+    [[nodiscard]] bool SendMsg2World(const LoginNet::CMessage& message,
+                                     std::int32_t worldId) const;
 
     [[nodiscard]] std::int32_t FindCdkey(const char* account) const;
     [[nodiscard]] bool L2W_PlayerBase_Send(const char* worldName,
                                            const char* account) const;
+    [[nodiscard]] bool L2W_DeleteRole_Send(const char* worldName,
+                                           const char* account,
+                                           std::int32_t playerId,
+                                           std::uint32_t ip) const;
+    [[nodiscard]] bool L2W_RestoreRole_Send(const char* worldName,
+                                            const char* account,
+                                            std::uint32_t playerId) const;
+    [[nodiscard]] bool L2W_CreateRole_Send(const char* worldName,
+                                           const char* account,
+                                           LoginNet::CMessage& message) const;
+    [[nodiscard]] bool L2W_QuestDetail_Send(const char* worldName,
+                                            const char* account,
+                                            std::int32_t playerId,
+                                            std::uint32_t ip) const;
+
+    [[nodiscard]] bool AddCdkey(const char* account, std::int32_t worldId);
+    void ClearLoginCdkey(const char* account);
+    void ClearCDKey(const char* account);
+    void ClearCDKeyByWorldServerID(std::int32_t worldId);
+    [[nodiscard]] std::int32_t AddWorld(std::int32_t worldId,
+                                        const char* worldName);
+    [[nodiscard]] std::int32_t DelWorld(std::int32_t worldId);
+    [[nodiscard]] std::int32_t GetLoginWorldCdkeyNumbers() const noexcept;
+    [[nodiscard]] std::uint32_t GetCdkeyCount() const noexcept;
 
     [[nodiscard]] const char* GetLoginCdkeyWorldServer(const char* account) const;
     void SetLoginCdkeyWorldServer(const char* account, const char* worldServer);
@@ -233,6 +267,7 @@ private:
     };
 
     void ChangeAllWorldSate();
+    void UpdateWorldStateFromCdkeyCount(std::int32_t worldId);
     void RecordTechnicalError(std::string detail);
     [[nodiscard]] asio::awaitable<AuthConnectResult> ConnectNewAuthClient();
     [[nodiscard]] std::int32_t SendLSInfoToAS();
