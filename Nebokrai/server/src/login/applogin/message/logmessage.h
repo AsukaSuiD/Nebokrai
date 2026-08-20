@@ -12,23 +12,24 @@
 #include <vector>
 
 /*
- * Owner: loginserver/applogin/message/logmessage.cpp
+ * Исходный владелец: loginserver/applogin/message/logmessage.cpp
  *
  * Точная пара: LoginServer/loginserver.exe + LoginServer/LoginServer.pdb.
- * Исходный путь PDB:
- * d:\\complite_version\\fengyun_russia\\trunk\\server\\loginserver\\applogin\\message\\logmessage.cpp
- * OnLogMessage RVA 0x0007F3F0.
+ * Путь владельца в PDB: d:\\complite_version\\fengyun_russia\\trunk\\server\\loginserver\\applogin\\message\\logmessage.cpp
+ * RVA OnLogMessage: 0x0007F3F0.
  *
- * Восстановлены все двадцать достигнутых case: synthetic disconnect 0x10001,
- * World 0x1FF01..0x1FF07 и client 0x2FD01..0x2FD0C. Неизвестный opcode
- * остаётся исходным default no-op. Linux donor используется только как C++-
- * подсказка: его payload validators, ownership checks, pending-created map,
- * launcher-ticket special case, debug trace и capacity guards exact RU owner
+ * Восстановлены все двадцать достигнутых веток: синтетическое отключение 0x10001,
+ * World 0x1FF01..0x1FF07 и клиент 0x2FD01..0x2FD0C. Неизвестный код операции
+ * остаётся исходной пустой реализацией по умолчанию. Linux-донор используется
+ * только как C++-подсказка: его проверки содержимого и владения, карта ожидающих
+ * созданий, особый случай launcher-ticket, отладочная трассировка и ограничения
+ * ёмкости отсутствовали у точного русского владельца
  * не имел и сюда они не переносятся.
  *
  * 0x2FD01 сохраняет порядок marker/version -> account(max 0x20) -> удаление
  * пробелов -> длина 1..31 -> exact 16-byte GetEx digest -> marker/version/
- * account checks -> short client-code -> long ekey -> unused string(max 0x40)
+ * проверки учётной записи -> короткий код клиента -> длинный ekey ->
+ * неиспользуемая строка (не более 0x40)
  * -> World(max 0x14) -> только затем ASCII lowercase и AddQuestCdkey(type=0).
  * Неверная длина account/digest — тихий return; marker/version дают client 4,
  * quote/equal/space — client 5. Старый GetEx при declared=16 и всего 16..19
@@ -70,7 +71,7 @@
  * Synthetic 0x10001 сохраняет странный exact порядок: ClearLoginCdkey и QUIT
  * до FindCdkey; найденный World-CD-key даёт ранний return. Иначе World-name
  * запрашивается уже после удаления login map, затем всегда AccountLeaveLog ->
- * ClearCDKey -> OnClientLost.
+ * Последовательность: ClearCDKey -> OnClientLost.
  *
  * ILogMessageContext выражает только достигнутые CGame calls. Очереди/valid/
  * matrix остаются у CLoginQueue; routing, account maps, logs и EnterGame — у

@@ -24,17 +24,19 @@ class AuthManager;
 class CLoginQueue;
 
 /*
- * Owner: loginserver/game.cpp / game.h — доказанный CGame slice.
+ * Исходный владелец: loginserver/game.cpp / game.h — доказанный фрагмент CGame.
  * Точная пара: LoginServer/loginserver.exe + LoginServer/LoginServer.pdb.
- * Материализуются только уже доказанные поля и методы; полный 1024-byte PDB
- * layout не подменяется фиктивными полями и расширяется по мере recovery.
+ * Материализуются только уже доказанные поля и методы; полная 1024-байтная
+ * компоновка из PDB не подменяется фиктивными полями и расширяется по мере
+ * восстановления.
  *
- * Setup owner: tagSetup ctor 0x0040C6E0, ChangeAllWorldSate 0x004075E0,
+ * Владелец настроек: конструктор tagSetup 0x0040C6E0,
+ * ChangeAllWorldSate 0x004075E0,
  * LoadSetupEx 0x0040D9E0, ReLoadSetupEx 0x0040DC60,
  * LoadSetup 0x0040E690, ReLoadSetup 0x0040F4E0,
  * LoadWorldSetup 0x00410F30, SetListWorldInfoBySetup 0x00411170,
  * ReLoadWorldSetup 0x00411FF0, UpdateWorldInfoToAllClient 0x00407860,
- * CGame ctor defaults 0x00414350.
+ * значения конструктора CGame по умолчанию 0x00414350.
  */
 class CGame
 {
@@ -113,7 +115,7 @@ public:
 
     struct tagSetupEx
     {
-        // Direct CGame ctor leaves only iAreaId without an explicit assignment.
+    // Прямой конструктор CGame оставляет без явного присваивания только iAreaId.
         std::int32_t iAreaId;
         std::int32_t lClientMaxBlockConNum{10};
         std::int32_t lClientValidDelayRecDataTime{4000};
@@ -128,8 +130,8 @@ public:
     };
 
     [[nodiscard]] bool LoadSetup();
-    // Direct EXE used global gAuthMgr. The Linux reconstruction keeps the same
-    // timeout side effect but passes the already-explicit AuthManager owner.
+    // Прямой EXE использовал глобальный gAuthMgr. Реконструкция Linux сохраняет
+    // тот же побочный эффект timeout, но передаёт уже явного владельца AuthManager.
     [[nodiscard]] bool ReLoadSetup(AuthManager& authManager);
     [[nodiscard]] bool LoadSetupEx();
     [[nodiscard]] bool ReLoadSetupEx();

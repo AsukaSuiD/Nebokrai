@@ -6,8 +6,8 @@
 #include <string>
 
 /*
- * Технический Linux owner: MSSQL/ODBC adapter для восстановленного
- * IAuthDatabase. Это не исходный Miracle owner и не новая DB-семантика.
+ * Технический владелец Linux: адаптер MSSQL/ODBC для восстановленного
+ * IAuthDatabase. Это не исходный владелец Miracle и не новая семантика БД.
  * Контракт процедур, параметров, fallback и result mapping остаётся в
  * authproc.cpp; здесь заменяется только Windows ADO/COM transport.
  *

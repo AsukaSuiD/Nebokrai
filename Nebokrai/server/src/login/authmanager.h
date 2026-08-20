@@ -11,11 +11,11 @@
 #include <vector>
 
 /*
- * Owner: loginserver/authmanager.cpp / authmanager.h
+ * Исходный владелец: loginserver/authmanager.cpp / authmanager.h
  *
  * Точная пара: LoginServer/loginserver.exe + LoginServer/LoginServer.pdb.
- * RVA: init 0x0001FBD0, send_quest_message 0x0001FBF0, run 0x0001FD20,
- * AuthQuest ctor 0x0001FF10, removeQuest 0x000201A0,
+ * Подтверждённые RVA: init 0x0001FBD0, send_quest_message 0x0001FBF0,
+ * run 0x0001FD20, конструктор AuthQuest 0x0001FF10, removeQuest 0x000201A0,
  * OnResponseAuth 0x00020200, manager ctor/dtor 0x00020350/0x00020390,
  * addQuest 0x000203E0/0x00020460.
  *

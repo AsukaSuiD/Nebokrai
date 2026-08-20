@@ -9,9 +9,10 @@
 #include <optional>
 
 /*
- * Owner: nets/netauth/mynetserverclient_auth.cpp
+ * Исходный владелец: nets/netauth/mynetserverclient_auth.cpp
  *
- * AuthServer EXE/PDB, RVA: ctor 0x00015A10, OnAccept 0x00015AD0,
+ * AuthServer EXE/PDB, подтверждённые RVA: конструктор 0x00015A10,
+ * OnAccept 0x00015AD0,
  * OnClose 0x00015B60, OnReceive 0x00015C10. Производный receive accumulator
  * начинал с 0xA00000. OnAccept публикует 0xCF401, OnClose сначала 0xCF402 и
  * только затем выставляет общий close-state.

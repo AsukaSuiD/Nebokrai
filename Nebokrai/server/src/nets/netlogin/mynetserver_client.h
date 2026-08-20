@@ -16,13 +16,14 @@
 #include <vector>
 
 /*
- * Owner: nets/netlogin/mynetserver_client.cpp
+ * Исходный владелец: nets/netlogin/mynetserver_client.cpp
  *
- * LoginServer EXE/PDB: ctor 0x0006A870, CreateServerClient 0x0006A8B0,
+ * LoginServer EXE/PDB: конструктор 0x0006A870, CreateServerClient 0x0006A8B0,
  * OnMapStrError 0x0006A910; связанные CGame::InitNetServer_Client 0x2DA0 и
  * ReLoadSetup 0xF4E0.
  *
- * Component defaults: max in-flight sends = 5, per-client send limit =
+ * Значения компонента по умолчанию: не более 5 незавершённых отправок,
+ * ограничение отправки на клиента =
  * 0x400000. Setup отдельно задаёт receive-rate/ban, две CRC-проверки, max
  * frame, max clients, send limits, поздний backlog и first-receive timeout.
  *

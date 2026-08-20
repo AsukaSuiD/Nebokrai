@@ -8,14 +8,15 @@
 #include <optional>
 
 /*
- * Owner: nets/netlogin/mynetserverclient_client.cpp
+ * Исходный владелец: nets/netlogin/mynetserverclient_client.cpp
  *
- * LoginServer EXE/PDB: ctor 0x0006E590, OnClose 0x0006E660,
+ * LoginServer EXE/PDB: конструктор 0x0006E590, OnClose 0x0006E660,
  * OnOneMessageSizeOver 0x0006E730, OnTotalMessageSizeOver 0x0006E7A0,
  * OnReceive 0x0006E810.
  *
- * Client envelope:
- * [total_len, optional crc(total_len), optional crc(rle), rle(message)].
+ * Обёртка клиента:
+ * [total_len, необязательный crc(total_len), необязательный crc(rle),
+ * rle(сообщение)].
  * Length/content CRC включаются независимо. Предел одного frame проверяется
  * только при включённой length-проверке. Допустимый opcode после RLE decode:
  * 0x2FD01..=0x3FBFF. Четыре доказанных ошибки требуют forbid IP + QUIT:

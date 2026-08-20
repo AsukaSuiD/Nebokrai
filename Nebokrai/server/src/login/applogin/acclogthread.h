@@ -9,23 +9,25 @@
 #include <string>
 
 /*
- * Owner: loginserver/applogin/acclogthread.cpp / acclogthread.h.
+ * Исходный владелец: loginserver/applogin/acclogthread.cpp / acclogthread.h.
  * Точная пара: LoginServer/loginserver.exe + LoginServer/LoginServer.pdb.
- * RVA: ctor 0x00420C30, dtor 0x00420C90, Run 0x00420D30.
+ * Подтверждённые RVA: конструктор 0x00420C30, деструктор 0x00420C90,
+ * Run 0x00420D30.
  * PDB size 12 = старый Thread base + CMyAdoBase base.
  *
- * Thread/COM — только Windows plumbing. Linux owner сохраняет тот же blocking
- * Run, но не наследует отсутствующий Win32 Thread; AccLogQueue передаётся
- * ссылкой вместо direct GetGame()->_acc_logs global lookup.
+ * Thread/COM — только обвязка Windows. Владелец Linux сохраняет тот же
+ * блокирующий Run, но не наследует отсутствующий Win32 Thread; AccLogQueue
+ * передаётся ссылкой вместо прямого глобального поиска GetGame()->_acc_logs.
  *
- * Run: Pop в обнулённый char[2048]; пустая строка завершает worker. Для каждой
- * непустой строки создаётся НОВАЯ connection, затем OpenCn -> ExecuteCn ->
+ * Run: Pop в обнулённый char[2048]; пустая строка завершает рабочий поток. Для
+ * каждой непустой строки создаётся НОВОЕ подключение, затем OpenCn -> ExecuteCn ->
  * CloseCn -> ReleaseCn. Ошибка Create/Open/Execute в EXE превращалась в
- * _com_error, handler делал PrintErr("Acc Log Err"), ReleaseCn и продолжал со
- * СЛЕДУЮЩЕЙ queue-записью. Retry той же SQL и sleep отсутствуют.
+ * _com_error, обработчик делал PrintErr("Acc Log Err"), ReleaseCn и продолжал
+ * со СЛЕДУЮЩЕЙ записью очереди. Повтор той же SQL и ожидание отсутствуют.
  *
- * Пока общий AddLogText owner не материализован, PrintErr side effect хранится
- * как observability-only AccLogThreadError. Он не влияет на SQL/queue lifecycle.
+ * Пока общий владелец AddLogText не материализован, побочный эффект PrintErr
+ * хранится только для наблюдаемости как AccLogThreadError. Он не влияет на
+ * жизненный цикл SQL и очереди.
  */
 namespace Login
 {

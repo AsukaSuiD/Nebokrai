@@ -8,7 +8,7 @@
 #include <utility>
 
 /*
- * Owner: nets/socketcommands.cpp
+ * Исходный владелец: nets/socketcommands.cpp
  *
  * Источник: точные EXE/PDB AuthServer, LoginServer, BillingServer, MiscServer,
  * GameServer и Nworldserver. Полные варианты подтверждают один контракт:
@@ -25,7 +25,7 @@
  * старый 32-битный tagSocketOper размером 24 байта. Конкретный современный
  * payload здесь намеренно не материализуется: pBuf/pStrID имели разный смысл у
  * producers/consumers. clients и servers получают собственные владеющие типы
- * команд, а этот owner хранит только доказанную семантику очереди.
+ * команд, а этот владелец хранит только доказанную семантику очереди.
  *
  * Старые CRITICAL_SECTION, std::deque<tagSocketOper*>, allocator и ручные
  * ветви delete заменены std::mutex, std::deque<T> и обычным владением C++.

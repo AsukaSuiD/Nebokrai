@@ -8,10 +8,10 @@
 #include <vector>
 
 /*
- * Owner: authserver/src/kl_ipfilter.h
+ * Исходный владелец: authserver/src/kl_ipfilter.h
  *
  * Точная пара: AuthServer/authserver.exe + AuthServer/authserver.pdb; исходный
- * owner PDB: h:\fengyun\fy_russia\src\server\authserver\src\kl_ipfilter.h.
+ * Путь владельца в PDB: h:\fengyun\fy_russia\src\server\authserver\src\kl_ipfilter.h.
  * EXE/PDB подтверждает точную wildcard-семантику kl_net::ip_filter:
  * нулевой octet именно сохранённого правила означает wildcard, остальные
  * octet обязаны совпадать. Allow-вариант разрешает совпадение, deny-вариант —

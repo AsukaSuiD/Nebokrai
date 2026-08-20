@@ -7,14 +7,13 @@
 #include <vector>
 
 /*
- * Owner: loginserver/servlogqueue.cpp / servlogqueue.h
+ * Исходный владелец: loginserver/servlogqueue.cpp / servlogqueue.h
  *
  * Точная пара: LoginServer/loginserver.exe + LoginServer/LoginServer.pdb.
- * Исходный путь PDB:
- * d:\complite_version\fengyun_russia\trunk\server\loginserver\loginserver\servlogqueue.cpp
+ * Путь владельца в PDB: d:\complite_version\fengyun_russia\trunk\server\loginserver\loginserver\servlogqueue.cpp
  *
  * Подтверждённые RVA: size 0x0001F6F0, pop 0x0001F780,
- * clear 0x0001F810, push 0x0001FB50. Исходный owner хранил указатели на
+ * clear 0x0001F810, push 0x0001FB50. Исходный владелец хранил указатели на
  * отдельные ServLog в std::deque под одной CRITICAL_SECTION: push глубоко
  * копировал четыре поля и добавлял запись в хвост, pop снимал голову, clear
  * удалял всё под тем же lock.

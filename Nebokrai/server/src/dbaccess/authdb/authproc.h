@@ -17,14 +17,15 @@
 #include <vector>
 
 /*
- * Owner: dbaccess/authdb/authproc.cpp / authproc.h
+ * Исходный владелец: dbaccess/authdb/authproc.cpp / authproc.h
  *
  * Точная пара: AuthServer/authserver.exe + AuthServer/authserver.pdb.
- * Исходный owner PDB: h:\fengyun\fy_russia\src\dbaccess\authdb\authproc.cpp.
- * RVA: ctor 0x00016E10, init 0x00016E20, do_auth 0x00017530,
- * do_auth_ex 0x00017CC0, do_lock 0x00018730, result builders
- * 0x00018DD0/0x00018F90/0x00019160, do_write_log 0x00019270,
- * process_quest 0x0001A360, worker entry 0x0001A910.
+ * Исходный путь владельца в PDB: h:\fengyun\fy_russia\src\dbaccess\authdb\authproc.cpp.
+ * Подтверждённые RVA: конструктор 0x00016E10, init 0x00016E20,
+ * do_auth 0x00017530, do_auth_ex 0x00017CC0, do_lock 0x00018730,
+ * сборщики результатов 0x00018DD0/0x00018F90/0x00019160,
+ * do_write_log 0x00019270, process_quest 0x0001A360,
+ * точка входа рабочего потока 0x0001A910.
  *
  * MSSQL stored-procedure contract является частью baseline оригинала:
  * sp_auth/getAccInfo, sp_authex/GetAccount, sp_lock/suspendAccount и

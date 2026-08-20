@@ -9,10 +9,10 @@
 #include <vector>
 
 /*
- * Owner: authserver/src/dbqueue.h
+ * Исходный владелец: authserver/src/dbqueue.h
  *
  * Точная пара: AuthServer/authserver.exe + AuthServer/authserver.pdb; исходный
- * owner PDB: h:\fengyun\fy_russia\src\server\authserver\src\dbqueue.h.
+ * Путь владельца в PDB: h:\fengyun\fy_russia\src\server\authserver\src\dbqueue.h.
  * Поздняя реконструкция подтверждает формы Auth DB quest/result и
  * специальную coalescing-очередь ServerInfo. Старый db_element_type связывал
  * integer tag с void*; новый C++ использует std::variant и владеющие значения,

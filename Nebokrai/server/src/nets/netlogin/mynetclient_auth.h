@@ -14,9 +14,9 @@
 #include <vector>
 
 /*
- * Owner: nets/netlogin/mynetclient_auth.cpp / .h
+ * Исходный владелец: nets/netlogin/mynetclient_auth.cpp / .h
  *
- * LoginServer EXE/PDB: ctor 0x0006CAC0, HandleClose 0x0006CAF0,
+ * LoginServer EXE/PDB: конструктор 0x0006CAC0, HandleClose 0x0006CAF0,
  * OnReceive 0x0006CB90.
  *
  * Исходящий Auth путь использует общий CClient send contract и собственный
@@ -24,7 +24,8 @@
  * явный Close не создаёт synthetic message. Transport close через OnClose /
  * HandleClose публикует 0xCF301 в той же FIFO, что обычные Auth сообщения.
  *
- * Receive wire: [len, crc(len), crc(normalized message), message]. CRC length
+ * Формат приёма: [len, crc(len), crc(нормализованное сообщение), сообщение].
+ * Длина CRC
  * проверяется сразу после 12 bytes; malformed sign/short length сохраняются
  * отдельными неизвестностями. Reconnect synthetic 0xCF302 + raw pointer в
  * оригинале заменён типизированным событием в той же FIFO.

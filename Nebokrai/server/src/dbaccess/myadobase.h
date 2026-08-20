@@ -6,18 +6,18 @@
 #include <string>
 
 /*
- * Owner: dbaccess/myadobase.cpp / myadobase.h.
+ * Исходный владелец: dbaccess/myadobase.cpp / myadobase.h.
  * Точная пара: LoginServer/loginserver.exe + LoginServer/LoginServer.pdb.
  *
  * Материализован только connection-slice, уже необходимый AccLogThread:
  * Uninitalize 0x004641E0, GetTimeString 0x00464210,
  * CreateCn 0x00464450, OpenCn 0x00464650, CloseCn 0x00464720,
  * ExecuteCn 0x004647E0, ReleaseCn 0x00464B40, Initialize 0x00464CB0.
- * Recordset owner (CreateRs/OpenRs/CloseRs/ReleaseRs) намеренно не объявляется
+ * Владелец Recordset (CreateRs/OpenRs/CloseRs/ReleaseRs) намеренно не объявляется
  * до восстановления его реальных callers.
  *
  * Старый ADO/COM transport заменён unixODBC. Initialize всё ещё сохраняет все
- * семь исходных string и строит ТОЧНУЮ ADO-строку owner-а; connect timeout и
+ * семь исходных string и строит ТОЧНУЮ ADO-строку владельца; таймаут подключения и
  * integrated security исходник только сохранял и в connection string не
  * добавлял. Для фактического Linux OpenCn из тех же server/database/user/password
  * строится техническая ODBC-строка. Это не новая DB/state-machine семантика.
@@ -52,8 +52,9 @@ public:
     [[nodiscard]] static bool CloseCn(Connection& connection);
     static void ReleaseCn(Connection& connection) noexcept;
 
-    // Direct API had only char*. All original callers supply fixed stack arrays;
-    // the capacity overload is the safe Linux entry point used by recovered code.
+// В прямом API был только char*. Все исходные вызывающие стороны передавали
+// стековые массивы фиксированного размера; перегрузка с ёмкостью — безопасная
+// точка входа Linux, которой пользуется восстановленный код.
     [[nodiscard]] static char* GetTimeString(char* buffer, std::size_t capacity);
 
 private:

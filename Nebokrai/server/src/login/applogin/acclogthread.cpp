@@ -7,33 +7,34 @@ namespace Login
 namespace
 {
 constexpr std::size_t kLegacySqlBufferSize = 0x800U;
-constexpr char kAccLogErrorLabel[] = "Acc Log Err";
+constexpr char kAccLogErrorLabel[] = "Ошибка журнала входа";
 }
 
 AccLogThread::AccLogThread(AccLogQueue& logs) noexcept : m_Logs(logs) {}
 
 void AccLogThread::Run()
 {
-    // Direct EXE CoInitialize/CoUninitialize are omitted: CMyAdoBase now uses
-    // unixODBC and has no COM apartment state.
+    // Прямые вызовы CoInitialize/CoUninitialize из EXE опущены: CMyAdoBase
+    // теперь использует unixODBC и не имеет состояния COM apartment.
     CMyAdoBase::Connection connection;
 
     for (;;) {
         std::string sql = m_Logs.Pop();
 
-        // VERIFIED_ASSEMBLY 0x00420D98..0x00420DB0: strlen==0 is the sole
-        // normal exit condition, including stale semaphore-token after clear().
+        // ПОДТВЕРЖДЕНО АССЕМБЛЕРОМ 0x00420D98..0x00420DB0: strlen==0 —
+        // единственное штатное условие выхода, включая устаревший токен
+        // семафора после clear().
         if (sql.empty()) {
             CMyAdoBase::ReleaseCn(connection);
             return;
         }
 
-        // Old caller copied into zeroed char[2048] without a length guard.
-        // Oversize input is an explicit technical boundary rather than stack OOB;
-        // the popped SQL is not requeued because direct exception paths also
-        // continue with the next queue item.
+        // Старый вызывающий код копировал данные в обнулённый char[2048] без
+        // проверки длины. Слишком большой ввод считается явной технической
+        // границей вместо выхода за стек; извлечённый SQL не возвращается в
+        // очередь, поскольку прямые пути исключений тоже переходили к следующему.
         if (sql.size() >= kLegacySqlBufferSize) {
-            RecordError("SQL exceeds legacy AccLogThread char[2048]");
+            RecordError("SQL не помещается в старый буфер AccLogThread char[2048]");
             CMyAdoBase::ReleaseCn(connection);
             continue;
         }
@@ -54,8 +55,8 @@ void AccLogThread::Run()
             continue;
         }
 
-        // Run ignores the returned bool. ADO Close failure would throw into the
-        // same "Acc Log Err" handler; unixODBC exposes it explicitly instead.
+        // Run игнорирует возвращаемый bool. Ошибка закрытия ADO попадала бы в тот
+        // же обработчик «Acc Log Err»; unixODBC вместо этого сообщает её явно.
         if (!CMyAdoBase::CloseCn(connection)) {
             RecordError(connection.lastError);
         }

@@ -4,16 +4,19 @@
 
 bool ReadTo(std::istream& stream, const char* name)
 {
-    // VERIFIED_ASSEMBLY 0x00420AC0: first token is read unconditionally.
+    // ПОДТВЕРЖДЕНО АССЕМБЛЕРОМ 0x00420AC0: первый токен читается безусловно.
     std::string token;
-    stream >> token;
+    if (!(stream >> token)) {
+        return false;
+    }
 
     while (token != name) {
-        // Direct owner checks stream.eof() before the literal terminator.
-        if (stream.eof() || token == "<end>") {
+        // Прямой владелец проверяет stream.eof() перед буквальным терминатором.
+        // Проверка полного stream-state — техническая Linux-граница против
+        // бесконечного цикла при badbit без EOF; на допустимом вводе порядок тот же.
+        if (token == "<end>" || !(stream >> token)) {
             return false;
         }
-        stream >> token;
     }
     return true;
 }

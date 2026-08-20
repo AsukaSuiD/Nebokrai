@@ -12,10 +12,11 @@
 #include <vector>
 
 /*
- * Owner: nets/netauth/message.cpp
+ * Исходный владелец: nets/netauth/message.cpp
  *
  * AuthServer EXE/PDB: authserver.exe/authserver.pdb. Существенные RVA:
- * ctor 0x000136B0, Run 0x00013710, CreateMessageWithoutRLE 0x00013760,
+ * Подтверждённые RVA: конструктор 0x000136B0, Run 0x00013710,
+ * CreateMessageWithoutRLE 0x00013760,
  * SendToLogin 0x00013830, GetStr 0x000138C0, InitMsgFuncPool 0x000141A0.
  *
  * Внутреннее Auth-сообщение — общий 16-байтовый CBaseMessage. Внешний server

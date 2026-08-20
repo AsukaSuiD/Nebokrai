@@ -347,7 +347,7 @@ LoginQueueRunReport CLoginQueue::Run(ILoginQueueContext& context,
         });
     };
 
-    // VERIFIED_DISASSEMBLY/ASSEMBLY 0x0041D51B..0x0041D56F:
+    // ПОДТВЕРЖДЕНО ДИЗАССЕМБЛИРОВАНИЕМ/АССЕМБЛЕРОМ 0x0041D51B..0x0041D56F:
     // m_GasQuest (+0x64/+0x68) не очищается. Если list непуст, после его
     // полного прохода EXE ошибочно clear-ит m_NoQueueQuestCdkey (+0x34).
     if (!m_GasQuest.empty()) {
@@ -752,7 +752,7 @@ std::optional<QuestCdkeyError> CLoginQueue::OnQuestCdkey(
 
     const double banVariantTime = context.BanVariantTime(account);
     if (banVariantTime != 0.0) {
-        // VERIFIED_DISASSEMBLY 0x0041A2A4..0x0041A35A: GetLocalTime
+    // ПОДТВЕРЖДЕНО ДИЗАССЕМБЛИРОВАНИЕМ 0x0041A2A4..0x0041A35A: GetLocalTime
         // происходит до VariantTimeToSystemTime. Оставляем этот порядок даже
         // при вынесенном compatibility decoder.
         const auto now = CurrentLocalDateTime();
@@ -901,7 +901,7 @@ void CLoginQueue::OnQuestPlayerData(ILoginQueueContext& context,
             : std::nullopt;
         context.L2WQuestDetailSend(world, quest.account, quest.playerId, quest.clientIp);
 
-        // VERIFIED_ASSEMBLY 0x0041B447..0x0041B463: World-send — void;
+    // ПОДТВЕРЖДЕНО АССЕМБЛЕРОМ 0x0041B447..0x0041B463: отправка World — void;
         // PushLoginList вызывается сразу после него без проверки результата.
         static_cast<void>(PushLoginList(quest.playerId));
         return;
@@ -1085,7 +1085,7 @@ HandlePwdCheckedReport CLoginQueue::HandlePwdChecked(ILoginQueueContext& context
         if (context.ValidCodeEnabled()) {
             const auto accountKey = OwnedLegacyString(checked.Account());
 
-            // VERIFIED_ASSEMBLY 0x0041BCB2..0x0041BD5D: map::find(account),
+    // ПОДТВЕРЖДЕНО АССЕМБЛЕРОМ 0x0041BCB2..0x0041BD5D: map::find(account),
             // iterator != end -> N отправляется сохранённому socket без
             // сравнения с новым socket. Старый Linux donor добавлял сравнение,
             // которого в RU EXE нет.

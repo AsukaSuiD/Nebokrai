@@ -12,7 +12,7 @@
 #include <vector>
 
 /*
- * Owner: nets/clients.cpp / nets/clients.h
+ * Исходный владелец: nets/clients.cpp / nets/clients.h
  *
  * Общий исходящий CClient подтверждён Login/Misc/Game/World EXE/PDB. Поздняя
  * Rust-реконструкция уже отделила Miracle-семантику от WinSock plumbing:
@@ -21,11 +21,11 @@
  * оставшийся snapshot возвращаются перед командами, пришедшими параллельно.
  * Connect ждёт ровно 10 секунд уже после legacy hostname resolution.
  *
- * Новый Linux-owner использует standalone Asio вместо WSAEventSelect,
+ * Новый владелец Linux использует самостоятельный Asio вместо WSAEventSelect,
  * FD_WRITE/FD_CONNECT, thread handles и busy Sleep. Asio меняет только способ
  * ожидания readiness; порядок очереди, ownership и 10-секундная граница
  * сохраняются. DNS и malformed receive framing остаются service-specific
- * owner-ам, потому что их недоказанные края нельзя унифицировать здесь.
+ * владельцам, потому что их недоказанные края нельзя унифицировать здесь.
  */
 
 inline constexpr auto kClientConnectTimeout = std::chrono::seconds(10);

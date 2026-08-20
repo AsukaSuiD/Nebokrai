@@ -263,7 +263,7 @@ AuthDispatchStatus AuthMessageHandlers::OnGmKickPlayer(
         char detail[128]{};
         std::snprintf(detail,
                       sizeof(detail),
-                      "AuthServer : Invalid login server area id : %d!",
+                      "AuthServer: недопустимый идентификатор области LoginServer: %d!",
                       areaId);
         AddLegacyString(response.Base(), std::span<const std::uint8_t>(
                                              reinterpret_cast<const std::uint8_t*>(detail),

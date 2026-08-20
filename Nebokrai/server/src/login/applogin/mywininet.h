@@ -5,10 +5,10 @@
 #include <string>
 
 /*
- * Owner: loginserver/applogin/mywininet.cpp / mywininet.h
+ * Исходный владелец: loginserver/applogin/mywininet.cpp / mywininet.h
  *
  * Точная пара: LoginServer/loginserver.exe + LoginServer/LoginServer.pdb.
- * RVA: ctor 0x00425200, Init 0x00425250, Recv 0x004252D0,
+ * Подтверждённые RVA: конструктор 0x00425200, Init 0x00425250, Recv 0x004252D0,
  * Close 0x00425380, dtor 0x00425400, Send 0x00425440.
  *
  * WinInet является только платформенным HTTP transport. Linux-реконструкция
@@ -17,7 +17,7 @@
  * Init/Send возвращают 1 при успехе и 0 при ошибке, Recv даёт nullptr для
  * отсутствующего/пустого ответа, Close сбрасывает всё состояние. Запрос остаётся
  * POST, User-Agent "App", Accept "text/*" и Content-Type
- * application/x-www-form-urlencoded.
+ * Тип содержимого запроса: application/x-www-form-urlencoded.
  *
  * Старый Recv имел единственный char[1024]. Ответы, которые не помещаются в
  * безопасные 1023 bytes + NUL, теперь считаются технической transport-ошибкой,

@@ -17,10 +17,10 @@ class CMessage;
 }
 
 /*
- * Owner: loginserver/applogin/gasthread.cpp / gasthread.h
+ * Исходный владелец: loginserver/applogin/gasthread.cpp / gasthread.h
  *
  * Точная пара: LoginServer/loginserver.exe + LoginServer/LoginServer.pdb.
- * RVA: ctor 0x00420EB0, GetNickNameFromStrs 0x00420FA0,
+ * Подтверждённые RVA: конструктор 0x00420EB0, GetNickNameFromStrs 0x00420FA0,
  * AnalysisRet 0x00421080, MD5vec2str 0x004211C0,
  * FormContent 0x004212C0, CheckAcc 0x00421590, Run 0x00421720.
  *
@@ -35,7 +35,7 @@ class CMessage;
  * Технические части заменены библиотеками: CMyWinInet использует libcurl,
  * FormContent вычисляет MD5 через OpenSSL EVP. Оба password/sign hex в исходном
  * EXE lowercase; только итоговый sign hash upper-case, если
- * m_lVerifiSignUpper == 1.
+ * Условие: m_lVerifiSignUpper == 1.
  *
  * Старый MD5vec2str безусловно читал первые 16 bytes vector. Короткий digest,
  * невозможный MD5 и переполнение старых 512/1024 sprintf-буферов остаются
@@ -89,7 +89,7 @@ public:
     virtual void AddWorldInfoToMsg(LoginNet::CMessage& message,
                                    std::span<const std::uint8_t> account) = 0;
 
-    // PDB: bool CGame::ExecuteProce(std::string, std::string, char*, int).
+    // Сигнатура из PDB: bool CGame::ExecuteProce(std::string, std::string, char*, int).
     [[nodiscard]] virtual bool ExecuteProce(std::string nickname,
                                             std::string clientIp,
                                             char* passwordHex,

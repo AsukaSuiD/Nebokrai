@@ -27,7 +27,7 @@ struct RleDecodeResult
 };
 
 /*
- * Owner: nets/basemessage.h + nets/basemessage.cpp
+ * Исходный владелец: nets/basemessage.h + nets/basemessage.cpp
  *
  * Источник: точные EXE/PDB AuthServer, LoginServer, BillingServer, MiscServer,
  * GameServer и Nworldserver. Во всех шести вариантах подтверждён один базовый
