@@ -30,6 +30,11 @@ public:
     static void Initialize() noexcept;
     static void Uninitialize() noexcept;
     [[nodiscard]] static bool CreateGUID(CGUID& guid) noexcept;
+    [[nodiscard]] static constexpr CGUID
+    FromLegacyBytes(std::array<std::uint8_t, 16> bytes) noexcept
+    {
+        return FromBytes(bytes);
+    }
 
     [[nodiscard]] bool tostring(char* destination, std::size_t capacity) const noexcept;
     [[nodiscard]] bool IsInvalided() const noexcept;
