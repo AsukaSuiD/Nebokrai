@@ -34,11 +34,9 @@
 //! Rust `BTreeMap<CGuid, Box<CGoods>>` заменяет только STL hash storage и raw
 //! ownership. GUID остаётся ключом. Старый duplicate overwrite, `Clear` и
 //! проигнорированный false `Add` теряли прежний `CGoods*` без
-//! `GarbageCollect`; немедленный Rust `Drop` был бы исправлением поведения.
-//! Отдельный `detached_goods` quarantine поэтому удерживает такие товары до
-//! уничтожения Rust-owner-а, когда живых safe alias уже быть не может; он не
-//! объявляется полем старого ABI. Доказанный `CGoods` destructor не имеет
-//! внешних callback-эффектов.
+//! `GarbageCollect`. Это внутренний lifetime-дефект без наблюдаемого контракта:
+//! доказанный `CGoods` destructor не имеет внешних callback-эффектов, поэтому
+//! вытесненные и отклонённые товары теперь уничтожаются обычным Rust `Drop`.
 //!
 //! Старый hash-list traversal не является игровым порядком: каждая wire-запись
 //! содержит свой GUID внутри `CGoods`, decoder вставляет её обратно по GUID, а
@@ -102,8 +100,8 @@
 //! locked товар скрывается и не блокирует последующий hash overwrite. Non-null
 //! incoming после этого вставляется без factory-validation и без listener-
 //! callback. Debug-file заменён отсутствием технического log sink; success/
-//! rejection и state-переходы сохранены, displaced pointer уходит в ту же
-//! lifetime-quarantine.
+//! rejection и state-переходы сохранены, вытесненный pointer безопасно
+//! уничтожается как внутренний lifetime-дефект.
 //!
 //! Оставшийся `Clone` копирует сырые `CGoods*` shallow, а `AI` вызывает child-
 //! graph каждого товара через ещё не достигнутый `CBaseObject`; превращать их
@@ -181,11 +179,6 @@ pub(crate) struct CAmountLimitGoodsContainer {
     owner_type: i32,
     owner_id: i32,
     goods: BTreeMap<CGuid, Box<CGoods>>,
-    #[allow(
-        clippy::vec_box,
-        reason = "каждый потерянный CGoods* сохраняет отдельную heap-аллокацию и стабильный адрес"
-    )]
-    detached_goods: Vec<Box<CGoods>>,
     goods_amount_limit: u32,
     locked_goods: Vec<CGuid>,
 }
@@ -197,7 +190,6 @@ impl CAmountLimitGoodsContainer {
             owner_type: 0,
             owner_id: 0,
             goods: BTreeMap::new(),
-            detached_goods: Vec::new(),
             goods_amount_limit: 1,
             locked_goods: Vec::new(),
         }
@@ -272,12 +264,10 @@ impl CAmountLimitGoodsContainer {
         Ok(None)
     }
 
-    /// Вставляет raw DB/legacy pointer по GUID с quarantine старого значения.
+    /// Вставляет raw DB/legacy pointer по GUID и безопасно уничтожает вытесненный.
     pub(super) fn insert_unchecked(&mut self, goods: Box<CGoods>) {
         let ex_id = *goods.get_ex_id();
-        if let Some(displaced) = self.goods.insert(ex_id, goods) {
-            self.detached_goods.push(displaced);
-        }
+        let _ = self.goods.insert(ex_id, goods);
     }
 
     /// Вынимает unlocked товар по GUID и переносит ownership вызывающему.
@@ -291,8 +281,7 @@ impl CAmountLimitGoodsContainer {
 
     /// Очищает goods/locked storage, сохраняя owner и limit.
     pub(crate) fn clear(&mut self) {
-        self.detached_goods
-            .extend(std::mem::take(&mut self.goods).into_values());
+        self.goods.clear();
         self.locked_goods.clear();
     }
 
@@ -442,11 +431,6 @@ impl CAmountLimitGoodsContainer {
         self.goods.get_mut(ex_id).map(Box::as_mut)
     }
 
-    /// Удерживает factory-result, ownership которого legacy caller потерял.
-    pub(super) fn retain_detached_goods(&mut self, goods: Box<CGoods>) {
-        self.detached_goods.push(goods);
-    }
-
     /// Кодирует valid-count и полные товары в container wire.
     pub(crate) fn serialize(
         &self,
@@ -477,10 +461,8 @@ impl CAmountLimitGoodsContainer {
         self.clear();
         let count = read_amount_u32(source, cursor, "goods count")?;
         for _ in 0..count {
-            if let Some(goods) = unserialize_goods(source, cursor, registry)?
-                && let Some(rejected) = self.add(goods, registry)?
-            {
-                self.detached_goods.push(rejected);
+            if let Some(goods) = unserialize_goods(source, cursor, registry)? {
+                let _ = self.add(goods, registry)?;
             }
         }
         Ok(true)

@@ -101,7 +101,7 @@ impl CFairyContainer {
         self.volume_state.find(ex_id)
     }
 
-    /// Делегирует folded volume removal с factory/cell/quarantine порядком.
+    /// Делегирует folded volume removal с точным factory/cell порядком.
     pub(crate) fn remove(
         &mut self,
         ex_id: &CGuid,

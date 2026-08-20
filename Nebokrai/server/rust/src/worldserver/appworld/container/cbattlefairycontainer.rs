@@ -19,8 +19,8 @@
 //! vtable, secondary listener, STL и EH cleanup без копирования x86 layout.
 //!
 //! Собственные codec-функции являются точными тонкими вызовами volume-codec-а:
-//! wire, `include_child`, bool-result, ранний `Clear`, cursor, quarantine
-//! rejected goods и typed `BLOCKED_MISSING_FACT`-границы не меняются.
+//! wire, `include_child`, bool-result, ранний `Clear`, cursor, безопасное
+//! уничтожение rejected goods и typed `BLOCKED_MISSING_FACT`-границы не меняются.
 //! `Clear` всегда передаёт base literal `nullptr`, а `Release` прямо делегирует
 //! base. Короткий source поэтому сохраняет очищенный container, прежний volume,
 //! cursor и уже добавленные records по контракту volume-owner-а.

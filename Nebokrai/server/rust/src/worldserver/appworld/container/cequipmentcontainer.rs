@@ -497,10 +497,8 @@ impl CVolumeLimitGoodsContainer {
         let count = read_volume_u32(source, cursor, "goods count")?;
         for _ in 0..count {
             let position = read_volume_u32(source, cursor, "cell index")?;
-            if let Some(goods) = unserialize_goods(source, cursor, registry)?
-                && let Some(rejected) = self.add_at(position, goods, registry)?
-            {
-                self.retain_rejected_goods(rejected);
+            if let Some(goods) = unserialize_goods(source, cursor, registry)? {
+                let _ = self.add_at(position, goods, registry)?;
             }
         }
         Ok(true)
@@ -604,7 +602,7 @@ fn read_equipment_u32(
 // PROTOTYPE: int __thiscall Unserialize(uchar * param_1, long * param_2, int param_3)
 //
 // IMPLEMENTED выше для обоих folded symbols; `param_3` не читается, а rejected
-// positional Add остаётся в lifetime-quarantine concrete owner-а.
+// positional Add безопасно уничтожается обычным `Drop`.
 
 // ============================================================================
 // FUNCTION: CEquipmentContainer::Clear
@@ -617,7 +615,7 @@ fn read_equipment_u32(
 // PROTOTYPE: void __thiscall Clear(void * param_1)
 //
 // IMPLEMENTED выше; no-op removed callbacks не меняют состояние, а потерянные
-// legacy pointers переходят в lifetime-quarantine.
+// legacy pointers безопасно уничтожаются обычным `Drop`.
 
 // ============================================================================
 // FUNCTION: CEquipmentContainer::Release

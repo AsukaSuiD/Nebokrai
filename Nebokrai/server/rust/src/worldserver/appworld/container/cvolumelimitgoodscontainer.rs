@@ -41,8 +41,8 @@
 //! выполняет exact base stacking: base index, particular attribute, stacking
 //! limit и unsigned capacity проверяются в исходном порядке. False возвращает
 //! rejected `Box` Rust-вызывающему; decoder, который исходно игнорировал bool,
-//! переносит его в уже готовый lifetime-quarantine base-owner-а. Успех меняет
-//! amount существующего товара и уничтожает incoming. Автоматический
+//! безопасно уничтожает его обычным `Drop`. Успех меняет amount существующего
+//! товара и уничтожает incoming. Автоматический
 //! `Add(CBaseObject*)` теперь использует достигнутый поиск stack/empty позиции.
 //!
 //! Serialize helper пишет для каждого valid товара его первый cell index и
@@ -75,18 +75,18 @@
 //! затем проверяет base-properties, ищет первый GUID cell и обнуляет его. Это
 //! отличается и от нового C++ reference, очищающего cell до base removal, и от
 //! Linux-донора, ищущего cell первым. При post-remove отказе legacy pointer уже
-//! терялся; Rust оставляет такой `Box<CGoods>` в lifetime-quarantine, сохраняя
-//! невидимость для вызывающего без преждевременного destructor-а. Контекст и
-//! RTTI удалены только потому, что единственные достигнутые callbacks no-op, а
-//! owner typed как `CGoods`.
+//! терялся; Rust исправляет этот внутренний lifetime-дефект обычным `Drop`, не
+//! меняя уже совершённое удаление или возвращаемый результат. Контекст и RTTI
+//! удалены только потому, что единственные достигнутые callbacks no-op, а owner
+//! typed как `CGoods`.
 //!
 //! `AddFromDB` намеренно не делегирует обычному Add: сначала cell-`GetGoods`
 //! отличает unlocked collision для legacy debug-log, затем проверяются non-null
 //! incoming, `IsSpaceEnough` и factory lookup; amount-full и stacking здесь не
 //! участвуют. Успех напрямую вставляет GUID owner и заполняет cell без listener-
 //! callback. Rust возвращает rejected `Box` вместо сырого false, сохраняет
-//! duplicate overwrite через quarantine и не материализует технический
-//! `debug-DB` file sink.
+//! duplicate overwrite с безопасным уничтожением вытесненного товара и не
+//! материализует технический `debug-DB` file sink.
 //!
 //! Оставшийся `Clone` наследует небезопасный shallow copy `CGoods*` amount-
 //! owner-а и дописывает только size/cells; `AI` наследует недостигнутый child-
@@ -345,16 +345,13 @@ impl CVolumeLimitGoodsContainer {
         };
 
         let Some(index) = goods.get_base_properties_index() else {
-            self.amount_base.retain_detached_goods(goods);
             return Err(GoodsCodecError::MissingBasePropertiesIndex.into());
         };
         if query_goods_base_properties(registry, index).is_none() {
-            self.amount_base.retain_detached_goods(goods);
             return Ok(None);
         }
 
         let Some(position) = self.query_goods_position(ex_id) else {
-            self.amount_base.retain_detached_goods(goods);
             return Ok(None);
         };
         self.cells[position as usize] = CGuid::GUID_INVALID;
@@ -373,7 +370,6 @@ impl CVolumeLimitGoodsContainer {
         }
 
         let Some(index) = goods.get_base_properties_index() else {
-            self.amount_base.retain_detached_goods(goods);
             return Err(GoodsCodecError::MissingBasePropertiesIndex.into());
         };
         if query_goods_base_properties(registry, index).is_none() {
@@ -440,11 +436,6 @@ impl CVolumeLimitGoodsContainer {
             }
         }
         Ok(true)
-    }
-
-    /// Удерживает rejected factory-result как потерянный legacy pointer.
-    pub(super) fn retain_rejected_goods(&mut self, goods: Box<CGoods>) {
-        self.amount_base.retain_detached_goods(goods);
     }
 }
 
@@ -623,7 +614,7 @@ impl CVolumeLimitGoodsContainer {
 //
 // IMPLEMENTED выше; exact порядок amount removal -> typed result -> factory
 // lookup -> first cell query -> `GUID_INVALID` сохранён. Post-remove false
-// удерживает потерянное ownership в quarantine и не очищает cell.
+// безопасно уничтожает уже вынутое ownership и не очищает cell.
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::IsFull

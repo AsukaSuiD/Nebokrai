@@ -282,7 +282,7 @@ impl CDepot {
 // PROTOTYPE: CBaseObject * __thiscall Remove(CGUID * param_1, void * param_2)
 //
 // IMPLEMENTED выше; lock возвращает `None`, unlocked сохраняет весь base
-// removal/factory/cell/quarantine порядок.
+// removal/factory/cell порядок и безопасный `Drop` потерянного legacy pointer.
 
 // ============================================================================
 // FUNCTION: CDepot::~CDepot
