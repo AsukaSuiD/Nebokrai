@@ -1,9 +1,11 @@
 //! Владелец depot-container исторического `WorldServer`.
 //!
 //! Статус constructor/destructor-state RVA `0x000D7D70/0x000D7E00`,
-//! `Clear/Release` RVA `0x000D7D90/0x000D7DB0` и унаследованного volume-codec
-//! RVA `0x000DA7D0/0x000D8DA0` — `IMPLEMENTED`; lock-gated игровые операции
-//! `Add/Find/Remove/AddFromDB` ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `Clear/Release` RVA `0x000D7D90/0x000D7DB0`, lock-gated
+//! `Add/Add(position)/Find/Remove/AddFromDB` RVA
+//! `0x000D7DC0/0x000D7DD0/0x000D7DE0/0x000D7DF0/0x000D7E80` и
+//! унаследованного volume-codec RVA `0x000DA7D0/0x000D8DA0` — `IMPLEMENTED`.
+//! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -28,13 +30,20 @@
 //! Volume `0xA1` не является constructor-состоянием `CDepot`. Его задаёт
 //! точный `CPlayer::DecordFromByteArray` после отдельного virtual `Release` и
 //! до унаследованного decoder-а; будущая композиция player-codec обязана
-//! сохранить этот порядок. `Lock/Unlock`, `IsExtentionItemPos`,
-//! `IsActivedOrOldPos` и lock-gated игровые пути не требуются clone-границе и
-//! не получают реализации только по именам PDB.
+//! сохранить этот порядок.
+//!
+//! Lock-гейт проверяется до обоих Add, Find и Remove. `AddFromDB` сначала
+//! вызывает virtual cell-`GetGoods`; только при отсутствии unlocked collision
+//! проверяет lock и делегирует достигнутому volume DB-path. Это сохраняет
+//! literal `0` при lock/collision и base-result при успехе; старый `debug-DB`
+//! file sink технически не материализуется. Typed `Box<CGoods>` возвращается
+//! вызывающему при false вместо неявного сырого ownership.
 
 use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use super::cvolumelimitgoodscontainer::{CVolumeLimitGoodsContainer, VolumeContainerCodecError};
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
+use crate::public::guid::CGuid;
+use crate::worldserver::appworld::goods::cgoods::CGoods;
 
 /// Достигнутое состояние исходного `CDepot`, не копия его 32-битного ABI.
 pub(crate) struct CDepot {
@@ -67,6 +76,72 @@ impl CDepot {
     pub(crate) fn release(&mut self) {
         self.locked = false;
         self.volume_state.release();
+    }
+
+    /// Делегирует automatic Add только для unlocked depot-а.
+    pub(crate) fn add(
+        &mut self,
+        goods: Box<CGoods>,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, VolumeContainerCodecError> {
+        if self.locked {
+            return Ok(Some(goods));
+        }
+        self.volume_state.add(goods, registry)
+    }
+
+    /// Делегирует positional Add только для unlocked depot-а.
+    pub(crate) fn add_at(
+        &mut self,
+        position: u32,
+        goods: Box<CGoods>,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, VolumeContainerCodecError> {
+        if self.locked {
+            return Ok(Some(goods));
+        }
+        self.volume_state.add_at(position, goods, registry)
+    }
+
+    /// Скрывает весь depot при lock, иначе выполняет inherited GUID lookup.
+    pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
+        if self.locked {
+            return None;
+        }
+        self.volume_state.find(ex_id)
+    }
+
+    /// Выражает inherited cell lookup через virtual lock-gated `Find`.
+    pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
+        if self.locked {
+            return None;
+        }
+        self.volume_state.get_goods(position)
+    }
+
+    /// Вынимает товар только из unlocked depot-а.
+    pub(crate) fn remove(
+        &mut self,
+        ex_id: &CGuid,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, VolumeContainerCodecError> {
+        if self.locked {
+            return Ok(None);
+        }
+        self.volume_state.remove(ex_id, registry)
+    }
+
+    /// Сохраняет collision-before-lock порядок derived DB insertion.
+    pub(crate) fn add_from_db(
+        &mut self,
+        position: u32,
+        goods: Box<CGoods>,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, VolumeContainerCodecError> {
+        if self.get_goods(position).is_some() || self.locked {
+            return Ok(Some(goods));
+        }
+        self.volume_state.add_from_db(position, goods, registry)
     }
 
     /// Проверяет точные amount/cell границы унаследованного container-а.
@@ -161,7 +236,7 @@ impl CDepot {
 
 // ============================================================================
 // FUNCTION: CDepot::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cdepot.cpp:55
@@ -169,11 +244,12 @@ impl CDepot {
 // ADDRESS: 004d7dc0
 // PROTOTYPE: int __thiscall Add(CBaseObject * param_1, void * param_2)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
+// IMPLEMENTED выше; locked возвращает rejected `Box`, unlocked tail-call
+// выражен прямым typed делегированием automatic volume Add.
 
 // ============================================================================
 // FUNCTION: CDepot::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cdepot.cpp:68
@@ -181,11 +257,11 @@ impl CDepot {
 // ADDRESS: 004d7dd0
 // PROTOTYPE: int __thiscall Add(ulong param_1, CGoods * param_2, void * param_3)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
+// IMPLEMENTED выше как `add_at`; position и base stacking-contract сохранены.
 
 // ============================================================================
 // FUNCTION: CDepot::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cdepot.cpp:145
@@ -193,11 +269,11 @@ impl CDepot {
 // ADDRESS: 004d7de0
 // PROTOTYPE: CBaseObject * __thiscall Find(CGUID * param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
+// IMPLEMENTED выше; lock скрывает весь inherited GUID owner.
 
 // ============================================================================
 // FUNCTION: CDepot::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cdepot.cpp:157
@@ -205,7 +281,8 @@ impl CDepot {
 // ADDRESS: 004d7df0
 // PROTOTYPE: CBaseObject * __thiscall Remove(CGUID * param_1, void * param_2)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
+// IMPLEMENTED выше; lock возвращает `None`, unlocked сохраняет весь base
+// removal/factory/cell/quarantine порядок.
 
 // ============================================================================
 // FUNCTION: CDepot::~CDepot
@@ -221,7 +298,7 @@ impl CDepot {
 
 // ============================================================================
 // FUNCTION: CDepot::AddFromDB
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cdepot.cpp:81
@@ -229,6 +306,9 @@ impl CDepot {
 // ADDRESS: 004d7e80
 // PROTOTYPE: int __thiscall AddFromDB(CGoods * param_1, ulong param_2)
 //
+// IMPLEMENTED выше; derived `GetGoods` сохраняет virtual lock-gated Find,
+// затем unlocked путь возвращает exact результат volume `add_from_db`.
+// Collision `debug-DB` log технически опущен без изменения state/return.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
