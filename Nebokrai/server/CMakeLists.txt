@@ -82,3 +82,11 @@ target_link_libraries(nebokrai_loginserver
     PRIVATE
         Nebokrai::Server
         spdlog::spdlog)
+
+add_executable(nebokrai_billingserver
+    apps/billingserver/main.cpp)
+
+target_link_libraries(nebokrai_billingserver
+    PRIVATE
+        Nebokrai::Server
+        spdlog::spdlog)
