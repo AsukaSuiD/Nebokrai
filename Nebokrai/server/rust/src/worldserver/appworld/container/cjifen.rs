@@ -5,14 +5,15 @@
 //! и `Clear/QueryGoodsPosition/Find/Remove` RVA
 //! `0x000D8670/0x000D8350/0x000D8370/0x000D87C0/0x000D8A10`, traversal RVA
 //! `0x000D8690`, а также constructor/destructor-state `CJiFen`
-//! RVA `0x000D8280/0x000D82E0` и его folded container-контракт —
-//! `IMPLEMENTED`; остальные wallet-операции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
-//! Точная пара:
+//! RVA `0x000D8280/0x000D82E0`, собственные query/add-family RVA
+//! `0x000D8240/0x000D8260/0x000D83C0/0x000D8520/0x000D85C0/0x000D8600`
+//! и его folded container-контракт — `IMPLEMENTED`; остальные операции ниже
+//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
 //! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cjifen.cpp:18,34,124,133,142,180,193,236,261,273,289,322,336`.
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cjifen.cpp:18,34,41,55,82,124,133,142,180,193,211,224,236,247,261,273,289,322,336`.
 //!
 //! Wallet хранит не коллекцию, а один nullable `CGoods*`. Wire начинается с
 //! одного marker-байта: `0` завершает запись, любое ненулевое значение включает
@@ -42,6 +43,14 @@
 //! `Option<Box<CGoods>>` и `Drop` заменяют nullable pointer, `GarbageCollect`,
 //! deleting-destructor и EH cleanup; listener callbacks — общий доказанный
 //! no-op RVA `0x000DBD10`.
+//!
+//! Собственные операции отличаются только resolved JiFen-index. Exact
+//! `GetJiFenIndex` получает original name через StringTable ID `WS0110`, но
+//! process-global `CGame/StringTable` не переносится: Rust принимает уже
+//! разрешённый индекс. Как и wallet, пустой slot принимает товар без проверки
+//! currency index, а занятый разрешает stacking только для JiFen. Legacy
+//! `GetGoods(index, vector)` снова уничтожает vector-by-value; этот внутренний
+//! бесполезный дефект исправлен возвращаемым iterator-ом при том же критерии.
 
 use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsfactory::{GoodsBasePropertiesRegistry, unserialize_goods};
@@ -89,6 +98,84 @@ impl CJiFen {
     /// Возвращает число занятых slot-ов: ноль либо один.
     pub(crate) const fn get_goods_amount(&self) -> u32 {
         self.wallet_state.get_goods_amount()
+    }
+
+    /// Проверяет наличие slot-а для resolved JiFen-index.
+    pub(crate) fn is_goods_existed(&self, base_properties_index: u32, ji_fen_index: u32) -> bool {
+        self.wallet_state
+            .is_goods_existed(base_properties_index, ji_fen_index)
+    }
+
+    /// Возвращает единственный slot только для resolved JiFen-index.
+    pub(crate) fn get_the_first_goods(
+        &self,
+        base_properties_index: u32,
+        ji_fen_index: u32,
+    ) -> Option<&CGoods> {
+        self.wallet_state
+            .get_the_first_goods(base_properties_index, ji_fen_index)
+    }
+
+    /// Возвращает usable iterator вместо legacy vector-by-value копии.
+    pub(crate) fn get_goods_by_base_index(
+        &self,
+        base_properties_index: u32,
+        ji_fen_index: u32,
+    ) -> impl Iterator<Item = &CGoods> {
+        self.wallet_state
+            .get_goods_by_base_index(base_properties_index, ji_fen_index)
+    }
+
+    /// Делегирует positional `Add` с отдельным resolved JiFen-index.
+    pub(crate) fn add_at(
+        &mut self,
+        position: u32,
+        goods: Box<CGoods>,
+        ji_fen_index: u32,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, GoodsCodecError> {
+        self.wallet_state
+            .add_at(position, goods, ji_fen_index, registry)
+    }
+
+    /// Делегирует object-перегрузку exact позиции `0`.
+    pub(crate) fn add(
+        &mut self,
+        goods: Box<CGoods>,
+        ji_fen_index: u32,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, GoodsCodecError> {
+        self.wallet_state.add(goods, ji_fen_index, registry)
+    }
+
+    /// Вставляет DB-товар через positional collision-check без factory-validation.
+    pub(crate) fn add_from_db(&mut self, position: u32, goods: Box<CGoods>) -> Option<Box<CGoods>> {
+        self.wallet_state.add_from_db(position, goods)
+    }
+
+    /// Ищет товар по полному GUID в отдельном nominal owner-е.
+    pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
+        self.wallet_state.find(ex_id)
+    }
+
+    /// Передаёт ownership совпавшего товара вызывающему.
+    pub(crate) fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
+        self.wallet_state.remove(ex_id)
+    }
+
+    /// Запрашивает позицию non-null объекта через его GUID.
+    pub(crate) fn query_goods_position_by_object(&self, goods: Option<&CGoods>) -> Option<u32> {
+        self.wallet_state.query_goods_position_by_object(goods)
+    }
+
+    /// Возвращает позицию `0` при полном GUID-совпадении.
+    pub(crate) fn query_goods_position(&self, ex_id: &CGuid) -> Option<u32> {
+        self.wallet_state.query_goods_position(ex_id)
+    }
+
+    /// Делегирует folded traversal общему safe listener trait-у.
+    pub(crate) fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
+        self.wallet_state.traversing_container(listener);
     }
 
     /// Замораживает единственный folded wallet-slot для DB traversal.
@@ -339,7 +426,7 @@ impl CWallet {
 
 // ============================================================================
 // FUNCTION: CJiFen::IsGoodsExisted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cjifen.cpp:211
@@ -347,13 +434,14 @@ impl CWallet {
 // ADDRESS: 004d8240
 // PROTOTYPE: int __thiscall IsGoodsExisted(ulong param_1)
 //
+// IMPLEMENTED выше; resolved JiFen-index передаётся явно.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CJiFen::GetTheFirstGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cjifen.cpp:224
@@ -361,6 +449,7 @@ impl CWallet {
 // ADDRESS: 004d8260
 // PROTOTYPE: CGoods * __thiscall GetTheFirstGoods(ulong param_1)
 //
+// IMPLEMENTED выше; пустой slot остаётся `None`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -423,7 +512,7 @@ impl CWallet {
 
 // ============================================================================
 // FUNCTION: CJiFen::AddFromDB
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cjifen.cpp:82
@@ -431,13 +520,15 @@ impl CWallet {
 // ADDRESS: 004d83c0
 // PROTOTYPE: int __thiscall AddFromDB(CGoods * param_1, ulong param_2)
 //
+// IMPLEMENTED выше через достигнутый single-slot DB helper; debug logging
+// исключён как технический side effect.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CJiFen::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cjifen.cpp:55
@@ -445,13 +536,14 @@ impl CWallet {
 // ADDRESS: 004d8520
 // PROTOTYPE: int __thiscall Add(ulong param_1, CGoods * param_2, void * param_3)
 //
+// IMPLEMENTED выше с resolved JiFen-index и общим exact stacking helper-ом.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CJiFen::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cjifen.cpp:41
@@ -459,13 +551,14 @@ impl CWallet {
 // ADDRESS: 004d85c0
 // PROTOTYPE: int __thiscall Add(CBaseObject * param_1, void * param_2)
 //
+// IMPLEMENTED выше как typed `CGoods` API с позицией `0`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CJiFen::GetGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cjifen.cpp:247
@@ -473,6 +566,8 @@ impl CWallet {
 // ADDRESS: 004d8600
 // PROTOTYPE: void __thiscall GetGoods(ulong param_1, vector<CGoods*,std::allocator<CGoods*>_> param_2)
 //
+// IMPLEMENTED выше как возвращаемый iterator; внутренний vector-by-value defect
+// исправлен без изменения фильтра JiFen-index.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
