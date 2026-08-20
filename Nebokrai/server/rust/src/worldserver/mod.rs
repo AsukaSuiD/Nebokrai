@@ -88,6 +88,11 @@ pub(crate) mod appworld {
         pub(crate) mod countrywarsys;
     }
     pub(crate) mod goods {
+        #[allow(
+            dead_code,
+            reason = "battle-fairy compose owner подключён перед reload context wiring"
+        )]
+        pub(crate) mod cbattlefairyproperty;
         pub(crate) mod cgoods;
         #[allow(
             dead_code,
