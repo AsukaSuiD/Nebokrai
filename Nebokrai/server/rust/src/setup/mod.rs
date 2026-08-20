@@ -2,6 +2,11 @@
 
 pub(crate) mod emotion;
 pub(crate) mod hitlevelsetup;
+#[allow(
+    dead_code,
+    reason = "increment-shop serializer подключён к initial-config до LoadItems"
+)]
+pub(crate) mod incrementshoplist;
 pub(crate) mod monsterlist;
 pub(crate) mod playerlist;
 #[allow(
