@@ -6,6 +6,7 @@
 //! `CGame::ReConnectLoginServer` RVA `0x00003280` и
 //! `CGame::SendCdkeyToLoginServer` RVA `0x000083D0`,
 //! `CGame::SendMsg2GameServer` RVA `0x00001B10`,
+//! `CGame::SendGlobeVariableToGS` RVA `0x000017E0`,
 //! `CGame::LoadServerSetup` RVA `0x00013850`, полный `CGame::Init` RVA
 //! `0x00018EE0`, `CGame::SaveCityRegion` RVA `0x00008750`,
 //! `CGame::ClearMapPlayer` RVA `0x0000D450`, полный `CGame::Release` RVA
@@ -81,6 +82,16 @@
 //! ping-tick. Остальные достигнутые
 //! numeric/bool члены исходно не инициализированы; `Option` сохраняет эту
 //! границу и не назначает ей выдуманный ноль.
+//!
+//! Исключение сделано только для `m_GlobeVariable` по итогам точной проверки
+//! всего EXE. PDB задаёт четыре signed `long` по `CGame+0x04..+0x13`, точный
+//! конструктор `0x00415210` после vtable сразу начинает `m_mPlayer` с `+0x14`,
+//! а полный проход декомпиляции и ссылок не нашёл записей в эти 16 байт.
+//! Единственный настоящий потребитель, `SendGlobeVariableToGS` `0x004017E0`,
+//! копирует их как сырой payload `0x7F80D`. Старый сервер тем самым выдавал
+//! наружу недетерминированную память, а не устойчивую Miracle-семантику. Rust
+//! исправляет эту ошибку работы с памятью четырьмя нулями; явное little-endian кодирование
+//! сохраняет доказанные размер, порядок полей и wire framing без `unsafe`.
 //!
 //! `GetFactionById` не использует `this`: он возвращает null при ID `0` либо
 //! отсутствующем singleton-е, иначе делегирует signed ID точному
@@ -3916,6 +3927,34 @@ pub(crate) struct WorldGameServerEntry {
     pub(crate) received_player_data: Option<i32>,
 }
 
+/// Безопасное содержимое точного 16-байтового `CGame::tagGlobeVariable`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct WorldGlobeVariables {
+    pub(crate) world_cap_team_1: i32,
+    pub(crate) world_cap_team_2: i32,
+    pub(crate) world_cap_team_3: i32,
+    pub(crate) world_cap_team_4: i32,
+}
+
+impl WorldGlobeVariables {
+    fn values(self) -> [i32; 4] {
+        [
+            self.world_cap_team_1,
+            self.world_cap_team_2,
+            self.world_cap_team_3,
+            self.world_cap_team_4,
+        ]
+    }
+}
+
+/// Результат точной отправки `CGame::SendGlobeVariableToGS`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldGlobeVariablesDelivery {
+    pub(crate) socket_id: i32,
+    pub(crate) variables: WorldGlobeVariables,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
 /// Точная достигнутая семантика полей исходного `CGame::tagLoginPlayer`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct WorldLoginPlayerEntry {
@@ -4233,6 +4272,7 @@ impl fmt::Display for WorldCreationPlayerAppendLog {
 /// Достигнутая setup-часть исходного `CGame`; другие поля добавляются owners.
 pub(crate) struct CGame {
     setup: WorldSetup,
+    globe_variables: WorldGlobeVariables,
     net_client: Option<CMyNetClient>,
     net_server: Option<CMyNetServer>,
     regions: BTreeMap<i32, WorldRegionAssignment>,
@@ -4283,6 +4323,7 @@ impl CGame {
     pub(crate) fn new() -> Self {
         Self {
             setup: WorldSetup::for_game(),
+            globe_variables: WorldGlobeVariables::default(),
             net_client: None,
             net_server: None,
             regions: BTreeMap::new(),
@@ -9097,6 +9138,24 @@ impl CGame {
         self.net_server.as_ref().map(CMyNetServer::command_handle)
     }
 
+    /// Публикует `0x7F80D` с четырьмя последовательными signed Windows `long`.
+    pub(crate) fn send_globe_variables_to_game_server(
+        &self,
+        socket_id: i32,
+    ) -> WorldGlobeVariablesDelivery {
+        let mut message = CMessage::new(0x0007_F80D);
+        for value in self.globe_variables.values() {
+            message.base_mut().add_long(value);
+        }
+        let sender = self.current_game_server_sender();
+        let delivery = message.send_to_socket(sender.as_ref(), socket_id);
+        WorldGlobeVariablesDelivery {
+            socket_id,
+            variables: self.globe_variables,
+            delivery,
+        }
+    }
+
     /// Считает все подключённые GameServer в исходном ordered registry.
     pub(crate) fn connected_game_server_count(&self) -> i32 {
         self.game_servers
@@ -10641,19 +10700,10 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ============================================================================
 // IMPLEMENTED: `GetGame` RVA `0x000017A0` находится выше; nullable global pointer заменён заимствованием из owned slot.
 
-// ============================================================================
-// FUNCTION: CGame::SendGlobeVariableToGS
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:779
-// RVA: 0x000017E0
-// ADDRESS: 004017e0
-// PROTOTYPE: void __thiscall SendGlobeVariableToGS(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CGame::SendGlobeVariableToGS` RVA `0x000017E0` находится
+// выше. Точный конструктор и полный проход ссылок доказали отсутствие producer-а
+// четырёх исходно неинициализированных `long`; безопасная замена нулями описана
+// owner-комментарием.
 
 // IMPLEMENTED: `CGame::SendMsg2GameServer` RVA `0x00001B10` находится выше.
 
@@ -11492,8 +11542,6 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
 
 // ============================================================================
 // FUNCTION: FUN_0053bc30
