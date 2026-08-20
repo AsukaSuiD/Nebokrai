@@ -78,6 +78,8 @@
 //! оба ordered registry кодируются им в пакет `0x7F801/2`, после чего точной
 //! следующей границей остаётся `CHitLevelSetup`. Это адресный send только
 //! подключившемуся socket; его результат также не управляет продолжением.
+//! `CHitLevelSetup` затем строит `0x7F801/0x14` из своего восстановленного
+//! `count + 12-byte records` owner-а и переводит ветку к `CPlayerList`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -136,6 +138,7 @@ use crate::nets::basemessage::CBaseMessage;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::networld::mynetclient::CMyNetClient;
 use crate::nets::servers::ServerCommandHandle;
+use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelSerializeError};
 use crate::setup::monsterlist::{
     MonsterDropRegistry, MonsterListSerializeError, MonsterRegistry, serialize_monster_list,
 };
@@ -297,6 +300,20 @@ pub(crate) enum WorldMonsterConfigurationCompletion {
 pub(crate) struct WorldMonsterConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldMonsterConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после `CHitLevelSetup`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldHitLevelConfigurationCompletion {
+    HitLevelSetup(HitLevelSerializeError),
+    PlayerListPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/0x14` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldHitLevelConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldHitLevelConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -909,6 +926,32 @@ pub(crate) fn continue_game_server_monster_configuration(
             &payload,
         )),
         completion: WorldMonsterConfigurationCompletion::HitLevelSetupPending { socket_id },
+    }
+}
+
+/// Кодирует и отправляет точный `CHitLevelSetup` initial-config packet.
+pub(crate) fn continue_game_server_hit_level_configuration(
+    game: &CGame,
+    socket_id: i32,
+    hit_levels: &CHitLevelSetup,
+) -> WorldHitLevelConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = hit_levels.add_to_byte_array(&mut payload) {
+        return WorldHitLevelConfigurationReport {
+            delivery: None,
+            completion: WorldHitLevelConfigurationCompletion::HitLevelSetup(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldHitLevelConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x14,
+            &payload,
+        )),
+        completion: WorldHitLevelConfigurationCompletion::PlayerListPending { socket_id },
     }
 }
 
