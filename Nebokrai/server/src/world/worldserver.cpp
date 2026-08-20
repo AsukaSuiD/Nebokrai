@@ -591,6 +591,75 @@ void CWorldServer::HandlePlayerMessage(WorldNet::CMessage& message)
     static_cast<void>(message.SendAll(&sender));
 }
 
+bool CWorldServer::SendInitialGameServerState(
+    const std::int32_t socketId,
+    const CGame::GameServerInfo& gameServer)
+{
+    if (!m_Server || socketId <= 0) return false;
+    const auto sender = m_Server->CommandHandle();
+    const auto sent = [&](const WorldNet::CMessage& message) {
+        const auto result = message.SendToSocket(&sender, socketId);
+        return std::holds_alternative<std::int32_t>(result) &&
+               std::get<std::int32_t>(result) != 0;
+    };
+    const auto sendSetup = [&](const std::int32_t subtype,
+                               const std::vector<std::uint8_t>& payload) {
+        WorldNet::CMessage message(0x0007F801);
+        message.Add(subtype);
+        if (!payload.empty()) message.Add(payload.data(), static_cast<std::int32_t>(payload.size()));
+        return sent(message);
+    };
+
+    WorldNet::CMessage globe(0x0007F80D);
+    const auto& variables = m_Game->GlobeVariables();
+    globe.Add(&variables, sizeof(variables));
+    if (!sent(globe)) return false;
+
+    std::vector<std::uint8_t> payload;
+    if (!m_Game->Strings().Serialize(payload) || !sendSetup(0x2F, payload)) return false;
+
+    payload.clear();
+    if (!m_Game->CountryParameters().AddToByteArray(payload) ||
+        !sendSetup(0x18, payload)) return false;
+
+    for (const CGame::RegionRoute& route : m_Game->RegionRoutes()) {
+        payload.clear();
+        if (route.gameServerIndex == gameServer.index) {
+            if (!route.region->AddToByteArray(payload, true)) {
+                spdlog::error("WorldServer: регион {} не готов к полной сериализации",
+                              route.region->GetID());
+                return false;
+            }
+            WorldNet::CMessage region(0x0007F801);
+            region.Add(0x0E);
+            region.Add(static_cast<std::int32_t>(route.type));
+            if (!payload.empty()) region.Add(payload.data(), static_cast<std::int32_t>(payload.size()));
+            if (!sent(region)) return false;
+        } else {
+            if (!route.region->AddToByteArrayForProxy(payload, true) ||
+                !sendSetup(0x0F, payload)) {
+                spdlog::error("WorldServer: регион {} не готов к proxy-сериализации",
+                              route.region->GetID());
+                return false;
+            }
+        }
+    }
+
+    payload.clear();
+    if (!m_Game->Variables().Serialize(payload) || !sendSetup(0x0C, payload)) return false;
+
+    WorldNet::CMessage index(0x0007F801);
+    index.Add(0x12);
+    index.Add(static_cast<std::uint8_t>(gameServer.index));
+    if (!sent(index)) return false;
+
+    WorldNet::CMessage identity(0x0007F801);
+    identity.Add(0x3B);
+    identity.Add(m_Game->LoginServerId());
+    identity.Add(m_Game->GetSetup().number);
+    return sent(identity);
+}
+
 void CWorldServer::HandleServerMessage(WorldNet::CMessage& message)
 {
     const auto sender = m_Server ? std::optional(m_Server->CommandHandle()) : std::nullopt;
@@ -679,6 +748,14 @@ void CWorldServer::HandleServerMessage(WorldNet::CMessage& message)
             break;
         }
         server->connected = true;
+        if (!reconnect && !SendInitialGameServerState(message.SocketID(), *server)) {
+            server->connected = false;
+            const auto control = m_Server->CommandHandle();
+            static_cast<void>(control.QuitByMapID(static_cast<std::int32_t>(server->index)));
+            spdlog::error("WorldServer: начальная синхронизация GameServer {} не завершена",
+                          server->index);
+            break;
+        }
         spdlog::info("WorldServer: GameServer {} зарегистрирован как MapID {}{}",
                      host, server->index, reconnect ? " после переподключения" : "");
         break;

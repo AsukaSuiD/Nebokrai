@@ -91,6 +91,17 @@ public:
         std::int32_t mapId{};
         std::int32_t players{};
     };
+    struct GlobeVariable {
+        std::int32_t worldCupTeam1{};
+        std::int32_t worldCupTeam2{};
+        std::int32_t worldCupTeam3{};
+        std::int32_t worldCupTeam4{};
+    };
+    struct RegionRoute {
+        const CWorldRegion* region{};
+        std::uint32_t gameServerIndex{};
+        RegionType type{};
+    };
 
     enum class PlayerState { Creation, Login, Online, Offline };
     struct LoopResult { std::size_t messages{}; bool aiRan{}; };
@@ -126,6 +137,7 @@ public:
     [[nodiscard]] WorldMessageHandlers& MessageHandlers() noexcept { return m_MessageHandlers; }
     [[nodiscard]] CSessionFactory& Sessions() noexcept { return m_Sessions; }
     [[nodiscard]] const StringTable& Strings() const noexcept { return m_Strings; }
+    [[nodiscard]] const GlobeVariable& GlobeVariables() const noexcept { return m_GlobeVariables; }
 
     bool AddRegion(std::unique_ptr<CWorldRegion>, std::uint32_t gameServerIndex,
                    RegionType type);
@@ -133,6 +145,7 @@ public:
     [[nodiscard]] CWorldRegion* GetRegion(std::int32_t regionId) noexcept;
     [[nodiscard]] const CWorldRegion* GetRegion(std::int32_t regionId) const noexcept;
     [[nodiscard]] std::optional<std::uint32_t> GetRegionGameServer(std::int32_t regionId) const;
+    [[nodiscard]] std::vector<RegionRoute> RegionRoutes() const;
 
     bool AddPlayer(std::unique_ptr<CPlayer>, PlayerState);
     bool SetPlayerState(std::int32_t playerId, PlayerState, std::uint32_t nowMs = 0);
@@ -191,6 +204,7 @@ private:
     std::vector<GameServerPing> m_GameServerPings;
     std::uint32_t m_GameServerPingStartedAt{};
     std::int32_t m_LoginServerId{};
+    GlobeVariable m_GlobeVariables;
     std::deque<std::unique_ptr<WorldNet::CMessage>> m_Messages;
     CSessionFactory m_Sessions;
     COrganizingCtrl m_Organizations;
@@ -221,3 +235,5 @@ private:
     std::uint32_t m_LastMinuteTick{};
     std::uint32_t m_LastLoopTick{};
 };
+
+static_assert(sizeof(CGame::GlobeVariable) == 0x10);

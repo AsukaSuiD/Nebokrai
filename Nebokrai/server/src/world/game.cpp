@@ -124,6 +124,7 @@ bool CGame::LoadStaticConfiguration(const std::filesystem::path& runtimeDirector
         if (token != "#") continue;
         GameServerInfo server;
         if (!(servers >> server.index >> server.ip >> server.port) || server.index == 0 ||
+            server.index > std::numeric_limits<std::uint8_t>::max() ||
             server.port > 65535 || !RegisterGameServer(std::move(server))) {
             error = "повреждена или повторяется запись serversetup.ini";
             return false;
@@ -371,6 +372,17 @@ std::optional<std::uint32_t> CGame::GetRegionGameServer(const std::int32_t id) c
     const auto found = m_Regions.find(id);
     if (found == m_Regions.end()) return std::nullopt;
     return found->second.gameServerIndex;
+}
+
+std::vector<CGame::RegionRoute> CGame::RegionRoutes() const
+{
+    std::vector<RegionRoute> result;
+    result.reserve(m_Regions.size());
+    for (const auto& [id, owner] : m_Regions) {
+        (void)id;
+        if (owner.region) result.push_back({owner.region.get(), owner.gameServerIndex, owner.type});
+    }
+    return result;
 }
 
 std::set<std::int32_t>& CGame::StateSet(const PlayerState state) noexcept

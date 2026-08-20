@@ -46,6 +46,8 @@ bool CWorldCityRegion::LoadCitySetup(
         }
     }
     if (!foundDefence) return false;
+    // В исходном EXE эти три DWORD оставались неинициализированными.
+    for (std::size_t index = 5; index < defence.size(); ++index) defence[index] = 0;
     m_Gates = std::move(gates);
     m_DefenceSetup = defence;
     return true;

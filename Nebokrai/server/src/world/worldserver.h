@@ -63,6 +63,8 @@ private:
     void HandleTeamMessage(WorldNet::CMessage& message);
     void HandleJjcMessage(WorldNet::CMessage& message);
     void HandleUnhandledMessage(std::string_view family, WorldNet::CMessage& message);
+    [[nodiscard]] bool SendInitialGameServerState(std::int32_t socketId,
+                                                  const CGame::GameServerInfo& gameServer);
     void QueueServerIo(ServerSnapshot snapshot, std::size_t& count);
 
     asio::io_context m_Io;

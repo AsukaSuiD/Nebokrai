@@ -8,6 +8,15 @@
 #include <string>
 #include <vector>
 
+/*
+ * Исходный владелец: WorldServer/appworld/worldcityregion.cpp/.h.
+ * EXE подтверждает 0x20-byte defence block, но `.city` задаёт только первые
+ * пять DWORD, а исходный constructor не инициализирует последние три. Старый
+ * сервер тем самым отправлял неопределённую память. Новая Linux-реализация
+ * фиксирует неподтверждённые флаги в false/0: это безопасная техническая
+ * нормализация недетерминированного дефекта, а не новая игровая семантика.
+ */
+
 class CWorldCityRegion final : public CWorldWarRegion
 {
 public:
