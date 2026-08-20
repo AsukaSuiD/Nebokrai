@@ -1,8 +1,12 @@
 //! Владелец volume-limited goods-container исторического `WorldServer`.
 //!
 //! Статус `CSerializeContainer::OnTraversingContainer` RVA `0x000DA6B0`,
-//! `Serialize` RVA `0x000DA7D0`, `IsFull/QueryGoodsPosition/GetGoodsAmount` RVA
-//! `0x000DA9A0/0x000DA9F0/0x000DAB90`, empty-cell branch positional `Add` RVA
+//! три inherited `Find` wrapper-а RVA `0x000DA670/0x000DA680/0x000DA690`,
+//! `QueryGoodsPosition(CGoods*)/Serialize/GetGoods` RVA
+//! `0x000DA7B0/0x000DA7D0/0x000DA8A0`,
+//! `IsFull/QueryGoodsPosition(CGUID)/FindPositionForGoods/Add/GetGoodsAmount`
+//! RVA `0x000DA9A0/0x000DA9F0/0x000DAA50/0x000DAB30/0x000DAB90`,
+//! empty-cell branch positional `Add` RVA
 //! `0x000DB980`, а также его occupied-cell stacking-ветка через base Add RVA
 //! `0x000E07F0`,
 //! `Release/Clear` RVA `0x000DAE10/0x000DB5B0`, constructor/destructor RVA
@@ -36,7 +40,7 @@
 //! rejected `Box` Rust-вызывающему; decoder, который исходно игнорировал bool,
 //! переносит его в уже готовый lifetime-quarantine base-owner-а. Успех меняет
 //! amount существующего товара и уничтожает incoming. Автоматический
-//! `Add(CBaseObject*)` и поиск подходящей позиции ещё остаются raw.
+//! `Add(CBaseObject*)` теперь использует достигнутый поиск stack/empty позиции.
 //!
 //! Serialize helper пишет для каждого valid товара его первый cell index и
 //! полный `CGoods` с literal `include_child=true`; входной `param_2` не
@@ -46,6 +50,23 @@
 //! owner-а уже доказанно no-op, а `&self` исключает mutation между count и
 //! records. Map traversal технически заменён готовым `BTreeMap`, cell-order и
 //! все wire scalar остаются unsigned little-endian.
+//!
+//! Cell-aware `GetGoods` читает GUID только в пределах vector, отбрасывает
+//! `GUID_INVALID` и делегирует inherited `Find`, поэтому locked товар остаётся
+//! занятым в cell, но не выдаётся вызывающему. Object-overload position-query
+//! не ищет identity: exact EXE берёт GUID из `CGoods + 0x0c` и вызывает GUID-
+//! overload. Автоматический `Add` сохраняет исходный двухфазный выбор: сначала
+//! первый map-order стек с тем же base-index и unsigned вместимостью по
+//! stacking-limit входящего товара, затем первый пустой GUID cell. Lock и
+//! particular-attribute на этой стадии намеренно не фильтруются; окончательная
+//! stacking-проверка остаётся в positional base Add. Process-global factory
+//! технически заменена явным read-only `GoodsBasePropertiesRegistry`.
+//! Текущий C++ reference сводил automatic Add к `FindFreePosition`; архивный
+//! Linux-донор сохранил stack-first форму, а перечисленный порядок и отсутствие
+//! дополнительных фильтров подтверждены exact `Nworldserver.exe`.
+//! При нескольких подходящих стеках Rust сохраняет уже принятую `BTreeMap`-
+//! модель owner-а; bucket-order старого `stdext::_Hash` отдельно не восстановлен
+//! и остаётся явным неизвестным порядка выбора, а не скрытой гарантией exact.
 //!
 //! Короткий source в соседнем decoder-е сохраняет ранний `Clear`, cursor и уже
 //! добавленные записи, затем возвращает typed `BLOCKED_MISSING_FACT` вместо
@@ -170,6 +191,20 @@ impl CVolumeLimitGoodsContainer {
         self.amount_base.find(ex_id)
     }
 
+    /// Возвращает товар cell-а через inherited locked-aware `Find`.
+    pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
+        let ex_id = self.cells.get(position as usize)?;
+        if ex_id.is_invalid() {
+            return None;
+        }
+        self.find(ex_id)
+    }
+
+    /// Берёт GUID non-null объекта и делегирует GUID-overload position-query.
+    pub(crate) fn query_goods_position_by_object(&self, goods: Option<&CGoods>) -> Option<u32> {
+        self.query_goods_position(goods?.get_ex_id())
+    }
+
     /// Делегирует exact inherited traversal без собственной volume-фильтрации.
     pub(crate) fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
         self.amount_base.traversing_container(listener);
@@ -185,7 +220,9 @@ impl CVolumeLimitGoodsContainer {
             .map(|goods| {
                 Ok(TraversedGoods {
                     goods: goods.db_save_snapshot(registry)?,
-                    position: self.query_goods_position(goods.get_ex_id()).unwrap_or(0) as u8,
+                    position: self
+                        .query_goods_position_by_object(Some(goods))
+                        .unwrap_or(0) as u8,
                 })
             })
             .collect()
@@ -211,7 +248,7 @@ impl CVolumeLimitGoodsContainer {
                 .get_base_properties_index()
                 .ok_or(GoodsCodecError::MissingBasePropertiesIndex)?;
             if query_goods_base_properties(registry, index).is_some()
-                && self.query_goods_position(goods.get_ex_id()).is_some()
+                && self.query_goods_position_by_object(Some(goods)).is_some()
             {
                 count += 1;
             }
@@ -229,6 +266,47 @@ impl CVolumeLimitGoodsContainer {
             return Ok(true);
         }
         Ok(!self.cells.iter().any(|cell| cell.is_invalid()))
+    }
+
+    /// Ищет первый stack-candidate в map-order, затем первый пустой cell.
+    pub(crate) fn find_position_for_goods(
+        &self,
+        goods: Option<&CGoods>,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<u32>, GoodsCodecError> {
+        let Some(goods) = goods else {
+            return Ok(None);
+        };
+
+        if goods.get_max_stack_number(registry)? > 1 {
+            for existing in self.amount_base.goods() {
+                if existing.get_base_properties_index() == goods.get_base_properties_index()
+                    && goods.get_amount().wrapping_add(existing.get_amount())
+                        <= goods.get_max_stack_number(registry)?
+                    && let Some(position) = self.query_goods_position_by_object(Some(existing))
+                {
+                    return Ok(Some(position));
+                }
+            }
+        }
+
+        Ok(self
+            .cells
+            .iter()
+            .position(|cell| cell.is_invalid())
+            .and_then(|position| u32::try_from(position).ok()))
+    }
+
+    /// Выбирает exact stack/empty позицию и делегирует positional `Add`.
+    pub(crate) fn add(
+        &mut self,
+        goods: Box<CGoods>,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, VolumeContainerCodecError> {
+        let Some(position) = self.find_position_for_goods(Some(goods.as_ref()), registry)? else {
+            return Ok(Some(goods));
+        };
+        self.add_at(position, goods, registry)
     }
 
     /// Вставляет товар в пустую cell; `Some` возвращает ownership при false.
@@ -278,7 +356,7 @@ impl CVolumeLimitGoodsContainer {
                 .get_base_properties_index()
                 .ok_or(GoodsCodecError::MissingBasePropertiesIndex)?;
             if query_goods_base_properties(registry, index).is_some()
-                && let Some(position) = self.query_goods_position(goods.get_ex_id())
+                && let Some(position) = self.query_goods_position_by_object(Some(goods))
             {
                 destination.extend_from_slice(&position.to_le_bytes());
                 let _ = goods.serialize(destination, true)?;
@@ -343,7 +421,7 @@ impl CVolumeLimitGoodsContainer {
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cvolumelimitgoodscontainer.cpp:429
@@ -351,13 +429,13 @@ impl CVolumeLimitGoodsContainer {
 // ADDRESS: 004da670
 // PROTOTYPE: CBaseObject * __thiscall Find(CBaseObject * param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// Exact tail-chain `0x004DA670 -> 0x004DBD40 -> 0x004E0650 -> 0x004E0A40`
+// только проверяет null, берёт GUID объекта по `+0x0c` и вызывает GUID-slot.
+// Typed Rust call sites передают уже извлечённый `CGuid` в `find`.
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cvolumelimitgoodscontainer.cpp:434
@@ -365,13 +443,12 @@ impl CVolumeLimitGoodsContainer {
 // ADDRESS: 004da680
 // PROTOTYPE: CBaseObject * __thiscall Find(long param_1, CGUID * param_2)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// Exact tail-chain `0x004DA680 -> 0x004D5F50` игнорирует type scalar и
+// достигает того же GUID lookup; `find` выражает его без лишнего параметра.
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cvolumelimitgoodscontainer.cpp:439
@@ -379,9 +456,8 @@ impl CVolumeLimitGoodsContainer {
 // ADDRESS: 004da690
 // PROTOTYPE: CBaseObject * __thiscall Find(CGUID * param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// Exact `0x004DA690` tail-jump-ит в достигнутый amount-owner GUID lookup
+// `0x004DC180`; Rust `find` делегирует ему и сохраняет locked-фильтр.
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::CSerializeContainer::~CSerializeContainer
@@ -411,7 +487,7 @@ impl CVolumeLimitGoodsContainer {
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::QueryGoodsPosition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cvolumelimitgoodscontainer.cpp:157
@@ -419,9 +495,8 @@ impl CVolumeLimitGoodsContainer {
 // ADDRESS: 004da7b0
 // PROTOTYPE: int __thiscall QueryGoodsPosition(CGoods * param_1, ulong * param_2)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше как `query_goods_position_by_object`; null возвращает
+// `None`, а non-null путь берёт exact GUID и делегирует GUID-overload.
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::Serialize
@@ -450,7 +525,7 @@ impl CVolumeLimitGoodsContainer {
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::GetGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cvolumelimitgoodscontainer.cpp:140
@@ -458,9 +533,8 @@ impl CVolumeLimitGoodsContainer {
 // ADDRESS: 004da8a0
 // PROTOTYPE: CGoods * __thiscall GetGoods(ulong param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; vector-bound и `GUID_INVALID` проверяются до inherited
+// locked-aware `Find`. Typed owner устраняет доказанно избыточный RTTI cast.
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::Remove
@@ -502,7 +576,7 @@ impl CVolumeLimitGoodsContainer {
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::FindPositionForGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cvolumelimitgoodscontainer.cpp:55
@@ -510,9 +584,9 @@ impl CVolumeLimitGoodsContainer {
 // ADDRESS: 004daa50
 // PROTOTYPE: int __thiscall FindPositionForGoods(CGoods * param_1, ulong * param_2)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; exact map-order stack scan использует base-index,
+// wrapping unsigned amount-sum и stacking-limit входящего товара, затем
+// выполняется linear поиск первого `GUID_INVALID` во всём cell-vector.
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::Add
@@ -524,13 +598,12 @@ impl CVolumeLimitGoodsContainer {
 // ADDRESS: 004dab30
 // PROTOTYPE: int __thiscall Add(CBaseObject * param_1, void * param_2)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED выше; typed `Box<CGoods>` заменяет RTTI boundary, ownership при
+// false возвращается как `Some`, а найденная позиция передаётся `add_at`.
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::GetGoodsAmount
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cvolumelimitgoodscontainer.cpp:383
