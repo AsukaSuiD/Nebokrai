@@ -85,7 +85,9 @@
 //! Восстановленный `CEmotion` отправляется следом как `0x7F801/0x15`.
 //! `CSkillFactory` затем сохраняет ordered slot framing и исторические восемь
 //! байт padding каждого record-а, но обнуляет прежний heap-мусор, и адресно
-//! отправляется как subtype `6`. Следующая точная граница — `CTradeList`.
+//! отправляется как subtype `6`. `CTradeList` сохраняет следующий ordered
+//! `C-string + count + 8-byte goods records` payload и уходит subtype `3`;
+//! следующая точная граница — singleton `CIncrementShopList`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -150,6 +152,7 @@ use crate::setup::monsterlist::{
     MonsterDropRegistry, MonsterListSerializeError, MonsterRegistry, serialize_monster_list,
 };
 use crate::setup::playerlist::{CPlayerList, PlayerListSerializeError};
+use crate::setup::tradelist::{CTradeList, TradeListSerializeError};
 use crate::worldserver::appworld::country::country::CountryKingSaveLimits;
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
@@ -367,6 +370,20 @@ pub(crate) enum WorldSkillConfigurationCompletion {
 pub(crate) struct WorldSkillConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldSkillConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после `CTradeList`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldTradeListConfigurationCompletion {
+    TradeList(TradeListSerializeError),
+    IncrementShopListPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/3` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldTradeListConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldTradeListConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1083,6 +1100,32 @@ pub(crate) fn continue_game_server_skill_configuration(
             &payload,
         )),
         completion: WorldSkillConfigurationCompletion::TradeListPending { socket_id },
+    }
+}
+
+/// Кодирует и отправляет точный `CTradeList` initial-config packet.
+pub(crate) fn continue_game_server_trade_list_configuration(
+    game: &CGame,
+    socket_id: i32,
+    trades: &CTradeList,
+) -> WorldTradeListConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = trades.add_to_byte_array(&mut payload) {
+        return WorldTradeListConfigurationReport {
+            delivery: None,
+            completion: WorldTradeListConfigurationCompletion::TradeList(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldTradeListConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            3,
+            &payload,
+        )),
+        completion: WorldTradeListConfigurationCompletion::IncrementShopListPending { socket_id },
     }
 }
 
