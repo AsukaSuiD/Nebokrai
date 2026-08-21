@@ -982,6 +982,9 @@ use crate::worldserver::appworld::worldwarregion::WorldWarRegionSerializationBlo
 use crate::worldserver::worldserver::honorranks::{
     CHonorRanks, HonorRanksNewDayBlock, HonorRanksNewDayReport,
 };
+use crate::worldserver::worldserver::playerranks::{
+    CPlayerRanks, PlayerRanksGameServerUpdate, PlayerRanksSerializationBlock,
+};
 use crate::worldserver::worldserver::savedb::{
     DoSaveDataLifecycleReport, SaveDataFinalDisposition, SaveDataLifecycleState, SaveDataLogEvent,
     SaveDataLogPublishBlock, SaveDataLogPublishDisposition, SaveDataLogSink, SaveDataLogTarget,
@@ -2194,6 +2197,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) organizing: &'a mut COrganizingCtrl,
     pub(crate) country: &'a mut CCountryHandler,
     pub(crate) honor_ranks: &'a mut CHonorRanks,
+    pub(crate) player_ranks: &'a CPlayerRanks,
     pub(crate) auction_log: &'a mut CAuctionLog,
     pub(crate) auction_log_database: Option<&'a mut WorldTdsClient>,
     pub(crate) session_factory: &'a mut CSessionFactory,
@@ -2957,15 +2961,15 @@ impl WorldPlayerRanksRequestState {
 pub(crate) trait WorldMainLoopMaintenanceOwners {
     /// Пересчитывает PlayerRanks.
     fn stat_player_ranks(&mut self);
-    /// Публикует PlayerRanks подключённым GameServer.
-    fn update_player_ranks_to_game_server(&mut self);
 }
 
 /// Итог ручной PlayerRanks-ветви одного MainLoop turn.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldPlayerRanksMaintenanceDisposition {
     NotRequested,
-    Updated,
+    Updated {
+        publication: PlayerRanksGameServerUpdate,
+    },
 }
 
 /// Итог optional daily HonorRanks-ветви.
@@ -3018,6 +3022,7 @@ pub(crate) enum WorldAuctionBangMaintenanceDisposition {
 /// Первая безопасно неразрешимая граница maintenance-блока.
 #[derive(Debug)]
 pub(crate) enum WorldMainLoopMaintenanceBlock {
+    PlayerRanksSerialization(PlayerRanksSerializationBlock),
     HonorRanks(WorldHonorRanksMaintenanceBlock),
     AuctionOldDayUnknown { current_month_day: i32 },
 }
@@ -8669,6 +8674,7 @@ impl CGame {
             state.player_ranks_request,
             configuration.use_appellation_function,
             owners.maintenance,
+            owners.player_ranks,
             owners.honor_ranks,
             owners.auction_log,
             owners.auction_log_database.as_deref_mut(),
@@ -9062,6 +9068,7 @@ impl CGame {
         player_ranks_request: &WorldPlayerRanksRequestState,
         use_appellation_function: bool,
         owners: &mut Owners,
+        player_ranks: &CPlayerRanks,
         honor_ranks_owner: &mut CHonorRanks,
         auction_log: &mut CAuctionLog,
         auction_log_database: Option<&mut WorldTdsClient>,
@@ -9080,8 +9087,11 @@ impl CGame {
     {
         let player_ranks = if player_ranks_request.take_if_requested() {
             owners.stat_player_ranks();
-            owners.update_player_ranks_to_game_server();
-            WorldPlayerRanksMaintenanceDisposition::Updated
+            let sender = self.current_game_server_sender();
+            let publication = player_ranks
+                .update_ranks_to_game_server(sender.as_ref())
+                .map_err(WorldMainLoopMaintenanceBlock::PlayerRanksSerialization)?;
+            WorldPlayerRanksMaintenanceDisposition::Updated { publication }
         } else {
             WorldPlayerRanksMaintenanceDisposition::NotRequested
         };

@@ -1,8 +1,8 @@
 //! Общий рейтинг игроков исторического WorldServer.
 //!
-//! Статус World `CPlayerRanks::AddToByteArray` RVA `0x0001B760`:
-//! `IMPLEMENTED`; статистика, timer/DB lifecycle и Game runtime ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Статус World `CPlayerRanks::AddToByteArray` RVA `0x0001B760` и
+//! `UpdateRanksToGameServer` RVA `0x0001B890`: `IMPLEMENTED`; статистика и
+//! timer/DB lifecycle ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -15,9 +15,17 @@
 //! — `std::string`; порядок и little-endian поля не меняются. Невозможный
 //! 32-битный count и внутренний NUL typed-блокируют весь append до изменения
 //! destination вместо переполнения или чтения за строкой.
+//!
+//! Публикация использует готовые `CMessage` и `ServerCommandHandle`: exact
+//! `0x7F801 + subtype 0x17 + serialized ranks` сохраняется, а самописные
+//! буфер, CRC-envelope и fan-out не дублируются. Исходный `SendAll` игнорировал
+//! transport-result; Rust оставляет его в отчёте, не меняя порядок вызовов.
 
 use std::error::Error;
 use std::fmt;
+
+use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::nets::servers::ServerCommandHandle;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerRankEntry {
@@ -31,6 +39,13 @@ pub(crate) struct PlayerRankEntry {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CPlayerRanks {
     ranks: Vec<PlayerRankEntry>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct PlayerRanksGameServerUpdate {
+    pub(crate) rank_count: usize,
+    pub(crate) payload_length: usize,
+    pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
 impl CPlayerRanks {
@@ -72,6 +87,24 @@ impl CPlayerRanks {
         }
         destination.extend_from_slice(&payload);
         Ok(())
+    }
+
+    /// Публикует exact `0x7F801/0x17` всем подключённым GameServer-ам.
+    pub(crate) fn update_ranks_to_game_server(
+        &self,
+        sender: Option<&ServerCommandHandle>,
+    ) -> Result<PlayerRanksGameServerUpdate, PlayerRanksSerializationBlock> {
+        let mut payload = Vec::new();
+        self.add_to_byte_array(&mut payload)?;
+
+        let mut message = CMessage::new(0x0007_F801);
+        message.base_mut().add_long(0x17);
+        message.base_mut().add(&payload);
+        Ok(PlayerRanksGameServerUpdate {
+            rank_count: self.ranks.len(),
+            payload_length: payload.len(),
+            delivery: message.send_all(sender),
+        })
     }
 }
 
@@ -163,7 +196,7 @@ fn write_player_rank_string(
 
 // ============================================================================
 // FUNCTION: CPlayerRanks::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\playerranks.cpp:75
@@ -171,13 +204,14 @@ fn write_player_rank_string(
 // ADDRESS: 0041b760
 // PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
 //
+// Реализовано выше через owned `Vec<u8>` с exact insertion-order wire.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CPlayerRanks::UpdateRanksToGameServer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\playerranks.cpp:134
@@ -185,6 +219,7 @@ fn write_player_rank_string(
 // ADDRESS: 0041b890
 // PROTOTYPE: void __thiscall UpdateRanksToGameServer(void)
 //
+// Реализовано выше через готовые World `CMessage` и server fan-out.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
