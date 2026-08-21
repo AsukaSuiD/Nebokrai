@@ -4,7 +4,7 @@
 //! внутрипроцессного события `0x3FC03`,
 //! регистрации GameServer и reconnect player-data хвоста в `0x5FA01`,
 //! перехода игрока между GameServer `0x5FA02`,
-//! snapshot/cleanup хвоста `0x5FA03`, обычных opcode `0x4FC01..=0x4FC03`,
+//! полного player-save batch `0x5FA03`, обычных opcode `0x4FC01..=0x4FC03`,
 //! `0x5FA04..=0x5FA07`, `0x5FA09`, `0x5FA0A..=0x5FA0D` и
 //! `0x5FA0F..=0x5FA10` из
 //! `OnServerMessage` RVA `0x000ADCF0`;
@@ -253,13 +253,19 @@
 //! Levels`. Await между вызовами сохраняет порядок старого synchronous ADO;
 //! Tiberius и параметризованный SQL являются только технической заменой.
 //!
-//! Reached хвост `0x5FA03` после равенства response-count сначала уже сбросил
-//! `m_nDBResponsed`, затем выполняет полный `GenerateDBData` и строго
+//! `0x5FA03` читает signed marker и count. Marker `-1` переходит к completion
+//! до первого packet type; иначе каждый slot читает type, и только type `1`
+//! дополнительно читает ID и полный `CPlayer`. Существующий map-owner декодируется
+//! на месте, отсутствующий создаётся и заменяет запись по декодированному ID.
+//! После любого batch EXE сравнивает `m_nDBResponsed` с числом подключённых
+//! GameServer, кроме index `5`; marker `-1` перед этим делает wrapping increment.
+//! Равенство сначала сбрасывает счётчик, затем выполняет `GenerateDBData` и строго
 //! `ClearMapPlayerForOffline -> ClearRestorePlayer -> ClearCreationPlayer ->
-//! ClearDeletionPlayer -> ClearOfflinePlayer`. Этот owner хранит собственную
-//! caller-оркестрацию отдельно от совпадающей ветви `CGame::Run`. После cleanup
-//! прежний handle-state закрывается и возвращается точная одноразовая
-//! `SaveThreadFunc` launch-обязанность; системный thread не создаётся.
+//! ClearDeletionPlayer -> ClearOfflinePlayer`. После cleanup прежний handle-state
+//! закрывается, внешний launcher получает точные аргументы `SaveThreadFunc`, а
+//! возвращённое состояние становится новым handle. Exact disassembly
+//! `0x004B01DC..0x004B03CC`; поздний Linux cycle-tracker остаётся только донором
+//! назначения и не подменяет более слабую исходную семантику.
 
 use std::error::Error;
 use std::fmt;
@@ -347,7 +353,8 @@ use crate::worldserver::worldserver::game::{
     WorldGenerateDbDataBlock, WorldGenerateDbDataReport, WorldGlobeVariablesDelivery,
     WorldInitialRegionSnapshot, WorldInitialRegionSnapshotBlock, WorldInitialRegionSnapshotKind,
     WorldOnlinePlayerAppendOutcome, WorldPingGameServerInfo, WorldReconnectedPlayerDecode,
-    WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate, WorldRegionParamDecodeOutcome,
+    WorldPlayerSaveResponseProgress, WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate,
+    WorldRegionParamDecodeOutcome,
     WorldRegionChangePlayerTransition, WorldRegionChangeTeamOwner,
     WorldRegionChangeTeamUpdate, WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest,
     WorldServerSnapshotPlayerDecode, WorldServerSnapshotPlayerOwner, prepare_save_thread_launch,
@@ -356,6 +363,7 @@ use crate::worldserver::worldserver::honorranks::{CHonorRanks, HonorRanksSeriali
 use crate::worldserver::worldserver::playerranks::{
     CPlayerRanks, PlayerRanksSerializationBlock,
 };
+use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
 /// Наблюдаемый итог typed-замены LoginServer client из ветки `0x3FC03`.
 #[derive(Debug)]
@@ -378,11 +386,12 @@ pub(crate) struct WorldGameServerConnectedLog {
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
-/// Snapshot/cleanup хвост `0x5FA03` и достигнутый launch call-site.
+/// Snapshot/cleanup хвост `0x5FA03` и исполненный launch call-site.
 #[derive(Debug)]
 pub(crate) struct WorldCompletedSaveResponseLaunchReport {
     pub(crate) snapshot: WorldGenerateDbDataReport,
     pub(crate) launch: WorldSaveThreadLaunchRequest,
+    pub(crate) resulting_handle: WorldSaveThreadHandleState,
 }
 
 /// Результат исполненного обычного opcode `OnServerMessage`.
@@ -401,6 +410,7 @@ pub(crate) enum WorldServerMessageOutcome {
     OpaqueFieldsRead(WorldOpaqueServerFields),
     PlayerDataSynchronized(WorldPlayerDataSync),
     PlayerNameMessageRelayed(WorldPlayerNameMessageRelay),
+    PlayerSaveBatch(WorldPlayerSaveBatchMessage),
     RegionParametersUpdated(WorldRegionParameterUpdate),
     RegionChanged(WorldRegionChangeMessage),
     RegionMessageRelayed(WorldRegionMessageRelay),
@@ -572,6 +582,71 @@ pub(crate) enum WorldRegionChangeDisposition {
         team_session_id: i32,
         team_update: WorldRegionChangeTeamUpdate,
     },
+}
+
+/// Один positional slot player batch-а `0x5FA03`.
+#[derive(Debug)]
+pub(crate) enum WorldPlayerSavePacket {
+    Ignored {
+        index: i32,
+        packet_type: i32,
+        packet_type_complete: bool,
+    },
+    Player {
+        index: i32,
+        requested_player_id: i32,
+        player_id_complete: bool,
+        cursor_before_decode: usize,
+        cursor_after_decode: usize,
+        decode: WorldServerSnapshotPlayerDecode,
+        /// Точный текст достигнутого `AddErrorLogText`, если owner создавался.
+        missing_player_notice: Option<Vec<u8>>,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) struct WorldPlayerSaveCompletion {
+    pub(crate) game_server_index: i32,
+    pub(crate) advertised_player_count: i32,
+    pub(crate) message_size: i32,
+    pub(crate) log: AddLogTextDisposition,
+}
+
+#[derive(Debug)]
+pub(crate) enum WorldPlayerSaveMaterialization {
+    NotTriggered,
+    Launched(WorldCompletedSaveResponseLaunchReport),
+    Blocked(WorldGenerateDbDataBlock),
+}
+
+#[derive(Debug)]
+pub(crate) enum WorldPlayerSaveBatchDisposition {
+    DecodeBlocked {
+        packets: Vec<WorldPlayerSavePacket>,
+        index: i32,
+        requested_player_id: i32,
+        player_id_complete: bool,
+        cursor_before_decode: usize,
+        cursor_after_decode: usize,
+        error: PlayerCodecError,
+    },
+    Processed {
+        packets: Vec<WorldPlayerSavePacket>,
+        exhausted_noop_entries: i32,
+        completion: Option<WorldPlayerSaveCompletion>,
+        progress: WorldPlayerSaveResponseProgress,
+        materialization: WorldPlayerSaveMaterialization,
+    },
+}
+
+/// Полный typed-итог server opcode `0x5FA03`.
+#[derive(Debug)]
+pub(crate) struct WorldPlayerSaveBatchMessage {
+    pub(crate) marker: i8,
+    pub(crate) marker_complete: bool,
+    pub(crate) advertised_player_count: i32,
+    pub(crate) player_count_complete: bool,
+    pub(crate) disposition: WorldPlayerSaveBatchDisposition,
 }
 
 /// Наблюдаемый результат REPORT_MURDERER `0x5FA06`.
@@ -1601,13 +1676,13 @@ pub(crate) fn on_login_client_reconnected(
 
 /// Выполняет snapshot/cleanup хвост завершённой ветви `0x5FA03`.
 ///
-/// Счётчик DB-ответов уже сброшен caller-ом. Handle replacement выполняется
-/// только после успешных snapshot/cleanup и не создаёт системный thread.
+/// Счётчик DB-ответов уже сброшен caller-ом. Handle replacement и внешний
+/// launcher достигаются только после успешных snapshot/cleanup.
 #[allow(
     clippy::too_many_arguments,
     reason = "исходный handler повторно обращался к тем же singleton/static владельцам"
 )]
-pub(crate) fn materialize_completed_save_response_snapshot(
+pub(crate) fn materialize_completed_save_response_snapshot<LaunchSaveThread>(
     game: &mut CGame,
     registry: &GoodsBasePropertiesRegistry,
     organizing_ctrl: &mut COrganizingCtrl,
@@ -1617,7 +1692,12 @@ pub(crate) fn materialize_completed_save_response_snapshot(
     country_limits: CountryKingSaveLimits,
     honor_ranks: &mut CHonorRanks,
     save_thread_handle: &mut WorldSaveThreadHandleState,
-) -> Result<WorldCompletedSaveResponseLaunchReport, WorldGenerateDbDataBlock> {
+    launch_save_thread: &mut LaunchSaveThread,
+) -> Result<WorldCompletedSaveResponseLaunchReport, WorldGenerateDbDataBlock>
+where
+    LaunchSaveThread:
+        FnMut(&WorldSaveThreadLaunchRequest) -> WorldSaveThreadHandleState + ?Sized,
+{
     let snapshot = game.generate_db_data(
         registry,
         organizing_ctrl,
@@ -1633,7 +1713,13 @@ pub(crate) fn materialize_completed_save_response_snapshot(
     game.clear_deletion_player();
     game.clear_offline_player();
     let launch = prepare_save_thread_launch(save_thread_handle);
-    Ok(WorldCompletedSaveResponseLaunchReport { snapshot, launch })
+    let resulting_handle = launch_save_thread(&launch);
+    *save_thread_handle = resulting_handle;
+    Ok(WorldCompletedSaveResponseLaunchReport {
+        snapshot,
+        launch,
+        resulting_handle,
+    })
 }
 
 /// Исполняет только уже восстановленные обычные ветви `OnServerMessage`.
@@ -1643,6 +1729,15 @@ pub(crate) async fn on_server_message<TeamOwner>(
     registry: &GoodsBasePropertiesRegistry,
     coefficients: &PlayerPropertyCoefficients,
     organizing: &mut COrganizingCtrl,
+    faction_war: &CFactionWarSys,
+    country_handler: &CCountryHandler,
+    country_limits: CountryKingSaveLimits,
+    honor_ranks: &mut CHonorRanks,
+    save_thread_handle: &mut WorldSaveThreadHandleState,
+    launch_save_thread: &mut dyn FnMut(
+        &WorldSaveThreadLaunchRequest,
+    ) -> WorldSaveThreadHandleState,
+    add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     team_owner: &mut TeamOwner,
     general_variables: Option<&mut CVariableList>,
     gods_battle: &mut CGodsBattleConf,
@@ -1814,6 +1909,157 @@ where
                     target_region_id,
                     target_region_complete: decoded_target_region.is_some(),
                     socket_id,
+                    disposition,
+                },
+            ))
+        }
+        0x0005_FA03 => {
+            let message_size = i32::from_le_bytes(
+                message.as_wire_bytes()[..4]
+                    .try_into()
+                    .expect("World message всегда содержит полный header"),
+            );
+            let game_server_index = message.map_id();
+            let decoded_marker = message.base_mut().get_char();
+            let marker = decoded_marker.unwrap_or(0);
+            let decoded_player_count = message.base_mut().get_long();
+            let advertised_player_count = decoded_player_count.unwrap_or(0);
+
+            let disposition = 'batch: {
+                let mut packets = Vec::new();
+                let mut exhausted_noop_entries = 0;
+                if marker != -1 && advertised_player_count > 0 {
+                    let mut index = 0;
+                    while index < advertised_player_count {
+                        let decoded_packet_type = message.base_mut().get_long();
+                        let packet_type = decoded_packet_type.unwrap_or(0);
+                        if packet_type != 1 {
+                            packets.push(WorldPlayerSavePacket::Ignored {
+                                index,
+                                packet_type,
+                                packet_type_complete: decoded_packet_type.is_some(),
+                            });
+                            if decoded_packet_type.is_none() {
+                                exhausted_noop_entries = advertised_player_count
+                                    .wrapping_sub(index)
+                                    .wrapping_sub(1);
+                                break;
+                            }
+                            index = index.wrapping_add(1);
+                            continue;
+                        }
+
+                        let decoded_player_id = message.base_mut().get_long();
+                        let requested_player_id = decoded_player_id.unwrap_or(0);
+                        let cursor_before_decode = message.base_mut().cursor();
+                        let decode = {
+                            let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                            game.decord_server_snapshot_player(
+                                requested_player_id as u32,
+                                source,
+                                cursor,
+                                registry,
+                                coefficients,
+                            )
+                        };
+                        let cursor_after_decode = message.base_mut().cursor();
+                        let decode = match decode {
+                            Ok(decode) => decode,
+                            Err(error) => {
+                                break 'batch WorldPlayerSaveBatchDisposition::DecodeBlocked {
+                                    packets,
+                                    index,
+                                    requested_player_id,
+                                    player_id_complete: decoded_player_id.is_some(),
+                                    cursor_before_decode,
+                                    cursor_after_decode,
+                                    error,
+                                };
+                            }
+                        };
+                        let missing_player_notice = match decode.owner {
+                            WorldServerSnapshotPlayerOwner::Existing => None,
+                            WorldServerSnapshotPlayerOwner::Created { .. } => {
+                                let mut notice = game
+                                    .map_player(decode.decoded_player_id as u32)
+                                    .map(|player| {
+                                        let name = player.get_name();
+                                        let end = name
+                                            .iter()
+                                            .position(|byte| *byte == 0)
+                                            .unwrap_or(name.len());
+                                        name[..end].to_vec()
+                                    })
+                                    .unwrap_or_default();
+                                notice.extend_from_slice(
+                                    format!(
+                                        "({}) does not exist in WorldServer!!!!!",
+                                        decode.decoded_player_id
+                                    )
+                                    .as_bytes(),
+                                );
+                                Some(notice)
+                            }
+                        };
+                        packets.push(WorldPlayerSavePacket::Player {
+                            index,
+                            requested_player_id,
+                            player_id_complete: decoded_player_id.is_some(),
+                            cursor_before_decode,
+                            cursor_after_decode,
+                            decode,
+                            missing_player_notice,
+                        });
+                        index = index.wrapping_add(1);
+                    }
+                }
+
+                let completion = (marker == -1).then(|| {
+                    let text = format!(
+                        "Received saved data from GameServer{game_server_index} successfully, player:{advertised_player_count}, data packets size:{message_size}"
+                    );
+                    WorldPlayerSaveCompletion {
+                        game_server_index,
+                        advertised_player_count,
+                        message_size,
+                        log: add_log_text(text.as_bytes()),
+                    }
+                });
+                let progress = game.record_player_save_response(completion.is_some());
+                let materialization = if progress.save_triggered {
+                    match materialize_completed_save_response_snapshot(
+                        game,
+                        registry,
+                        organizing,
+                        coefficients,
+                        faction_war,
+                        country_handler,
+                        country_limits,
+                        honor_ranks,
+                        save_thread_handle,
+                        launch_save_thread,
+                    ) {
+                        Ok(report) => WorldPlayerSaveMaterialization::Launched(report),
+                        Err(block) => WorldPlayerSaveMaterialization::Blocked(block),
+                    }
+                } else {
+                    WorldPlayerSaveMaterialization::NotTriggered
+                };
+                WorldPlayerSaveBatchDisposition::Processed {
+                    packets,
+                    exhausted_noop_entries,
+                    completion,
+                    progress,
+                    materialization,
+                }
+            };
+
+            WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::PlayerSaveBatch(
+                WorldPlayerSaveBatchMessage {
+                    marker,
+                    marker_complete: decoded_marker.is_some(),
+                    advertised_player_count,
+                    player_count_complete: decoded_player_count.is_some(),
                     disposition,
                 },
             ))

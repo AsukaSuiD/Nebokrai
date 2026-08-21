@@ -1819,6 +1819,16 @@ pub(crate) struct WorldServerSnapshotPlayerDecode {
     pub(crate) owner: WorldServerSnapshotPlayerOwner,
 }
 
+/// Состояние `m_nDBResponsed` после одного server opcode `0x5FA03`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerSaveResponseProgress {
+    pub(crate) previous_responses: i32,
+    pub(crate) completion_counted: bool,
+    pub(crate) responses_before_reset: i32,
+    pub(crate) connected_game_servers: i32,
+    pub(crate) save_triggered: bool,
+}
+
 /// Итог `list::remove` online-ID и следующего organizing exit callback-а.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldOnlinePlayerRemoveOutcome {
@@ -8516,7 +8526,7 @@ impl CGame {
     /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, other
     /// transport/cursor `0x5FD02/0x5FD06..0x5FD09/0x5FD0E`, copy-number
     /// `0x5FD0B`, LeiTing update `0x5FD10`, honor
-    /// `0x5FD0C/0x5FD0D`, server `0x5FA04..=0x5FA07/0x5FA09/0x5FA0F/0x5FA10`,
+    /// `0x5FD0C/0x5FD0D`, server `0x5FA01..=0x5FA07/0x5FA09/0x5FA0F/0x5FA10`,
     /// organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
@@ -8536,6 +8546,7 @@ impl CGame {
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
         country_handler: &CCountryHandler,
+        country_limits: CountryKingSaveLimits,
         faction_war_sys: &mut CFactionWarSys,
         attack_city: &mut CAttackCitySys,
         attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
@@ -8553,13 +8564,17 @@ impl CGame {
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
         rs_player: &mut TiberiusRsPlayer,
         mut player_database: Option<&mut WorldTdsClient>,
+        save_thread_handle: &mut WorldSaveThreadHandleState,
+        launch_save_thread: &mut dyn FnMut(
+            &WorldSaveThreadLaunchRequest,
+        ) -> WorldSaveThreadHandleState,
         team_owner: &mut TeamOwner,
         mut general_variables: Option<&mut CVariableList>,
         gods_battle: &mut CGodsBattleConf,
         mut rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
         mut gods_battle_database: Option<&mut WorldTdsClient>,
         reload_context: &mut dyn WorldReloadContext,
-        add_gma_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
+        add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
         update_player: &mut dyn FnMut(i32),
         clear_city_war_country_warring: &mut dyn FnMut(u8),
         set_city_war_country_king_and_city: &mut dyn FnMut(u8, i32, i32),
@@ -8593,6 +8608,7 @@ impl CGame {
                             organizing,
                             organizing_parameters,
                             country_handler,
+                            country_limits,
                             faction_war_sys,
                             attack_city,
                             attack_city_callbacks,
@@ -8610,13 +8626,15 @@ impl CGame {
                             application_callbacks,
                             &mut *rs_player,
                             player_database.as_deref_mut(),
+                            &mut *save_thread_handle,
+                            &mut *launch_save_thread,
                             &mut *team_owner,
                             general_variables.as_deref_mut(),
                             &mut *gods_battle,
                             rs_gods_battle.as_deref_mut(),
                             gods_battle_database.as_deref_mut(),
                             &mut *reload_context,
-                            &mut *add_gma_log_text,
+                            &mut *add_log_text,
                             update_player,
                             clear_city_war_country_warring,
                             set_city_war_country_king_and_city,
@@ -8655,6 +8673,7 @@ impl CGame {
                     organizing,
                     organizing_parameters,
                     country_handler,
+                    country_limits,
                     faction_war_sys,
                     attack_city,
                     attack_city_callbacks,
@@ -8672,13 +8691,15 @@ impl CGame {
                     application_callbacks,
                     &mut *rs_player,
                     player_database.as_deref_mut(),
+                    &mut *save_thread_handle,
+                    &mut *launch_save_thread,
                     &mut *team_owner,
                     general_variables.as_deref_mut(),
                     &mut *gods_battle,
                     rs_gods_battle.as_deref_mut(),
                     gods_battle_database.as_deref_mut(),
                     &mut *reload_context,
-                    &mut *add_gma_log_text,
+                    &mut *add_log_text,
                     update_player,
                     clear_city_war_country_warring,
                     set_city_war_country_king_and_city,
@@ -8716,6 +8737,7 @@ impl CGame {
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
         country_handler: &CCountryHandler,
+        country_limits: CountryKingSaveLimits,
         faction_war_sys: &mut CFactionWarSys,
         attack_city: &mut CAttackCitySys,
         attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
@@ -8733,6 +8755,10 @@ impl CGame {
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
         rs_player: &mut TiberiusRsPlayer,
         player_database: Option<&mut WorldTdsClient>,
+        save_thread_handle: &mut WorldSaveThreadHandleState,
+        launch_save_thread: &mut dyn FnMut(
+            &WorldSaveThreadLaunchRequest,
+        ) -> WorldSaveThreadHandleState,
         team_owner: &mut TeamOwner,
         general_variables: Option<&mut CVariableList>,
         gods_battle: &mut CGodsBattleConf,
@@ -8756,7 +8782,7 @@ impl CGame {
     {
         let started_at_ms = get_tick();
         let save_info_time_ms = self.setup.save_info_time_ms;
-        let mut add_gma_log_text = |message: &[u8]| {
+        let mut add_log_text = |message: &[u8]| {
             log.add_log_text(
                 message,
                 save_info_time_ms,
@@ -8770,6 +8796,7 @@ impl CGame {
             organizing,
             organizing_parameters,
             country_handler,
+            country_limits,
             faction_war_sys,
             attack_city,
             attack_city_callbacks,
@@ -8787,13 +8814,15 @@ impl CGame {
             application_callbacks,
             rs_player,
             player_database,
+            save_thread_handle,
+            launch_save_thread,
             team_owner,
             general_variables,
             gods_battle,
             rs_gods_battle,
             gods_battle_database,
             reload_context,
-            &mut add_gma_log_text,
+            &mut add_log_text,
             update_player,
             clear_city_war_country_warring,
             set_city_war_country_king_and_city,
@@ -8808,7 +8837,7 @@ impl CGame {
                 };
             }
         };
-        drop(add_gma_log_text);
+        drop(add_log_text);
         let finished_at_ms = get_tick();
         let elapsed_ms = finished_at_ms.wrapping_sub(started_at_ms);
         state.accumulated_time_ms = state.accumulated_time_ms.wrapping_add(elapsed_ms);
@@ -9868,6 +9897,7 @@ impl CGame {
             owners.organizing,
             owners.organizing_parameters,
             owners.country,
+            configuration.country_limits,
             owners.faction_war,
             owners.attack_city,
             owners.attack_city_callbacks,
@@ -9885,6 +9915,8 @@ impl CGame {
             &mut union_application_callbacks,
             owners.rs_player,
             owners.player_database.as_deref_mut(),
+            state.save_thread_handle,
+            &mut *callbacks.launch_save_thread,
             &mut *owners.team_owner,
             owners.general_variables.as_deref_mut(),
             owners.gods_battle,
@@ -11049,7 +11081,7 @@ impl CGame {
         })
     }
 
-    /// Декодирует обычный `0x5FA09/1` snapshot без reconnect offline-эффекта.
+    /// Декодирует обычный `0x5FA03/0x5FA09` snapshot без reconnect offline-эффекта.
     pub(crate) fn decord_server_snapshot_player(
         &mut self,
         requested_player_id: u32,
@@ -11080,6 +11112,33 @@ impl CGame {
                 replaced_existing_decoded_id,
             },
         })
+    }
+
+    /// Повторяет wrapping increment и точное equality-решение `0x5FA03`.
+    ///
+    /// Проверка выполняется после каждого batch, даже не terminal. При равенстве
+    /// счётчик сбрасывается до `GenerateDBData`, как в EXE.
+    pub(crate) fn record_player_save_response(
+        &mut self,
+        completion_counted: bool,
+    ) -> WorldPlayerSaveResponseProgress {
+        let previous_responses = self.db_responses;
+        if completion_counted {
+            self.db_responses = self.db_responses.wrapping_add(1);
+        }
+        let responses_before_reset = self.db_responses;
+        let connected_game_servers = self.connected_game_server_count_ex();
+        let save_triggered = responses_before_reset == connected_game_servers;
+        if save_triggered {
+            self.db_responses = 0;
+        }
+        WorldPlayerSaveResponseProgress {
+            previous_responses,
+            completion_counted,
+            responses_before_reset,
+            connected_game_servers,
+            save_triggered,
+        }
     }
 
     /// Удаляет все совпадения online-ID и затем всегда вызывает exit.
@@ -11900,6 +11959,7 @@ async fn process_world_message<TimerCallback, TeamOwner>(
     organizing: &mut COrganizingCtrl,
     organizing_parameters: &COrganizingParam,
     country_handler: &CCountryHandler,
+    country_limits: CountryKingSaveLimits,
     faction_war_sys: &mut CFactionWarSys,
     attack_city: &mut CAttackCitySys,
     attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
@@ -11917,13 +11977,17 @@ async fn process_world_message<TimerCallback, TeamOwner>(
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     rs_player: &mut TiberiusRsPlayer,
     player_database: Option<&mut WorldTdsClient>,
+    save_thread_handle: &mut WorldSaveThreadHandleState,
+    launch_save_thread: &mut dyn FnMut(
+        &WorldSaveThreadLaunchRequest,
+    ) -> WorldSaveThreadHandleState,
     team_owner: &mut TeamOwner,
     general_variables: Option<&mut CVariableList>,
     gods_battle: &mut CGodsBattleConf,
     rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
     gods_battle_database: Option<&mut WorldTdsClient>,
     reload_context: &mut dyn WorldReloadContext,
-    add_gma_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
+    add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     update_player: &mut dyn FnMut(i32),
     clear_city_war_country_warring: &mut dyn FnMut(u8),
     set_city_war_country_king_and_city: &mut dyn FnMut(u8, i32, i32),
@@ -11948,6 +12012,13 @@ where
             registry,
             coefficients,
             organizing,
+            faction_war_sys,
+            country_handler,
+            country_limits,
+            honor_ranks,
+            save_thread_handle,
+            launch_save_thread,
+            add_log_text,
             team_owner,
             general_variables,
             gods_battle,
@@ -11981,7 +12052,7 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::Gma) {
-        match on_gma_message(game, message, add_gma_log_text) {
+        match on_gma_message(game, message, add_log_text) {
             WorldGmaMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::GmaMessage {
                     source,
