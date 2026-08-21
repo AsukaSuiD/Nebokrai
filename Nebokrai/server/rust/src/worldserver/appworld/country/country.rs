@@ -163,6 +163,16 @@
 //! minister map `job:u8 -> player_id:i32`. `tech_level_up_exp`, имена и flags
 //! в этот wire не входят. `BTreeMap` сохраняет unsigned порядок; signed count
 //! проверяется до записи вместо неограниченного `size_t -> long` narrowing.
+//!
+//! `CCountry::CCountry` exact `0x004CB760..0x004CB8E2` обнуляет country,
+//! scalar, officer, lifecycle и exile state, затем через настоящий
+//! `CCountryParam::_country_tech_lels[tech_level + 1]` читает следующий
+//! technology exp. Отсутствующий level поэтому вставляется с нулевыми полями;
+//! Rust сохраняет этот observable `operator[]` эффект в `CCountryParam`, не
+//! копируя tree allocation/erase plumbing. `SetMinisterfromDB` exact
+//! `0x004C9EB0..0x004C9F09` заменяет value существующего job либо вставляет
+//! новую пару. Старый pointer при overwrite утекал; owned Rust state корректно
+//! освобождает его, поскольку lifetime-дефект не является внешним контрактом.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -174,7 +184,9 @@ use crate::dbaccess::worlddb::dbcountry::{
 };
 use crate::nets::networld::message::{CMessage, SendMessageError};
 
-use super::countryparam::{CCountryParam, CountryParameterUnavailable};
+use super::countryparam::{
+    CCountryParam, CountryParameterUnavailable, CountryTechLevelLookup,
+};
 use super::king::{KingPointUpdate, set_control_point, set_material_point, set_war_point};
 
 /// Три текущих максимума `CCountryParam`, читаемые во время clone.
@@ -191,6 +203,17 @@ pub(crate) struct CountryMinisterState {
     pub(crate) id_type: u8,
     pub(crate) quest_switch: bool,
     pub(crate) snapshot: CountryMinisterSaveSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryConstructorReport {
+    pub(crate) next_technology: CountryTechLevelLookup,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum CountryMinisterFromDbUpdate {
+    Inserted,
+    Replaced { previous: Option<CountryMinisterState> },
 }
 
 /// Достигнутая save-часть живого `CCountry` без копирования MSVC layout.
@@ -987,6 +1010,71 @@ pub(crate) struct CountryAppointMinisterReport {
 }
 
 impl CCountry {
+    /// Создаёт exact reached constructor-state без воспроизведения STL layout.
+    pub(crate) fn with_constructor_state(
+        parameters: &mut CCountryParam,
+    ) -> (Self, CountryConstructorReport) {
+        let next_technology = parameters.technology_level_or_insert(1);
+        (
+            Self {
+                country_id: 0,
+                treasury: 0,
+                power: 0,
+                tech_current_exp: 0,
+                tech_level_up_exp: next_technology.country_tech_exp,
+                tech_level: 0,
+                king: CountryKingSaveSnapshot {
+                    id: 0,
+                    name: Vec::new(),
+                    appointed: false,
+                    salary_received: false,
+                    control_point: 0,
+                    material_point: 0,
+                    war_point: 0,
+                },
+                king_quest_switch: false,
+                country_war_result: 0,
+                ministers: BTreeMap::new(),
+                null_minister_slots: BTreeSet::new(),
+                city_id: 0,
+                demise_faction: false,
+                king_timestamp_ms: 0,
+                is_warring: false,
+                day: 0,
+                silence_count: 0,
+                pk_count: 0,
+                exile_count: 0,
+                absolve_count: 0,
+                exile_started_at_ms: BTreeMap::new(),
+            },
+            CountryConstructorReport { next_technology },
+        )
+    }
+
+    /// Повторяет exact find-then-replace/insert `SetMinisterfromDB`.
+    pub(crate) fn set_minister_from_db(
+        &mut self,
+        job: u8,
+        minister: Option<CountryMinisterState>,
+    ) -> CountryMinisterFromDbUpdate {
+        let existed = self.ministers.contains_key(&job) || self.null_minister_slots.contains(&job);
+        let previous = self.ministers.remove(&job);
+        self.null_minister_slots.remove(&job);
+        match minister {
+            Some(minister) => {
+                self.ministers.insert(job, minister);
+            }
+            None => {
+                self.null_minister_slots.insert(job);
+            }
+        }
+        if existed {
+            CountryMinisterFromDbUpdate::Replaced { previous }
+        } else {
+            CountryMinisterFromDbUpdate::Inserted
+        }
+    }
+
     /// Повторяет exact дневной country lifecycle и mode `8` для job `7`.
     pub(crate) fn set_new_day<Context: CountrySetNewDayContext + ?Sized>(
         &mut self,
@@ -4064,7 +4152,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::SetMinisterfromDB
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1648
@@ -4219,7 +4307,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::CCountry
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:28

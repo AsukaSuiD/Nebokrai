@@ -126,6 +126,14 @@ struct CountryTechLevel {
     country_power: i32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryTechLevelLookup {
+    pub(crate) level: i32,
+    pub(crate) inserted: bool,
+    pub(crate) country_tech_exp: i32,
+    pub(crate) country_power: i32,
+}
+
 /// Согласованный результат трёх `operator[]`, читаемых точкой возврата.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CountryReturnPoint {
@@ -180,6 +188,21 @@ pub(crate) struct CCountryParam {
 }
 
 impl CCountryParam {
+    /// Повторяет observable `operator[]` technology map, включая default insert.
+    pub(crate) fn technology_level_or_insert(
+        &mut self,
+        level: i32,
+    ) -> CountryTechLevelLookup {
+        let inserted = !self.country_tech_levels.contains_key(&level);
+        let technology = self.country_tech_levels.entry(level).or_default();
+        CountryTechLevelLookup {
+            level,
+            inserted,
+            country_tech_exp: technology.country_tech_exp,
+            country_power: technology.country_power,
+        }
+    }
+
     /// Создаёт точный constructor-state: восемь пустых maps и неизвестные scalars.
     pub(crate) const fn new() -> Self {
         Self {
