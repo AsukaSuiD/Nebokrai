@@ -115,7 +115,8 @@
 //! C-string преобразования. Nullable general `CVariableList` затем передаёт
 //! `count + payload length + tagged values` subtype `12`. Ordered script-file
 //! map следует отдельными subtype `13`: C-string path, signed `lstrlenA` data
-//! и C-string data. Следующая граница — `CQuestSystem` subtype `0x16`.
+//! и C-string data. `CQuestSystem` затем передаёт setup и ordered quest records
+//! subtype `0x16`. Следующая граница — `CPlayerRanks` subtype `0x17`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -200,6 +201,7 @@ use crate::setup::newskillmonsterlist::{
 use crate::setup::playerlist::{CPlayerList, PlayerListSerializeError};
 use crate::setup::preciousboxconf::{PreciousBoxConf, PreciousBoxSerializeError};
 use crate::setup::prisonconf::{PrisonConf, PrisonConfSerializeError};
+use crate::setup::questsystem::{CQuestSystem, QuestSystemSerializationBlock};
 use crate::setup::regionsetup::{CRegionSetup, RegionSetupSerializeError};
 use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};
@@ -799,6 +801,18 @@ pub(crate) enum WorldScriptFilesConfigurationCompletion {
 pub(crate) struct WorldScriptFilesConfigurationReport {
     pub(crate) deliveries: Vec<WorldScriptFileConfigurationDelivery>,
     pub(crate) completion: WorldScriptFilesConfigurationCompletion,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldQuestConfigurationCompletion {
+    QuestSystem(QuestSystemSerializationBlock),
+    PlayerRanksPending { socket_id: i32 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldQuestConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldQuestConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -2265,6 +2279,31 @@ pub(crate) fn continue_game_server_script_files_configuration(
     WorldScriptFilesConfigurationReport {
         deliveries,
         completion: WorldScriptFilesConfigurationCompletion::QuestSystemPending { socket_id },
+    }
+}
+
+/// Кодирует и отправляет точный `CQuestSystem` subtype `0x16`.
+pub(crate) fn continue_game_server_quest_configuration(
+    game: &CGame,
+    socket_id: i32,
+    quests: &CQuestSystem,
+) -> WorldQuestConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = quests.add_to_byte_array(&mut payload) {
+        return WorldQuestConfigurationReport {
+            delivery: None,
+            completion: WorldQuestConfigurationCompletion::QuestSystem(error),
+        };
+    }
+    let sender = game.current_game_server_sender();
+    WorldQuestConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x16,
+            &payload,
+        )),
+        completion: WorldQuestConfigurationCompletion::PlayerRanksPending { socket_id },
     }
 }
 

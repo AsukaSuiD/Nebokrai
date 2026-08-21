@@ -61,6 +61,11 @@ pub(crate) mod preciousboxconf;
 pub(crate) mod prisonconf;
 #[allow(
     dead_code,
+    reason = "quest serializer подключён к initial-config до точных ini loaders/runtime-а"
+)]
+pub(crate) mod questsystem;
+#[allow(
+    dead_code,
     reason = "region-setup serializer подключён к initial-config до точного loader-а"
 )]
 pub(crate) mod regionsetup;
