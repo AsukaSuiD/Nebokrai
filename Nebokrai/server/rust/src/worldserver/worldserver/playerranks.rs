@@ -35,6 +35,12 @@
 //! инструкциями `0x0041C4DD..0x0041C4E9` и `0x0041C3EE..0x0041C40C`.
 //! `Option<TimerId>` заменяет неинициализированный constructor-ом event ID;
 //! сам `CTimer` остаётся библиотечным ordered owner-ом.
+//! `Default` повторяет подтверждённую inline-инициализацию singleton-а, а
+//! явная передача единственного `CPlayerRanks` заменяет process-global
+//! `getInstance`/`GetPlayerRanks`. `Vec` освобождается обычным Rust `Drop`;
+//! исходный dangling singleton после `Release` не воспроизводится. Сам
+//! `Release` остаётся сырой границей до прямой связи с timer-owner-ом в
+//! shutdown-пути `CGame`.
 //! Парсинг двух входных полей пока принадлежит отдельному сырому
 //! `COrganizingParam`; PlayerRanks принимает уже доказанную typed-проекцию и
 //! не угадывает формат его конфигурационного файла.
@@ -347,7 +353,8 @@ fn write_player_rank_string(destination: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CPlayerRanks::~CPlayerRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// Rust `Drop` для `Vec<PlayerRankEntry>` выполняет тот же полный release списка.
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\playerranks.cpp:28
@@ -361,7 +368,8 @@ fn write_player_rank_string(destination: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CPlayerRanks::getInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// `CPlayerRanks::default` и явный owner заменяют nullable process-global singleton.
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\playerranks.cpp:33
@@ -375,7 +383,8 @@ fn write_player_rank_string(destination: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: GetPlayerRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// Все callers получают тот же один owner явным mutable/shared borrow-ом.
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\playerranks.cpp:166
