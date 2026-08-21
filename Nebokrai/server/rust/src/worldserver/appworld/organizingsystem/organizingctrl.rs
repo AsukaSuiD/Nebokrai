@@ -5,6 +5,8 @@
 //! `SendAllTopInfoToInfoToOneClient` RVA `0x000352C0` — `IMPLEMENTED`;
 //! локальные `CreateUnion::{CreateUnion,DoAsyncCall,Release}` RVA
 //! `0x00034E90/0x00033680/0x00034EF0` — `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
+//! `CreateConfederation` RVA `0x000389D0` —
+//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
 //! полный `COrganizingCtrl::Run` RVA `0x0003A550` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`, `DisbandFaction` RVA `0x00038550` и
 //! `UpdateOtherFacInfoToClient` RVA `0x00034980` и `DisbandConferation` RVA
@@ -91,6 +93,14 @@
 //! ответ `AR_OK` с первым `long == 1` отделён от отказа и non-result terminal.
 //! `Arc`, typed payload и автоматический `Drop` заменяют только множественное
 //! наследование, raw `char *`, ручное выделение и virtual `Release` оригинала.
+//! `CreateConfederation` проверяет reservation в порядке first/second, требует
+//! оба ненулевых faction owner-а, читает их player header, затем проверяет у
+//! первой faction `IsCreateUnionFun`. Отказ использует `WS0242/WS0193`, offline
+//! второго мастера — `WS0243/WS0193`. Только online-ветвь получает process-wide
+//! net-exchange ID, резервирует обе faction и начинает timeout `1000`.
+//! Переданный аргумент имени EXE не читает: endpoint получает имя первой
+//! faction. Rust на внутренней ошибке session setup снимает обе reservation
+//! вместо исходного null dereference; внешнего Miracle-контракта у UB нет.
 //! `AddOwnedCityToFaction` повторяет те же positive-ID/map/null gates и затем
 //! вызывает virtual `AddOwnedCity` slot `+0x80`. Exact ASM
 //! `0x00437C20..0x00437C69` подтверждает порядок обоих аргументов и отсутствие
@@ -1819,6 +1829,57 @@ pub(crate) fn begin_confederation_creation_session(
     Ok(ConfederationCreationSessionReport { session })
 }
 
+/// Внешние границы синхронного `COrganizingCtrl::CreateConfederation`.
+pub(crate) trait ConfederationCreationEffects {
+    type SessionReport;
+    type SessionBlock;
+
+    fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8>;
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>);
+    fn begin_confederation_creation_session(
+        &mut self,
+        request: ConfederationCreationSessionRequest,
+    ) -> Result<Self::SessionReport, Self::SessionBlock>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ConfederationCreationRejection {
+    FirstFactionReserved,
+    SecondFactionReserved,
+    ZeroFactionId,
+    FirstFactionMissing,
+    SecondFactionMissing,
+    CreationFunctionDisabled { notice_sent: bool },
+    SecondMasterOffline { notice_sent: bool },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum ConfederationCreationStartOutcome<SessionReport> {
+    Rejected(ConfederationCreationRejection),
+    Started {
+        first_player_id: i32,
+        second_player_id: i32,
+        first_faction_id: i32,
+        second_faction_id: i32,
+        net_exchange_id: i32,
+        session: SessionReport,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum ConfederationCreationStartBlock<SessionBlock> {
+    MissingFirstMaster { faction_id: i32 },
+    MissingSecondMaster { faction_id: i32 },
+    MissingFirstProperty { faction_id: i32 },
+    Session {
+        first_faction_id: i32,
+        second_faction_id: i32,
+        first_reservation_removed: bool,
+        second_reservation_removed: bool,
+        source: SessionBlock,
+    },
+}
+
 /// Поля синхронного `PlayerTransferOwnerCity::DoAsyncCall`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CityTransferSessionRequest {
@@ -2213,6 +2274,25 @@ pub(crate) trait AttackCityEndEffects {
     fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32);
 
     fn broadcast_city_war_result(&mut self, text: &[u8]) -> Result<i32, SendMessageError>;
+}
+
+fn send_confederation_creation_notice<Effects>(
+    effects: &mut Effects,
+    first_player_id: i32,
+    text_id: &'static [u8],
+) where
+    Effects: ConfederationCreationEffects,
+{
+    let second_text = effects.world_string(b"WS0193");
+    let first_text = effects.world_string(text_id);
+    effects.send_organizing_info(FactionMemberInfoRequest {
+        recipient_player_id: first_player_id,
+        first_text: legacy_c_string_prefix(&first_text),
+        second_text: legacy_c_string_prefix(&second_text),
+        information_type: -1,
+        color: 0xFFDA_EDFE,
+        trailing_value: 0,
+    });
 }
 
 fn send_city_transfer_notice<Effects>(
@@ -4930,6 +5010,123 @@ impl COrganizingCtrl {
         Ok(report)
     }
 
+    /// Проверяет две faction и запускает exact подтверждение учреждения союза.
+    ///
+    /// Переданное старому API имя намеренно не используется: EXE копирует в
+    /// endpoint имя первой faction через virtual slot `+0x60`.
+    pub(crate) fn create_confederation<Effects>(
+        &mut self,
+        game: &CGame,
+        first_faction_id: i32,
+        second_faction_id: i32,
+        _requested_name: &[u8],
+        effects: &mut Effects,
+    ) -> Result<
+        ConfederationCreationStartOutcome<Effects::SessionReport>,
+        ConfederationCreationStartBlock<Effects::SessionBlock>,
+    >
+    where
+        Effects: ConfederationCreationEffects,
+    {
+        if self.is_union_application_reserved(first_faction_id) {
+            return Ok(ConfederationCreationStartOutcome::Rejected(
+                ConfederationCreationRejection::FirstFactionReserved,
+            ));
+        }
+        if self.is_union_application_reserved(second_faction_id) {
+            return Ok(ConfederationCreationStartOutcome::Rejected(
+                ConfederationCreationRejection::SecondFactionReserved,
+            ));
+        }
+        if first_faction_id == 0 || second_faction_id == 0 {
+            return Ok(ConfederationCreationStartOutcome::Rejected(
+                ConfederationCreationRejection::ZeroFactionId,
+            ));
+        }
+
+        let Some(first_faction) = self.faction_by_id(first_faction_id) else {
+            return Ok(ConfederationCreationStartOutcome::Rejected(
+                ConfederationCreationRejection::FirstFactionMissing,
+            ));
+        };
+        let first_player_id = first_faction.master_id().ok_or(
+            ConfederationCreationStartBlock::MissingFirstMaster {
+                faction_id: first_faction_id,
+            },
+        )?;
+        let creation_enabled = first_faction.is_create_union_function().ok_or(
+            ConfederationCreationStartBlock::MissingFirstProperty {
+                faction_id: first_faction_id,
+            },
+        )?;
+        let union_name = first_faction.name().to_vec();
+
+        let Some(second_faction) = self.faction_by_id(second_faction_id) else {
+            return Ok(ConfederationCreationStartOutcome::Rejected(
+                ConfederationCreationRejection::SecondFactionMissing,
+            ));
+        };
+        let second_player_id = second_faction.master_id().ok_or(
+            ConfederationCreationStartBlock::MissingSecondMaster {
+                faction_id: second_faction_id,
+            },
+        )?;
+
+        if !creation_enabled {
+            send_confederation_creation_notice(effects, first_player_id, b"WS0242");
+            return Ok(ConfederationCreationStartOutcome::Rejected(
+                ConfederationCreationRejection::CreationFunctionDisabled { notice_sent: true },
+            ));
+        }
+
+        let Some(second_player) = game.online_player_by_id(second_player_id as u32) else {
+            send_confederation_creation_notice(effects, first_player_id, b"WS0243");
+            return Ok(ConfederationCreationStartOutcome::Rejected(
+                ConfederationCreationRejection::SecondMasterOffline { notice_sent: true },
+            ));
+        };
+        let net_exchange_id = second_player.get_net_exchange_id();
+        self.push_to_establishment_list(first_faction_id);
+        self.push_to_establishment_list(second_faction_id);
+        let session = match effects.begin_confederation_creation_session(
+            ConfederationCreationSessionRequest {
+                first_player_id,
+                second_player_id,
+                first_faction_id,
+                second_faction_id,
+                requested_session_id: net_exchange_id,
+                timeout_ticks: 0x3E8,
+                union_name,
+            },
+        ) {
+            Ok(session) => session,
+            Err(source) => {
+                // CreateSession/allocation failure старого кода приводил к
+                // null dereference. Это внутренний UB, не wire-семантика.
+                let first_reservation_removed =
+                    self.remove_from_establishment_list(first_faction_id);
+                let second_reservation_removed =
+                    self.remove_from_establishment_list(second_faction_id);
+                return Err(ConfederationCreationStartBlock::Session {
+                    first_faction_id,
+                    second_faction_id,
+                    first_reservation_removed,
+                    second_reservation_removed,
+                    source,
+                });
+            }
+        };
+
+        Ok(ConfederationCreationStartOutcome::Started {
+            first_player_id,
+            second_player_id,
+            first_faction_id,
+            second_faction_id,
+            net_exchange_id,
+            session,
+        })
+    }
+
     /// Выполняет preflight и запускает `TransferIOwnerCity` в машинном порядке.
     #[allow(
         clippy::too_many_arguments,
@@ -7101,7 +7298,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::CreateConfederation
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:867
@@ -7109,6 +7306,9 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 004389d0
 // PROTOTYPE: eCrOrgResult __thiscall CreateConfederation(long param_1, long param_2, basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_3)
 //
+// IMPLEMENTED_OWNER: `COrganizingCtrl::create_confederation` сохраняет exact
+// preflight, notice/order, first-faction name, reservation и timeout `0x3E8`;
+// safe session failure очищает обе reservation вместо внутреннего UB.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
