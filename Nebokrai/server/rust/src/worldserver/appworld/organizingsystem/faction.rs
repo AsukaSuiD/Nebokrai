@@ -19,6 +19,11 @@
 //! `IsOwnedCity` RVA `0x000B5490`, `GetOwnedCities` RVA `0x000BD7D0`,
 //! `UpdateExpToClient/SetExp` RVA `0x000B55B0/0x000B61F0`,
 //! `OnMemberLvlChange` RVA `0x000B6590`,
+//! базовые query-owner-ы `GetID/GetName/GetMasterID/GetLvl/GetExp/GetCountry`
+//! RVA `0x000BD700..0x000BD760`, `GetEstablishedTime`/`IsLWFunction`/
+//! `IsCreateUnionFun` RVA `0x000BD790..0x000BD7B0`, victor/delete getter-ы
+//! RVA `0x000BD800..0x000BD820` и member query-owner-ы
+//! `GetTitleByID/GetJobLvlByID` RVA `0x000BD870/0x000BD910`,
 //! `DelMember` RVA `0x000B9EF0`,
 //! `UpdatePropertyToClient` RVA `0x000B9FB0`,
 //! `UpdateEnemyFactionToClient/UpdateCityWarEnemyFactionToClient` RVA
@@ -79,6 +84,9 @@
 //! `enemy_id/operator` исходные функции не читали и в Rust-интерфейс не входят.
 //! Experience-update `0x7FE14` получает только contributor либо master и несёт
 //! recipient/current/upgrade exp. `SetExp` ставит dirty-bit до этой рассылки.
+//! Простые query-owner-ы возвращают достигнутые scalar/property/member поля
+//! без side effect. Для ещё не назначенного partial state Rust возвращает
+//! `Option`, а bounded C-строка title не воспроизводит старое чтение за массивом.
 //! Достигнутый `SetPlayerOrganizing` дополнительно читает `m_strName`,
 //! `m_lMastterID`, `m_Property.lLvl/lExp`, `m_OwnedCities` и два enemy-set.
 //! Коллекции, которые constructor действительно создавал пустыми, хранятся
@@ -304,6 +312,14 @@ impl FactionBaseProperty {
 
     pub(crate) const fn property_2(&self) -> i32 {
         self.signed_at(0x34)
+    }
+
+    pub(crate) const fn leave_word_function(&self) -> bool {
+        self.bytes[0x25] != 0
+    }
+
+    pub(crate) const fn create_union_function(&self) -> bool {
+        self.bytes[0x2A] != 0
     }
 
     const fn wire_bytes(&self) -> &[u8; FACTION_BASE_PROPERTY_SIZE] {
@@ -674,6 +690,48 @@ impl CFaction {
     /// Возвращает полный reached `m_Property` вместе с исходным padding.
     pub(crate) const fn base_property(&self) -> Option<FactionBaseProperty> {
         self.base_property
+    }
+
+    pub(crate) const fn country(&self) -> Option<u8> {
+        match self.base_property {
+            Some(property) => Some(property.country()),
+            None => None,
+        }
+    }
+
+    pub(crate) const fn is_permitted(&self) -> Option<bool> {
+        match self.base_property {
+            Some(property) => Some(property.permit()),
+            None => None,
+        }
+    }
+
+    pub(crate) const fn is_leave_word_function(&self) -> Option<bool> {
+        match self.base_property {
+            Some(property) => Some(property.leave_word_function()),
+            None => None,
+        }
+    }
+
+    pub(crate) const fn is_create_union_function(&self) -> Option<bool> {
+        match self.base_property {
+            Some(property) => Some(property.create_union_function()),
+            None => None,
+        }
+    }
+
+    pub(crate) const fn defence_victor_counts(&self) -> Option<i32> {
+        match self.base_property {
+            Some(property) => Some(property.defence_victor_counts()),
+            None => None,
+        }
+    }
+
+    pub(crate) const fn offense_victor_counts(&self) -> Option<i32> {
+        match self.base_property {
+            Some(property) => Some(property.offense_victor_counts()),
+            None => None,
+        }
     }
 
     /// Пересчитывает level-зависимый property prefix без клиентской публикации.
@@ -1052,6 +1110,24 @@ impl CFaction {
         self.members
             .get(&player_id)
             .is_some_and(|member| member.contribute)
+    }
+
+    /// Считает contributor-флаги с исходным 32-битным переполнением.
+    pub(crate) fn contributor_count(&self) -> i32 {
+        self.members.values().fold(0i32, |count, member| {
+            if member.contribute {
+                count.wrapping_add(1)
+            } else {
+                count
+            }
+        })
+    }
+
+    /// Возвращает младшие 16 бит `lJobLvl` либо исходный `0` при miss.
+    pub(crate) fn member_job_level(&self, player_id: i32) -> u16 {
+        self.members
+            .get(&player_id)
+            .map_or(0, |member| member.job_level as u16)
     }
 
     /// Проверяет точное состояние `PST_Permit` одного member-права.
@@ -1629,7 +1705,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetIsPermit
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2431
@@ -1825,7 +1901,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetControbuterNum
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2507
@@ -2063,7 +2139,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::IsControbute
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2457
@@ -2651,7 +2727,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:161
@@ -2665,7 +2741,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:162
@@ -2679,7 +2755,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetMasterID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:163
@@ -2693,7 +2769,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetLvl
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:164
@@ -2707,7 +2783,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetExp
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:166
@@ -2735,7 +2811,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetCountry
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:171
@@ -2777,7 +2853,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetEstablishedTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:202
@@ -2791,7 +2867,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::IsLWFunction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:225
@@ -2805,7 +2881,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::IsCreateUnionFun
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:237
@@ -2861,7 +2937,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetDefenceVictorCounts
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:288
@@ -2875,7 +2951,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetOffenseVictorCounts
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:289
@@ -2889,7 +2965,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetDelRemainTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:316
@@ -2903,7 +2979,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetTitleByID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:207
@@ -2917,7 +2993,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetJobLvlByID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:217
