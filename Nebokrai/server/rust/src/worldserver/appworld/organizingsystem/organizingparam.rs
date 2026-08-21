@@ -213,6 +213,30 @@ impl COrganizingParam {
         self.player_ranks_count
     }
 
+    pub(crate) const fn pronounce_minimum_level(&self) -> i32 {
+        self.pronounce_minimum_level
+    }
+
+    pub(crate) const fn leave_word_minimum_level(&self) -> i32 {
+        self.leave_word_minimum_level
+    }
+
+    pub(crate) const fn endue_right_minimum_level(&self) -> i32 {
+        self.endue_right_minimum_level
+    }
+
+    pub(crate) const fn create_union_minimum_level(&self) -> i32 {
+        self.create_union_minimum_level
+    }
+
+    pub(crate) const fn attack_village_minimum_level(&self) -> i32 {
+        self.attack_village_minimum_level
+    }
+
+    pub(crate) const fn attack_city_minimum_level(&self) -> i32 {
+        self.attack_city_minimum_level
+    }
+
     pub(crate) const fn latest_tax_event_id(&self) -> Option<TimerId> {
         self.latest_tax_event_id
     }

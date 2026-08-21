@@ -9,7 +9,8 @@
 //! `GetMembers/GetMemberNum` RVA `0x000BD7C0/0x000BD830` и
 //! `CFaction::IsMember` RVA `0x000BD840` и
 //! `UpdateMemberInfoToClient` RVA `0x000BA7C0`, а также
-//! `OnMemberExitGame` RVA `0x000B64D0` и
+//! `OnMemberExitGame` RVA `0x000B64D0`,
+//! `InitialPropertyByLvl` RVA `0x000B4BA0` и
 //! `OnMemberEnterGame` RVA `0x000C0A10` — `IMPLEMENTED`; спорные ключи lookup
 //! имеют статус `VERIFIED_DISASSEMBLY`.
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
@@ -29,6 +30,11 @@
 //! MSVC tree-node, sentinel, allocator и ручной cleanup, сохраняя signed
 //! numeric порядок. Rust-layout не объявляется копией старого ABI, а полного
 //! `CFaction` constructor-а до остальных полей не существует.
+//! `InitialPropertyByLvl` принимает восстановленный `COrganizingParam` явно,
+//! меняет шесть permission-флагов и maximum до проверки level-record, а
+//! upgrade experience — только после неё. Поэтому отсутствующий уровень
+//! сохраняет уже выполненный prefix и возвращает старый `false`; отсутствующий
+//! live property остаётся отдельной safe-границей узкого Rust-owner-а.
 //! Достигнутый `SetPlayerOrganizing` дополнительно читает `m_strName`,
 //! `m_lMastterID`, `m_Property.lLvl/lExp`, `m_OwnedCities` и два enemy-set.
 //! Коллекции, которые constructor действительно создавал пустыми, хранятся
@@ -158,6 +164,7 @@ use std::mem::{offset_of, size_of};
 use chrono::{Datelike, Local, Timelike};
 
 use super::organizing::{EOperator, TagMemInfo, TagTimeValue, UnterminatedMemberField};
+use super::organizingparam::COrganizingParam;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::worldserver::game::{CGame, WorldRegionNameLookup};
 
@@ -247,6 +254,20 @@ impl FactionBaseProperty {
     pub(crate) const fn property_2(&self) -> i32 {
         self.signed_at(0x34)
     }
+
+    fn write_signed(&mut self, offset: usize, value: i32) {
+        self.bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn set_initial_level_permissions(&mut self, parameters: &COrganizingParam) {
+        let level = self.level();
+        self.bytes[0x24] = u8::from(parameters.pronounce_minimum_level() <= level);
+        self.bytes[0x25] = u8::from(parameters.leave_word_minimum_level() <= level);
+        self.bytes[0x26] = u8::from(parameters.endue_right_minimum_level() <= level);
+        self.bytes[0x2A] = u8::from(parameters.create_union_minimum_level() <= level);
+        self.bytes[0x28] = u8::from(parameters.attack_village_minimum_level() <= level);
+        self.bytes[0x29] = u8::from(parameters.attack_city_minimum_level() <= level);
+    }
 }
 
 /// Локальная safe-граница dirty-bit `1` для ещё узкого live-state.
@@ -257,6 +278,9 @@ pub(crate) enum FactionCloneSaveBlock {
     EstablishedTimeUnknown,
     DeleteRemainTimeAbsent,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FactionInitialPropertyBlock;
 
 /// Результат одной исходно игнорировавшейся отправки member-update.
 #[derive(Debug, Eq, PartialEq)]
@@ -506,6 +530,30 @@ impl CFaction {
     /// Возвращает полный reached `m_Property` вместе с исходным padding.
     pub(crate) const fn base_property(&self) -> Option<FactionBaseProperty> {
         self.base_property
+    }
+
+    /// Пересчитывает level-зависимый property prefix без клиентской публикации.
+    pub(crate) fn initial_property_by_level(
+        &mut self,
+        parameters: &COrganizingParam,
+    ) -> Result<bool, FactionInitialPropertyBlock> {
+        let property = self
+            .base_property
+            .as_mut()
+            .ok_or(FactionInitialPropertyBlock)?;
+        let level = property.level();
+        property.set_initial_level_permissions(parameters);
+
+        let maximum_members = parameters.get_max_number_by_level(level);
+        if property.signed_at(0x1C) != maximum_members {
+            property.write_signed(0x1C, maximum_members);
+        }
+
+        let Some(level_parameters) = parameters.get_level_param(level) else {
+            return Ok(false);
+        };
+        property.write_signed(0x20, level_parameters.experience);
+        Ok(true)
     }
 
     /// Возвращает reached `m_EstablishedTime` без выдуманного default.
@@ -996,7 +1044,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::InitialPropertyByLvl
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:155
