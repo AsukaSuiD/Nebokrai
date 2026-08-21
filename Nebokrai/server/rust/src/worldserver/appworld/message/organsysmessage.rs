@@ -1,7 +1,7 @@
 //! Статус корпуса: `IMPLEMENTED_PARTIAL` для достигнутых organizing opcode,
 //! включая заявку союза `0x60118`, общий session-result dispatch, billboard
-//! `0x60125`, улучшение фракции `0x60126` и запрос значка `0x60127`;
-//! остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127` и выбор
+//! вкладчика `0x60128`; остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
@@ -70,6 +70,13 @@
 //! lookup, payload decoder и wire-ответ отсутствуют; сам `UploadIcon` время не
 //! читает и реализует только master/property/interval gate. Добавленные старым
 //! Linux-донором ownership и exact-tail проверки поэтому не переносятся.
+//! Exact `0x004A80CF..0x004A8128` для `0x60128` читает `(target player ID,
+//! enabled long, requester player ID)`, преобразует enabled строго через
+//! `!= 0`, разрешает faction requester-а через ordered `IsFreePlayer` и
+//! вызывает virtual slot `+0x128`, то есть готовый
+//! `SetControbuter(requester, target, enabled)`. Online-player ownership,
+//! payload decoder и wire-ответ отсутствуют. Linux-донор верно подсказал форму
+//! трёх полей, но его exact-tail/ownership проверки в EXE не подтверждаются.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -101,7 +108,8 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsOriginalNameIndex, query_goods_name,
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
-    FactionLevelContext, FactionMemberInfoRequest, FactionOrganizingInfoContext,
+    FactionContributorContext, FactionLevelContext, FactionMemberInfoRequest,
+    FactionOrganizingInfoContext,
     FactionUpgradeBlock, FactionUpgradeContext, FactionUpgradeFormatArgument,
     FactionUpgradeOutcome, FactionUploadIconBlock, FactionUploadIconContext,
     FactionUploadIconOutcome,
@@ -111,6 +119,7 @@ use crate::worldserver::appworld::organizingsystem::factionwarsys::{
 };
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     COrganizingCtrl, DeclareWarFactionPage, DeclareWarFactionPageBlock, FreePlayerLookup,
+    OrganizingContributorBlock, OrganizingContributorOutcome,
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock,
     OrganizingLeaveWordEditOutcome, OrganizingLeaveWordEnableBlock,
     OrganizingFactionWarDeclarationBlock, WorldFactionWarDeclarationEffects,
@@ -145,6 +154,7 @@ const FACTION_BILLBOARD_MESSAGE_TYPE: i32 = 0x60125;
 const FACTION_BILLBOARD_RESPONSE_TYPE: i32 = 0x7FE1D;
 const UPGRADE_FACTION_MESSAGE_TYPE: i32 = 0x60126;
 const UPLOAD_FACTION_ICON_MESSAGE_TYPE: i32 = 0x60127;
+const SET_FACTION_CONTRIBUTOR_MESSAGE_TYPE: i32 = 0x60128;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -478,6 +488,40 @@ impl FactionUploadIconContext for WorldFactionUploadIconEffects<'_, '_, '_> {
             string_id,
             &[UnionFormatArgument::Signed(interval_minutes)],
         )
+    }
+}
+
+/// Узкий string/player adapter для готового `CFaction::SetControbuter`.
+struct WorldFactionContributorEffects<'game, 'callbacks, 'effects, 'update> {
+    game: &'game CGame,
+    callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
+    update_player: &'update mut dyn FnMut(i32),
+}
+
+impl FactionOrganizingInfoContext for WorldFactionContributorEffects<'_, '_, '_, '_> {
+    fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
+        Some((self.callbacks.world_string)(string_id))
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+impl FactionContributorContext for WorldFactionContributorEffects<'_, '_, '_, '_> {
+    fn format_contributor_string(
+        &mut self,
+        string_id: &'static [u8],
+        member_name: &[u8],
+    ) -> Vec<u8> {
+        (self.callbacks.format_world_string)(
+            string_id,
+            &[UnionFormatArgument::Text(member_name)],
+        )
+    }
+
+    fn update_player_faction_info(&mut self, player_id: i32) {
+        (self.update_player)(player_id);
     }
 }
 
@@ -1280,6 +1324,54 @@ pub(crate) fn dispatch_faction_upload_icon(
         player_id,
         outcome,
     }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionContributorDispatch {
+    pub(crate) target_player_id: i32,
+    pub(crate) enabled_value: i32,
+    pub(crate) requester_player_id: i32,
+    pub(crate) outcome: OrganizingContributorOutcome,
+}
+
+/// Выполняет `0x60128`: requester membership и virtual `SetControbuter`.
+pub(crate) fn dispatch_faction_contributor(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    parameters: &COrganizingParam,
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    update_player: &mut dyn FnMut(i32),
+) -> Option<Result<OrganizingFactionContributorDispatch, OrganizingContributorBlock>> {
+    if message.message_type() != SET_FACTION_CONTRIBUTOR_MESSAGE_TYPE {
+        return None;
+    }
+
+    let target_player_id = message.base_mut().get_long().unwrap_or(0);
+    let enabled_value = message.base_mut().get_long().unwrap_or(0);
+    let requester_player_id = message.base_mut().get_long().unwrap_or(0);
+    let mut effects = WorldFactionContributorEffects {
+        game,
+        callbacks,
+        update_player,
+    };
+    Some(
+        organizing
+            .set_contributor_for_player(
+                game,
+                parameters,
+                requester_player_id,
+                target_player_id,
+                enabled_value != 0,
+                &mut effects,
+            )
+            .map(|outcome| OrganizingFactionContributorDispatch {
+                target_player_id,
+                enabled_value,
+                requester_player_id,
+                outcome,
+            }),
+    )
 }
 
 fn send_declare_war_faction_list_notice<Context>(

@@ -268,7 +268,8 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use rustix::time::{ClockId, clock_gettime};
 
 use super::faction::{
-    CFaction, FactionCloneSaveBlock, FactionDeleteOrganizingBuildError,
+    CFaction, FactionCloneSaveBlock, FactionContributorBlock, FactionContributorContext,
+    FactionContributorOutcome, FactionDeleteOrganizingBuildError,
     FactionDeleteOrganizingOutcome, FactionDisbandBlock, FactionDisbandContext,
     FactionDisbandOutcome, FactionDisbandProgress, FactionDisbandRejection,
     FactionEditLeaveWordOutcome, FactionEnemyDelivery, FactionEnemyMutationBlock,
@@ -770,6 +771,21 @@ pub(crate) enum OrganizingPronounceOutcome {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingContributorOutcome {
+    FactionNotFound,
+    Applied {
+        faction_id: i32,
+        outcome: FactionContributorOutcome,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingContributorBlock {
+    Membership { map_key: i32 },
+    Contributor(FactionContributorBlock),
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum OrganizingPronounceBlock {
     Membership { map_key: i32 },
     Faction {
@@ -1250,6 +1266,40 @@ impl COrganizingCtrl {
         faction
             .upload_icon(parameters, player_id, time, context)
             .map(Some)
+    }
+
+    /// Разрешает faction requester-а через `IsFreePlayer` и меняет contributor.
+    pub(crate) fn set_contributor_for_player<Context>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        requester_id: i32,
+        target_id: i32,
+        enabled: bool,
+        context: &mut Context,
+    ) -> Result<OrganizingContributorOutcome, OrganizingContributorBlock>
+    where
+        Context: FactionContributorContext,
+    {
+        let faction_id = match self.is_free_player(requester_id) {
+            FreePlayerLookup::NoFaction => {
+                return Ok(OrganizingContributorOutcome::FactionNotFound);
+            }
+            FreePlayerLookup::Faction(faction_id) => faction_id,
+            FreePlayerLookup::BlockedNullFaction { map_key } => {
+                return Err(OrganizingContributorBlock::Membership { map_key });
+            }
+        };
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return Ok(OrganizingContributorOutcome::FactionNotFound);
+        };
+        let outcome = faction
+            .set_contributor(game, parameters, requester_id, target_id, enabled, context)
+            .map_err(OrganizingContributorBlock::Contributor)?;
+        Ok(OrganizingContributorOutcome::Applied {
+            faction_id,
+            outcome,
+        })
     }
 
     fn add_billboard_to_byte_array(
