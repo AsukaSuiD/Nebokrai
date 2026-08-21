@@ -11,7 +11,7 @@
 //! `SendToSocket`
 //! подтверждены машинным кодом `Nworldserver.exe`; добавленные Linux-веткой
 //! clamp и error-log отсутствуют в EXE и не перенесены.
-//! Также материализованы transport-only ветви `0x5FF02/03/08/09/0A/0D/0E/0F`
+//! Также материализованы transport-only ветви `0x5FF02/03/07/08/09/0A/0D/0E/0F`
 //! и `0x5FF10/11/13/14/15/16`: они создают либо переписывают точные response
 //! opcodes, сохраняют исходный payload, где это делал EXE, и используют ровно
 //! исходные `SendToSocket`, `SendToMapID` либо `SendAll`.
@@ -86,6 +86,31 @@ pub(crate) enum WorldGmTransportOutcome {
         wire: Vec<u8>,
         delivery: Result<i32, SendMessageError>,
     },
+    NamedPlayerRoute {
+        request_type: i32,
+        request_id: i32,
+        request_id_complete: bool,
+        player_name: Vec<u8>,
+        online_player_id: u32,
+        target_game_server_id: i32,
+        disposition: WorldGmNamedPlayerRouteDisposition,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldGmNamedPlayerRouteDisposition {
+    TargetRouted {
+        response_type: i32,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+    RequesterFallback {
+        response_type: i32,
+        requester_game_server_id: i32,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+    RequesterUnroutable,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -275,6 +300,60 @@ pub(crate) fn on_gm_message(game: &CGame, mut message: CMessage) -> WorldGmMessa
                     ],
                     wire,
                     delivery,
+                },
+            ))
+        }
+        0x0005_FF07 => {
+            let player_name = message
+                .base_mut()
+                .get_str_bytes(0x100)
+                .expect("literal 0x100 исключает zero-capacity GetStr");
+            let online_player_id = game.online_player_id_by_name(&player_name);
+            let target_game_server_id =
+                game.game_server_number_by_player_id(online_player_id as i32);
+            let disposition = if target_game_server_id != 0 {
+                message.set_message_type(0x0007_FC06);
+                let wire = message.as_wire_bytes().to_vec();
+                let delivery = message.send_to_map_id(
+                    game.current_game_server_sender().as_ref(),
+                    target_game_server_id,
+                );
+                WorldGmNamedPlayerRouteDisposition::TargetRouted {
+                    response_type: 0x0007_FC06,
+                    wire,
+                    delivery,
+                }
+            } else {
+                let requester_game_server_id = game.game_server_number_by_player_id(request_id);
+                if requester_game_server_id == 0 {
+                    WorldGmNamedPlayerRouteDisposition::RequesterUnroutable
+                } else {
+                    let mut response = CMessage::new(0x0007_FC08);
+                    response.base_mut().add_long(request_id);
+                    response.base_mut().add_char(0);
+                    add_c_string(&mut response, &player_name);
+                    let wire = response.as_wire_bytes().to_vec();
+                    let delivery = response.send_to_map_id(
+                        game.current_game_server_sender().as_ref(),
+                        requester_game_server_id,
+                    );
+                    WorldGmNamedPlayerRouteDisposition::RequesterFallback {
+                        response_type: 0x0007_FC08,
+                        requester_game_server_id,
+                        wire,
+                        delivery,
+                    }
+                }
+            };
+            WorldGmMessageDispatch::Handled(WorldGmMessageOutcome::Transport(
+                WorldGmTransportOutcome::NamedPlayerRoute {
+                    request_type: 0x0005_FF07,
+                    request_id,
+                    request_id_complete: decoded_request_id.is_some(),
+                    player_name,
+                    online_player_id,
+                    target_game_server_id,
+                    disposition,
                 },
             ))
         }

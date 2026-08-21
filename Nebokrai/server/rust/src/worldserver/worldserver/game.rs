@@ -8390,7 +8390,7 @@ impl CGame {
     /// Поэтому typed reconnect из первой очереди заменяет owner до второго
     /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
     /// ветви server-owner-а, GMA `0x4FD01/0x4FD04/0x60401/0x60402`, GM
-    /// query/transport ветви GM `0x5FF01/02/03/05/08/09/0A/0D..11/13..16`,
+    /// query/transport ветви GM `0x5FF01/02/03/05/07..0A/0D..11/13..16`,
     /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, honor
     /// `0x5FD0C/0x5FD0D`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
