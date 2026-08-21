@@ -10,7 +10,7 @@
 //! `LeaveWord/LoadLeavewords` RVA `0x000BCA40/0x000BD3F0`,
 //! `UpdateAllApplyMemberToClient/UpdateApplyMemberToClient/RemoveApplyMember`
 //! RVA `0x000B60D0/0x000BEC80/0x000B9F50`,
-//! `ApplyForJoin` RVA `0x000BE520`,
+//! `ApplyForJoin/DoJoin` RVA `0x000BE520/0x000BEE40`,
 //! `SendInfoToAllMember/UpdateOtherFacInfoToClient` RVA
 //! `0x000B5890/0x000B58F0`,
 //! `Talk` RVA `0x000B5A50`,
@@ -419,6 +419,20 @@
 //! буфера. Нетерминированное `char[20]` и переполнение 256-байтового `_sprintf`
 //! заменены typed-границами в точках прежнего UB с сохранением уже выполненных
 //! эффектов.
+//! `DoJoin` повторяет те же war-gates, но Goods War проверяет после city-war и
+//! только затем право `PV_ConMem`. Найденная заявка копируется и удаляется до
+//! чтения approve-флага. Нулевой флаг означает отказ заявителю и старый `true`;
+//! ненулевой продолжает через повторный member-limit, глобальное снятие заявок
+//! и membership-gate. Новый `tagMemInfo` получает job-level `99`, права Exit и
+//! LeaveWord, title `WS0169`, входной join-time и online либо сохранённые данные
+//! кандидата. До вставки идут `WS0170` всем старым членам и `WS0171` заявителю;
+//! после неё — player refresh, два controller snapshot callback-а, member
+//! `OP_Add`, dirty `2`, отмена disband countdown и опциональный join-log.
+//! Exact ASM `0x004BEE40..0x004BF9F5` подтверждает этот порядок, два отдельных
+//! controller callback-а `0x00437380/0x00434D00`, unsigned countdown threshold
+//! и игнорирование их bool-return. Fixed C-буферы и старые `_sprintf/strcpy`
+//! заменены bounded массивами и typed-границами; controller/war/log plumbing
+//! остаётся явным тонким контекстом.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -455,6 +469,8 @@ const LEAVE_WORD_CONTENT_CAPACITY: usize = 212;
 const LEAVE_WORD_CONTENT_LIMIT: usize = 210;
 const LEAVE_WORD_LIMIT: usize = 60;
 const APPLY_PERSON_NAME_CAPACITY: usize = 20;
+const FACTION_MEMBER_NAME_CAPACITY: usize = 32;
+const FACTION_MEMBER_TEXT_CAPACITY: usize = 64;
 const PRONOUNCE_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_CONTENT_CAPACITY: usize = 2048;
 const OTHER_FACTION_NAME_CAPACITY: usize = 20;
@@ -745,6 +761,85 @@ pub(crate) enum FactionApplyForJoinBlock<ContextBlock> {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionDoJoinRejection {
+    StandardOrVillageWar,
+    CityWar,
+    GoodsWar,
+    PermissionDenied,
+    ApplicationNotFound,
+    MemberLimit,
+    ApplicantAlreadyInFaction,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionDoJoinOutcome {
+    Rejected {
+        reason: FactionDoJoinRejection,
+        application_removal: Option<FactionRemoveApplyMemberOutcome>,
+    },
+    ApplicationDenied {
+        application_removal: FactionRemoveApplyMemberOutcome,
+    },
+    Joined {
+        application_removal: FactionRemoveApplyMemberOutcome,
+        member_information: FactionMemberInfoReport,
+        refreshed_player_ids: Vec<i32>,
+        add_faction_to_client_result: bool,
+        add_all_faction_info_result: bool,
+        member_update: Result<MemberUpdateReport, MemberUpdateBuildError>,
+        disband_countdown_cancelled: bool,
+        log_written: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionDoJoinContextOperation {
+    RemovePreviousApplications,
+    ApplicantMembershipLookup,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionDoJoinStringField {
+    DenialNotice,
+    MemberLimitNotice,
+    MemberTitle,
+    OnlinePlayerName,
+    OnlineRegionName,
+    MemberJoinedNotice,
+    ApplicantJoinedNotice,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionDoJoinBlock<ContextBlock> {
+    Context {
+        operation: FactionDoJoinContextOperation,
+        source: ContextBlock,
+        application_removed: bool,
+    },
+    MissingBaseProperty {
+        application_removed: bool,
+    },
+    StringWouldOverflow {
+        field: FactionDoJoinStringField,
+        visible_len: usize,
+        capacity: usize,
+        application_removed: bool,
+        member_inserted: bool,
+    },
+    UnterminatedManagerName {
+        manager_id: i32,
+        member_inserted: bool,
+    },
+    ManagerMemberMissing {
+        manager_id: i32,
+        member_inserted: bool,
+    },
+    MissingDeleteRemainTime {
+        member_inserted: bool,
+    },
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FactionLeaveWordUpdateBuildError {
     MissingLastLeaveWord,
@@ -947,6 +1042,47 @@ pub(crate) trait FactionApplyForJoinContext: FactionOrganizingInfoContext {
         faction_name: &[u8],
         player_id: i32,
         player_name: &[u8],
+        log_type: i32,
+    );
+}
+
+/// Узкая граница внешних систем полного approve/reject join-пути.
+pub(crate) trait FactionDoJoinContext: FactionOrganizingInfoContext {
+    type Block;
+
+    fn already_declared_for_village_war(&self, faction_id: i32) -> bool;
+
+    fn already_declared_for_city_war(&self, faction_id: i32) -> bool;
+
+    fn goods_war_blocks_join(&self, faction_id: i32, manager_id: i32) -> bool;
+
+    fn remove_previous_faction_applications(
+        &mut self,
+        game: &CGame,
+        player_id: i32,
+    ) -> Result<(), Self::Block>;
+
+    fn applicant_already_in_faction(&self, player_id: i32) -> Result<bool, Self::Block>;
+
+    fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8>;
+
+    fn update_player_faction_info(&mut self, player_id: i32);
+
+    fn add_faction_to_client_by_player_id(&mut self, player_id: i32) -> bool;
+
+    fn add_all_faction_info_to_client_by_player_id(&mut self, player_id: i32) -> bool;
+
+    fn faction_join_log_enabled(&self) -> bool;
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_faction_join_log(
+        &mut self,
+        member_id: i32,
+        member_name: &[u8],
+        manager_id: i32,
+        manager_name: &[u8],
+        faction_id: i32,
+        faction_name: &[u8],
         log_type: i32,
     );
 }
@@ -2708,6 +2844,297 @@ impl CFaction {
         })
     }
 
+    /// Отклоняет либо принимает уже существующую faction-заявку.
+    pub(crate) fn do_join<Context>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        manager_id: i32,
+        applicant_id: i32,
+        approve_flag: i32,
+        join_time: TagTimeValue,
+        context: &mut Context,
+    ) -> Result<FactionDoJoinOutcome, FactionDoJoinBlock<Context::Block>>
+    where
+        Context: FactionDoJoinContext + ?Sized,
+    {
+        if self.has_enemy_faction() || context.already_declared_for_village_war(self.faction_id) {
+            send_apply_join_information(context, manager_id, b"WS0162", b"WS0121");
+            return Ok(FactionDoJoinOutcome::Rejected {
+                reason: FactionDoJoinRejection::StandardOrVillageWar,
+                application_removal: None,
+            });
+        }
+        if self.has_city_war_enemy_faction()
+            || context.already_declared_for_city_war(self.faction_id)
+        {
+            send_apply_join_information(context, manager_id, b"WS0163", b"WS0121");
+            return Ok(FactionDoJoinOutcome::Rejected {
+                reason: FactionDoJoinRejection::CityWar,
+                application_removal: None,
+            });
+        }
+        if context.goods_war_blocks_join(self.faction_id, manager_id) {
+            send_apply_join_information(context, manager_id, b"WS0162", b"WS0121");
+            return Ok(FactionDoJoinOutcome::Rejected {
+                reason: FactionDoJoinRejection::GoodsWar,
+                application_removal: None,
+            });
+        }
+        if !self.is_using_purview(manager_id, EPurview::ConMem as i32) {
+            return Ok(FactionDoJoinOutcome::Rejected {
+                reason: FactionDoJoinRejection::PermissionDenied,
+                application_removal: None,
+            });
+        }
+
+        let Some(apply_person) = self.apply_persons.get(&applicant_id).copied() else {
+            return Ok(FactionDoJoinOutcome::Rejected {
+                reason: FactionDoJoinRejection::ApplicationNotFound,
+                application_removal: None,
+            });
+        };
+        let application_removal = self.remove_apply_member(game, applicant_id);
+
+        if approve_flag == 0 {
+            let notice = context
+                .format_world_string(b"WS0167", &[legacy_c_string_visible_bytes(&self.name)]);
+            let notice = legacy_c_string_visible_bytes(&notice);
+            ensure_do_join_string_fits::<Context::Block>(
+                FactionDoJoinStringField::DenialNotice,
+                notice.len(),
+                APPLY_JOIN_NOTICE_CAPACITY,
+                true,
+                false,
+            )?;
+            let second_text = context.world_string(b"WS0119").unwrap_or_default();
+            context.send_organizing_info(FactionMemberInfoRequest {
+                recipient_player_id: applicant_id,
+                first_text: notice,
+                second_text: legacy_c_string_visible_bytes(&second_text),
+                information_type: -1,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            });
+            return Ok(FactionDoJoinOutcome::ApplicationDenied {
+                application_removal,
+            });
+        }
+
+        let level = self
+            .level()
+            .ok_or(FactionDoJoinBlock::MissingBaseProperty {
+                application_removed: true,
+            })?;
+        let maximum_members = parameters.get_max_number_by_level(level);
+        if self.members.len() as u32 as i32 >= maximum_members {
+            let first_text = context.world_string(b"WS0168").unwrap_or_default();
+            let first_text = legacy_c_string_visible_bytes(&first_text);
+            ensure_do_join_string_fits::<Context::Block>(
+                FactionDoJoinStringField::MemberLimitNotice,
+                first_text.len(),
+                APPLY_JOIN_NOTICE_CAPACITY,
+                true,
+                false,
+            )?;
+            let second_text = context.world_string(b"WS0119").unwrap_or_default();
+            context.send_organizing_info(FactionMemberInfoRequest {
+                recipient_player_id: manager_id,
+                first_text,
+                second_text: legacy_c_string_visible_bytes(&second_text),
+                information_type: -1,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            });
+            return Ok(FactionDoJoinOutcome::Rejected {
+                reason: FactionDoJoinRejection::MemberLimit,
+                application_removal: Some(application_removal),
+            });
+        }
+
+        context
+            .remove_previous_faction_applications(game, applicant_id)
+            .map_err(|source| FactionDoJoinBlock::Context {
+                operation: FactionDoJoinContextOperation::RemovePreviousApplications,
+                source,
+                application_removed: true,
+            })?;
+        if context
+            .applicant_already_in_faction(applicant_id)
+            .map_err(|source| FactionDoJoinBlock::Context {
+                operation: FactionDoJoinContextOperation::ApplicantMembershipLookup,
+                source,
+                application_removed: true,
+            })?
+        {
+            return Ok(FactionDoJoinOutcome::Rejected {
+                reason: FactionDoJoinRejection::ApplicantAlreadyInFaction,
+                application_removal: Some(application_removal),
+            });
+        }
+
+        let title = context.world_string(b"WS0169").unwrap_or_default();
+        let title = fixed_do_join_string::<FACTION_MEMBER_TEXT_CAPACITY, Context::Block>(
+            FactionDoJoinStringField::MemberTitle,
+            &title,
+            true,
+            false,
+        )?;
+        let mut purview = [EPurviewOwnState::No; 11];
+        purview[EPurview::Exit as usize] = EPurviewOwnState::Permit;
+        purview[EPurview::LeaveWord as usize] = EPurviewOwnState::Permit;
+
+        let (name, member_level, occupation, region) =
+            if let Some(player) = game.online_player_by_id(applicant_id as u32) {
+                let name = fixed_do_join_string::<FACTION_MEMBER_NAME_CAPACITY, Context::Block>(
+                    FactionDoJoinStringField::OnlinePlayerName,
+                    player.get_name(),
+                    true,
+                    false,
+                )?;
+                let region_source = match game.region_name(player.get_region_id()) {
+                    WorldRegionNameLookup::RegionNotFound
+                    | WorldRegionNameLookup::NullRegionPointer => &[][..],
+                    WorldRegionNameLookup::Name(name) => name,
+                };
+                let region = fixed_do_join_string::<FACTION_MEMBER_TEXT_CAPACITY, Context::Block>(
+                    FactionDoJoinStringField::OnlineRegionName,
+                    region_source,
+                    true,
+                    false,
+                )?;
+                (
+                    name,
+                    i32::from(player.get_level()),
+                    i32::from(player.get_occupation()),
+                    region,
+                )
+            } else {
+                let mut name = [0; FACTION_MEMBER_NAME_CAPACITY];
+                name[..APPLY_PERSON_NAME_CAPACITY].copy_from_slice(&apply_person.name);
+                (
+                    name,
+                    apply_person.level,
+                    apply_person.occupation,
+                    [0; FACTION_MEMBER_TEXT_CAPACITY],
+                )
+            };
+
+        let member = TagMemInfo::from_complete_fields(
+            applicant_id,
+            name,
+            member_level,
+            occupation,
+            99,
+            title,
+            purview,
+            region,
+            join_time,
+            false,
+        );
+        let member_name = member
+            .name_wire_bytes()
+            .expect("online и offline join-name ограничены до создания member");
+        let member_name = member_name[..member_name.len() - 1].to_vec();
+
+        let joined_notice = context.format_world_string(b"WS0170", &[&member_name]);
+        let joined_notice = legacy_c_string_visible_bytes(&joined_notice);
+        ensure_do_join_string_fits::<Context::Block>(
+            FactionDoJoinStringField::MemberJoinedNotice,
+            joined_notice.len(),
+            APPLY_JOIN_NOTICE_CAPACITY,
+            true,
+            false,
+        )?;
+        let joined_second_text = context.world_string(b"WS0119").unwrap_or_default();
+        let member_information = self.send_info_to_all_members(
+            joined_notice,
+            legacy_c_string_visible_bytes(&joined_second_text),
+            -1,
+            |request| context.send_organizing_info(request),
+        );
+
+        let applicant_notice =
+            context.format_world_string(b"WS0171", &[legacy_c_string_visible_bytes(&self.name)]);
+        let applicant_notice = legacy_c_string_visible_bytes(&applicant_notice);
+        ensure_do_join_string_fits::<Context::Block>(
+            FactionDoJoinStringField::ApplicantJoinedNotice,
+            applicant_notice.len(),
+            APPLY_JOIN_NOTICE_CAPACITY,
+            true,
+            false,
+        )?;
+        let applicant_second_text = context.world_string(b"WS0119").unwrap_or_default();
+        context.send_organizing_info(FactionMemberInfoRequest {
+            recipient_player_id: applicant_id,
+            first_text: applicant_notice,
+            second_text: legacy_c_string_visible_bytes(&applicant_second_text),
+            information_type: -1,
+            color: 0xFFDA_EDFE,
+            trailing_value: 0,
+        });
+
+        self.members.insert(applicant_id, member);
+        let refreshed_player_ids =
+            self.update_player_faction_info(game, applicant_id, |player_id| {
+                context.update_player_faction_info(player_id);
+            });
+        let add_faction_to_client_result = context.add_faction_to_client_by_player_id(applicant_id);
+        let add_all_faction_info_result =
+            context.add_all_faction_info_to_client_by_player_id(applicant_id);
+        let member_update = self.update_member_info_to_client(game, applicant_id, EOperator::Add);
+        self.set_change_data(2);
+
+        let delete_remain_time =
+            self.delete_remain_time
+                .ok_or(FactionDoJoinBlock::MissingDeleteRemainTime {
+                    member_inserted: true,
+                })?;
+        let disband_countdown_cancelled = parameters.disband_faction_minimum_members() as u32
+            <= self.members.len() as u32
+            && delete_remain_time >= 0;
+        if disband_countdown_cancelled {
+            self.delete_remain_time = Some(-1);
+        }
+
+        let log_written = context.faction_join_log_enabled();
+        if log_written {
+            let manager =
+                self.members
+                    .get(&manager_id)
+                    .ok_or(FactionDoJoinBlock::ManagerMemberMissing {
+                        manager_id,
+                        member_inserted: true,
+                    })?;
+            let manager_name = manager.name_wire_bytes().map_err(|_| {
+                FactionDoJoinBlock::UnterminatedManagerName {
+                    manager_id,
+                    member_inserted: true,
+                }
+            })?;
+            context.write_faction_join_log(
+                applicant_id,
+                &member_name,
+                manager_id,
+                &manager_name[..manager_name.len() - 1],
+                self.faction_id,
+                legacy_c_string_visible_bytes(&self.name),
+                0,
+            );
+        }
+
+        Ok(FactionDoJoinOutcome::Joined {
+            application_removal,
+            member_information,
+            refreshed_player_ids,
+            add_faction_to_client_result,
+            add_all_faction_info_result,
+            member_update,
+            disband_countdown_cancelled,
+            log_written,
+        })
+    }
+
     /// Публикует удаление по переданному ID либо последний leave-word целиком.
     pub(crate) fn update_leave_word_to_client(
         &self,
@@ -4060,6 +4487,44 @@ fn send_apply_join_information<Context>(
         color: 0xFFDA_EDFE,
         trailing_value: 0,
     });
+}
+
+fn ensure_do_join_string_fits<ContextBlock>(
+    field: FactionDoJoinStringField,
+    visible_len: usize,
+    capacity: usize,
+    application_removed: bool,
+    member_inserted: bool,
+) -> Result<(), FactionDoJoinBlock<ContextBlock>> {
+    if visible_len >= capacity {
+        return Err(FactionDoJoinBlock::StringWouldOverflow {
+            field,
+            visible_len,
+            capacity,
+            application_removed,
+            member_inserted,
+        });
+    }
+    Ok(())
+}
+
+fn fixed_do_join_string<const CAPACITY: usize, ContextBlock>(
+    field: FactionDoJoinStringField,
+    value: &[u8],
+    application_removed: bool,
+    member_inserted: bool,
+) -> Result<[u8; CAPACITY], FactionDoJoinBlock<ContextBlock>> {
+    let visible = legacy_c_string_visible_bytes(value);
+    ensure_do_join_string_fits::<ContextBlock>(
+        field,
+        visible.len(),
+        CAPACITY,
+        application_removed,
+        member_inserted,
+    )?;
+    let mut output = [0; CAPACITY];
+    output[..visible.len()].copy_from_slice(visible);
+    Ok(output)
 }
 
 fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
@@ -5522,7 +5987,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::DoJoin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:947
