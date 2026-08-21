@@ -35,6 +35,7 @@
 //! `UpdatePropertyToClient` RVA `0x000B9FB0`,
 //! `UpdateEnemyFactionToClient/UpdateCityWarEnemyFactionToClient` RVA
 //! `0x000BA0F0/0x000BA210`,
+//! `UpdateOwnedCityToClient` RVA `0x000C0BF0`,
 //! `AddDefence/Offense/VillageWarVictorCounts` RVA
 //! `0x000BA3B0/0x000BA3D0/0x000BA3F0`,
 //! `ReInitialPropertyByLvl` RVA `0x000BA630`,
@@ -107,6 +108,11 @@
 //! `pRegion` дают пустую строку. Exact ASM подтверждает lookup по текущему city
 //! ID и локальный `char[256]`; переполнение `strcpy` заменено typed-границей,
 //! сохраняя уже дописанный prefix результата.
+//! Owned-city update `0x7FE13` повторяет тот же full snapshot для каждого
+//! готового member recipient после исходного предварительного, но не
+//! использованного построения. Оба объявленных delta-аргумента не читаются.
+//! Recipient filter и игнорирование send-result совпадают с property/enemy
+//! update; Rust возвращает результаты и уже выполненный prefix явно.
 //! Experience-update `0x7FE14` получает только contributor либо master и несёт
 //! recipient/current/upgrade exp. `SetExp` ставит dirty-bit до этой рассылки.
 //! Простые query-owner-ы возвращают достигнутые scalar/property/member поля
@@ -269,6 +275,7 @@ use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::worldserver::game::{CGame, WorldRegionNameLookup};
 
 const MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0D;
+const OWNED_CITY_UPDATE_MESSAGE_TYPE: i32 = 0x7FE13;
 const ENTER_REGION_BUFFER_CAPACITY: usize = 256;
 const LEAVE_WORD_NAME_CAPACITY: usize = 20;
 const LEAVE_WORD_CONTENT_CAPACITY: usize = 212;
@@ -450,6 +457,24 @@ pub(crate) struct FactionEnemyDelivery {
     pub(crate) recipient_player_id: i32,
     pub(crate) game_server_id: i32,
     pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionOwnedCityDelivery {
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionOwnedCityUpdateBuildError {
+    Preflight(OwnedCitiesWireBuildError),
+    Recipient {
+        source: OwnedCitiesWireBuildError,
+        recipient_player_id: i32,
+        game_server_id: i32,
+        completed_deliveries: Vec<FactionOwnedCityDelivery>,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1082,6 +1107,46 @@ impl CFaction {
             completed_cities += 1;
         }
         Ok(true)
+    }
+
+    /// Публикует полный owned-city snapshot каждому готовому member recipient.
+    pub(crate) fn update_owned_cities_to_client(
+        &self,
+        game: &CGame,
+    ) -> Result<Vec<FactionOwnedCityDelivery>, FactionOwnedCityUpdateBuildError> {
+        let mut preflight = Vec::new();
+        self.add_owned_cities_to_byte_array(game, &mut preflight)
+            .map_err(FactionOwnedCityUpdateBuildError::Preflight)?;
+
+        let mut deliveries = Vec::new();
+        for &recipient_player_id in self.members.keys() {
+            let player = game.online_player_by_id(recipient_player_id as u32);
+            let game_server_id = game.game_server_number_by_player_id(recipient_player_id);
+            if player.is_none_or(|player| !player.faction_data_received()) || game_server_id == 0 {
+                continue;
+            }
+
+            let mut serialized_cities = Vec::new();
+            if let Err(source) =
+                self.add_owned_cities_to_byte_array(game, &mut serialized_cities)
+            {
+                return Err(FactionOwnedCityUpdateBuildError::Recipient {
+                    source,
+                    recipient_player_id,
+                    game_server_id,
+                    completed_deliveries: deliveries,
+                });
+            }
+            let mut message = CMessage::new(OWNED_CITY_UPDATE_MESSAGE_TYPE);
+            message.base_mut().add_long(recipient_player_id);
+            message.base_mut().add(&serialized_cities);
+            deliveries.push(FactionOwnedCityDelivery {
+                recipient_player_id,
+                game_server_id,
+                result: game.send_msg_to_game_server(game_server_id, &message),
+            });
+        }
+        Ok(deliveries)
     }
 
     /// Возвращает faction ID, только если город есть в исходном list-order.
@@ -3561,7 +3626,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::UpdateOwnedCityToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2702
