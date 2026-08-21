@@ -18,6 +18,11 @@ pub(crate) mod emotion;
 pub(crate) mod goodsdestructionconfig;
 #[allow(
     dead_code,
+    reason = "GM-list serializer подключён к initial-config до точных ini loaders/accessors"
+)]
+pub(crate) mod gmlist;
+#[allow(
+    dead_code,
     reason = "globe snapshot подключён к initial-config до typed loaders/accessors"
 )]
 pub(crate) mod globesetup;

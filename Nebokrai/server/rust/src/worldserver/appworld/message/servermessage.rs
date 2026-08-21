@@ -117,7 +117,8 @@
 //! map следует отдельными subtype `13`: C-string path, signed `lstrlenA` data
 //! и C-string data. `CQuestSystem` затем передаёт setup и ordered quest records
 //! subtype `0x16`. `CPlayerRanks` следом отправляет insertion-order рейтинг
-//! subtype `0x17`. Следующая граница — `CGMList` subtype `9`.
+//! subtype `0x17`. `CGMList` затем передаёт два ordered name/level map-а и god
+//! passport subtype `9`. Следующая граница — GameServer index subtype `0x12`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -187,6 +188,7 @@ use crate::setup::cbattlefairyexpconfig::{
 use crate::setup::contributesetup::{CContributeSetup, ContributeSetupSerializeError};
 use crate::setup::emotion::{CEmotion, EmotionSerializeError};
 use crate::setup::goodsdestructionconfig::{GoodsDestroySerializeError, GoodsDestroySetup};
+use crate::setup::gmlist::{CGMList, GmListSerializationBlock};
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::godsbattleconf::{CGodsBattleConf, GodsBattleSerializeError};
 use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelSerializeError};
@@ -829,6 +831,21 @@ pub(crate) enum WorldPlayerRanksConfigurationCompletion {
 pub(crate) struct WorldPlayerRanksConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldPlayerRanksConfigurationCompletion,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldGmListConfigurationCompletion {
+    GmList(GmListSerializationBlock),
+    GameServerIndexPending {
+        socket_id: i32,
+        game_server_index: u32,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldGmListConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldGmListConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -2345,6 +2362,35 @@ pub(crate) fn continue_game_server_player_ranks_configuration(
             &payload,
         )),
         completion: WorldPlayerRanksConfigurationCompletion::GmListPending { socket_id },
+    }
+}
+
+/// Кодирует и отправляет точный `CGMList` subtype `9`.
+pub(crate) fn continue_game_server_gm_list_configuration(
+    game: &CGame,
+    socket_id: i32,
+    game_server_index: u32,
+    gm_list: &CGMList,
+) -> WorldGmListConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = gm_list.add_to_byte_array(&mut payload) {
+        return WorldGmListConfigurationReport {
+            delivery: None,
+            completion: WorldGmListConfigurationCompletion::GmList(error),
+        };
+    }
+    let sender = game.current_game_server_sender();
+    WorldGmListConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            9,
+            &payload,
+        )),
+        completion: WorldGmListConfigurationCompletion::GameServerIndexPending {
+            socket_id,
+            game_server_index,
+        },
     }
 }
 
