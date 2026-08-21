@@ -163,6 +163,7 @@ use crate::setup::monsterlist::{
 use crate::setup::playerlist::{CPlayerList, PlayerListSerializeError};
 use crate::setup::preciousboxconf::{PreciousBoxConf, PreciousBoxSerializeError};
 use crate::setup::prisonconf::{PrisonConf, PrisonConfSerializeError};
+use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};
 use crate::setup::tradelist::{CTradeList, TradeListSerializeError};
 use crate::worldserver::appworld::country::country::CountryKingSaveLimits;
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
@@ -465,6 +466,20 @@ pub(crate) enum WorldFairyExpConfigurationCompletion {
 pub(crate) struct WorldFairyExpConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldFairyExpConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после `CSynthesis`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldSynthesisConfigurationCompletion {
+    Synthesis(SynthesisSerializeError),
+    EquipmentComposeConfigurationPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/0x21` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldSynthesisConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldSynthesisConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1343,6 +1358,34 @@ pub(crate) fn continue_game_server_fairy_exp_configuration(
             &payload,
         )),
         completion: WorldFairyExpConfigurationCompletion::SynthesisConfigurationPending {
+            socket_id,
+        },
+    }
+}
+
+/// Кодирует и отправляет точный `CSynthesis` initial-config packet.
+pub(crate) fn continue_game_server_synthesis_configuration(
+    game: &CGame,
+    socket_id: i32,
+    synthesis: &CSynthesis,
+) -> WorldSynthesisConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = synthesis.add_to_byte_array(&mut payload) {
+        return WorldSynthesisConfigurationReport {
+            delivery: None,
+            completion: WorldSynthesisConfigurationCompletion::Synthesis(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldSynthesisConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x21,
+            &payload,
+        )),
+        completion: WorldSynthesisConfigurationCompletion::EquipmentComposeConfigurationPending {
             socket_id,
         },
     }
