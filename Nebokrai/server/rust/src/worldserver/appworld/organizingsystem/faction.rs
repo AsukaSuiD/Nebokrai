@@ -505,6 +505,13 @@
 //! отдельной purview-проверки. Локализация и player-owner остаются контекстом;
 //! нетерминированное имя и overflow заменены typed-границами после уже
 //! совершённых эффектов.
+//! `UploadIcon`, вопреки имени, не принимает icon bytes и не выполняет file I/O:
+//! аргумент `tagTime` не читается. Member-gate и property flag дают silent miss
+//! либо `WS0225/WS0119`; разрешённый interval `<1` лишь ставит dirty `8` и
+//! возвращает `true`, положительный interval отправляет `WS0226(minutes)` и
+//! возвращает `false`. Exact ASM `0x004B8F30..0x004B92ED` подтверждает
+//! 256-байтовый `_sprintf` buffer и отсутствие иных эффектов. Локализация
+//! остаётся тонким контекстом, overflow старого buffer-а — typed-границей.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -552,6 +559,7 @@ const FACTION_PURVIEW_NOTICE_CAPACITY: usize = 100;
 const FACTION_MAXIMUM_MEMBERS_NOTICE_CAPACITY: usize = 256;
 const FACTION_UPGRADE_NOTICE_CAPACITY: usize = 256;
 const FACTION_CONTRIBUTOR_NOTICE_CAPACITY: usize = 256;
+const FACTION_UPLOAD_ICON_NOTICE_CAPACITY: usize = 256;
 const PRONOUNCE_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_CONTENT_CAPACITY: usize = 2048;
 const OTHER_FACTION_NAME_CAPACITY: usize = 20;
@@ -653,6 +661,10 @@ impl FactionBaseProperty {
 
     pub(crate) const fn create_union_function(&self) -> bool {
         self.bytes[0x2A] != 0
+    }
+
+    pub(crate) const fn upload_icon_function(&self) -> bool {
+        self.bytes[0x27] != 0
     }
 
     const fn wire_bytes(&self) -> &[u8; FACTION_BASE_PROPERTY_SIZE] {
@@ -1301,6 +1313,32 @@ pub(crate) enum FactionContributorBlock {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionUploadIconRejection {
+    PlayerNotMember,
+    FunctionDisabled,
+    IntervalActive,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionUploadIconOutcome {
+    Rejected {
+        reason: FactionUploadIconRejection,
+        notice_sent: bool,
+    },
+    Accepted {
+        dirty_set: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionUploadIconBlock {
+    MissingBaseProperty,
+    NoticeWouldOverflow {
+        formatted_len: usize,
+    },
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FactionLeaveWordUpdateBuildError {
     MissingLastLeaveWord,
@@ -1693,6 +1731,15 @@ pub(crate) trait FactionContributorContext: FactionOrganizingInfoContext {
     ) -> Vec<u8>;
 
     fn update_player_faction_info(&mut self, player_id: i32);
+}
+
+/// Узкая граница локализации для фактического gate-owner-а `UploadIcon`.
+pub(crate) trait FactionUploadIconContext: FactionOrganizingInfoContext {
+    fn format_upload_icon_interval(
+        &mut self,
+        string_id: &'static [u8],
+        interval_minutes: i32,
+    ) -> Vec<u8>;
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -5083,6 +5130,62 @@ impl CFaction {
         })
     }
 
+    /// Повторяет permission/interval gate старого `UploadIcon` без выдуманного I/O.
+    pub(crate) fn upload_icon<Context>(
+        &mut self,
+        parameters: &COrganizingParam,
+        player_id: i32,
+        _time: &TagTimeValue,
+        context: &mut Context,
+    ) -> Result<FactionUploadIconOutcome, FactionUploadIconBlock>
+    where
+        Context: FactionUploadIconContext,
+    {
+        if self.is_member(player_id) == 0 {
+            return Ok(FactionUploadIconOutcome::Rejected {
+                reason: FactionUploadIconRejection::PlayerNotMember,
+                notice_sent: false,
+            });
+        }
+        let property = self
+            .base_property
+            .ok_or(FactionUploadIconBlock::MissingBaseProperty)?;
+        if !property.upload_icon_function() {
+            send_apply_join_information(context, player_id, b"WS0225", b"WS0119");
+            return Ok(FactionUploadIconOutcome::Rejected {
+                reason: FactionUploadIconRejection::FunctionDisabled,
+                notice_sent: true,
+            });
+        }
+
+        let interval_minutes = parameters.upload_icon_interval_minutes();
+        if interval_minutes < 1 {
+            self.set_change_data(8);
+            return Ok(FactionUploadIconOutcome::Accepted { dirty_set: true });
+        }
+
+        let notice = context.format_upload_icon_interval(b"WS0226", interval_minutes);
+        let notice = legacy_c_string_visible_bytes(&notice);
+        if notice.len() >= FACTION_UPLOAD_ICON_NOTICE_CAPACITY {
+            return Err(FactionUploadIconBlock::NoticeWouldOverflow {
+                formatted_len: notice.len(),
+            });
+        }
+        let second_text = context.world_string(b"WS0119").unwrap_or_default();
+        context.send_organizing_info(FactionMemberInfoRequest {
+            recipient_player_id: player_id,
+            first_text: notice,
+            second_text: legacy_c_string_visible_bytes(&second_text),
+            information_type: -1,
+            color: 0xFFDA_EDFE,
+            trailing_value: 0,
+        });
+        Ok(FactionUploadIconOutcome::Rejected {
+            reason: FactionUploadIconRejection::IntervalActive,
+            notice_sent: true,
+        })
+    }
+
     /// Передаёт organizing-info каждому member без online-фильтра этого owner-а.
     pub(crate) fn send_info_to_all_members<'a, F>(
         &self,
@@ -7094,7 +7197,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::UploadIcon
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2395

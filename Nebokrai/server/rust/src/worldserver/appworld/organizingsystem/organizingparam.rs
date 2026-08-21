@@ -213,6 +213,10 @@ impl COrganizingParam {
         self.player_ranks_count
     }
 
+    pub(crate) const fn upload_icon_interval_minutes(&self) -> i32 {
+        self.upload_icon_interval_minutes
+    }
+
     pub(crate) const fn pronounce_minimum_level(&self) -> i32 {
         self.pronounce_minimum_level
     }
