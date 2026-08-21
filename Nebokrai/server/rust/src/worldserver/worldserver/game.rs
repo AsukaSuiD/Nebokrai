@@ -8425,7 +8425,8 @@ impl CGame {
     /// ветви server-owner-а, GMA `0x4FD01/0x4FD04/0x60401/0x60402`, полный GM
     /// owner `0x5FF01..0x5FF16`,
     /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, other
-    /// transport/cursor `0x5FD02/0x5FD06..0x5FD09/0x5FD0E`, honor
+    /// transport/cursor `0x5FD02/0x5FD06..0x5FD09/0x5FD0E`, copy-number
+    /// `0x5FD0B`, honor
     /// `0x5FD0C/0x5FD0D`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей

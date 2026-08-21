@@ -1,8 +1,8 @@
 //! WorldServer dispatcher-owner `OnOtherMessage`.
 //!
 //! Весь dispatcher RVA `0x000AC680` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме локального
-//! transport leaves `0x5FD02`, `0x5FD06..0x5FD09`, cursor-only `0x5FD0E`,
-//! honor-reset `0x5FD0C` и eliminate update `0x5FD0D` со статусом
+//! transport leaves `0x5FD02`, `0x5FD06..0x5FD09`, copy-number `0x5FD0B`,
+//! cursor-only `0x5FD0E`, honor-reset `0x5FD0C` и eliminate update `0x5FD0D` со статусом
 //! `IMPLEMENTED`. Reset читает один Windows `long`, получает текущий `CGame`
 //! и вызывает `ResetHonorElimilateInfo`.
 //! Недостаточный payload сохраняет старое поведение numeric getter-а: значение
@@ -22,8 +22,12 @@
 //! маршрутизует то же сообщение; `0x5FD06..09` только переписывают type и
 //! делают `SendAll`. `0x5FD0E` ровно один раз читает и отбрасывает signed long.
 //! Donor-added ownership/tail validation отсутствует в EXE и не перенесена.
+//! `0x5FD0B` отражает первые два signed long, добавляет прежнее значение
+//! `s_nCopyNum` и только при ненулевом третьем поле увеличивает global до
+//! `SendToSocket`; это сохраняет peek/reserve и side-effect-before-send.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::worldserver::appworld::misc::{add_copy_num, get_copy_num};
 use crate::worldserver::worldserver::game::{
     CGame, WorldHonorEliminatorRegistration,
 };
@@ -92,6 +96,17 @@ pub(crate) enum WorldOtherMessageOutcome {
         value: i32,
         payload_complete: bool,
     },
+    CopyNumber {
+        requester_player_id: i32,
+        request_context: i32,
+        reserve_flag: i32,
+        payload_complete: [bool; 3],
+        returned_copy_number: i32,
+        copy_number_after: i32,
+        response_type: i32,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
     HonorEliminateReset(WorldHonorEliminateReset),
     HonorEliminateUpdate(WorldHonorEliminateUpdate),
 }
@@ -150,6 +165,45 @@ pub(crate) fn on_other_message(
                 request_type: 0x0005_FD0E,
                 value: decoded_value.unwrap_or(0),
                 payload_complete: decoded_value.is_some(),
+            })
+        }
+        0x0005_FD0B => {
+            let decoded_requester = message.base_mut().get_long();
+            let decoded_context = message.base_mut().get_long();
+            let decoded_reserve = message.base_mut().get_long();
+            let requester_player_id = decoded_requester.unwrap_or(0);
+            let request_context = decoded_context.unwrap_or(0);
+            let reserve_flag = decoded_reserve.unwrap_or(0);
+            let returned_copy_number = get_copy_num();
+
+            let mut response = CMessage::new(0x0007_FA15);
+            response.base_mut().add_long(requester_player_id);
+            response.base_mut().add_long(request_context);
+            response.base_mut().add_long(returned_copy_number);
+            let copy_number_after = if reserve_flag != 0 {
+                add_copy_num()
+            } else {
+                returned_copy_number
+            };
+            let wire = response.as_wire_bytes().to_vec();
+            let delivery = response.send_to_socket(
+                game.current_game_server_sender().as_ref(),
+                message.socket_id(),
+            );
+            WorldOtherMessageDispatch::Handled(WorldOtherMessageOutcome::CopyNumber {
+                requester_player_id,
+                request_context,
+                reserve_flag,
+                payload_complete: [
+                    decoded_requester.is_some(),
+                    decoded_context.is_some(),
+                    decoded_reserve.is_some(),
+                ],
+                returned_copy_number,
+                copy_number_after,
+                response_type: 0x0007_FA15,
+                wire,
+                delivery,
             })
         }
         HONOR_ELIMINATE_RESET => {

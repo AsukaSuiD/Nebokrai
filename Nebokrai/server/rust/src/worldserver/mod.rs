@@ -108,6 +108,7 @@ pub(crate) mod appworld {
     pub(crate) mod goodswarmember;
     pub(crate) mod jjcsystem;
     pub(crate) mod leiting;
+    pub(crate) mod misc;
     #[allow(
         dead_code,
         reason = "listener-контракт подключён перед materialized CPlayer packet traversal"
@@ -131,7 +132,7 @@ pub(crate) mod appworld {
         pub(crate) mod countrymessage;
         #[allow(
             dead_code,
-            reason = "подключён точный локальный honor-reset перед остальными other opcodes"
+            reason = "подключены достигнутые transport/copy-number/honor ветви перед остальными other opcodes"
         )]
         pub(crate) mod othermessage;
         pub(crate) mod playermessage;

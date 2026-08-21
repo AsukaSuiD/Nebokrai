@@ -1,6 +1,30 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
+//! Узкий process-global owner суточного номера копии ShengSiShiSu.
+//!
+//! `GetCopyNum` RVA `0x000A0DC0` и `AddCopyNum` RVA `0x000A0DD0` имеют статус
+//! `IMPLEMENTED`; timer-owned reset/registration ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Exact `GetCopyNum` читает signed DWORD по VA `0x0056B5E8`,
+//! а PE `.data` содержит initial bytes `01 00 00 00`. `AddCopyNum` выполняет
+//! обычное 32-битное сложение с единицей без overflow gate; `AtomicI32`
+//! заменяет только возможную межпоточную data race и сохраняет wrapping bits.
+//! Декомпилятор: Ghidra 12.1.2; точная пара указана у raw provenance ниже.
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
+//!
+//! Поздний Rust-донор верно определил начальное значение и назначение owner-а,
+//! но его fail-closed overflow был новым поведением и здесь не перенесён.
+
+use std::sync::atomic::{AtomicI32, Ordering};
+
+static COPY_NUMBER: AtomicI32 = AtomicI32::new(1);
+
+/// Возвращает текущий signed номер без изменения состояния.
+pub(crate) fn get_copy_num() -> i32 {
+    COPY_NUMBER.load(Ordering::Relaxed)
+}
+
+/// Увеличивает номер с exact 32-битным wrapping оригинала.
+pub(crate) fn add_copy_num() -> i32 {
+    COPY_NUMBER.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
+}
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
@@ -10,7 +34,7 @@
 
 // ============================================================================
 // FUNCTION: GetCopyNum
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\misc.cpp:9
@@ -24,7 +48,7 @@
 
 // ============================================================================
 // FUNCTION: AddCopyNum
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\misc.cpp:14
