@@ -481,7 +481,7 @@ pub(crate) struct UnionApplicationSessionRequest {
 }
 
 /// Нормальные ветви локального `OnAsyncCallback` после typed decode.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum UnionApplicationTerminal {
     Approved,
     Denied,

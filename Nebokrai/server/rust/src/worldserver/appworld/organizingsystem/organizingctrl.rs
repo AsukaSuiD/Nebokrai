@@ -968,7 +968,6 @@ impl COrganizingCtrl {
 
     /// Строит и маршрутизирует точный player-targeted organizing-info wire.
     pub(crate) fn send_organizing_info_to_client(
-        &self,
         game: &CGame,
         request: FactionMemberInfoRequest<'_>,
     ) -> OrganizingInfoDelivery {

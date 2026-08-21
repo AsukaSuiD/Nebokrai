@@ -17,6 +17,15 @@
 //! через `COrganizingCtrl::GetUnion(master player ID)` и при non-null вызывает
 //! virtual `ApplyForJoin(applicant faction ID, 0, master player ID)`.
 //!
+//! Старый callback держал singleton-указатели и мутировал organizing state
+//! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
+//! `'static` ссылки сохраняет terminal action в FIFO под `parking_lot::Mutex`;
+//! единственный main-loop owner забирает её сразу после callback dispatch.
+//! Confirmation send остаётся синхронным внутри `Beging`: route и клонируемый
+//! `ServerCommandHandle` снимаются непосредственно перед созданием session.
+//! Это техническая замена lifetime/lock plumbing, а не изменение wire, cookie,
+//! timeout или порядка terminal actions.
+//!
 //! Legacy getters при нехватке возвращают ноль и не двигают cursor; Rust
 //! сохраняет это через `unwrap_or(0)`, а не добавляет отсутствовавший общий
 //! reject. Дополнительный хвост owner не проверял. Проверки exact payload и
@@ -24,18 +33,216 @@
 //! и здесь не переносятся. `CMessage`/`CBaseMessage` и session manager уже
 //! материализованы; функция ниже добавляет только конкретный opcode dispatch.
 
-use crate::nets::networld::message::CMessage;
+use std::collections::VecDeque;
+use std::sync::Arc;
+
+use parking_lot::Mutex;
+
+use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::nets::servers::ServerCommandHandle;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionCallbackOutcome};
+use crate::worldserver::appworld::organizingsystem::faction::FactionMemberInfoRequest;
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
-    COrganizingCtrl, OrganizingUnionApplyForJoinDispatchBlock,
-    OrganizingUnionApplyForJoinOutcome,
+    COrganizingCtrl, OrganizingUnionApplyForJoinDispatchBlock, OrganizingUnionApplyForJoinOutcome,
 };
-use crate::worldserver::appworld::organizingsystem::union::UnionApplyForJoinEffects;
+use crate::worldserver::appworld::organizingsystem::union::{
+    UnionAddFactionEffects, UnionApplicationEndpointBlock, UnionApplicationSessionBlock,
+    UnionApplicationSessionReport, UnionApplicationSessionRequest, UnionApplicationSessionRuntime,
+    UnionApplicationTerminal, UnionApplyForJoinEffects, UnionFormatArgument,
+    begin_union_application_session,
+};
 use crate::worldserver::worldserver::game::CGame;
 
 const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
     [0x60117, 0x60119, 0x60120, 0x60122, 0x60124, 0x60131];
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct QueuedUnionApplicationTerminal {
+    pub(crate) union_id: i32,
+    pub(crate) applicant_faction_id: i32,
+    pub(crate) terminal: UnionApplicationTerminal,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionApplicationConfirmationDelivery {
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Default)]
+struct WorldUnionApplicationRuntimeState {
+    terminals: Mutex<VecDeque<QueuedUnionApplicationTerminal>>,
+    confirmations: Mutex<VecDeque<UnionApplicationConfirmationDelivery>>,
+    blocks: Mutex<VecDeque<UnionApplicationEndpointBlock>>,
+}
+
+/// Process-lifetime очередь между `CNetSessionManager` и organizing owner-ом.
+#[derive(Clone, Default)]
+pub(crate) struct WorldUnionApplicationRuntimeOwner {
+    state: Arc<WorldUnionApplicationRuntimeState>,
+}
+
+impl WorldUnionApplicationRuntimeOwner {
+    fn endpoint(
+        &self,
+        sender: Option<ServerCommandHandle>,
+        game_server_id: i32,
+    ) -> Arc<dyn UnionApplicationSessionRuntime> {
+        Arc::new(WorldUnionApplicationEndpointRuntime {
+            state: Arc::clone(&self.state),
+            sender,
+            game_server_id,
+        })
+    }
+
+    pub(crate) fn pop_terminal(&self) -> Option<QueuedUnionApplicationTerminal> {
+        self.state.terminals.lock().pop_front()
+    }
+
+    pub(crate) fn take_confirmations(&self) -> Vec<UnionApplicationConfirmationDelivery> {
+        self.state.confirmations.lock().drain(..).collect()
+    }
+
+    pub(crate) fn take_blocks(&self) -> Vec<UnionApplicationEndpointBlock> {
+        self.state.blocks.lock().drain(..).collect()
+    }
+}
+
+struct WorldUnionApplicationEndpointRuntime {
+    state: Arc<WorldUnionApplicationRuntimeState>,
+    sender: Option<ServerCommandHandle>,
+    game_server_id: i32,
+}
+
+impl UnionApplicationSessionRuntime for WorldUnionApplicationEndpointRuntime {
+    fn send_union_application_confirmation(
+        &self,
+        recipient_player_id: i32,
+        message: &CMessage,
+    ) {
+        let result = message.send_to_map_id(self.sender.as_ref(), self.game_server_id);
+        self.state
+            .confirmations
+            .lock()
+            .push_back(UnionApplicationConfirmationDelivery {
+                recipient_player_id,
+                game_server_id: self.game_server_id,
+                result,
+            });
+    }
+
+    fn finish_union_application(
+        &self,
+        union_id: i32,
+        applicant_faction_id: i32,
+        terminal: UnionApplicationTerminal,
+    ) {
+        self.state
+            .terminals
+            .lock()
+            .push_back(QueuedUnionApplicationTerminal {
+                union_id,
+                applicant_faction_id,
+                terminal,
+            });
+    }
+
+    fn block_union_application_endpoint(&self, block: UnionApplicationEndpointBlock) {
+        self.state.blocks.lock().push_back(block);
+    }
+}
+
+/// Живые callback-и универсальной инфраструктуры, не принадлежащие union state.
+pub(crate) struct WorldUnionApplicationEffectCallbacks<'a> {
+    pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
+    pub(crate) world_string: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
+    pub(crate) format_world_string:
+        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+    pub(crate) put_war_log: &'a mut dyn FnMut(&[u8]),
+    pub(crate) refresh_owned_city: &'a mut dyn FnMut(i32, i32, i32),
+}
+
+/// Тонкий concrete adapter готовых string/transport/session owners.
+pub(crate) struct WorldUnionApplicationEffects<'a> {
+    game: &'a CGame,
+    manager: &'a CNetSessionManager,
+    runtime: &'a WorldUnionApplicationRuntimeOwner,
+    callbacks: WorldUnionApplicationEffectCallbacks<'a>,
+}
+
+impl<'a> WorldUnionApplicationEffects<'a> {
+    pub(crate) fn new(
+        game: &'a CGame,
+        manager: &'a CNetSessionManager,
+        runtime: &'a WorldUnionApplicationRuntimeOwner,
+        callbacks: WorldUnionApplicationEffectCallbacks<'a>,
+    ) -> Self {
+        Self {
+            game,
+            manager,
+            runtime,
+            callbacks,
+        }
+    }
+}
+
+impl UnionApplyForJoinEffects for WorldUnionApplicationEffects<'_> {
+    type SessionReport = UnionApplicationSessionReport;
+    type SessionBlock = UnionApplicationSessionBlock;
+
+    fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
+        (self.callbacks.world_string)(string_id)
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+
+    fn begin_union_application_session(
+        &mut self,
+        request: UnionApplicationSessionRequest,
+    ) -> Result<Self::SessionReport, Self::SessionBlock> {
+        // `Beging` вызывает `DoAsyncCall` синхронно; route и клонируемый
+        // transport handle снимаются непосредственно перед session creation.
+        let game_server_id = self
+            .game
+            .game_server_number_by_player_id(request.recipient_player_id);
+        let endpoint = self
+            .runtime
+            .endpoint(self.game.current_game_server_sender(), game_server_id);
+        begin_union_application_session(self.manager, request, endpoint, |upper_bound| {
+            (self.callbacks.random)(upper_bound)
+        })
+    }
+}
+
+impl UnionAddFactionEffects for WorldUnionApplicationEffects<'_> {
+    fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
+        (self.callbacks.world_string)(string_id)
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[UnionFormatArgument<'_>],
+    ) -> Vec<u8> {
+        (self.callbacks.format_world_string)(string_id, arguments)
+    }
+
+    fn put_war_log(&mut self, text: &[u8]) {
+        (self.callbacks.put_war_log)(text);
+    }
+
+    fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32) {
+        (self.callbacks.refresh_owned_city)(region_id, faction_id, union_id);
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OrganizingSessionResultDispatch {
