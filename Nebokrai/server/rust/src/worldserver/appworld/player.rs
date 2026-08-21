@@ -4,6 +4,8 @@
 //! `0x0005B4E0`, `CPlayer::CheckGoodsInPacket` RVA `0x0005BA90`, inherited
 //! `GetName`, reached `ProcessPlayerDataQueue`
 //! accessors для level/friends и inherited `CShape::SetState`,
+//! process-wide `CPlayer::GetNetExID` inline-path в `CUnion::ApplyForJoin`
+//! `0x004C2C51..0x004C2C5E`,
 //! достигнутого base-подобъекта `CMoveShape`, поля `m_bGetFactionData` в
 //! `CPlayer::CPlayer` RVA `0x0005EB10` и `CPlayer::~CPlayer` RVA
 //! `0x0005F020` — `IMPLEMENTED`; остальной корпус ниже остаётся
@@ -52,6 +54,12 @@
 //! `CFaction::UpdateMemberInfoToClient` проверяет `byte ptr [player+0x868]` в
 //! диапазоне `0x004BA82D..0x004BA834`, поэтому offset дополнительно имеет
 //! статус `VERIFIED_DISASSEMBLY`.
+//!
+//! `GetNetExID` не читает player: он pre-increment-ит process-static signed
+//! DWORD по VA `0x006BAD98` с x86 wrapping и возвращает новое значение. В
+//! `ApplyForJoin` этот эффект происходит после online lookup, но до проверки
+//! лимита union, поэтому даже отказ по лимиту расходует ID. `AtomicI32`
+//! устраняет исходную data race, сохраняя process lifetime и 32-битный шаблон.
 //!
 //! `CFaction::Demise` дважды читает `m_bFactionWarOperator` по PDB-offset
 //! `CPlayer+0x8ED`; exact диапазон `0x004BFF25..0x004BFF39` подтверждает оба
@@ -267,6 +275,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::ffi::CStr;
 use std::fmt;
+use std::sync::atomic::{AtomicI32, Ordering};
+
+static NEXT_NET_EXCHANGE_ID: AtomicI32 = AtomicI32::new(0);
 
 use crate::dbaccess::worlddb::dbgoods::{DbGoodsOwner, PlayerGoodsFiledSnapshot};
 use crate::dbaccess::worlddb::goodslistener::{GoodsContainerTraversalSnapshot, TraversedGoods};
@@ -1266,6 +1277,13 @@ impl CPlayer {
     /// Возвращает signed ID через унаследованный `CBaseObject` owner.
     pub(crate) const fn get_id(&self) -> i32 {
         self.move_shape_base.get_id()
+    }
+
+    /// Возвращает следующий process-wide ID старого inline `GetNetExID`.
+    pub(crate) fn get_net_exchange_id(&self) -> i32 {
+        NEXT_NET_EXCHANGE_ID
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1)
     }
 
     /// Возвращает signed type через унаследованный `CBaseObject` owner.

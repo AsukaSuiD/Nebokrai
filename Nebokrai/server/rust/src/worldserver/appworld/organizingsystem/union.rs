@@ -27,7 +27,8 @@
 //! `UpdateMemberInfoToClient` RVA `0x000C5840`, `AddMembersToByteArray` RVA
 //! `0x000C21D0`, `AddToByteArray` RVA `0x000C6590`, public-конструктор RVA
 //! `0x000C64D0`, `Initial` RVA `0x000C1FE0` и `AddFaction` RVA
-//! `0x000C3170`, `DoJoin` RVA `0x000C66A0` — `IMPLEMENTED`;
+//! `0x000C3170`, `ApplyForJoin` RVA `0x000C2B90`, `DoJoin` RVA
+//! `0x000C66A0` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -35,7 +36,7 @@
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
 //! Исходные владельцы PDB:
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h`
-//! и `union.cpp:680,785,1442`.
+//! и `union.cpp:559,680,785,1442`.
 //!
 //! Точный PDB задаёт старый `CUnion` размером `0x50`: signed ID `+0x4`, имя
 //! `+0x8`, signed master ID `+0x24`, ordered member-map `+0x28`, `tagTime`
@@ -186,6 +187,19 @@
 //! `0x004C1840..0x004C1866` подтверждает аргумент, slot `+0x1AC`, purview `3`
 //! и отсутствие других эффектов; безаргументный helper Linux-донора не является
 //! контрактом этой функции.
+//! `ApplyForJoin` отвергает уже pending/нулевую/зарезервированную/состоящую в
+//! union faction, затем требует оба faction-owner-а и online master-player.
+//! Offline master получает applicant-header notice `WS0264/WS0193`. Только
+//! после online lookup inline `GetNetExID` расходует process ID; затем exact
+//! лимит `50` может вернуть `WS0265/WS0193`. Success сначала записывает
+//! applicant в `m_ApplyPerson`, затем добавляет его в establishment-list и
+//! запускает session `1000` с confirmation kind `2`, master player ID, полным
+//! applicant faction name, union/applicant ID и выделенным NetEx ID. Второй и
+//! третий входные `long` не читаются. Existing `CNetSessionManager` остаётся
+//! универсальным transport-owner-ом; Rust trait передаёт ему точный доменный
+//! request, а ошибки безопасной session-границы сохраняют уже выполненные
+//! assignment/list эффекты без выдуманного rollback. Локальные callback-owner-ы
+//! `DoAsyncCall/OnAsyncCallback` остаются следующим связанным RAW-проходом.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -400,6 +414,97 @@ pub(crate) trait UnionDoJoinContext {
         union: &mut CUnion,
         faction_id: i32,
     ) -> Result<bool, Self::InitialSnapshotBlock>;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionApplicationFactionSnapshot {
+    pub(crate) faction_id: i32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) player_header: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UnionApplicationFactionBlock {
+    pub(crate) faction_id: i32,
+}
+
+/// Controller state, который синхронная часть `ApplyForJoin` читает и резервирует.
+pub(crate) trait UnionApplyForJoinContext {
+    fn union_application_is_reserved(&self, faction_id: i32) -> bool;
+
+    fn union_application_faction(
+        &self,
+        faction_id: i32,
+    ) -> Result<Option<UnionApplicationFactionSnapshot>, UnionApplicationFactionBlock>;
+
+    fn reserve_union_application(&mut self, faction_id: i32);
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionApplicationSessionRequest {
+    pub(crate) union_id: i32,
+    pub(crate) applicant_faction_id: i32,
+    pub(crate) recipient_player_id: i32,
+    pub(crate) requested_session_id: i32,
+    pub(crate) timeout_ticks: u32,
+    pub(crate) confirmation_kind: i32,
+    pub(crate) applicant_faction_name: Vec<u8>,
+}
+
+/// StringTable, client notice и адаптер уже восстановленного `CNetSessionManager`.
+pub(crate) trait UnionApplyForJoinEffects {
+    type SessionReport;
+    type SessionBlock;
+
+    fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8>;
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>);
+
+    fn begin_union_application_session(
+        &mut self,
+        request: UnionApplicationSessionRequest,
+    ) -> Result<Self::SessionReport, Self::SessionBlock>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UnionApplyForJoinRejection {
+    PendingApplication,
+    ZeroApplicantFactionId,
+    ApplicantAlreadyReserved,
+    ApplicantAlreadyInUnion { union_id: i32 },
+    ApplicantFactionMissing,
+    MasterFactionMissing,
+    MasterPlayerOffline { notice_sent: bool },
+    MemberLimit {
+        member_count: i32,
+        maximum: i32,
+        allocated_net_exchange_id: i32,
+        notice_sent: bool,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionApplyForJoinOutcome<SessionReport> {
+    Rejected(UnionApplyForJoinRejection),
+    Started {
+        applicant_faction_id: i32,
+        net_exchange_id: i32,
+        session: SessionReport,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionApplyForJoinBlock<MembershipBlock, SessionBlock> {
+    PendingApplicationUninitialized,
+    MembershipScan(MembershipBlock),
+    FactionSnapshot(UnionApplicationFactionBlock),
+    Session {
+        source: SessionBlock,
+        applicant_faction_id: i32,
+        net_exchange_id: i32,
+        application_assigned: bool,
+        establishment_reserved: bool,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -897,6 +1002,130 @@ impl CUnion {
     /// Save-проекция не выдумывает transient apply-person; live `Initial` — 0.
     pub(crate) const fn apply_person(&self) -> Option<i32> {
         self.apply_person
+    }
+
+    /// Запускает подтверждение заявки faction на вступление в союз.
+    pub(crate) fn apply_for_join<Context, Effects>(
+        &mut self,
+        game: &CGame,
+        applicant_faction_id: i32,
+        _second_parameter: i32,
+        _third_parameter: i32,
+        context: &mut Context,
+        effects: &mut Effects,
+    ) -> Result<
+        UnionApplyForJoinOutcome<Effects::SessionReport>,
+        UnionApplyForJoinBlock<
+            <Context as UnionDoJoinContext>::FreeFactionBlock,
+            Effects::SessionBlock,
+        >,
+    >
+    where
+        Context: UnionApplyForJoinContext + UnionDoJoinContext,
+        Effects: UnionApplyForJoinEffects,
+    {
+        let Some(pending_application) = self.apply_person else {
+            return Err(UnionApplyForJoinBlock::PendingApplicationUninitialized);
+        };
+        if pending_application >= 1 {
+            return Ok(UnionApplyForJoinOutcome::Rejected(
+                UnionApplyForJoinRejection::PendingApplication,
+            ));
+        }
+        if applicant_faction_id == 0 {
+            return Ok(UnionApplyForJoinOutcome::Rejected(
+                UnionApplyForJoinRejection::ZeroApplicantFactionId,
+            ));
+        }
+        if context.union_application_is_reserved(applicant_faction_id) {
+            return Ok(UnionApplyForJoinOutcome::Rejected(
+                UnionApplyForJoinRejection::ApplicantAlreadyReserved,
+            ));
+        }
+
+        let existing_union_id = context
+            .union_id_for_joining_faction(applicant_faction_id)
+            .map_err(UnionApplyForJoinBlock::MembershipScan)?;
+        if existing_union_id > 0 {
+            return Ok(UnionApplyForJoinOutcome::Rejected(
+                UnionApplyForJoinRejection::ApplicantAlreadyInUnion {
+                    union_id: existing_union_id,
+                },
+            ));
+        }
+
+        let applicant = context
+            .union_application_faction(applicant_faction_id)
+            .map_err(UnionApplyForJoinBlock::FactionSnapshot)?;
+        let Some(applicant) = applicant else {
+            return Ok(UnionApplyForJoinOutcome::Rejected(
+                UnionApplyForJoinRejection::ApplicantFactionMissing,
+            ));
+        };
+        let master = context
+            .union_application_faction(self.master_id)
+            .map_err(UnionApplyForJoinBlock::FactionSnapshot)?;
+        let Some(master) = master else {
+            return Ok(UnionApplyForJoinOutcome::Rejected(
+                UnionApplyForJoinRejection::MasterFactionMissing,
+            ));
+        };
+
+        let Some(master_player) = game.online_player_by_id(master.player_header as u32) else {
+            send_union_application_notice(
+                effects,
+                applicant.player_header,
+                b"WS0264",
+            );
+            return Ok(UnionApplyForJoinOutcome::Rejected(
+                UnionApplyForJoinRejection::MasterPlayerOffline { notice_sent: true },
+            ));
+        };
+
+        let net_exchange_id = master_player.get_net_exchange_id();
+        let member_count = self.members.len() as u32 as i32;
+        if member_count >= MAX_UNION_MEMBER_COUNT {
+            send_union_application_notice(
+                effects,
+                applicant.player_header,
+                b"WS0265",
+            );
+            return Ok(UnionApplyForJoinOutcome::Rejected(
+                UnionApplyForJoinRejection::MemberLimit {
+                    member_count,
+                    maximum: MAX_UNION_MEMBER_COUNT,
+                    allocated_net_exchange_id: net_exchange_id,
+                    notice_sent: true,
+                },
+            ));
+        }
+
+        self.apply_person = Some(applicant_faction_id);
+        context.reserve_union_application(applicant_faction_id);
+        let request = UnionApplicationSessionRequest {
+            union_id: self.union_id,
+            applicant_faction_id,
+            recipient_player_id: master.player_header,
+            requested_session_id: net_exchange_id,
+            timeout_ticks: 1_000,
+            confirmation_kind: 2,
+            applicant_faction_name: applicant.name,
+        };
+        let session = effects
+            .begin_union_application_session(request)
+            .map_err(|source| UnionApplyForJoinBlock::Session {
+                source,
+                applicant_faction_id,
+                net_exchange_id,
+                application_assigned: true,
+                establishment_reserved: true,
+            })?;
+
+        Ok(UnionApplyForJoinOutcome::Started {
+            applicant_faction_id,
+            net_exchange_id,
+            session,
+        })
     }
 
     /// Очищает единственную union-заявку только при праве `PV_ConMem`.
@@ -2195,6 +2424,25 @@ fn append_union_member_update_fields(
     Ok(())
 }
 
+fn send_union_application_notice<Effects>(
+    effects: &mut Effects,
+    recipient_player_id: i32,
+    text_id: &'static [u8],
+) where
+    Effects: UnionApplyForJoinEffects,
+{
+    let second_text = effects.world_string(b"WS0193");
+    let first_text = effects.world_string(text_id);
+    effects.send_organizing_info(FactionMemberInfoRequest {
+        recipient_player_id,
+        first_text: legacy_c_string_visible_bytes(&first_text),
+        second_text: legacy_c_string_visible_bytes(&second_text),
+        information_type: -1,
+        color: 0xFFDA_EDFE,
+        trailing_value: 0,
+    });
+}
+
 fn append_i32(output: &mut Vec<u8>, value: i32) {
     output.extend_from_slice(&value.to_le_bytes());
 }
@@ -2902,20 +3150,6 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 // RVA: 0x000C2B30
 // ADDRESS: 004c2b30
 // PROTOTYPE: bool __thiscall DelMember(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CUnion::ApplyForJoin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:559
-// RVA: 0x000C2B90
-// ADDRESS: 004c2b90
-// PROTOTYPE: bool __thiscall ApplyForJoin(long param_1, long param_2, long param_3)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

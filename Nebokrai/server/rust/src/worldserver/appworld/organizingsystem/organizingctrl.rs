@@ -16,7 +16,7 @@
 //! `GetConfederationOrganizing` RVA `0x00036BF0`,
 //! `IsFactionMaster` RVA `0x000344A0`, `ReInitialFacFactionByLvl` RVA
 //! `0x00034C80` и `AddUnionToClientByFactionID` RVA `0x00038010` —
-//! `IMPLEMENTED`. Точная пара:
+//! `IMPLEMENTED`; `PushToEstaList` RVA `0x000367C0` — `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -87,6 +87,11 @@
 //! игнорирует send result. `CMessage`, `BTreeMap`, split borrow и `Result`
 //! заменяют transport/MSVC tree/null plumbing; отсутствие faction, которое
 //! машина разыменовывала, остаётся typed safe-границей с выполненным prefix-ом.
+//! `m_RequestEstaUnionPlayers` материализован как `VecDeque<i32>`: scan идёт
+//! от начала, `PushToEstaList` без duplicate-gate добавляет literal ID в хвост,
+//! а terminal callback удаляет только первое совпадение. Проверку отсутствия
+//! перед push сохраняет вызывающий `CUnion::ApplyForJoin`; `VecDeque` заменяет
+//! только MSVC list nodes/allocator и не меняет порядок либо duplicates.
 //!
 //! `RemovePersonFromApplyFactionList` вызывает `RemoveApplyMember(player)` у
 //! каждой faction в signed map-order, игнорирует все concrete return values и
@@ -234,8 +239,9 @@ use super::faction::{
 use super::organizing::EOperator;
 use super::organizingparam::COrganizingParam;
 use super::union::{
-    CUnion, UnionClientSnapshotContext, UnionFactionMemberContext,
-    UnionDoJoinContext, UnionFactionJoinContext, UnionFactionLevelBlock,
+    CUnion, UnionApplicationFactionBlock, UnionApplicationFactionSnapshot,
+    UnionApplyForJoinContext, UnionClientSnapshotContext, UnionDoJoinContext,
+    UnionFactionJoinContext, UnionFactionLevelBlock, UnionFactionMemberContext,
     UnionFactionStateMutationContext, UnionInitialMutationContext,
     UnionMasterFactionQueryContext, UnionMemberSnapshotBlock,
     UnionOperatorValidationContext, UnionOwnedCityMutationContext,
@@ -626,6 +632,7 @@ pub(crate) struct COrganizingCtrl {
     delete_factions: VecDeque<i32>,
     delete_unions: VecDeque<i32>,
     top_infos: VecDeque<StTopInfo>,
+    request_establishment_union_players: VecDeque<i32>,
 }
 
 /// Разделённый borrow faction-map для union snapshot во время mutable union lookup.
@@ -648,6 +655,7 @@ impl COrganizingCtrl {
             delete_factions: VecDeque::new(),
             delete_unions: VecDeque::new(),
             top_infos: VecDeque::new(),
+            request_establishment_union_players: VecDeque::new(),
         }
     }
 
@@ -1011,6 +1019,32 @@ impl COrganizingCtrl {
             }
         }
         FreeFactionLookup::NoUnion
+    }
+
+    /// Проверяет literal ID в исходном list-order без изменения списка.
+    pub(crate) fn is_union_application_reserved(&self, faction_id: i32) -> bool {
+        self.request_establishment_union_players
+            .iter()
+            .any(|reserved_id| *reserved_id == faction_id)
+    }
+
+    /// Добавляет ID в хвост `m_RequestEstaUnionPlayers`, не устраняя duplicate.
+    pub(crate) fn push_to_establishment_list(&mut self, faction_id: i32) {
+        self.request_establishment_union_players
+            .push_back(faction_id);
+    }
+
+    /// Удаляет первое совпадение, как terminal union callback.
+    pub(crate) fn remove_from_establishment_list(&mut self, faction_id: i32) -> bool {
+        let Some(position) = self
+            .request_establishment_union_players
+            .iter()
+            .position(|reserved_id| *reserved_id == faction_id)
+        else {
+            return false;
+        };
+        self.request_establishment_union_players.remove(position);
+        true
     }
 
     /// Отправляет полный union snapshot каждому готовому клиенту одной faction.
@@ -1408,6 +1442,36 @@ impl UnionDoJoinContext for COrganizingCtrl {
     ) -> Result<bool, Self::InitialSnapshotBlock> {
         send_union_snapshot_to_faction(game, &self.factions, union, faction_id)
             .map(|outcome| matches!(outcome, AddUnionToFactionOutcome::Sent { .. }))
+    }
+}
+
+impl UnionApplyForJoinContext for COrganizingCtrl {
+    fn union_application_is_reserved(&self, faction_id: i32) -> bool {
+        self.is_union_application_reserved(faction_id)
+    }
+
+    fn union_application_faction(
+        &self,
+        faction_id: i32,
+    ) -> Result<Option<UnionApplicationFactionSnapshot>, UnionApplicationFactionBlock> {
+        if faction_id < 1 {
+            return Ok(None);
+        }
+        let Some(faction) = self.faction_by_id(faction_id) else {
+            return Ok(None);
+        };
+        let player_header = faction
+            .master_id()
+            .ok_or(UnionApplicationFactionBlock { faction_id })?;
+        Ok(Some(UnionApplicationFactionSnapshot {
+            faction_id,
+            name: faction.name().to_vec(),
+            player_header,
+        }))
+    }
+
+    fn reserve_union_application(&mut self, faction_id: i32) {
+        self.push_to_establishment_list(faction_id);
     }
 }
 
@@ -2321,20 +2385,6 @@ fn legacy_tick_ms() -> u32 {
 // RVA: 0x00034F10
 // ADDRESS: 00434f10
 // PROTOTYPE: void __thiscall Release(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: COrganizingCtrl::PushToEstaList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.h:149
-// RVA: 0x000367C0
-// ADDRESS: 004367c0
-// PROTOTYPE: void __thiscall PushToEstaList(long param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
