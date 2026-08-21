@@ -12,7 +12,7 @@
 //! подтверждены машинным кодом `Nworldserver.exe`; добавленные Linux-веткой
 //! clamp и error-log отсутствуют в EXE и не перенесены.
 //! Также материализованы transport-only ветви `0x5FF02/03/08/09/0A/0D/0E/0F`
-//! и `0x5FF10/11/13/14/16`: они создают либо переписывают точные response
+//! и `0x5FF10/11/13/14/15/16`: они создают либо переписывают точные response
 //! opcodes, сохраняют исходный payload, где это делал EXE, и используют ровно
 //! исходные `SendToSocket`, `SendToMapID` либо `SendAll`.
 //!
@@ -75,6 +75,16 @@ pub(crate) enum WorldGmTransportOutcome {
         game_server_id: i32,
         wire: Option<Vec<u8>>,
         delivery: Option<Result<i32, SendMessageError>>,
+    },
+    DirectMapRoute {
+        request_type: i32,
+        response_type: i32,
+        request_id: i32,
+        discarded_value: i32,
+        target_map_id: i32,
+        payload_complete: [bool; 3],
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
     },
 }
 
@@ -345,6 +355,31 @@ pub(crate) fn on_gm_message(game: &CGame, mut message: CMessage) -> WorldGmMessa
                 Some(request_id),
                 Some(map_id),
             )
+        }
+        0x0005_FF15 => {
+            let decoded_discarded = message.base_mut().get_long();
+            let decoded_target = message.base_mut().get_long();
+            let discarded_value = decoded_discarded.unwrap_or(0);
+            let target_map_id = decoded_target.unwrap_or(0);
+            message.set_message_type(0x0007_FC12);
+            let wire = message.as_wire_bytes().to_vec();
+            let delivery = game.send_msg_to_game_server(target_map_id, &message);
+            WorldGmMessageDispatch::Handled(WorldGmMessageOutcome::Transport(
+                WorldGmTransportOutcome::DirectMapRoute {
+                    request_type: 0x0005_FF15,
+                    response_type: 0x0007_FC12,
+                    request_id,
+                    discarded_value,
+                    target_map_id,
+                    payload_complete: [
+                        decoded_request_id.is_some(),
+                        decoded_discarded.is_some(),
+                        decoded_target.is_some(),
+                    ],
+                    wire,
+                    delivery,
+                },
+            ))
         }
         0x0005_FF16 => handled_rewritten_broadcast(game, message, 0x0005_FF16, 0x0007_FC13),
         _ => WorldGmMessageDispatch::Pending(message),
