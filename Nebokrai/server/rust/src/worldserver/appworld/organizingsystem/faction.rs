@@ -10,6 +10,7 @@
 //! `0x000B5890/0x000B58F0`,
 //! `Talk` RVA `0x000B5A50`,
 //! `DeleteOrgaToClient` RVA `0x000B8A20`,
+//! `Pronounce` RVA `0x000B8DC0`,
 //! `AddMembersToByteArray` RVA `0x000B53D0`, PDB-inline
 //! `AddApplyPersonsToByteArray/AddLeaveWordsToByteArray` RVA
 //! `0x000B5D30/0x000B5DD0`,
@@ -347,6 +348,14 @@
 //! `WS0119` разрешается заново после каждой отправки. Exact ASM
 //! `0x004B8A20..0x004B8DB2` подтверждает ветвление и порядок side effects;
 //! старое переполнение `char[100]` строкой `WS0191` заменено typed-границей.
+//! `Pronounce` сначала проверяет property-флаг и право `PV_Pronounce`, затем
+//! обрезает переданную `std::string&` до глобального `0x800`, присваивает ID и
+//! время, копирует только C-string prefix текста, а имя заменяет лишь для
+//! online-автора. Весь `tagPronounceWord` не очищается: хвосты fixed-массивов и
+//! прежнее имя offline-автора сохраняются. После `UpdatePronounceToClient(0,
+//! OP_Update)` всегда ставится dirty-бит `8`. Exact ASM
+//! `0x004B8DC0..0x004B8F1E` подтверждает порядок, размер глобала и обе ветки;
+//! две старые `strcpy`-границы заменены typed-блокировкой до изменения state.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -470,6 +479,10 @@ impl FactionBaseProperty {
         self.bytes[0x25] != 0
     }
 
+    pub(crate) const fn pronounce_function(&self) -> bool {
+        self.bytes[0x24] != 0
+    }
+
     pub(crate) const fn create_union_function(&self) -> bool {
         self.bytes[0x2A] != 0
     }
@@ -585,6 +598,30 @@ pub(crate) struct FactionPronounceUpdateBuildError {
     pub(crate) recipient_player_id: i32,
     pub(crate) game_server_id: i32,
     pub(crate) completed_deliveries: Vec<FactionPronounceDelivery>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionPronounceBlock {
+    MissingBaseProperty,
+    ContentWouldOverflow {
+        visible_len: usize,
+        input_truncated: bool,
+    },
+    PlayerNameWouldOverflow {
+        player_id: i32,
+        visible_len: usize,
+        input_truncated: bool,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionPronounceOutcome {
+    FunctionDisabled,
+    PermissionDenied,
+    Published {
+        input_truncated: bool,
+        deliveries: Result<Vec<FactionPronounceDelivery>, FactionPronounceUpdateBuildError>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2144,6 +2181,64 @@ impl CFaction {
             });
         }
         Ok(deliveries)
+    }
+
+    /// Заменяет текущее объявление с исходными проверками и порядком эффектов.
+    pub(crate) fn pronounce(
+        &mut self,
+        game: &CGame,
+        player_id: i32,
+        content: &mut Vec<u8>,
+        time: TagTimeValue,
+    ) -> Result<FactionPronounceOutcome, FactionPronounceBlock> {
+        let property = self
+            .base_property
+            .ok_or(FactionPronounceBlock::MissingBaseProperty)?;
+        if !property.pronounce_function() {
+            return Ok(FactionPronounceOutcome::FunctionDisabled);
+        }
+        if !self.is_using_purview(player_id, EPurview::Pronounce as i32) {
+            return Ok(FactionPronounceOutcome::PermissionDenied);
+        }
+
+        let input_truncated = content.len() > PRONOUNCE_CONTENT_CAPACITY;
+        content.truncate(PRONOUNCE_CONTENT_CAPACITY);
+        let visible_content = legacy_c_string_visible_bytes(content);
+        if visible_content.len() >= PRONOUNCE_CONTENT_CAPACITY {
+            return Err(FactionPronounceBlock::ContentWouldOverflow {
+                visible_len: visible_content.len(),
+                input_truncated,
+            });
+        }
+
+        let online_player = game.online_player_by_id(player_id as u32);
+        let visible_name =
+            online_player.map(|player| legacy_c_string_visible_bytes(player.get_name()));
+        if let Some(visible_name) = visible_name {
+            if visible_name.len() >= PRONOUNCE_NAME_CAPACITY {
+                return Err(FactionPronounceBlock::PlayerNameWouldOverflow {
+                    player_id,
+                    visible_len: visible_name.len(),
+                    input_truncated,
+                });
+            }
+        }
+
+        self.pronounce.player_id = player_id;
+        self.pronounce.time = time;
+        self.pronounce.content[..visible_content.len()].copy_from_slice(visible_content);
+        self.pronounce.content[visible_content.len()] = 0;
+        if let Some(visible_name) = visible_name {
+            self.pronounce.name[..visible_name.len()].copy_from_slice(visible_name);
+            self.pronounce.name[visible_name.len()] = 0;
+        }
+
+        let deliveries = self.update_pronounce_to_client(game, EOperator::Update);
+        self.set_change_data(8);
+        Ok(FactionPronounceOutcome::Published {
+            input_truncated,
+            deliveries,
+        })
     }
 
     /// Передаёт organizing-info каждому member без online-фильтра этого owner-а.
@@ -3804,7 +3899,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::Pronounce
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2000
