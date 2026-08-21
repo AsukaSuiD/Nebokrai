@@ -46,6 +46,12 @@
 //! инфраструктура. SQL выполняется параметризованным `tiberius`-запросом в
 //! dispatcher-owner-е; COM exception plumbing заменён явным Rust-исходом без
 //! повторного player-поиска после ошибки выполнения.
+//!
+//! Exact static `OneCountrySignUp` `0x00494340..0x00494431` принимает только
+//! countries `1..=4`, получает `XBWS0035` и форматирует локальный `char[256]`,
+//! но никуда не передаёт результат и не меняет состояние. Rust сохраняет
+//! внешний no-op и country gate, удаляя только неиспользуемые allocation,
+//! string lookup и `_snprintf` как внутреннюю мёртвую работу.
 
 use std::error::Error;
 use std::fmt;
@@ -141,6 +147,12 @@ pub(crate) struct FourNationExploitLoadedReport {
     pub(crate) disposition: FourNationExploitLoadedDisposition,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FourNationSignUpDisposition {
+    CountryIgnored,
+    ValidCountryNoExternalEffect,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FourNationMoralePublicationDisposition {
     RouteRejected,
@@ -167,6 +179,15 @@ pub(crate) struct FourNationWarResultReport {
 }
 
 impl CFourNationWarSys {
+    /// Сохраняет единственный внешний контракт exact `OneCountrySignUp`.
+    pub(crate) const fn one_country_sign_up(country: i32) -> FourNationSignUpDisposition {
+        if 0 < country && country < 5 {
+            FourNationSignUpDisposition::ValidCountryNoExternalEffect
+        } else {
+            FourNationSignUpDisposition::CountryIgnored
+        }
+    }
+
     pub(crate) fn push_setup(&mut self, setup: FourNationWarSetup) {
         self.setups.push(setup);
     }

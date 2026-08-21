@@ -4,7 +4,7 @@
 //! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, а также вход country victory
 //! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, exile-time
 //! `0x60316 -> 0x7FF15`, war-declare `0x60317 -> 0x7FF16` и four-nation result
-//! `0x60319 -> 0x7FE49` и `0x6031A -> 0x7FE46/DB` имеют статус
+//! `0x60319 -> 0x7FE49`, `0x6031A -> 0x7FE46/DB` и no-op `0x6031B` имеют статус
 //! `IMPLEMENTED`. Victory читает один
 //! unsigned country byte и вызывает исходно
 //! названный `CountryWarSys::on_flag_destory`; соседние opcodes helper не
@@ -44,6 +44,11 @@
 //! вызывает `ConvertMoraleToExploit(player_id, increment)` без source/tail
 //! gate. Последующий DB/online-маршрут материализован в общем async
 //! `ProcessMessage`, поскольку `tiberius` требует await.
+//! Exact `0x004A507D..0x004A5094` для `0x6031B` читает один signed country и
+//! вызывает static `OneCountrySignUp`. Сам owner `0x00494340..0x00494431`
+//! только для `1..=4` форматирует неиспользуемый локальный текст; состояния,
+//! log-а и network side effect нет, поэтому Rust сохраняет typed no-op без
+//! мёртвого `_snprintf`.
 //! Exact switch target `0x004A504E..0x004A5065` подтверждает, что `0x60318`
 //! читает один unsigned country byte и сразу передаёт его достигнутому
 //! `CountryWarSys`; конкретный region/country/localization/network context
@@ -60,8 +65,8 @@ use crate::worldserver::appworld::country::countryparam::{
     CCountryParam, CountryParameterUnavailable,
 };
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
-    CFourNationWarSys, FourNationExploitLoadedReport, FourNationWarResultContext,
-    FourNationWarResultReport,
+    CFourNationWarSys, FourNationExploitLoadedReport, FourNationSignUpDisposition,
+    FourNationWarResultContext, FourNationWarResultReport,
 };
 use crate::worldserver::worldserver::game::{CGame, legacy_tick_ms};
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
@@ -194,6 +199,15 @@ pub(crate) struct WorldFourNationExploitSync {
     pub(crate) after_database: Option<FourNationExploitLoadedReport>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldFourNationSignUpSync {
+    pub(crate) country: i32,
+    pub(crate) country_complete: bool,
+    pub(crate) source_map_id: i32,
+    pub(crate) source_socket_id: i32,
+    pub(crate) disposition: FourNationSignUpDisposition,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryMessageOutcome {
     Relay(WorldCountryRelayOutcome),
@@ -204,6 +218,7 @@ pub(crate) enum WorldCountryMessageOutcome {
     CountryWarVictory(WorldCountryWarVictorySync),
     FourNationWarResult(WorldFourNationWarResultSync),
     FourNationExploit(WorldFourNationExploitSync),
+    FourNationSignUp(WorldFourNationSignUpSync),
 }
 
 pub(crate) enum WorldCountryMessageDispatch {
@@ -220,6 +235,21 @@ pub(crate) fn on_country_message(
     mut message: CMessage,
 ) -> WorldCountryMessageDispatch {
     let request_type = message.message_type();
+    if request_type == 0x0006_031b {
+        let source_map_id = message.map_id();
+        let source_socket_id = message.socket_id();
+        let decoded_country = message.base_mut().get_long();
+        let country = decoded_country.unwrap_or(0);
+        return WorldCountryMessageDispatch::Handled(
+            WorldCountryMessageOutcome::FourNationSignUp(WorldFourNationSignUpSync {
+                country,
+                country_complete: decoded_country.is_some(),
+                source_map_id,
+                source_socket_id,
+                disposition: CFourNationWarSys::one_country_sign_up(country),
+            }),
+        );
+    }
     if request_type == 0x0006_0314 {
         let decoded_country_id = message.base_mut().get_byte();
         let country_id = decoded_country_id.unwrap_or(0);
