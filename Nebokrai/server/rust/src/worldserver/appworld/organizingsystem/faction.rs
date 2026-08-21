@@ -6,6 +6,8 @@
 //! `GetPronounceData` RVA
 //! `0x000B4CA0`, `SetGoodsWarCount` RVA `0x000B4D70`,
 //! `UpdatePronounceToClient` RVA `0x000B56C0`,
+//! `SendInfoToAllMember/UpdateOtherFacInfoToClient` RVA
+//! `0x000B5890/0x000B58F0`,
 //! `AddMembersToByteArray` RVA `0x000B53D0`, PDB-inline
 //! `AddApplyPersonsToByteArray/AddLeaveWordsToByteArray` RVA
 //! `0x000B5D30/0x000B5DD0`,
@@ -322,6 +324,13 @@
 //! time[0x10]`. Exact ASM `0x004B56C0..0x004B57DB` подтверждает framing,
 //! фильтр и неиспользованный первый аргумент. Нетерминированная C-строка
 //! останавливает текущий message typed-ошибкой вместо чтения за `0x828`.
+//! `SendInfoToAllMember` передаёт каждому signed member key обе исходные
+//! `std::string`, signed kind, жёсткие `0xFFDAEDFE/0`; объявленный unsigned
+//! четвёртый аргумент не читается. `UpdateOtherFacInfoToClient` сначала копирует
+//! visible C-string имени в `char[20]`, затем готовым member-ам отправляет
+//! `0x7FE15`: `recipient, operator, other_faction_id, name\0`. Exact ASM
+//! `0x004B5890..0x004B5A44` подтверждает оба порядка и фильтр второй функции.
+//! Переполнение старого `strcpy` заменено typed-границей до recipient-прохода.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -340,6 +349,7 @@ use crate::worldserver::worldserver::game::{CGame, WorldRegionNameLookup};
 
 const MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0D;
 const PRONOUNCE_UPDATE_MESSAGE_TYPE: i32 = 0x7FE10;
+const OTHER_FACTION_UPDATE_MESSAGE_TYPE: i32 = 0x7FE15;
 const OWNED_CITY_UPDATE_MESSAGE_TYPE: i32 = 0x7FE13;
 const ENTER_REGION_BUFFER_CAPACITY: usize = 256;
 const ENEMY_WAR_LOG_BUFFER_CAPACITY: usize = 256;
@@ -348,6 +358,7 @@ const LEAVE_WORD_CONTENT_CAPACITY: usize = 212;
 const APPLY_PERSON_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_CONTENT_CAPACITY: usize = 2048;
+const OTHER_FACTION_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_DATA_SIZE: usize = 0x828;
 const FACTION_BASE_PROPERTY_SIZE: usize = 0x38;
 
@@ -554,6 +565,33 @@ pub(crate) struct FactionPronounceUpdateBuildError {
     pub(crate) recipient_player_id: i32,
     pub(crate) game_server_id: i32,
     pub(crate) completed_deliveries: Vec<FactionPronounceDelivery>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FactionMemberInfoRequest<'a> {
+    pub(crate) recipient_player_id: i32,
+    pub(crate) first_text: &'a [u8],
+    pub(crate) second_text: &'a [u8],
+    pub(crate) information_type: i32,
+    pub(crate) color: u32,
+    pub(crate) trailing_value: u32,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionMemberInfoReport {
+    pub(crate) recipient_player_ids: Vec<i32>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionOtherInfoDelivery {
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FactionOtherInfoBuildError {
+    pub(crate) visible_name_len: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2049,6 +2087,77 @@ impl CFaction {
         Ok(deliveries)
     }
 
+    /// Передаёт organizing-info каждому member без online-фильтра этого owner-а.
+    pub(crate) fn send_info_to_all_members<'a, F>(
+        &self,
+        first_text: &'a [u8],
+        second_text: &'a [u8],
+        information_type: i32,
+        mut send_organizing_info: F,
+    ) -> FactionMemberInfoReport
+    where
+        F: FnMut(FactionMemberInfoRequest<'a>),
+    {
+        let mut recipient_player_ids = Vec::with_capacity(self.members.len());
+        for &recipient_player_id in self.members.keys() {
+            send_organizing_info(FactionMemberInfoRequest {
+                recipient_player_id,
+                first_text,
+                second_text,
+                information_type,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            });
+            recipient_player_ids.push(recipient_player_id);
+        }
+        FactionMemberInfoReport {
+            recipient_player_ids,
+        }
+    }
+
+    /// Публикует имя другой фракции всем готовым member recipient-ам.
+    pub(crate) fn update_other_faction_info_to_client(
+        &self,
+        game: &CGame,
+        other_faction_id: i32,
+        other_faction_name: &[u8],
+        operator: EOperator,
+    ) -> Result<Vec<FactionOtherInfoDelivery>, FactionOtherInfoBuildError> {
+        let visible_name = match other_faction_name.iter().position(|byte| *byte == 0) {
+            Some(terminator) => &other_faction_name[..terminator],
+            None => other_faction_name,
+        };
+        if visible_name.len() >= OTHER_FACTION_NAME_CAPACITY {
+            return Err(FactionOtherInfoBuildError {
+                visible_name_len: visible_name.len(),
+            });
+        }
+        let mut name_wire = Vec::with_capacity(visible_name.len() + 1);
+        name_wire.extend_from_slice(visible_name);
+        name_wire.push(0);
+
+        let mut deliveries = Vec::new();
+        for &recipient_player_id in self.members.keys() {
+            let player = game.online_player_by_id(recipient_player_id as u32);
+            let game_server_id = game.game_server_number_by_player_id(recipient_player_id);
+            if player.is_none_or(|player| !player.faction_data_received()) || game_server_id == 0 {
+                continue;
+            }
+
+            let mut message = CMessage::new(OTHER_FACTION_UPDATE_MESSAGE_TYPE);
+            message.base_mut().add_long(recipient_player_id);
+            message.base_mut().add_long(operator.wire_value());
+            message.base_mut().add_long(other_faction_id);
+            message.base_mut().add(&name_wire);
+            deliveries.push(FactionOtherInfoDelivery {
+                recipient_player_id,
+                game_server_id,
+                result: game.send_msg_to_game_server(game_server_id, &message),
+            });
+        }
+        Ok(deliveries)
+    }
+
     /// Clamp-ит и публикует faction experience с исходным порядком эффектов.
     pub(crate) fn set_experience(
         &mut self,
@@ -3128,7 +3237,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SendInfoToAllMember
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2730
@@ -3142,7 +3251,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::UpdateOtherFacInfoToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2740
