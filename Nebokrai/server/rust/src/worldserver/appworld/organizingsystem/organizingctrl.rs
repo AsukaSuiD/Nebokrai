@@ -35,7 +35,8 @@
 //! `FindOrgaByName` RVA `0x000345A0`,
 //! `AddAllFactinInfoToClientByPlayerID/AddFactionToClientByPlayerID` RVA
 //! `0x00034D00/0x00037380`,
-//! `IsFactionMaster` RVA `0x000344A0`, `ReInitialFacFactionByLvl` RVA
+//! `IsFactionMaster` RVA `0x000344A0`, `IsConferationMaster` RVA `0x00034520`,
+//! `ReInitialFacFactionByLvl` RVA
 //! `0x00034C80` и `AddUnionToClientByFactionID` RVA `0x00038010` —
 //! `IMPLEMENTED`; `PushToEstaList` RVA `0x000367C0` и оба overload-а
 //! `SendOrgaInfoToClient` RVA `0x00033750/0x00033840`, billboard serializer-ы
@@ -49,7 +50,7 @@
 //! Исходные владельцы PDB:
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.h`
 //! и
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:73,164,242,626,725,1105,1238,1352,1641,1655,1910,1952,1960,1970,1998`.
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:73,164,242,626,725,1105,1238,1352,1414,1641,1655,1910,1952,1960,1970,1998`.
 //!
 //! `GenerateSaveData` проходит faction-map, затем union-map в signed key-order.
 //! `force_all=true` ставит bits `1/2/4/8` четырьмя virtual-вызовами; concrete
@@ -200,6 +201,11 @@
 //! сохраняет такую запись через `Option<Box<CFaction>>`, но останавливает её
 //! локальным `BLOCKED_MISSING_FACT`, а не назначает старому null-dereference
 //! продолжение либо fail-closed результат.
+//! `IsConferationMaster` симметрично проходит union-map и возвращает первый
+//! положительный ID concrete union, чья master-faction равна входному ID. Null union-value
+//! остаётся typed safe-границей старого virtual разыменования. Folded exact
+//! `CUnion::IsMaster` `0x004C1EE0..0x004C1EF3` подтверждает сравнение поля
+//! master-faction и возврат union ID.
 //!
 //! `IsFreeFaction` симметрично проходит `m_ConfedeOrganizings`; PDB публикует
 //! `CUnion::IsMember(long)` на том же folded RVA `0x000BD840`, поскольку ID и
@@ -474,7 +480,7 @@ use super::faction::{
 };
 use super::factionwarsys::{
     CFactionWarSys, FactionWarDeclarationContext, FactionWarFactionSnapshot,
-    FactionWarFormatArgument,
+    FactionWarFormatArgument, FactionWarPlayerDiedContext,
 };
 use super::organizing::{ECityState, EOperator, TagTimeValue};
 use super::organizingparam::COrganizingParam;
@@ -619,7 +625,27 @@ pub(crate) enum OrganizingFactionWarDeclarationBlock {
     },
 }
 
-/// Concrete adapter controller/player/string/transport owner-ов войны.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ConfederationMasterLookupBlock {
+    pub(crate) map_key: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionWarPlayerDiedBlock {
+    MasterLookup(FactionMasterLookupBlock),
+    UnionMembership { map_key: i32 },
+    UnionMaster(ConfederationMasterLookupBlock),
+    PlayerMembership { map_key: i32 },
+    MissingFactionInUnion { union_id: i32, faction_id: i32 },
+    MissingFactionForMutation { faction_id: i32 },
+    EnemyMutation {
+        faction_id: i32,
+        enemy_id: i32,
+        source: FactionEnemyMutationBlock,
+    },
+}
+
+/// Concrete adapter общих controller/player/string/transport owner-ов войны.
 pub(crate) struct WorldFactionWarDeclarationEffects<'a> {
     game: &'a CGame,
     organizing: &'a mut COrganizingCtrl,
@@ -828,6 +854,139 @@ impl FactionWarDeclarationContext for WorldFactionWarDeclarationEffects<'_> {
                 trailing_value: 0,
             },
         );
+    }
+
+    fn send_orga_info_to_all(&mut self, info: &[u8], kind: u32, color: u32) {
+        let _ = COrganizingCtrl::send_organizing_info_to_all(self.game, info, kind, color);
+    }
+
+    fn put_war_log(&mut self, info: &[u8]) {
+        (self.put_war_log)(info);
+    }
+}
+
+impl FactionWarPlayerDiedContext for WorldFactionWarDeclarationEffects<'_> {
+    type Block = OrganizingFactionWarPlayerDiedBlock;
+
+    fn faction_id_by_master_player(&self, player_id: i32) -> Result<i32, Self::Block> {
+        self.organizing
+            .faction_id_by_master_player(player_id)
+            .map_err(OrganizingFactionWarPlayerDiedBlock::MasterLookup)
+    }
+
+    fn union_id_by_faction(&self, faction_id: i32) -> Result<i32, Self::Block> {
+        match self.organizing.is_free_faction(faction_id) {
+            FreeFactionLookup::NoUnion => Ok(0),
+            FreeFactionLookup::Union(union_id) => Ok(union_id),
+            FreeFactionLookup::BlockedNullConfederation { map_key } => {
+                Err(OrganizingFactionWarPlayerDiedBlock::UnionMembership { map_key })
+            }
+        }
+    }
+
+    fn union_id_by_master_faction(&self, faction_id: i32) -> Result<i32, Self::Block> {
+        self.organizing
+            .union_id_by_master_faction(faction_id)
+            .map_err(OrganizingFactionWarPlayerDiedBlock::UnionMaster)
+    }
+
+    fn faction_id_by_player(&self, player_id: i32) -> Result<i32, Self::Block> {
+        match self.organizing.is_free_player(player_id) {
+            FreePlayerLookup::NoFaction => Ok(0),
+            FreePlayerLookup::Faction(faction_id) => Ok(faction_id),
+            FreePlayerLookup::BlockedNullFaction { map_key } => {
+                Err(OrganizingFactionWarPlayerDiedBlock::PlayerMembership { map_key })
+            }
+        }
+    }
+
+    fn faction_exists(&self, faction_id: i32) -> bool {
+        self.organizing.faction_by_id(faction_id).is_some()
+    }
+
+    fn faction_side(&self, root_faction_id: i32) -> Result<Vec<i32>, Self::Block> {
+        match self.organizing.is_free_faction(root_faction_id) {
+            FreeFactionLookup::NoUnion => Ok(vec![root_faction_id]),
+            FreeFactionLookup::BlockedNullConfederation { map_key } => {
+                Err(OrganizingFactionWarPlayerDiedBlock::UnionMembership { map_key })
+            }
+            FreeFactionLookup::Union(union_id) => {
+                let Some(union) = self.organizing.confederation_by_id(union_id) else {
+                    return Ok(Vec::new());
+                };
+                let members = union.member_ids_snapshot();
+                if let Some(&faction_id) = members
+                    .iter()
+                    .find(|&&faction_id| self.organizing.faction_by_id(faction_id).is_none())
+                {
+                    return Err(
+                        OrganizingFactionWarPlayerDiedBlock::MissingFactionInUnion {
+                            union_id,
+                            faction_id,
+                        },
+                    );
+                }
+                Ok(members)
+            }
+        }
+    }
+
+    fn del_enemy_organizing(
+        &mut self,
+        faction_id: i32,
+        enemy_id: i32,
+    ) -> Result<(), Self::Block> {
+        let enemy_name = self
+            .organizing
+            .faction_by_id(enemy_id)
+            .map(|faction| faction.name().to_vec())
+            .ok_or(
+                OrganizingFactionWarPlayerDiedBlock::MissingFactionForMutation {
+                    faction_id: enemy_id,
+                },
+            )?;
+        let faction = self.organizing.faction_by_id_mut(faction_id).ok_or(
+            OrganizingFactionWarPlayerDiedBlock::MissingFactionForMutation { faction_id },
+        )?;
+        let mut effects = DeclarationEnemyMutationEffects {
+            enemy_id,
+            enemy_name,
+            format_world_string: &mut *self.format_world_string,
+            put_war_log: &mut *self.put_war_log,
+        };
+        faction
+            .del_enemy_organizing(enemy_id, &mut effects)
+            .map(|_| ())
+            .map_err(|source| OrganizingFactionWarPlayerDiedBlock::EnemyMutation {
+                faction_id,
+                enemy_id,
+                source,
+            })
+    }
+
+    fn update_enemy_faction(&mut self, faction_id: i32) -> Result<(), Self::Block> {
+        let faction = self.organizing.faction_by_id_mut(faction_id).ok_or(
+            OrganizingFactionWarPlayerDiedBlock::MissingFactionForMutation { faction_id },
+        )?;
+        let _ = faction.update_enemy_faction(self.game, &mut *self.update_player);
+        Ok(())
+    }
+
+    fn organizing_name(&self, faction_id: i32) -> Result<Vec<u8>, Self::Block> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(|faction| faction.name().to_vec())
+            .ok_or(OrganizingFactionWarPlayerDiedBlock::MissingFactionForMutation {
+                faction_id,
+            })
+    }
+
+    fn format_world_string(&mut self, string_id: &[u8], arguments: &[&[u8]]) -> Vec<u8> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| UnionFormatArgument::Text(argument))
+            .collect::<Vec<_>>();
+        (self.format_world_string)(string_id, &arguments)
     }
 
     fn send_orga_info_to_all(&mut self, info: &[u8], kind: u32, color: u32) {
@@ -3422,6 +3581,22 @@ impl COrganizingCtrl {
             };
             if faction_id > 0 {
                 return Ok(faction_id);
+            }
+        }
+        Ok(0)
+    }
+
+    /// Повторяет ordered `IsConferationMaster` и его null-owner границу.
+    pub(crate) fn union_id_by_master_faction(
+        &self,
+        faction_id: i32,
+    ) -> Result<i32, ConfederationMasterLookupBlock> {
+        for (&map_key, union) in &self.confederations {
+            let Some(union) = union.as_deref() else {
+                return Err(ConfederationMasterLookupBlock { map_key });
+            };
+            if union.master_id() == faction_id && union.union_id() > 0 {
+                return Ok(union.union_id());
             }
         }
         Ok(0)
@@ -8079,7 +8254,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::IsConferationMaster
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1414
@@ -8087,6 +8262,7 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00434520
 // PROTOTYPE: long __thiscall IsConferationMaster(long param_1)
 //
+// IMPLEMENTED_OWNER: `COrganizingCtrl::union_id_by_master_faction` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

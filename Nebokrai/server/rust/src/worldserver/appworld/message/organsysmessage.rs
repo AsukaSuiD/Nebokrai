@@ -1,5 +1,6 @@
 //! Статус корпуса: `IMPLEMENTED_PARTIAL` для достигнутых organizing opcode,
-//! включая создание фракции `0x60103`, список фракций страны `0x60107`,
+//! включая смерть faction-master-а `0x60101`, создание фракции `0x60103`,
+//! список фракций страны `0x60107`,
 //! подачу заявки `0x60108`, отмену
 //! заявки `0x60109`, решение по заявке `0x6010A`, исключение участника
 //! `0x6010B`, исключение фракции из союза `0x6010C`, выход из фракции
@@ -25,6 +26,13 @@
 //!
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
 //! `OnOrgasysMessage` RVA `0x000A6110`. Exact диапазоны
+//! ingress `0x60101` читает два полных `Long` как `(defeated master,
+//! victor player)` и без route/tail/online gates передаёт их
+//! `CFactionWarSys::OnPlayerDied`. Его exact owner
+//! `0x00465750..0x00465CDF` проверяет master/union/enemy связи, попарно снимает
+//! войну сторон и публикует `WS0233(victor, defeated)` с war-log. Добавленные
+//! старым Linux-донором validation gates в EXE отсутствуют.
+//! Exact диапазоны
 //! `0x004A6186..0x004A6685` восстанавливают `0x60103`: запрос читает
 //! `(request ID, cookie, player ID, country, name[20])`, после непустого имени
 //! снимает один local-time и декодирует online player из остатка сообщения.
@@ -428,6 +436,7 @@ use crate::worldserver::appworld::organizingsystem::faction::{
 };
 use crate::worldserver::appworld::organizingsystem::factionwarsys::{
     CFactionWarSys, FactionWarDeclarationBlock, FactionWarDeclarationOutcome,
+    FactionWarPlayerDiedBlock, FactionWarPlayerDiedOutcome,
 };
 use crate::worldserver::appworld::organizingsystem::attackcitysys::{
     AttackCityApplicationContext, AttackCityApplicationReport, AttackCityCallbacks,
@@ -457,7 +466,8 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingFactionMemberStateOutcome,
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock,
     OrganizingLeaveWordEditOutcome, OrganizingLeaveWordEnableBlock,
-    OrganizingFactionWarDeclarationBlock, WorldFactionWarDeclarationEffects,
+    OrganizingFactionWarDeclarationBlock, OrganizingFactionWarPlayerDiedBlock,
+    WorldFactionWarDeclarationEffects,
     OrganizingLeaveWordEnableOutcome, OrganizingLeaveWordOutcome, OrganizingPronounceBlock,
     OrganizingPronounceOutcome, OrganizingUnionApplyForJoinDispatchBlock,
     OrganizingUnionApplyForJoinOutcome, OrganizingFactionApplicationBlock,
@@ -498,6 +508,7 @@ use crate::worldserver::worldserver::game::{
 
 const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
     [0x60117, 0x60119, 0x60120, 0x60122, 0x60124, 0x60131];
+const FACTION_WAR_PLAYER_DIED_MESSAGE_TYPE: i32 = 0x60101;
 const CREATE_FACTION_MESSAGE_TYPE: i32 = 0x60103;
 const CREATE_FACTION_RESPONSE_TYPE: i32 = 0x7FE01;
 const FACTION_LIST_MESSAGE_TYPE: i32 = 0x60107;
@@ -2287,6 +2298,49 @@ pub(crate) fn dispatch_pronounce(
                 outcome,
             }),
     )
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionWarPlayerDiedDispatch {
+    pub(crate) defeated_master_player_id: i32,
+    pub(crate) victor_player_id: i32,
+    pub(crate) outcome: Result<
+        FactionWarPlayerDiedOutcome,
+        FactionWarPlayerDiedBlock<OrganizingFactionWarPlayerDiedBlock>,
+    >,
+}
+
+pub(crate) fn dispatch_faction_war_player_died(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    faction_war: &mut CFactionWarSys,
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    update_player: &mut dyn FnMut(i32),
+) -> Option<OrganizingFactionWarPlayerDiedDispatch> {
+    if message.message_type() != FACTION_WAR_PLAYER_DIED_MESSAGE_TYPE {
+        return None;
+    }
+    let defeated_master_player_id = message.base_mut().get_long().unwrap_or(0);
+    let victor_player_id = message.base_mut().get_long().unwrap_or(0);
+    let mut effects = WorldFactionWarDeclarationEffects::new(
+        game,
+        organizing,
+        &mut *callbacks.world_string,
+        &mut *callbacks.format_world_string,
+        &mut *callbacks.put_war_log,
+        update_player,
+    );
+    let outcome = faction_war.on_player_died(
+        defeated_master_player_id,
+        victor_player_id,
+        &mut effects,
+    );
+    Some(OrganizingFactionWarPlayerDiedDispatch {
+        defeated_master_player_id,
+        victor_player_id,
+        outcome,
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
