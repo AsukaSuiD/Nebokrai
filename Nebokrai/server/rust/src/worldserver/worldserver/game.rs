@@ -825,8 +825,10 @@
 //! Следующая MainLoop minute-chain теперь объединяет lazy bits `0x10`, `0x20`
 //! и `0x40`, их точные два initial clock-call, новый current tick, wrapping
 //! `(current - minute_start) / 60000`, полный `COrganizingCtrl::Run`, полный
-//! `CCountryHandler::Run` и только после обоих обновляет minute start. Ещё
-//! сырой `DisbandFaction` передаётся явным owner-callback-ом;
+//! `CCountryHandler::Run` и только после обоих обновляет minute start.
+//! `DisbandFaction` вызывается concrete organizing owner-ом через живые
+//! Village/City/Goods War/country owners; player flag и optional log завершают
+//! его exact success-порядок сразу после удаления faction;
 //! `CCountry::AI` выполняется concrete country owner-ом через governance context;
 //! при локальном blocked-path последующие эффекты не выдумываются.
 //! Сразу после этого `run_main_loop_bai_tan_jjc_stage` без нового clock-call
@@ -1020,7 +1022,8 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsOriginalNameIndex,
 };
 use crate::worldserver::appworld::goodswarmember::{
-    CGoodsWarMember, GoodsWarDatabaseLoadReport, GoodsWarMemberBlock,
+    CGoodsWarMember, GoodsWarDatabaseLoadReport, GoodsWarDeliveryContext,
+    GoodsWarMemberBlock,
 };
 use crate::worldserver::appworld::jjcsystem::{
     CJJcSystem, JjcRunBlock, JjcRunConfig, JjcRunContext, JjcRunReport,
@@ -1116,8 +1119,8 @@ use crate::worldserver::appworld::message::servermessage::{
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
     goods_war_check_for_faction_id, CFaction, FactionDemiseContext, FactionDemiseOutcome,
-    FactionExperienceBlock, FactionMemberInfoRequest, FactionOrganizingInfoContext,
-    FactionUploadIconBlock,
+    FactionDisbandContext, FactionExperienceBlock, FactionMemberInfoRequest,
+    FactionOrganizingInfoContext, FactionUploadIconBlock,
 };
 use crate::worldserver::appworld::organizingsystem::attackcitysys::{
     AttackCityCallbacks, CAttackCitySys,
@@ -1128,8 +1131,8 @@ use crate::worldserver::appworld::organizingsystem::factionwarsys::{
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     AttackCityEndBlock, COrganizingCtrl, CityTransferEndpointBlock, CityTransferFinishBlock,
     CityTransferFinishReport, CityTransferSessionBlock, CityTransferSessionReport,
-    CityTransferStartBlock, OrganizingContributorBlock, OrganizingRunBlock,
-    OrganizingRunReport, OrganizingSaveDataBlock,
+    CityTransferStartBlock, OrganizingContributorBlock, OrganizingDisbandOutcome,
+    OrganizingDisbandPlayer, OrganizingRunBlock, OrganizingRunReport, OrganizingSaveDataBlock,
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock, OrganizingLeaveWordEnableBlock,
     OrganizingPronounceBlock, OrganizingSaveDataReport, OrganizingUnionApplicationCallbackBlock,
     OrganizingUnionApplicationCallbackReport, OrganizingUnionApplyForJoinDispatchBlock,
@@ -3079,10 +3082,13 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     pub(crate) faction_master_log_enabled: bool,
     pub(crate) write_faction_master_log:
         &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
+    /// Внешний feature-gate `CLogSystem::FactionDisbandEnabled`.
+    pub(crate) faction_disband_log_enabled: bool,
+    pub(crate) write_faction_disband_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, &[u8]),
     pub(crate) dispatch_timer:
         &'a mut dyn FnMut(&mut CTimer<TimerCallback>, TimerCallbackInvocation<TimerCallback>),
     pub(crate) get_lei_ting_local_time: &'a mut dyn FnMut() -> LeiTingLocalTime,
-    pub(crate) disband_faction: &'a mut dyn FnMut(&mut COrganizingCtrl, i32, i32) -> bool,
     pub(crate) wait: &'a mut dyn FnMut(u32),
     pub(crate) output_debug: &'a mut dyn FnMut(&'static str),
 }
@@ -9779,7 +9785,7 @@ impl CGame {
         clippy::too_many_arguments,
         reason = "два ещё отдельных downstream owner-а и clock передаются явно"
     )]
-    pub(crate) fn run_main_loop_minute_stage<GetTick, Disband>(
+    pub(crate) fn run_main_loop_minute_stage<GetTick>(
         &mut self,
         initialization: &mut WorldMainLoopInitializationState,
         clocks: &mut WorldMainLoopTailClockState,
@@ -9788,10 +9794,10 @@ impl CGame {
         country_parameters: &CCountryParam,
         organizing_parameters: &COrganizingParam,
         attack_city: &CAttackCitySys,
-        goods_war: &CGoodsWarMember,
+        village_war: &CVillageWarSys,
+        goods_war: &mut CGoodsWarMember,
         globe_setup: &GlobeSetupSnapshot,
         mut get_tick: GetTick,
-        disband_faction: Disband,
         world_string: &mut dyn FnMut(&[u8]) -> Vec<u8>,
         format_world_string:
             &mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
@@ -9800,10 +9806,11 @@ impl CGame {
         faction_master_log_enabled: bool,
         write_faction_master_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
+        faction_disband_log_enabled: bool,
+        write_faction_disband_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
     ) -> Result<WorldMainLoopMinuteStageReport, WorldMainLoopMinuteStageBlock>
     where
         GetTick: FnMut() -> u32,
-        Disband: FnMut(&mut COrganizingCtrl, i32, i32) -> bool,
     {
         let initialized = initialize_main_loop_tail_clocks(initialization, clocks, &mut get_tick);
         let current_tick_ms = get_tick();
@@ -9812,8 +9819,48 @@ impl CGame {
             .wrapping_sub(clocks.minute_started_at_ms)
             .wrapping_div(60_000) as i32;
 
+        let faction_disband_log_enabled =
+            self.setup.use_log_system && faction_disband_log_enabled;
         let organizing_report = organizing
-            .run(minute_delta, disband_faction)
+            .run(minute_delta, |organizing, player_id, faction_id| {
+                let outcome = {
+                    let mut effects = WorldOrganizingDisbandEffects {
+                        game: &*self,
+                        village_war,
+                        attack_city,
+                        country_handler: &*country_handler,
+                        goods_war: &mut *goods_war,
+                        world_string: &mut *world_string,
+                    };
+                    organizing.disband_faction(
+                        &*self,
+                        player_id,
+                        faction_id,
+                        &mut effects,
+                    )?
+                };
+                let OrganizingDisbandOutcome::Disbanded {
+                    mut progress,
+                    retired_faction,
+                } = outcome
+                else {
+                    return Ok(false);
+                };
+                progress.player = self.clear_disbanded_player_faction_data(player_id);
+                if faction_disband_log_enabled
+                    && let Some(player) = progress.player.as_ref()
+                {
+                    write_faction_disband_log(
+                        faction_id,
+                        legacy_c_string_prefix(retired_faction.name()),
+                        player.player_id,
+                        legacy_c_string_prefix(&player.player_name),
+                    );
+                    progress.log_written = true;
+                }
+                drop(retired_faction);
+                Ok(true)
+            })
             .map_err(WorldMainLoopMinuteStageBlock::Organizing)?;
         let faction_master_log_enabled = self.setup.use_log_system && faction_master_log_enabled;
         let base = WorldCountryExileResultEffects {
@@ -10452,16 +10499,18 @@ impl CGame {
                 owners.country_parameters,
                 owners.organizing_parameters,
                 owners.attack_city,
+                owners.village_war,
                 owners.goods_war,
                 owners.globe_setup,
                 &mut *callbacks.get_tick,
-                &mut *callbacks.disband_faction,
                 &mut *callbacks.world_string_by_id,
                 &mut *callbacks.format_union_world_string,
                 &mut *callbacks.refresh_union_owned_city,
                 &mut *callbacks.update_union_player,
                 callbacks.faction_master_log_enabled,
                 &mut *callbacks.write_faction_master_log,
+                callbacks.faction_disband_log_enabled,
+                &mut *callbacks.write_faction_disband_log,
             )
             .map_err(|block| Box::new(WorldMainLoopBlock::Minute(block)))?;
         let bai_tan_jjc = self
@@ -11232,6 +11281,31 @@ impl CGame {
     /// Возвращает игрока непосредственно из владеющего map либо `None`.
     pub(crate) fn map_player(&self, player_id: u32) -> Option<&CPlayer> {
         self.players.get(&player_id).map(Box::as_ref)
+    }
+
+    /// Повторяет reached continuation `DisbandFaction`: snapshot имени берётся
+    /// до прямой записи `m_bGetFactionData=false` тому же online map-owner-у.
+    fn clear_disbanded_player_faction_data(
+        &mut self,
+        player_id: i32,
+    ) -> Option<OrganizingDisbandPlayer> {
+        let player_id = player_id as u32;
+        if !self
+            .online_players
+            .iter()
+            .any(|&online_id| online_id == player_id)
+        {
+            return None;
+        }
+        self.players.get_mut(&player_id).map(|player| {
+            let player = player.as_mut();
+            let snapshot = OrganizingDisbandPlayer {
+                player_id: player.get_id(),
+                player_name: legacy_c_string_prefix(player.get_name()).to_vec(),
+            };
+            player.set_faction_data_received(false);
+            snapshot
+        })
     }
 
     /// Выполняет прямую wrapping-мутацию `dwExploit` только map-owner-а.
@@ -12499,6 +12573,22 @@ struct WorldCountryFactionDemiseEffects<'a> {
         &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
 }
 
+/// Concrete war/country/Goods-War owners внешнего `DisbandFaction`.
+struct WorldOrganizingDisbandEffects<'a> {
+    game: &'a CGame,
+    village_war: &'a CVillageWarSys,
+    attack_city: &'a CAttackCitySys,
+    country_handler: &'a CCountryHandler,
+    goods_war: &'a mut CGoodsWarMember,
+    world_string: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
+}
+
+/// Отдельный immutable transport-view устраняет искусственную зависимость
+/// Goods War delete-публикаций от mutable organizing lookup-а.
+struct WorldGoodsWarDelivery<'a> {
+    game: &'a CGame,
+}
+
 struct WorldFourNationWarResultEffects<'a> {
     game: &'a CGame,
 }
@@ -12812,6 +12902,60 @@ impl FactionOrganizingInfoContext for WorldCountryFactionDemiseEffects<'_> {
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
         let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+impl GoodsWarDeliveryContext for WorldGoodsWarDelivery<'_> {
+    fn send_all(&mut self, message: &CMessage) -> i32 {
+        message
+            .send_all(self.game.current_game_server_sender().as_ref())
+            .unwrap_or(0)
+    }
+}
+
+impl FactionOrganizingInfoContext for WorldOrganizingDisbandEffects<'_> {
+    fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
+        Some((self.world_string)(string_id))
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+impl FactionDisbandContext for WorldOrganizingDisbandEffects<'_> {
+    fn village_war_declared(&self, faction_id: i32) -> bool {
+        self.village_war.is_already_declared_for_war(faction_id)
+    }
+
+    fn city_war_declared(&self, faction_id: i32) -> bool {
+        self.attack_city.is_already_declared_for_war(faction_id)
+    }
+
+    fn goods_war_blocks_disband(&self, faction_id: i32, _player_id: i32) -> bool {
+        goods_war_check_for_faction_id(faction_id, |candidate| {
+            self.goods_war.contains_faction_id(candidate)
+        })
+    }
+
+    fn country_king_id(&self, country: u8) -> Option<i32> {
+        self.country_handler
+            .get_country(country)
+            .map(|country| country.king.id)
+    }
+
+    fn delete_goods_war_members_by_faction_id(&mut self, faction_id: i32) {
+        let mut delivery = WorldGoodsWarDelivery { game: self.game };
+        let _ = self
+            .goods_war
+            .delete_members_by_faction_id(faction_id, &mut delivery);
+    }
+
+    fn decrement_goods_war_faction_count(&mut self, _faction_id: i32, faction_name: &[u8]) {
+        let mut delivery = WorldGoodsWarDelivery { game: self.game };
+        let _ = self
+            .goods_war
+            .delete_one_faction_count_by_name(faction_name, &mut delivery);
     }
 }
 

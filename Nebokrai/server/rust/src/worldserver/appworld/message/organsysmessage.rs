@@ -255,7 +255,8 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
 use crate::worldserver::appworld::goodswarmember::{
     CGoodsWarMember, GoodsWarAuditEnvironment, GoodsWarAuditPlayer,
     GoodsWarFactionSnapshot, GoodsWarFactionWinReport, GoodsWarFactionWinSnapshot,
-    GoodsWarMemberBlock, GoodsWarMemberContext, GoodsWarMutationReport,
+    GoodsWarDeliveryContext, GoodsWarMemberBlock, GoodsWarMemberContext,
+    GoodsWarMutationReport,
     GoodsWarRefreshReport,
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
@@ -3566,6 +3567,14 @@ struct WorldGoodsWarMemberContext<'game, 'organizing> {
     organizing: &'organizing mut COrganizingCtrl,
 }
 
+impl GoodsWarDeliveryContext for WorldGoodsWarMemberContext<'_, '_> {
+    fn send_all(&mut self, message: &CMessage) -> i32 {
+        message
+            .send_all(self.game.current_game_server_sender().as_ref())
+            .unwrap_or(0)
+    }
+}
+
 impl GoodsWarMemberContext for WorldGoodsWarMemberContext<'_, '_> {
     type Block = OrganizingGoodsWarContextBlock;
 
@@ -3589,12 +3598,6 @@ impl GoodsWarMemberContext for WorldGoodsWarMemberContext<'_, '_> {
         self.organizing
             .set_faction_goods_war_count(faction_id, count)
             .ok_or(OrganizingGoodsWarContextBlock { faction_id })
-    }
-
-    fn send_all(&mut self, message: &CMessage) -> i32 {
-        message
-            .send_all(self.game.current_game_server_sender().as_ref())
-            .unwrap_or(0)
     }
 
     fn faction_win_audit_environment(&mut self) -> Option<GoodsWarAuditEnvironment> {

@@ -247,9 +247,9 @@
 //! в signed order, уменьшает только положительный `m_lDelRemainTime` через
 //! wrapping subtraction, собирает достигшие `<= 0` пары `(faction ID,
 //! master ID)` во временный ordered map и лишь после traversal вызывает
-//! `DisbandFaction(master, faction)`. `Run` принимает этот достигнутый вызов как
-//! явный callback, чтобы caller мог передать Game/context без самозаимствования
-//! controller-а; concrete `disband_faction` теперь материализован ниже.
+//! `DisbandFaction(master, faction)`. Внутренний fallible dispatch нужен только
+//! для передачи Game/context без самозаимствования controller-а; MainLoop
+//! подключает к нему concrete `disband_faction`, а не внешний owner-callback.
 //!
 //! `UpdateOtherFacInfoToClient` проходит оставшиеся faction-owner-ы в signed
 //! map-order, пропускает null value и вызывает concrete update slot `+0x170`.
@@ -263,6 +263,9 @@
 //! в update/log — второй аргумент, player ID — первый. Наблюдаемая дубликация
 //! сохранена; утечка 256-байтового SQL buffer при offline player устранена как
 //! чисто внутренний дефект, а DB/war/player owners оставлены узким context.
+//! Rust завершает player/log continuation в `CGame` сразу после возврата core:
+//! имя faction сохраняется до Drop удалённого owner-а, поэтому observable
+//! порядок остаётся тем же без alias между immutable Game и mutable player.
 //!
 //! Billboard snapshot очищается и строится из faction-map: null value
 //! пропускается, ID/name/value копируются из concrete faction. Specialized
@@ -1034,11 +1037,16 @@ pub(crate) struct OrganizingSaveDataReport {
 }
 
 /// Локальная safe-граница полного faction countdown traversal.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum OrganizingRunBlock {
     NullFaction { map_key: i32 },
     DeleteRemainTimeAbsent { map_key: i32 },
     MasterIdAbsent { map_key: i32, faction_id: i32 },
+    Disband {
+        faction_id: i32,
+        master_id: i32,
+        source: OrganizingDisbandBlock,
+    },
 }
 
 /// Один вызов отдельного `DisbandFaction(master, faction)` owner-а.
@@ -1199,14 +1207,16 @@ pub(crate) struct OrganizingDisbandProgress {
     pub(crate) log_written: bool,
 }
 
-#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum OrganizingDisbandOutcome {
     Rejected {
         reason: OrganizingDisbandRejection,
         notice_sent: bool,
         cleared_city_war_enemies: usize,
     },
-    Disbanded(OrganizingDisbandProgress),
+    Disbanded {
+        progress: OrganizingDisbandProgress,
+        retired_faction: Box<CFaction>,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1226,24 +1236,6 @@ pub(crate) enum OrganizingDisbandBlock {
         source: OrganizingOtherFactionUpdateBlock,
         progress: OrganizingDisbandProgress,
     },
-}
-
-/// Player/log continuation внешнего `COrganizingCtrl::DisbandFaction`.
-pub(crate) trait OrganizingDisbandContext: FactionDisbandContext {
-    fn clear_player_faction_data_received(
-        &mut self,
-        player_id: i32,
-    ) -> Option<OrganizingDisbandPlayer>;
-
-    fn faction_disband_log_enabled(&self) -> bool;
-
-    fn write_faction_disband_log(
-        &mut self,
-        faction_id: i32,
-        faction_name: &[u8],
-        player_id: i32,
-        player_name: &[u8],
-    );
 }
 
 /// Поля синхронного `PlayerTransferOwnerCity::DoAsyncCall`.
@@ -2585,7 +2577,7 @@ impl COrganizingCtrl {
         context: &mut Context,
     ) -> Result<OrganizingDisbandOutcome, OrganizingDisbandBlock>
     where
-        Context: OrganizingDisbandContext,
+        Context: FactionDisbandContext,
     {
         let Some(faction) = self.factions.get_mut(&faction_id) else {
             return Ok(OrganizingDisbandOutcome::Rejected {
@@ -2676,20 +2668,10 @@ impl COrganizingCtrl {
             },
         );
 
-        progress.player = context.clear_player_faction_data_received(player_id);
-        if context.faction_disband_log_enabled()
-            && let Some(player) = progress.player.as_ref()
-        {
-            context.write_faction_disband_log(
-                faction_id,
-                legacy_c_string_prefix(faction.name()),
-                player.player_id,
-                legacy_c_string_prefix(&player.player_name),
-            );
-            progress.log_written = true;
-        }
-
-        Ok(OrganizingDisbandOutcome::Disbanded(progress))
+        Ok(OrganizingDisbandOutcome::Disbanded {
+            progress,
+            retired_faction: faction,
+        })
     }
 
     /// Пересчитывает и публикует property всех concrete faction-owner-ов.
@@ -3858,7 +3840,7 @@ impl COrganizingCtrl {
         mut disband_faction: Disband,
     ) -> Result<OrganizingRunReport, OrganizingRunBlock>
     where
-        Disband: FnMut(&mut Self, i32, i32) -> bool,
+        Disband: FnMut(&mut Self, i32, i32) -> Result<bool, OrganizingDisbandBlock>,
     {
         let mut pending_disbands = BTreeMap::new();
         let mut decremented_factions = 0;
@@ -3889,7 +3871,13 @@ impl COrganizingCtrl {
 
         let mut disbands = Vec::with_capacity(pending_disbands.len());
         for (faction_id, master_id) in pending_disbands {
-            let result = disband_faction(self, master_id, faction_id);
+            let result = disband_faction(self, master_id, faction_id).map_err(|source| {
+                OrganizingRunBlock::Disband {
+                    faction_id,
+                    master_id,
+                    source,
+                }
+            })?;
             disbands.push(OrganizingRunDisband {
                 faction_id,
                 master_id,
@@ -5429,7 +5417,7 @@ fn legacy_tick_ms() -> u32 {
 
 // VERIFIED_DISASSEMBLY, IMPLEMENTED: полный `COrganizingCtrl::Run` RVA
 // `0x0003A550` находится выше; temporary-map/STL traversal заменён typed
-// callback к материализованному `DisbandFaction` owner-у.
+// fallible dispatch к подключённому `DisbandFaction` owner-у.
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::OnPlayerInviteFaction

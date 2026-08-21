@@ -2009,7 +2009,7 @@ pub(crate) trait FactionDisbandContext: FactionOrganizingInfoContext {
 
     fn delete_goods_war_members_by_faction_id(&mut self, faction_id: i32);
 
-    fn decrement_goods_war_faction_count(&mut self, faction_id: i32);
+    fn decrement_goods_war_faction_count(&mut self, faction_id: i32, faction_name: &[u8]);
 }
 
 /// Узкая граница war/country/localization/player-refresh/log для `Demise`.
@@ -5691,7 +5691,7 @@ impl CFaction {
         };
         context.delete_goods_war_members_by_faction_id(self.faction_id);
         progress.goods_war_members_deleted = true;
-        context.decrement_goods_war_faction_count(self.faction_id);
+        context.decrement_goods_war_faction_count(self.faction_id, self.name());
         progress.goods_war_faction_count_decremented = true;
 
         progress.cleared_apply_persons = self.apply_persons.len();

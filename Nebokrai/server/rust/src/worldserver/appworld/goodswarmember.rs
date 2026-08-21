@@ -42,7 +42,9 @@
 //! удалении публикует `0x7FF20 { operation=3, faction_id }` один раз.
 //! `DelOneFactionfCount` exact `0x004A1FA0..0x004A2084` сначала требует живой
 //! faction-owner, затем удаляет только первую C-string-равную count-запись и
-//! немедленно публикует обновлённый top-five через `RequestCountList`.
+//! немедленно публикует обновлённый top-five через `RequestCountList`. В
+//! disband-цепочке то же имя снимается с ещё живого `CFaction` до erase, а
+//! узкий delivery-adapter отделяет эту семантику от уже ненужного map lookup.
 //! `IsInFactionIdList` exact `0x004A2760..0x004A2792` является обычным find по
 //! signed set; `BTreeSet::contains` заменяет только MSVC tree. Destructor exact
 //! `0x004A29C0..0x004A2A87` освобождает count-list, set и map; стандартный
@@ -118,7 +120,12 @@ pub(crate) struct GoodsWarAuditEnvironment {
     pub(crate) world_number: u32,
 }
 
-pub(crate) trait GoodsWarMemberContext {
+/// Узкая граница исходных `CMessage::SendAll`-публикаций Goods War.
+pub(crate) trait GoodsWarDeliveryContext {
+    fn send_all(&mut self, message: &CMessage) -> i32;
+}
+
+pub(crate) trait GoodsWarMemberContext: GoodsWarDeliveryContext {
     type Block;
 
     fn faction_snapshot(
@@ -133,8 +140,6 @@ pub(crate) trait GoodsWarMemberContext {
         faction_id: i32,
         count: i32,
     ) -> Result<i32, Self::Block>;
-
-    fn send_all(&mut self, message: &CMessage) -> i32;
 
     /// Возвращает reached runtime-поля для legacy `bzhsmd.txt`; `None`
     /// означает, что setup ещё не достиг назначенного `dwNumber`.
@@ -372,7 +377,7 @@ impl CGoodsWarMember {
         self.faction_ids.contains(&faction_id)
     }
 
-    fn send_members<Context: GoodsWarMemberContext + ?Sized>(
+    fn send_members<Context: GoodsWarDeliveryContext + ?Sized>(
         &self,
         context: &mut Context,
     ) -> i32 {
@@ -391,7 +396,7 @@ impl CGoodsWarMember {
         context.send_all(&message)
     }
 
-    fn send_count_list<Context: GoodsWarMemberContext + ?Sized>(
+    fn send_count_list<Context: GoodsWarDeliveryContext + ?Sized>(
         &self,
         context: &mut Context,
     ) -> i32 {
@@ -405,7 +410,7 @@ impl CGoodsWarMember {
         context.send_all(&message)
     }
 
-    fn send_faction_ids<Context: GoodsWarMemberContext + ?Sized>(
+    fn send_faction_ids<Context: GoodsWarDeliveryContext + ?Sized>(
         &self,
         context: &mut Context,
     ) -> i32 {
@@ -419,7 +424,7 @@ impl CGoodsWarMember {
     }
 
     /// Удаляет literal player key и только при hit публикует operation `2`.
-    pub(crate) fn delete_one_member<Context: GoodsWarMemberContext + ?Sized>(
+    pub(crate) fn delete_one_member<Context: GoodsWarDeliveryContext + ?Sized>(
         &mut self,
         player_id: i32,
         context: &mut Context,
@@ -438,7 +443,7 @@ impl CGoodsWarMember {
     }
 
     /// Удаляет все member-записи faction и публикует один exact operation `3`.
-    pub(crate) fn delete_members_by_faction_id<Context: GoodsWarMemberContext + ?Sized>(
+    pub(crate) fn delete_members_by_faction_id<Context: GoodsWarDeliveryContext + ?Sized>(
         &mut self,
         faction_id: i32,
         context: &mut Context,
@@ -475,23 +480,35 @@ impl CGoodsWarMember {
         else {
             return Ok(GoodsWarMutationReport::default());
         };
-        let faction_name = legacy_c_string_prefix(&snapshot.name);
+        Ok(self.delete_one_faction_count_by_name(&snapshot.name, context))
+    }
+
+    /// Удаляет первую count-запись по уже подтверждённому exact C-string имени.
+    pub(crate) fn delete_one_faction_count_by_name<Context>(
+        &mut self,
+        faction_name: &[u8],
+        context: &mut Context,
+    ) -> GoodsWarMutationReport
+    where
+        Context: GoodsWarDeliveryContext + ?Sized,
+    {
+        let faction_name = legacy_c_string_prefix(faction_name);
         let Some(position) = self
             .counts
             .iter()
             .position(|entry| legacy_c_string_prefix(&entry.name) == faction_name)
         else {
-            return Ok(GoodsWarMutationReport {
+            return GoodsWarMutationReport {
                 target_found: true,
                 ..GoodsWarMutationReport::default()
-            });
+            };
         };
         self.counts.remove(position);
-        Ok(GoodsWarMutationReport {
+        GoodsWarMutationReport {
             target_found: true,
             state_changed: true,
             delivery: Some(self.send_count_list(context)),
-        })
+        }
     }
 
     /// Вставляет существующую faction и при новой записи публикует весь set.
@@ -588,7 +605,7 @@ impl CGoodsWarMember {
     }
 
     /// Публикует members, count top-five и faction IDs строго в этом порядке.
-    pub(crate) fn refresh_all<Context: GoodsWarMemberContext + ?Sized>(
+    pub(crate) fn refresh_all<Context: GoodsWarDeliveryContext + ?Sized>(
         &self,
         context: &mut Context,
     ) -> GoodsWarRefreshReport {
