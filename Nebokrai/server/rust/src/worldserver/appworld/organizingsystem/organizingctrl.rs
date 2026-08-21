@@ -256,6 +256,7 @@ use super::faction::{
     FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome, FactionSuperiorOrganizingBlock,
     MemberEnterOutcome, MemberExitOutcome, OwnedCityMutationBuildError,
 };
+use super::factionwarsys::CFactionWarSys;
 use super::organizing::{EOperator, TagTimeValue};
 use super::organizingparam::COrganizingParam;
 use super::union::{
@@ -278,6 +279,7 @@ use crate::worldserver::worldserver::game::CGame;
 const TOP_INFO_MESSAGE_TYPE: i32 = 0x7FA04;
 const UNION_INITIAL_MESSAGE_TYPE: i32 = 0x7FE04;
 const EXPIRING_TIMER_FLAG: i32 = 2;
+const DECLARE_WAR_FACTION_PAGE_SIZE: i32 = 11;
 
 const UNUSED_UNION_APPLICATION_TIME: TagTimeValue = TagTimeValue {
     year: 0,
@@ -477,6 +479,41 @@ pub(crate) enum OrganizingPronounceBlock {
         faction_id: i32,
         source: FactionPronounceBlock,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(i32)]
+pub(crate) enum DeclareWarFactionRelation {
+    None = 0,
+    SelfFaction = 1,
+    SameUnion = 2,
+    Enemy = 3,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct DeclareWarFactionEntry {
+    pub(crate) faction_id: i32,
+    pub(crate) country: u8,
+    pub(crate) name: Vec<u8>,
+    pub(crate) relation: DeclareWarFactionRelation,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct DeclareWarFactionPage {
+    pub(crate) requested_page: i32,
+    pub(crate) normalized_page: i32,
+    pub(crate) total_factions: i32,
+    pub(crate) entries: Vec<DeclareWarFactionEntry>,
+    pub(crate) payload: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DeclareWarFactionPageBlock {
+    FactionCountOutsideLegacyRange { count: usize },
+    MissingSourceFaction { faction_id: i32 },
+    NullFaction { map_key: i32 },
+    MissingCountry { faction_id: i32 },
+    UnionMembership { faction_id: i32, map_key: i32 },
 }
 
 /// Safe-границы точной цепочки `GetUnion(player ID)`.
@@ -1079,6 +1116,106 @@ impl COrganizingCtrl {
                 outcome,
             })
             .map_err(|source| OrganizingPronounceBlock::Faction { faction_id, source })
+    }
+
+    /// Возвращает bit-exact Windows `long` для исходного `m_FacOrg.size()`.
+    pub(crate) fn declare_war_faction_count(
+        &self,
+    ) -> Result<i32, DeclareWarFactionPageBlock> {
+        i32::try_from(self.factions.len()).map_err(|_| {
+            DeclareWarFactionPageBlock::FactionCountOutsideLegacyRange {
+                count: self.factions.len(),
+            }
+        })
+    }
+
+    /// Строит payload одной 11-элементной страницы целей объявления войны.
+    ///
+    /// Exact `AddDeclareWarFactionInfoToByteArray` сначала вызывал
+    /// `GetCountry` у source faction и отбрасывал результат. Этот внутренний
+    /// бессмысленный вызов не переносится: он не менял wire или state. Signed
+    /// page arithmetic остаётся wrapping, а remaining сравнивается unsigned —
+    /// это сохраняет исходный wire-quirk переполненного положительного page.
+    /// Старый `strcpy` через 256-byte stack buffer заменён прямой C-string
+    /// сериализацией: для допустимых имён wire тот же, memory overflow удалён.
+    pub(crate) fn declare_war_faction_page(
+        &self,
+        source_faction_id: i32,
+        requested_page: i32,
+        faction_wars: &CFactionWarSys,
+    ) -> Result<DeclareWarFactionPage, DeclareWarFactionPageBlock> {
+        if self.faction_by_id(source_faction_id).is_none() {
+            return Err(DeclareWarFactionPageBlock::MissingSourceFaction {
+                faction_id: source_faction_id,
+            });
+        }
+
+        let total_factions = self.declare_war_faction_count()?;
+        let normalized_page = requested_page.max(1);
+        let start = normalized_page
+            .wrapping_mul(DECLARE_WAR_FACTION_PAGE_SIZE)
+            .wrapping_sub(DECLARE_WAR_FACTION_PAGE_SIZE);
+        let remaining = total_factions.wrapping_sub(start);
+        let entry_count = if (remaining as u32) <= DECLARE_WAR_FACTION_PAGE_SIZE as u32 {
+            remaining
+        } else {
+            DECLARE_WAR_FACTION_PAGE_SIZE
+        };
+        let end = start.wrapping_add(entry_count);
+
+        let mut entries = Vec::with_capacity(entry_count as usize);
+        let mut payload = Vec::new();
+        append_i32(&mut payload, entry_count);
+        for (index, (&map_key, faction)) in self.factions.iter().enumerate() {
+            let index = index as i32;
+            if index < start {
+                continue;
+            }
+            if index >= end {
+                break;
+            }
+            let Some(faction) = faction.as_deref() else {
+                return Err(DeclareWarFactionPageBlock::NullFaction { map_key });
+            };
+            let faction_id = faction.faction_id();
+            let country = faction
+                .country()
+                .ok_or(DeclareWarFactionPageBlock::MissingCountry { faction_id })?;
+            let name = legacy_c_string_prefix(faction.name()).to_vec();
+            let relation = if faction_id == source_faction_id {
+                DeclareWarFactionRelation::SelfFaction
+            } else {
+                let target_union = declare_war_union_id(self, faction_id)?;
+                let source_union = declare_war_union_id(self, source_faction_id)?;
+                if target_union.is_some() && target_union == source_union {
+                    DeclareWarFactionRelation::SameUnion
+                } else if faction_wars.is_enemy_relation(faction_id, source_faction_id) {
+                    DeclareWarFactionRelation::Enemy
+                } else {
+                    DeclareWarFactionRelation::None
+                }
+            };
+
+            append_i32(&mut payload, faction_id);
+            payload.push(country);
+            payload.extend_from_slice(&name);
+            payload.push(0);
+            append_i32(&mut payload, relation as i32);
+            entries.push(DeclareWarFactionEntry {
+                faction_id,
+                country,
+                name,
+                relation,
+            });
+        }
+
+        Ok(DeclareWarFactionPage {
+            requested_page,
+            normalized_page,
+            total_factions,
+            entries,
+            payload,
+        })
     }
 
     /// Повторяет `GetUnion`: master-player -> faction -> union -> nullable owner.
@@ -2498,6 +2635,26 @@ fn send_disband_information<Context>(
     });
 }
 
+fn declare_war_union_id(
+    organizing: &COrganizingCtrl,
+    faction_id: i32,
+) -> Result<Option<i32>, DeclareWarFactionPageBlock> {
+    match organizing.is_free_faction(faction_id) {
+        FreeFactionLookup::NoUnion => Ok(None),
+        FreeFactionLookup::Union(union_id) => Ok(Some(union_id)),
+        FreeFactionLookup::BlockedNullConfederation { map_key } => {
+            Err(DeclareWarFactionPageBlock::UnionMembership {
+                faction_id,
+                map_key,
+            })
+        }
+    }
+}
+
+fn append_i32(output: &mut Vec<u8>, value: i32) {
+    output.extend_from_slice(&value.to_le_bytes());
+}
+
 fn top_info_message(
     player_id: i32,
     top_info_id: i32,
@@ -2555,7 +2712,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::GetFactionNumber
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:445
@@ -2563,9 +2720,13 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00433560
 // PROTOTYPE: long __thiscall GetFactionNumber(void)
 //
+// IMPLEMENTED_OWNER: `declare_war_faction_count` возвращает exact map-size
+// как Windows `long`; oversized safe-state остаётся явной block-границей.
+// RAW_REFERENCE_BEGIN: сохранённая декомпиляция реализованной функции.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
+// RAW_REFERENCE_END: `GetFactionNumber()`.
 
 // ============================================================================
 // FUNCTION: `public:_enum_eCrOrgResult___thiscall_COrganizingCtrl::CreateConfederation(long,long,std::basic_string<char,std::char_traits<char>,std::allocator<char>_>&)'::__l28::CreateUnion::DoAsyncCall
@@ -3071,7 +3232,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::AddDeclareWarFactionInfoToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:532
@@ -3079,9 +3240,14 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 004374b0
 // PROTOTYPE: void __thiscall AddDeclareWarFactionInfoToByteArray(long param_1, vector<unsigned_char,std::allocator<unsigned_char>_> * param_2, long param_3)
 //
+// IMPLEMENTED_OWNER: `declare_war_faction_page` сохраняет page clamp, signed
+// map-order, exact entry wire и relation codes; нечитавшийся source-country
+// вызов как ненаблюдаемый внутренний дефект удалён.
+// RAW_REFERENCE_BEGIN: сохранённая декомпиляция реализованной функции.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
+// RAW_REFERENCE_END: `AddDeclareWarFactionInfoToByteArray`.
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::AddUnionToClientByPlayerID

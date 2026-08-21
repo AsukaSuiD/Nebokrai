@@ -977,16 +977,18 @@ use crate::worldserver::appworld::message::othermessage::{
     WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
 };
 use crate::worldserver::appworld::message::organsysmessage::{
-    OrganizingConsumedLongDispatch, OrganizingLeaveWordDispatch, OrganizingLeaveWordEditDispatch,
-    OrganizingLeaveWordEnableDispatch,
+    OrganizingConsumedLongDispatch, OrganizingDeclareWarFactionListBlock,
+    OrganizingDeclareWarFactionListDispatch, OrganizingLeaveWordDispatch,
+    OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEnableDispatch,
     OrganizingPronounceDispatch, OrganizingSessionResultDispatch,
     OrganizingUnionApplicationDispatch,
     QueuedUnionApplicationTerminal,
     UnionApplicationConfirmationDelivery,
     WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects,
-    WorldUnionApplicationRuntimeOwner, dispatch_consumed_long, dispatch_leave_word,
-    dispatch_leave_word_edit, dispatch_leave_word_enable, dispatch_organizing_session_result,
-    dispatch_pronounce, dispatch_union_application,
+    WorldUnionApplicationRuntimeOwner, dispatch_consumed_long,
+    dispatch_declare_war_faction_list, dispatch_leave_word, dispatch_leave_word_edit,
+    dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_pronounce,
+    dispatch_union_application,
 };
 use crate::worldserver::appworld::message::servermessage::{
     WorldLoginClientReplacement, WorldServerMessageDispatch, WorldServerMessageError,
@@ -1881,6 +1883,15 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: OrganizingConsumedLongDispatch,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingDeclareWarFactionList {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<
+            OrganizingDeclareWarFactionListDispatch,
+            OrganizingDeclareWarFactionListBlock,
+        >,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingUnionApplication {
@@ -8102,14 +8113,16 @@ impl CGame {
     /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
     /// ветви server-owner-а, honor `0x5FD0C/0x5FD0D`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
-    /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D` и общий leaf
-    /// `0x60121/0x60123` исполняются; остальные остаются owned pending. Terminal
-    /// session actions применяются FIFO до следующего сообщения.
+    /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
+    /// войны `0x6011E` и общий leaf `0x60121/0x60123` исполняются; остальные
+    /// остаются owned pending. Terminal actions применяются FIFO до следующего
+    /// сообщения.
     pub(crate) fn process_message(
         &mut self,
         honor_ranks: &mut CHonorRanks,
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
+        faction_war_sys: &CFactionWarSys,
         net_sessions: &CNetSessionManager,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
@@ -8139,6 +8152,7 @@ impl CGame {
                             honor_ranks,
                             organizing,
                             organizing_parameters,
+                            faction_war_sys,
                             net_sessions,
                             application_runtime,
                             application_callbacks,
@@ -8176,6 +8190,7 @@ impl CGame {
                     honor_ranks,
                     organizing,
                     organizing_parameters,
+                    faction_war_sys,
                     net_sessions,
                     application_runtime,
                     application_callbacks,
@@ -8212,6 +8227,7 @@ impl CGame {
         honor_ranks: &mut CHonorRanks,
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
+        faction_war_sys: &CFactionWarSys,
         net_sessions: &CNetSessionManager,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
@@ -8228,6 +8244,7 @@ impl CGame {
             honor_ranks,
             organizing,
             organizing_parameters,
+            faction_war_sys,
             net_sessions,
             application_runtime,
             application_callbacks,
@@ -9289,6 +9306,7 @@ impl CGame {
             owners.honor_ranks,
             owners.organizing,
             owners.organizing_parameters,
+            owners.faction_war,
             owners.net_sessions,
             owners.union_application_runtime,
             &mut union_application_callbacks,
@@ -10914,6 +10932,7 @@ fn process_world_message(
     honor_ranks: &mut CHonorRanks,
     organizing: &mut COrganizingCtrl,
     organizing_parameters: &COrganizingParam,
+    faction_war_sys: &CFactionWarSys,
     net_sessions: &CNetSessionManager,
     application_runtime: &WorldUnionApplicationRuntimeOwner,
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
@@ -11042,6 +11061,7 @@ fn process_world_message(
                 runtime,
             };
         }
+        let game_server_sender = game.current_game_server_sender();
         let callbacks = WorldUnionApplicationEffectCallbacks {
             random: &mut *application_callbacks.random,
             world_string: &mut *application_callbacks.world_string,
@@ -11055,6 +11075,28 @@ fn process_world_message(
             application_runtime,
             callbacks,
         );
+        if let Some(outcome) = dispatch_declare_war_faction_list(
+            &mut message,
+            organizing,
+            faction_war_sys,
+            &mut effects,
+            game_server_sender.as_ref(),
+        ) {
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingDeclareWarFactionList {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
         if let Some(outcome) = dispatch_consumed_long(&mut message) {
             let runtime = drain_union_application_runtime(
                 game,

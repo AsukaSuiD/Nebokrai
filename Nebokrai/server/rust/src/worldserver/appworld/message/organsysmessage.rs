@@ -33,6 +33,10 @@
 //! `CFaction::Pronounce` в slot `+0x34`.
 //! Exact shared leaf `0x004A796A..0x004A7971` для `0x60121/0x60123` вызывает
 //! один `GetLong` и не использует возвращённое значение.
+//! Exact `0x004A69A9..0x004A6EC4` для `0x6011E` читает `(request ID, cookie,
+//! player ID, page)`, проверяет faction/master и формирует ответ `0x7FE18`.
+//! Пустые ответы не содержат page/payload; успешный ответ содержит total,
+//! исходный page и 11-элементный `AddDeclareWarFactionInfoToByteArray` payload.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -62,8 +66,10 @@ use crate::public::date::TagTime;
 use crate::worldserver::appworld::organizingsystem::faction::{
     FactionMemberInfoRequest, FactionOrganizingInfoContext,
 };
+use crate::worldserver::appworld::organizingsystem::factionwarsys::CFactionWarSys;
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
-    COrganizingCtrl, OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock,
+    COrganizingCtrl, DeclareWarFactionPage, DeclareWarFactionPageBlock, FreePlayerLookup,
+    OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock,
     OrganizingLeaveWordEditOutcome, OrganizingLeaveWordEnableBlock,
     OrganizingLeaveWordEnableOutcome, OrganizingLeaveWordOutcome, OrganizingPronounceBlock,
     OrganizingPronounceOutcome,
@@ -85,6 +91,8 @@ const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
 const EDIT_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011C;
 const PRONOUNCE_MESSAGE_TYPE: i32 = 0x6011D;
+const DECLARE_WAR_FACTION_LIST_MESSAGE_TYPE: i32 = 0x6011E;
+const DECLARE_WAR_FACTION_LIST_RESPONSE_TYPE: i32 = 0x7FE18;
 const CONSUMED_LONG_MESSAGE_TYPES: [i32; 2] = [0x60121, 0x60123];
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
@@ -541,6 +549,242 @@ pub(crate) fn dispatch_consumed_long(
         message_type,
         value,
     })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingDeclareWarFactionListNotice {
+    MissingFaction,
+    MasterRequired,
+    NoFactions,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingDeclareWarFactionListResponse {
+    pub(crate) socket_id: i32,
+    pub(crate) total_factions: i32,
+    pub(crate) included_page: Option<i32>,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingDeclareWarFactionListOutcome {
+    Empty {
+        faction_id: i32,
+        notice: OrganizingDeclareWarFactionListNotice,
+        response: OrganizingDeclareWarFactionListResponse,
+    },
+    PageOutsideRange {
+        faction_id: i32,
+        total_factions: i32,
+        page: i32,
+    },
+    Page {
+        faction_id: i32,
+        page: DeclareWarFactionPage,
+        response: OrganizingDeclareWarFactionListResponse,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingDeclareWarFactionListBlock {
+    Membership { map_key: i32 },
+    Page(DeclareWarFactionPageBlock),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingDeclareWarFactionListDispatch {
+    pub(crate) request_id: i64,
+    pub(crate) cookie: i32,
+    pub(crate) player_id: i32,
+    pub(crate) page: i32,
+    pub(crate) outcome: OrganizingDeclareWarFactionListOutcome,
+}
+
+/// Выполняет `0x6011E` и строит точный socket-response `0x7FE18`.
+pub(crate) fn dispatch_declare_war_faction_list<Context>(
+    message: &mut CMessage,
+    organizing: &COrganizingCtrl,
+    faction_wars: &CFactionWarSys,
+    context: &mut Context,
+    sender: Option<&ServerCommandHandle>,
+) -> Option<
+    Result<OrganizingDeclareWarFactionListDispatch, OrganizingDeclareWarFactionListBlock>,
+>
+where
+    Context: FactionOrganizingInfoContext,
+{
+    if message.message_type() != DECLARE_WAR_FACTION_LIST_MESSAGE_TYPE {
+        return None;
+    }
+
+    let socket_id = message.socket_id();
+    let request_id = message.base_mut().get_long64().unwrap_or(0);
+    let cookie = message.base_mut().get_long().unwrap_or(0);
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let page = message.base_mut().get_long().unwrap_or(0);
+    let faction_id = match organizing.is_free_player(player_id) {
+        FreePlayerLookup::NoFaction => 0,
+        FreePlayerLookup::Faction(faction_id) => faction_id,
+        FreePlayerLookup::BlockedNullFaction { map_key } => {
+            return Some(Err(OrganizingDeclareWarFactionListBlock::Membership { map_key }));
+        }
+    };
+
+    let outcome = if organizing.faction_by_id(faction_id).is_none() {
+        send_declare_war_faction_list_notice(
+            context,
+            player_id,
+            OrganizingDeclareWarFactionListNotice::MissingFaction,
+        );
+        OrganizingDeclareWarFactionListOutcome::Empty {
+            faction_id,
+            notice: OrganizingDeclareWarFactionListNotice::MissingFaction,
+            response: send_declare_war_faction_list_response(
+                sender, socket_id, player_id, 0, request_id, cookie, None,
+            ),
+        }
+    } else if organizing
+        .faction_by_id(faction_id)
+        .is_some_and(|faction| faction.is_master(player_id) == 0)
+    {
+        send_declare_war_faction_list_notice(
+            context,
+            player_id,
+            OrganizingDeclareWarFactionListNotice::MasterRequired,
+        );
+        OrganizingDeclareWarFactionListOutcome::Empty {
+            faction_id,
+            notice: OrganizingDeclareWarFactionListNotice::MasterRequired,
+            response: send_declare_war_faction_list_response(
+                sender, socket_id, player_id, 0, request_id, cookie, None,
+            ),
+        }
+    } else {
+        let total_factions = match organizing.declare_war_faction_count() {
+            Ok(total_factions) => total_factions,
+            Err(block) => {
+                return Some(Err(OrganizingDeclareWarFactionListBlock::Page(block)));
+            }
+        };
+        if total_factions == 0 {
+            send_declare_war_faction_list_notice(
+                context,
+                player_id,
+                OrganizingDeclareWarFactionListNotice::NoFactions,
+            );
+            OrganizingDeclareWarFactionListOutcome::Empty {
+                faction_id,
+                notice: OrganizingDeclareWarFactionListNotice::NoFactions,
+                response: send_declare_war_faction_list_response(
+                    sender, socket_id, player_id, 0, request_id, cookie, None,
+                ),
+            }
+        } else {
+            let start = page.wrapping_mul(11).wrapping_sub(11);
+            if start >= total_factions {
+                OrganizingDeclareWarFactionListOutcome::PageOutsideRange {
+                    faction_id,
+                    total_factions,
+                    page,
+                }
+            } else {
+                let page_data = match organizing.declare_war_faction_page(
+                    faction_id,
+                    page,
+                    faction_wars,
+                ) {
+                    Ok(page_data) => page_data,
+                    Err(block) => {
+                        return Some(Err(OrganizingDeclareWarFactionListBlock::Page(block)));
+                    }
+                };
+                let response = send_declare_war_faction_list_response(
+                    sender,
+                    socket_id,
+                    player_id,
+                    total_factions,
+                    request_id,
+                    cookie,
+                    Some(&page_data),
+                );
+                OrganizingDeclareWarFactionListOutcome::Page {
+                    faction_id,
+                    page: page_data,
+                    response,
+                }
+            }
+        }
+    };
+
+    Some(Ok(OrganizingDeclareWarFactionListDispatch {
+        request_id,
+        cookie,
+        player_id,
+        page,
+        outcome,
+    }))
+}
+
+fn send_declare_war_faction_list_notice<Context>(
+    context: &mut Context,
+    player_id: i32,
+    notice: OrganizingDeclareWarFactionListNotice,
+) where
+    Context: FactionOrganizingInfoContext,
+{
+    let first_string_id = match notice {
+        OrganizingDeclareWarFactionListNotice::MissingFaction => b"WS0122".as_slice(),
+        OrganizingDeclareWarFactionListNotice::MasterRequired => b"WS0123".as_slice(),
+        OrganizingDeclareWarFactionListNotice::NoFactions => b"WS0124".as_slice(),
+    };
+    let first_text = context.world_string(first_string_id).unwrap_or_default();
+    let second_text = context.world_string(b"WS0121").unwrap_or_default();
+    context.send_organizing_info(FactionMemberInfoRequest {
+        recipient_player_id: player_id,
+        first_text: legacy_c_string_prefix(&first_text),
+        second_text: legacy_c_string_prefix(&second_text),
+        information_type: -1,
+        color: 0xFFDA_EDFE,
+        trailing_value: 0,
+    });
+}
+
+fn send_declare_war_faction_list_response(
+    sender: Option<&ServerCommandHandle>,
+    socket_id: i32,
+    player_id: i32,
+    total_factions: i32,
+    request_id: i64,
+    cookie: i32,
+    page: Option<&DeclareWarFactionPage>,
+) -> OrganizingDeclareWarFactionListResponse {
+    let mut response = CMessage::new(DECLARE_WAR_FACTION_LIST_RESPONSE_TYPE);
+    response.base_mut().add_long(player_id);
+    response.base_mut().add_long(total_factions);
+    response.base_mut().add_long64(request_id);
+    response.base_mut().add_long(cookie);
+    if let Some(page) = page {
+        response.base_mut().add_long(page.requested_page);
+        response.base_mut().add(&page.payload);
+    }
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = response.send_to_socket(sender, socket_id);
+    OrganizingDeclareWarFactionListResponse {
+        socket_id,
+        total_factions,
+        included_page: page.map(|page| page.requested_page),
+        wire,
+        delivery,
+    }
+}
+
+fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
+    let end = value
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(value.len());
+    &value[..end]
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
