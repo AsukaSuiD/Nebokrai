@@ -6,6 +6,8 @@
 //! `GetPronounceData` RVA
 //! `0x000B4CA0`, `SetGoodsWarCount` RVA `0x000B4D70`,
 //! `AddMembersToByteArray` RVA `0x000B53D0`, PDB-inline
+//! `AddApplyPersonsToByteArray/AddLeaveWordsToByteArray` RVA
+//! `0x000B5D30/0x000B5DD0`,
 //! `GetMembers/GetMemberNum` RVA `0x000BD7C0/0x000BD830` и
 //! `CFaction::IsMember` RVA `0x000BD840` и
 //! `UpdateMemberInfoToClient` RVA `0x000BA7C0`, а также
@@ -19,6 +21,7 @@
 //! `ClearEnemyFation/ClearCityWarEnemyFation` RVA `0x000B6030/0x000B6080`,
 //! `IsHaveEnymyFaction/IsHaveCityEnemyFaction` RVA `0x000B50F0/0x000B5100`,
 //! `ClearOwnedCity/DelOwnedCity` RVA `0x000B54C0/0x000B5F60`,
+//! обе перегрузки `GetMemberList` RVA `0x000B5530/0x000B9E60`,
 //! оба `AddOwnedCity` RVA `0x000B9DE0/0x000BA650` и `SetOwnedCity` RVA
 //! `0x000C16A0`,
 //! `SetSuperiorOrganizing` RVA `0x000B5110`,
@@ -182,8 +185,10 @@
 //! заменяет только Win32 `GetLocalTime`, а сам lookup остаётся явным контекстом.
 //!
 //! Для достигнутого `SaveAbility` наблюдаемы только signed keys ordered map
-//! `m_ApplyPersons`, поэтому `BTreeSet<i32>` заменяет MSVC map вместе с пока не
-//! читаемым value. `GetPronounceData` буквально дописывает все `0x828` bytes
+//! `m_ApplyPersons`, а `AddApplyPersonsToByteArray` дополнительно подтверждает
+//! value: `strName[20], lLvl, lOccu`. Поэтому owner хранит полный
+//! `BTreeMap<i32, TagApplyPerson>`, не перенося MSVC tree-layout.
+//! `GetPronounceData` буквально дописывает все `0x828` bytes
 //! `m_Pronounce`; partial-owner хранит их byte-exact, не объявляя Rust-layout
 //! формой ещё не восстановленного `tagPronounceWord`. `Vec<u8>` и
 //! `TagTimeValue` заменяют только STL-vector и Windows `SYSTEMTIME`-совместимое
@@ -291,6 +296,18 @@
 //! потерянных raw stack-key, destination `tagMemInfo + 0xAC` и порядок вызова.
 //! Missing/null region остаётся исходным no-op; переполнение старого `strcpy`
 //! заменено typed safe-границей без частичной записи.
+//!
+//! Обе перегрузки `GetMemberList` сначала очищают переданный list. Перегрузка
+//! `list<COrganizing*>` оставляет его пустым, а `list<long>` затем добавляет
+//! signed member keys в tree-order. Exact ASM `0x004B5530..0x004B5564` и
+//! `0x004B9E60..0x004B9EDE` подтверждает, что raw early-return после удаления
+//! старых nodes был ошибкой декомпиляции, а не условием пропуска заполнения.
+//! Apply snapshot имеет wire-порядок `count, id, name\0, level, occupation` в
+//! signed key-order. Leave-word snapshot сохраняет list-order и поля
+//! `count, id, player_id, time[0x10], content\0, name\0`. Exact ASM
+//! `0x004B5D30..0x004B5E3B` подтверждает offsets и порядок. Нетерминированные
+//! fixed C-строки локализованы typed-ошибками после уже записанного prefix,
+//! вместо исходного чтения за массивом.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -313,6 +330,7 @@ const ENTER_REGION_BUFFER_CAPACITY: usize = 256;
 const ENEMY_WAR_LOG_BUFFER_CAPACITY: usize = 256;
 const LEAVE_WORD_NAME_CAPACITY: usize = 20;
 const LEAVE_WORD_CONTENT_CAPACITY: usize = 212;
+const APPLY_PERSON_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_DATA_SIZE: usize = 0x828;
 const FACTION_BASE_PROPERTY_SIZE: usize = 0x38;
 
@@ -774,6 +792,53 @@ impl fmt::Display for OwnedCitiesWireBuildError {
 
 impl Error for OwnedCitiesWireBuildError {}
 
+/// Безопасная граница старого C-string чтения `tagApplyPerson::strName[20]`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UnterminatedApplyPersonName {
+    pub(crate) player_id: i32,
+    pub(crate) completed_persons: usize,
+}
+
+impl fmt::Display for UnterminatedApplyPersonName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "у кандидата {} отсутствует NUL в tagApplyPerson::strName",
+            self.player_id
+        )
+    }
+}
+
+impl Error for UnterminatedApplyPersonName {}
+
+/// Полное доказанное value исходного `m_ApplyPersons`.
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub(crate) struct TagApplyPerson {
+    pub(crate) name: [u8; APPLY_PERSON_NAME_CAPACITY],
+    pub(crate) level: i32,
+    pub(crate) occupation: i32,
+}
+
+impl TagApplyPerson {
+    pub(crate) const fn from_complete_fields(
+        name: [u8; APPLY_PERSON_NAME_CAPACITY],
+        level: i32,
+        occupation: i32,
+    ) -> Self {
+        Self {
+            name,
+            level,
+            occupation,
+        }
+    }
+
+    fn name_wire_bytes(&self) -> Option<&[u8]> {
+        let terminator = self.name.iter().position(|byte| *byte == 0)?;
+        Some(&self.name[..=terminator])
+    }
+}
+
 /// Ошибка безопасного C-string view одного fixed-поля `tagLeaveWord`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct UnterminatedLeaveWordField {
@@ -833,10 +898,24 @@ impl TagLeaveWord {
         };
         Ok(&self.content[..=terminator])
     }
+
+    /// Возвращает `strName` до первого NUL включительно.
+    pub(crate) fn name_wire_bytes(&self) -> Result<&[u8], UnterminatedLeaveWordField> {
+        let Some(terminator) = self.name.iter().position(|byte| *byte == 0) else {
+            return Err(UnterminatedLeaveWordField {
+                field: "tagLeaveWord::strName",
+            });
+        };
+        Ok(&self.name[..=terminator])
+    }
 }
 
 const _: () = {
     assert!(size_of::<FactionBaseProperty>() == FACTION_BASE_PROPERTY_SIZE);
+    assert!(size_of::<TagApplyPerson>() == 0x1C);
+    assert!(offset_of!(TagApplyPerson, name) == 0x00);
+    assert!(offset_of!(TagApplyPerson, level) == 0x14);
+    assert!(offset_of!(TagApplyPerson, occupation) == 0x18);
     assert!(size_of::<TagLeaveWord>() == 0x100);
     assert!(offset_of!(TagLeaveWord, id) == 0x00);
     assert!(offset_of!(TagLeaveWord, player_id) == 0x04);
@@ -860,7 +939,7 @@ pub(crate) struct CFaction {
     permit_demise: Option<bool>,
     enemy_factions_changed: Option<bool>,
     city_war_enemy_factions_changed: Option<bool>,
-    apply_person_ids: BTreeSet<i32>,
+    apply_persons: BTreeMap<i32, TagApplyPerson>,
     pronounce_data: [u8; PRONOUNCE_DATA_SIZE],
     leave_words: VecDeque<TagLeaveWord>,
     last_upload_icon_time: TagTimeValue,
@@ -887,7 +966,7 @@ impl CFaction {
             permit_demise: None,
             enemy_factions_changed: None,
             city_war_enemy_factions_changed: None,
-            apply_person_ids: BTreeSet::new(),
+            apply_persons: BTreeMap::new(),
             pronounce_data: [0; PRONOUNCE_DATA_SIZE],
             leave_words: VecDeque::new(),
             last_upload_icon_time: ZERO_TIME,
@@ -2068,12 +2147,12 @@ impl CFaction {
             permit_demise: None,
             enemy_factions_changed: None,
             city_war_enemy_factions_changed: None,
-            // DB ability-owner читает только ordered keys; значения
-            // tagApplyPerson в достигнутой цепочке не наблюдаются.
-            apply_person_ids: if change_data_type & 8 != 0 {
-                self.apply_person_ids.clone()
+            // DB ability-owner читает ordered keys; wire-owner подтверждает
+            // и сохраняемый вместе с ними полный tagApplyPerson value.
+            apply_persons: if change_data_type & 8 != 0 {
+                self.apply_persons.clone()
             } else {
-                BTreeSet::new()
+                BTreeMap::new()
             },
             pronounce_data: if change_data_type & 8 != 0 {
                 self.pronounce_data
@@ -2145,14 +2224,30 @@ impl CFaction {
         &self.members
     }
 
-    /// Возвращает ordered signed keys исходного `m_ApplyPersons`.
-    pub(crate) const fn get_apply_person_ids(&self) -> &BTreeSet<i32> {
-        &self.apply_person_ids
+    /// Перегрузка `list<COrganizing*>`: faction не возвращает вложенные owners.
+    pub(crate) fn get_organizing_member_list<T>(&self, output: &mut VecDeque<T>) {
+        output.clear();
+    }
+
+    /// Перегрузка `list<long>`: заменяет output полным ordered списком ID.
+    pub(crate) fn get_member_id_list(&self, output: &mut VecDeque<i32>) {
+        output.clear();
+        output.extend(self.members.keys().copied());
+    }
+
+    /// Возвращает полный ordered map исходного `m_ApplyPersons`.
+    pub(crate) const fn get_apply_persons(&self) -> &BTreeMap<i32, TagApplyPerson> {
+        &self.apply_persons
+    }
+
+    /// Даёт DB owner-у прежний zero-copy ordered view только ключей.
+    pub(crate) fn get_apply_person_ids(&self) -> impl Iterator<Item = &i32> {
+        self.apply_persons.keys()
     }
 
     /// Возвращает faction ID при наличии player-key в `m_ApplyPersons`.
     pub(crate) fn is_in_apply_members(&self, player_id: i32) -> i32 {
-        if self.apply_person_ids.contains(&player_id) {
+        if self.apply_persons.contains_key(&player_id) {
             self.faction_id
         } else {
             0
@@ -2164,7 +2259,7 @@ impl CFaction {
         if !self.is_using_purview(operator_id, EPurview::ConMem as i32) {
             return false;
         }
-        self.apply_person_ids.clear();
+        self.apply_persons.clear();
         true
     }
 
@@ -2220,6 +2315,43 @@ impl CFaction {
             output.extend_from_slice(&u32::from(member.contribute).to_le_bytes());
             output.extend_from_slice(member.region_wire_bytes()?);
             output.extend_from_slice(&member.last_online_wire_bytes());
+        }
+        Ok(true)
+    }
+
+    /// Дописывает полный ordered snapshot кандидатов на вступление.
+    pub(crate) fn add_apply_persons_to_byte_array(
+        &self,
+        output: &mut Vec<u8>,
+    ) -> Result<bool, UnterminatedApplyPersonName> {
+        output.extend_from_slice(&(self.apply_persons.len() as u32).to_le_bytes());
+        for (completed_persons, (&player_id, person)) in self.apply_persons.iter().enumerate() {
+            append_i32(output, player_id);
+            let Some(name) = person.name_wire_bytes() else {
+                return Err(UnterminatedApplyPersonName {
+                    player_id,
+                    completed_persons,
+                });
+            };
+            output.extend_from_slice(name);
+            append_i32(output, person.level);
+            append_i32(output, person.occupation);
+        }
+        Ok(true)
+    }
+
+    /// Дописывает полный leave-word snapshot в исходном list-order.
+    pub(crate) fn add_leave_words_to_byte_array(
+        &self,
+        output: &mut Vec<u8>,
+    ) -> Result<bool, UnterminatedLeaveWordField> {
+        output.extend_from_slice(&(self.leave_words.len() as u32).to_le_bytes());
+        for leave_word in &self.leave_words {
+            append_i32(output, leave_word.id);
+            append_i32(output, leave_word.player_id);
+            output.extend_from_slice(&leave_word.time.wire_bytes());
+            output.extend_from_slice(leave_word.content_wire_bytes()?);
+            output.extend_from_slice(leave_word.name_wire_bytes()?);
         }
         Ok(true)
     }
@@ -2709,7 +2841,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetMemberList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:534
@@ -2835,7 +2967,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::AddApplyPersonsToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:364
@@ -2849,7 +2981,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::AddLeaveWordsToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:389
@@ -3241,7 +3373,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetMemberList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:520
