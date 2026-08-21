@@ -4,7 +4,7 @@
 //! `0x6010B`, исключение фракции из союза `0x6010C`, выход из фракции
 //! `0x6010D`, выход фракции из союза `0x6010E`, передачу главы фракции
 //! `0x6010F`, передачу главы союза `0x60110`, роспуск фракции `0x60111`,
-//! роспуск союза `0x60112`,
+//! роспуск союза `0x60112`, назначение title/job-level `0x60113`,
 //! заявку союза `0x60118`,
 //! общий session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
@@ -112,6 +112,16 @@
 //! `DisbandConferation(player, union ID)`. Result игнорируется;
 //! online/route/tail gates и прямой wire-ответ отсутствуют. Дополнительные
 //! payload/ownership rejects Linux-донора не перенесены.
+//! Exact `0x004A7306..0x004A73DC` для `0x60113` читает `(target ID, job
+//! level, title[20], manager ID)`, разрешает faction через ordered
+//! `IsFreePlayer(manager)`, дважды выполняет один и тот же nullable
+//! `GetFactionOrganizing` и вызывает virtual `CFaction::DubAndSetJobLvl` в
+//! slot `+0x28`. Оба числовых аргумента передаются полными 32-битными
+//! значениями; `char` job-level в RAW — артефакт. Между lookup нет мутации,
+//! поэтому Rust удерживает один safe mutable owner. Online/route/tail gates и
+//! прямой wire-ответ отсутствуют; Linux-донорские ingress-rejects не
+//! перенесены. Invalid-string filter и optional title-log остаются внешними
+//! техническими владельцами готового concrete faction owner-а.
 //! Exact диапазоны
 //! `0x004A74C6..0x004A7509` и `0x004A7511..0x004A7543` исправляют повреждённый
 //! RAW. Общий branch читает
@@ -371,6 +381,7 @@ use crate::worldserver::appworld::organizingsystem::faction::{
     FactionApplyForJoinEffects, FactionApplyForJoinOutcome, FactionContributorContext,
     FactionDemiseBlock, FactionDemiseContext, FactionDemiseOutcome, FactionDisbandContext,
     FactionDoJoinEffects,
+    FactionDubBlock, FactionDubContext, FactionDubFormatArgument, FactionDubOutcome,
     FactionExitBlock, FactionExitContext, FactionExitOutcome,
     FactionFireOutBlock, FactionFireOutContext, FactionFireOutOutcome,
     current_local_member_time, goods_war_check_for_faction_id,
@@ -461,6 +472,7 @@ const FACTION_DEMISE_MESSAGE_TYPE: i32 = 0x6010F;
 const UNION_DEMISE_MESSAGE_TYPE: i32 = 0x60110;
 const FACTION_DISBAND_MESSAGE_TYPE: i32 = 0x60111;
 const UNION_DISBAND_MESSAGE_TYPE: i32 = 0x60112;
+const FACTION_DUB_MESSAGE_TYPE: i32 = 0x60113;
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
@@ -828,6 +840,80 @@ impl UnionFireOutEffects for WorldUnionFireOutEffects<'_, '_, '_> {
 
     fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32) {
         (self.callbacks.refresh_owned_city)(region_id, faction_id, union_id);
+    }
+}
+
+/// Тонкий text-filter/string/player/log adapter faction `0x60113`.
+struct WorldFactionDubEffects<'game, 'callbacks, 'effects, 'filter, 'update, 'log> {
+    game: &'game CGame,
+    callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
+    check_invalid_string: &'filter mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
+    update_player: &'update mut dyn FnMut(i32),
+    use_log_system: bool,
+    faction_title_log_enabled: bool,
+    write_faction_title_log:
+        &'log mut dyn FnMut(i32, &[u8], &[u8], &[u8], i32, &[u8], i32, &[u8]),
+}
+
+impl FactionOrganizingInfoContext for WorldFactionDubEffects<'_, '_, '_, '_, '_, '_> {
+    fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
+        Some((self.callbacks.world_string)(string_id))
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+impl FactionDubContext for WorldFactionDubEffects<'_, '_, '_, '_, '_, '_> {
+    fn check_invalid_string(&mut self, value: &mut Vec<u8>, mode: bool) -> bool {
+        (self.check_invalid_string)(value, mode)
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[FactionDubFormatArgument<'_>],
+    ) -> Vec<u8> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| match argument {
+                FactionDubFormatArgument::Text(value) => UnionFormatArgument::Text(value),
+                FactionDubFormatArgument::Signed(value) => UnionFormatArgument::Signed(*value),
+            })
+            .collect::<Vec<_>>();
+        (self.callbacks.format_world_string)(string_id, &arguments)
+    }
+
+    fn update_player_faction_info(&mut self, player_id: i32) {
+        (self.update_player)(player_id);
+    }
+
+    fn faction_title_log_enabled(&self) -> bool {
+        self.use_log_system && self.faction_title_log_enabled
+    }
+
+    fn write_faction_title_log(
+        &mut self,
+        member_id: i32,
+        member_name: &[u8],
+        old_title: &[u8],
+        new_title: &[u8],
+        manager_id: i32,
+        manager_name: &[u8],
+        faction_id: i32,
+        faction_name: &[u8],
+    ) {
+        (self.write_faction_title_log)(
+            member_id,
+            member_name,
+            old_title,
+            new_title,
+            manager_id,
+            manager_name,
+            faction_id,
+            faction_name,
+        );
     }
 }
 
@@ -2828,6 +2914,117 @@ pub(crate) fn dispatch_union_disband(
         }
     };
     Some(Ok(OrganizingUnionDisbandDispatch { player_id, outcome }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionDubOutcome {
+    FactionNotFound { faction_id: i32 },
+    Applied {
+        faction_id: i32,
+        outcome: FactionDubOutcome,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionDubBlock {
+    Membership { map_key: i32 },
+    Dub {
+        faction_id: i32,
+        source: FactionDubBlock,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionDubDispatch {
+    pub(crate) target_id: i32,
+    pub(crate) job_level: i32,
+    pub(crate) title: Vec<u8>,
+    pub(crate) manager_id: i32,
+    pub(crate) outcome: OrganizingFactionDubOutcome,
+}
+
+/// Выполняет exact `0x60113`: `(target, job-level, title[20], manager)`,
+/// faction lookup по manager и virtual `CFaction::DubAndSetJobLvl`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn dispatch_faction_dub(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    check_invalid_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
+    use_log_system: bool,
+    faction_title_log_enabled: bool,
+    write_faction_title_log: &mut dyn FnMut(
+        i32,
+        &[u8],
+        &[u8],
+        &[u8],
+        i32,
+        &[u8],
+        i32,
+        &[u8],
+    ),
+    update_player: &mut dyn FnMut(i32),
+) -> Option<Result<OrganizingFactionDubDispatch, OrganizingFactionDubBlock>> {
+    if message.message_type() != FACTION_DUB_MESSAGE_TYPE {
+        return None;
+    }
+
+    let target_id = message.base_mut().get_long().unwrap_or(0);
+    let job_level = message.base_mut().get_long().unwrap_or(0);
+    let mut title = message.base_mut().get_str_bytes(20).unwrap_or_default();
+    let manager_id = message.base_mut().get_long().unwrap_or(0);
+    let faction_id = match organizing.is_free_player(manager_id) {
+        FreePlayerLookup::NoFaction => 0,
+        FreePlayerLookup::Faction(faction_id) => faction_id,
+        FreePlayerLookup::BlockedNullFaction { map_key } => {
+            return Some(Err(OrganizingFactionDubBlock::Membership { map_key }));
+        }
+    };
+    let Some(faction) = organizing.faction_by_id_mut(faction_id) else {
+        return Some(Ok(OrganizingFactionDubDispatch {
+            target_id,
+            job_level,
+            title,
+            manager_id,
+            outcome: OrganizingFactionDubOutcome::FactionNotFound { faction_id },
+        }));
+    };
+    let mut effects = WorldFactionDubEffects {
+        game,
+        callbacks,
+        check_invalid_string,
+        update_player,
+        use_log_system,
+        faction_title_log_enabled,
+        write_faction_title_log,
+    };
+    let outcome = match faction.dub_and_set_job_level(
+        game,
+        manager_id,
+        target_id,
+        &mut title,
+        job_level,
+        &mut effects,
+    ) {
+        Ok(outcome) => OrganizingFactionDubOutcome::Applied {
+            faction_id,
+            outcome,
+        },
+        Err(source) => {
+            return Some(Err(OrganizingFactionDubBlock::Dub {
+                faction_id,
+                source,
+            }));
+        }
+    };
+    Some(Ok(OrganizingFactionDubDispatch {
+        target_id,
+        job_level,
+        title,
+        manager_id,
+        outcome,
+    }))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
