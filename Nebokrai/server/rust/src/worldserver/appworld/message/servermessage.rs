@@ -105,7 +105,9 @@
 //! остальные — как subtype `0x0F + proxy snapshot`. Старый `Sleep(100)` после
 //! каждого назначенного региона выражен injected delay-callback-ом: wire-order
 //! и точка задержки сохранены без навязывания Rust-слою конкретного runtime-а.
-//! Следующая граница — `CRegionSetup` subtype `0x11`.
+//! Общий `CRegionSetup` затем сохраняет signed count и ordered 12-байтные
+//! records в subtype `0x11`. Следующая граница — `CDupliRegionSetup` subtype
+//! `0x1A`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -187,6 +189,7 @@ use crate::setup::newskillmonsterlist::{
 use crate::setup::playerlist::{CPlayerList, PlayerListSerializeError};
 use crate::setup::preciousboxconf::{PreciousBoxConf, PreciousBoxSerializeError};
 use crate::setup::prisonconf::{PrisonConf, PrisonConfSerializeError};
+use crate::setup::regionsetup::{CRegionSetup, RegionSetupSerializeError};
 use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};
 use crate::setup::tradelist::{CTradeList, TradeListSerializeError};
@@ -647,6 +650,20 @@ pub(crate) enum WorldRegionConfigurationCompletion {
 pub(crate) struct WorldRegionConfigurationReport {
     pub(crate) deliveries: Vec<WorldRegionConfigurationDelivery>,
     pub(crate) completion: WorldRegionConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после общего `CRegionSetup`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldRegionSetupConfigurationCompletion {
+    RegionSetup(RegionSetupSerializeError),
+    DupliRegionSetupPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/0x11` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldRegionSetupConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldRegionSetupConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1842,6 +1859,34 @@ where
     WorldRegionConfigurationReport {
         deliveries,
         completion,
+    }
+}
+
+/// Кодирует и отправляет точный общий `CRegionSetup` initial-config packet.
+pub(crate) fn continue_game_server_region_setup_configuration(
+    game: &CGame,
+    socket_id: i32,
+    region_setup: &CRegionSetup,
+) -> WorldRegionSetupConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = region_setup.add_to_byte_array(&mut payload) {
+        return WorldRegionSetupConfigurationReport {
+            delivery: None,
+            completion: WorldRegionSetupConfigurationCompletion::RegionSetup(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldRegionSetupConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x11,
+            &payload,
+        )),
+        completion: WorldRegionSetupConfigurationCompletion::DupliRegionSetupPending {
+            socket_id,
+        },
     }
 }
 

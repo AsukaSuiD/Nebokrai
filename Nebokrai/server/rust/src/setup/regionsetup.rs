@@ -1,6 +1,85 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Ограничения входа в регионы исторического Miracle.
+//!
+//! Статус World `CRegionSetup::AddToByteArray` RVA `0x00097B90`:
+//! `IMPLEMENTED`; loader и Game decoder ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
+//! SHA-256 EXE
+//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
+//! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Исходный owner PDB:
+//! `e:\svn\fengyun_russia_dev\server\setup\regionsetup.cpp:50`.
+//!
+//! Exact EXE и Game decoder подтверждают wire: signed 32-битный count, затем
+//! ordered records ровно по 12 little-endian bytes: `id`, минимальный уровень
+//! входа и требуемый вклад. `BTreeMap<i32, _>` заменяет `std::map<long, _>` и
+//! сохраняет signed key-order; отдельный map key в wire не передаётся. Typed
+//! поля исключают зависимость от C++ layout/padding, а невозможный для старого
+//! 32-битного контейнера count возвращается как ошибка до изменения buffer-а.
+//! Точный смысл legacy return у `LoadRegionSetup` ещё не подтверждён машинно,
+//! поэтому загрузка файла здесь намеренно не выдаётся за восстановленную.
+
+use std::collections::BTreeMap;
+use std::error::Error;
+use std::fmt;
+
+/// Точный 12-байтовый `CRegionSetup::tagRegionSetup`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RegionSetupEntry {
+    pub(crate) id: i32,
+    pub(crate) can_enter_level: i32,
+    pub(crate) required_contribute: i32,
+}
+
+/// Value-owner вместо process-global `s_mapRegionSetup`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CRegionSetup {
+    entries: BTreeMap<i32, RegionSetupEntry>,
+}
+
+impl CRegionSetup {
+    pub(crate) fn insert(&mut self, entry: RegionSetupEntry) -> Option<RegionSetupEntry> {
+        self.entries.insert(entry.id, entry)
+    }
+
+    pub(crate) fn entries(&self) -> &BTreeMap<i32, RegionSetupEntry> {
+        &self.entries
+    }
+
+    /// Дописывает exact `count + ordered 12-byte records` в существующий buffer.
+    pub(crate) fn add_to_byte_array(
+        &self,
+        destination: &mut Vec<u8>,
+    ) -> Result<(), RegionSetupSerializeError> {
+        let count = i32::try_from(self.entries.len()).map_err(|_| RegionSetupSerializeError {
+            count: self.entries.len(),
+        })?;
+        destination.extend_from_slice(&count.to_le_bytes());
+        for entry in self.entries.values() {
+            destination.extend_from_slice(&entry.id.to_le_bytes());
+            destination.extend_from_slice(&entry.can_enter_level.to_le_bytes());
+            destination.extend_from_slice(&entry.required_contribute.to_le_bytes());
+        }
+        Ok(())
+    }
+}
+
+/// Невозможный в исходном 32-битном `std::map` размер.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RegionSetupSerializeError {
+    pub(crate) count: usize,
+}
+
+impl fmt::Display for RegionSetupSerializeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "RegionSetup содержит {} записей вне signed 32-битного диапазона",
+            self.count
+        )
+    }
+}
+
+impl Error for RegionSetupSerializeError {}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

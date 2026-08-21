@@ -56,6 +56,11 @@ pub(crate) mod preciousboxconf;
 pub(crate) mod prisonconf;
 #[allow(
     dead_code,
+    reason = "region-setup serializer подключён к initial-config до точного loader-а"
+)]
+pub(crate) mod regionsetup;
+#[allow(
+    dead_code,
     reason = "region-router serializer подключён через globe initial-config до loader-а"
 )]
 pub(crate) mod regionrouter;
