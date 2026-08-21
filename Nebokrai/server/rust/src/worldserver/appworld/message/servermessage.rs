@@ -108,8 +108,10 @@
 //! Общий `CRegionSetup` затем сохраняет signed count и ordered 12-байтные
 //! records в subtype `0x11`. `CDupliRegionSetup` следом передаёт insertion-order
 //! пары region/duplicate-region subtype `0x1A`. `HonorElimilateConfig` затем
-//! отправляет два signed scalar-а subtype `0x26`. Следующая граница — две
-//! выборки `CHonorRanks` subtype `0x27/0x28`.
+//! отправляет два signed scalar-а subtype `0x26`. Четыре history-среза
+//! `CHonorRanks` идут subtype `0x27..0x2A`; total-пакет сохраняет отдельный
+//! positional ноль перед тем же rank payload. Следующая граница — nullable
+//! function-list file-data subtype `10`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -164,6 +166,7 @@ use std::error::Error;
 use std::fmt;
 use std::net::Ipv4Addr;
 
+use crate::dbaccess::worlddb::rsplayer::HonorRanksType;
 use crate::nets::basemessage::CBaseMessage;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::networld::mynetclient::CMyNetClient;
@@ -220,7 +223,7 @@ use crate::worldserver::worldserver::game::{
     WorldOnlinePlayerAppendOutcome, WorldPingGameServerInfo, WorldReconnectedPlayerDecode,
     WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest, prepare_save_thread_launch,
 };
-use crate::worldserver::worldserver::honorranks::CHonorRanks;
+use crate::worldserver::worldserver::honorranks::{CHonorRanks, HonorRanksSerializationBlock};
 
 /// Наблюдаемый итог typed-замены LoginServer client из ветки `0x3FC03`.
 #[derive(Debug)]
@@ -695,6 +698,27 @@ pub(crate) enum WorldHonorEliminateConfigurationCompletion {
 pub(crate) struct WorldHonorEliminateConfigurationReport {
     pub(crate) delivery: WorldInitialConfigurationDelivery,
     pub(crate) completion: WorldHonorEliminateConfigurationCompletion,
+}
+
+/// Одна из четырёх initial-config history-таблиц `CHonorRanks`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldHonorRanksConfigurationDelivery {
+    pub(crate) rank_type: HonorRanksType,
+    pub(crate) delivery: WorldInitialConfigurationDelivery,
+}
+
+/// Следующая точная позиция после четырёх history-таблиц.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldHonorRanksConfigurationCompletion {
+    HonorRanks(HonorRanksSerializationBlock),
+    FunctionListPending { socket_id: i32 },
+}
+
+/// Частичный или полный отчёт отправки subtype `0x27..0x2A`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldHonorRanksConfigurationReport {
+    pub(crate) deliveries: Vec<WorldHonorRanksConfigurationDelivery>,
+    pub(crate) completion: WorldHonorRanksConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1966,6 +1990,63 @@ pub(crate) fn continue_game_server_honor_eliminate_configuration(
             &payload,
         ),
         completion: WorldHonorEliminateConfigurationCompletion::HonorRanksPending { socket_id },
+    }
+}
+
+/// Отправляет четыре точных history-среза `CHonorRanks`.
+pub(crate) fn continue_game_server_honor_ranks_configuration(
+    game: &CGame,
+    socket_id: i32,
+    honor_ranks: &CHonorRanks,
+) -> WorldHonorRanksConfigurationReport {
+    const PASSES: [(HonorRanksType, i32, bool); 4] = [
+        (HonorRanksType::Day, 0x27, false),
+        (HonorRanksType::Week, 0x28, false),
+        (HonorRanksType::Month, 0x29, false),
+        (HonorRanksType::Total, 0x2A, true),
+    ];
+
+    let sender = game.current_game_server_sender();
+    let mut deliveries = Vec::with_capacity(PASSES.len());
+    for (rank_type, subtype, has_total_prefix) in PASSES {
+        let mut payload = Vec::new();
+        if let Err(error) =
+            honor_ranks.add_history_to_byte_array(&mut payload, rank_type, None)
+        {
+            return WorldHonorRanksConfigurationReport {
+                deliveries,
+                completion: WorldHonorRanksConfigurationCompletion::HonorRanks(error),
+            };
+        }
+
+        let delivery = if has_total_prefix {
+            let mut message = CMessage::new(0x0007_F801);
+            message.base_mut().add_long(subtype);
+            message.base_mut().add_long(0);
+            message.base_mut().add(&payload);
+            WorldInitialConfigurationDelivery {
+                subtype,
+                payload_length: payload.len() + 4,
+                target: WorldInitialConfigurationTarget::Socket(socket_id),
+                delivery: message.send_to_socket(sender.as_ref(), socket_id),
+            }
+        } else {
+            send_initial_configuration_to_socket(
+                sender.as_ref(),
+                socket_id,
+                subtype,
+                &payload,
+            )
+        };
+        deliveries.push(WorldHonorRanksConfigurationDelivery {
+            rank_type,
+            delivery,
+        });
+    }
+
+    WorldHonorRanksConfigurationReport {
+        deliveries,
+        completion: WorldHonorRanksConfigurationCompletion::FunctionListPending { socket_id },
     }
 }
 

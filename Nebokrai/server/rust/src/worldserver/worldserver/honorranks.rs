@@ -1,8 +1,8 @@
 //! Владелец таблиц почётных рангов исторического `WorldServer`.
 //!
-//! Статус `CHonorRanks::GenerateSaveData` RVA `0x0001B090` —
-//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`; остальные функции ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Статус `CHonorRanks::GenerateSaveData` RVA `0x0001B090` и
+//! `AddToByteArray` RVA `0x0001A6F0` — `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
+//! остальные функции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
@@ -35,11 +35,23 @@
 //! таблицы. До первого generator-вызова `Option::None` выражает нулевую, но
 //! календарно невалидную constructor-копию `tagTime`; DB-owner такую дату не
 //! наблюдает.
+//!
+//! Initial-config serializer читает только history-массив. Для выбранного
+//! day/week/month/total type и country `-1` он последовательно пишет четыре
+//! country-секции: signed count и записи `i32 player + u8 level + C-string
+//! name + u8 occupation + u32 appellation + u32 eliminate`. Exact Game decoder
+//! подтверждает те же границы. `Vec` заменяет `std::list`, сохраняя insertion
+//! order; fixed `[u8; 20]` остаётся storage-контрактом, а отсутствие NUL теперь
+//! typed-блокирует сериализацию вместо чтения C++ за пределами массива.
+
+use std::error::Error;
+use std::fmt;
 
 use chrono::{Datelike, Local, Timelike};
 
 use crate::dbaccess::worlddb::rsplayer::{
-    HonorRankDbLists, HonorRanksCopyTimeSnapshot, HonorRanksDbDataSnapshot,
+    HonorRankDbEntry, HonorRankDbLists, HonorRanksCopyTimeSnapshot, HonorRanksDbDataSnapshot,
+    HonorRanksType,
 };
 
 /// Достигнутая save-часть process-static `CHonorRanks` state.
@@ -83,7 +95,107 @@ impl CHonorRanks {
     pub(crate) fn db_data_mut(&mut self) -> Option<&mut HonorRanksDbDataSnapshot> {
         self.db_data.as_mut()
     }
+
+    /// Даёт loader/runtime-owner-у одну доказанную history-секцию.
+    pub(crate) fn history_mut(
+        &mut self,
+        rank_type: HonorRanksType,
+        country: u8,
+    ) -> Option<&mut Vec<HonorRankDbEntry>> {
+        self.history[rank_type as usize].get_mut(usize::from(country))
+    }
+
+    /// Повторяет `AddToByteArray(type, country)`; `None` соответствует `-1`.
+    pub(crate) fn add_history_to_byte_array(
+        &self,
+        destination: &mut Vec<u8>,
+        rank_type: HonorRanksType,
+        country: Option<u8>,
+    ) -> Result<(), HonorRanksSerializationBlock> {
+        let countries = match country {
+            Some(country) if country < 4 => usize::from(country)..usize::from(country) + 1,
+            Some(country) => {
+                return Err(HonorRanksSerializationBlock::InvalidCountry { country });
+            }
+            None => 0..4,
+        };
+        let mut payload = Vec::new();
+        for country_index in countries {
+            let entries = &self.history[rank_type as usize][country_index];
+            let count = i32::try_from(entries.len()).map_err(|_| {
+                HonorRanksSerializationBlock::CountOutOfRange {
+                    rank_type,
+                    country: country_index as u8,
+                    count: entries.len(),
+                }
+            })?;
+            payload.extend_from_slice(&count.to_le_bytes());
+            for (record_index, entry) in entries.iter().enumerate() {
+                let name_end = entry.name.iter().position(|byte| *byte == 0).ok_or(
+                    HonorRanksSerializationBlock::NameWithoutTerminator {
+                        rank_type,
+                        country: country_index as u8,
+                        record_index,
+                    },
+                )?;
+                payload.extend_from_slice(&entry.player_id.to_le_bytes());
+                payload.push(entry.level);
+                payload.extend_from_slice(&entry.name[..=name_end]);
+                payload.push(entry.occupation_id);
+                payload.extend_from_slice(&entry.appellation_id.to_le_bytes());
+                payload.extend_from_slice(&entry.eliminate_num.to_le_bytes());
+            }
+        }
+        destination.extend_from_slice(&payload);
+        Ok(())
+    }
 }
+
+/// Safe-границы старого count/C-string wire почётных рангов.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum HonorRanksSerializationBlock {
+    InvalidCountry {
+        country: u8,
+    },
+    CountOutOfRange {
+        rank_type: HonorRanksType,
+        country: u8,
+        count: usize,
+    },
+    NameWithoutTerminator {
+        rank_type: HonorRanksType,
+        country: u8,
+        record_index: usize,
+    },
+}
+
+impl fmt::Display for HonorRanksSerializationBlock {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidCountry { country } => {
+                write!(formatter, "страна honor ranks вне диапазона 0..3: {country}")
+            }
+            Self::CountOutOfRange {
+                rank_type,
+                country,
+                count,
+            } => write!(
+                formatter,
+                "honor ranks {rank_type:?}/{country} содержит {count} записей вне signed 32-битного диапазона"
+            ),
+            Self::NameWithoutTerminator {
+                rank_type,
+                country,
+                record_index,
+            } => write!(
+                formatter,
+                "honor ranks {rank_type:?}/{country}, запись {record_index}: имя не содержит NUL"
+            ),
+        }
+    }
+}
+
+impl Error for HonorRanksSerializationBlock {}
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb

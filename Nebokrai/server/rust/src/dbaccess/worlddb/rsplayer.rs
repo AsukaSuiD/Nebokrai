@@ -513,7 +513,7 @@ pub(crate) enum HonorRanksSavePeriod {
 }
 
 /// Допустимые значения исходного `int type` и связанные DB-поля.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(usize)]
 pub(crate) enum HonorRanksType {
     Day = 0,
