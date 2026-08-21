@@ -335,6 +335,7 @@ use super::faction::{
     FactionPermitBlock, FactionPermitUpdate,
     FactionPronounceBlock, FactionPronounceOutcome, FactionPropertyDelivery,
     FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome, FactionSuperiorOrganizingBlock,
+    FactionSetParameterBlock, FactionSetParameterContext, FactionSetParameterOutcome,
     FactionUpgradeBlock, FactionUpgradeContext, FactionUpgradeOutcome, FactionUploadIconBlock,
     FactionUploadIconContext, FactionUploadIconOutcome,
     MemberEnterOutcome, MemberExitOutcome, MemberLevelChangeOutcome,
@@ -1747,6 +1748,27 @@ impl COrganizingCtrl {
         };
         faction
             .upgrade(game, parameters, player_id, context)
+            .map(Some)
+    }
+
+    /// Выполняет nullable faction lookup и concrete `CFaction::SetParam`.
+    pub(crate) fn set_faction_parameter<Context>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        faction_id: i32,
+        parameter: &[u8],
+        value: i32,
+        context: &mut Context,
+    ) -> Result<Option<FactionSetParameterOutcome>, FactionSetParameterBlock>
+    where
+        Context: FactionSetParameterContext,
+    {
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return Ok(None);
+        };
+        faction
+            .set_parameter(game, parameters, parameter, value, context)
             .map(Some)
     }
 

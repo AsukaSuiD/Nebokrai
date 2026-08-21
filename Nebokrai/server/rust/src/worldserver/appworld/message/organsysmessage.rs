@@ -8,8 +8,8 @@
 //! terminal `0x60133`, village-war application `0x60135`, её result ingress
 //! `0x60136`, city-war application `0x60137`, её result ingress `0x60138` и
 //! Goods War command `0x60139`, faction-win `0x6013A` и player quest routes
-//! `0x6013B/0x6013C` и run-script `0x6013D`; остальной owner —
-//! `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `0x6013B/0x6013C`, run-script `0x6013D` и faction parameter `0x6013E`;
+//! остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
@@ -201,6 +201,12 @@
 //! route gate ненулевой route получает `0x7FE3A(player ID, C-string script)`.
 //! Route miss не отправляет ответ; socket/ownership/tail gates донора в EXE
 //! отсутствуют.
+//! Exact `0x004A85AC..0x004A8604` для `0x6013E` читает player `Long`, bounded
+//! parameter C-string через `GetStr(..., 0x32)` и ещё один полный `Long`.
+//! Затем `IsFactionMaster` разрешает faction, nullable organizing lookup и
+//! virtual slot `+0x184` вызывают уже готовый `CFaction::SetParam`. Машина
+//! кладёт значение прямым `PUSH EDI`; RAW cast к `char` является ошибкой
+//! декомпиляции. Wire-ответа и дополнительных donor gates нет.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -247,6 +253,7 @@ use crate::worldserver::appworld::organizingsystem::faction::{
     FactionInitialPropertyBlock, FactionOperationBlock, FactionOperationOutcome,
     FactionOperationRejection, OwnedCityMutationBuildError,
     FactionPermitBlock, FactionPermitUpdate,
+    FactionSetParameterBlock, FactionSetParameterContext, FactionSetParameterOutcome,
     FactionUpgradeBlock, FactionUpgradeContext, FactionUpgradeFormatArgument,
     FactionUpgradeOutcome, FactionUploadIconBlock, FactionUploadIconContext,
     FactionUploadIconOutcome,
@@ -346,6 +353,8 @@ const GAME_REMOVE_QUEST_MESSAGE_TYPE: i32 = 0x7FE39;
 const PLAYER_RUN_SCRIPT_MESSAGE_TYPE: i32 = 0x6013D;
 const GAME_RUN_SCRIPT_MESSAGE_TYPE: i32 = 0x7FE3A;
 const PLAYER_SCRIPT_CAPACITY: usize = 0x100;
+const SET_FACTION_PARAMETER_MESSAGE_TYPE: i32 = 0x6013E;
+const FACTION_PARAMETER_NAME_CAPACITY: usize = 0x32;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -715,6 +724,42 @@ impl FactionOrganizingInfoContext for WorldUnionApplicationEffects<'_> {
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
         let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+/// Узкий adapter строк/уведомлений для уже готового `CFaction::SetParam`.
+struct WorldFactionSetParameterEffects<'game, 'callbacks, 'effects, 'update> {
+    game: &'game CGame,
+    callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
+    update_player: &'update mut dyn FnMut(i32),
+}
+
+impl FactionOrganizingInfoContext for WorldFactionSetParameterEffects<'_, '_, '_, '_> {
+    fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
+        Some((self.callbacks.world_string)(string_id))
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+impl FactionLevelContext for WorldFactionSetParameterEffects<'_, '_, '_, '_> {
+    fn format_world_string_signed(
+        &mut self,
+        string_id: &'static [u8],
+        value: i32,
+    ) -> Vec<u8> {
+        (self.callbacks.format_world_string)(
+            string_id,
+            &[UnionFormatArgument::Signed(value)],
+        )
+    }
+}
+
+impl FactionSetParameterContext for WorldFactionSetParameterEffects<'_, '_, '_, '_> {
+    fn update_player_faction_info(&mut self, player_id: i32) {
+        (self.update_player)(player_id);
     }
 }
 
@@ -3754,6 +3799,99 @@ pub(crate) fn dispatch_player_run_script(
         game_server_id,
         delivery,
     })
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionParameterOutcome {
+    FactionMissing,
+    Applied {
+        faction_id: i32,
+        outcome: FactionSetParameterOutcome,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionParameterBlock {
+    FactionMaster(FactionMasterLookupBlock),
+    SetParameter {
+        faction_id: i32,
+        source: FactionSetParameterBlock,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionParameterDispatch {
+    pub(crate) player_id: i32,
+    pub(crate) parameter: Vec<u8>,
+    pub(crate) value: i32,
+    pub(crate) outcome: OrganizingFactionParameterOutcome,
+}
+
+/// Выполняет exact `0x6013E` с полным `Long` value и concrete `SetParam`.
+pub(crate) fn dispatch_faction_parameter(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    parameters: &COrganizingParam,
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    update_player: &mut dyn FnMut(i32),
+) -> Option<Result<OrganizingFactionParameterDispatch, OrganizingFactionParameterBlock>> {
+    if message.message_type() != SET_FACTION_PARAMETER_MESSAGE_TYPE {
+        return None;
+    }
+
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let parameter = message
+        .base_mut()
+        .get_str_bytes(FACTION_PARAMETER_NAME_CAPACITY)
+        .expect("literal 0x32 исключает zero-capacity GetStr");
+    let value = message.base_mut().get_long().unwrap_or(0);
+    let faction_id = match organizing.faction_id_by_master_player(player_id) {
+        Ok(faction_id) => faction_id,
+        Err(source) => {
+            return Some(Err(OrganizingFactionParameterBlock::FactionMaster(source)));
+        }
+    };
+    if faction_id < 1 {
+        return Some(Ok(OrganizingFactionParameterDispatch {
+            player_id,
+            parameter,
+            value,
+            outcome: OrganizingFactionParameterOutcome::FactionMissing,
+        }));
+    }
+
+    let mut effects = WorldFactionSetParameterEffects {
+        game,
+        callbacks,
+        update_player,
+    };
+    let outcome = match organizing.set_faction_parameter(
+        game,
+        parameters,
+        faction_id,
+        &parameter,
+        value,
+        &mut effects,
+    ) {
+        Ok(Some(outcome)) => OrganizingFactionParameterOutcome::Applied {
+            faction_id,
+            outcome,
+        },
+        Ok(None) => OrganizingFactionParameterOutcome::FactionMissing,
+        Err(source) => {
+            return Some(Err(OrganizingFactionParameterBlock::SetParameter {
+                faction_id,
+                source,
+            }));
+        }
+    };
+    Some(Ok(OrganizingFactionParameterDispatch {
+        player_id,
+        parameter,
+        value,
+        outcome,
+    }))
 }
 
 #[derive(Debug, Eq, PartialEq)]
