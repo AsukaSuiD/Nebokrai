@@ -13,8 +13,8 @@
 //! `SendAllCurrentMaps` из старого Linux-донора в EXE отсутствуют и не
 //! перенесены. Неизвестный opcode остаётся owned pending без mutation/send.
 //!
-//! Декомпилятор: Ghidra 12.1.2. Сырой C++ ниже сохранён как локальная
-//! документация, а не как Rust-реализация.
+//! Compiler catch/unwind-записи не являются отдельными source-owner-ами;
+//! после машинной сверки они свёрнуты вместе с реализованным RAW.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::worldserver::game::CGame;
@@ -77,7 +77,7 @@ pub(crate) fn on_player_message(
 
 // ============================================================================
 // FUNCTION: OnPlayerMessage
-// STATUS: IMPLEMENTED_OWNER
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\playermessage.cpp:17
@@ -85,160 +85,8 @@ pub(crate) fn on_player_message(
 // ADDRESS: 004ad580
 // PROTOTYPE: void __cdecl OnPlayerMessage(CMessage * param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004ad742
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\playermessage.cpp
-// RVA: 0x000AD742
-// ADDRESS: 004ad742
-// PROTOTYPE: undefined Catch@004ad742()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004ad843
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\playermessage.cpp
-// RVA: 0x000AD843
-// ADDRESS: 004ad843
-// PROTOTYPE: undefined Catch@004ad843()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004adaa5
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\playermessage.cpp
-// RVA: 0x000ADAA5
-// ADDRESS: 004adaa5
-// PROTOTYPE: undefined Catch@004adaa5()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004adb56
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\playermessage.cpp
-// RVA: 0x000ADB56
-// ADDRESS: 004adb56
-// PROTOTYPE: undefined Catch@004adb56()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// ============================================================================
-// FUNCTION: Unwind@00532d70
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\playermessage.cpp
-// RVA: 0x00132D70
-// ADDRESS: 00532d70
-// PROTOTYPE: undefined Unwind@00532d70()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@00532d90
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\playermessage.cpp
-// RVA: 0x00132D90
-// ADDRESS: 00532d90
-// PROTOTYPE: undefined Unwind@00532d90()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+// Полная typed-реализация четырёх relay-ветвей находится в
+// `on_player_message` выше. Catch/unwind записи декомпилятора не являются
+// самостоятельными source-owner-ами и не переносятся в Rust.
 
 // COMPONENT_VARIANT_END: WorldServer
