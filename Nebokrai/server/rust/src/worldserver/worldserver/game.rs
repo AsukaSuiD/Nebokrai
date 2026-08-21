@@ -601,6 +601,9 @@
 //! время первого совпадения либо `0`. `LoadedSetupIds` записывает результаты
 //! constructor-load в ранее неинициализированные `m_nPlayerID/m_nLeaveWordID`;
 //! до этого Rust хранит `None` и не читает старое UB.
+//! `CFaction::LeaveWord` RVA `0x000BCA40` увеличивает `m_nLeaveWordID` обычным
+//! signed x86 `add 1`; `allocate_leave_word_id` сохраняет wrapping, а
+//! неинициализированное constructor-state отделяет typed-результатом.
 //!
 //! Player-prefix `GenerateDBData` сначала копирует оба scalar ID, затем обходит
 //! signed creation-list, unsigned restore-list, deletion-list и unsigned
@@ -4361,6 +4364,9 @@ pub(crate) enum WorldGenerateDbDataBlock {
     Organizing(OrganizingSaveDataBlock),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldLeaveWordIdBlock;
+
 impl From<PlayerCodecError> for WorldGenerateDbDataBlock {
     fn from(error: PlayerCodecError) -> Self {
         Self::PlayerCodec(error)
@@ -5921,6 +5927,16 @@ impl CGame {
     pub(crate) const fn apply_loaded_setup_ids(&mut self, loaded: LoadedSetupIds) {
         self.player_id = Some(loaded.player_id);
         self.leave_word_id = Some(loaded.leave_world_id);
+    }
+
+    /// Выделяет следующий signed leave-word ID с точным x86 wrapping.
+    pub(crate) fn allocate_leave_word_id(&mut self) -> Result<i32, WorldLeaveWordIdBlock> {
+        let leave_word_id = self
+            .leave_word_id
+            .as_mut()
+            .ok_or(WorldLeaveWordIdBlock)?;
+        *leave_word_id = leave_word_id.wrapping_add(1);
+        Ok(*leave_word_id)
     }
 
     /// Полностью очищает live restore-list.

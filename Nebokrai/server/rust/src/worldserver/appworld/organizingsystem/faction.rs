@@ -7,6 +7,7 @@
 //! `0x000B4CA0`, `SetGoodsWarCount` RVA `0x000B4D70`,
 //! `UpdatePronounceToClient` RVA `0x000B56C0`,
 //! `UpdateLeaveWordToClient/EditLeaveWord` RVA `0x000B6240/0x000B6790`,
+//! `LeaveWord/LoadLeavewords` RVA `0x000BCA40/0x000BD3F0`,
 //! `SendInfoToAllMember/UpdateOtherFacInfoToClient` RVA
 //! `0x000B5890/0x000B58F0`,
 //! `Talk` RVA `0x000B5A50`,
@@ -377,6 +378,17 @@
 //! `0x004B6790..0x004B6823` подтверждает порядок и донорские расхождения.
 //! Чтение sentinel-а при пустом non-delete list и выход за fixed C-строки
 //! заменены typed-границами.
+//! `LeaveWord` проверяет feature и `PV_LeaveWord`, обрезает входную
+//! `std::string&` до global `MAX_PerWordCharNum=210`, затем wrapping-увеличивает
+//! общий `CGame::m_nLeaveWordID`, копирует time/player/content и только online-
+//! имя. После добавления в хвост публикуется `OP_Add`, затем dirty-бит `4`.
+//! `MAX_LeaveWordNum=60`; `LoadLeavewords` делает только bounded append без
+//! публикации/dirty. Exact ASM `0x004BCA40..0x004BCC58` и
+//! `0x004BD3F0..0x004BD470` подтверждает порядок и глобалы. В EXE unlink старых
+//! nodes не уменьшает `_Mysize`, из-за чего full-list loop повреждён; стандартный
+//! `VecDeque::pop_front` сохраняет intended FIFO-limit. Неинициализированное имя
+//! offline-автора и переполнение `char[20]` заменены typed-блокировкой после уже
+//! выделенного ID; незначимые хвосты нового fixed-record безопасно обнуляются.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -391,7 +403,9 @@ use super::organizing::{
 };
 use super::organizingparam::COrganizingParam;
 use crate::nets::networld::message::{CMessage, SendMessageError};
-use crate::worldserver::worldserver::game::{CGame, WorldRegionNameLookup};
+use crate::worldserver::worldserver::game::{
+    CGame, WorldLeaveWordIdBlock, WorldRegionNameLookup,
+};
 
 const MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0D;
 const PRONOUNCE_UPDATE_MESSAGE_TYPE: i32 = 0x7FE10;
@@ -405,6 +419,8 @@ const ENTER_REGION_BUFFER_CAPACITY: usize = 256;
 const ENEMY_WAR_LOG_BUFFER_CAPACITY: usize = 256;
 const LEAVE_WORD_NAME_CAPACITY: usize = 20;
 const LEAVE_WORD_CONTENT_CAPACITY: usize = 212;
+const LEAVE_WORD_CONTENT_LIMIT: usize = 210;
+const LEAVE_WORD_LIMIT: usize = 60;
 const APPLY_PERSON_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_CONTENT_CAPACITY: usize = 2048;
@@ -648,6 +664,40 @@ pub(crate) enum FactionEditLeaveWordOutcome {
     Deleted {
         deliveries: Result<Vec<FactionLeaveWordDelivery>, FactionLeaveWordUpdateBuildError>,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionLeaveWordBlock {
+    MissingBaseProperty,
+    LeaveWordId(WorldLeaveWordIdBlock),
+    OfflineAuthorNameUnknown {
+        player_id: i32,
+        allocated_leave_word_id: i32,
+        input_truncated: bool,
+    },
+    PlayerNameWouldOverflow {
+        player_id: i32,
+        allocated_leave_word_id: i32,
+        visible_len: usize,
+        input_truncated: bool,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionLeaveWordOutcome {
+    FunctionDisabled,
+    PermissionDenied,
+    Published {
+        leave_word_id: i32,
+        input_truncated: bool,
+        evicted_count: usize,
+        deliveries: Result<Vec<FactionLeaveWordDelivery>, FactionLeaveWordUpdateBuildError>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FactionLoadLeaveWordReport {
+    pub(crate) evicted_count: usize,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -2383,6 +2433,91 @@ impl CFaction {
             self.update_leave_word_to_client(game, leave_word_id, EOperator::Delete);
         self.set_change_data(4);
         Ok(FactionEditLeaveWordOutcome::Deleted { deliveries })
+    }
+
+    /// Создаёт новый leave-word, вытесняет старейшие и публикует последний.
+    pub(crate) fn leave_word(
+        &mut self,
+        game: &mut CGame,
+        player_id: i32,
+        content: &mut Vec<u8>,
+        time: TagTimeValue,
+    ) -> Result<FactionLeaveWordOutcome, FactionLeaveWordBlock> {
+        let property = self
+            .base_property
+            .ok_or(FactionLeaveWordBlock::MissingBaseProperty)?;
+        if !property.leave_word_function() {
+            return Ok(FactionLeaveWordOutcome::FunctionDisabled);
+        }
+        if !self.is_using_purview(player_id, EPurview::LeaveWord as i32) {
+            return Ok(FactionLeaveWordOutcome::PermissionDenied);
+        }
+
+        let input_truncated = content.len() > LEAVE_WORD_CONTENT_LIMIT;
+        content.truncate(LEAVE_WORD_CONTENT_LIMIT);
+        let visible_content = legacy_c_string_visible_bytes(content);
+        let leave_word_id = game
+            .allocate_leave_word_id()
+            .map_err(FactionLeaveWordBlock::LeaveWordId)?;
+
+        let Some(player) = game.online_player_by_id(player_id as u32) else {
+            return Err(FactionLeaveWordBlock::OfflineAuthorNameUnknown {
+                player_id,
+                allocated_leave_word_id: leave_word_id,
+                input_truncated,
+            });
+        };
+        let visible_name = legacy_c_string_visible_bytes(player.get_name());
+        if visible_name.len() >= LEAVE_WORD_NAME_CAPACITY {
+            return Err(FactionLeaveWordBlock::PlayerNameWouldOverflow {
+                player_id,
+                allocated_leave_word_id: leave_word_id,
+                visible_len: visible_name.len(),
+                input_truncated,
+            });
+        }
+
+        let mut name = [0; LEAVE_WORD_NAME_CAPACITY];
+        name[..visible_name.len()].copy_from_slice(visible_name);
+        let mut stored_content = [0; LEAVE_WORD_CONTENT_CAPACITY];
+        stored_content[..visible_content.len()].copy_from_slice(visible_content);
+        let leave_word = TagLeaveWord::from_complete_fields(
+            leave_word_id,
+            player_id,
+            name,
+            time,
+            stored_content,
+        );
+
+        let mut evicted_count = 0;
+        while self.leave_words.len() >= LEAVE_WORD_LIMIT {
+            let _ = self.leave_words.pop_front();
+            evicted_count += 1;
+        }
+        self.leave_words.push_back(leave_word);
+        let deliveries =
+            self.update_leave_word_to_client(game, leave_word_id, EOperator::Add);
+        self.set_change_data(4);
+        Ok(FactionLeaveWordOutcome::Published {
+            leave_word_id,
+            input_truncated,
+            evicted_count,
+            deliveries,
+        })
+    }
+
+    /// Загружает один DB leave-word с восстановленным FIFO-limit.
+    pub(crate) fn load_leave_word(
+        &mut self,
+        leave_word: TagLeaveWord,
+    ) -> FactionLoadLeaveWordReport {
+        let mut evicted_count = 0;
+        while self.leave_words.len() >= LEAVE_WORD_LIMIT {
+            let _ = self.leave_words.pop_front();
+            evicted_count += 1;
+        }
+        self.leave_words.push_back(leave_word);
+        FactionLoadLeaveWordReport { evicted_count }
     }
 
     /// Заменяет текущее объявление с исходными проверками и порядком эффектов.
@@ -4548,7 +4683,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::LeaveWord
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2033
@@ -4576,7 +4711,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::LoadLeavewords
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2933
