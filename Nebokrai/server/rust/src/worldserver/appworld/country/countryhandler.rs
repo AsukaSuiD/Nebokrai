@@ -1,6 +1,7 @@
 //! Country-map владелец исторического `WorldServer`.
 //!
 //! Статус `CCountryHandler::GetCountry` RVA `0x00036C40`,
+//! `AddToByteArray` RVA `0x000449F0`,
 //! `send_info_to_client` RVA `0x00044760`, `GenerateSaveData` RVA `0x00044970`,
 //! `AddOneTopInfo` RVA `0x00045130` и полный `Run` RVA `0x00045040` —
 //! `IMPLEMENTED`; остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
@@ -33,13 +34,24 @@
 //! `send_info_to_client` строит `0x7FA03` из четырёх consecutive unsigned long
 //! и C-строки; один overload target `0x00423C00` для обоих нулей/title/color
 //! подтверждён exact EXE.
+//!
+//! Initial-config wire начинается signed размером всей country-map и затем
+//! содержит `CCountry` records в unsigned key-order; отдельный map key не
+//! передаётся. Исходник без проверки разыменовывал null country. Safe Rust
+//! останавливает эту недопустимую внутреннюю state-границу до изменения
+//! destination, не выдавая старый null-dereference за протокол. `BTreeMap` и
+//! owned buffer заменяют только MSVC tree/vector plumbing.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::error::Error;
 use std::ffi::CStr;
+use std::fmt;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::nets::networld::message::CMessage;
-use crate::worldserver::appworld::country::country::{CCountry, CountryKingSaveLimits};
+use crate::worldserver::appworld::country::country::{
+    CCountry, CountryKingSaveLimits, CountrySerializeError,
+};
 use crate::worldserver::worldserver::game::CGame;
 
 static NEXT_COUNTRY_TOP_INFO_ID: AtomicI32 = AtomicI32::new(1);
@@ -56,6 +68,43 @@ struct CountryTopInfo {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CountryRunBlock {
     pub(crate) map_key: u8,
+}
+
+/// Safe-границы serializer-а всей country-map.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryHandlerSerializeError {
+    CountryCountOutOfRange { country_count: usize },
+    NullCountry { map_key: u8 },
+    Country {
+        map_key: u8,
+        source: CountrySerializeError,
+    },
+}
+
+impl fmt::Display for CountryHandlerSerializeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CountryCountOutOfRange { country_count } => write!(
+                formatter,
+                "CCountryHandler содержит {country_count} стран вне signed 32-битного диапазона"
+            ),
+            Self::NullCountry { map_key } => {
+                write!(formatter, "CCountryHandler содержит null country по ключу {map_key}")
+            }
+            Self::Country { map_key, source } => {
+                write!(formatter, "страна по ключу {map_key} не сериализована: {source}")
+            }
+        }
+    }
+}
+
+impl Error for CountryHandlerSerializeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Country { source, .. } => Some(source),
+            _ => None,
+        }
+    }
 }
 
 /// Полный ordered результат `CCountryHandler::Run`.
@@ -83,6 +132,31 @@ impl CCountryHandler {
             countries: BTreeMap::new(),
             top_infos: VecDeque::new(),
         }
+    }
+
+    /// Дописывает точную ordered country-map для initial-config subtype `0x19`.
+    pub(crate) fn add_to_byte_array(
+        &self,
+        destination: &mut Vec<u8>,
+    ) -> Result<(), CountryHandlerSerializeError> {
+        let country_count = self.countries.len();
+        let country_count_i32 = i32::try_from(country_count).map_err(|_| {
+            CountryHandlerSerializeError::CountryCountOutOfRange { country_count }
+        })?;
+
+        let mut records = Vec::new();
+        for (&map_key, country) in &self.countries {
+            let country = country
+                .as_deref()
+                .ok_or(CountryHandlerSerializeError::NullCountry { map_key })?;
+            country.add_to_byte_array(&mut records).map_err(|source| {
+                CountryHandlerSerializeError::Country { map_key, source }
+            })?;
+        }
+
+        destination.extend_from_slice(&country_count_i32.to_le_bytes());
+        destination.extend_from_slice(&records);
+        Ok(())
     }
 
     /// Возвращает живую страну по unsigned ID; ноль всегда равен `nullptr`.
@@ -276,19 +350,8 @@ impl CCountryHandler {
 // IMPLEMENTED: CCountryHandler::GenerateSaveData, WorldServer RVA 0x00044970.
 // Реализация находится выше; STL traversal свёрнут в provenance.
 
-// ============================================================================
-// FUNCTION: CCountryHandler::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countryhandler.cpp:75
-// RVA: 0x000449F0
-// ADDRESS: 004449f0
-// PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: CCountryHandler::AddToByteArray, WorldServer RVA 0x000449F0.
+// Реализация находится выше; STL traversal свёрнут в provenance.
 
 // ============================================================================
 // FUNCTION: CCountryHandler::SetNewDay

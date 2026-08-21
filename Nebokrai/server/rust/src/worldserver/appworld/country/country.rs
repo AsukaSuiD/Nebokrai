@@ -1,6 +1,7 @@
 //! Save-владелец `CCountry` исторического `WorldServer`.
 //!
-//! Статус `CCountry::CloneCountryData` RVA `0x000C9CE0` и
+//! Статус `CCountry::AddToByteArray` RVA `0x000C6E30`,
+//! `CCountry::CloneCountryData` RVA `0x000C9CE0` и
 //! `CCountry::CloneSaveData` RVA `0x000CC470` — `IMPLEMENTED`; остальной корпус
 //! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -33,8 +34,16 @@
 //! `_tech_lelup_exp`, который DB-owner не читает, остаётся локально
 //! зафиксированным полем live save-state, но не выдумывается в DB-контракте.
 //! Raw тела двух заменённых функций и compiler/STL cleanup удалены.
+//!
+//! Initial-config record сохраняет только наблюдаемую Game-проекцию: country
+//! ID, четыре country scalars, три king points, king ID, war-result и ordered
+//! minister map `job:u8 -> player_id:i32`. `tech_level_up_exp`, имена и flags
+//! в этот wire не входят. `BTreeMap` сохраняет unsigned порядок; signed count
+//! проверяется до записи вместо неограниченного `size_t -> long` narrowing.
 
 use std::collections::BTreeMap;
+use std::error::Error;
+use std::fmt;
 
 use crate::dbaccess::worlddb::dbcountry::{
     CountryKingSaveSnapshot, CountryMinisterSaveSnapshot, CountrySaveSnapshot,
@@ -70,6 +79,33 @@ pub(crate) struct CCountry {
 }
 
 impl CCountry {
+    /// Дописывает один точный country record для `CCountryHandler` wire.
+    pub(crate) fn add_to_byte_array(
+        &self,
+        destination: &mut Vec<u8>,
+    ) -> Result<(), CountrySerializeError> {
+        let minister_count = self.ministers.len();
+        let minister_count_i32 = i32::try_from(minister_count)
+            .map_err(|_| CountrySerializeError::MinisterCountOutOfRange { minister_count })?;
+
+        destination.push(self.country_id);
+        destination.extend_from_slice(&self.treasury.to_le_bytes());
+        destination.extend_from_slice(&self.power.to_le_bytes());
+        destination.extend_from_slice(&self.tech_current_exp.to_le_bytes());
+        destination.extend_from_slice(&self.tech_level.to_le_bytes());
+        destination.extend_from_slice(&self.king.control_point.to_le_bytes());
+        destination.extend_from_slice(&self.king.material_point.to_le_bytes());
+        destination.extend_from_slice(&self.king.war_point.to_le_bytes());
+        destination.extend_from_slice(&self.king.id.to_le_bytes());
+        destination.extend_from_slice(&self.country_war_result.to_le_bytes());
+        destination.extend_from_slice(&minister_count_i32.to_le_bytes());
+        for (&job, minister) in &self.ministers {
+            destination.push(job);
+            destination.extend_from_slice(&minister.snapshot.id.to_le_bytes());
+        }
+        Ok(())
+    }
+
     /// Создаёт отдельную DB-наблюдаемую копию country state.
     pub(crate) fn clone_save_data(&self, limits: CountryKingSaveLimits) -> CountrySaveSnapshot {
         let mut cloned_ministers = BTreeMap::new();
@@ -108,6 +144,24 @@ impl CCountry {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountrySerializeError {
+    MinisterCountOutOfRange { minister_count: usize },
+}
+
+impl fmt::Display for CountrySerializeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MinisterCountOutOfRange { minister_count } => write!(
+                formatter,
+                "CCountry содержит {minister_count} министров вне signed 32-битного диапазона"
+            ),
+        }
+    }
+}
+
+impl Error for CountrySerializeError {}
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
@@ -270,19 +324,8 @@ impl CCountry {
 //
 //
 
-// ============================================================================
-// FUNCTION: CCountry::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1608
-// RVA: 0x000C6E30
-// ADDRESS: 004c6e30
-// PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: CCountry::AddToByteArray, WorldServer RVA 0x000C6E30.
+// Реализация находится выше; STL traversal свёрнут в provenance.
 
 // ============================================================================
 // FUNCTION: CCountry::NewTerm
