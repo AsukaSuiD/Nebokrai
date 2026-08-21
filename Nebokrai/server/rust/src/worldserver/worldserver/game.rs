@@ -981,14 +981,18 @@ use crate::transport::bind_tcp_ipv4;
 use crate::worldserver::appworld::country::country::{
     CCountry, CountryAbsolveCounterReset, CountryExileMessageDelivery, CountryExileResultContext,
     CountryExileTarget, CountryExileTextArgument, CountryFactionSnapshot, CountryNewTermContext,
+    CountrySetNewDayContext,
     CountryGovernanceContextBlock, CountryKingSaveLimits, CountryOnlinePlayer,
     CountryPlayersListContext, CountryPlayersListContextBlock,
     CountryVillageTaxContext, CountryVillageTaxContextBlock, CountryVillageTaxRegion,
 };
 use crate::worldserver::appworld::country::countryhandler::{
-    CCountryHandler, CountryInfoDeliveryContext, CountryRunBlock, CountryRunReport,
+    CCountryHandler, CountryHandlerInitializeReport, CountryInfoDeliveryContext,
+    CountryRunBlock, CountryRunReport,
 };
-use crate::worldserver::appworld::country::countryparam::CCountryParam;
+use crate::worldserver::appworld::country::countryparam::{
+    CCountryParam, CountryParamLoadError, CountryParamLoadReport,
+};
 use crate::worldserver::appworld::country::countrywarsys::{
     CountryWarDeclarationAuthority, CountryWarDeclarationContext, CountryWarDeclarationPlayer,
     CountryWarSys, CountryWarVictoryContext, CountryWarVictoryRegion,
@@ -1356,7 +1360,6 @@ pub(crate) enum WorldGameInitVoidOwner {
     InitializeOrganizingController,
     InitializeFactionWar,
     InitializeQuestSystem,
-    InitializeCountryParameters,
     CreateGeneralVariableList,
     LoadGeneralVariableList,
     LoadGeneralVariableData,
@@ -1372,7 +1375,6 @@ pub(crate) enum WorldGameInitBooleanOwner {
     InitializeAttackCity,
     InitializeFourNationWar,
     InitializeVillageWar,
-    InitializeCountryHandler,
     InitializeCountryWar,
     LoadIncrementShopLog,
 }
@@ -1436,6 +1438,8 @@ pub(crate) enum WorldGameInitEvent {
         succeeded: bool,
     },
     OrganizingParametersLoaded(OrganizingParamLoadReport),
+    CountryParametersLoaded(CountryParamLoadReport),
+    CountryHandlerInitialized(CountryHandlerInitializeReport),
     RegionOwnerRelationInitialized {
         region_id: i32,
     },
@@ -1480,6 +1484,8 @@ pub(crate) enum WorldGameInitBlockReason<ContextBlock> {
     JjcConfiguration,
     BooleanOwner(WorldGameInitBooleanOwner),
     OrganizingParameters(OrganizingParamLoadError),
+    CountryParameters(CountryParamLoadError),
+    CountryHandler,
     PlayerRanksSchedule(PlayerRanksScheduleBlock),
     PlayerRanksStat(PlayerRanksStatRunBlock),
     NetworkClient(WorldClientInitializationError),
@@ -1537,6 +1543,7 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn initialize_boolean_owner(&mut self, owner: WorldGameInitBooleanOwner) -> bool;
     fn load_jjc_configuration(&mut self) -> bool;
     fn load_region_parameters(&mut self, game: &mut CGame) -> bool;
+    fn country_parameter_source(&mut self) -> Option<Vec<u8>>;
     fn initialize_words_filter(&mut self, invalid_strings: &[u8], char_codes: &[u8]);
     fn initialize_region_owner_relation(&mut self, region_id: i32, region: &mut CWorldRegion);
 
@@ -7367,11 +7374,21 @@ impl CGame {
     /// Windows crash reporter, GUI notice и thread creation передаются точным
     /// внешним границам; file/network owners и live `CGame` мутации исполняются
     /// непосредственно здесь. Первый false/block прекращает оставшийся порядок.
+    ///
+    /// Для country-участка EXE/PDB подтверждают порядок: загрузить параметры,
+    /// при включённой appellation-функции загрузить honor ranks, передать
+    /// текущий локальный день в `CCountryHandler::Initialize`, проверить его
+    /// результат, записать `Load Country SUCCESS...` и лишь затем запускать
+    /// country war. Rust использует тот же живой `CCountryParam` и
+    /// `CCountryHandler`; resource bytes, Tiberius-соединение и календарный
+    /// контекст передаются явно вместо resource manager, глобального DB-owner-а
+    /// и process-global времени оригинала. Эти технические замены не меняют
+    /// доказанный fail-fast порядок и вызов `SetNewDay` после успешной DB-load.
     #[allow(
         clippy::too_many_arguments,
-        reason = "прямые PlayerRanks/timer owners заменяют два прежних opaque callbacks"
+        reason = "прямые PlayerRanks/country/timer owners заменяют прежние opaque callbacks"
     )]
-    pub(crate) async fn init<Context, TimerCallback>(
+    pub(crate) async fn init<Context, TimerCallback, CountryDatabase, CountryContext>(
         &mut self,
         runtime_directory: &Path,
         context: &mut Context,
@@ -7381,6 +7398,11 @@ impl CGame {
         organizing_tax_callback: TimerCallback,
         player_ranks_callback: TimerCallback,
         organizing: &COrganizingCtrl,
+        country_handler: &mut CCountryHandler,
+        country_parameters: &mut CCountryParam,
+        country_database: &mut CountryDatabase,
+        country_database_connection: Option<&mut WorldTdsClient>,
+        country_context: &mut CountryContext,
         honor_ranks: &mut CHonorRanks,
         auction_log: &mut CAuctionLog,
         log: &mut WorldLogTextOwner,
@@ -7389,6 +7411,8 @@ impl CGame {
     where
         Context: WorldGameInitContext,
         TimerCallback: Copy,
+        CountryDatabase: DbCountryOwner,
+        CountryContext: CountrySetNewDayContext + ?Sized,
     {
         let mut events = Vec::new();
         macro_rules! stop {
@@ -7793,9 +7817,16 @@ impl CGame {
         };
         events.push(WorldGameInitEvent::PlayerRanksLoaded(player_ranks_stat));
 
-        let owner = WorldGameInitVoidOwner::InitializeCountryParameters;
-        context.initialize_void_owner(owner);
-        events.push(WorldGameInitEvent::VoidOwner(owner));
+        let country_parameter_source = context.country_parameter_source();
+        let country_parameter_report = match country_parameters
+            .initialize(country_parameter_source.as_deref())
+        {
+            Ok(report) => report,
+            Err(source) => stop!(WorldGameInitBlockReason::CountryParameters(source)),
+        };
+        events.push(WorldGameInitEvent::CountryParametersLoaded(
+            country_parameter_report,
+        ));
 
         if context.use_appellation_function() {
             let _unused_system_time = (callbacks.get_log_local_time)();
@@ -7823,11 +7854,22 @@ impl CGame {
             });
         }
 
-        let owner = WorldGameInitBooleanOwner::InitializeCountryHandler;
-        let succeeded = context.initialize_boolean_owner(owner);
-        events.push(WorldGameInitEvent::BooleanOwner { owner, succeeded });
+        let country_local_time = (callbacks.get_timer_local_time)();
+        let country_initialization = country_handler
+            .initialize(
+                i32::from(country_local_time.day),
+                country_database,
+                country_database_connection,
+                country_parameters,
+                country_context,
+            )
+            .await;
+        let succeeded = country_initialization.legacy_result;
+        events.push(WorldGameInitEvent::CountryHandlerInitialized(
+            country_initialization,
+        ));
         if !succeeded {
-            stop!(WorldGameInitBlockReason::BooleanOwner(owner));
+            stop!(WorldGameInitBlockReason::CountryHandler);
         }
         self.record_game_init_log(&mut events, log, callbacks, b"Load Country SUCCESS...");
 
