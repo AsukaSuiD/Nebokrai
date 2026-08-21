@@ -1012,6 +1012,7 @@ use crate::worldserver::appworld::message::countrymessage::{
     WorldFourNationExploitDatabaseDisposition, WorldFourNationExploitSync,
     decode_four_nation_exploit_message,
     dispatch_country_absolve_request_message,
+    dispatch_country_appoint_minister_message,
     dispatch_country_depose_minister_message,
     dispatch_country_exile_result_message,
     dispatch_country_exile_request_message,
@@ -12754,6 +12755,26 @@ where
                 source,
                 legacy_run_result,
                 outcome: WorldCountryMessageOutcome::MinisterDeposed(sync),
+            };
+        }
+        let appoint_minister = {
+            let mut effects = WorldCountryExileResultEffects {
+                game,
+                globe_setup,
+                format_world_string: &mut *application_callbacks.format_world_string,
+            };
+            dispatch_country_appoint_minister_message(
+                &mut message,
+                country_handler,
+                country_parameters,
+                &mut effects,
+            )
+        };
+        if let Some(sync) = appoint_minister {
+            return ProcessedWorldEvent::CountryMessage {
+                source,
+                legacy_run_result,
+                outcome: WorldCountryMessageOutcome::MinisterAppointed(sync),
             };
         }
         let exile_request = {

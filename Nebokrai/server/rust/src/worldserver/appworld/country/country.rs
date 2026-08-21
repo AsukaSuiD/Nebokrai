@@ -68,6 +68,14 @@
 //! `0x7FF10` и полный `0x7FF07` королю; appointed/salary flags не очищаются.
 //! Последующий original clone разыменовывал null slot; безопасный save-clone
 //! его пропускает как внутренний UB, но два наблюдаемых wire-count сохраняет.
+//! `0x60309` использует тот же target/job/king/country wire и selector `1`.
+//! Positive `AppointMinister(..., 6)` проверяет king, slot, pending-флаг,
+//! online/country и `HasJob`; последний намеренно вызывает полный `IsKing` и
+//! оставляет `WS0034` даже для обычного кандидата. Успех ставит appointed до
+//! списания points, пишет `WS0066`, затем публикует `0x7FF04` kind `1`,
+//! `0x7FF10` и `0x7FF07`. Exact disassembly `0x004C6B5B/0x004C6BDA/0x004C6BF3`
+//! подтвердил, что base-info wire несёт quest-switch короля и пары
+//! quest-switch/appointed министров, а не DB salary flags.
 //! Clone копирует country ID, treasury, power,
 //! current/level-up tech exp, tech level, king identity/flags и war-result.
 //! Три king-point ограничиваются соответствующими максимумами `CCountryParam`.
@@ -480,6 +488,62 @@ pub(crate) struct CountryDeposeMinisterReport {
     pub(crate) disposition: CountryDeposeMinisterDisposition,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryAppointMinisterRejection {
+    CountryAtWar,
+    InsufficientControlPoint,
+    TargetIsKing,
+    JobUnavailable,
+    JobOccupied,
+    AppointmentPending,
+    TargetMissing,
+    TargetCountryUnavailable,
+    TargetFromAnotherCountry,
+    TargetAlreadyHasJob { job: u8 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountryCanAppointMinisterDisposition {
+    Allowed,
+    ParameterUnavailable(CountryParameterUnavailable),
+    Rejected {
+        reason: CountryAppointMinisterRejection,
+        text: Vec<u8>,
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountryAppointMinisterDisposition {
+    Rejected {
+        reason: CountryAppointMinisterRejection,
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+    ParameterUnavailable {
+        block: CountryParameterUnavailable,
+        appointment_flag_set: bool,
+        control_point_update: Option<KingPointUpdate>,
+    },
+    Applied {
+        control_point_update: KingPointUpdate,
+        country_deliveries: Vec<CountryExileMessageDelivery>,
+        appointment_wire: Vec<u8>,
+        appointment_delivery: Result<i32, SendMessageError>,
+        control_point_delivery: CountryExileMessageDelivery,
+        base_info: CountryBaseInfoDisposition,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountryAppointMinisterReport {
+    pub(crate) player_id: i32,
+    pub(crate) job: u8,
+    pub(crate) mode: u8,
+    pub(crate) legacy_result: i32,
+    pub(crate) text: Vec<u8>,
+    pub(crate) disposition: CountryAppointMinisterDisposition,
+}
+
 impl CCountry {
     /// Exact `IsKing`: нулевой candidate всегда отклоняется с `WS0033`.
     pub(crate) fn authorize_king<Context: CountryExileResultContext + ?Sized>(
@@ -540,6 +604,281 @@ impl CCountry {
         let text = legacy_country_text(context.format_world_string(b"WS0043", &[]));
         let private_delivery = self.send_private_message(&text, 0, context);
         CountryCanDeposeMinisterDisposition::Rejected { text, private_delivery }
+    }
+
+    pub(crate) fn can_appoint_minister<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> CountryCanAppointMinisterDisposition {
+        let Some(minimum) = parameters.min_king_control_point() else {
+            return CountryCanAppointMinisterDisposition::ParameterUnavailable(
+                CountryParameterUnavailable { field: "_min_king_control_point" },
+            );
+        };
+        let rejection = if self.is_warring {
+            Some((CountryAppointMinisterRejection::CountryAtWar, b"WS0041" as &'static [u8], None))
+        } else if self.king.control_point < minimum {
+            Some((
+                CountryAppointMinisterRejection::InsufficientControlPoint,
+                b"WS0042" as &'static [u8],
+                Some(minimum),
+            ))
+        } else {
+            None
+        };
+        let Some((reason, string_id, argument)) = rejection else {
+            return CountryCanAppointMinisterDisposition::Allowed;
+        };
+        let arguments = argument
+            .as_ref()
+            .map(|value| [CountryExileTextArgument::Signed(*value)]);
+        let text = legacy_country_text(context.format_world_string(
+            string_id,
+            arguments.as_ref().map_or(&[], |arguments| arguments.as_slice()),
+        ));
+        let private_delivery = self.send_private_message(&text, 0, context);
+        CountryCanAppointMinisterDisposition::Rejected { reason, text, private_delivery }
+    }
+
+    /// Exact positive-player ветка `AppointMinister(player, job, 6)`.
+    pub(crate) fn appoint_minister<Context: CountryExileResultContext + ?Sized>(
+        &mut self,
+        player_id: i32,
+        job: u8,
+        mode: u8,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> CountryAppointMinisterReport {
+        if player_id != 0 && self.king.id == player_id {
+            let country_name = context.country_name(self.country_id);
+            return self.reject_appoint_minister(
+                player_id,
+                job,
+                mode,
+                CountryAppointMinisterRejection::TargetIsKing,
+                b"WS0059",
+                &[CountryExileTextArgument::Text(&country_name)],
+                false,
+                context,
+            );
+        }
+        let Some(minister) = self.ministers.get(&job) else {
+            let country_name = context.country_name(self.country_id);
+            let identity_name = context.country_identity_name(job);
+            return self.reject_appoint_minister(
+                player_id,
+                job,
+                mode,
+                CountryAppointMinisterRejection::JobUnavailable,
+                b"WS0060",
+                &[
+                    CountryExileTextArgument::Text(&country_name),
+                    CountryExileTextArgument::Text(&identity_name),
+                ],
+                false,
+                context,
+            );
+        };
+        if minister.snapshot.id != 0 {
+            let identity_name = context.country_identity_name(job);
+            return self.reject_appoint_minister(
+                player_id,
+                job,
+                mode,
+                CountryAppointMinisterRejection::JobOccupied,
+                b"WS0061",
+                &[CountryExileTextArgument::Text(&identity_name)],
+                true,
+                context,
+            );
+        }
+        if minister.snapshot.appointed {
+            let identity_name = context.country_identity_name(job);
+            return self.reject_appoint_minister(
+                player_id,
+                job,
+                mode,
+                CountryAppointMinisterRejection::AppointmentPending,
+                b"WS0062",
+                &[CountryExileTextArgument::Text(&identity_name)],
+                true,
+                context,
+            );
+        }
+        let Some(player) = context.online_player(player_id) else {
+            return self.reject_appoint_minister(
+                player_id,
+                job,
+                mode,
+                CountryAppointMinisterRejection::TargetMissing,
+                b"WS0063",
+                &[],
+                true,
+                context,
+            );
+        };
+        let Some(player_country) = player.country else {
+            return CountryAppointMinisterReport {
+                player_id,
+                job,
+                mode,
+                legacy_result: player_id,
+                text: Vec::new(),
+                disposition: CountryAppointMinisterDisposition::Rejected {
+                    reason: CountryAppointMinisterRejection::TargetCountryUnavailable,
+                    private_delivery: None,
+                },
+            };
+        };
+        if player_country != self.country_id {
+            return self.reject_appoint_minister(
+                player_id,
+                job,
+                mode,
+                CountryAppointMinisterRejection::TargetFromAnotherCountry,
+                b"WS0064",
+                &[],
+                true,
+                context,
+            );
+        }
+        let existing_job = self.has_job_with_legacy_king_check(player_id, context);
+        if existing_job != 0 {
+            let identity_name = context.country_identity_name(existing_job);
+            return self.reject_appoint_minister(
+                player_id,
+                job,
+                mode,
+                CountryAppointMinisterRejection::TargetAlreadyHasJob { job: existing_job },
+                b"WS0065",
+                &[
+                    CountryExileTextArgument::Text(&player.name),
+                    CountryExileTextArgument::Text(&identity_name),
+                ],
+                true,
+                context,
+            );
+        }
+        self.ministers.get_mut(&job).expect("minister проверен выше").snapshot.appointed = true;
+        let Some(cost) = parameters.appoint_control_point_cost() else {
+            return self.appoint_parameter_unavailable(
+                player_id,
+                job,
+                mode,
+                CountryParameterUnavailable { field: "_dec_king_control_point_appoint" },
+                None,
+            );
+        };
+        let requested = self.king.control_point.wrapping_sub(cost);
+        let control_point_update = match set_control_point(&mut self.king, requested, parameters) {
+            Ok(update) => update,
+            Err(block) => {
+                return self.appoint_parameter_unavailable(player_id, job, mode, block, None);
+            }
+        };
+        let country_name = context.country_name(self.country_id);
+        let identity_name = context.country_identity_name(job);
+        let text = legacy_country_text(context.format_world_string(
+            b"WS0066",
+            &[
+                CountryExileTextArgument::Text(&country_name),
+                CountryExileTextArgument::Text(&player.name),
+                CountryExileTextArgument::Text(&identity_name),
+            ],
+        ));
+        let country_deliveries = self.send_country_message(&text, context);
+        context.put_king_log(&text);
+        let minister = self.ministers.get_mut(&job).expect("minister проверен выше");
+        minister.snapshot.id = player_id;
+        minister.snapshot.name = player.name;
+        let king_map_id = context.game_server_number_by_player_id(self.king.id);
+        let mut appointment = CMessage::new(0x0007_FF04);
+        appointment.base_mut().add_byte(self.country_id);
+        appointment.base_mut().add_long(player_id);
+        appointment.base_mut().add_byte(job);
+        appointment.base_mut().add_byte(1);
+        let appointment_wire = appointment.as_wire_bytes().to_vec();
+        let appointment_delivery = context.send_all(&appointment);
+        let control_point_delivery = self.send_king_control_point(king_map_id, context);
+        let base_info = self.send_base_info_to_client(parameters, context);
+        CountryAppointMinisterReport {
+            player_id,
+            job,
+            mode,
+            legacy_result: player_id,
+            text,
+            disposition: CountryAppointMinisterDisposition::Applied {
+                control_point_update,
+                country_deliveries,
+                appointment_wire,
+                appointment_delivery,
+                control_point_delivery,
+                base_info,
+            },
+        }
+    }
+
+    fn has_job_with_legacy_king_check<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> u8 {
+        if self.authorize_king(player_id, context) {
+            return 1;
+        }
+        self.ministers
+            .iter()
+            .find_map(|(&job, minister)| (minister.snapshot.id == player_id).then_some(job))
+            .unwrap_or(0)
+    }
+
+    fn reject_appoint_minister<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        player_id: i32,
+        job: u8,
+        mode: u8,
+        reason: CountryAppointMinisterRejection,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+        notify_king: bool,
+        context: &mut Context,
+    ) -> CountryAppointMinisterReport {
+        let text = legacy_country_text(context.format_world_string(string_id, arguments));
+        context.put_king_log(&text);
+        let private_delivery = notify_king
+            .then(|| self.send_private_message(&text, 0, context))
+            .flatten();
+        CountryAppointMinisterReport {
+            player_id,
+            job,
+            mode,
+            legacy_result: player_id,
+            text,
+            disposition: CountryAppointMinisterDisposition::Rejected { reason, private_delivery },
+        }
+    }
+
+    fn appoint_parameter_unavailable(
+        &self,
+        player_id: i32,
+        job: u8,
+        mode: u8,
+        block: CountryParameterUnavailable,
+        control_point_update: Option<KingPointUpdate>,
+    ) -> CountryAppointMinisterReport {
+        CountryAppointMinisterReport {
+            player_id,
+            job,
+            mode,
+            legacy_result: player_id,
+            text: Vec::new(),
+            disposition: CountryAppointMinisterDisposition::ParameterUnavailable {
+                block,
+                appointment_flag_set: true,
+                control_point_update,
+            },
+        }
     }
 
     /// Exact `DeposeMinister(job, 7)` и достигнутая ветка `AppointMinister(0, job, 7)`.
@@ -1459,7 +1798,7 @@ impl CCountry {
         message.base_mut().add_long(self.tech_current_exp);
         message.base_mut().add_long(self.tech_level_up_exp);
         message.base_mut().add_long(self.tech_level);
-        message.base_mut().add_byte(u8::from(self.king.appointed));
+        message.base_mut().add_byte(u8::from(self.king_quest_switch));
         message.base_mut().add_long(minister_count);
         for job in jobs {
             let minister = self.ministers.get(&job);
@@ -1476,8 +1815,8 @@ impl CCountry {
                 let name = CString::new(visible_name)
                     .expect("C-string prefix minister-а не содержит embedded NUL");
                 message.base_mut().add_str(Some(&name));
+                message.base_mut().add_byte(u8::from(minister.quest_switch));
                 message.base_mut().add_byte(u8::from(minister.snapshot.appointed));
-                message.base_mut().add_byte(u8::from(minister.snapshot.salary_received));
             }
         }
         for value in [demise, appoint, exile, silence, absolve] {
@@ -1995,8 +2334,8 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 // ADDRESS: 004c7520
 // PROTOTYPE: bool __thiscall CanOperate(uchar param_1)
 //
-// Ветки operation `2/3/4/5` реализованы выше как `can_depose_minister/`
-// `can_absolve/can_exile/can_silence`; остальные selectors остаются reference.
+// Ветки operation `1/2/3/4/5` реализованы выше как `can_appoint_minister/`
+// `can_depose_minister/can_absolve/can_exile/can_silence`; остальные — reference.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -2065,7 +2404,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::HasJob
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1790
@@ -2073,6 +2412,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 // ADDRESS: 004c8820
 // PROTOTYPE: uchar __thiscall HasJob(long param_1)
 //
+// Реализация с исходным вложенным `IsKing` log-side-effect находится выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -2093,7 +2433,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::AppointMinister
-// STATUS: IMPLEMENTED_PARTIAL_SOURCE_REFERENCE
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:956
@@ -2101,8 +2441,8 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 // ADDRESS: 004c8fa0
 // PROTOTYPE: long __thiscall AppointMinister(long param_1, uchar param_2, uchar param_3)
 //
-// Достигнутая mode-7 ветка `player=0` реализована внутри `depose_minister`;
-// назначение и остальные mode остаются source-reference.
+// Positive-player назначение и player=0 снятие реализованы выше; mode влияет
+// только на WS0067/WS0068 в исходной ветке снятия.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
