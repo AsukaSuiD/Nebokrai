@@ -3,8 +3,9 @@
 //! Статус registry/lifecycle, `IsEnemyRelation` RVA `0x00064090`,
 //! `ClearEnemyFaction` RVA `0x000640D0`, `AddOneEnmeyFaction` RVA
 //! `0x00064A30`, `GetDecWarMoneyByType` RVA `0x00064D40`,
-//! `StopFactionWar` RVA `0x00065D10`, `GenerateSaveData` RVA
-//! `0x000662F0`, constructor RVA `0x000663F0` и `Run` RVA `0x00066590` —
+//! `DigUpTheHatchet` RVA `0x00064D80`, `StopFactionWar` RVA `0x00065D10`,
+//! `GenerateSaveData` RVA `0x000662F0`, constructor RVA `0x000663F0` и
+//! `Run` RVA `0x00066590` —
 //! `IMPLEMENTED`; остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
 //! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
 //! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
@@ -131,6 +132,102 @@ pub(crate) enum FactionWarStopOutcome {
     },
 }
 
+/// Аргумент исходного `_sprintf` внутри объявления войны.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionWarFormatArgument<'a> {
+    Text(&'a [u8]),
+    Signed(i32),
+}
+
+/// Минимальный снимок найденной concrete faction до mutable side-effects.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FactionWarFactionSnapshot {
+    pub(crate) faction_id: i32,
+    pub(crate) superior_organizing_id: i32,
+}
+
+/// Наблюдаемый исход `DigUpTheHatchet`; `legacy_result` совпадает с bool EXE.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionWarDeclarationOutcome {
+    WarTypeNotFound,
+    MasterRequired,
+    FactionNotFound,
+    SameUnion,
+    PlayerOffline,
+    InsufficientFunds { required_money: i32 },
+    Declared {
+        source_faction_id: i32,
+        target_faction_id: i32,
+        relation_pairs: usize,
+        required_money: i32,
+    },
+}
+
+impl FactionWarDeclarationOutcome {
+    pub(crate) const fn legacy_result(self) -> bool {
+        matches!(self, Self::Declared { .. })
+    }
+}
+
+/// Safe-остановка старого UB либо уже локализованного соседнего owner-а.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FactionWarDeclarationBlock<ContextBlock> {
+    Context(ContextBlock),
+    FormattedNoticeExceedsLegacyBuffer {
+        string_id: &'static [u8],
+        len: usize,
+        capacity: usize,
+    },
+}
+
+/// Узкая синхронная граница controller/player/string/transport owner-ов.
+pub(crate) trait FactionWarDeclarationContext {
+    type Block;
+
+    fn faction_id_by_master_player(&self, player_id: i32) -> Result<i32, Self::Block>;
+
+    fn faction_snapshot(
+        &self,
+        faction_id: i32,
+    ) -> Result<Option<FactionWarFactionSnapshot>, Self::Block>;
+
+    /// Свободная faction даёт один root, union — member map-order.
+    fn faction_side(&self, root_faction_id: i32) -> Result<Vec<i32>, Self::Block>;
+
+    fn player_money(&self, player_id: i32) -> Option<u32>;
+
+    /// Выполняет concrete `CFaction::AddEnemyOrganizing`, включая `WS0158` log.
+    fn add_enemy_organizing(
+        &mut self,
+        faction_id: i32,
+        enemy_id: i32,
+    ) -> Result<(), Self::Block>;
+
+    /// Выполняет virtual `UpdateEnemyFaction` и все его client/player эффекты.
+    fn update_enemy_faction(&mut self, faction_id: i32) -> Result<(), Self::Block>;
+
+    fn organizing_name(&self, faction_id: i32) -> Result<Vec<u8>, Self::Block>;
+
+    fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8>;
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[FactionWarFormatArgument<'_>],
+    ) -> Vec<u8>;
+
+    fn send_player_info(
+        &mut self,
+        player_id: i32,
+        first_text: &[u8],
+        second_text: &[u8],
+    );
+
+    fn send_orga_info_to_all(&mut self, info: &[u8], kind: u32, color: u32);
+
+    fn put_war_log(&mut self, info: &[u8]);
+}
+
 /// Наблюдаемый итог одного `Run`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FactionWarRunReport {
@@ -243,6 +340,128 @@ impl CFactionWarSys {
             faction_id_2,
             disband_time,
         });
+    }
+
+    /// Объявляет войну в точном порядке RVA `0x00064D80`.
+    ///
+    /// Registry relation обновляется до двух faction-callback-ов для каждой
+    /// пары; затем стороны обновляются и их имена собираются в map-order.
+    /// Деньги здесь только проверяются: фактическое списание инициирует caller
+    /// через успешный ответ `0x7FE19`, как и в исходном WorldServer.
+    pub(crate) fn dig_up_the_hatchet<Context>(
+        &mut self,
+        player_id: i32,
+        target_faction_id: i32,
+        war_type: i32,
+        declaration_time: crate::public::date::TagTime,
+        context: &mut Context,
+    ) -> Result<FactionWarDeclarationOutcome, FactionWarDeclarationBlock<Context::Block>>
+    where
+        Context: FactionWarDeclarationContext,
+    {
+        let Some(war) = self.faction_wars.get(&war_type).copied() else {
+            return Ok(FactionWarDeclarationOutcome::WarTypeNotFound);
+        };
+
+        let source_faction_id = context
+            .faction_id_by_master_player(player_id)
+            .map_err(FactionWarDeclarationBlock::Context)?;
+        if source_faction_id == 0 {
+            let first = context.world_string(b"WS0123");
+            let second = context.world_string(b"WS0121");
+            context.send_player_info(player_id, &first, &second);
+            return Ok(FactionWarDeclarationOutcome::MasterRequired);
+        }
+
+        let source = context
+            .faction_snapshot(source_faction_id)
+            .map_err(FactionWarDeclarationBlock::Context)?;
+        let target = context
+            .faction_snapshot(target_faction_id)
+            .map_err(FactionWarDeclarationBlock::Context)?;
+        let (Some(source), Some(target)) = (source, target) else {
+            return Ok(FactionWarDeclarationOutcome::FactionNotFound);
+        };
+
+        if source.superior_organizing_id != 0
+            && source.superior_organizing_id == target.superior_organizing_id
+        {
+            let first = context.world_string(b"WS0230");
+            let second = context.world_string(b"WS0121");
+            context.send_player_info(player_id, &first, &second);
+            return Ok(FactionWarDeclarationOutcome::SameUnion);
+        }
+
+        let Some(player_money) = context.player_money(player_id) else {
+            return Ok(FactionWarDeclarationOutcome::PlayerOffline);
+        };
+        if player_money < war.money as u32 {
+            let first = context.format_world_string(
+                b"WS0231",
+                &[FactionWarFormatArgument::Signed(war.money)],
+            );
+            if first.len() > 255 {
+                return Err(FactionWarDeclarationBlock::FormattedNoticeExceedsLegacyBuffer {
+                    string_id: b"WS0231",
+                    len: first.len(),
+                    capacity: 256,
+                });
+            }
+            let second = context.world_string(b"WS0121");
+            context.send_player_info(player_id, &first, &second);
+            return Ok(FactionWarDeclarationOutcome::InsufficientFunds {
+                required_money: war.money,
+            });
+        }
+
+        let source_side = context
+            .faction_side(source.faction_id)
+            .map_err(FactionWarDeclarationBlock::Context)?;
+        let target_side = context
+            .faction_side(target.faction_id)
+            .map_err(FactionWarDeclarationBlock::Context)?;
+
+        for &source_id in &source_side {
+            for &target_id in &target_side {
+                self.add_one_enemy_faction(source_id, target_id, war.fight_time_ms as u32);
+                context
+                    .add_enemy_organizing(source_id, target_id)
+                    .map_err(FactionWarDeclarationBlock::Context)?;
+                context
+                    .add_enemy_organizing(target_id, source_id)
+                    .map_err(FactionWarDeclarationBlock::Context)?;
+            }
+        }
+
+        let source_names = collect_declaration_side_names(context, &source_side)
+            .map_err(FactionWarDeclarationBlock::Context)?;
+        let target_names = collect_declaration_side_names(context, &target_side)
+            .map_err(FactionWarDeclarationBlock::Context)?;
+        let time_text = declaration_time.get_format_string();
+        let notice = context.format_world_string(
+            b"WS0232",
+            &[
+                FactionWarFormatArgument::Text(time_text.as_bytes()),
+                FactionWarFormatArgument::Text(&source_names),
+                FactionWarFormatArgument::Text(&target_names),
+            ],
+        );
+        if notice.len() > 9_999 {
+            return Err(FactionWarDeclarationBlock::FormattedNoticeExceedsLegacyBuffer {
+                string_id: b"WS0232",
+                len: notice.len(),
+                capacity: 10_000,
+            });
+        }
+        context.send_orga_info_to_all(&notice, 0xFFFF_FE92, 0xFFFF_0000);
+        context.put_war_log(&notice);
+
+        Ok(FactionWarDeclarationOutcome::Declared {
+            source_faction_id,
+            target_faction_id,
+            relation_pairs: source_side.len().saturating_mul(target_side.len()),
+            required_money: war.money,
+        })
     }
 
     /// Выполняет полный доказанный expiry callback с синхронными внешними эффектами.
@@ -386,6 +605,24 @@ impl CFactionWarSys {
     }
 }
 
+fn collect_declaration_side_names<Context>(
+    context: &mut Context,
+    faction_ids: &[i32],
+) -> Result<Vec<u8>, Context::Block>
+where
+    Context: FactionWarDeclarationContext,
+{
+    let mut names = Vec::new();
+    for (index, &faction_id) in faction_ids.iter().enumerate() {
+        context.update_enemy_faction(faction_id)?;
+        if index != 0 {
+            names.push(b',');
+        }
+        names.extend_from_slice(&context.organizing_name(faction_id)?);
+    }
+    Ok(names)
+}
+
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
@@ -412,7 +649,7 @@ impl CFactionWarSys {
 
 // ============================================================================
 // FUNCTION: CFactionWarSys::DigUpTheHatchet
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\factionwarsys.cpp:217
@@ -420,6 +657,8 @@ impl CFactionWarSys {
 // ADDRESS: 00464d80
 // PROTOTYPE: bool __thiscall DigUpTheHatchet(long param_1, long param_2, long param_3, tagTime * param_4)
 //
+// IMPLEMENTED_OWNER: `dig_up_the_hatchet` сохраняет exact lookup/gate,
+// refresh, `WS0232`, broadcast, war-log и подтверждённый bool return.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

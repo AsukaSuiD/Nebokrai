@@ -977,7 +977,8 @@ use crate::worldserver::appworld::message::othermessage::{
     WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
 };
 use crate::worldserver::appworld::message::organsysmessage::{
-    OrganizingConsumedLongDispatch, OrganizingDeclareWarFactionListBlock,
+    OrganizingConsumedLongDispatch, OrganizingDeclareFactionWarBlock,
+    OrganizingDeclareFactionWarDispatch, OrganizingDeclareWarFactionListBlock,
     OrganizingDeclareWarFactionListDispatch, OrganizingLeaveWordDispatch,
     OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEnableDispatch,
     OrganizingPronounceDispatch, OrganizingSessionResultDispatch,
@@ -985,7 +986,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     QueuedUnionApplicationTerminal,
     UnionApplicationConfirmationDelivery,
     WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects,
-    WorldUnionApplicationRuntimeOwner, dispatch_consumed_long,
+    WorldUnionApplicationRuntimeOwner, dispatch_consumed_long, dispatch_declare_faction_war,
     dispatch_declare_war_faction_list, dispatch_leave_word, dispatch_leave_word_edit,
     dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_pronounce,
     dispatch_union_application,
@@ -1892,6 +1893,12 @@ pub(crate) enum ProcessedWorldEvent {
             OrganizingDeclareWarFactionListDispatch,
             OrganizingDeclareWarFactionListBlock,
         >,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingDeclareFactionWar {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<OrganizingDeclareFactionWarDispatch, OrganizingDeclareFactionWarBlock>,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingUnionApplication {
@@ -8114,7 +8121,8 @@ impl CGame {
     /// ветви server-owner-а, honor `0x5FD0C/0x5FD0D`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
-    /// войны `0x6011E` и общий leaf `0x60121/0x60123` исполняются; остальные
+    /// войны `0x6011E`, само объявление `0x6011F` и общий leaf
+    /// `0x60121/0x60123` исполняются; остальные
     /// остаются owned pending. Terminal actions применяются FIFO до следующего
     /// сообщения.
     pub(crate) fn process_message(
@@ -8122,7 +8130,9 @@ impl CGame {
         honor_ranks: &mut CHonorRanks,
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
-        faction_war_sys: &CFactionWarSys,
+        faction_war_sys: &mut CFactionWarSys,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
         net_sessions: &CNetSessionManager,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
@@ -8153,6 +8163,8 @@ impl CGame {
                             organizing,
                             organizing_parameters,
                             faction_war_sys,
+                            registry,
+                            coefficients,
                             net_sessions,
                             application_runtime,
                             application_callbacks,
@@ -8191,6 +8203,8 @@ impl CGame {
                     organizing,
                     organizing_parameters,
                     faction_war_sys,
+                    registry,
+                    coefficients,
                     net_sessions,
                     application_runtime,
                     application_callbacks,
@@ -8227,7 +8241,9 @@ impl CGame {
         honor_ranks: &mut CHonorRanks,
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
-        faction_war_sys: &CFactionWarSys,
+        faction_war_sys: &mut CFactionWarSys,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
         net_sessions: &CNetSessionManager,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
@@ -8245,6 +8261,8 @@ impl CGame {
             organizing,
             organizing_parameters,
             faction_war_sys,
+            registry,
+            coefficients,
             net_sessions,
             application_runtime,
             application_callbacks,
@@ -9307,6 +9325,8 @@ impl CGame {
             owners.organizing,
             owners.organizing_parameters,
             owners.faction_war,
+            owners.registry,
+            owners.coefficients,
             owners.net_sessions,
             owners.union_application_runtime,
             &mut union_application_callbacks,
@@ -10157,6 +10177,29 @@ impl CGame {
         self.map_player(player_id)
     }
 
+    /// Декодирует player snapshot только после exact online-list lookup.
+    pub(crate) fn decord_online_player_by_id(
+        &mut self,
+        player_id: u32,
+        source: &[u8],
+        cursor: &mut usize,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<bool, PlayerCodecError> {
+        if !self
+            .online_players
+            .iter()
+            .any(|&online_id| online_id == player_id)
+        {
+            return Ok(false);
+        }
+        let Some(player) = self.players.get_mut(&player_id) else {
+            return Ok(false);
+        };
+        let _ = player.decord_from_byte_array(source, cursor, true, registry, coefficients)?;
+        Ok(true)
+    }
+
     /// Возвращает первый по map-порядку online-ID с ASCII-case-insensitive именем.
     pub(crate) fn online_player_id_by_name(&self, name: &[u8]) -> u32 {
         let name = legacy_c_string_prefix(name);
@@ -10932,7 +10975,9 @@ fn process_world_message(
     honor_ranks: &mut CHonorRanks,
     organizing: &mut COrganizingCtrl,
     organizing_parameters: &COrganizingParam,
-    faction_war_sys: &CFactionWarSys,
+    faction_war_sys: &mut CFactionWarSys,
+    registry: &GoodsBasePropertiesRegistry,
+    coefficients: &PlayerPropertyCoefficients,
     net_sessions: &CNetSessionManager,
     application_runtime: &WorldUnionApplicationRuntimeOwner,
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
@@ -11055,6 +11100,46 @@ fn process_world_message(
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingPronounce {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        let game_server_sender = game.current_game_server_sender();
+        if let Some(outcome) = dispatch_declare_faction_war(
+            &mut message,
+            game,
+            organizing,
+            faction_war_sys,
+            registry,
+            coefficients,
+            application_callbacks,
+            update_player,
+            game_server_sender.as_ref(),
+        ) {
+            let callbacks = WorldUnionApplicationEffectCallbacks {
+                random: &mut *application_callbacks.random,
+                world_string: &mut *application_callbacks.world_string,
+                format_world_string: &mut *application_callbacks.format_world_string,
+                put_war_log: &mut *application_callbacks.put_war_log,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+            };
+            let mut effects = WorldUnionApplicationEffects::new(
+                game,
+                net_sessions,
+                application_runtime,
+                callbacks,
+            );
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingDeclareFactionWar {
                 source,
                 legacy_run_result,
                 outcome,

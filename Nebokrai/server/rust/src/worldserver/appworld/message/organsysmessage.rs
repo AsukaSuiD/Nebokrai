@@ -37,6 +37,12 @@
 //! player ID, page)`, проверяет faction/master и формирует ответ `0x7FE18`.
 //! Пустые ответы не содержат page/payload; успешный ответ содержит total,
 //! исходный page и 11-элементный `AddDeclareWarFactionInfoToByteArray` payload.
+//! Exact `0x004A784F..0x004A7965` для `0x6011F` читает `(request ID, cookie,
+//! player ID, target faction ID, war type)`, декодирует полный player snapshot
+//! с текущего message cursor, снимает local `tagTime`, вызывает готовый
+//! `CFactionWarSys::DigUpTheHatchet` и отправляет `0x7FE19`. Стоимость войны
+//! попадает в ответ только при истинном результате; сам WorldServer её здесь
+//! не списывает.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -63,17 +69,21 @@ use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::servers::ServerCommandHandle;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionCallbackOutcome};
 use crate::public::date::TagTime;
+use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use crate::worldserver::appworld::organizingsystem::faction::{
     FactionMemberInfoRequest, FactionOrganizingInfoContext,
 };
-use crate::worldserver::appworld::organizingsystem::factionwarsys::CFactionWarSys;
+use crate::worldserver::appworld::organizingsystem::factionwarsys::{
+    CFactionWarSys, FactionWarDeclarationBlock, FactionWarDeclarationOutcome,
+};
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     COrganizingCtrl, DeclareWarFactionPage, DeclareWarFactionPageBlock, FreePlayerLookup,
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock,
     OrganizingLeaveWordEditOutcome, OrganizingLeaveWordEnableBlock,
+    OrganizingFactionWarDeclarationBlock, WorldFactionWarDeclarationEffects,
     OrganizingLeaveWordEnableOutcome, OrganizingLeaveWordOutcome, OrganizingPronounceBlock,
-    OrganizingPronounceOutcome,
-    OrganizingUnionApplyForJoinDispatchBlock, OrganizingUnionApplyForJoinOutcome,
+    OrganizingPronounceOutcome, OrganizingUnionApplyForJoinDispatchBlock,
+    OrganizingUnionApplyForJoinOutcome,
 };
 use crate::worldserver::appworld::organizingsystem::organizing::{EOperator, TagTimeValue};
 use crate::worldserver::appworld::organizingsystem::union::{
@@ -82,6 +92,7 @@ use crate::worldserver::appworld::organizingsystem::union::{
     UnionApplicationTerminal, UnionApplyForJoinEffects, UnionFormatArgument,
     begin_union_application_session,
 };
+use crate::worldserver::appworld::player::{PlayerCodecError, PlayerPropertyCoefficients};
 use crate::worldserver::worldserver::game::CGame;
 
 const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
@@ -93,6 +104,8 @@ const EDIT_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011C;
 const PRONOUNCE_MESSAGE_TYPE: i32 = 0x6011D;
 const DECLARE_WAR_FACTION_LIST_MESSAGE_TYPE: i32 = 0x6011E;
 const DECLARE_WAR_FACTION_LIST_RESPONSE_TYPE: i32 = 0x7FE18;
+const DECLARE_FACTION_WAR_MESSAGE_TYPE: i32 = 0x6011F;
+const DECLARE_FACTION_WAR_RESPONSE_TYPE: i32 = 0x7FE19;
 const CONSUMED_LONG_MESSAGE_TYPES: [i32; 2] = [0x60121, 0x60123];
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
@@ -723,6 +736,134 @@ where
         player_id,
         page,
         outcome,
+    }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingDeclareFactionWarResponse {
+    pub(crate) socket_id: i32,
+    pub(crate) result_money: i32,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingDeclareFactionWarOutcome {
+    PlayerOffline,
+    Declaration(FactionWarDeclarationOutcome),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingDeclareFactionWarBlock {
+    PlayerDecode(PlayerCodecError),
+    Declaration(FactionWarDeclarationBlock<OrganizingFactionWarDeclarationBlock>),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingDeclareFactionWarDispatch {
+    pub(crate) request_id: i64,
+    pub(crate) cookie: i32,
+    pub(crate) player_id: i32,
+    pub(crate) target_faction_id: i32,
+    pub(crate) war_type: i32,
+    pub(crate) outcome: OrganizingDeclareFactionWarOutcome,
+    pub(crate) response: OrganizingDeclareFactionWarResponse,
+}
+
+/// Выполняет `0x6011F`: player decode, объявление войны и socket-response `0x7FE19`.
+pub(crate) fn dispatch_declare_faction_war(
+    message: &mut CMessage,
+    game: &mut CGame,
+    organizing: &mut COrganizingCtrl,
+    faction_wars: &mut CFactionWarSys,
+    registry: &GoodsBasePropertiesRegistry,
+    coefficients: &PlayerPropertyCoefficients,
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    update_player: &mut dyn FnMut(i32),
+    sender: Option<&ServerCommandHandle>,
+) -> Option<Result<OrganizingDeclareFactionWarDispatch, OrganizingDeclareFactionWarBlock>> {
+    if message.message_type() != DECLARE_FACTION_WAR_MESSAGE_TYPE {
+        return None;
+    }
+
+    let socket_id = message.socket_id();
+    let request_id = message.base_mut().get_long64().unwrap_or(0);
+    let cookie = message.base_mut().get_long().unwrap_or(0);
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let target_faction_id = message.base_mut().get_long().unwrap_or(0);
+    let war_type = message.base_mut().get_long().unwrap_or(0);
+    let player_online = {
+        let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+        match game.decord_online_player_by_id(
+            player_id as u32,
+            source,
+            cursor,
+            registry,
+            coefficients,
+        ) {
+            Ok(player_online) => player_online,
+            Err(source) => {
+                return Some(Err(OrganizingDeclareFactionWarBlock::PlayerDecode(source)));
+            }
+        }
+    };
+
+    let (outcome, result_money) = if player_online {
+        let declaration_time = TagTime::local_now();
+        let mut effects = WorldFactionWarDeclarationEffects::new(
+            game,
+            organizing,
+            &mut *callbacks.world_string,
+            &mut *callbacks.format_world_string,
+            &mut *callbacks.put_war_log,
+            update_player,
+        );
+        let declaration = match faction_wars.dig_up_the_hatchet(
+            player_id,
+            target_faction_id,
+            war_type,
+            declaration_time,
+            &mut effects,
+        ) {
+            Ok(declaration) => declaration,
+            Err(source) => {
+                return Some(Err(OrganizingDeclareFactionWarBlock::Declaration(source)));
+            }
+        };
+        let result_money = if declaration.legacy_result() {
+            faction_wars.get_dec_war_money_by_type(war_type)
+        } else {
+            0
+        };
+        (
+            OrganizingDeclareFactionWarOutcome::Declaration(declaration),
+            result_money,
+        )
+    } else {
+        (OrganizingDeclareFactionWarOutcome::PlayerOffline, 0)
+    };
+
+    let mut response = CMessage::new(DECLARE_FACTION_WAR_RESPONSE_TYPE);
+    response.base_mut().add_long64(request_id);
+    response.base_mut().add_long(cookie);
+    response.base_mut().add_long(player_id);
+    response.base_mut().add_long(result_money);
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = response.send_to_socket(sender, socket_id);
+
+    Some(Ok(OrganizingDeclareFactionWarDispatch {
+        request_id,
+        cookie,
+        player_id,
+        target_faction_id,
+        war_type,
+        outcome,
+        response: OrganizingDeclareFactionWarResponse {
+            socket_id,
+            result_money,
+            wire,
+            delivery,
+        },
     }))
 }
 

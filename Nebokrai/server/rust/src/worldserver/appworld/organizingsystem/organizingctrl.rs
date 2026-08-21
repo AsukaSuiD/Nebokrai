@@ -16,8 +16,8 @@
 //! `GetConfederationOrganizing` RVA `0x00036BF0`,
 //! `IsFactionMaster` RVA `0x000344A0`, `ReInitialFacFactionByLvl` RVA
 //! `0x00034C80` и `AddUnionToClientByFactionID` RVA `0x00038010` —
-//! `IMPLEMENTED`; `PushToEstaList` RVA `0x000367C0` и первый overload
-//! `SendOrgaInfoToClient` RVA `0x00033750` — `IMPLEMENTED`. Точная пара:
+//! `IMPLEMENTED`; `PushToEstaList` RVA `0x000367C0` и оба overload-а
+//! `SendOrgaInfoToClient` RVA `0x00033750/0x00033840` — `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -245,7 +245,8 @@ use super::faction::{
     CFaction, FactionCloneSaveBlock, FactionDeleteOrganizingBuildError,
     FactionDeleteOrganizingOutcome, FactionDisbandBlock, FactionDisbandContext,
     FactionDisbandOutcome, FactionDisbandProgress, FactionDisbandRejection,
-    FactionEditLeaveWordOutcome, FactionEnemyDelivery, FactionFeatureFunctionUpdate,
+    FactionEditLeaveWordOutcome, FactionEnemyDelivery, FactionEnemyMutationBlock,
+    FactionEnemyMutationContext, FactionEnemyWarLogArgument, FactionFeatureFunctionUpdate,
     FactionInitialPropertyBlock,
     FactionLeaveWordBlock, FactionLeaveWordOutcome, FactionMemberInfoReport,
     FactionMemberInfoRequest,
@@ -256,7 +257,10 @@ use super::faction::{
     FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome, FactionSuperiorOrganizingBlock,
     MemberEnterOutcome, MemberExitOutcome, OwnedCityMutationBuildError,
 };
-use super::factionwarsys::CFactionWarSys;
+use super::factionwarsys::{
+    CFactionWarSys, FactionWarDeclarationContext, FactionWarFactionSnapshot,
+    FactionWarFormatArgument,
+};
 use super::organizing::{EOperator, TagTimeValue};
 use super::organizingparam::COrganizingParam;
 use super::union::{
@@ -268,7 +272,7 @@ use super::union::{
     UnionFactionStateMutationContext, UnionInitialMutationContext, UnionMasterFactionQueryContext,
     UnionMemberSnapshotBlock,
     UnionOperatorValidationContext, UnionOwnedCityMutationContext,
-    UnionPlayerRefreshContext, UnionSendInfoContext,
+    UnionFormatArgument, UnionPlayerRefreshContext, UnionSendInfoContext,
 };
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::appworld::player::{
@@ -330,6 +334,241 @@ pub(crate) enum OrganizingInfoDelivery {
         game_server_id: i32,
         result: Result<i32, SendMessageError>,
     },
+}
+
+/// Safe-границы concrete controller-owner-а для объявления войны.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionWarDeclarationBlock {
+    MasterLookup(FactionMasterLookupBlock),
+    MissingFactionProperty { faction_id: i32 },
+    UnionMembership { map_key: i32 },
+    MissingFactionInUnion { union_id: i32, faction_id: i32 },
+    MissingFactionForMutation { faction_id: i32 },
+    EnemyMutation {
+        faction_id: i32,
+        enemy_id: i32,
+        source: FactionEnemyMutationBlock,
+    },
+}
+
+/// Concrete adapter controller/player/string/transport owner-ов войны.
+pub(crate) struct WorldFactionWarDeclarationEffects<'a> {
+    game: &'a CGame,
+    organizing: &'a mut COrganizingCtrl,
+    world_string: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
+    format_world_string:
+        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+    put_war_log: &'a mut dyn FnMut(&[u8]),
+    update_player: &'a mut dyn FnMut(i32),
+}
+
+impl<'a> WorldFactionWarDeclarationEffects<'a> {
+    pub(crate) fn new(
+        game: &'a CGame,
+        organizing: &'a mut COrganizingCtrl,
+        world_string: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
+        format_world_string: &'a mut dyn FnMut(
+            &[u8],
+            &[UnionFormatArgument<'_>],
+        ) -> Vec<u8>,
+        put_war_log: &'a mut dyn FnMut(&[u8]),
+        update_player: &'a mut dyn FnMut(i32),
+    ) -> Self {
+        Self {
+            game,
+            organizing,
+            world_string,
+            format_world_string,
+            put_war_log,
+            update_player,
+        }
+    }
+}
+
+struct DeclarationEnemyMutationEffects<'a> {
+    enemy_id: i32,
+    enemy_name: Vec<u8>,
+    format_world_string:
+        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+    put_war_log: &'a mut dyn FnMut(&[u8]),
+}
+
+impl FactionEnemyMutationContext for DeclarationEnemyMutationEffects<'_> {
+    fn organizing_name(&self, organizing_id: i32) -> Option<Vec<u8>> {
+        (organizing_id == self.enemy_id).then(|| self.enemy_name.clone())
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[FactionEnemyWarLogArgument<'_>],
+    ) -> Vec<u8> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| match argument {
+                FactionEnemyWarLogArgument::Text(text) => UnionFormatArgument::Text(text),
+                FactionEnemyWarLogArgument::Unsigned(value) => {
+                    UnionFormatArgument::Signed(*value as i32)
+                }
+            })
+            .collect::<Vec<_>>();
+        (self.format_world_string)(string_id, &arguments)
+    }
+
+    fn put_war_log(&mut self, text: &[u8]) {
+        (self.put_war_log)(text);
+    }
+}
+
+impl FactionWarDeclarationContext for WorldFactionWarDeclarationEffects<'_> {
+    type Block = OrganizingFactionWarDeclarationBlock;
+
+    fn faction_id_by_master_player(&self, player_id: i32) -> Result<i32, Self::Block> {
+        self.organizing
+            .faction_id_by_master_player(player_id)
+            .map_err(OrganizingFactionWarDeclarationBlock::MasterLookup)
+    }
+
+    fn faction_snapshot(
+        &self,
+        faction_id: i32,
+    ) -> Result<Option<FactionWarFactionSnapshot>, Self::Block> {
+        let Some(faction) = self.organizing.faction_by_id(faction_id) else {
+            return Ok(None);
+        };
+        let superior_organizing_id = faction.superior_organizing().ok_or(
+            OrganizingFactionWarDeclarationBlock::MissingFactionProperty { faction_id },
+        )?;
+        Ok(Some(FactionWarFactionSnapshot {
+            faction_id: faction.faction_id(),
+            superior_organizing_id,
+        }))
+    }
+
+    fn faction_side(&self, root_faction_id: i32) -> Result<Vec<i32>, Self::Block> {
+        match self.organizing.is_free_faction(root_faction_id) {
+            FreeFactionLookup::NoUnion => Ok(vec![root_faction_id]),
+            FreeFactionLookup::BlockedNullConfederation { map_key } => Err(
+                OrganizingFactionWarDeclarationBlock::UnionMembership { map_key },
+            ),
+            FreeFactionLookup::Union(union_id) => {
+                let Some(union) = self.organizing.confederation_by_id(union_id) else {
+                    return Ok(Vec::new());
+                };
+                let members = union.member_ids_snapshot();
+                if let Some(&faction_id) = members
+                    .iter()
+                    .find(|&&faction_id| self.organizing.faction_by_id(faction_id).is_none())
+                {
+                    return Err(
+                        OrganizingFactionWarDeclarationBlock::MissingFactionInUnion {
+                            union_id,
+                            faction_id,
+                        },
+                    );
+                }
+                Ok(members)
+            }
+        }
+    }
+
+    fn player_money(&self, player_id: i32) -> Option<u32> {
+        self.game
+            .online_player_by_id(player_id as u32)
+            .map(|player| player.money())
+    }
+
+    fn add_enemy_organizing(
+        &mut self,
+        faction_id: i32,
+        enemy_id: i32,
+    ) -> Result<(), Self::Block> {
+        let enemy_name = self
+            .organizing
+            .faction_by_id(enemy_id)
+            .map(|faction| faction.name().to_vec())
+            .ok_or(OrganizingFactionWarDeclarationBlock::MissingFactionForMutation {
+                faction_id: enemy_id,
+            })?;
+        let faction = self.organizing.faction_by_id_mut(faction_id).ok_or(
+            OrganizingFactionWarDeclarationBlock::MissingFactionForMutation { faction_id },
+        )?;
+        let mut effects = DeclarationEnemyMutationEffects {
+            enemy_id,
+            enemy_name,
+            format_world_string: &mut *self.format_world_string,
+            put_war_log: &mut *self.put_war_log,
+        };
+        faction
+            .add_enemy_organizing(enemy_id, &mut effects)
+            .map(|_| ())
+            .map_err(|source| OrganizingFactionWarDeclarationBlock::EnemyMutation {
+                faction_id,
+                enemy_id,
+                source,
+            })
+    }
+
+    fn update_enemy_faction(&mut self, faction_id: i32) -> Result<(), Self::Block> {
+        let faction = self.organizing.faction_by_id_mut(faction_id).ok_or(
+            OrganizingFactionWarDeclarationBlock::MissingFactionForMutation { faction_id },
+        )?;
+        let _ = faction.update_enemy_faction(self.game, &mut *self.update_player);
+        Ok(())
+    }
+
+    fn organizing_name(&self, faction_id: i32) -> Result<Vec<u8>, Self::Block> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(|faction| faction.name().to_vec())
+            .ok_or(OrganizingFactionWarDeclarationBlock::MissingFactionForMutation { faction_id })
+    }
+
+    fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
+        (self.world_string)(string_id)
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[FactionWarFormatArgument<'_>],
+    ) -> Vec<u8> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| match argument {
+                FactionWarFormatArgument::Text(text) => UnionFormatArgument::Text(text),
+                FactionWarFormatArgument::Signed(value) => UnionFormatArgument::Signed(*value),
+            })
+            .collect::<Vec<_>>();
+        (self.format_world_string)(string_id, &arguments)
+    }
+
+    fn send_player_info(
+        &mut self,
+        player_id: i32,
+        first_text: &[u8],
+        second_text: &[u8],
+    ) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(
+            self.game,
+            FactionMemberInfoRequest {
+                recipient_player_id: player_id,
+                first_text,
+                second_text,
+                information_type: -1,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            },
+        );
+    }
+
+    fn send_orga_info_to_all(&mut self, info: &[u8], kind: u32, color: u32) {
+        let _ = COrganizingCtrl::send_organizing_info_to_all(self.game, info, kind, color);
+    }
+
+    fn put_war_log(&mut self, info: &[u8]) {
+        (self.put_war_log)(info);
+    }
 }
 
 /// Typed-результат ordered `m_FacOrg` scan вместо старого null-dereference.
@@ -1330,6 +1569,24 @@ impl COrganizingCtrl {
             game_server_id,
             result: game.send_msg_to_game_server(game_server_id, &message),
         }
+    }
+
+    /// Строит exact broadcast-overload `0x7FA03` и вызывает `SendAll`.
+    pub(crate) fn send_organizing_info_to_all(
+        game: &CGame,
+        info: &[u8],
+        kind: u32,
+        color: u32,
+    ) -> Result<i32, SendMessageError> {
+        let mut message = CMessage::new(0x0007_FA03);
+        message.base_mut().add_long(0);
+        message.base_mut().add_long(0);
+        message.base_mut().add_ulong(kind);
+        message.base_mut().add_ulong(color);
+        message.base_mut().add(legacy_c_string_prefix(info));
+        message.base_mut().add_byte(0);
+        let sender = game.current_game_server_sender();
+        message.send_all(sender.as_ref())
     }
 
     /// Публикует одно other-faction изменение всем concrete faction-owner-ам.
@@ -2698,7 +2955,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::GetFactionOrganizing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.h:117
@@ -2756,7 +3013,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::SendOrgaInfoToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1939
@@ -2764,6 +3021,8 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00433840
 // PROTOTYPE: void __thiscall SendOrgaInfoToClient(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1, ulong param_2, ulong param_3)
 //
+// IMPLEMENTED_OWNER: `send_organizing_info_to_all` сохраняет exact `0x7FA03`
+// wire-order, C-string prefix и исходно игнорировавшийся `SendAll` result.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

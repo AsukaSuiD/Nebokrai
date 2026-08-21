@@ -1229,6 +1229,11 @@ impl CPlayer {
         }
     }
 
+    /// Повторяет `CPlayer::GetMoney` RVA `0x0005AEA0` через wallet-owner.
+    pub(crate) const fn money(&self) -> u32 {
+        self.wallet.get_gold_coins_amount()
+    }
+
     /// Считает unlocked amount товаров packet-а с точным original-name.
     pub(crate) fn check_goods_in_packet(
         &self,
@@ -2623,7 +2628,7 @@ fn read_player_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CPlayer::GetMoney
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:786
@@ -2631,6 +2636,7 @@ fn read_player_array<const N: usize>(
 // ADDRESS: 0045aea0
 // PROTOTYPE: ulong __thiscall GetMoney(void)
 //
+// IMPLEMENTED_OWNER: `money` делегирует точному `CWallet::GetGoldCoinsAmount`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
