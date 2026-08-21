@@ -2,7 +2,8 @@
 //!
 //! Статус достигнутой save-части `CUnion`, `CUnion::CloneSaveData` RVA
 //! `0x000C6380`, `SetChangeData` RVA `0x000C17D0` и `CUnion::IsMember` RVA
-//! `0x000BD840`, а также `CUnion::DelMember` RVA `0x000C2B30` — `IMPLEMENTED`;
+//! `0x000BD840`, `CUnion::GetPlayerHeader` RVA `0x000C6320`, а также
+//! `CUnion::DelMember` RVA `0x000C2B30` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -36,6 +37,11 @@
 //! и два faction-callback-а материализованы у владельца map как
 //! `COrganizingCtrl::detach_union_member`; это технический перенос singleton-
 //! доступа, а не изменение контракта `CUnion`.
+//! `GetPlayerHeader` при неположительном master-faction ID возвращает `0`.
+//! Иначе он ищет master-faction в controller map и вызывает именно
+//! `GetMasterID`, не рекурсивный `GetPlayerHeader`; miss/null map-value также
+//! дают `0`. Недостигнутый Rust master ID у найденной concrete faction остаётся
+//! typed-блокировкой caller-а, а не выдуманным нулём.
 
 use std::collections::BTreeMap;
 
@@ -102,6 +108,20 @@ impl CUnion {
 
     pub(crate) const fn master_id(&self) -> i32 {
         self.master_id
+    }
+
+    /// Разрешает header через master-faction, сохраняя legacy `0` на miss.
+    pub(crate) fn player_header<Lookup, Block>(
+        &self,
+        master_player_id_by_faction: Lookup,
+    ) -> Result<i32, Block>
+    where
+        Lookup: FnOnce(i32) -> Result<Option<i32>, Block>,
+    {
+        if self.master_id <= 0 {
+            return Ok(0);
+        }
+        Ok(master_player_id_by_faction(self.master_id)?.unwrap_or(0))
     }
 
     pub(crate) const fn members(&self) -> &BTreeMap<i32, TagMemInfo> {
@@ -1072,7 +1092,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::GetPlayerHeader
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1431

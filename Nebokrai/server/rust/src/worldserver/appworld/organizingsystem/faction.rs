@@ -64,6 +64,9 @@
 //! `Add/DelCityWarEnemyOrganizing` RVA `0x000BE1E0/0x000BE390`,
 //! `UpdateOwnedCityToClient` RVA `0x000C0BF0`,
 //! `UpdatePlayerFactionInfo` RVA `0x000B5820`,
+//! `IncMaxNumber` RVA `0x000B4E90`, by-value no-op `GetEnemyList` RVA
+//! `0x000B5FF0`, `SetParam` RVA `0x000BA310`, `GetPlayerHeader` RVA
+//! `0x000C0D10` и compiler-owned destructor RVA `0x000BD590`,
 //! `AddDefence/Offense/VillageWarVictorCounts` RVA
 //! `0x000BA3B0/0x000BA3D0/0x000BA3F0`,
 //! `ReInitialPropertyByLvl` RVA `0x000BA630`,
@@ -117,6 +120,21 @@
 //! индекс. `SetMemPV` в EXE единственный не проверял индекс и мог писать за
 //! `listPV`; safe Rust явно отклоняет недопустимое значение. Это исправление
 //! внутреннего memory bug, а не новая Miracle-семантика допустимых прав.
+//! `SetParam` сравнивает полные legacy C-string ключи `Level`/`Experience`.
+//! Level выше `12` выходит без эффектов; после `SetLvl` отсутствующая level-
+//! запись сохраняет уже выполненный prefix и также выходит. Любой иной
+//! нормальный путь, включая неизвестный ключ, публикует property, обновляет
+//! online member-ов и запрашивает dirty-bit `1` именно в таком порядке.
+//! `GetPlayerHeader` при положительном union ID использует nullable lookup и
+//! только найденному `CUnion` делегирует header; miss возвращает собственного
+//! master-а. Найденный, но внутренне разорванный союз может вернуть `0` и не
+//! запускает faction fallback.
+//! `IncMaxNumber` машинно состоит из `true; ret 4`. By-value `GetEnemyList` не
+//! читает receiver или элементы и только уничтожает временный `std::list`;
+//! отдельной игровой операции в Rust нет, а владение временным значением и
+//! cleanup обеспечивает обычный `Drop`. По той же причине destructor не
+//! получает ручной `Drop`: он выполнял только compiler/STL cleanup уже
+//! представленных `Vec`/`String`/`BTree*`/`VecDeque` полей.
 //! Apply-list clear проверяет право `ConMem = 3`, при отказе не меняет set и
 //! возвращает `false`. Membership exact ASM ищет входной player ID, а не
 //! ошибочную подстановку this в декомпиляте, и при hit возвращает faction ID.
@@ -1223,6 +1241,52 @@ pub(crate) enum FactionLevelBlock {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionSetParameterKind {
+    Level,
+    Experience,
+    Unknown,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionSetParameterProgress {
+    pub(crate) parameter: FactionSetParameterKind,
+    pub(crate) level_update: Option<FactionLevelUpdate>,
+    pub(crate) experience_update: Option<FactionExperienceUpdate>,
+    pub(crate) assigned_experience: Option<i32>,
+    pub(crate) assigned_upgrade_experience: Option<i32>,
+    pub(crate) property_deliveries: Option<Vec<FactionPropertyDelivery>>,
+    pub(crate) refreshed_player_ids: Option<Vec<i32>>,
+    pub(crate) dirty_bit_requested: bool,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionSetParameterOutcome {
+    LevelAboveMaximum {
+        requested_level: i32,
+    },
+    LevelParametersMissing {
+        level: i32,
+        progress: FactionSetParameterProgress,
+    },
+    Applied(FactionSetParameterProgress),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionSetParameterBlock {
+    MissingBaseProperty {
+        progress: FactionSetParameterProgress,
+    },
+    Level {
+        source: FactionLevelBlock,
+        progress: FactionSetParameterProgress,
+    },
+    Experience {
+        source: FactionExperienceBlock,
+        progress: FactionSetParameterProgress,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FactionUpgradeRejection {
     PlayerNotMaster,
     MaximumLevel,
@@ -1882,6 +1946,11 @@ pub(crate) trait FactionLevelContext: FactionOrganizingInfoContext {
     fn format_world_string_signed(&mut self, string_id: &'static [u8], value: i32) -> Vec<u8>;
 }
 
+/// Узкая граница level-уведомлений и virtual player-refresh для `SetParam`.
+pub(crate) trait FactionSetParameterContext: FactionLevelContext {
+    fn update_player_faction_info(&mut self, player_id: i32);
+}
+
 /// Узкая граница player inventory/money, goods catalog, локализации и level-log.
 pub(crate) trait FactionUpgradeContext: FactionLevelContext {
     fn player_money(&self, player_id: i32) -> Option<u32>;
@@ -1991,6 +2060,22 @@ pub(crate) trait FactionOperationAuthorityContext {
 
     /// Повторяет nullable `GetConfederationOrganizing(...)->GetMasterID()`.
     fn union_master_faction_id(&self, union_id: i32) -> Option<i32>;
+}
+
+/// Read-only lookup союза для точного virtual `GetPlayerHeader`.
+pub(crate) trait FactionPlayerHeaderContext {
+    type Block;
+
+    /// `None` означает miss/null самого union; `Some(0)` — найденный союз,
+    /// который штатно не смог разрешить свою master-faction.
+    fn union_player_header(&self, union_id: i32) -> Result<Option<i32>, Self::Block>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionPlayerHeaderBlock<ContextBlock> {
+    MissingBaseProperty,
+    MissingMasterId,
+    Context(ContextBlock),
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -4334,6 +4419,11 @@ impl CFaction {
         ))
     }
 
+    /// Старый virtual принимал amount, не читал его и всегда возвращал `true`.
+    pub(crate) const fn inc_maximum_number(&self, _amount: i32) -> bool {
+        true
+    }
+
     /// Меняет level и последовательно применяет шесть feature-флагов и maximum.
     pub(crate) fn set_level<Context>(
         &mut self,
@@ -4420,6 +4510,97 @@ impl CFaction {
             join_city_war,
             maximum_members,
         })
+    }
+
+    /// Диспетчеризует legacy `Level`/`Experience` и сохраняет общий postfix.
+    pub(crate) fn set_parameter<Context>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        parameter: &[u8],
+        value: i32,
+        context: &mut Context,
+    ) -> Result<FactionSetParameterOutcome, FactionSetParameterBlock>
+    where
+        Context: FactionSetParameterContext,
+    {
+        let parameter = match legacy_c_string_visible_bytes(parameter) {
+            b"Level" => FactionSetParameterKind::Level,
+            b"Experience" => FactionSetParameterKind::Experience,
+            _ => FactionSetParameterKind::Unknown,
+        };
+        if parameter == FactionSetParameterKind::Level && value > 12 {
+            return Ok(FactionSetParameterOutcome::LevelAboveMaximum {
+                requested_level: value,
+            });
+        }
+
+        let mut progress = empty_faction_set_parameter_progress(parameter);
+        match parameter {
+            FactionSetParameterKind::Level => {
+                progress.level_update = match self.set_level(value, parameters, context) {
+                    Ok(update) => Some(update),
+                    Err(source) => {
+                        return Err(FactionSetParameterBlock::Level { source, progress });
+                    }
+                };
+
+                let level = match self.base_property {
+                    Some(property) => property.level(),
+                    None => {
+                        return Err(FactionSetParameterBlock::MissingBaseProperty { progress });
+                    }
+                };
+                let Some(level_parameters) = parameters.get_level_param(level) else {
+                    return Ok(FactionSetParameterOutcome::LevelParametersMissing {
+                        level,
+                        progress,
+                    });
+                };
+                let Some(property) = self.base_property.as_mut() else {
+                    return Err(FactionSetParameterBlock::MissingBaseProperty { progress });
+                };
+                property.write_signed(0x20, level_parameters.experience);
+                progress.assigned_upgrade_experience = Some(level_parameters.experience);
+            }
+            FactionSetParameterKind::Experience => {
+                let experience_before = self.base_property.map(|property| property.experience());
+                progress.experience_update = match self.set_experience(game, value) {
+                    Ok(update) => {
+                        if let FactionExperienceUpdate::Updated { experience, .. } = &update {
+                            progress.assigned_experience = Some(*experience);
+                            progress.dirty_bit_requested = true;
+                        }
+                        Some(update)
+                    }
+                    Err(source) => {
+                        let experience_after =
+                            self.base_property.map(|property| property.experience());
+                        if experience_after != experience_before {
+                            progress.assigned_experience = experience_after;
+                            progress.dirty_bit_requested = true;
+                        }
+                        return Err(FactionSetParameterBlock::Experience { source, progress });
+                    }
+                };
+            }
+            FactionSetParameterKind::Unknown => {}
+        }
+
+        progress.property_deliveries = match self.update_property_to_client(game) {
+            Ok(deliveries) => Some(deliveries),
+            Err(_) => {
+                return Err(FactionSetParameterBlock::MissingBaseProperty { progress });
+            }
+        };
+        progress.refreshed_player_ids = Some(self.update_player_faction_info(
+            game,
+            0,
+            |player_id| context.update_player_faction_info(player_id),
+        ));
+        self.set_change_data(1);
+        progress.dirty_bit_requested = true;
+        Ok(FactionSetParameterOutcome::Applied(progress))
     }
 
     /// Повышает faction-level с исходными проверками и частичными эффектами.
@@ -6247,6 +6428,29 @@ impl CFaction {
         }
     }
 
+    /// Возвращает player-header с исходным union lookup и faction fallback.
+    pub(crate) fn player_header<Context>(
+        &self,
+        context: &Context,
+    ) -> Result<i32, FactionPlayerHeaderBlock<Context::Block>>
+    where
+        Context: FactionPlayerHeaderContext,
+    {
+        let property = self
+            .base_property
+            .ok_or(FactionPlayerHeaderBlock::MissingBaseProperty)?;
+        if property.union_id() > 0 {
+            if let Some(player_header) = context
+                .union_player_header(property.union_id())
+                .map_err(FactionPlayerHeaderBlock::Context)?
+            {
+                return Ok(player_header);
+            }
+        }
+        self.master_id
+            .ok_or(FactionPlayerHeaderBlock::MissingMasterId)
+    }
+
     /// Назначает union ID и поддерживает исходный countdown роспуска.
     pub(crate) fn set_superior_organizing(
         &mut self,
@@ -7133,6 +7337,21 @@ fn legacy_c_string_wire_bytes(value: &[u8]) -> Vec<u8> {
     wire
 }
 
+fn empty_faction_set_parameter_progress(
+    parameter: FactionSetParameterKind,
+) -> FactionSetParameterProgress {
+    FactionSetParameterProgress {
+        parameter,
+        level_update: None,
+        experience_update: None,
+        assigned_experience: None,
+        assigned_upgrade_experience: None,
+        property_deliveries: None,
+        refreshed_player_ids: None,
+        dirty_bit_requested: false,
+    }
+}
+
 fn send_apply_join_information<Context>(
     context: &mut Context,
     recipient_player_id: i32,
@@ -7415,7 +7634,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::IncMaxNumber
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2425
@@ -7709,7 +7928,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetEnemyList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:551
@@ -8129,7 +8348,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetParam
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2860
@@ -8381,7 +8600,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::~CFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:46
@@ -8899,7 +9118,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetPlayerHeader
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2762

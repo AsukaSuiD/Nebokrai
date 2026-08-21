@@ -48,6 +48,10 @@
 //! Через read-only `FactionOperationAuthorityContext` этот lookup и уже
 //! материализованный `IsFreeFaction` обслуживают faction tax/city-gate owner-ы;
 //! null во время membership scan остаётся typed-границей старого UB.
+//! Тот же nullable lookup обслуживает `CFaction::GetPlayerHeader`: найденный
+//! союз отдельно разрешает master-faction через `m_FacOrg`, где miss/null даёт
+//! старый `0`, а отсутствующий reached master ID concrete Rust-faction остаётся
+//! typed-блокировкой.
 //!
 //! `IsFreePlayer` проходит `m_FacOrg` в порядке исходного ordered map и для
 //! каждого `COrganizing*` вызывает virtual slot `+0xDC`. Точный PDB
@@ -202,8 +206,9 @@ use super::faction::{
     FactionDisbandOutcome, FactionDisbandProgress, FactionDisbandRejection,
     FactionInitialPropertyBlock, FactionMemberInfoRequest, FactionOperationAuthorityContext,
     FactionOrganizingInfoContext, FactionOtherInfoBuildError, FactionOtherInfoDelivery,
-    FactionPropertyDelivery, FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome,
-    FactionSuperiorOrganizingBlock, MemberEnterOutcome, MemberExitOutcome,
+    FactionPlayerHeaderContext, FactionPropertyDelivery, FactionPropertyReinitialization,
+    FactionRemoveApplyMemberOutcome, FactionSuperiorOrganizingBlock, MemberEnterOutcome,
+    MemberExitOutcome,
 };
 use super::organizing::EOperator;
 use super::organizingparam::COrganizingParam;
@@ -264,6 +269,12 @@ pub(crate) enum FreeFactionLookup {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FactionUnionMembershipLookupBlock {
     pub(crate) map_key: i32,
+}
+
+/// Найденная master-faction союза ещё не имеет достигнутого master ID.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UnionPlayerHeaderLookupBlock {
+    pub(crate) master_faction_id: i32,
 }
 
 /// Результат одного вызова `CFaction::RemoveApplyMember` в map-order.
@@ -1174,6 +1185,28 @@ impl FactionOperationAuthorityContext for COrganizingCtrl {
 
     fn union_master_faction_id(&self, union_id: i32) -> Option<i32> {
         self.confederation_by_id(union_id).map(CUnion::master_id)
+    }
+}
+
+impl FactionPlayerHeaderContext for COrganizingCtrl {
+    type Block = UnionPlayerHeaderLookupBlock;
+
+    fn union_player_header(&self, union_id: i32) -> Result<Option<i32>, Self::Block> {
+        let Some(union) = self.confederation_by_id(union_id) else {
+            return Ok(None);
+        };
+        let player_header = union.player_header(|master_faction_id| {
+            let Some(faction) = self.faction_by_id(master_faction_id) else {
+                return Ok(None);
+            };
+            faction
+                .master_id()
+                .map(Some)
+                .ok_or(UnionPlayerHeaderLookupBlock {
+                    master_faction_id,
+                })
+        })?;
+        Ok(Some(player_header))
     }
 }
 
