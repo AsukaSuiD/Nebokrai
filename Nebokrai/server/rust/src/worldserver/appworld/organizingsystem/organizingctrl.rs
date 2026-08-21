@@ -9,6 +9,8 @@
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
 //! локальный `CreateUnion::OnAsyncCallback` RVA `0x00038D80` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
+//! `OnPlayerInviteFaction` RVA `0x0003A780` —
+//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
 //! полный `COrganizingCtrl::Run` RVA `0x0003A550` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`, `DisbandFaction` RVA `0x00038550` и
 //! `UpdateOtherFacInfoToClient` RVA `0x00034980` и `DisbandConferation` RVA
@@ -112,6 +114,16 @@
 //! этот порядок и дублирующие side effects сохранены. Exact EXE
 //! `0x0043930C..0x00439388` исправляет ошибочный RAW: callback всегда проходит
 //! cleanup first, затем second reservation, без раннего возврата между ними.
+//! `OnPlayerInviteFaction` сначала разрешает первую faction только через
+//! `IsFactionMaster(player)`, затем проверяет обе concrete faction. War-gates
+//! идут строго: first standard/village `WS0237`, first city-only `WS0238`,
+//! invited standard/village `WS0239`, invited city/AttackCity `WS0240`; общий
+//! второй текст этих четырёх отказов — `WS0121`. После двух `IsFreeFaction`
+//! ветви literal: две свободные — `CreateConfederation`, свободная первая —
+//! `ApplyForJoin` союза второй, свободная вторая — `Invite` союза первой,
+//! два союза — `WS0241/WS0193`. Exact ASM `0x0043A780..0x0043AC6C`
+//! подтверждает отсутствие source AttackCity gate и true-return после любого
+//! вызванного owner-а независимо от его bool/result.
 //! `AddOwnedCityToFaction` повторяет те же positive-ID/map/null gates и затем
 //! вызывает virtual `AddOwnedCity` slot `+0x80`. Exact ASM
 //! `0x00437C20..0x00437C69` подтверждает порядок обоих аргументов и отсутствие
@@ -1463,6 +1475,55 @@ pub(crate) enum OrganizingUnionInvitationCallbackBlock {
     },
 }
 
+pub(crate) trait PlayerInviteFactionEffects:
+    ConfederationCreationEffects + UnionApplyForJoinEffects + UnionInviteEffects
+{
+}
+
+impl<T> PlayerInviteFactionEffects for T where
+    T: ConfederationCreationEffects + UnionApplyForJoinEffects + UnionInviteEffects
+{
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerInviteFactionRejection {
+    MasterFactionNotFound,
+    InviterFactionMissing,
+    InvitedFactionMissing,
+    InviterStandardWar { notice_sent: bool },
+    InviterCityWar { notice_sent: bool },
+    InvitedStandardWar { notice_sent: bool },
+    InvitedCityWar { notice_sent: bool },
+    BothAlreadyInUnion { notice_sent: bool },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum PlayerInviteFactionAction<CreationReport, ApplicationReport, InvitationReport> {
+    Create(ConfederationCreationStartOutcome<CreationReport>),
+    ApplyToInvitedUnion(UnionApplyForJoinOutcome<ApplicationReport>),
+    InviteToInviterUnion(OrganizingUnionInviteOutcome<InvitationReport>),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum PlayerInviteFactionOutcome<CreationReport, ApplicationReport, InvitationReport> {
+    Rejected(PlayerInviteFactionRejection),
+    Dispatched {
+        inviter_faction_id: i32,
+        invited_faction_id: i32,
+        action: PlayerInviteFactionAction<CreationReport, ApplicationReport, InvitationReport>,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum PlayerInviteFactionBlock<CreationBlock, ApplicationBlock, InvitationBlock> {
+    Master(FactionMasterLookupBlock),
+    InviterMembership { map_key: i32 },
+    InvitedMembership { map_key: i32 },
+    Creation(ConfederationCreationStartBlock<CreationBlock>),
+    Application(OrganizingNamedUnionApplicationBlock<ApplicationBlock>),
+    Invitation(OrganizingUnionInviteDispatchBlock<InvitationBlock>),
+}
+
 /// Результат одного вызова `CFaction::RemoveApplyMember` в map-order.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct ApplyFactionRemoval {
@@ -2428,6 +2489,31 @@ fn send_confederation_creation_notice<Effects>(
         color: 0xFFDA_EDFE,
         trailing_value: 0,
     });
+}
+
+fn send_player_invite_faction_notice<Effects>(
+    effects: &mut Effects,
+    player_id: i32,
+    first_text_id: &'static [u8],
+    second_text_id: &'static [u8],
+) where
+    Effects: PlayerInviteFactionEffects,
+{
+    let second_text =
+        <Effects as ConfederationCreationEffects>::world_string(effects, second_text_id);
+    let first_text =
+        <Effects as ConfederationCreationEffects>::world_string(effects, first_text_id);
+    <Effects as ConfederationCreationEffects>::send_organizing_info(
+        effects,
+        FactionMemberInfoRequest {
+            recipient_player_id: player_id,
+            first_text: legacy_c_string_prefix(&first_text),
+            second_text: legacy_c_string_prefix(&second_text),
+            information_type: -1,
+            color: 0xFFDA_EDFE,
+            trailing_value: 0,
+        },
+    );
 }
 
 fn send_city_transfer_notice<Effects>(
@@ -5188,6 +5274,145 @@ impl COrganizingCtrl {
             report.broadcast = Some(effects.broadcast_city_war_result(text));
         }
         Ok(report)
+    }
+
+    /// Выполняет exact `OnPlayerInviteFaction` до выбранного union owner-а.
+    pub(crate) fn on_player_invite_faction<Effects>(
+        &mut self,
+        game: &CGame,
+        village_war: &CVillageWarSys,
+        attack_city: &CAttackCitySys,
+        player_id: i32,
+        invited_faction_id: i32,
+        effects: &mut Effects,
+    ) -> Result<
+        PlayerInviteFactionOutcome<
+            <Effects as ConfederationCreationEffects>::SessionReport,
+            <Effects as UnionApplyForJoinEffects>::SessionReport,
+            <Effects as UnionInviteEffects>::SessionReport,
+        >,
+        PlayerInviteFactionBlock<
+            <Effects as ConfederationCreationEffects>::SessionBlock,
+            <Effects as UnionApplyForJoinEffects>::SessionBlock,
+            <Effects as UnionInviteEffects>::SessionBlock,
+        >,
+    >
+    where
+        Effects: PlayerInviteFactionEffects,
+    {
+        let inviter_faction_id = self
+            .faction_id_by_master_player(player_id)
+            .map_err(PlayerInviteFactionBlock::Master)?;
+        if inviter_faction_id == 0 {
+            return Ok(PlayerInviteFactionOutcome::Rejected(
+                PlayerInviteFactionRejection::MasterFactionNotFound,
+            ));
+        }
+
+        let Some(inviter) = self.faction_by_id(inviter_faction_id) else {
+            return Ok(PlayerInviteFactionOutcome::Rejected(
+                PlayerInviteFactionRejection::InviterFactionMissing,
+            ));
+        };
+        let inviter_standard_war =
+            inviter.has_enemy_faction() || village_war.is_already_declared_for_war(inviter_faction_id);
+        let inviter_city_war = inviter.has_city_war_enemy_faction();
+        if inviter_standard_war {
+            send_player_invite_faction_notice(effects, player_id, b"WS0237", b"WS0121");
+            return Ok(PlayerInviteFactionOutcome::Rejected(
+                PlayerInviteFactionRejection::InviterStandardWar { notice_sent: true },
+            ));
+        }
+        if inviter_city_war {
+            send_player_invite_faction_notice(effects, player_id, b"WS0238", b"WS0121");
+            return Ok(PlayerInviteFactionOutcome::Rejected(
+                PlayerInviteFactionRejection::InviterCityWar { notice_sent: true },
+            ));
+        }
+
+        let Some(invited) = self.faction_by_id(invited_faction_id) else {
+            return Ok(PlayerInviteFactionOutcome::Rejected(
+                PlayerInviteFactionRejection::InvitedFactionMissing,
+            ));
+        };
+        let invited_standard_war = invited.has_enemy_faction()
+            || village_war.is_already_declared_for_war(invited_faction_id);
+        let invited_city_war = invited.has_city_war_enemy_faction()
+            || attack_city.is_already_declared_for_war(invited_faction_id);
+        if invited_standard_war {
+            send_player_invite_faction_notice(effects, player_id, b"WS0239", b"WS0121");
+            return Ok(PlayerInviteFactionOutcome::Rejected(
+                PlayerInviteFactionRejection::InvitedStandardWar { notice_sent: true },
+            ));
+        }
+        if invited_city_war {
+            send_player_invite_faction_notice(effects, player_id, b"WS0240", b"WS0121");
+            return Ok(PlayerInviteFactionOutcome::Rejected(
+                PlayerInviteFactionRejection::InvitedCityWar { notice_sent: true },
+            ));
+        }
+
+        let inviter_union_id = match self.is_free_faction(inviter_faction_id) {
+            FreeFactionLookup::NoUnion => 0,
+            FreeFactionLookup::Union(union_id) => union_id,
+            FreeFactionLookup::BlockedNullConfederation { map_key } => {
+                return Err(PlayerInviteFactionBlock::InviterMembership { map_key });
+            }
+        };
+        let invited_union_id = match self.is_free_faction(invited_faction_id) {
+            FreeFactionLookup::NoUnion => 0,
+            FreeFactionLookup::Union(union_id) => union_id,
+            FreeFactionLookup::BlockedNullConfederation { map_key } => {
+                return Err(PlayerInviteFactionBlock::InvitedMembership { map_key });
+            }
+        };
+
+        let action = match (inviter_union_id, invited_union_id) {
+            (0, 0) => PlayerInviteFactionAction::Create(
+                self.create_confederation(
+                    game,
+                    inviter_faction_id,
+                    invited_faction_id,
+                    b"",
+                    effects,
+                )
+                .map_err(PlayerInviteFactionBlock::Creation)?,
+            ),
+            (0, invited_union_id) => {
+                PlayerInviteFactionAction::ApplyToInvitedUnion(
+                    self.apply_for_named_union_join(
+                        game,
+                        invited_union_id,
+                        inviter_faction_id,
+                        0,
+                        0,
+                        effects,
+                    )
+                    .map_err(PlayerInviteFactionBlock::Application)?,
+                )
+            }
+            (inviter_union_id, 0) => PlayerInviteFactionAction::InviteToInviterUnion(
+                self.invite_faction_to_union(
+                    game,
+                    inviter_union_id,
+                    inviter_faction_id,
+                    invited_faction_id,
+                    effects,
+                )
+                .map_err(PlayerInviteFactionBlock::Invitation)?,
+            ),
+            _ => {
+                send_player_invite_faction_notice(effects, player_id, b"WS0241", b"WS0193");
+                return Ok(PlayerInviteFactionOutcome::Rejected(
+                    PlayerInviteFactionRejection::BothAlreadyInUnion { notice_sent: true },
+                ));
+            }
+        };
+        Ok(PlayerInviteFactionOutcome::Dispatched {
+            inviter_faction_id,
+            invited_faction_id,
+            action,
+        })
     }
 
     /// Проверяет две faction и запускает exact подтверждение учреждения союза.
@@ -8060,7 +8285,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::OnPlayerInviteFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:790
@@ -8068,6 +8293,8 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 0043a780
 // PROTOTYPE: bool __thiscall OnPlayerInviteFaction(long param_1, long param_2)
 //
+// IMPLEMENTED_OWNER: `COrganizingCtrl::on_player_invite_faction` сохраняет
+// exact war order/notices, две membership ветки и owner dispatch.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
