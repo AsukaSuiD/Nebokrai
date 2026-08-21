@@ -38,6 +38,7 @@
 //! `UpdatePropertyToClient` RVA `0x000B9FB0`,
 //! `UpdateEnemyFactionToClient/UpdateCityWarEnemyFactionToClient` RVA
 //! `0x000BA0F0/0x000BA210`,
+//! `UpdateEnemyFaction/UpdateCityWarEnemyFaction` RVA `0x000B4E30/0x000B4E60`,
 //! `UpdateOwnedCityToClient` RVA `0x000C0BF0`,
 //! `UpdatePlayerFactionInfo` RVA `0x000B5820`,
 //! `AddDefence/Offense/VillageWarVictorCounts` RVA
@@ -102,6 +103,11 @@
 //! Enemy-update сообщения передают полный set, а не delta: `0x7FE11/0x7FE12`,
 //! recipient ID, 32-битный count и signed IDs в tree-order. Объявленные
 //! `enemy_id/operator` исходные функции не читали и в Rust-интерфейс не входят.
+//! Standard refresh сначала безусловно ставит enemy-changed byte в `1`, затем
+//! публикует `0x7FE11` и обновляет online player state. City-war refresh делает
+//! `0x7FE12` и player update только при changed byte ровно `1`, не очищая его.
+//! Exact ASM подтверждает порядок; неизвестный partial byte не превращается в
+//! выдуманный `false`, а возвращается отдельным typed outcome.
 //! Value-getter-ы обоих enemy-set создают независимые копии. Clear всегда
 //! очищает set, но выставляет соответствующий changed-флаг только если до
 //! очистки он был непустым. Отдельный virtual `IsEnemyFaction` в этой версии
@@ -471,6 +477,19 @@ pub(crate) struct FactionEnemyDelivery {
     pub(crate) recipient_player_id: i32,
     pub(crate) game_server_id: i32,
     pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionEnemyRefreshReport {
+    pub(crate) deliveries: Vec<FactionEnemyDelivery>,
+    pub(crate) refreshed_player_ids: Vec<i32>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CityWarEnemyRefreshOutcome {
+    ChangeFlagUnknown,
+    Unchanged,
+    Published(FactionEnemyRefreshReport),
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1469,6 +1488,48 @@ impl CFaction {
         self.update_enemy_set_to_client(game, EnemyFactionSetKind::CityWar)
     }
 
+    /// Ставит standard changed-флаг, публикует set и обновляет online players.
+    pub(crate) fn update_enemy_faction<F>(
+        &mut self,
+        game: &CGame,
+        update_player: F,
+    ) -> FactionEnemyRefreshReport
+    where
+        F: FnMut(i32),
+    {
+        self.enemy_factions_changed = Some(true);
+        let deliveries = self.update_enemy_factions_to_client(game);
+        let refreshed_player_ids = self.update_player_faction_info(game, 0, update_player);
+        FactionEnemyRefreshReport {
+            deliveries,
+            refreshed_player_ids,
+        }
+    }
+
+    /// Выполняет city-war refresh только при changed-флаге ровно `true`.
+    pub(crate) fn update_city_war_enemy_faction<F>(
+        &self,
+        game: &CGame,
+        update_player: F,
+    ) -> CityWarEnemyRefreshOutcome
+    where
+        F: FnMut(i32),
+    {
+        match self.city_war_enemy_factions_changed {
+            None => CityWarEnemyRefreshOutcome::ChangeFlagUnknown,
+            Some(false) => CityWarEnemyRefreshOutcome::Unchanged,
+            Some(true) => {
+                let deliveries = self.update_city_war_enemy_factions_to_client(game);
+                let refreshed_player_ids =
+                    self.update_player_faction_info(game, 0, update_player);
+                CityWarEnemyRefreshOutcome::Published(FactionEnemyRefreshReport {
+                    deliveries,
+                    refreshed_player_ids,
+                })
+            }
+        }
+    }
+
     /// Рассылает current/upgrade exp только contributor-ам и master-у.
     pub(crate) fn update_experience_to_client(
         &self,
@@ -2320,7 +2381,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::UpdateEnemyFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2639
@@ -2334,7 +2395,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::UpdateCityWarEnemyFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2649
