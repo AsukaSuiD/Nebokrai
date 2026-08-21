@@ -14,6 +14,7 @@
 //! `IsHaveEnymyFaction/IsHaveCityEnemyFaction` RVA `0x000B50F0/0x000B5100`,
 //! `SetSuperiorOrganizing` RVA `0x000B5110`,
 //! `IsOwnedCity` RVA `0x000B5490`, `GetOwnedCities` RVA `0x000BD7D0`,
+//! `DelMember` RVA `0x000B9EF0`,
 //! `UpdatePropertyToClient` RVA `0x000B9FB0`,
 //! `ReInitialPropertyByLvl` RVA `0x000BA630`,
 //! `IsSuperiorOrganizing` RVA `0x000BD780`, `IsMaster` RVA `0x000C1EE0` и
@@ -46,6 +47,9 @@
 //! ID только отменяет положительный countdown, а negative/zero ID сравнивает
 //! member-count с порогом через unsigned `JNC`. При неполном live-state уже
 //! выполненная смена union ID не откатывается.
+//! `DelMember` отклоняет master до erase, после erase использует новый unsigned
+//! member-count и запускает countdown только для faction без union. Exact
+//! `0x004B9EF0..0x004B9F46` подтверждает порядок и unsigned `JNC`.
 //! `UpdatePropertyToClient` публикует message `0x7FE0B`: recipient ID, затем
 //! все `0x38` байт property вместе с padding. Получатели обходятся по signed
 //! member key и допускаются только при online-owner, ненулевом GameServer ID и
@@ -305,6 +309,19 @@ pub(crate) struct FactionInitialPropertyBlock;
 pub(crate) enum FactionSuperiorOrganizingBlock {
     MissingBaseProperty,
     DeleteRemainTimeAbsent,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionDelMemberBlock {
+    MasterIdMissing,
+    DeleteRemainTimeAbsent,
+    MissingBaseProperty,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FactionDelMemberReport {
+    pub(crate) removed: bool,
+    pub(crate) disband_countdown_started: bool,
 }
 
 /// Результат одной исходно игнорировавшейся отправки полного property.
@@ -737,6 +754,43 @@ impl CFaction {
             }
         }
         Ok(())
+    }
+
+    /// Удаляет не-master участника и при необходимости запускает роспуск.
+    pub(crate) fn del_member(
+        &mut self,
+        player_id: i32,
+        parameters: &COrganizingParam,
+    ) -> Result<Option<FactionDelMemberReport>, FactionDelMemberBlock> {
+        let master_id = self.master_id.ok_or(FactionDelMemberBlock::MasterIdMissing)?;
+        if player_id == master_id {
+            return Ok(None);
+        }
+
+        let removed = self.members.remove(&player_id).is_some();
+        let member_count = self.members.len() as u32;
+        let minimum_members = parameters.disband_faction_minimum_members() as u32;
+        let mut disband_countdown_started = false;
+        if member_count < minimum_members {
+            let delete_remain_time = self
+                .delete_remain_time
+                .ok_or(FactionDelMemberBlock::DeleteRemainTimeAbsent)?;
+            if delete_remain_time < 0 {
+                let union_id = self
+                    .base_property
+                    .ok_or(FactionDelMemberBlock::MissingBaseProperty)?
+                    .union_id();
+                if union_id < 1 {
+                    self.delete_remain_time = Some(parameters.disband_faction_minutes());
+                    disband_countdown_started = true;
+                }
+            }
+        }
+
+        Ok(Some(FactionDelMemberReport {
+            removed,
+            disband_countdown_started,
+        }))
     }
 
     /// Возвращает member-title без завершающего NUL либо старую overread-границу.
@@ -1911,7 +1965,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::DelMember
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:759
