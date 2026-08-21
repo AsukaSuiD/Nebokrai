@@ -100,7 +100,12 @@
 //! country-map с вложенными `CCountry` records уходит subtype `0x19` через
 //! `CCountryHandler`. `CGodsBattleConf` затем передаёт семь positional секций
 //! subtype `0x39`; явный старый `Update` уже является инвариантом каждого
-//! `CBaseMessage::add`. Следующая граница — ordered region snapshots.
+//! `CBaseMessage::add`. Ordered region map следом отправляет назначенные этому
+//! GameServer регионы как subtype `0x0E + region type + full snapshot`, а
+//! остальные — как subtype `0x0F + proxy snapshot`. Старый `Sleep(100)` после
+//! каждого назначенного региона выражен injected delay-callback-ом: wire-order
+//! и точка задержки сохранены без навязывания Rust-слою конкретного runtime-а.
+//! Следующая граница — `CRegionSetup` subtype `0x11`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -204,6 +209,7 @@ use crate::worldserver::appworld::skills::skillfactory::{
 use crate::worldserver::worldserver::game::{
     CGame, WorldCdkeySnapshot, WorldCdkeySnapshotError, WorldGameServerLookupError,
     WorldGenerateDbDataBlock, WorldGenerateDbDataReport, WorldGlobeVariablesDelivery,
+    WorldInitialRegionSnapshot, WorldInitialRegionSnapshotBlock, WorldInitialRegionSnapshotKind,
     WorldOnlinePlayerAppendOutcome, WorldPingGameServerInfo, WorldReconnectedPlayerDecode,
     WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest, prepare_save_thread_launch,
 };
@@ -617,6 +623,30 @@ pub(crate) enum WorldGodsBattleConfigurationCompletion {
 pub(crate) struct WorldGodsBattleConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldGodsBattleConfigurationCompletion,
+}
+
+/// Наблюдаемая отправка одного элемента ordered region map.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldRegionConfigurationDelivery {
+    pub(crate) map_key: i32,
+    pub(crate) region_id: i32,
+    pub(crate) kind: WorldInitialRegionSnapshotKind,
+    pub(crate) delivery: WorldInitialConfigurationDelivery,
+    pub(crate) delay_after_ms: Option<u32>,
+}
+
+/// Следующая точная позиция ветки после initial-config region traversal.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldRegionConfigurationCompletion {
+    RegionSnapshot(WorldInitialRegionSnapshotBlock),
+    RegionSetupConfigurationPending { socket_id: i32 },
+}
+
+/// Частичный или полный отчёт ordered region snapshot прохода.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldRegionConfigurationReport {
+    pub(crate) deliveries: Vec<WorldRegionConfigurationDelivery>,
+    pub(crate) completion: WorldRegionConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1749,6 +1779,69 @@ pub(crate) fn continue_game_server_gods_battle_configuration(
             &payload,
         )),
         completion: WorldGodsBattleConfigurationCompletion::RegionSnapshotsPending { socket_id },
+    }
+}
+
+/// Отправляет initial-config снимки регионов в точном signed map-order.
+pub(crate) fn continue_game_server_region_configurations<Delay>(
+    game: &CGame,
+    socket_id: i32,
+    game_server_index: u32,
+    mut delay: Delay,
+) -> WorldRegionConfigurationReport
+where
+    Delay: FnMut(u32),
+{
+    let sender = game.current_game_server_sender();
+    let mut deliveries = Vec::new();
+    let traversal = game.visit_initial_region_snapshots(
+        game_server_index,
+        |snapshot: WorldInitialRegionSnapshot| {
+            let delay_after_ms = match snapshot.kind {
+                WorldInitialRegionSnapshotKind::Assigned { .. } => Some(100),
+                WorldInitialRegionSnapshotKind::Proxy => None,
+            };
+            let mut message = CMessage::new(0x0007_F801);
+            let (subtype, payload_length) = match snapshot.kind {
+                WorldInitialRegionSnapshotKind::Assigned { region_type } => {
+                    message.base_mut().add_long(0x0E);
+                    message.base_mut().add_long(region_type);
+                    (0x0E, snapshot.payload.len() + 4)
+                }
+                WorldInitialRegionSnapshotKind::Proxy => {
+                    message.base_mut().add_long(0x0F);
+                    (0x0F, snapshot.payload.len())
+                }
+            };
+            message.base_mut().add(&snapshot.payload);
+            let delivery = message.send_to_socket(sender.as_ref(), socket_id);
+            deliveries.push(WorldRegionConfigurationDelivery {
+                map_key: snapshot.map_key,
+                region_id: snapshot.region_id,
+                kind: snapshot.kind,
+                delivery: WorldInitialConfigurationDelivery {
+                    subtype,
+                    payload_length,
+                    target: WorldInitialConfigurationTarget::Socket(socket_id),
+                    delivery,
+                },
+                delay_after_ms,
+            });
+            if let Some(milliseconds) = delay_after_ms {
+                delay(milliseconds);
+            }
+        },
+    );
+
+    let completion = match traversal {
+        Ok(()) => WorldRegionConfigurationCompletion::RegionSetupConfigurationPending {
+            socket_id,
+        },
+        Err(error) => WorldRegionConfigurationCompletion::RegionSnapshot(error),
+    };
+    WorldRegionConfigurationReport {
+        deliveries,
+        completion,
     }
 }
 

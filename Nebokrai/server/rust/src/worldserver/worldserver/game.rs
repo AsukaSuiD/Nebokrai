@@ -940,6 +940,7 @@ use crate::worldserver::appworld::organizingsystem::union::CUnion;
 use crate::worldserver::appworld::player::{
     CPlayer, PlayerCodecError, PlayerOrganizingUpdateError, PlayerPropertyCoefficients,
 };
+use crate::worldserver::appworld::region::RegionSerializationBlock;
 use crate::worldserver::appworld::script::variablelist::VariableListSaveSource;
 use crate::worldserver::appworld::session::csessionfactory::{
     CSessionFactory, WorldSessionFactoryAiReport,
@@ -3813,6 +3814,35 @@ impl WorldRegionOwner {
             Self::Country(region) => region.base_mut(),
         }
     }
+
+    fn add_full_initial_snapshot(
+        &self,
+        destination: &mut Vec<u8>,
+    ) -> Result<(), WorldRegionOwnerSerializationBlock> {
+        match self {
+            Self::Base(region) => {
+                let _ = region
+                    .add_to_byte_array(destination, true)
+                    .map_err(WorldRegionOwnerSerializationBlock::Base)?;
+            }
+            Self::Village(region) => {
+                let _ = region
+                    .add_to_byte_array(destination, true)
+                    .map_err(WorldRegionOwnerSerializationBlock::Village)?;
+            }
+            Self::City(region) => {
+                let _ = region
+                    .add_to_byte_array(destination, true)
+                    .map_err(WorldRegionOwnerSerializationBlock::City)?;
+            }
+            Self::Country(region) => {
+                let _ = region
+                    .add_to_byte_array(destination, true)
+                    .map_err(WorldRegionOwnerSerializationBlock::Country)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3829,6 +3859,37 @@ pub(crate) enum WorldRegionOwnerSerializationBlock {
     Village(WorldWarRegionSerializationBlock),
     City(WorldCityRegionSerializationBlock),
     Country(WorldCountryWarRegionSerializationBlock),
+}
+
+/// Выбранный исходным initial-config virtual wire одного региона.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldInitialRegionSnapshotKind {
+    Assigned { region_type: i32 },
+    Proxy,
+}
+
+/// Один уже сериализованный элемент ordered `s_mapRegionList`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldInitialRegionSnapshot {
+    pub(crate) map_key: i32,
+    pub(crate) region_id: i32,
+    pub(crate) kind: WorldInitialRegionSnapshotKind,
+    pub(crate) payload: Vec<u8>,
+}
+
+/// Точная safe-граница initial-config region traversal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WorldInitialRegionSnapshotSource {
+    MissingRegionOwner,
+    UninitializedRegionType,
+    Full(WorldRegionOwnerSerializationBlock),
+    Proxy(RegionSerializationBlock),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldInitialRegionSnapshotBlock {
+    pub(crate) map_key: i32,
+    pub(crate) source: WorldInitialRegionSnapshotSource,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -9595,6 +9656,59 @@ impl CGame {
     /// Возвращает регион по signed numeric ID либо старый `nullptr` как `None`.
     pub(crate) fn region(&self, region_id: i32) -> Option<&WorldRegionAssignment> {
         self.regions.get(&region_id)
+    }
+
+    /// Сериализует initial-config регионы в signed map-order и передаёт каждый
+    /// элемент visitor-у до перехода к следующему узлу.
+    pub(crate) fn visit_initial_region_snapshots<Visit>(
+        &self,
+        target_game_server_index: u32,
+        mut visit: Visit,
+    ) -> Result<(), WorldInitialRegionSnapshotBlock>
+    where
+        Visit: FnMut(WorldInitialRegionSnapshot),
+    {
+        for (&map_key, assignment) in &self.regions {
+            let region = assignment.region.as_ref().ok_or(
+                WorldInitialRegionSnapshotBlock {
+                    map_key,
+                    source: WorldInitialRegionSnapshotSource::MissingRegionOwner,
+                },
+            )?;
+            let region_id = region.base().get_id();
+            let mut payload = Vec::new();
+            let kind = if assignment.game_server_index == target_game_server_index {
+                let region_type = assignment.region_type.ok_or(
+                    WorldInitialRegionSnapshotBlock {
+                        map_key,
+                        source: WorldInitialRegionSnapshotSource::UninitializedRegionType,
+                    },
+                )?;
+                region
+                    .add_full_initial_snapshot(&mut payload)
+                    .map_err(|source| WorldInitialRegionSnapshotBlock {
+                        map_key,
+                        source: WorldInitialRegionSnapshotSource::Full(source),
+                    })?;
+                WorldInitialRegionSnapshotKind::Assigned { region_type }
+            } else {
+                let _ = region
+                    .base()
+                    .add_to_byte_array_for_proxy(&mut payload, true)
+                    .map_err(|source| WorldInitialRegionSnapshotBlock {
+                        map_key,
+                        source: WorldInitialRegionSnapshotSource::Proxy(source),
+                    })?;
+                WorldInitialRegionSnapshotKind::Proxy
+            };
+            visit(WorldInitialRegionSnapshot {
+                map_key,
+                region_id,
+                kind,
+                payload,
+            });
+        }
+        Ok(())
     }
 
     /// Проходит `tagRegion::pRegion`, не смешивая отсутствующий key и null.
