@@ -475,6 +475,14 @@
 //! update и dirty, а не до них, как Linux-донор. Диапазоны
 //! `0x004BBFB0..0x004BC4CF` и `0x004BC500..0x004BCA13` подтверждают эту
 //! асимметрию, 100-байтовые notice-буферы и string-ID mapping.
+//! `SetLvl` принимает только `1..=12`, первым пишет level, затем в строгом
+//! порядке применяет Pronounce, LeaveWord, EndueRight, CreateUnion,
+//! JoinVillageWar, JoinCityWar и наконец maximum member count. Каждый реально
+//! изменившийся feature setter публикует собственный notice. `SetMaxMememberNums`
+//! сначала пишет `lMaxMemberNums`, затем форматирует `WS0186(max)` в старый
+//! 256-байтовый buffer и рассылает его всем member key. Exact ASM
+//! `0x004B8710..0x004B893C` и `0x004B8940..0x004B8A18` подтверждает порядок;
+//! typed block сохраняет уже изменённое поле вместо воспроизведения overflow.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -518,6 +526,7 @@ const FACTION_MEMBER_NOTICE_CAPACITY: usize = 260;
 const FACTION_DUB_NOTICE_CAPACITY: usize = 100;
 const FACTION_DUB_OLD_TITLE_CAPACITY: usize = 32;
 const FACTION_PURVIEW_NOTICE_CAPACITY: usize = 100;
+const FACTION_MAXIMUM_MEMBERS_NOTICE_CAPACITY: usize = 256;
 const PRONOUNCE_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_CONTENT_CAPACITY: usize = 2048;
 const OTHER_FACTION_NAME_CAPACITY: usize = 20;
@@ -1101,6 +1110,47 @@ pub(crate) enum FactionPurviewChangeBlock {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionMaximumMembersUpdate {
+    Unchanged,
+    Updated(FactionMemberInfoReport),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionMaximumMembersBlock {
+    MissingBaseProperty,
+    NoticeWouldOverflow {
+        maximum_members: i32,
+        formatted_len: usize,
+        property_changed: bool,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionLevelUpdate {
+    Unchanged,
+    Updated {
+        pronounce: FactionFeatureFunctionUpdate,
+        leave_word: FactionFeatureFunctionUpdate,
+        endue_right: FactionFeatureFunctionUpdate,
+        create_union: FactionFeatureFunctionUpdate,
+        join_village_war: FactionFeatureFunctionUpdate,
+        join_city_war: FactionFeatureFunctionUpdate,
+        maximum_members: FactionMaximumMembersUpdate,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionLevelBlock {
+    MissingBaseProperty {
+        level_changed: bool,
+    },
+    MaximumMembers {
+        source: FactionMaximumMembersBlock,
+        level_changed: bool,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FactionLeaveWordUpdateBuildError {
     MissingLastLeaveWord,
     Recipient {
@@ -1448,6 +1498,11 @@ pub(crate) trait FactionPurviewChangeContext: FactionOrganizingInfoContext {
         faction_name: &[u8],
         log_type: i32,
     );
+}
+
+/// Узкая граница форматирования `WS0186` для level/max-member owner-ов.
+pub(crate) trait FactionLevelContext: FactionOrganizingInfoContext {
+    fn format_world_string_signed(&mut self, string_id: &'static [u8], value: i32) -> Vec<u8>;
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -3749,6 +3804,134 @@ impl CFaction {
             FactionPurviewChange::Revoke,
             context,
         )
+    }
+
+    /// Меняет maximum member count и публикует `WS0186` только при отличии.
+    pub(crate) fn set_maximum_members<Context>(
+        &mut self,
+        maximum_members: i32,
+        context: &mut Context,
+    ) -> Result<FactionMaximumMembersUpdate, FactionMaximumMembersBlock>
+    where
+        Context: FactionLevelContext,
+    {
+        let property = self
+            .base_property
+            .ok_or(FactionMaximumMembersBlock::MissingBaseProperty)?;
+        if property.signed_at(0x1C) == maximum_members {
+            return Ok(FactionMaximumMembersUpdate::Unchanged);
+        }
+        self.base_property
+            .as_mut()
+            .ok_or(FactionMaximumMembersBlock::MissingBaseProperty)?
+            .write_signed(0x1C, maximum_members);
+
+        let notice = context.format_world_string_signed(b"WS0186", maximum_members);
+        let notice = legacy_c_string_visible_bytes(&notice);
+        if notice.len() >= FACTION_MAXIMUM_MEMBERS_NOTICE_CAPACITY {
+            return Err(FactionMaximumMembersBlock::NoticeWouldOverflow {
+                maximum_members,
+                formatted_len: notice.len(),
+                property_changed: true,
+            });
+        }
+        let second_text = context.world_string(b"WS0119").unwrap_or_default();
+        Ok(FactionMaximumMembersUpdate::Updated(
+            self.send_info_to_all_members(
+                notice,
+                legacy_c_string_visible_bytes(&second_text),
+                -1,
+                |request| context.send_organizing_info(request),
+            ),
+        ))
+    }
+
+    /// Меняет level и последовательно применяет шесть feature-флагов и maximum.
+    pub(crate) fn set_level<Context>(
+        &mut self,
+        level: i32,
+        parameters: &COrganizingParam,
+        context: &mut Context,
+    ) -> Result<FactionLevelUpdate, FactionLevelBlock>
+    where
+        Context: FactionLevelContext,
+    {
+        let property = self
+            .base_property
+            .ok_or(FactionLevelBlock::MissingBaseProperty {
+                level_changed: false,
+            })?;
+        if !(1..=12).contains(&level) || property.level() == level {
+            return Ok(FactionLevelUpdate::Unchanged);
+        }
+        self.base_property
+            .as_mut()
+            .ok_or(FactionLevelBlock::MissingBaseProperty {
+                level_changed: false,
+            })?
+            .write_signed(0x00, level);
+
+        let feature_block = |_| FactionLevelBlock::MissingBaseProperty {
+            level_changed: true,
+        };
+        let pronounce = self
+            .set_feature_function(
+                FactionFeatureFunction::Pronounce,
+                parameters.pronounce_minimum_level() <= level,
+                context,
+            )
+            .map_err(feature_block)?;
+        let leave_word = self
+            .set_feature_function(
+                FactionFeatureFunction::LeaveWord,
+                parameters.leave_word_minimum_level() <= level,
+                context,
+            )
+            .map_err(feature_block)?;
+        let endue_right = self
+            .set_feature_function(
+                FactionFeatureFunction::EndueRight,
+                parameters.endue_right_minimum_level() <= level,
+                context,
+            )
+            .map_err(feature_block)?;
+        let create_union = self
+            .set_feature_function(
+                FactionFeatureFunction::CreateUnion,
+                parameters.create_union_minimum_level() <= level,
+                context,
+            )
+            .map_err(feature_block)?;
+        let join_village_war = self
+            .set_feature_function(
+                FactionFeatureFunction::JoinVillageWar,
+                parameters.attack_village_minimum_level() <= level,
+                context,
+            )
+            .map_err(feature_block)?;
+        let join_city_war = self
+            .set_feature_function(
+                FactionFeatureFunction::JoinCityWar,
+                parameters.attack_city_minimum_level() <= level,
+                context,
+            )
+            .map_err(feature_block)?;
+        let maximum_members = self
+            .set_maximum_members(parameters.get_max_number_by_level(level), context)
+            .map_err(|source| FactionLevelBlock::MaximumMembers {
+                source,
+                level_changed: true,
+            })?;
+
+        Ok(FactionLevelUpdate::Updated {
+            pronounce,
+            leave_word,
+            endue_right,
+            create_union,
+            join_village_war,
+            join_city_war,
+            maximum_members,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -6209,7 +6392,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetMaxMememberNums
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1202
@@ -6223,7 +6406,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetLvl
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1215
