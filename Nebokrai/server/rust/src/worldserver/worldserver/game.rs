@@ -984,7 +984,8 @@ use crate::worldserver::appworld::message::othermessage::{
     WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
 };
 use crate::worldserver::appworld::message::organsysmessage::{
-    OrganizingCityGateBlock, OrganizingCityGateDispatch, OrganizingConsumedLongDispatch,
+    CityTransferConfirmationDelivery, OrganizingCityGateBlock, OrganizingCityGateDispatch,
+    OrganizingCityTransferDispatch, OrganizingConsumedLongDispatch,
     OrganizingDeclareFactionWarBlock,
     OrganizingDeclareFactionWarDispatch, OrganizingDeclareWarFactionListBlock,
     OrganizingDeclareWarFactionListDispatch, OrganizingFactionBillboardBlock,
@@ -997,11 +998,12 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEnableDispatch,
     OrganizingPronounceDispatch, OrganizingSessionResultDispatch,
     OrganizingUnionApplicationDispatch,
+    QueuedCityTransferTerminal, QueuedOrganizingSessionTerminal,
     QueuedUnionApplicationTerminal,
     UnionApplicationConfirmationDelivery,
     WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects,
-    WorldUnionApplicationRuntimeOwner, dispatch_consumed_long, dispatch_declare_faction_war,
-    dispatch_city_gate,
+    WorldUnionApplicationRuntimeOwner, dispatch_city_gate, dispatch_city_transfer,
+    dispatch_consumed_long, dispatch_declare_faction_war,
     dispatch_declare_war_faction_list, dispatch_faction_billboard, dispatch_faction_upgrade,
     dispatch_faction_contributor, dispatch_faction_experience, dispatch_faction_member_state,
     dispatch_faction_tax, dispatch_faction_upload_icon,
@@ -1021,8 +1023,10 @@ use crate::worldserver::appworld::organizingsystem::factionwarsys::{
     CFactionWarSys, FactionWarRunReport, FactionWarStopBlock, FactionWarStopContext,
 };
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
-    COrganizingCtrl, OrganizingContributorBlock, OrganizingRunBlock, OrganizingRunReport,
-    OrganizingSaveDataBlock,
+    COrganizingCtrl, CityTransferEndpointBlock, CityTransferFinishBlock,
+    CityTransferFinishReport, CityTransferSessionBlock, CityTransferSessionReport,
+    CityTransferStartBlock, OrganizingContributorBlock, OrganizingRunBlock,
+    OrganizingRunReport, OrganizingSaveDataBlock,
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock, OrganizingLeaveWordEnableBlock,
     OrganizingPronounceBlock, OrganizingSaveDataReport, OrganizingUnionApplicationCallbackBlock,
     OrganizingUnionApplicationCallbackReport, OrganizingUnionApplyForJoinDispatchBlock,
@@ -1877,10 +1881,19 @@ pub(crate) struct WorldUnionApplicationTerminalDispatch {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldCityTransferTerminalDispatch {
+    pub(crate) request: QueuedCityTransferTerminal,
+    pub(crate) outcome: Result<CityTransferFinishReport, CityTransferFinishBlock>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldUnionApplicationRuntimeReport {
     pub(crate) terminals: Vec<WorldUnionApplicationTerminalDispatch>,
     pub(crate) confirmations: Vec<UnionApplicationConfirmationDelivery>,
     pub(crate) endpoint_blocks: Vec<UnionApplicationEndpointBlock>,
+    pub(crate) city_terminals: Vec<WorldCityTransferTerminalDispatch>,
+    pub(crate) city_confirmations: Vec<CityTransferConfirmationDelivery>,
+    pub(crate) city_endpoint_blocks: Vec<CityTransferEndpointBlock>,
 }
 
 /// Один фактически извлечённый элемент двух FIFO `ProcessMessage`.
@@ -1982,6 +1995,15 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: Result<OrganizingCityGateDispatch, OrganizingCityGateBlock>,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingCityTransfer {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<
+            OrganizingCityTransferDispatch<CityTransferSessionReport>,
+            CityTransferStartBlock<CityTransferSessionBlock>,
+        >,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingUnionApplication {
@@ -8220,8 +8242,8 @@ impl CGame {
     /// ветви server-owner-а, honor `0x5FD0C/0x5FD0D`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
-    /// войны `0x6011E`, само объявление `0x6011F` и общий leaf
-    /// `0x60121/0x60123` исполняются; остальные
+    /// войны `0x6011E`, само объявление `0x6011F`, общий leaf
+    /// `0x60121/0x60123` и передача города `0x60130` исполняются; остальные
     /// остаются owned pending. Terminal actions применяются FIFO до следующего
     /// сообщения.
     pub(crate) fn process_message(
@@ -8229,6 +8251,7 @@ impl CGame {
         honor_ranks: &mut CHonorRanks,
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
+        country_handler: &CCountryHandler,
         faction_war_sys: &mut CFactionWarSys,
         attack_city: &CAttackCitySys,
         village_war: &CVillageWarSys,
@@ -8264,6 +8287,7 @@ impl CGame {
                             honor_ranks,
                             organizing,
                             organizing_parameters,
+                            country_handler,
                             faction_war_sys,
                             attack_city,
                             village_war,
@@ -8307,6 +8331,7 @@ impl CGame {
                     honor_ranks,
                     organizing,
                     organizing_parameters,
+                    country_handler,
                     faction_war_sys,
                     attack_city,
                     village_war,
@@ -8349,6 +8374,7 @@ impl CGame {
         honor_ranks: &mut CHonorRanks,
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
+        country_handler: &CCountryHandler,
         faction_war_sys: &mut CFactionWarSys,
         attack_city: &CAttackCitySys,
         village_war: &CVillageWarSys,
@@ -8371,6 +8397,7 @@ impl CGame {
             honor_ranks,
             organizing,
             organizing_parameters,
+            country_handler,
             faction_war_sys,
             attack_city,
             village_war,
@@ -9448,6 +9475,7 @@ impl CGame {
             owners.honor_ranks,
             owners.organizing,
             owners.organizing_parameters,
+            owners.country,
             owners.faction_war,
             owners.attack_city,
             owners.village_war,
@@ -11128,6 +11156,7 @@ fn process_world_message(
     honor_ranks: &mut CHonorRanks,
     organizing: &mut COrganizingCtrl,
     organizing_parameters: &COrganizingParam,
+    country_handler: &CCountryHandler,
     faction_war_sys: &mut CFactionWarSys,
     attack_city: &CAttackCitySys,
     village_war: &CVillageWarSys,
@@ -11668,6 +11697,30 @@ fn process_world_message(
                 runtime,
             };
         }
+        if let Some(outcome) = dispatch_city_transfer(
+            &mut message,
+            game,
+            country_handler,
+            organizing,
+            attack_city,
+            village_war,
+            &mut effects,
+        ) {
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingCityTransfer {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
         if let Some(outcome) = dispatch_faction_tax(
             &mut message,
             organizing,
@@ -11804,22 +11857,43 @@ fn drain_union_application_runtime(
     update_player: &mut dyn FnMut(i32),
 ) -> WorldUnionApplicationRuntimeReport {
     let mut terminals = Vec::new();
+    let mut city_terminals = Vec::new();
     while let Some(request) = runtime.pop_terminal() {
-        let outcome = organizing.finish_union_application(
-            game,
-            organizing_parameters,
-            request.union_id,
-            request.applicant_faction_id,
-            request.terminal,
-            effects,
-            update_player,
-        );
-        terminals.push(WorldUnionApplicationTerminalDispatch { request, outcome });
+        match request {
+            QueuedOrganizingSessionTerminal::Union(request) => {
+                let outcome = organizing.finish_union_application(
+                    game,
+                    organizing_parameters,
+                    request.union_id,
+                    request.applicant_faction_id,
+                    request.terminal,
+                    effects,
+                    update_player,
+                );
+                terminals.push(WorldUnionApplicationTerminalDispatch { request, outcome });
+            }
+            QueuedOrganizingSessionTerminal::CityTransfer(request) => {
+                let outcome = organizing.finish_city_transfer(
+                    game,
+                    request.source_faction_id,
+                    request.target_faction_id,
+                    request.region_id,
+                    &request.region_name,
+                    request.terminal,
+                    effects,
+                    update_player,
+                );
+                city_terminals.push(WorldCityTransferTerminalDispatch { request, outcome });
+            }
+        }
     }
     WorldUnionApplicationRuntimeReport {
         terminals,
         confirmations: runtime.take_confirmations(),
         endpoint_blocks: runtime.take_blocks(),
+        city_terminals,
+        city_confirmations: runtime.take_city_confirmations(),
+        city_endpoint_blocks: runtime.take_city_blocks(),
     }
 }
 

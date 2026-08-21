@@ -18,15 +18,17 @@
 //! `0x00034C80` и `AddUnionToClientByFactionID` RVA `0x00038010` —
 //! `IMPLEMENTED`; `PushToEstaList` RVA `0x000367C0` и оба overload-а
 //! `SendOrgaInfoToClient` RVA `0x00033750/0x00033840`, billboard serializer-ы
-//! RVA `0x000339D0/0x00033A50/0x00033AD0/0x00033CC0` и три stat-owner-а
-//! RVA `0x0003AC70/0x0003B050/0x0003B430` — `IMPLEMENTED`. Точная пара:
+//! RVA `0x000339D0/0x00033A50/0x00033AD0/0x00033CC0`, три stat-owner-а
+//! RVA `0x0003AC70/0x0003B050/0x0003B430`, `TransferIOwnerCity` RVA
+//! `0x00039890` и его локальные constructor/`DoAsyncCall`/`OnAsyncCallback`
+//! RVA `0x00033F40/0x00037810/0x0003A070` — `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
 //! Исходные владельцы PDB:
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.h`
 //! и
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:73,164,242,626,725,1352,1641,1655,1910,1952,1960,1970,1998`.
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:73,164,242,626,725,1105,1238,1352,1641,1655,1910,1952,1960,1970,1998`.
 //!
 //! `GenerateSaveData` проходит faction-map, затем union-map в signed key-order.
 //! `force_all=true` ставит bits `1/2/4/8` четырьмя virtual-вызовами; concrete
@@ -105,6 +107,29 @@
 //! же union applicant или более ранний null/map match не теряется. Остальные
 //! достигнутые callbacks работают с faction-map либо получают union явно;
 //! ownership-замена не меняет их lookup и порядок эффектов.
+//!
+//! `TransferIOwnerCity` exact `0x00439890..0x0043A068` проверяет живой регион
+//! и положительный ID, затем village/attack state, master-faction, страны,
+//! country king, владение регионом, пустой city-list цели, обе war-заявки,
+//! source/target reservation и online target-master. Отказы `WS0248..WS0256`
+//! используют title `WS0193`; отсутствующие region/faction/master и чужой
+//! регион остаются тихими. После успеха source и target ID без duplicate-gate
+//! добавляются в общий establishment-list, online player выдаёт process-wide
+//! NetEx ID и начинается session на `0x2710` ticks. Старый Linux-донор менял
+//! этот порядок и добавлял rollback/session checks; они не являются контрактом
+//! целевого EXE и не перенесены.
+//!
+//! Локальный `DoAsyncCall` exact `0x00437810..0x00437A31` строит `0x7FE2B`:
+//! target master, source faction name C-строка, region name C-строка, session
+//! ID и `cookie.second`, затем маршрутизирует по target player. Callback exact
+//! `0x0043A070..0x0043A2B9` всегда удаляет первые source и target reservation;
+//! только result с decision `1` требует обе faction, вызывает у source именно
+//! безаргументный `ClearOwnedCity` (очищая весь список, а не только переданный
+//! регион), у target `AddOwnedCity(region)`, затем `IsFreeFaction(target ID)`,
+//! `RefreshOwnedCityOrg` и общий `WS0257` broadcast с kind/color
+//! `0xFFDAEDFE/0x328F93FC`. Очередь под `parking_lot::Mutex`, `Arc`, `Box` и
+//! готовый `CNetSessionManager` заменяют singleton/interface lifetime и ручной
+//! `new/delete`, не меняя wire, timeout, FIFO terminal-порядок или mutations.
 //! `SendOrgaInfoToClient(player, first, second, server, color, trailing)` при
 //! `server == -1` разрешает GameServer через live player; только literal `-1`
 //! после lookup прекращает путь. Exact EXE `0x0043378F..0x0043380B` строит
@@ -260,13 +285,16 @@
 //! snapshot без скрытого пересчёта: его lifecycle остаётся `Initialize` и
 //! явным `StatBillboard` после завершения city-war.
 
+use std::any::Any;
 use std::cell::Cell;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use rustix::time::{ClockId, clock_gettime};
 
+use super::attackcitysys::CAttackCitySys;
 use super::faction::{
     CFaction, FactionCloneSaveBlock, FactionContributorBlock, FactionContributorContext,
     FactionContributorOutcome, FactionDeleteOrganizingBuildError,
@@ -287,13 +315,14 @@ use super::faction::{
     FactionUpgradeBlock, FactionUpgradeContext, FactionUpgradeOutcome, FactionUploadIconBlock,
     FactionUploadIconContext, FactionUploadIconOutcome,
     MemberEnterOutcome, MemberExitOutcome, MemberLevelChangeOutcome,
-    MemberPositionChangeOutcome, OwnedCityMutationBuildError,
+    MemberPositionChangeOutcome, OwnedCityAddOutcome, OwnedCityBooleanMutationReport,
+    OwnedCityMutationBuildError,
 };
 use super::factionwarsys::{
     CFactionWarSys, FactionWarDeclarationContext, FactionWarFactionSnapshot,
     FactionWarFormatArgument,
 };
-use super::organizing::{EOperator, TagTimeValue};
+use super::organizing::{ECityState, EOperator, TagTimeValue};
 use super::organizingparam::COrganizingParam;
 use super::union::{
     CUnion, UnionAddFactionEffects, UnionApplicationFactionBlock,
@@ -306,17 +335,27 @@ use super::union::{
     UnionOperatorValidationContext, UnionOwnedCityMutationContext,
     UnionFormatArgument, UnionPlayerRefreshContext, UnionSendInfoContext,
 };
+use super::villagewarsys::CVillageWarSys;
 use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::public::netsession::{
+    NetSessionAsyncResult, NetSessionAsyncResultKind, NetSessionEndpoint,
+};
+use crate::public::netsessionmanager::{
+    CNetSessionManager, CreatedNetSession, NetSessionCreateBlock, NetSessionManagerBeginBlock,
+    NetSessionSetCallbackBlock,
+};
+use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::player::{
     PlayerOrganizingState, PlayerOrganizingUpdateError, PlayerOrganizingUpdater,
 };
-use crate::worldserver::worldserver::game::CGame;
+use crate::worldserver::worldserver::game::{CGame, WorldRegionNameLookup};
 
 const TOP_INFO_MESSAGE_TYPE: i32 = 0x7FA04;
 const UNION_INITIAL_MESSAGE_TYPE: i32 = 0x7FE04;
 const EXPIRING_TIMER_FLAG: i32 = 2;
 const DECLARE_WAR_FACTION_PAGE_SIZE: i32 = 11;
 const DEFAULT_FACTION_BILLBOARD_SIZE: i32 = 10;
+const CITY_TRANSFER_CONFIRMATION_MESSAGE_TYPE: i32 = 0x7FE2B;
 
 const UNUSED_UNION_APPLICATION_TIME: TagTimeValue = TagTimeValue {
     year: 0,
@@ -1180,6 +1219,294 @@ pub(crate) trait OrganizingDisbandContext: FactionDisbandContext {
         player_id: i32,
         player_name: &[u8],
     );
+}
+
+/// Поля синхронного `PlayerTransferOwnerCity::DoAsyncCall`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CityTransferSessionRequest {
+    pub(crate) requester_player_id: i32,
+    pub(crate) source_faction_id: i32,
+    pub(crate) target_master_player_id: i32,
+    pub(crate) target_faction_id: i32,
+    pub(crate) region_id: i32,
+    pub(crate) requested_session_id: i32,
+    pub(crate) timeout_ticks: u32,
+    pub(crate) source_faction_name: Vec<u8>,
+    pub(crate) region_name: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CityTransferTerminal {
+    Approved,
+    Denied,
+    NonResult { kind: NetSessionAsyncResultKind },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CityTransferEndpointBlock {
+    BeginPayloadType,
+    ResultPayloadType,
+}
+
+/// Потокобезопасная граница callback-а и единственного organizing owner-а.
+pub(crate) trait CityTransferSessionRuntime: Send + Sync {
+    fn send_city_transfer_confirmation(&self, recipient_player_id: i32, message: &CMessage);
+
+    fn finish_city_transfer(
+        &self,
+        source_faction_id: i32,
+        target_faction_id: i32,
+        region_id: i32,
+        region_name: &[u8],
+        terminal: CityTransferTerminal,
+    );
+
+    fn block_city_transfer_endpoint(&self, block: CityTransferEndpointBlock);
+}
+
+/// Safe owner локального `PlayerTransferOwnerCity` вместо двух C++ subobject-ов.
+pub(crate) struct PlayerTransferOwnerCity {
+    source_faction_id: i32,
+    target_faction_id: i32,
+    region_id: i32,
+    region_name: Vec<u8>,
+    runtime: Arc<dyn CityTransferSessionRuntime>,
+}
+
+impl NetSessionEndpoint for PlayerTransferOwnerCity {
+    fn do_async_call(&self, session_id: i64, cookie_second: i32, payload: &dyn Any) {
+        let Some(request) = payload.downcast_ref::<CityTransferSessionRequest>() else {
+            self.runtime
+                .block_city_transfer_endpoint(CityTransferEndpointBlock::BeginPayloadType);
+            return;
+        };
+
+        let mut message = CMessage::new(CITY_TRANSFER_CONFIRMATION_MESSAGE_TYPE);
+        message.base_mut().add_long(request.target_master_player_id);
+        message
+            .base_mut()
+            .add(legacy_c_string_prefix(&request.source_faction_name));
+        message.base_mut().add_byte(0);
+        message
+            .base_mut()
+            .add(legacy_c_string_prefix(&request.region_name));
+        message.base_mut().add_byte(0);
+        message.base_mut().add_long64(session_id);
+        message.base_mut().add_long(cookie_second);
+        self.runtime
+            .send_city_transfer_confirmation(request.target_master_player_id, &message);
+    }
+
+    fn on_async_callback(&self, result: NetSessionAsyncResult<'_>) {
+        let terminal = if result.kind == NetSessionAsyncResultKind::Result {
+            let Some(decision) = result
+                .payload
+                .and_then(|payload| payload.downcast_ref::<i32>())
+            else {
+                self.runtime
+                    .block_city_transfer_endpoint(CityTransferEndpointBlock::ResultPayloadType);
+                return;
+            };
+            if *decision == 1 {
+                CityTransferTerminal::Approved
+            } else {
+                CityTransferTerminal::Denied
+            }
+        } else {
+            CityTransferTerminal::NonResult { kind: result.kind }
+        };
+        self.runtime.finish_city_transfer(
+            self.source_faction_id,
+            self.target_faction_id,
+            self.region_id,
+            &self.region_name,
+            terminal,
+        );
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CityTransferSessionReport {
+    pub(crate) session: CreatedNetSession,
+}
+
+pub(crate) enum CityTransferSessionBlock {
+    Create(NetSessionCreateBlock),
+    SetCallback {
+        session: CreatedNetSession,
+        source: NetSessionSetCallbackBlock,
+    },
+    Begin {
+        session: CreatedNetSession,
+        source: NetSessionManagerBeginBlock,
+    },
+}
+
+impl std::fmt::Debug for CityTransferSessionBlock {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Create(source) => formatter.debug_tuple("Create").field(source).finish(),
+            Self::SetCallback { session, source } => {
+                let source = match source {
+                    NetSessionSetCallbackBlock::SessionNotFound { .. } => "SessionNotFound",
+                    NetSessionSetCallbackBlock::AlreadyAssigned(_) => "AlreadyAssigned",
+                };
+                formatter
+                    .debug_struct("SetCallback")
+                    .field("session", session)
+                    .field("source", &source)
+                    .finish()
+            }
+            Self::Begin { session, source } => formatter
+                .debug_struct("Begin")
+                .field("session", session)
+                .field("source", source)
+                .finish(),
+        }
+    }
+}
+
+pub(crate) fn begin_city_transfer_session(
+    manager: &CNetSessionManager,
+    request: CityTransferSessionRequest,
+    runtime: Arc<dyn CityTransferSessionRuntime>,
+    random: impl FnMut(i32) -> i32,
+) -> Result<CityTransferSessionReport, CityTransferSessionBlock> {
+    let session = manager
+        .create_session(
+            request.target_master_player_id,
+            request.requested_session_id,
+            random,
+        )
+        .map_err(CityTransferSessionBlock::Create)?;
+    let endpoint = Box::new(PlayerTransferOwnerCity {
+        source_faction_id: request.source_faction_id,
+        target_faction_id: request.target_faction_id,
+        region_id: request.region_id,
+        region_name: request.region_name.clone(),
+        runtime,
+    });
+    manager
+        .set_callback_handle(session.id, endpoint)
+        .map_err(|source| CityTransferSessionBlock::SetCallback { session, source })?;
+    manager
+        .beging(session.id, request.timeout_ticks, &request)
+        .map_err(|source| CityTransferSessionBlock::Begin { session, source })?;
+    Ok(CityTransferSessionReport { session })
+}
+
+pub(crate) trait CityTransferEffects {
+    type SessionReport;
+    type SessionBlock;
+
+    fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8>;
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>);
+    fn begin_city_transfer_session(
+        &mut self,
+        request: CityTransferSessionRequest,
+    ) -> Result<Self::SessionReport, Self::SessionBlock>;
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[UnionFormatArgument<'_>],
+    ) -> Vec<u8>;
+    fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32);
+    fn broadcast_city_transfer(&mut self, text: &[u8]) -> Result<i32, SendMessageError>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CityTransferRejection {
+    RegionNotFound,
+    NullRegionPointer,
+    NonPositiveRegion,
+    CityWarActive { notice_sent: bool },
+    MasterFactionNotFound,
+    ZeroTargetFactionId,
+    SourceFactionMissing,
+    TargetFactionMissing,
+    CountriesDiffer { notice_sent: bool },
+    SourceMasterIsCountryKing { notice_sent: bool },
+    SourceDoesNotOwnRegion,
+    TargetAlreadyOwnsCity { notice_sent: bool },
+    TargetDeclaredAttackWar { notice_sent: bool },
+    TargetDeclaredVillageWar { notice_sent: bool },
+    SourceFactionReserved { notice_sent: bool },
+    TargetFactionReserved { notice_sent: bool },
+    TargetMasterOffline { notice_sent: bool },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CityTransferStartOutcome<SessionReport> {
+    Rejected(CityTransferRejection),
+    Started {
+        source_faction_id: i32,
+        target_master_player_id: i32,
+        net_exchange_id: i32,
+        session: SessionReport,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum CityTransferStartBlock<SessionBlock> {
+    FactionMaster(FactionMasterLookupBlock),
+    MissingSourceCountry { faction_id: i32 },
+    MissingTargetCountry { faction_id: i32 },
+    MissingSourceMaster { faction_id: i32 },
+    MissingTargetMaster { faction_id: i32 },
+    Session {
+        source_faction_id: i32,
+        target_faction_id: i32,
+        source_reserved: bool,
+        target_reserved: bool,
+        source: SessionBlock,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CityTransferFinishReport {
+    pub(crate) source_reservation_removed: bool,
+    pub(crate) target_reservation_removed: bool,
+    pub(crate) source_faction_found: bool,
+    pub(crate) target_faction_found: bool,
+    pub(crate) source_cities: Option<OwnedCityBooleanMutationReport>,
+    pub(crate) target_city: Option<OwnedCityAddOutcome>,
+    pub(crate) target_union_id: Option<i32>,
+    pub(crate) broadcast: Option<Result<i32, SendMessageError>>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CityTransferFinishBlock {
+    SourceCities {
+        report: CityTransferFinishReport,
+        source: OwnedCityMutationBuildError,
+    },
+    TargetCity {
+        report: CityTransferFinishReport,
+        source: OwnedCityMutationBuildError,
+    },
+    TargetUnion {
+        report: CityTransferFinishReport,
+        map_key: i32,
+    },
+}
+
+fn send_city_transfer_notice<Effects>(
+    effects: &mut Effects,
+    requester_player_id: i32,
+    text_id: &'static [u8],
+) where
+    Effects: CityTransferEffects,
+{
+    let second_text = effects.world_string(b"WS0193");
+    let first_text = effects.world_string(text_id);
+    effects.send_organizing_info(FactionMemberInfoRequest {
+        recipient_player_id: requester_player_id,
+        first_text: legacy_c_string_prefix(&first_text),
+        second_text: legacy_c_string_prefix(&second_text),
+        information_type: -1,
+        color: 0xFFDA_EDFE,
+        trailing_value: 0,
+    });
 }
 
 /// Достигнутые faction-callback и top-info части исходного singleton owner-а.
@@ -2274,6 +2601,294 @@ impl COrganizingCtrl {
         };
         self.request_establishment_union_players.remove(position);
         true
+    }
+
+    /// Выполняет preflight и запускает `TransferIOwnerCity` в машинном порядке.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "явные Game/country/war/session owners заменяют process singletons"
+    )]
+    pub(crate) fn transfer_city_owner<Effects>(
+        &mut self,
+        game: &CGame,
+        countries: &CCountryHandler,
+        attack_city: &CAttackCitySys,
+        village_war: &CVillageWarSys,
+        requester_player_id: i32,
+        target_faction_id: i32,
+        region_id: i32,
+        effects: &mut Effects,
+    ) -> Result<
+        CityTransferStartOutcome<Effects::SessionReport>,
+        CityTransferStartBlock<Effects::SessionBlock>,
+    >
+    where
+        Effects: CityTransferEffects,
+    {
+        let region_name = match game.region_name(region_id) {
+            WorldRegionNameLookup::RegionNotFound => {
+                return Ok(CityTransferStartOutcome::Rejected(
+                    CityTransferRejection::RegionNotFound,
+                ));
+            }
+            WorldRegionNameLookup::NullRegionPointer => {
+                return Ok(CityTransferStartOutcome::Rejected(
+                    CityTransferRejection::NullRegionPointer,
+                ));
+            }
+            WorldRegionNameLookup::Name(name) => name,
+        };
+        if region_id < 1 {
+            return Ok(CityTransferStartOutcome::Rejected(
+                CityTransferRejection::NonPositiveRegion,
+            ));
+        }
+        if village_war.get_region_state(region_id) != ECityState::No
+            || attack_city.get_city_state(region_id) != ECityState::No
+        {
+            send_city_transfer_notice(effects, requester_player_id, b"WS0248");
+            return Ok(CityTransferStartOutcome::Rejected(
+                CityTransferRejection::CityWarActive { notice_sent: true },
+            ));
+        }
+
+        let source_faction_id = self
+            .faction_id_by_master_player(requester_player_id)
+            .map_err(CityTransferStartBlock::FactionMaster)?;
+        if source_faction_id == 0 {
+            return Ok(CityTransferStartOutcome::Rejected(
+                CityTransferRejection::MasterFactionNotFound,
+            ));
+        }
+        if target_faction_id == 0 {
+            return Ok(CityTransferStartOutcome::Rejected(
+                CityTransferRejection::ZeroTargetFactionId,
+            ));
+        }
+
+        let (source_country, source_owns_region) = {
+            let Some(source) = self.faction_by_id(source_faction_id) else {
+                return Ok(CityTransferStartOutcome::Rejected(
+                    CityTransferRejection::SourceFactionMissing,
+                ));
+            };
+            let country = source.country().ok_or(
+                CityTransferStartBlock::MissingSourceCountry {
+                    faction_id: source_faction_id,
+                },
+            )?;
+            (country, source.is_owned_city(region_id) != 0)
+        };
+        let (target_country, target_has_city) = {
+            let Some(target) = self.faction_by_id(target_faction_id) else {
+                return Ok(CityTransferStartOutcome::Rejected(
+                    CityTransferRejection::TargetFactionMissing,
+                ));
+            };
+            let country = target.country().ok_or(
+                CityTransferStartBlock::MissingTargetCountry {
+                    faction_id: target_faction_id,
+                },
+            )?;
+            (country, !target.owned_cities().is_empty())
+        };
+
+        if source_country != target_country {
+            send_city_transfer_notice(effects, requester_player_id, b"WS0249");
+            return Ok(CityTransferStartOutcome::Rejected(
+                CityTransferRejection::CountriesDiffer { notice_sent: true },
+            ));
+        }
+        if let Some(country) = countries.get_country(source_country) {
+            let source_master_id = self
+                .faction_by_id(source_faction_id)
+                .expect("source faction owner проверен")
+                .master_id()
+                .ok_or(CityTransferStartBlock::MissingSourceMaster {
+                    faction_id: source_faction_id,
+                })?;
+            if country.king.id == source_master_id {
+                send_city_transfer_notice(effects, requester_player_id, b"WS0250");
+                return Ok(CityTransferStartOutcome::Rejected(
+                    CityTransferRejection::SourceMasterIsCountryKing { notice_sent: true },
+                ));
+            }
+        }
+        if !source_owns_region {
+            return Ok(CityTransferStartOutcome::Rejected(
+                CityTransferRejection::SourceDoesNotOwnRegion,
+            ));
+        }
+        if target_has_city {
+            send_city_transfer_notice(effects, requester_player_id, b"WS0251");
+            return Ok(CityTransferStartOutcome::Rejected(
+                CityTransferRejection::TargetAlreadyOwnsCity { notice_sent: true },
+            ));
+        }
+        if attack_city.is_already_declared_for_war(target_faction_id) {
+            send_city_transfer_notice(effects, requester_player_id, b"WS0252");
+            return Ok(CityTransferStartOutcome::Rejected(
+                CityTransferRejection::TargetDeclaredAttackWar { notice_sent: true },
+            ));
+        }
+        if village_war.is_already_declared_for_war(target_faction_id) {
+            send_city_transfer_notice(effects, requester_player_id, b"WS0253");
+            return Ok(CityTransferStartOutcome::Rejected(
+                CityTransferRejection::TargetDeclaredVillageWar { notice_sent: true },
+            ));
+        }
+        if self.is_union_application_reserved(source_faction_id) {
+            send_city_transfer_notice(effects, requester_player_id, b"WS0254");
+            return Ok(CityTransferStartOutcome::Rejected(
+                CityTransferRejection::SourceFactionReserved { notice_sent: true },
+            ));
+        }
+        if self.is_union_application_reserved(target_faction_id) {
+            send_city_transfer_notice(effects, requester_player_id, b"WS0255");
+            return Ok(CityTransferStartOutcome::Rejected(
+                CityTransferRejection::TargetFactionReserved { notice_sent: true },
+            ));
+        }
+
+        let target_master_player_id = self
+            .faction_by_id(target_faction_id)
+            .expect("target faction owner проверен")
+            .master_id()
+            .ok_or(CityTransferStartBlock::MissingTargetMaster {
+                faction_id: target_faction_id,
+            })?;
+        let Some(target_master) = game.online_player_by_id(target_master_player_id as u32) else {
+            send_city_transfer_notice(effects, requester_player_id, b"WS0256");
+            return Ok(CityTransferStartOutcome::Rejected(
+                CityTransferRejection::TargetMasterOffline { notice_sent: true },
+            ));
+        };
+        self.push_to_establishment_list(source_faction_id);
+        self.push_to_establishment_list(target_faction_id);
+        let net_exchange_id = target_master.get_net_exchange_id();
+        let source_name = self
+            .faction_by_id(source_faction_id)
+            .expect("source faction owner проверен")
+            .name()
+            .to_vec();
+        let session = effects
+            .begin_city_transfer_session(CityTransferSessionRequest {
+                requester_player_id,
+                source_faction_id,
+                target_master_player_id,
+                target_faction_id,
+                region_id,
+                requested_session_id: net_exchange_id,
+                timeout_ticks: 0x2710,
+                source_faction_name: source_name,
+                region_name: region_name.to_vec(),
+            })
+            .map_err(|source| CityTransferStartBlock::Session {
+                source_faction_id,
+                target_faction_id,
+                source_reserved: true,
+                target_reserved: true,
+                source,
+            })?;
+        Ok(CityTransferStartOutcome::Started {
+            source_faction_id,
+            target_master_player_id,
+            net_exchange_id,
+            session,
+        })
+    }
+
+    /// Завершает callback: снимает обе reservation и при approve передаёт город.
+    pub(crate) fn finish_city_transfer<Effects>(
+        &mut self,
+        game: &CGame,
+        source_faction_id: i32,
+        target_faction_id: i32,
+        region_id: i32,
+        region_name: &[u8],
+        terminal: CityTransferTerminal,
+        effects: &mut Effects,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<CityTransferFinishReport, CityTransferFinishBlock>
+    where
+        Effects: CityTransferEffects,
+    {
+        let mut report = CityTransferFinishReport {
+            source_reservation_removed: self.remove_from_establishment_list(source_faction_id),
+            target_reservation_removed: self.remove_from_establishment_list(target_faction_id),
+            source_faction_found: false,
+            target_faction_found: false,
+            source_cities: None,
+            target_city: None,
+            target_union_id: None,
+            broadcast: None,
+        };
+        if terminal != CityTransferTerminal::Approved {
+            return Ok(report);
+        }
+
+        report.source_faction_found = self.faction_by_id(source_faction_id).is_some();
+        report.target_faction_found = self.faction_by_id(target_faction_id).is_some();
+        if !report.source_faction_found || !report.target_faction_found {
+            return Ok(report);
+        }
+        let source_name = self
+            .faction_by_id(source_faction_id)
+            .expect("оба faction owner-а проверены")
+            .name()
+            .to_vec();
+        let target_name = self
+            .faction_by_id(target_faction_id)
+            .expect("оба faction owner-а проверены")
+            .name()
+            .to_vec();
+        let target_canonical_faction_id = self
+            .faction_by_id(target_faction_id)
+            .expect("оба faction owner-а проверены")
+            .faction_id();
+
+        let source_cities = self
+            .faction_by_id_mut(source_faction_id)
+            .expect("source faction owner проверен")
+            .clear_owned_cities(game, &mut *update_player);
+        report.source_cities = Some(match source_cities {
+            Ok(source_cities) => source_cities,
+            Err(source) => {
+                return Err(CityTransferFinishBlock::SourceCities { report, source });
+            }
+        });
+        let target_city = self
+            .faction_by_id_mut(target_faction_id)
+            .expect("target faction owner проверен")
+            .add_owned_city(game, region_id, &mut *update_player);
+        report.target_city = Some(match target_city {
+            Ok(target_city) => target_city,
+            Err(source) => {
+                return Err(CityTransferFinishBlock::TargetCity { report, source });
+            }
+        });
+        let target_union_id = match self.is_free_faction(target_canonical_faction_id) {
+            FreeFactionLookup::NoUnion => 0,
+            FreeFactionLookup::Union(union_id) => union_id,
+            FreeFactionLookup::BlockedNullConfederation { map_key } => {
+                return Err(CityTransferFinishBlock::TargetUnion { report, map_key });
+            }
+        };
+        report.target_union_id = Some(target_union_id);
+        effects.refresh_owned_city(region_id, target_faction_id, target_union_id);
+        let source_name = legacy_c_string_prefix(&source_name);
+        let region_name = legacy_c_string_prefix(region_name);
+        let target_name = legacy_c_string_prefix(&target_name);
+        let text = effects.format_world_string(
+            b"WS0257",
+            &[
+                UnionFormatArgument::Text(source_name),
+                UnionFormatArgument::Text(region_name),
+                UnionFormatArgument::Text(target_name),
+            ],
+        );
+        report.broadcast = Some(effects.broadcast_city_transfer(&text));
+        Ok(report)
     }
 
     /// Завершает result/timeout локального `PlayerApplyForJoinConfeder`.

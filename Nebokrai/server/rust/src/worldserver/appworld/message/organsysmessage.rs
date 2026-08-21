@@ -3,8 +3,8 @@
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
 //! `0x6012A`, парные city-tax gate `0x6012B/0x6012C` и region-param update
-//! `0x6012D`, region route `0x6012E` и city-gate route `0x6012F`; остальной
-//! owner —
+//! `0x6012D`, region route `0x6012E`, city-gate route `0x6012F` и полный
+//! city-transfer ingress `0x60130`; остальной owner —
 //! `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
@@ -124,6 +124,11 @@
 //! true-result меняет type исходного сообщения на `0x7FE2A`, получает route
 //! через `GetGameServerNumber_ByRegionID(region)` и безусловно вызывает
 //! `SendToMapID`, включая literal `0` при miss. War/online/tail gates нет.
+//! Exact `0x004A8022..0x004A804A` для `0x60130` читает ровно `(requester
+//! player ID, target faction ID, region ID)` и вызывает восстановленный
+//! `COrganizingCtrl::TransferIOwnerCity`; bool-result игнорируется, прямого
+//! wire-ответа ingress не создаёт. Подтверждение идёт отдельным `0x7FE2B`, а
+//! terminal decision возвращается через уже общий `0x60131` session branch.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -149,6 +154,7 @@ use parking_lot::Mutex;
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::servers::ServerCommandHandle;
+use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionCallbackOutcome};
 use crate::public::date::TagTime;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
@@ -167,7 +173,10 @@ use crate::worldserver::appworld::organizingsystem::factionwarsys::{
 };
 use crate::worldserver::appworld::organizingsystem::attackcitysys::CAttackCitySys;
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
-    COrganizingCtrl, DeclareWarFactionPage, DeclareWarFactionPageBlock, FreePlayerLookup,
+    COrganizingCtrl, CityTransferEffects, CityTransferEndpointBlock,
+    CityTransferSessionBlock, CityTransferSessionReport, CityTransferSessionRequest,
+    CityTransferSessionRuntime, CityTransferStartBlock, CityTransferStartOutcome,
+    CityTransferTerminal, DeclareWarFactionPage, DeclareWarFactionPageBlock, FreePlayerLookup,
     OrganizingContributorBlock, OrganizingContributorOutcome,
     FactionUnionMembershipLookupBlock, OrganizingFactionExperienceMutation,
     OrganizingFactionMemberStateOutcome,
@@ -176,7 +185,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingFactionWarDeclarationBlock, WorldFactionWarDeclarationEffects,
     OrganizingLeaveWordEnableOutcome, OrganizingLeaveWordOutcome, OrganizingPronounceBlock,
     OrganizingPronounceOutcome, OrganizingUnionApplyForJoinDispatchBlock,
-    OrganizingUnionApplyForJoinOutcome,
+    OrganizingUnionApplyForJoinOutcome, begin_city_transfer_session,
 };
 use crate::worldserver::appworld::organizingsystem::organizing::{
     ECityState, EOperator, TagTimeValue,
@@ -221,6 +230,7 @@ const ROUTE_REGION_MESSAGE_TYPE: i32 = 0x6012E;
 const ROUTE_REGION_RESPONSE_TYPE: i32 = 0x7FE2D;
 const OPERATE_CITY_GATE_MESSAGE_TYPE: i32 = 0x6012F;
 const OPERATE_CITY_GATE_RESPONSE_TYPE: i32 = 0x7FE2A;
+const TRANSFER_CITY_OWNER_MESSAGE_TYPE: i32 = 0x60130;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -240,11 +250,35 @@ pub(crate) struct UnionApplicationConfirmationDelivery {
     pub(crate) result: Result<i32, SendMessageError>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct QueuedCityTransferTerminal {
+    pub(crate) source_faction_id: i32,
+    pub(crate) target_faction_id: i32,
+    pub(crate) region_id: i32,
+    pub(crate) region_name: Vec<u8>,
+    pub(crate) terminal: CityTransferTerminal,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum QueuedOrganizingSessionTerminal {
+    Union(QueuedUnionApplicationTerminal),
+    CityTransfer(QueuedCityTransferTerminal),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CityTransferConfirmationDelivery {
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
 #[derive(Default)]
 struct WorldUnionApplicationRuntimeState {
-    terminals: Mutex<VecDeque<QueuedUnionApplicationTerminal>>,
+    terminals: Mutex<VecDeque<QueuedOrganizingSessionTerminal>>,
     confirmations: Mutex<VecDeque<UnionApplicationConfirmationDelivery>>,
     blocks: Mutex<VecDeque<UnionApplicationEndpointBlock>>,
+    city_confirmations: Mutex<VecDeque<CityTransferConfirmationDelivery>>,
+    city_blocks: Mutex<VecDeque<CityTransferEndpointBlock>>,
 }
 
 /// Process-lifetime очередь между `CNetSessionManager` и organizing owner-ом.
@@ -266,7 +300,19 @@ impl WorldUnionApplicationRuntimeOwner {
         })
     }
 
-    pub(crate) fn pop_terminal(&self) -> Option<QueuedUnionApplicationTerminal> {
+    fn city_endpoint(
+        &self,
+        sender: Option<ServerCommandHandle>,
+        game_server_id: i32,
+    ) -> Arc<dyn CityTransferSessionRuntime> {
+        Arc::new(WorldCityTransferEndpointRuntime {
+            state: Arc::clone(&self.state),
+            sender,
+            game_server_id,
+        })
+    }
+
+    pub(crate) fn pop_terminal(&self) -> Option<QueuedOrganizingSessionTerminal> {
         self.state.terminals.lock().pop_front()
     }
 
@@ -276,6 +322,14 @@ impl WorldUnionApplicationRuntimeOwner {
 
     pub(crate) fn take_blocks(&self) -> Vec<UnionApplicationEndpointBlock> {
         self.state.blocks.lock().drain(..).collect()
+    }
+
+    pub(crate) fn take_city_confirmations(&self) -> Vec<CityTransferConfirmationDelivery> {
+        self.state.city_confirmations.lock().drain(..).collect()
+    }
+
+    pub(crate) fn take_city_blocks(&self) -> Vec<CityTransferEndpointBlock> {
+        self.state.city_blocks.lock().drain(..).collect()
     }
 }
 
@@ -311,15 +365,63 @@ impl UnionApplicationSessionRuntime for WorldUnionApplicationEndpointRuntime {
         self.state
             .terminals
             .lock()
-            .push_back(QueuedUnionApplicationTerminal {
-                union_id,
-                applicant_faction_id,
-                terminal,
-            });
+            .push_back(QueuedOrganizingSessionTerminal::Union(
+                QueuedUnionApplicationTerminal {
+                    union_id,
+                    applicant_faction_id,
+                    terminal,
+                },
+            ));
     }
 
     fn block_union_application_endpoint(&self, block: UnionApplicationEndpointBlock) {
         self.state.blocks.lock().push_back(block);
+    }
+}
+
+struct WorldCityTransferEndpointRuntime {
+    state: Arc<WorldUnionApplicationRuntimeState>,
+    sender: Option<ServerCommandHandle>,
+    game_server_id: i32,
+}
+
+impl CityTransferSessionRuntime for WorldCityTransferEndpointRuntime {
+    fn send_city_transfer_confirmation(&self, recipient_player_id: i32, message: &CMessage) {
+        let result = message.send_to_map_id(self.sender.as_ref(), self.game_server_id);
+        self.state
+            .city_confirmations
+            .lock()
+            .push_back(CityTransferConfirmationDelivery {
+                recipient_player_id,
+                game_server_id: self.game_server_id,
+                result,
+            });
+    }
+
+    fn finish_city_transfer(
+        &self,
+        source_faction_id: i32,
+        target_faction_id: i32,
+        region_id: i32,
+        region_name: &[u8],
+        terminal: CityTransferTerminal,
+    ) {
+        self.state
+            .terminals
+            .lock()
+            .push_back(QueuedOrganizingSessionTerminal::CityTransfer(
+                QueuedCityTransferTerminal {
+                    source_faction_id,
+                    target_faction_id,
+                    region_id,
+                    region_name: region_name.to_vec(),
+                    terminal,
+                },
+            ));
+    }
+
+    fn block_city_transfer_endpoint(&self, block: CityTransferEndpointBlock) {
+        self.state.city_blocks.lock().push_back(block);
     }
 }
 
@@ -416,6 +518,55 @@ impl UnionAddFactionEffects for WorldUnionApplicationEffects<'_> {
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
         let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+impl CityTransferEffects for WorldUnionApplicationEffects<'_> {
+    type SessionReport = CityTransferSessionReport;
+    type SessionBlock = CityTransferSessionBlock;
+
+    fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
+        (self.callbacks.world_string)(string_id)
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+
+    fn begin_city_transfer_session(
+        &mut self,
+        request: CityTransferSessionRequest,
+    ) -> Result<Self::SessionReport, Self::SessionBlock> {
+        let game_server_id = self
+            .game
+            .game_server_number_by_player_id(request.target_master_player_id);
+        let endpoint = self
+            .runtime
+            .city_endpoint(self.game.current_game_server_sender(), game_server_id);
+        begin_city_transfer_session(self.manager, request, endpoint, |upper_bound| {
+            (self.callbacks.random)(upper_bound)
+        })
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[UnionFormatArgument<'_>],
+    ) -> Vec<u8> {
+        (self.callbacks.format_world_string)(string_id, arguments)
+    }
+
+    fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32) {
+        (self.callbacks.refresh_owned_city)(region_id, faction_id, union_id);
+    }
+
+    fn broadcast_city_transfer(&mut self, text: &[u8]) -> Result<i32, SendMessageError> {
+        COrganizingCtrl::send_organizing_info_to_all(
+            self.game,
+            text,
+            0xFFDA_EDFE,
+            0x328F_93FC,
+        )
     }
 }
 
@@ -1923,6 +2074,57 @@ pub(crate) fn dispatch_city_gate(
     };
     Some(Ok(OrganizingCityGateDispatch {
         player_id,
+        region_id,
+        outcome,
+    }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingCityTransferDispatch<SessionReport> {
+    pub(crate) requester_player_id: i32,
+    pub(crate) target_faction_id: i32,
+    pub(crate) region_id: i32,
+    pub(crate) outcome: CityTransferStartOutcome<SessionReport>,
+}
+
+/// Выполняет `0x60130`: три legacy `Long` и полный `TransferIOwnerCity`.
+pub(crate) fn dispatch_city_transfer<Effects>(
+    message: &mut CMessage,
+    game: &CGame,
+    countries: &CCountryHandler,
+    organizing: &mut COrganizingCtrl,
+    attack_city: &CAttackCitySys,
+    village_war: &CVillageWarSys,
+    effects: &mut Effects,
+) -> Option<
+    Result<
+        OrganizingCityTransferDispatch<Effects::SessionReport>,
+        CityTransferStartBlock<Effects::SessionBlock>,
+    >,
+>
+where
+    Effects: CityTransferEffects,
+{
+    if message.message_type() != TRANSFER_CITY_OWNER_MESSAGE_TYPE {
+        return None;
+    }
+
+    let requester_player_id = message.base_mut().get_long().unwrap_or(0);
+    let target_faction_id = message.base_mut().get_long().unwrap_or(0);
+    let region_id = message.base_mut().get_long().unwrap_or(0);
+    let outcome = organizing.transfer_city_owner(
+        game,
+        countries,
+        attack_city,
+        village_war,
+        requester_player_id,
+        target_faction_id,
+        region_id,
+        effects,
+    );
+    Some(outcome.map(|outcome| OrganizingCityTransferDispatch {
+        requester_player_id,
+        target_faction_id,
         region_id,
         outcome,
     }))
