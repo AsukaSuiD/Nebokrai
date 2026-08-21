@@ -3,8 +3,9 @@
 //! `RequestCountList` RVA `0x000A1C60`, `AppendOneFaction2Count`
 //! `0x000A1DD0`, `RefreshMembers/RefreshlistFid/RefreshAll`
 //! `0x000A2090/0x000A21D0/0x000A22C0`, `DeleteOneMember` `0x000A27A0` и
-//! `InsertOneFaction` `0x000A2960` имеют статус `IMPLEMENTED`; DB reload,
-//! остальные mutations и `FactionWin` ниже пока `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `InsertOneFaction` `0x000A2960`, `MkOne` `0x000A2B60` и `FactionWin`
+//! `0x000A2BD0` имеют статус `IMPLEMENTED`; DB reload и остальные mutations
+//! ниже пока `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
@@ -28,6 +29,12 @@
 //! являются потерянными decompiler stack-alias входного параметра: PDB
 //! сохраняет соответствующие сигнатуры, а exact caller `0x60139` кладёт
 //! прочитанный literal ID непосредственно перед каждым вызовом.
+//! `FactionWin` сохраняет exact ordered insert-only `MkOne`: уже известный
+//! player не меняет faction и не попадает в delta-сообщение. Отрицательный
+//! master ID является только wire-маркером перед terminal zero и в `m_member`
+//! не вставляется. После `SendAll` legacy-аудит дописывается в `bzhsmd.txt`;
+//! `OpenOptions`/`Write` заменяют CRT FILE plumbing, а CRLF фиксирует байты,
+//! которые исходный Windows text-mode получал из `\n`.
 //!
 //! Старый unbounded copy faction-name в `char[20]` мог перезаписать count и
 //! links. Это внутренний UB, а не протокол: Rust останавливает append при
@@ -36,6 +43,10 @@
 //! принимает уже загруженное состояние через обычные safe collections.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::OpenOptions;
+use std::io::Write;
+
+use chrono::{Datelike, Local, Timelike};
 
 use crate::nets::networld::message::CMessage;
 
@@ -48,6 +59,28 @@ const MAX_PUBLISHED_COUNTS: usize = 5;
 pub(crate) struct GoodsWarFactionSnapshot {
     pub(crate) name: Vec<u8>,
     pub(crate) goods_war_count: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GoodsWarFactionWinSnapshot {
+    pub(crate) faction_id: i32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) master_id: i32,
+    pub(crate) member_ids: Vec<i32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GoodsWarAuditPlayer {
+    pub(crate) account: Vec<u8>,
+    pub(crate) player_id: i32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) level: u8,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GoodsWarAuditEnvironment {
+    pub(crate) login_server_id: i32,
+    pub(crate) world_number: u32,
 }
 
 pub(crate) trait GoodsWarMemberContext {
@@ -67,6 +100,13 @@ pub(crate) trait GoodsWarMemberContext {
     ) -> Result<i32, Self::Block>;
 
     fn send_all(&mut self, message: &CMessage) -> i32;
+
+    /// Возвращает reached runtime-поля для legacy `bzhsmd.txt`; `None`
+    /// означает, что setup ещё не достиг назначенного `dwNumber`.
+    fn faction_win_audit_environment(&mut self) -> Option<GoodsWarAuditEnvironment>;
+
+    /// Повторяет поэлементный `GetMapPlayer` уже после записи audit header.
+    fn faction_win_audit_player(&mut self, player_id: i32) -> Option<GoodsWarAuditPlayer>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,6 +127,23 @@ pub(crate) struct GoodsWarRefreshReport {
     pub(crate) members_delivery: i32,
     pub(crate) counts_delivery: i32,
     pub(crate) faction_ids_delivery: i32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GoodsWarFactionWinAuditReport {
+    pub(crate) environment_available: bool,
+    pub(crate) file_opened: bool,
+    pub(crate) header_written: bool,
+    pub(crate) player_lookups_attempted: usize,
+    pub(crate) player_rows_attempted: usize,
+    pub(crate) player_rows_written: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GoodsWarFactionWinReport {
+    pub(crate) inserted_members: usize,
+    pub(crate) delivery: i32,
+    pub(crate) audit: GoodsWarFactionWinAuditReport,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -285,6 +342,42 @@ impl CGoodsWarMember {
             faction_ids_delivery: self.send_faction_ids(context),
         }
     }
+
+    /// Выполняет exact `FactionWin`: insert-only member delta, wire sentinel,
+    /// общий send и только затем best-effort legacy file audit.
+    pub(crate) fn faction_win<Context: GoodsWarMemberContext + ?Sized>(
+        &mut self,
+        winner: &GoodsWarFactionWinSnapshot,
+        context: &mut Context,
+    ) -> GoodsWarFactionWinReport {
+        let mut message = CMessage::new(GOODS_WAR_STATE_MESSAGE_TYPE);
+        message.base_mut().add_long(1);
+        message.base_mut().add_long(winner.faction_id);
+
+        let mut inserted_members = 0usize;
+        for &player_id in &winner.member_ids {
+            if self.members.contains_key(&player_id) {
+                continue;
+            }
+            self.members.insert(player_id, winner.faction_id);
+            message.base_mut().add_long(player_id);
+            inserted_members += 1;
+        }
+        message.base_mut().add_long(winner.master_id.wrapping_neg());
+        message.base_mut().add_long(0);
+
+        let delivery = context.send_all(&message);
+        let audit = context
+            .faction_win_audit_environment()
+            .map_or_else(GoodsWarFactionWinAuditReport::default, |environment| {
+                append_faction_win_audit(winner, &environment, context)
+            });
+        GoodsWarFactionWinReport {
+            inserted_members,
+            delivery,
+            audit,
+        }
+    }
 }
 
 fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
@@ -292,6 +385,65 @@ fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
         .iter()
         .position(|byte| *byte == 0)
         .unwrap_or(value.len())]
+}
+
+fn append_faction_win_audit<Context: GoodsWarMemberContext + ?Sized>(
+    winner: &GoodsWarFactionWinSnapshot,
+    environment: &GoodsWarAuditEnvironment,
+    context: &mut Context,
+) -> GoodsWarFactionWinAuditReport {
+    let mut report = GoodsWarFactionWinAuditReport {
+        environment_available: true,
+        ..GoodsWarFactionWinAuditReport::default()
+    };
+    let now = Local::now();
+    let Ok(mut file) = OpenOptions::new()
+        .read(true)
+        .append(true)
+        .create(true)
+        .open("bzhsmd.txt")
+    else {
+        return report;
+    };
+    report.file_opened = true;
+
+    let mut header = Vec::new();
+    let _ = write!(
+        header,
+        "\r\n{}-{} {:04}{:02}{:02} {:02}:{:02}\r\n>>>FName:",
+        environment.login_server_id,
+        environment.world_number as i32,
+        now.year(),
+        now.month(),
+        now.day(),
+        now.hour(),
+        now.minute(),
+    );
+    header.extend_from_slice(legacy_c_string_prefix(&winner.name));
+    let _ = write!(
+        header,
+        "\tMasterID:{}\tCount:{}\r\n",
+        winner.master_id,
+        winner.member_ids.len() as u32 as i32,
+    );
+    report.header_written = file.write_all(&header).is_ok();
+
+    for &player_id in &winner.member_ids {
+        report.player_lookups_attempted += 1;
+        let Some(player) = context.faction_win_audit_player(player_id) else {
+            continue;
+        };
+        report.player_rows_attempted += 1;
+        let mut row = Vec::new();
+        row.extend_from_slice(legacy_c_string_prefix(&player.account));
+        let _ = write!(row, "\t{}\t", player.player_id);
+        row.extend_from_slice(legacy_c_string_prefix(&player.name));
+        let _ = write!(row, "\t{}\r\n", player.level);
+        if file.write_all(&row).is_ok() {
+            report.player_rows_written += 1;
+        }
+    }
+    report
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
@@ -554,7 +706,7 @@ fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
 
 // ============================================================================
 // FUNCTION: CGoodsWarMember::MkOne
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goodswarmember.cpp:26
@@ -568,7 +720,7 @@ fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
 
 // ============================================================================
 // FUNCTION: CGoodsWarMember::FactionWin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goodswarmember.cpp:369

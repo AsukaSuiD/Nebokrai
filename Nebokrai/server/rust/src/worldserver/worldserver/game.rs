@@ -1001,6 +1001,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingFactionUpgradeDispatch, OrganizingFactionUploadIconDispatch,
     OrganizingRegionParamDispatch, OrganizingRegionRouteDispatch,
     OrganizingGoodsWarCommandDispatch, OrganizingGoodsWarContextBlock,
+    OrganizingGoodsWarFactionWinBlock, OrganizingGoodsWarFactionWinDispatch,
     OrganizingVillageWarApplicationBlock, OrganizingVillageWarApplicationDispatch,
     OrganizingVillageWarResultDispatch,
     OrganizingLeaveWordDispatch,
@@ -1018,7 +1019,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     dispatch_declare_war_faction_list, dispatch_faction_billboard, dispatch_faction_upgrade,
     dispatch_faction_contributor, dispatch_faction_experience, dispatch_faction_member_state,
     dispatch_faction_tax, dispatch_faction_upload_icon,
-    dispatch_goods_war_command,
+    dispatch_goods_war_command, dispatch_goods_war_faction_win,
     dispatch_leave_word, dispatch_leave_word_edit,
     dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_pronounce,
     dispatch_region_param_update, dispatch_region_route, dispatch_union_application,
@@ -2065,6 +2066,15 @@ pub(crate) enum ProcessedWorldEvent {
         outcome: Result<
             OrganizingGoodsWarCommandDispatch,
             GoodsWarMemberBlock<OrganizingGoodsWarContextBlock>,
+        >,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingGoodsWarFactionWin {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<
+            OrganizingGoodsWarFactionWinDispatch,
+            OrganizingGoodsWarFactionWinBlock,
         >,
         runtime: WorldUnionApplicationRuntimeReport,
     },
@@ -8322,8 +8332,9 @@ impl CGame {
     /// `0x60121/0x60123`, передача города `0x60130`, admission permit
     /// `0x60132`, terminal войны за город `0x60133`, заявка village-war
     /// `0x60135`, её result `0x60136`, city-war заявка `0x60137` и её result
-    /// `0x60138` и Goods War command `0x60139` исполняются; остальные остаются
-    /// owned pending. Terminal actions применяются FIFO до следующего сообщения.
+    /// `0x60138`, Goods War command `0x60139` и faction-win `0x6013A`
+    /// исполняются; остальные остаются owned pending. Terminal actions
+    /// применяются FIFO до следующего сообщения.
     pub(crate) fn process_message<TimerCallback: Copy>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
@@ -11826,6 +11837,43 @@ fn process_world_message<TimerCallback: Copy>(
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingGoodsWarCommand {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        if let Some(outcome) =
+            dispatch_goods_war_faction_win(&mut message, game, organizing, goods_war)
+        {
+            let callbacks = WorldUnionApplicationEffectCallbacks {
+                random: &mut *application_callbacks.random,
+                world_string: &mut *application_callbacks.world_string,
+                format_world_string: &mut *application_callbacks.format_world_string,
+                put_war_log: &mut *application_callbacks.put_war_log,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
+            };
+            let mut effects = WorldUnionApplicationEffects::new(
+                game,
+                net_sessions,
+                application_runtime,
+                callbacks,
+            );
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingGoodsWarFactionWin {
                 source,
                 legacy_run_result,
                 outcome,

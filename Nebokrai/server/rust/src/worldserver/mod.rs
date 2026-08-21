@@ -103,7 +103,7 @@ pub(crate) mod appworld {
     }
     #[allow(
         dead_code,
-        reason = "Goods War runtime-owner подключён к organizing ingress до DB reload и FactionWin"
+        reason = "Goods War runtime-owner подключён к organizing ingress до DB reload и остальных mutations"
     )]
     pub(crate) mod goodswarmember;
     pub(crate) mod jjcsystem;

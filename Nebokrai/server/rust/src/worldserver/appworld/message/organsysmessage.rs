@@ -7,7 +7,8 @@
 //! city-transfer ingress `0x60130`, admission-permit `0x60132`, city-war
 //! terminal `0x60133`, village-war application `0x60135`, её result ingress
 //! `0x60136`, city-war application `0x60137`, её result ingress `0x60138` и
-//! Goods War command `0x60139`; остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Goods War command `0x60139` и faction-win `0x6013A`; остальной owner —
+//! `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
@@ -180,6 +181,14 @@
 //! вызывает `RefreshAll` без второго поля. Все остальные значения являются
 //! no-op и не потребляют хвост. Прямого ingress-ответа нет: concrete Goods War
 //! owner при фактических mutations публикует свои `0x7FF20/0x7FF21`.
+//! Exact `0x004A889D..0x004A88CC` для `0x6013A` читает один faction ID,
+//! разрешает faction и только при non-null вызывает `FactionWin`. Сам owner
+//! подтверждён машиной `0x004A2BD0..0x004A2ED5`: берёт ordered member IDs,
+//! insert-only добавляет отсутствующие ключи, публикует `0x7FF20(1, faction,
+//! new members..., -master, 0)`, затем best-effort дописывает `bzhsmd.txt`.
+//! Уже существующие player keys не переназначаются; отрицательный master —
+//! только wire sentinel. Donor-очистка с удалением прежних записей и
+//! обязательной вставкой `-master` в map машине противоречит и не перенесена.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -214,8 +223,10 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsOriginalNameIndex, query_goods_name,
 };
 use crate::worldserver::appworld::goodswarmember::{
-    CGoodsWarMember, GoodsWarFactionSnapshot, GoodsWarMemberBlock, GoodsWarMemberContext,
-    GoodsWarMutationReport, GoodsWarRefreshReport,
+    CGoodsWarMember, GoodsWarAuditEnvironment, GoodsWarAuditPlayer,
+    GoodsWarFactionSnapshot, GoodsWarFactionWinReport, GoodsWarFactionWinSnapshot,
+    GoodsWarMemberBlock, GoodsWarMemberContext, GoodsWarMutationReport,
+    GoodsWarRefreshReport,
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
     FactionContributorContext, FactionEnemyMutationBlock, FactionEnemyMutationContext,
@@ -315,6 +326,7 @@ const APPLY_FOR_CITY_WAR_MESSAGE_TYPE: i32 = 0x60137;
 const APPLY_FOR_CITY_WAR_RESPONSE_TYPE: i32 = 0x7FE37;
 const CITY_WAR_RESULT_MESSAGE_TYPE: i32 = 0x60138;
 const GOODS_WAR_COMMAND_MESSAGE_TYPE: i32 = 0x60139;
+const GOODS_WAR_FACTION_WIN_MESSAGE_TYPE: i32 = 0x6013A;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -3506,6 +3518,25 @@ impl GoodsWarMemberContext for WorldGoodsWarMemberContext<'_, '_> {
             .send_all(self.game.current_game_server_sender().as_ref())
             .unwrap_or(0)
     }
+
+    fn faction_win_audit_environment(&mut self) -> Option<GoodsWarAuditEnvironment> {
+        let world_number = self.game.configured_world_number()?;
+        Some(GoodsWarAuditEnvironment {
+            login_server_id: self.game.login_server_id(),
+            world_number,
+        })
+    }
+
+    fn faction_win_audit_player(&mut self, player_id: i32) -> Option<GoodsWarAuditPlayer> {
+        self.game
+            .map_player(player_id as u32)
+            .map(|player| GoodsWarAuditPlayer {
+                account: player.get_account().to_vec(),
+                player_id: player.get_id(),
+                name: player.get_name().to_vec(),
+                level: player.get_level(),
+            })
+    }
 }
 
 /// Выполняет exact внутренний switch `0x60139`, потребляя только нужные поля.
@@ -3556,6 +3587,64 @@ pub(crate) fn dispatch_goods_war_command(
         _ => OrganizingGoodsWarCommandOutcome::Ignored,
     };
     Some(Ok(OrganizingGoodsWarCommandDispatch { operation, outcome }))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingGoodsWarFactionWinBlock {
+    MissingMasterId {
+        requested_faction_id: i32,
+        actual_faction_id: i32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingGoodsWarFactionWinDispatch {
+    pub(crate) requested_faction_id: i32,
+    pub(crate) faction_found: bool,
+    pub(crate) report: Option<GoodsWarFactionWinReport>,
+}
+
+/// Выполняет exact nullable ingress `0x6013A` и передаёт owned faction snapshot.
+pub(crate) fn dispatch_goods_war_faction_win(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    goods_war: &mut CGoodsWarMember,
+) -> Option<
+    Result<OrganizingGoodsWarFactionWinDispatch, OrganizingGoodsWarFactionWinBlock>,
+> {
+    if message.message_type() != GOODS_WAR_FACTION_WIN_MESSAGE_TYPE {
+        return None;
+    }
+
+    let requested_faction_id = message.base_mut().get_long().unwrap_or(0);
+    let Some(faction) = organizing.faction_by_id(requested_faction_id) else {
+        return Some(Ok(OrganizingGoodsWarFactionWinDispatch {
+            requested_faction_id,
+            faction_found: false,
+            report: None,
+        }));
+    };
+    let actual_faction_id = faction.faction_id();
+    let Some(master_id) = faction.master_id() else {
+        return Some(Err(OrganizingGoodsWarFactionWinBlock::MissingMasterId {
+            requested_faction_id,
+            actual_faction_id,
+        }));
+    };
+    let winner = GoodsWarFactionWinSnapshot {
+        faction_id: actual_faction_id,
+        name: faction.name().to_vec(),
+        master_id,
+        member_ids: faction.get_members().keys().copied().collect(),
+    };
+    let mut context = WorldGoodsWarMemberContext { game, organizing };
+    let report = goods_war.faction_win(&winner, &mut context);
+    Some(Ok(OrganizingGoodsWarFactionWinDispatch {
+        requested_faction_id,
+        faction_found: true,
+        report: Some(report),
+    }))
 }
 
 #[derive(Debug, Eq, PartialEq)]
