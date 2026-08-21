@@ -979,6 +979,7 @@ use crate::worldserver::appworld::country::country::{CCountry, CountryKingSaveLi
 use crate::worldserver::appworld::country::countryhandler::{
     CCountryHandler, CountryRunBlock, CountryRunReport,
 };
+use crate::worldserver::appworld::country::countryparam::CCountryParam;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsOriginalNameIndex,
 };
@@ -993,7 +994,7 @@ use crate::worldserver::appworld::message::othermessage::{
     WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
 };
 use crate::worldserver::appworld::message::countrymessage::{
-    WorldCountryMessageDispatch, WorldCountryRelayOutcome, on_country_message,
+    WorldCountryMessageDispatch, WorldCountryMessageOutcome, on_country_message,
 };
 use crate::worldserver::appworld::message::gmamessage::{
     WorldGmaMessageDispatch, WorldGmaMessageOutcome, on_gma_message,
@@ -2009,7 +2010,7 @@ pub(crate) enum ProcessedWorldEvent {
     CountryMessage {
         source: WorldMessageSource,
         legacy_run_result: i32,
-        outcome: WorldCountryRelayOutcome,
+        outcome: WorldCountryMessageOutcome,
     },
     GmaMessage {
         source: WorldMessageSource,
@@ -2822,6 +2823,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) coefficients: &'a PlayerPropertyCoefficients,
     pub(crate) organizing: &'a mut COrganizingCtrl,
     pub(crate) country: &'a mut CCountryHandler,
+    pub(crate) country_parameters: &'a CCountryParam,
     pub(crate) honor_ranks: &'a mut CHonorRanks,
     pub(crate) organizing_parameters: &'a mut COrganizingParam,
     pub(crate) player_ranks: &'a mut CPlayerRanks,
@@ -8545,7 +8547,8 @@ impl CGame {
         honor_ranks: &mut CHonorRanks,
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
-        country_handler: &CCountryHandler,
+        country_handler: &mut CCountryHandler,
+        country_parameters: &CCountryParam,
         country_limits: CountryKingSaveLimits,
         faction_war_sys: &mut CFactionWarSys,
         attack_city: &mut CAttackCitySys,
@@ -8608,6 +8611,7 @@ impl CGame {
                             organizing,
                             organizing_parameters,
                             country_handler,
+                            country_parameters,
                             country_limits,
                             faction_war_sys,
                             attack_city,
@@ -8673,6 +8677,7 @@ impl CGame {
                     organizing,
                     organizing_parameters,
                     country_handler,
+                    country_parameters,
                     country_limits,
                     faction_war_sys,
                     attack_city,
@@ -8736,7 +8741,8 @@ impl CGame {
         honor_ranks: &mut CHonorRanks,
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
-        country_handler: &CCountryHandler,
+        country_handler: &mut CCountryHandler,
+        country_parameters: &CCountryParam,
         country_limits: CountryKingSaveLimits,
         faction_war_sys: &mut CFactionWarSys,
         attack_city: &mut CAttackCitySys,
@@ -8796,6 +8802,7 @@ impl CGame {
             organizing,
             organizing_parameters,
             country_handler,
+            country_parameters,
             country_limits,
             faction_war_sys,
             attack_city,
@@ -9897,6 +9904,7 @@ impl CGame {
             owners.organizing,
             owners.organizing_parameters,
             owners.country,
+            owners.country_parameters,
             configuration.country_limits,
             owners.faction_war,
             owners.attack_city,
@@ -11958,7 +11966,8 @@ async fn process_world_message<TimerCallback, TeamOwner>(
     honor_ranks: &mut CHonorRanks,
     organizing: &mut COrganizingCtrl,
     organizing_parameters: &COrganizingParam,
-    country_handler: &CCountryHandler,
+    country_handler: &mut CCountryHandler,
+    country_parameters: &CCountryParam,
     country_limits: CountryKingSaveLimits,
     faction_war_sys: &mut CFactionWarSys,
     attack_city: &mut CAttackCitySys,
@@ -12100,7 +12109,7 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::Country) {
-        match on_country_message(game, message) {
+        match on_country_message(game, country_handler, country_parameters, message) {
             WorldCountryMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::CountryMessage {
                     source,

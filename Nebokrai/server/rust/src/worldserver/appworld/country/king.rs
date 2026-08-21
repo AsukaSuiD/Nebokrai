@@ -1,6 +1,99 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Три setter-а king points RVA `0x000A46C0/0x000A46F0/0x000A4720` —
+//! `IMPLEMENTED`; constructor/destructor и change-owner ниже пока остаются RAW.
+//! Exact EXE подтверждает только upper clamp: отрицательные значения не
+//! исправляются. Rust применяет тот же контракт к достигнутому king-state без
+//! воспроизведения C++ inheritance/layout.
+
+use crate::dbaccess::worlddb::dbcountry::CountryKingSaveSnapshot;
+use crate::worldserver::appworld::country::countryparam::{
+    CCountryParam, CountryParameterUnavailable,
+};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum KingPointKind {
+    Control,
+    Material,
+    War,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct KingPointUpdate {
+    pub(crate) kind: KingPointKind,
+    pub(crate) requested: i32,
+    pub(crate) previous: i32,
+    pub(crate) applied: i32,
+}
+
+pub(crate) fn set_control_point(
+    king: &mut CountryKingSaveSnapshot,
+    requested: i32,
+    parameters: &CCountryParam,
+) -> Result<KingPointUpdate, CountryParameterUnavailable> {
+    let maximum = parameters
+        .max_king_control_point()
+        .ok_or(CountryParameterUnavailable {
+            field: "_max_king_control_point",
+        })?;
+    Ok(apply_point(
+        &mut king.control_point,
+        requested,
+        maximum,
+        KingPointKind::Control,
+    ))
+}
+
+pub(crate) fn set_material_point(
+    king: &mut CountryKingSaveSnapshot,
+    requested: i32,
+    parameters: &CCountryParam,
+) -> Result<KingPointUpdate, CountryParameterUnavailable> {
+    let maximum = parameters
+        .max_king_material_point()
+        .ok_or(CountryParameterUnavailable {
+            field: "_max_king_material_point",
+        })?;
+    Ok(apply_point(
+        &mut king.material_point,
+        requested,
+        maximum,
+        KingPointKind::Material,
+    ))
+}
+
+pub(crate) fn set_war_point(
+    king: &mut CountryKingSaveSnapshot,
+    requested: i32,
+    parameters: &CCountryParam,
+) -> Result<KingPointUpdate, CountryParameterUnavailable> {
+    let maximum = parameters
+        .max_king_war_point()
+        .ok_or(CountryParameterUnavailable {
+            field: "_max_king_war_point",
+        })?;
+    Ok(apply_point(
+        &mut king.war_point,
+        requested,
+        maximum,
+        KingPointKind::War,
+    ))
+}
+
+fn apply_point(
+    point: &mut i32,
+    requested: i32,
+    maximum: i32,
+    kind: KingPointKind,
+) -> KingPointUpdate {
+    let previous = *point;
+    let applied = requested.min(maximum);
+    *point = applied;
+    KingPointUpdate {
+        kind,
+        requested,
+        previous,
+        applied,
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
@@ -11,7 +104,7 @@
 
 // ============================================================================
 // FUNCTION: CKing::set_control_point
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\king.h:55
@@ -25,7 +118,7 @@
 
 // ============================================================================
 // FUNCTION: CKing::set_material_point
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\king.h:65
@@ -39,7 +132,7 @@
 
 // ============================================================================
 // FUNCTION: CKing::set_war_point
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\king.h:75

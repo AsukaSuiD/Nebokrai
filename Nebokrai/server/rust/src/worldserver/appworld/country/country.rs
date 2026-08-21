@@ -1,6 +1,7 @@
 //! Save-владелец `CCountry` исторического `WorldServer`.
 //!
-//! Статус `CCountry::AddToByteArray` RVA `0x000C6E30`,
+//! Статус `CCountry::SetCountryPower/SetCountryTreasury/SetCountryTech` RVA
+//! `0x000A4750/0x000A4790/0x000A47D0`, `CCountry::AddToByteArray` RVA `0x000C6E30`,
 //! `CCountry::CloneCountryData` RVA `0x000C9CE0` и
 //! `CCountry::CloneSaveData` RVA `0x000CC470` — `IMPLEMENTED`; остальной корпус
 //! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
@@ -49,6 +50,9 @@ use crate::dbaccess::worlddb::dbcountry::{
     CountryKingSaveSnapshot, CountryMinisterSaveSnapshot, CountrySaveSnapshot,
 };
 
+use super::countryparam::{CCountryParam, CountryParameterUnavailable};
+use super::king::{KingPointUpdate, set_control_point, set_material_point, set_war_point};
+
 /// Три текущих максимума `CCountryParam`, читаемые во время clone.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CountryKingSaveLimits {
@@ -78,7 +82,124 @@ pub(crate) struct CCountry {
     pub(crate) ministers: BTreeMap<u8, CountryMinisterState>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryScalarUpdate {
+    Treasury {
+        requested: i32,
+        previous: i32,
+        applied: i32,
+    },
+    Power {
+        requested: i32,
+        previous: i32,
+        applied: i32,
+    },
+    TechnologyExperience {
+        requested: i32,
+        previous: i32,
+        applied: i32,
+    },
+    TechnologyLevel {
+        requested: i32,
+        previous: i32,
+        applied: i32,
+    },
+    KingPoint(KingPointUpdate),
+}
+
 impl CCountry {
+    /// Применяет selector server opcode `0x60314` к достигнутому live-state.
+    pub(crate) fn apply_server_scalar(
+        &mut self,
+        selector: i8,
+        requested: i32,
+        parameters: &CCountryParam,
+    ) -> Result<Option<CountryScalarUpdate>, CountryParameterUnavailable> {
+        let update = match selector {
+            1 => self.set_country_treasury(requested, parameters)?,
+            2 => self.set_country_power(requested, parameters)?,
+            3 => self.set_country_technology(requested),
+            4 => {
+                let previous = self.tech_level;
+                let applied = requested.max(0);
+                self.tech_level = applied;
+                CountryScalarUpdate::TechnologyLevel {
+                    requested,
+                    previous,
+                    applied,
+                }
+            }
+            5 => CountryScalarUpdate::KingPoint(set_control_point(
+                &mut self.king,
+                requested,
+                parameters,
+            )?),
+            6 => CountryScalarUpdate::KingPoint(set_material_point(
+                &mut self.king,
+                requested,
+                parameters,
+            )?),
+            7 => CountryScalarUpdate::KingPoint(set_war_point(
+                &mut self.king,
+                requested,
+                parameters,
+            )?),
+            _ => return Ok(None),
+        };
+        Ok(Some(update))
+    }
+
+    pub(crate) fn set_country_power(
+        &mut self,
+        requested: i32,
+        parameters: &CCountryParam,
+    ) -> Result<CountryScalarUpdate, CountryParameterUnavailable> {
+        let maximum = parameters
+            .max_country_power()
+            .ok_or(CountryParameterUnavailable {
+                field: "_max_country_power",
+            })?;
+        let previous = self.power;
+        let applied = requested.max(0).min(maximum);
+        self.power = applied;
+        Ok(CountryScalarUpdate::Power {
+            requested,
+            previous,
+            applied,
+        })
+    }
+
+    pub(crate) fn set_country_treasury(
+        &mut self,
+        requested: i32,
+        parameters: &CCountryParam,
+    ) -> Result<CountryScalarUpdate, CountryParameterUnavailable> {
+        let maximum = parameters
+            .max_country_treasury()
+            .ok_or(CountryParameterUnavailable {
+                field: "_max_country_treasury",
+            })?;
+        let previous = self.treasury;
+        let applied = requested.max(0).min(maximum);
+        self.treasury = applied;
+        Ok(CountryScalarUpdate::Treasury {
+            requested,
+            previous,
+            applied,
+        })
+    }
+
+    pub(crate) fn set_country_technology(&mut self, requested: i32) -> CountryScalarUpdate {
+        let previous = self.tech_current_exp;
+        let applied = requested.min(self.tech_level_up_exp);
+        self.tech_current_exp = applied;
+        CountryScalarUpdate::TechnologyExperience {
+            requested,
+            previous,
+            applied,
+        }
+    }
+
     /// Дописывает один точный country record для `CCountryHandler` wire.
     pub(crate) fn add_to_byte_array(
         &self,
@@ -186,7 +307,7 @@ impl Error for CountrySerializeError {}
 
 // ============================================================================
 // FUNCTION: CCountry::SetCountryPower
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.h:57
@@ -200,7 +321,7 @@ impl Error for CountrySerializeError {}
 
 // ============================================================================
 // FUNCTION: CCountry::SetCountryTreasury
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.h:82
@@ -214,7 +335,7 @@ impl Error for CountrySerializeError {}
 
 // ============================================================================
 // FUNCTION: CCountry::SetCountryTech
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.h:118

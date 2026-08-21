@@ -46,6 +46,8 @@ use std::collections::BTreeMap;
 use crate::public::readwrite::read_to;
 
 const COUNTRY_PARAMETER_COUNT: usize = 39;
+const MAX_COUNTRY_POWER: usize = 2;
+const MAX_COUNTRY_TREASURY: usize = 4;
 const MAX_KING_CONTROL_POINT: usize = 10;
 const MAX_KING_MATERIAL_POINT: usize = 26;
 const MAX_KING_WAR_POINT: usize = 28;
@@ -139,6 +141,12 @@ pub(crate) enum CountryParamSerializationBlock {
         collection: &'static str,
         count: usize,
     },
+}
+
+/// Safe-граница чтения constructor-неизвестного scalar-параметра.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryParameterUnavailable {
+    pub(crate) field: &'static str,
 }
 
 /// Полный достигнутый state исходного `CCountryParam`.
@@ -257,6 +265,14 @@ impl CCountryParam {
             rect,
             direction,
         }
+    }
+
+    pub(crate) const fn max_country_power(&self) -> Option<i32> {
+        self.parameters[MAX_COUNTRY_POWER]
+    }
+
+    pub(crate) const fn max_country_treasury(&self) -> Option<i32> {
+        self.parameters[MAX_COUNTRY_TREASURY]
     }
 
     /// Возвращает достигнутый максимум king control point без default-подстановки.

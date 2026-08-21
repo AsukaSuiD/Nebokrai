@@ -83,6 +83,11 @@ pub(crate) mod appworld {
         pub(crate) mod countryparam;
         #[allow(
             dead_code,
+            reason = "king point setters подключены к country scalar-sync перед остальным lifecycle"
+        )]
+        pub(crate) mod king;
+        #[allow(
+            dead_code,
             reason = "country victory producer подключён через World/Game message boundary перед phase scheduler"
         )]
         pub(crate) mod countrywarsys;
