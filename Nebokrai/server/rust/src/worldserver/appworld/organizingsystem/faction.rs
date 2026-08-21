@@ -12,6 +12,7 @@
 //! оба `CheckOperValidate` RVA `0x000B4CE0/0x000C17F0`,
 //! `OnMemberExitGame` RVA `0x000B64D0`,
 //! `ClearApplyList/IsInApplyMembers` RVA `0x000B6450/0x000B6760`,
+//! free owner `GoodsWarCheckforFaction` RVA `0x000B5070`,
 //! `InitialPropertyByLvl` RVA `0x000B4BA0`,
 //! `AddEnemyFactionsToByteArray/AddCityWarEnemyFactionsToByteArray` RVA
 //! `0x000B5E40/0x000B5ED0`,
@@ -129,6 +130,11 @@
 //! ставит bit `1`, затем сохраняет `0` для входа `<= 0` либо сам положительный
 //! signed `long`. Последняя нормализация подтверждена exact диапазоном
 //! `0x004B4DC5..0x004B4DDF`; после ответа reverse прекращён.
+//! `GoodsWarCheckforFaction` снимает один local-time snapshot только для
+//! ненулевой faction и допускает ровно субботнее окно 19:30–21:10 включительно.
+//! Лишь затем он передаёт faction ID в GoodsWar membership lookup. Exact ASM
+//! `0x004B5074..0x004B50DA` подтверждает short-circuit и обе границы; `chrono`
+//! заменяет только Win32 `GetLocalTime`, а сам lookup остаётся явным контекстом.
 //!
 //! Для достигнутого `SaveAbility` наблюдаемы только signed keys ordered map
 //! `m_ApplyPersons`, поэтому `BTreeSet<i32>` заменяет MSVC map вместе с пока не
@@ -1884,6 +1890,30 @@ impl CFaction {
     }
 }
 
+/// Проверяет субботнее Goods War окно и только затем membership faction ID.
+pub(crate) fn goods_war_check_for_faction<F>(
+    faction: Option<&CFaction>,
+    is_in_faction_id_list: F,
+) -> bool
+where
+    F: FnOnce(i32) -> bool,
+{
+    let Some(faction) = faction else {
+        return false;
+    };
+    let now = Local::now();
+    if now.weekday().num_days_from_sunday() != 6 {
+        return false;
+    }
+    let inside_time_window = match now.hour() {
+        19 => now.minute() >= 30,
+        20 => true,
+        21 => now.minute() <= 10,
+        _ => false,
+    };
+    inside_time_window && is_in_faction_id_list(faction.faction_id())
+}
+
 fn current_local_member_time() -> TagTimeValue {
     let now = Local::now();
     TagTimeValue {
@@ -2021,7 +2051,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: GoodsWarCheckforFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:50
