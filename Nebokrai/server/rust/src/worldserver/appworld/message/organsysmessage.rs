@@ -4,7 +4,7 @@
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
 //! `0x6012A`, парные city-tax gate `0x6012B/0x6012C` и region-param update
 //! `0x6012D`, region route `0x6012E`, city-gate route `0x6012F` и полный
-//! city-transfer ingress `0x60130`; остальной owner —
+//! city-transfer ingress `0x60130` и admission-permit `0x60132`; остальной owner —
 //! `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
@@ -129,6 +129,11 @@
 //! `COrganizingCtrl::TransferIOwnerCity`; bool-result игнорируется, прямого
 //! wire-ответа ingress не создаёт. Подтверждение идёт отдельным `0x7FE2B`, а
 //! terminal decision возвращается через уже общий `0x60131` session branch.
+//! Exact `0x004A8078..0x004A80CA` для `0x60132` читает `(permit long,
+//! player ID)`, преобразует permit строго через `!= 0`, разрешает faction
+//! player-а ordered `IsFreePlayer` и при nullable-success вызывает уже
+//! восстановленный `CFaction::SetIsPermit(player, permit)` в slot `+0x11C`.
+//! Online/route/tail checks Linux-донора в EXE отсутствуют; wire-ответа нет.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -164,6 +169,7 @@ use crate::worldserver::appworld::organizingsystem::faction::{
     FactionContributorContext, FactionExperienceBlock, FactionExperienceUpdate,
     FactionLevelContext, FactionMemberInfoRequest, FactionOrganizingInfoContext,
     FactionOperationBlock, FactionOperationOutcome, FactionOperationRejection,
+    FactionPermitBlock, FactionPermitUpdate,
     FactionUpgradeBlock, FactionUpgradeContext, FactionUpgradeFormatArgument,
     FactionUpgradeOutcome, FactionUploadIconBlock, FactionUploadIconContext,
     FactionUploadIconOutcome,
@@ -231,6 +237,7 @@ const ROUTE_REGION_RESPONSE_TYPE: i32 = 0x7FE2D;
 const OPERATE_CITY_GATE_MESSAGE_TYPE: i32 = 0x6012F;
 const OPERATE_CITY_GATE_RESPONSE_TYPE: i32 = 0x7FE2A;
 const TRANSFER_CITY_OWNER_MESSAGE_TYPE: i32 = 0x60130;
+const SET_FACTION_ADMISSION_PERMIT_MESSAGE_TYPE: i32 = 0x60132;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -2126,6 +2133,60 @@ where
         requester_player_id,
         target_faction_id,
         region_id,
+        outcome,
+    }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingAdmissionPermitDispatch {
+    pub(crate) requested_value: i32,
+    pub(crate) player_id: i32,
+    pub(crate) faction_id: Option<i32>,
+    pub(crate) outcome: Option<FactionPermitUpdate>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingAdmissionPermitBlock {
+    Membership { map_key: i32 },
+    Permit {
+        faction_id: i32,
+        source: FactionPermitBlock,
+    },
+}
+
+/// Выполняет `0x60132`: literal bool, membership и virtual `SetIsPermit`.
+pub(crate) fn dispatch_admission_permit(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+) -> Option<Result<OrganizingAdmissionPermitDispatch, OrganizingAdmissionPermitBlock>> {
+    if message.message_type() != SET_FACTION_ADMISSION_PERMIT_MESSAGE_TYPE {
+        return None;
+    }
+
+    let requested_value = message.base_mut().get_long().unwrap_or(0);
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let faction_id = match organizing.is_free_player(player_id) {
+        FreePlayerLookup::NoFaction => {
+            return Some(Ok(OrganizingAdmissionPermitDispatch {
+                requested_value,
+                player_id,
+                faction_id: None,
+                outcome: None,
+            }));
+        }
+        FreePlayerLookup::Faction(faction_id) => faction_id,
+        FreePlayerLookup::BlockedNullFaction { map_key } => {
+            return Some(Err(OrganizingAdmissionPermitBlock::Membership { map_key }));
+        }
+    };
+    let outcome = organizing
+        .set_faction_admission_permit(game, faction_id, player_id, requested_value != 0)
+        .map_err(|source| OrganizingAdmissionPermitBlock::Permit { faction_id, source });
+    Some(outcome.map(|outcome| OrganizingAdmissionPermitDispatch {
+        requested_value,
+        player_id,
+        faction_id: Some(faction_id),
         outcome,
     }))
 }

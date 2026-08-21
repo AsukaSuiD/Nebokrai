@@ -310,6 +310,7 @@ use super::faction::{
     FactionOrganizingInfoContext, FactionOtherInfoBuildError,
     FactionOtherInfoDelivery, FactionOwnedCityDelivery, FactionOwnedCityRefreshBlock,
     FactionOwnedCityRefreshReport, FactionOwnedCityUpdateBuildError, FactionPlayerHeaderContext,
+    FactionPermitBlock, FactionPermitUpdate,
     FactionPronounceBlock, FactionPronounceOutcome, FactionPropertyDelivery,
     FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome, FactionSuperiorOrganizingBlock,
     FactionUpgradeBlock, FactionUpgradeContext, FactionUpgradeOutcome, FactionUploadIconBlock,
@@ -1746,6 +1747,31 @@ impl COrganizingCtrl {
         faction
             .operator_city_gate(player_id, region_id, self)
             .map(Some)
+    }
+
+    /// Вызывает concrete `SetIsPermit` с точным nullable lookup текущего union.
+    pub(crate) fn set_faction_admission_permit(
+        &mut self,
+        game: &CGame,
+        faction_id: i32,
+        player_id: i32,
+        permit: bool,
+    ) -> Result<Option<FactionPermitUpdate>, FactionPermitBlock> {
+        let Some(mut faction) = self
+            .factions
+            .get_mut(&faction_id)
+            .and_then(Option::take)
+        else {
+            return Ok(None);
+        };
+        let outcome = faction.set_is_permitted(game, player_id, permit, |union_id| {
+            self.confederation_by_id(union_id).map(CUnion::master_id)
+        });
+        *self
+            .factions
+            .get_mut(&faction_id)
+            .expect("временный faction slot не удаляется") = Some(faction);
+        outcome.map(Some)
     }
 
     fn add_billboard_to_byte_array(

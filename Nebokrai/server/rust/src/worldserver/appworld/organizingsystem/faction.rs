@@ -204,8 +204,10 @@
 //! сообщает успех. Три transient bool до первого достигнутого присваивания
 //! остаются `Option`, потому что один constructor сам их не инициализировал.
 //! `SetIsPermit` получает union lookup явно, но вызывает его только после
-//! master-gate и только с текущим `lConfederationID`. Exact ASM подтверждает
-//! последующий порядок: запись permit-byte, полная property-рассылка, dirty `1`.
+//! master-player gate и только с текущим `lConfederationID`; найденный
+//! master-faction ID союза сравнивается с собственным faction ID. Exact ASM
+//! `0x004C09A0..0x004C0A02` подтверждает последующий порядок: запись
+//! permit-byte, полная property-рассылка, dirty `1`.
 //! Достигнутый `SetPlayerOrganizing` дополнительно читает `m_strName`,
 //! `m_lMastterID`, `m_Property.lLvl/lExp`, `m_OwnedCities` и два enemy-set.
 //! Коллекции, которые constructor действительно создавал пустыми, хранятся
@@ -2751,29 +2753,30 @@ impl CFaction {
     /// Меняет faction-permit в точном порядке `SetIsPermit`.
     ///
     /// Lookup заменяет исходный singleton и получает ровно текущий union ID;
-    /// `None` сохраняет общий null/missing результат старого controller-а.
+    /// его результат — master-faction ID, а не master-player ID. `None`
+    /// сохраняет общий null/missing результат старого controller-а.
     pub(crate) fn set_is_permitted<F>(
         &mut self,
         game: &CGame,
         requester_id: i32,
         permit: bool,
-        superior_master_by_id: F,
+        superior_master_faction_by_id: F,
     ) -> Result<FactionPermitUpdate, FactionPermitBlock>
     where
         F: FnOnce(i32) -> Option<i32>,
     {
-        let master_id = self
+        let master_player_id = self
             .master_id
             .ok_or(FactionPermitBlock::MasterIdMissing)?;
-        if requester_id != master_id {
+        if requester_id != master_player_id {
             return Ok(FactionPermitUpdate::RequesterIsNotMaster);
         }
 
         let property = self
             .base_property
             .ok_or(FactionPermitBlock::MissingBaseProperty)?;
-        if superior_master_by_id(property.union_id())
-            .is_some_and(|superior_master_id| superior_master_id != master_id)
+        if superior_master_faction_by_id(property.union_id())
+            .is_some_and(|master_faction_id| master_faction_id != self.faction_id)
         {
             return Ok(FactionPermitUpdate::SuperiorMasterMismatch);
         }
