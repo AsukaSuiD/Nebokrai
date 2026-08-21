@@ -39,6 +39,8 @@
 //! `UpdateEnemyFactionToClient/UpdateCityWarEnemyFactionToClient` RVA
 //! `0x000BA0F0/0x000BA210`,
 //! `UpdateEnemyFaction/UpdateCityWarEnemyFaction` RVA `0x000B4E30/0x000B4E60`,
+//! `Add/DelEnemyOrganizing` RVA `0x000BDE80/0x000BE030` и
+//! `Add/DelCityWarEnemyOrganizing` RVA `0x000BE1E0/0x000BE390`,
 //! `UpdateOwnedCityToClient` RVA `0x000C0BF0`,
 //! `UpdatePlayerFactionInfo` RVA `0x000B5820`,
 //! `AddDefence/Offense/VillageWarVictorCounts` RVA
@@ -108,6 +110,17 @@
 //! `0x7FE12` и player update только при changed byte ровно `1`, не очищая его.
 //! Exact ASM подтверждает порядок; неизвестный partial byte не превращается в
 //! выдуманный `false`, а возвращается отдельным typed outcome.
+//! Standard enemy add/del меняют set только при фактической вставке/наличии и
+//! вообще не трогают changed byte. City-war add при новой записи ставит changed
+//! byte перед вставкой; city-war del безусловно вызывает erase и не ставит
+//! changed byte. Последний также пытается написать `WS0161` даже при miss,
+//! тогда как остальные три логируют только фактическую мутацию. War-логи идут
+//! после мутации, разрешают только положительный organizing ID и живой pointer,
+//! используют `WS0158/WS0159/WS0160/WS0161`; delete-формы получают оставшийся
+//! 32-битный count третьим аргументом. Exact ASM `0x004BDE80..0x004BE511`
+//! подтверждает эти асимметрии и порядок. Локализация и запись в `war` оставлены
+//! тонкому контексту, а небезопасный `_sprintf(char[256])` заменён typed
+//! границей без воспроизведения переполнения.
 //! Value-getter-ы обоих enemy-set создают независимые копии. Clear всегда
 //! очищает set, но выставляет соответствующий changed-флаг только если до
 //! очистки он был непустым. Отдельный virtual `IsEnemyFaction` в этой версии
@@ -297,6 +310,7 @@ use crate::worldserver::worldserver::game::{CGame, WorldRegionNameLookup};
 const MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0D;
 const OWNED_CITY_UPDATE_MESSAGE_TYPE: i32 = 0x7FE13;
 const ENTER_REGION_BUFFER_CAPACITY: usize = 256;
+const ENEMY_WAR_LOG_BUFFER_CAPACITY: usize = 256;
 const LEAVE_WORD_NAME_CAPACITY: usize = 20;
 const LEAVE_WORD_CONTENT_CAPACITY: usize = 212;
 const PRONOUNCE_DATA_SIZE: usize = 0x828;
@@ -490,6 +504,42 @@ pub(crate) enum CityWarEnemyRefreshOutcome {
     ChangeFlagUnknown,
     Unchanged,
     Published(FactionEnemyRefreshReport),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionEnemyWarLogArgument<'a> {
+    Text(&'a [u8]),
+    Unsigned(u32),
+}
+
+/// Узкая граница organizing lookup, локализации и исходного `war`-лога.
+pub(crate) trait FactionEnemyMutationContext {
+    /// Возвращает независимую byte-exact копию имени живого organizing.
+    fn organizing_name(&self, organizing_id: i32) -> Option<Vec<u8>>;
+
+    /// Повторяет `StringTable::getStringByID` с fallback `""` и `_sprintf`.
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[FactionEnemyWarLogArgument<'_>],
+    ) -> Vec<u8>;
+
+    /// Повторяет `PutStringToFile("war", text)`.
+    fn put_war_log(&mut self, text: &[u8]);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FactionEnemyMutationReport {
+    pub(crate) state_changed: bool,
+    pub(crate) changed_flag_set: bool,
+    pub(crate) war_log_written: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FactionEnemyMutationBlock {
+    pub(crate) state_changed: bool,
+    pub(crate) changed_flag_set: bool,
+    pub(crate) formatted_len: usize,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1426,6 +1476,158 @@ impl CFaction {
     /// Сохраняет отдельный исторический stub, не подменяя его membership-check.
     pub(crate) const fn is_enemy_faction(&self, _faction_id: i32) -> i32 {
         0
+    }
+
+    fn write_enemy_war_log<Context>(
+        &self,
+        context: &mut Context,
+        enemy_id: i32,
+        string_id: &'static [u8],
+        remaining_enemy_count: Option<u32>,
+        state_changed: bool,
+        changed_flag_set: bool,
+    ) -> Result<bool, FactionEnemyMutationBlock>
+    where
+        Context: FactionEnemyMutationContext,
+    {
+        if enemy_id <= 0 {
+            return Ok(false);
+        }
+        let Some(enemy_name) = context.organizing_name(enemy_id) else {
+            return Ok(false);
+        };
+
+        let mut arguments = vec![
+            FactionEnemyWarLogArgument::Text(&self.name),
+            FactionEnemyWarLogArgument::Text(&enemy_name),
+        ];
+        if let Some(remaining_enemy_count) = remaining_enemy_count {
+            arguments.push(FactionEnemyWarLogArgument::Unsigned(
+                remaining_enemy_count,
+            ));
+        }
+        let text = context.format_world_string(string_id, &arguments);
+        if text.len() >= ENEMY_WAR_LOG_BUFFER_CAPACITY {
+            return Err(FactionEnemyMutationBlock {
+                state_changed,
+                changed_flag_set,
+                formatted_len: text.len(),
+            });
+        }
+        context.put_war_log(&text);
+        Ok(true)
+    }
+
+    /// Добавляет standard enemy и только при новой записи пишет `WS0158`.
+    pub(crate) fn add_enemy_organizing<Context>(
+        &mut self,
+        enemy_id: i32,
+        context: &mut Context,
+    ) -> Result<FactionEnemyMutationReport, FactionEnemyMutationBlock>
+    where
+        Context: FactionEnemyMutationContext,
+    {
+        let state_changed = self.enemy_factions.insert(enemy_id);
+        if !state_changed {
+            return Ok(FactionEnemyMutationReport {
+                state_changed: false,
+                changed_flag_set: false,
+                war_log_written: false,
+            });
+        }
+        let war_log_written =
+            self.write_enemy_war_log(context, enemy_id, b"WS0158", None, true, false)?;
+        Ok(FactionEnemyMutationReport {
+            state_changed,
+            changed_flag_set: false,
+            war_log_written,
+        })
+    }
+
+    /// Удаляет существующего standard enemy и после erase пишет `WS0159`.
+    pub(crate) fn del_enemy_organizing<Context>(
+        &mut self,
+        enemy_id: i32,
+        context: &mut Context,
+    ) -> Result<FactionEnemyMutationReport, FactionEnemyMutationBlock>
+    where
+        Context: FactionEnemyMutationContext,
+    {
+        let state_changed = self.enemy_factions.remove(&enemy_id);
+        if !state_changed {
+            return Ok(FactionEnemyMutationReport {
+                state_changed: false,
+                changed_flag_set: false,
+                war_log_written: false,
+            });
+        }
+        let remaining_enemy_count = self.enemy_factions.len() as u32;
+        let war_log_written = self.write_enemy_war_log(
+            context,
+            enemy_id,
+            b"WS0159",
+            Some(remaining_enemy_count),
+            true,
+            false,
+        )?;
+        Ok(FactionEnemyMutationReport {
+            state_changed,
+            changed_flag_set: false,
+            war_log_written,
+        })
+    }
+
+    /// Добавляет city-war enemy, выставляя changed byte перед вставкой.
+    pub(crate) fn add_city_war_enemy_organizing<Context>(
+        &mut self,
+        enemy_id: i32,
+        context: &mut Context,
+    ) -> Result<FactionEnemyMutationReport, FactionEnemyMutationBlock>
+    where
+        Context: FactionEnemyMutationContext,
+    {
+        if self.city_war_enemy_factions.contains(&enemy_id) {
+            return Ok(FactionEnemyMutationReport {
+                state_changed: false,
+                changed_flag_set: false,
+                war_log_written: false,
+            });
+        }
+        self.city_war_enemy_factions_changed = Some(true);
+        self.city_war_enemy_factions.insert(enemy_id);
+        let war_log_written =
+            self.write_enemy_war_log(context, enemy_id, b"WS0160", None, true, true)?;
+        Ok(FactionEnemyMutationReport {
+            state_changed: true,
+            changed_flag_set: true,
+            war_log_written,
+        })
+    }
+
+    /// Безусловно стирает city-war enemy и независимо от miss пытается писать `WS0161`.
+    pub(crate) fn del_city_war_enemy_organizing<Context>(
+        &mut self,
+        enemy_id: i32,
+        context: &mut Context,
+    ) -> Result<FactionEnemyMutationReport, FactionEnemyMutationBlock>
+    where
+        Context: FactionEnemyMutationContext,
+    {
+        let state_changed = self.city_war_enemy_factions.remove(&enemy_id);
+        let remaining_enemy_count = self.city_war_enemy_factions.len() as u32;
+        let war_log_written = self.write_enemy_war_log(
+            context,
+            enemy_id,
+            b"WS0161",
+            Some(remaining_enemy_count),
+            state_changed,
+            false,
+        )?;
+        Ok(FactionEnemyMutationReport {
+            state_changed,
+            changed_flag_set: false,
+            war_log_written,
+        })
     }
 
     /// Дописывает полный standard enemy-set в исходном wire-формате.
@@ -3697,7 +3899,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::AddEnemyOrganizing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:558
@@ -3711,7 +3913,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::DelEnemyOrganizing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:576
@@ -3725,7 +3927,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::AddCityWarEnemyOrganizing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:601
@@ -3739,7 +3941,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::DelCityWarEnemyOrganizing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:619
