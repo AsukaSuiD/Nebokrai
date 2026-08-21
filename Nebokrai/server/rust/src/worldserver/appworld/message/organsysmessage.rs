@@ -4,6 +4,7 @@
 //! `0x6010B`, исключение фракции из союза `0x6010C`, выход из фракции
 //! `0x6010D`, выход фракции из союза `0x6010E`, передачу главы фракции
 //! `0x6010F`, передачу главы союза `0x60110`, роспуск фракции `0x60111`,
+//! роспуск союза `0x60112`,
 //! заявку союза `0x60118`,
 //! общий session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
@@ -104,6 +105,13 @@
 //! player faction-data, optional DB-log и немедленное уничтожение удалённого
 //! faction-owner-а. Linux-донорские exact-payload/ownership rejects не
 //! перенесены.
+//! Exact `0x004A72E1..0x004A7301` с общим leaf
+//! `0x004A7216..0x004A722D` для `0x60112` читает один полный `Long` player
+//! ID, выполняет nullable `GetUnion(player)`, берёт ID найденного owner-а
+//! виртуальным slot `+0x5C` и вызывает уже восстановленный
+//! `DisbandConferation(player, union ID)`. Result игнорируется;
+//! online/route/tail gates и прямой wire-ответ отсутствуют. Дополнительные
+//! payload/ownership rejects Linux-донора не перенесены.
 //! Exact диапазоны
 //! `0x004A74C6..0x004A7509` и `0x004A7511..0x004A7543` исправляют повреждённый
 //! RAW. Общий branch читает
@@ -399,6 +407,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingContributorBlock, OrganizingContributorOutcome,
     OrganizingDisbandBlock, OrganizingDisbandOutcome, OrganizingDisbandPlayer,
     OrganizingDisbandProgress, OrganizingDisbandRejection,
+    OrganizingConfederationDisbandBlock, OrganizingConfederationDisbandOutcome,
     FactionUnionMembershipLookupBlock, OrganizingFactionExperienceMutation,
     OrganizingFactionMemberStateOutcome,
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock,
@@ -413,6 +422,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingUnionDemiseBlock, OrganizingUnionDemiseOutcome,
     OrganizingUnionExitBlock, OrganizingUnionExitOutcome,
     OrganizingUnionFireOutBlock, OrganizingUnionFireOutOutcome,
+    OrganizingUnionByMasterBlock,
 };
 use crate::worldserver::appworld::organizingsystem::organizing::{
     ECityState, EOperator, TagTimeValue,
@@ -450,6 +460,7 @@ const UNION_EXIT_MESSAGE_TYPE: i32 = 0x6010E;
 const FACTION_DEMISE_MESSAGE_TYPE: i32 = 0x6010F;
 const UNION_DEMISE_MESSAGE_TYPE: i32 = 0x60110;
 const FACTION_DISBAND_MESSAGE_TYPE: i32 = 0x60111;
+const UNION_DISBAND_MESSAGE_TYPE: i32 = 0x60112;
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
@@ -2748,6 +2759,75 @@ where
         faction_id,
         outcome,
     }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingUnionDisbandOutcome {
+    UnionNotFound,
+    Applied {
+        union_id: i32,
+        outcome: OrganizingConfederationDisbandOutcome,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingUnionDisbandBlock {
+    Lookup(OrganizingUnionByMasterBlock),
+    Disband {
+        union_id: i32,
+        source: OrganizingConfederationDisbandBlock,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingUnionDisbandDispatch {
+    pub(crate) player_id: i32,
+    pub(crate) outcome: OrganizingUnionDisbandOutcome,
+}
+
+/// Выполняет exact `0x60112`: один `Long`, nullable `GetUnion(player)`,
+/// virtual `GetID` и `DisbandConferation(player, union ID)`.
+pub(crate) fn dispatch_union_disband(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    parameters: &COrganizingParam,
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    update_player: &mut dyn FnMut(i32),
+) -> Option<Result<OrganizingUnionDisbandDispatch, OrganizingUnionDisbandBlock>> {
+    if message.message_type() != UNION_DISBAND_MESSAGE_TYPE {
+        return None;
+    }
+
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let union_id = match organizing.union_id_by_master_player(player_id) {
+        Ok(Some(union_id)) => union_id,
+        Ok(None) => {
+            return Some(Ok(OrganizingUnionDisbandDispatch {
+                player_id,
+                outcome: OrganizingUnionDisbandOutcome::UnionNotFound,
+            }));
+        }
+        Err(source) => return Some(Err(OrganizingUnionDisbandBlock::Lookup(source))),
+    };
+    let mut effects = WorldUnionFireOutEffects { game, callbacks };
+    let outcome = match organizing.disband_confederation(
+        game,
+        parameters,
+        player_id,
+        union_id,
+        &mut effects,
+        update_player,
+    ) {
+        Ok(outcome) => OrganizingUnionDisbandOutcome::Applied { union_id, outcome },
+        Err(source) => {
+            return Some(Err(OrganizingUnionDisbandBlock::Disband {
+                union_id,
+                source,
+            }));
+        }
+    };
+    Some(Ok(OrganizingUnionDisbandDispatch { player_id, outcome }))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
