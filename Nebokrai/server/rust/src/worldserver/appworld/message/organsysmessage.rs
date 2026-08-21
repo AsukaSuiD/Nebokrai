@@ -172,11 +172,11 @@
 //! параметр попадает только во входной diagnostic; owner заново вычисляет
 //! union победителя. Timer, завершение войны, ownership/country mutations,
 //! `WS0147..WS0153`, top-info и `0x7FE22` остаются внутри concrete owner-а.
-//! Два ещё сырых country-owner эффекта не подменены прямой записью в
-//! save-проекцию `CCountry`: `m_bIsWarring=false` и связка
-//! `SetKing(master)+m_lCityID=region` остаются явно переданными callback-ами.
-//! Это сохраняет место и порядок side effects, не объявляя сырой `SetKing`
-//! (включая его `DeposeKing` и `0x7FF05`) уже восстановленным.
+//! `m_bIsWarring=false` выполняется у живого `CCountry` напрямую после exact
+//! region/country lookup. Связка `SetKing(master)+m_lCityID=region` пока
+//! остаётся явно переданным callback-ом: это сохраняет место и порядок side
+//! effects, не объявляя ещё не подключённый здесь `SetKing` (включая его
+//! `DeposeKing` и `0x7FF05`) готовым через одну scalar-запись.
 //! Exact `0x004A88D1..0x004A8952` для `0x60139` сначала читает один operation
 //! `Long`. Только literal `2/0x11/0x12` читают второй `Long` и вызывают
 //! `DeleteOneMember/InsertOneFaction/AppendOneFaction2Count`; literal `4`
@@ -3112,10 +3112,9 @@ struct WorldAttackCityResultContext<
 > {
     game: &'game CGame,
     organizing: &'organizing mut COrganizingCtrl,
-    country_handler: &'country CCountryHandler,
+    country_handler: &'country mut CCountryHandler,
     callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
     update_player: &'update mut dyn FnMut(i32),
-    clear_country_warring: &'country_effects mut dyn FnMut(u8),
     set_country_king_and_city: &'country_effects mut dyn FnMut(u8, i32, i32),
 }
 
@@ -3211,8 +3210,8 @@ impl AttackCityWarEndContext
         let Some(country_id) = self.game.region_country_id(city_region_id) else {
             return Ok(());
         };
-        if self.country_handler.get_country(country_id).is_some() {
-            (self.clear_country_warring)(country_id);
+        if let Some(country) = self.country_handler.get_country_mut(country_id) {
+            country.is_warring = false;
         }
         Ok(())
     }
@@ -3489,13 +3488,12 @@ pub(crate) fn dispatch_city_war_result<Callback: Copy>(
     message: &mut CMessage,
     game: &CGame,
     organizing: &mut COrganizingCtrl,
-    country_handler: &CCountryHandler,
+    country_handler: &mut CCountryHandler,
     attack_city: &mut CAttackCitySys,
     timer: &mut CTimer<Callback>,
     attack_callbacks: AttackCityCallbacks<Callback>,
     effects: &mut WorldUnionApplicationEffectCallbacks<'_>,
     update_player: &mut dyn FnMut(i32),
-    clear_country_warring: &mut dyn FnMut(u8),
     set_country_king_and_city: &mut dyn FnMut(u8, i32, i32),
 ) -> Option<OrganizingCityWarResultDispatch> {
     if message.message_type() != CITY_WAR_RESULT_MESSAGE_TYPE {
@@ -3512,7 +3510,6 @@ pub(crate) fn dispatch_city_war_result<Callback: Copy>(
         country_handler,
         callbacks: effects,
         update_player,
-        clear_country_warring,
         set_country_king_and_city,
     };
     let outcome = attack_city.on_faction_win_city(
