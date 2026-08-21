@@ -15,6 +15,9 @@
 //! и `0x5FF10/11/13/14/15/16`: они создают либо переписывают точные response
 //! opcodes, сохраняют исходный payload, где это делал EXE, и используют ровно
 //! исходные `SendToSocket`, `SendToMapID` либо `SendAll`.
+//! Region query `0x5FF04` сохраняет case-sensitive `GetRegion(name)`, exact
+//! `s_mapGameServer[index].bConnected` gate и общий `SendAll` ответа `0x7FC04`;
+//! donor-замены через current socket и ответ только источнику не перенесены.
 //!
 //! Rust `VecDeque::len` шире старого 32-битного `_Mysize`; значение вне
 //! legacy-range безопасно блокируется typed-исходом, а не молча обрезается.
@@ -25,7 +28,7 @@
 use std::ffi::CString;
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
-use crate::worldserver::worldserver::game::CGame;
+use crate::worldserver::worldserver::game::{CGame, WorldNamedRegionLookup};
 
 const ONLINE_PLAYER_COUNT_REQUEST: i32 = 0x0005_FF01;
 const ONLINE_PLAYER_COUNT_RESPONSE: i32 = 0x0007_FC01;
@@ -141,6 +144,17 @@ pub(crate) enum WorldGmMessageOutcome {
         script_id: i32,
         numeric_payload_complete: [bool; 2],
         online_player_id: u32,
+        response_type: i32,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+    RegionLookup {
+        request_id: i32,
+        region_name: Vec<u8>,
+        script_id: i32,
+        numeric_payload_complete: [bool; 2],
+        lookup: WorldNamedRegionLookup,
+        returned_region_id: i32,
         response_type: i32,
         wire: Vec<u8>,
         delivery: Result<i32, SendMessageError>,
@@ -302,6 +316,40 @@ pub(crate) fn on_gm_message(game: &CGame, mut message: CMessage) -> WorldGmMessa
                     delivery,
                 },
             ))
+        }
+        0x0005_FF04 => {
+            let region_name = message
+                .base_mut()
+                .get_str_bytes(0x100)
+                .expect("literal 0x100 исключает zero-capacity GetStr");
+            let decoded_script_id = message.base_mut().get_long();
+            let script_id = decoded_script_id.unwrap_or(0);
+            let lookup = game.named_region_lookup(&region_name);
+            let returned_region_id = lookup
+                .matched
+                .filter(|matched| matched.game_server_connected)
+                .map_or(0, |matched| matched.region_id);
+
+            let mut response = CMessage::new(0x0007_FC04);
+            response.base_mut().add_long(request_id);
+            response.base_mut().add_long(returned_region_id);
+            response.base_mut().add_long(script_id);
+            let wire = response.as_wire_bytes().to_vec();
+            let delivery = response.send_all(game.current_game_server_sender().as_ref());
+            WorldGmMessageDispatch::Handled(WorldGmMessageOutcome::RegionLookup {
+                request_id,
+                region_name,
+                script_id,
+                numeric_payload_complete: [
+                    decoded_request_id.is_some(),
+                    decoded_script_id.is_some(),
+                ],
+                lookup,
+                returned_region_id,
+                response_type: 0x0007_FC04,
+                wire,
+                delivery,
+            })
         }
         0x0005_FF07 => {
             let player_name = message

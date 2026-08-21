@@ -4671,6 +4671,22 @@ pub(crate) enum WorldRegionNameLookup<'a> {
     Name(&'a [u8]),
 }
 
+/// Найденный case-sensitive `GetRegion(name)` route snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldNamedRegionMatch {
+    pub(crate) region_id: i32,
+    pub(crate) game_server_index: u32,
+    pub(crate) game_server_entry_found: bool,
+    pub(crate) game_server_connected: bool,
+}
+
+/// Безопасный отчёт исходного ordered name lookup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldNamedRegionLookup {
+    pub(crate) skipped_null_owners: usize,
+    pub(crate) matched: Option<WorldNamedRegionMatch>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldRegionParamUpdateOutcome {
     RegionNotFound,
@@ -8390,7 +8406,7 @@ impl CGame {
     /// Поэтому typed reconnect из первой очереди заменяет owner до второго
     /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
     /// ветви server-owner-а, GMA `0x4FD01/0x4FD04/0x60401/0x60402`, GM
-    /// query/transport ветви GM `0x5FF01/02/03/05/07..0A/0D..11/13..16`,
+    /// query/transport ветви GM `0x5FF01..05/07..0A/0D..11/13..16`,
     /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, honor
     /// `0x5FD0C/0x5FD0D`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
@@ -10981,6 +10997,37 @@ impl CGame {
             return WorldRegionNameLookup::NullRegionPointer;
         };
         WorldRegionNameLookup::Name(region.get_name())
+    }
+
+    /// Повторяет ordered `GetRegion(char const*)` с case-sensitive `strcmp`.
+    pub(crate) fn named_region_lookup(&self, name: &[u8]) -> WorldNamedRegionLookup {
+        let name = legacy_c_string_prefix(name);
+        let mut skipped_null_owners = 0;
+        for assignment in self.regions.values() {
+            let Some(region) = assignment.region.as_ref().map(WorldRegionOwner::base) else {
+                // В EXE `GetRegion(name)` разыменовывал null `pRegion`. Это
+                // внутренний UB повреждённого состояния, а не wire-контракт.
+                skipped_null_owners += 1;
+                continue;
+            };
+            if legacy_c_string_prefix(region.get_name()) != name {
+                continue;
+            }
+            let game_server = self.game_server(assignment.game_server_index);
+            return WorldNamedRegionLookup {
+                skipped_null_owners,
+                matched: Some(WorldNamedRegionMatch {
+                    region_id: region.get_id(),
+                    game_server_index: assignment.game_server_index,
+                    game_server_entry_found: game_server.is_some(),
+                    game_server_connected: game_server.is_some_and(|server| server.connected),
+                }),
+            };
+        }
+        WorldNamedRegionLookup {
+            skipped_null_owners,
+            matched: None,
+        }
     }
 
     /// Проверяет обе ступени исходного `GetRegion -> tagRegion::pRegion`.
