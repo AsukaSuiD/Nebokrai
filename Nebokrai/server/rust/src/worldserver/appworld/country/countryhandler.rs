@@ -30,10 +30,10 @@
 //! запись добавляется в хвост. `Run` снимает отдельный wrapping tick для каждой
 //! top-info записи и удаляет все `timer == 2 && param <= elapsed`, продолжая
 //! обход после erase; это подтверждено exact EXE `0x00445060..0x004450AD`.
-//! Затем country-map обходится в unsigned key-order. `CCountry::AI` вызывается
-//! только при ненулевом king ID и непустом king name; сам ещё сырой AI остаётся
-//! явным callback-owner-ом. Null country исходно разыменовывался и получает
-//! локальный `BLOCKED_MISSING_FACT`, а не молчаливый skip.
+//! Затем country-map обходится в unsigned key-order. Concrete `CCountry::AI`
+//! вызывается только при ненулевом king ID и непустом king name; его typed
+//! report сохраняется рядом с map key. Null country исходно разыменовывался и
+//! получает локальный `BLOCKED_MISSING_FACT`, а не молчаливый skip.
 //! `send_info_to_client` строит `0x7FA03` из четырёх consecutive unsigned long
 //! и C-строки; один overload target `0x00423C00` для обоих нулей/title/color
 //! подтверждён exact EXE.
@@ -69,7 +69,8 @@ use crate::dbaccess::worlddb::dbcountry::DbCountryOwner;
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::CMessage;
 use crate::worldserver::appworld::country::country::{
-    CCountry, CountryKingSaveLimits, CountrySerializeError, CountrySetNewDayContext,
+    CCountry, CountryAiBlock, CountryAiReport, CountryExileResultContext,
+    CountryKingSaveLimits, CountrySerializeError, CountrySetNewDayContext,
     CountrySetNewDayReport,
 };
 use crate::worldserver::appworld::country::countryparam::CCountryParam;
@@ -86,9 +87,15 @@ struct CountryTopInfo {
 }
 
 /// Safe-граница исходного null country pointer во время `Run`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryRunBlock {
-    pub(crate) map_key: u8,
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountryRunBlock {
+    NullCountry {
+        map_key: u8,
+    },
+    Ai {
+        map_key: u8,
+        source: CountryAiBlock,
+    },
 }
 
 /// Safe-границы serializer-а всей country-map.
@@ -133,6 +140,7 @@ impl Error for CountryHandlerSerializeError {
 pub(crate) struct CountryRunReport {
     pub(crate) expired_top_info_ids: Vec<i32>,
     pub(crate) ai_country_ids: Vec<u8>,
+    pub(crate) ai_reports: Vec<(u8, CountryAiReport)>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -382,15 +390,16 @@ impl CCountryHandler {
     }
 
     /// Выполняет top-info expiry и условные country AI в исходном порядке.
-    pub(crate) fn run<GetTick, CountryAi>(
+    pub(crate) fn run<GetTick, Context>(
         &mut self,
         _minute_delta: i32,
         mut get_tick: GetTick,
-        mut country_ai: CountryAi,
+        parameters: &CCountryParam,
+        context: &mut Context,
     ) -> Result<CountryRunReport, CountryRunBlock>
     where
         GetTick: FnMut() -> u32,
-        CountryAi: FnMut(&mut CCountry),
+        Context: CountryExileResultContext + ?Sized,
     {
         let mut retained = VecDeque::with_capacity(self.top_infos.len());
         let mut expired_top_info_ids = Vec::new();
@@ -407,18 +416,23 @@ impl CCountryHandler {
         self.top_infos = retained;
 
         let mut ai_country_ids = Vec::new();
+        let mut ai_reports = Vec::new();
         for (&map_key, country) in &mut self.countries {
             let Some(country) = country.as_deref_mut() else {
-                return Err(CountryRunBlock { map_key });
+                return Err(CountryRunBlock::NullCountry { map_key });
             };
             if country.king.id != 0 && !country.king.name.is_empty() {
-                country_ai(country);
+                let report = country
+                    .ai(parameters, &mut get_tick, context)
+                    .map_err(|source| CountryRunBlock::Ai { map_key, source })?;
                 ai_country_ids.push(map_key);
+                ai_reports.push((map_key, report));
             }
         }
         Ok(CountryRunReport {
             expired_top_info_ids,
             ai_country_ids,
+            ai_reports,
         })
     }
 }

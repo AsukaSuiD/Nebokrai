@@ -826,7 +826,8 @@
 //! и `0x40`, их точные два initial clock-call, новый current tick, wrapping
 //! `(current - minute_start) / 60000`, полный `COrganizingCtrl::Run`, полный
 //! `CCountryHandler::Run` и только после обоих обновляет minute start. Ещё
-//! сырые `DisbandFaction` и `CCountry::AI` передаются как явные owner-callbacks;
+//! сырой `DisbandFaction` передаётся явным owner-callback-ом;
+//! `CCountry::AI` выполняется concrete country owner-ом через governance context;
 //! при локальном blocked-path последующие эффекты не выдумываются.
 //! Сразу после этого `run_main_loop_bai_tan_jjc_stage` без нового clock-call
 //! завершает весь BaiTan batch и запускает полный `CJJcSystem::Run`. JJC сам
@@ -992,7 +993,7 @@ use crate::setup::regionrouter::RegionRouter;
 use crate::public::tools::{ini_decode, put_string_to_file};
 use crate::transport::bind_tcp_ipv4;
 use crate::worldserver::appworld::country::country::{
-    CCountry, CountryAbsolveCounterReset, CountryExileMessageDelivery, CountryExileResultContext,
+    CountryAbsolveCounterReset, CountryExileMessageDelivery, CountryExileResultContext,
     CountryExileTarget, CountryExileTextArgument, CountryFactionSnapshot, CountryNewTermContext,
     CountrySetNewDayContext,
     CountryGovernanceContextBlock, CountryKingSaveLimits, CountryOnlinePlayer,
@@ -2819,7 +2820,7 @@ pub(crate) struct WorldMainLoopMinuteStageReport {
 }
 
 /// Safe-граница одного из двух ordered minute-owner-ов.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldMainLoopMinuteStageBlock {
     Organizing(OrganizingRunBlock),
     Country(CountryRunBlock),
@@ -3076,7 +3077,6 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
         &'a mut dyn FnMut(&mut CTimer<TimerCallback>, TimerCallbackInvocation<TimerCallback>),
     pub(crate) get_lei_ting_local_time: &'a mut dyn FnMut() -> LeiTingLocalTime,
     pub(crate) disband_faction: &'a mut dyn FnMut(&mut COrganizingCtrl, i32, i32) -> bool,
-    pub(crate) country_ai: &'a mut dyn FnMut(&mut CCountry),
     pub(crate) wait: &'a mut dyn FnMut(u32),
     pub(crate) output_debug: &'a mut dyn FnMut(&'static str),
 }
@@ -9735,20 +9735,31 @@ impl CGame {
         clippy::too_many_arguments,
         reason = "два ещё отдельных downstream owner-а и clock передаются явно"
     )]
-    pub(crate) fn run_main_loop_minute_stage<GetTick, Disband, CountryAi>(
+    pub(crate) fn run_main_loop_minute_stage<GetTick, Disband>(
         &mut self,
         initialization: &mut WorldMainLoopInitializationState,
         clocks: &mut WorldMainLoopTailClockState,
         organizing: &mut COrganizingCtrl,
         country_handler: &mut CCountryHandler,
+        country_parameters: &CCountryParam,
+        organizing_parameters: &COrganizingParam,
+        attack_city: &CAttackCitySys,
+        goods_war: &CGoodsWarMember,
+        globe_setup: &GlobeSetupSnapshot,
         mut get_tick: GetTick,
         disband_faction: Disband,
-        country_ai: CountryAi,
+        world_string: &mut dyn FnMut(&[u8]) -> Vec<u8>,
+        format_world_string:
+            &mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+        refresh_owned_city: &mut dyn FnMut(i32, i32, i32),
+        update_player: &mut dyn FnMut(i32),
+        faction_master_log_enabled: bool,
+        write_faction_master_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
     ) -> Result<WorldMainLoopMinuteStageReport, WorldMainLoopMinuteStageBlock>
     where
         GetTick: FnMut() -> u32,
         Disband: FnMut(&mut COrganizingCtrl, i32, i32) -> bool,
-        CountryAi: FnMut(&mut CCountry),
     {
         let initialized = initialize_main_loop_tail_clocks(initialization, clocks, &mut get_tick);
         let current_tick_ms = get_tick();
@@ -9757,11 +9768,34 @@ impl CGame {
             .wrapping_sub(clocks.minute_started_at_ms)
             .wrapping_div(60_000) as i32;
 
-        let organizing = organizing
+        let organizing_report = organizing
             .run(minute_delta, disband_faction)
             .map_err(WorldMainLoopMinuteStageBlock::Organizing)?;
+        let faction_master_log_enabled = self.setup.use_log_system && faction_master_log_enabled;
+        let base = WorldCountryExileResultEffects {
+            game: self,
+            globe_setup,
+            format_world_string,
+        };
+        let mut effects = WorldCountryDemiseEffects {
+            base,
+            organizing,
+            organizing_parameters,
+            attack_city,
+            goods_war,
+            world_string,
+            refresh_owned_city,
+            update_player,
+            faction_master_log_enabled,
+            write_faction_master_log,
+        };
         let country = country_handler
-            .run(minute_delta, &mut get_tick, country_ai)
+            .run(
+                minute_delta,
+                &mut get_tick,
+                country_parameters,
+                &mut effects,
+            )
             .map_err(WorldMainLoopMinuteStageBlock::Country)?;
         clocks.minute_started_at_ms = current_tick_ms;
 
@@ -9769,7 +9803,7 @@ impl CGame {
             initialization: initialized,
             current_tick_ms,
             minute_delta,
-            organizing,
+            organizing: organizing_report,
             country,
         })
     }
@@ -10371,9 +10405,19 @@ impl CGame {
                 state.tail_clocks,
                 owners.organizing,
                 owners.country,
+                owners.country_parameters,
+                owners.organizing_parameters,
+                owners.attack_city,
+                owners.goods_war,
+                owners.globe_setup,
                 &mut *callbacks.get_tick,
                 &mut *callbacks.disband_faction,
-                &mut *callbacks.country_ai,
+                &mut *callbacks.world_string_by_id,
+                &mut *callbacks.format_union_world_string,
+                &mut *callbacks.refresh_union_owned_city,
+                &mut *callbacks.update_union_player,
+                callbacks.faction_master_log_enabled,
+                &mut *callbacks.write_faction_master_log,
             )
             .map_err(|block| Box::new(WorldMainLoopBlock::Minute(block)))?;
         let bai_tan_jjc = self

@@ -7,7 +7,8 @@
 //! governance-цепочка `CanAscend/CanDemise/DeposeKing/RegisterKing/Demise`
 //! RVA `0x000CA830/0x000CAC30/0x000CB030/0x000CB8F0/0x000CC320`,
 //! `CCountry::CloneCountryData` RVA `0x000C9CE0` и
-//! `CCountry::CloneSaveData` RVA `0x000CC470` — `IMPLEMENTED`; остальной корпус
+//! `CCountry::CloneSaveData` RVA `0x000CC470`, `CCountry::AI` RVA
+//! `0x000CB710` — `IMPLEMENTED`; остальной корпус
 //! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -78,6 +79,13 @@
 //! затем ограничивает сверху `_max_country_treasury` и пишет `WS0091` в
 //! `king`. Rust `BTreeMap`-проекция и форматтер заменяют только STL/singleton/
 //! `_sprintf`; donor source/tail/ownership gates сюда не относятся.
+//! `AI` exact `0x004CB710..0x004CB758` снимает unsigned 32-bit tick, сравнивает
+//! его с wrapping `m_dwTimeStamp + _dec_king_control_point_interval` и при
+//! достижении сначала читает decay, затем обновляет timestamp. Списание идёт
+//! через exact `ChangeControlPoint(wrapping_neg(decay))`; только отрицательный
+//! итог вызывает `DeposeKing(4)`. `CCountryHandler::Run` сохраняет unsigned
+//! country-map order и теперь вызывает этот concrete owner через уже
+//! восстановленный governance context вместо сырого whole-AI callback-а.
 //! `SetNewDay` exact `0x004C9FD0..0x004CA058` сначала обнуляет silence/PK,
 //! затем только при прежнем `m_nDay != 0` начисляет village tax ненулевому
 //! королю, вызывает `NewTerm`, выполняет настоящий `operator[]` minister slot
@@ -682,6 +690,30 @@ pub(crate) struct CountryDeposeKingReport {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountryAiReport {
+    pub(crate) current_tick_ms: u32,
+    pub(crate) previous_timestamp_ms: u32,
+    pub(crate) interval_ms: Option<i32>,
+    pub(crate) deadline_ms: Option<u32>,
+    pub(crate) due: bool,
+    pub(crate) timestamp_updated: bool,
+    pub(crate) control_point_update: Option<KingPointUpdate>,
+    pub(crate) depose: Option<CountryDeposeKingReport>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountryAiBlock {
+    Parameter {
+        report: CountryAiReport,
+        source: CountryParameterUnavailable,
+    },
+    Depose {
+        report: CountryAiReport,
+        source: CountryGovernanceContextBlock,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum CountryRegisterKingDisposition {
     Rejected(CountryDemiseRejection),
     ParameterUnavailable(CountryParameterUnavailable),
@@ -1051,6 +1083,79 @@ impl CCountry {
             },
             CountryConstructorReport { next_technology },
         )
+    }
+
+    /// Выполняет exact `CCountry::AI`: unsigned wrapping deadline, одно
+    /// списание control point и optional `DeposeKing(4)`.
+    pub(crate) fn ai<Context, GetTick>(
+        &mut self,
+        parameters: &CCountryParam,
+        mut get_tick: GetTick,
+        context: &mut Context,
+    ) -> Result<CountryAiReport, CountryAiBlock>
+    where
+        Context: CountryExileResultContext + ?Sized,
+        GetTick: FnMut() -> u32,
+    {
+        let current_tick_ms = get_tick();
+        let previous_timestamp_ms = self.king_timestamp_ms;
+        let mut report = CountryAiReport {
+            current_tick_ms,
+            previous_timestamp_ms,
+            interval_ms: None,
+            deadline_ms: None,
+            due: false,
+            timestamp_updated: false,
+            control_point_update: None,
+            depose: None,
+        };
+        let Some(interval_ms) = parameters.king_control_point_decay_interval() else {
+            return Err(CountryAiBlock::Parameter {
+                report,
+                source: CountryParameterUnavailable {
+                    field: "_dec_king_control_point_interval",
+                },
+            });
+        };
+        report.interval_ms = Some(interval_ms);
+        let deadline_ms = previous_timestamp_ms.wrapping_add(interval_ms as u32);
+        report.deadline_ms = Some(deadline_ms);
+        if current_tick_ms < deadline_ms {
+            return Ok(report);
+        }
+        report.due = true;
+
+        let Some(decay) = parameters.king_control_point_decay() else {
+            return Err(CountryAiBlock::Parameter {
+                report,
+                source: CountryParameterUnavailable {
+                    field: "_dec_king_control_point_time",
+                },
+            });
+        };
+        self.king_timestamp_ms = current_tick_ms;
+        report.timestamp_updated = true;
+        let control_point_update = match change_control_point(
+            &mut self.king,
+            decay.wrapping_neg(),
+            parameters,
+        ) {
+            Ok(update) => update,
+            Err(source) => {
+                return Err(CountryAiBlock::Parameter { report, source });
+            }
+        };
+        report.control_point_update = Some(control_point_update);
+        if self.king.control_point < 0 {
+            let depose = match self.depose_king(4, parameters, context) {
+                Ok(depose) => depose,
+                Err(source) => {
+                    return Err(CountryAiBlock::Depose { report, source });
+                }
+            };
+            report.depose = Some(depose);
+        }
+        Ok(report)
     }
 
     /// Повторяет exact find-then-replace/insert `SetMinisterfromDB`.
@@ -4298,7 +4403,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1526
@@ -4306,6 +4411,8 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 // ADDRESS: 004cb710
 // PROTOTYPE: void __thiscall AI(void)
 //
+// Реализовано выше через `CCountry::ai`; exact disassembly
+// `0x004CB710..0x004CB758` подтверждает unsigned deadline и side-effect order.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

@@ -54,6 +54,8 @@ const KING_NEED_CREDIT: usize = 8;
 const DEFAULT_KING_CONTROL_POINT: usize = 9;
 const MAX_KING_CONTROL_POINT: usize = 10;
 const MIN_KING_CONTROL_POINT: usize = 11;
+const DEC_KING_CONTROL_POINT_INTERVAL: usize = 12;
+const DEC_KING_CONTROL_POINT_TIME: usize = 16;
 const DEC_KING_CONTROL_POINT_DEMISE: usize = 17;
 const DEC_KING_CONTROL_POINT_SILENCE: usize = 18;
 const DEC_KING_CONTROL_POINT_EXILE: usize = 20;
@@ -326,6 +328,14 @@ impl CCountryParam {
 
     pub(crate) const fn min_king_control_point(&self) -> Option<i32> {
         self.parameters[MIN_KING_CONTROL_POINT]
+    }
+
+    pub(crate) const fn king_control_point_decay_interval(&self) -> Option<i32> {
+        self.parameters[DEC_KING_CONTROL_POINT_INTERVAL]
+    }
+
+    pub(crate) const fn king_control_point_decay(&self) -> Option<i32> {
+        self.parameters[DEC_KING_CONTROL_POINT_TIME]
     }
 
     pub(crate) const fn king_need_level(&self) -> Option<i32> {
