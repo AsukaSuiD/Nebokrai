@@ -1083,7 +1083,8 @@ use crate::worldserver::appworld::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarCallbacks,
 };
 use crate::worldserver::appworld::player::{
-    CPlayer, PlayerCodecError, PlayerOrganizingUpdateError, PlayerPropertyCoefficients,
+    CPlayer, PlayerCodecError, PlayerMurderCounterUpdate, PlayerOrganizingUpdateError,
+    PlayerPropertyCoefficients,
 };
 use crate::worldserver::appworld::region::RegionSerializationBlock;
 use crate::worldserver::appworld::script::variablelist::VariableListSaveSource;
@@ -8427,7 +8428,7 @@ impl CGame {
     /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, other
     /// transport/cursor `0x5FD02/0x5FD06..0x5FD09/0x5FD0E`, copy-number
     /// `0x5FD0B`, LeiTing update `0x5FD10`, honor
-    /// `0x5FD0C/0x5FD0D`, organizing session
+    /// `0x5FD0C/0x5FD0D`, server report-murderer `0x5FA06`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
     /// войны `0x6011E`, само объявление `0x6011F`, общий leaf
@@ -10653,6 +10654,23 @@ impl CGame {
         self.players
             .get_mut(&player_id)
             .map(|player| player.replace_silience_time(silience_time))
+    }
+
+    /// Увеличивает kill/PK только у owner-а, подтверждённого online-list.
+    pub(crate) fn increment_online_player_murder_counters(
+        &mut self,
+        player_id: u32,
+    ) -> Option<PlayerMurderCounterUpdate> {
+        if !self
+            .online_players
+            .iter()
+            .any(|&online_id| online_id == player_id)
+        {
+            return None;
+        }
+        self.players
+            .get_mut(&player_id)
+            .map(|player| player.increment_murder_counters())
     }
 
     /// Декодирует player snapshot только после exact online-list lookup.

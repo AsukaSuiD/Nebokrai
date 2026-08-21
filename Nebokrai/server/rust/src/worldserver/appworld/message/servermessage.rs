@@ -3,8 +3,8 @@
 //! Статус владельца: `IMPLEMENTED` для `gameserv_conn_log`,
 //! внутрипроцессного события `0x3FC03`,
 //! регистрации GameServer и reconnect player-data хвоста в `0x5FA01`,
-//! snapshot/cleanup хвоста `0x5FA03`, обычных opcode `0x4FC01..=0x4FC03` и
-//! `0x5FA0A..=0x5FA0D` из
+//! snapshot/cleanup хвоста `0x5FA03`, обычных opcode `0x4FC01..=0x4FC03`,
+//! `0x5FA06` и `0x5FA0A..=0x5FA0D` из
 //! `OnServerMessage` RVA `0x000ADCF0`;
 //! остальные ветви остаются `UNKNOWN` (исследовательский декомпилят хранится локально) ниже. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
@@ -181,6 +181,14 @@
 //! сохраняют ноль и неподвижный cursor; typed outcome отдельно сообщает
 //! полноту обоих чтений и исходно игнорировавшийся результат отправки.
 //!
+//! `0x5FA06` последовательно читает четыре signed `long`; первые три не
+//! интерпретируются WorldServer-ом, но остаются в payload того же сообщения.
+//! Четвёртый задаёт player ID. Ненулевой маршрут меняет только opcode на
+//! `0x7F806` и вызывает `SendToMapID`; при нулевом маршруте online-player
+//! получает wrapping `u32` kill и `u16` PK increment. EXE разыменовывал null,
+//! если route отсутствовал вместе с online-owner-ом: безопасный Rust сохраняет
+//! все корректные эффекты, но сообщает `MissingOnlinePlayer` вместо UB/crash.
+//!
 //! Reached хвост `0x5FA03` после равенства response-count сначала уже сбросил
 //! `m_nDBResponsed`, затем выполняет полный `GenerateDBData` и строго
 //! `ClearMapPlayerForOffline -> ClearRestorePlayer -> ClearCreationPlayer ->
@@ -253,7 +261,9 @@ use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
 };
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
 use crate::worldserver::appworld::organizingsystem::villagewarsys::CVillageWarSys;
-use crate::worldserver::appworld::player::{PlayerCodecError, PlayerPropertyCoefficients};
+use crate::worldserver::appworld::player::{
+    PlayerCodecError, PlayerMurderCounterUpdate, PlayerPropertyCoefficients,
+};
 use crate::worldserver::appworld::script::variablelist::{
     CVariableList, VariableListSerializationBlock,
 };
@@ -309,8 +319,33 @@ pub(crate) enum WorldServerMessageOutcome {
     GameServerPingStarted(WorldGameServerPingStart),
     LoginServerTupleRelay(WorldLoginServerTupleRelay),
     LoginServerIdentityAssigned(WorldLoginServerIdentity),
+    MurderReported(WorldMurderReport),
     OpaqueFieldsRead(WorldOpaqueServerFields),
     RegionMessageRelayed(WorldRegionMessageRelay),
+}
+
+/// Наблюдаемый результат REPORT_MURDERER `0x5FA06`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldMurderReport {
+    /// Все четыре positional `long`, включая legacy-ноль короткого payload.
+    pub(crate) fields: [i32; 4],
+    /// Для каждого поля сообщает, сдвинул ли соответствующий getter cursor.
+    pub(crate) fields_complete: [bool; 4],
+    /// Маршрут, вычисленный после всех четырёх чтений.
+    pub(crate) game_server_number: i32,
+    pub(crate) disposition: WorldMurderReportDisposition,
+}
+
+/// Взаимоисключающие хвосты REPORT_MURDERER после route lookup.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldMurderReportDisposition {
+    Relayed {
+        message_type: i32,
+        delivery: Result<i32, SendMessageError>,
+    },
+    CountersIncremented(PlayerMurderCounterUpdate),
+    /// Safe-замена исходного null-dereference, не являвшегося контрактом.
+    MissingOnlinePlayer,
 }
 
 /// Следующая точная позиция ветки `0x5FA01` после достигнутой начальной части.
@@ -1314,6 +1349,39 @@ pub(crate) fn on_server_message(
         0x0005_FA01 => {
             WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::GameServerConnection(
                 on_game_server_connected(game, &mut message, None),
+            ))
+        }
+        0x0005_FA06 => {
+            let decoded = [
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+            ];
+            let fields = decoded.map(|value| value.unwrap_or(0));
+            let fields_complete = decoded.map(|value| value.is_some());
+            let player_id = fields[3];
+            let game_server_number = game.game_server_number_by_player_id(player_id);
+            let disposition = if game_server_number == 0 {
+                game.increment_online_player_murder_counters(player_id as u32).map_or(
+                    WorldMurderReportDisposition::MissingOnlinePlayer,
+                    WorldMurderReportDisposition::CountersIncremented,
+                )
+            } else {
+                message.set_message_type(0x0007_F806);
+                let delivery = game.send_msg_to_game_server(game_server_number, &message);
+                WorldMurderReportDisposition::Relayed {
+                    message_type: 0x0007_F806,
+                    delivery,
+                }
+            };
+            WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::MurderReported(
+                WorldMurderReport {
+                    fields,
+                    fields_complete,
+                    game_server_number,
+                    disposition,
+                },
             ))
         }
         0x0005_FA0A => {

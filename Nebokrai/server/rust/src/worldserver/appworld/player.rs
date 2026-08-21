@@ -586,6 +586,16 @@ struct PlayerBaseProperty {
     title: Vec<u8>,
 }
 
+/// Наблюдаемый результат двух прямых мутаций `tagBaseProperty` из
+/// `OnServerMessage(0x5FA06)`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerMurderCounterUpdate {
+    pub(crate) previous_kill_count: u32,
+    pub(crate) kill_count: u32,
+    pub(crate) previous_pk_count: u16,
+    pub(crate) pk_count: u16,
+}
+
 impl PlayerBaseProperty {
     fn read_u8(&self, offset: usize) -> u8 {
         self.wire[offset]
@@ -1258,6 +1268,28 @@ impl CPlayer {
     /// Возвращает сохранённые account-байты без придуманной перекодировки.
     pub(crate) fn get_account(&self) -> &[u8] {
         &self.base_property.account
+    }
+
+    /// Повторяет две последовательные native-width мутации ветки `0x5FA06`.
+    pub(crate) fn increment_murder_counters(&mut self) -> PlayerMurderCounterUpdate {
+        let previous_kill_count = self
+            .base_property
+            .read_u32(BASE_PROPERTY_KILL_COUNT_OFFSET);
+        let kill_count = previous_kill_count.wrapping_add(1);
+        self.base_property
+            .write_u32(BASE_PROPERTY_KILL_COUNT_OFFSET, kill_count);
+
+        let previous_pk_count = self.base_property.read_u16(BASE_PROPERTY_PK_COUNT_OFFSET);
+        let pk_count = previous_pk_count.wrapping_add(1);
+        self.base_property
+            .write_u16(BASE_PROPERTY_PK_COUNT_OFFSET, pk_count);
+
+        PlayerMurderCounterUpdate {
+            previous_kill_count,
+            kill_count,
+            previous_pk_count,
+            pk_count,
+        }
     }
 
     /// Сообщает, был ли игроку уже отправлен полный faction snapshot.
