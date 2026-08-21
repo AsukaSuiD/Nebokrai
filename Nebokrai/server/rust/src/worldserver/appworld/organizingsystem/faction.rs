@@ -17,6 +17,7 @@
 //! `IsHaveEnymyFaction/IsHaveCityEnemyFaction` RVA `0x000B50F0/0x000B5100`,
 //! `SetSuperiorOrganizing` RVA `0x000B5110`,
 //! `IsOwnedCity` RVA `0x000B5490`, `GetOwnedCities` RVA `0x000BD7D0`,
+//! `UpdateExpToClient/SetExp` RVA `0x000B55B0/0x000B61F0`,
 //! `DelMember` RVA `0x000B9EF0`,
 //! `UpdatePropertyToClient` RVA `0x000B9FB0`,
 //! `UpdateEnemyFactionToClient/UpdateCityWarEnemyFactionToClient` RVA
@@ -75,6 +76,8 @@
 //! Enemy-update сообщения передают полный set, а не delta: `0x7FE11/0x7FE12`,
 //! recipient ID, 32-битный count и signed IDs в tree-order. Объявленные
 //! `enemy_id/operator` исходные функции не читали и в Rust-интерфейс не входят.
+//! Experience-update `0x7FE14` получает только contributor либо master и несёт
+//! recipient/current/upgrade exp. `SetExp` ставит dirty-bit до этой рассылки.
 //! Достигнутый `SetPlayerOrganizing` дополнительно читает `m_strName`,
 //! `m_lMastterID`, `m_Property.lLvl/lExp`, `m_OwnedCities` и два enemy-set.
 //! Коллекции, которые constructor действительно создавал пустыми, хранятся
@@ -262,6 +265,10 @@ impl FactionBaseProperty {
         self.signed_at(0x04)
     }
 
+    pub(crate) const fn upgrade_experience(&self) -> i32 {
+        self.signed_at(0x20)
+    }
+
     pub(crate) const fn offense_victor_counts(&self) -> i32 {
         self.signed_at(0x08)
     }
@@ -373,6 +380,29 @@ pub(crate) struct FactionEnemyDelivery {
     pub(crate) recipient_player_id: i32,
     pub(crate) game_server_id: i32,
     pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionExperienceDelivery {
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionExperienceBlock {
+    MissingBaseProperty,
+    MasterIdMissing,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionExperienceUpdate {
+    MaximumLevel,
+    Unchanged { experience: i32 },
+    Updated {
+        experience: i32,
+        deliveries: Vec<FactionExperienceDelivery>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -856,6 +886,67 @@ impl CFaction {
         game: &CGame,
     ) -> Vec<FactionEnemyDelivery> {
         self.update_enemy_set_to_client(game, EnemyFactionSetKind::CityWar)
+    }
+
+    /// Рассылает current/upgrade exp только contributor-ам и master-у.
+    pub(crate) fn update_experience_to_client(
+        &self,
+        game: &CGame,
+    ) -> Result<Vec<FactionExperienceDelivery>, FactionExperienceBlock> {
+        let property = self
+            .base_property
+            .ok_or(FactionExperienceBlock::MissingBaseProperty)?;
+        let master_id = self
+            .master_id
+            .ok_or(FactionExperienceBlock::MasterIdMissing)?;
+        let mut deliveries = Vec::new();
+        for (&recipient_player_id, member) in &self.members {
+            if !member.contribute && recipient_player_id != master_id {
+                continue;
+            }
+            let player = game.online_player_by_id(recipient_player_id as u32);
+            let game_server_id = game.game_server_number_by_player_id(recipient_player_id);
+            if player.is_none_or(|player| !player.faction_data_received()) || game_server_id == 0 {
+                continue;
+            }
+
+            let mut message = CMessage::new(0x7FE14);
+            message.base_mut().add_long(recipient_player_id);
+            message.base_mut().add_long(property.experience());
+            message.base_mut().add_long(property.upgrade_experience());
+            deliveries.push(FactionExperienceDelivery {
+                recipient_player_id,
+                game_server_id,
+                result: game.send_msg_to_game_server(game_server_id, &message),
+            });
+        }
+        Ok(deliveries)
+    }
+
+    /// Clamp-ит и публикует faction experience с исходным порядком эффектов.
+    pub(crate) fn set_experience(
+        &mut self,
+        game: &CGame,
+        experience: i32,
+    ) -> Result<FactionExperienceUpdate, FactionExperienceBlock> {
+        let property = self
+            .base_property
+            .as_mut()
+            .ok_or(FactionExperienceBlock::MissingBaseProperty)?;
+        if property.level() >= 12 {
+            return Ok(FactionExperienceUpdate::MaximumLevel);
+        }
+        let experience = experience.clamp(0, 100_000_000);
+        if property.experience() == experience {
+            return Ok(FactionExperienceUpdate::Unchanged { experience });
+        }
+        property.write_signed(0x04, experience);
+        self.set_change_data(1);
+        let deliveries = self.update_experience_to_client(game)?;
+        Ok(FactionExperienceUpdate::Updated {
+            experience,
+            deliveries,
+        })
     }
 
     /// Возвращает достигнутый `m_Property.lConfederationID`.
@@ -1677,7 +1768,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::UpdateExpToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1366
@@ -1901,7 +1992,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetExp
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1307
