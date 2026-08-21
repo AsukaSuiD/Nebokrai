@@ -40,8 +40,9 @@
 //! set-copy getter-ы `GetEnemyList/GetCityWarEnemyList` RVA
 //! `0x000BA6A0/0x000BA6D0` и legacy `IsEnemyFaction` RVA `0x000C1830`,
 //! `IsSuperiorOrganizing` RVA `0x000BD780`, `IsMaster` RVA `0x000C1EE0` и
-//! `OnMemberEnterGame` RVA `0x000C0A10` — `IMPLEMENTED`; спорные ключи lookup
-//! имеют статус `VERIFIED_DISASSEMBLY`.
+//! `SetIsPermit/OnMemberEnterGame` RVA `0x000C09A0/0x000C0A10` —
+//! `IMPLEMENTED`; спорные ключи и порядок side effect имеют статус
+//! `VERIFIED_DISASSEMBLY`.
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
 //! SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -102,6 +103,9 @@
 //! property-byte, name копируется byte-exact и по старому контракту всегда
 //! сообщает успех. Три transient bool до первого достигнутого присваивания
 //! остаются `Option`, потому что один constructor сам их не инициализировал.
+//! `SetIsPermit` получает union lookup явно, но вызывает его только после
+//! master-gate и только с текущим `lConfederationID`. Exact ASM подтверждает
+//! последующий порядок: запись permit-byte, полная property-рассылка, dirty `1`.
 //! Достигнутый `SetPlayerOrganizing` дополнительно читает `m_strName`,
 //! `m_lMastterID`, `m_Property.lLvl/lExp`, `m_OwnedCities` и два enemy-set.
 //! Коллекции, которые constructor действительно создавал пустыми, хранятся
@@ -349,6 +353,10 @@ impl FactionBaseProperty {
         self.bytes[0x2C] = country;
     }
 
+    fn set_permit(&mut self, permit: bool) {
+        self.bytes[0x2B] = u8::from(permit);
+    }
+
     fn set_initial_level_permissions(&mut self, parameters: &COrganizingParam) {
         let level = self.level();
         self.bytes[0x24] = u8::from(parameters.pronounce_minimum_level() <= level);
@@ -438,6 +446,22 @@ pub(crate) enum FactionExperienceUpdate {
     Updated {
         experience: i32,
         deliveries: Vec<FactionExperienceDelivery>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionPermitBlock {
+    MasterIdMissing,
+    MissingBaseProperty,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionPermitUpdate {
+    RequesterIsNotMaster,
+    SuperiorMasterMismatch,
+    Unchanged,
+    Updated {
+        deliveries: Vec<FactionPropertyDelivery>,
     },
 }
 
@@ -773,6 +797,51 @@ impl CFaction {
             Some(property) => Some(property.permit()),
             None => None,
         }
+    }
+
+    /// Меняет faction-permit в точном порядке `SetIsPermit`.
+    ///
+    /// Lookup заменяет исходный singleton и получает ровно текущий union ID;
+    /// `None` сохраняет общий null/missing результат старого controller-а.
+    pub(crate) fn set_is_permitted<F>(
+        &mut self,
+        game: &CGame,
+        requester_id: i32,
+        permit: bool,
+        superior_master_by_id: F,
+    ) -> Result<FactionPermitUpdate, FactionPermitBlock>
+    where
+        F: FnOnce(i32) -> Option<i32>,
+    {
+        let master_id = self
+            .master_id
+            .ok_or(FactionPermitBlock::MasterIdMissing)?;
+        if requester_id != master_id {
+            return Ok(FactionPermitUpdate::RequesterIsNotMaster);
+        }
+
+        let property = self
+            .base_property
+            .ok_or(FactionPermitBlock::MissingBaseProperty)?;
+        if superior_master_by_id(property.union_id())
+            .is_some_and(|superior_master_id| superior_master_id != master_id)
+        {
+            return Ok(FactionPermitUpdate::SuperiorMasterMismatch);
+        }
+        if property.permit() == permit {
+            return Ok(FactionPermitUpdate::Unchanged);
+        }
+
+        let property = self
+            .base_property
+            .as_mut()
+            .ok_or(FactionPermitBlock::MissingBaseProperty)?;
+        property.set_permit(permit);
+        let deliveries = self
+            .update_property_to_client(game)
+            .map_err(|_| FactionPermitBlock::MissingBaseProperty)?;
+        self.set_change_data(1);
+        Ok(FactionPermitUpdate::Updated { deliveries })
     }
 
     pub(crate) const fn is_leave_word_function(&self) -> Option<bool> {
@@ -3293,7 +3362,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetIsPermit
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2436
