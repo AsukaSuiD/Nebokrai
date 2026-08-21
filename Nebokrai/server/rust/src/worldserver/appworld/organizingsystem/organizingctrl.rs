@@ -245,8 +245,8 @@ use super::faction::{
     CFaction, FactionCloneSaveBlock, FactionDeleteOrganizingBuildError,
     FactionDeleteOrganizingOutcome, FactionDisbandBlock, FactionDisbandContext,
     FactionDisbandOutcome, FactionDisbandProgress, FactionDisbandRejection,
-    FactionEnemyDelivery, FactionInitialPropertyBlock, FactionMemberInfoReport,
-    FactionMemberInfoRequest,
+    FactionEnemyDelivery, FactionFeatureFunctionUpdate, FactionInitialPropertyBlock,
+    FactionMemberInfoReport, FactionMemberInfoRequest,
     FactionOperationAuthorityContext, FactionOrganizingInfoContext, FactionOtherInfoBuildError,
     FactionOtherInfoDelivery, FactionOwnedCityDelivery, FactionOwnedCityRefreshBlock,
     FactionOwnedCityRefreshReport, FactionOwnedCityUpdateBuildError, FactionPlayerHeaderContext,
@@ -403,6 +403,24 @@ pub(crate) struct UnionPlayerHeaderLookupBlock {
 pub(crate) enum FactionMasterLookupBlock {
     NullFaction { map_key: i32 },
     MissingMasterId { map_key: i32 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingLeaveWordEnableOutcome {
+    FactionNotFound,
+    Updated {
+        faction_id: i32,
+        update: FactionFeatureFunctionUpdate,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingLeaveWordEnableBlock {
+    MasterLookup(FactionMasterLookupBlock),
+    Property {
+        faction_id: i32,
+        source: FactionInitialPropertyBlock,
+    },
 }
 
 /// Safe-границы точной цепочки `GetUnion(player ID)`.
@@ -885,6 +903,30 @@ impl COrganizingCtrl {
             }
         }
         Ok(0)
+    }
+
+    /// Разрешает master-faction и включает её leave-word feature.
+    pub(crate) fn enable_leave_word_for_master<Context>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Result<OrganizingLeaveWordEnableOutcome, OrganizingLeaveWordEnableBlock>
+    where
+        Context: FactionOrganizingInfoContext,
+    {
+        let faction_id = self
+            .faction_id_by_master_player(player_id)
+            .map_err(OrganizingLeaveWordEnableBlock::MasterLookup)?;
+        if faction_id < 1 {
+            return Ok(OrganizingLeaveWordEnableOutcome::FactionNotFound);
+        }
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return Ok(OrganizingLeaveWordEnableOutcome::FactionNotFound);
+        };
+        let update = faction
+            .set_leave_word_function(true, context)
+            .map_err(|source| OrganizingLeaveWordEnableBlock::Property { faction_id, source })?;
+        Ok(OrganizingLeaveWordEnableOutcome::Updated { faction_id, update })
     }
 
     /// Повторяет `GetUnion`: master-player -> faction -> union -> nullable owner.

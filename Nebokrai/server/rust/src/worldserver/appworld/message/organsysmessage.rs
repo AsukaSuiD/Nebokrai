@@ -16,6 +16,9 @@
 //! `0x60118` читает `(master player ID, applicant faction ID)`, разрешает union
 //! через `COrganizingCtrl::GetUnion(master player ID)` и при non-null вызывает
 //! virtual `ApplyForJoin(applicant faction ID, 0, master player ID)`.
+//! Exact `0x004A75FB..0x004A763F` подтверждает соседний `0x6011A`: один
+//! `GetLong`, ordered `IsFactionMaster`, nullable faction lookup и virtual
+//! `SetLWFunction(true)` в slot `+0x104`.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -41,9 +44,12 @@ use parking_lot::Mutex;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::servers::ServerCommandHandle;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionCallbackOutcome};
-use crate::worldserver::appworld::organizingsystem::faction::FactionMemberInfoRequest;
+use crate::worldserver::appworld::organizingsystem::faction::{
+    FactionMemberInfoRequest, FactionOrganizingInfoContext,
+};
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
-    COrganizingCtrl, OrganizingUnionApplyForJoinDispatchBlock, OrganizingUnionApplyForJoinOutcome,
+    COrganizingCtrl, OrganizingLeaveWordEnableBlock, OrganizingLeaveWordEnableOutcome,
+    OrganizingUnionApplyForJoinDispatchBlock, OrganizingUnionApplyForJoinOutcome,
 };
 use crate::worldserver::appworld::organizingsystem::union::{
     UnionAddFactionEffects, UnionApplicationEndpointBlock, UnionApplicationSessionBlock,
@@ -56,6 +62,7 @@ use crate::worldserver::worldserver::game::CGame;
 const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
     [0x60117, 0x60119, 0x60120, 0x60122, 0x60124, 0x60131];
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
+const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct QueuedUnionApplicationTerminal {
@@ -244,6 +251,16 @@ impl UnionAddFactionEffects for WorldUnionApplicationEffects<'_> {
     }
 }
 
+impl FactionOrganizingInfoContext for WorldUnionApplicationEffects<'_> {
+    fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
+        Some((self.callbacks.world_string)(string_id))
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OrganizingSessionResultDispatch {
     NotHandled,
@@ -329,6 +346,32 @@ where
                 applicant_faction_id,
                 outcome,
             }),
+    )
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingLeaveWordEnableDispatch {
+    pub(crate) player_id: i32,
+    pub(crate) outcome: OrganizingLeaveWordEnableOutcome,
+}
+
+/// Выполняет `0x6011A`: master lookup и virtual `SetLWFunction(true)`.
+pub(crate) fn dispatch_leave_word_enable<Context>(
+    message: &mut CMessage,
+    organizing: &mut COrganizingCtrl,
+    context: &mut Context,
+) -> Option<Result<OrganizingLeaveWordEnableDispatch, OrganizingLeaveWordEnableBlock>>
+where
+    Context: FactionOrganizingInfoContext,
+{
+    if message.message_type() != ENABLE_LEAVE_WORD_MESSAGE_TYPE {
+        return None;
+    }
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    Some(
+        organizing
+            .enable_leave_word_for_master(player_id, context)
+            .map(|outcome| OrganizingLeaveWordEnableDispatch { player_id, outcome }),
     )
 }
 

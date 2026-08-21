@@ -977,11 +977,12 @@ use crate::worldserver::appworld::message::othermessage::{
     WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
 };
 use crate::worldserver::appworld::message::organsysmessage::{
-    OrganizingSessionResultDispatch, OrganizingUnionApplicationDispatch,
-    QueuedUnionApplicationTerminal, UnionApplicationConfirmationDelivery,
+    OrganizingLeaveWordEnableDispatch, OrganizingSessionResultDispatch,
+    OrganizingUnionApplicationDispatch, QueuedUnionApplicationTerminal,
+    UnionApplicationConfirmationDelivery,
     WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects,
-    WorldUnionApplicationRuntimeOwner, dispatch_organizing_session_result,
-    dispatch_union_application,
+    WorldUnionApplicationRuntimeOwner, dispatch_leave_word_enable,
+    dispatch_organizing_session_result, dispatch_union_application,
 };
 use crate::worldserver::appworld::message::servermessage::{
     WorldLoginClientReplacement, WorldServerMessageDispatch, WorldServerMessageError,
@@ -993,9 +994,9 @@ use crate::worldserver::appworld::organizingsystem::factionwarsys::{
 };
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     COrganizingCtrl, OrganizingRunBlock, OrganizingRunReport, OrganizingSaveDataBlock,
-    OrganizingSaveDataReport, OrganizingUnionApplicationCallbackBlock,
-    OrganizingUnionApplicationCallbackReport, OrganizingUnionApplyForJoinDispatchBlock,
-    PlayerEnterGameOutcome, PlayerExitGameOutcome,
+    OrganizingLeaveWordEnableBlock, OrganizingSaveDataReport,
+    OrganizingUnionApplicationCallbackBlock, OrganizingUnionApplicationCallbackReport,
+    OrganizingUnionApplyForJoinDispatchBlock, PlayerEnterGameOutcome, PlayerExitGameOutcome,
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::{
     COrganizingParam, OrganizingParamLoadError, OrganizingParamLoadReport,
@@ -1878,6 +1879,12 @@ pub(crate) enum ProcessedWorldEvent {
             OrganizingUnionApplicationDispatch<UnionApplicationSessionReport>,
             WorldUnionApplicationStartBlock,
         >,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingLeaveWordEnable {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<OrganizingLeaveWordEnableDispatch, OrganizingLeaveWordEnableBlock>,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     LoginClientReconnected(WorldLoginClientReplacement),
@@ -8065,9 +8072,9 @@ impl CGame {
     /// Поэтому typed reconnect из первой очереди заменяет owner до второго
     /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
     /// ветви server-owner-а, honor `0x5FD0C/0x5FD0D`, organizing session
-    /// result и union application `0x60118` исполняются, остальные остаются
-    /// owned pending. Terminal session actions применяются FIFO до перехода к
-    /// следующему входящему сообщению.
+    /// result, union application `0x60118` и leave-word enable `0x6011A`
+    /// исполняются, остальные остаются owned pending. Terminal session actions
+    /// применяются FIFO до перехода к следующему входящему сообщению.
     pub(crate) fn process_message(
         &mut self,
         honor_ranks: &mut CHonorRanks,
@@ -10962,6 +10969,24 @@ fn process_world_message(
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingUnionApplication {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        if let Some(outcome) =
+            dispatch_leave_word_enable(&mut message, organizing, &mut effects)
+        {
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingLeaveWordEnable {
                 source,
                 legacy_run_result,
                 outcome,
