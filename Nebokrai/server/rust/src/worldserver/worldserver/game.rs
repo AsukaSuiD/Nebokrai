@@ -913,7 +913,9 @@
 //! обработку, новая пара добавляется в хвост до чтения четырёх счётчиков.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::convert::Infallible;
 use std::error::Error;
+use std::ffi::CString;
 use std::fmt;
 use std::fs;
 use std::future::Future;
@@ -977,9 +979,12 @@ use crate::public::tools::ini_decode;
 use crate::transport::bind_tcp_ipv4;
 use crate::worldserver::appworld::country::country::{CCountry, CountryKingSaveLimits};
 use crate::worldserver::appworld::country::countryhandler::{
-    CCountryHandler, CountryRunBlock, CountryRunReport,
+    CCountryHandler, CountryInfoDeliveryContext, CountryRunBlock, CountryRunReport,
 };
 use crate::worldserver::appworld::country::countryparam::CCountryParam;
+use crate::worldserver::appworld::country::countrywarsys::{
+    CountryWarSys, CountryWarVictoryContext, CountryWarVictoryRegion,
+};
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsOriginalNameIndex,
 };
@@ -994,7 +999,8 @@ use crate::worldserver::appworld::message::othermessage::{
     WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
 };
 use crate::worldserver::appworld::message::countrymessage::{
-    WorldCountryMessageDispatch, WorldCountryMessageOutcome, on_country_message,
+    WorldCountryMessageDispatch, WorldCountryMessageOutcome,
+    dispatch_country_war_victory_message, on_country_message,
 };
 use crate::worldserver::appworld::message::gmamessage::{
     WorldGmaMessageDispatch, WorldGmaMessageOutcome, on_gma_message,
@@ -2824,6 +2830,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) organizing: &'a mut COrganizingCtrl,
     pub(crate) country: &'a mut CCountryHandler,
     pub(crate) country_parameters: &'a CCountryParam,
+    pub(crate) country_war: &'a mut CountryWarSys,
     pub(crate) honor_ranks: &'a mut CHonorRanks,
     pub(crate) organizing_parameters: &'a mut COrganizingParam,
     pub(crate) player_ranks: &'a mut CPlayerRanks,
@@ -8549,6 +8556,7 @@ impl CGame {
         organizing_parameters: &COrganizingParam,
         country_handler: &mut CCountryHandler,
         country_parameters: &CCountryParam,
+        country_war: &mut CountryWarSys,
         country_limits: CountryKingSaveLimits,
         faction_war_sys: &mut CFactionWarSys,
         attack_city: &mut CAttackCitySys,
@@ -8612,6 +8620,7 @@ impl CGame {
                             organizing_parameters,
                             country_handler,
                             country_parameters,
+                            country_war,
                             country_limits,
                             faction_war_sys,
                             attack_city,
@@ -8678,6 +8687,7 @@ impl CGame {
                     organizing_parameters,
                     country_handler,
                     country_parameters,
+                    country_war,
                     country_limits,
                     faction_war_sys,
                     attack_city,
@@ -8743,6 +8753,7 @@ impl CGame {
         organizing_parameters: &COrganizingParam,
         country_handler: &mut CCountryHandler,
         country_parameters: &CCountryParam,
+        country_war: &mut CountryWarSys,
         country_limits: CountryKingSaveLimits,
         faction_war_sys: &mut CFactionWarSys,
         attack_city: &mut CAttackCitySys,
@@ -8803,6 +8814,7 @@ impl CGame {
             organizing_parameters,
             country_handler,
             country_parameters,
+            country_war,
             country_limits,
             faction_war_sys,
             attack_city,
@@ -9905,6 +9917,7 @@ impl CGame {
             owners.organizing_parameters,
             owners.country,
             owners.country_parameters,
+            owners.country_war,
             configuration.country_limits,
             owners.faction_war,
             owners.attack_city,
@@ -11961,6 +11974,99 @@ pub(crate) async fn game_thread_func<Runtime: WorldGameThreadRuntime>(
     }
 }
 
+struct WorldCountryInfoDelivery<'a> {
+    game: &'a CGame,
+}
+
+impl CountryInfoDeliveryContext for WorldCountryInfoDelivery<'_> {
+    fn send_all(&mut self, message: &CMessage) -> i32 {
+        message
+            .send_all(self.game.current_game_server_sender().as_ref())
+            .unwrap_or(0)
+    }
+}
+
+struct WorldCountryWarVictoryEffects<'a> {
+    game: &'a CGame,
+    country_handler: &'a mut CCountryHandler,
+    format_world_string:
+        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+}
+
+impl CountryWarVictoryContext for WorldCountryWarVictoryEffects<'_> {
+    type Block = Infallible;
+
+    fn region(
+        &mut self,
+        region_id: i32,
+    ) -> Result<Option<CountryWarVictoryRegion>, Self::Block> {
+        Ok(match self.game.region_name(region_id) {
+            WorldRegionNameLookup::Name(name) => Some(CountryWarVictoryRegion {
+                name: name.to_vec(),
+            }),
+            WorldRegionNameLookup::RegionNotFound
+            | WorldRegionNameLookup::NullRegionPointer => None,
+        })
+    }
+
+    fn country_exists(&mut self, country: u8) -> Result<bool, Self::Block> {
+        Ok(self.country_handler.get_country(country).is_some())
+    }
+
+    fn send_all(&mut self, message: &CMessage) -> i32 {
+        message
+            .send_all(self.game.current_game_server_sender().as_ref())
+            .unwrap_or(0)
+    }
+
+    fn set_country_war_result(
+        &mut self,
+        country: u8,
+        result: i32,
+    ) -> Result<(), Self::Block> {
+        let _ = self
+            .country_handler
+            .set_country_war_result(country, result);
+        Ok(())
+    }
+
+    fn format_victory_notice(
+        &mut self,
+        string_id: &'static [u8],
+        attack_country: i32,
+        defend_country: i32,
+        region_name: &[u8],
+    ) -> Result<Vec<u8>, Self::Block> {
+        let formatted = (self.format_world_string)(
+            string_id,
+            &[
+                UnionFormatArgument::Signed(attack_country),
+                UnionFormatArgument::Signed(defend_country),
+                UnionFormatArgument::Text(region_name),
+            ],
+        );
+        let visible = legacy_c_string_prefix(&formatted);
+        // Нормальный output сохраняется byte-exact; переполнение старого
+        // 256-byte `_sprintf` было внутренним UB, поэтому safe adapter
+        // оставляет место под C-string NUL вместо чтения за stack-buffer.
+        Ok(visible[..visible.len().min(0xff)].to_vec())
+    }
+
+    fn send_country_info(
+        &mut self,
+        text: &[u8],
+        title: u32,
+        color: u32,
+    ) -> Result<i32, Self::Block> {
+        let text = CString::new(legacy_c_string_prefix(text))
+            .expect("legacy C-string prefix не содержит внутреннего NUL");
+        let mut delivery = WorldCountryInfoDelivery { game: self.game };
+        Ok(self
+            .country_handler
+            .send_info_to_client(&text, title, color, &mut delivery))
+    }
+}
+
 async fn process_world_message<TimerCallback, TeamOwner>(
     game: &mut CGame,
     honor_ranks: &mut CHonorRanks,
@@ -11968,6 +12074,7 @@ async fn process_world_message<TimerCallback, TeamOwner>(
     organizing_parameters: &COrganizingParam,
     country_handler: &mut CCountryHandler,
     country_parameters: &CCountryParam,
+    country_war: &mut CountryWarSys,
     country_limits: CountryKingSaveLimits,
     faction_war_sys: &mut CFactionWarSys,
     attack_city: &mut CAttackCitySys,
@@ -12109,6 +12216,25 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::Country) {
+        let victory = {
+            let mut effects = WorldCountryWarVictoryEffects {
+                game,
+                country_handler,
+                format_world_string: &mut *application_callbacks.format_world_string,
+            };
+            dispatch_country_war_victory_message(&mut message, country_war, &mut effects)
+        };
+        match victory {
+            Ok(Some(sync)) => {
+                return ProcessedWorldEvent::CountryMessage {
+                    source,
+                    legacy_run_result,
+                    outcome: WorldCountryMessageOutcome::CountryWarVictory(sync),
+                };
+            }
+            Ok(None) => {}
+            Err(block) => match block.source {},
+        }
         match on_country_message(
             game,
             country_handler,

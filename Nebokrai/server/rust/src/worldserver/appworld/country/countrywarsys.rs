@@ -15,7 +15,11 @@
 //! даже при пустом тексте. Потерянный Ghidra stack-key region lookup и порядок
 //! state/message/result/clear подтверждены exact EXE `0x00491E69..0x00492142`.
 //! Region, localization, country-map и network owners остаются явной context-
-//! границей; неизвестность в них сохраняет уже выполненные предыдущие эффекты.
+//! границей; concrete adapter теперь подключён к `ProcessMessage(0x60318)`.
+//! Неизвестность в этих владельцах сохраняет уже выполненные предыдущие эффекты.
+//! Переполнение исходного 256-byte `_sprintf` не воспроизводится: нормальный
+//! output сохраняется, oversized localization безопасно ограничивается 255
+//! байтами под C-string NUL как внутренний UB без доказанного gameplay-эффекта.
 //!
 //! Snapshot намеренно сохраняет layout World EXE: `state_clear + 3 bytes
 //! padding`, затем defender и attacker. Парный Game EXE RVA `0x000EBD60`

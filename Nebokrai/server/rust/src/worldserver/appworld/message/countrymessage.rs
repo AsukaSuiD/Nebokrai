@@ -23,6 +23,10 @@
 //! `_bQuestSwitch +0x25`. Строка `king`-лога сохраняет исходный raw switch и
 //! byte-exact хвост `A1 A3`; безопасный accessor `CGlobeSetup` заменяет только
 //! старое адресное вычисление country-name slot.
+//! Exact switch target `0x004A504E..0x004A5065` подтверждает, что `0x60318`
+//! читает один unsigned country byte и сразу передаёт его достигнутому
+//! `CountryWarSys`; конкретный region/country/localization/network context
+//! подключён в общем `ProcessMessage`, а не оставлен отдельным helper-ом.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::tools::put_string_to_file;
@@ -100,6 +104,7 @@ pub(crate) enum WorldCountryMessageOutcome {
     Relay(WorldCountryRelayOutcome),
     ScalarSynchronized(WorldCountryScalarSync),
     QuestSwitchSynchronized(WorldCountryQuestSwitchSync),
+    CountryWarVictory(WorldCountryWarVictorySync),
 }
 
 pub(crate) enum WorldCountryMessageDispatch {
@@ -221,31 +226,36 @@ fn country_quest_switch_log_line(country_name: &[u8], job: u8, raw_switch: u8) -
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CountryWarVictoryDispatchError<ContextBlock> {
-    UnexpectedEnd { offset: usize },
-    Context(ContextBlock),
+pub(crate) struct WorldCountryWarVictorySync {
+    pub(crate) country: u8,
+    pub(crate) country_complete: bool,
+    pub(crate) report: CountryWarVictoryReport,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CountryWarVictoryDispatchError<ContextBlock> {
+    pub(crate) source: ContextBlock,
 }
 
 pub(crate) fn dispatch_country_war_victory_message<Context: CountryWarVictoryContext + ?Sized>(
-    opcode: u32,
-    payload: &[u8],
-    cursor: &mut usize,
+    message: &mut CMessage,
     country_war_sys: &mut CountryWarSys,
     context: &mut Context,
-) -> Result<Option<CountryWarVictoryReport>, CountryWarVictoryDispatchError<Context::Block>> {
-    if opcode != 0x60318 {
+) -> Result<Option<WorldCountryWarVictorySync>, CountryWarVictoryDispatchError<Context::Block>> {
+    if message.message_type() != 0x60318 {
         return Ok(None);
     }
 
-    let offset = *cursor;
-    let Some(&country) = payload.get(offset) else {
-        return Err(CountryWarVictoryDispatchError::UnexpectedEnd { offset });
-    };
-    *cursor += 1;
-    country_war_sys
+    let decoded_country = message.base_mut().get_byte();
+    let country = decoded_country.unwrap_or(0);
+    let report = country_war_sys
         .on_flag_destory(i32::from(country), context)
-        .map(Some)
-        .map_err(CountryWarVictoryDispatchError::Context)
+        .map_err(|source| CountryWarVictoryDispatchError { source })?;
+    Ok(Some(WorldCountryWarVictorySync {
+        country,
+        country_complete: decoded_country.is_some(),
+        report,
+    }))
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
