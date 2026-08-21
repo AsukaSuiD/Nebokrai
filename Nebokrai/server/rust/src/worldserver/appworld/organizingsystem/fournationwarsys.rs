@@ -1,7 +1,8 @@
 //! Система войны четырёх стран исторического WorldServer.
 //!
-//! Статус `CFourNationWarSys::AddToByteArray` RVA `0x00094250`:
-//! `IMPLEMENTED`; loader, timers, результаты войны и Game runtime ниже остаются
+//! Статус `CFourNationWarSys::AddToByteArray` RVA `0x00094250` и
+//! `RecvResultFromGS` RVA `0x00093C60`: `IMPLEMENTED`; loader, timers и
+//! остальной Game runtime ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -21,10 +22,21 @@
 //! `Vec` заменяет `std::vector`, фиксированный массив — process-global RECT[5].
 //! Невозможный signed count блокирует append до изменения destination. Точная
 //! parser/timer-семантика `FourNationWarSys.ini` остаётся отдельным проходом.
+//!
+//! Exact `0x00493C60..0x00493D3E` последовательно читает ровно пять signed
+//! `long` в static `s_lMorale[5]`. После slots `1..=4`, до чтения следующего,
+//! выбираются fixed regions `11000/12000/13000/14000`; только route `1..=4`
+//! получает `0x7FE49 { morale:i32 }`. Slot `0` сохраняется, но не публикуется.
+//! Source map/socket, request correlation, connected-state и send-result не
+//! проверяются. Linux-донор добавлял request tracker, socket ownership и
+//! fail-closed публикацию; это новая политика, а не контракт EXE. Rust хранит
+//! morale в instance-owner-е вместо process-global массива, сохраняя порядок
+//! mutation/read/send и не копируя static storage.
 
 use std::error::Error;
 use std::fmt;
 
+use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
 
 const FOUR_NATION_SETUP_WIRE_SIZE: usize = 196;
@@ -68,6 +80,41 @@ pub(crate) struct FourNationRect {
 pub(crate) struct CFourNationWarSys {
     setups: Vec<FourNationWarSetup>,
     rects: [FourNationRect; FOUR_NATION_RECT_COUNT as usize],
+    morale: [i32; FOUR_NATION_RECT_COUNT as usize],
+}
+
+pub(crate) trait FourNationWarResultContext {
+    fn game_server_number_by_region_id(&mut self, region_id: i32) -> i32;
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError>;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FourNationMoralePublicationDisposition {
+    RouteRejected,
+    Sent {
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FourNationMoralePublication {
+    pub(crate) country: u8,
+    pub(crate) region_id: i32,
+    pub(crate) map_id: i32,
+    pub(crate) disposition: FourNationMoralePublicationDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FourNationWarResultReport {
+    pub(crate) previous_morale: [i32; FOUR_NATION_RECT_COUNT as usize],
+    pub(crate) applied_morale: [i32; FOUR_NATION_RECT_COUNT as usize],
+    pub(crate) values_complete: [bool; FOUR_NATION_RECT_COUNT as usize],
+    pub(crate) publications: Vec<FourNationMoralePublication>,
 }
 
 impl CFourNationWarSys {
@@ -83,12 +130,69 @@ impl CFourNationWarSys {
         &self.rects
     }
 
+    pub(crate) const fn morale(&self) -> &[i32; FOUR_NATION_RECT_COUNT as usize] {
+        &self.morale
+    }
+
     pub(crate) fn set_rect(&mut self, country: usize, rect: FourNationRect) -> bool {
         let Some(slot) = self.rects.get_mut(country) else {
             return false;
         };
         *slot = rect;
         true
+    }
+
+    /// Повторяет exact static `RecvResultFromGS`, включая interleaving чтения
+    /// следующего slot-а только после публикации предыдущей страны.
+    pub(crate) fn receive_result_from_game_server<
+        Context: FourNationWarResultContext + ?Sized,
+    >(
+        &mut self,
+        message: &mut CMessage,
+        context: &mut Context,
+    ) -> FourNationWarResultReport {
+        const COUNTRY_REGION_IDS: [i32; 4] = [11_000, 12_000, 13_000, 14_000];
+
+        let previous_morale = self.morale;
+        let mut values_complete = [false; FOUR_NATION_RECT_COUNT as usize];
+        let mut publications = Vec::with_capacity(4);
+
+        for index in 0..FOUR_NATION_RECT_COUNT as usize {
+            self.morale[index] = 0;
+            let decoded = message.base_mut().get_long();
+            self.morale[index] = decoded.unwrap_or(0);
+            values_complete[index] = decoded.is_some();
+
+            let Some(&region_id) = index
+                .checked_sub(1)
+                .and_then(|country_index| COUNTRY_REGION_IDS.get(country_index))
+            else {
+                continue;
+            };
+            let map_id = context.game_server_number_by_region_id(region_id);
+            let disposition = if (1..5).contains(&map_id) {
+                let mut publication = CMessage::new(0x7fe49);
+                publication.base_mut().add_long(self.morale[index]);
+                let wire = publication.as_wire_bytes().to_vec();
+                let delivery = context.send_to_map_id(&publication, map_id);
+                FourNationMoralePublicationDisposition::Sent { wire, delivery }
+            } else {
+                FourNationMoralePublicationDisposition::RouteRejected
+            };
+            publications.push(FourNationMoralePublication {
+                country: index as u8,
+                region_id,
+                map_id,
+                disposition,
+            });
+        }
+
+        FourNationWarResultReport {
+            previous_morale,
+            applied_morale: self.morale,
+            values_complete,
+            publications,
+        }
     }
 
     pub(crate) fn add_to_byte_array(
@@ -223,7 +327,7 @@ fn write_tag_time(destination: &mut Vec<u8>, time: TagTime) {
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::RecvResultFromGS
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:676

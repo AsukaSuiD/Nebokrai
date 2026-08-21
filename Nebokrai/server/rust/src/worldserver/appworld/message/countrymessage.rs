@@ -3,7 +3,8 @@
 //! Dispatcher RVA `0x000A47F0` остаётся `IMPLEMENTED_PARTIAL`: country relays
 //! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, а также вход country victory
 //! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, exile-time
-//! `0x60316 -> 0x7FF15` и war-declare `0x60317 -> 0x7FF16` имеют статус
+//! `0x60316 -> 0x7FF15`, war-declare `0x60317 -> 0x7FF16` и four-nation result
+//! `0x60319 -> 0x7FE49` имеют статус
 //! `IMPLEMENTED`. Victory читает один
 //! unsigned country byte и вызывает исходно
 //! названный `CountryWarSys::on_flag_destory`; соседние opcodes helper не
@@ -36,6 +37,9 @@
 //! синхронный `player_declare`, затем ответ `char accepted, player, target` в
 //! исходный `m_lMapID`. Проверок socket-owner и полного tail здесь нет; они
 //! были добавлены Linux-донором и не являются поведением поставленного EXE.
+//! Exact `0x004A506A..0x004A5078` для `0x60319` только получает singleton и
+//! передаёт исходное сообщение static `RecvResultFromGS`: source metadata и
+//! хвост не проверяются, отдельного ответа источнику нет.
 //! Exact switch target `0x004A504E..0x004A5065` подтверждает, что `0x60318`
 //! читает один unsigned country byte и сразу передаёт его достигнутому
 //! `CountryWarSys`; конкретный region/country/localization/network context
@@ -50,6 +54,9 @@ use crate::worldserver::appworld::country::country::{
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::country::countryparam::{
     CCountryParam, CountryParameterUnavailable,
+};
+use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
+    CFourNationWarSys, FourNationWarResultContext, FourNationWarResultReport,
 };
 use crate::worldserver::worldserver::game::{CGame, legacy_tick_ms};
 
@@ -149,6 +156,13 @@ pub(crate) struct WorldCountryWarDeclarationSync {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldFourNationWarResultSync {
+    pub(crate) source_map_id: i32,
+    pub(crate) source_socket_id: i32,
+    pub(crate) report: FourNationWarResultReport,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryMessageOutcome {
     Relay(WorldCountryRelayOutcome),
     ScalarSynchronized(WorldCountryScalarSync),
@@ -156,6 +170,7 @@ pub(crate) enum WorldCountryMessageOutcome {
     ExileTimeSynchronized(WorldCountryExileTimeSync),
     CountryWarDeclared(WorldCountryWarDeclarationSync),
     CountryWarVictory(WorldCountryWarVictorySync),
+    FourNationWarResult(WorldFourNationWarResultSync),
 }
 
 pub(crate) enum WorldCountryMessageDispatch {
@@ -392,6 +407,26 @@ pub(crate) fn dispatch_country_war_declaration_message<
         declaration,
         response_wire,
         response_delivery,
+    })
+}
+
+pub(crate) fn dispatch_four_nation_war_result_message<
+    Context: FourNationWarResultContext + ?Sized,
+>(
+    message: &mut CMessage,
+    four_nation_war: &mut CFourNationWarSys,
+    context: &mut Context,
+) -> Option<WorldFourNationWarResultSync> {
+    if message.message_type() != 0x60319 {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let report = four_nation_war.receive_result_from_game_server(message, context);
+    Some(WorldFourNationWarResultSync {
+        source_map_id,
+        source_socket_id,
+        report,
     })
 }
 

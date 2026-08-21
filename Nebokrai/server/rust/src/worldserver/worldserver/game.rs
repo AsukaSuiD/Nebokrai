@@ -993,6 +993,9 @@ use crate::worldserver::appworld::goodswarmember::{CGoodsWarMember, GoodsWarMemb
 use crate::worldserver::appworld::jjcsystem::{
     CJJcSystem, JjcRunBlock, JjcRunConfig, JjcRunContext, JjcRunReport,
 };
+use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
+    CFourNationWarSys, FourNationWarResultContext,
+};
 use crate::worldserver::appworld::leiting::{
     CLeiTing, LeiTingBlock, LeiTingContext, LeiTingLocalTime, LeiTingRunReport,
 };
@@ -1002,7 +1005,7 @@ use crate::worldserver::appworld::message::othermessage::{
 use crate::worldserver::appworld::message::countrymessage::{
     WorldCountryMessageDispatch, WorldCountryMessageOutcome,
     dispatch_country_war_declaration_message, dispatch_country_war_victory_message,
-    on_country_message,
+    dispatch_four_nation_war_result_message, on_country_message,
 };
 use crate::worldserver::appworld::message::gmamessage::{
     WorldGmaMessageDispatch, WorldGmaMessageOutcome, on_gma_message,
@@ -2833,6 +2836,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) country: &'a mut CCountryHandler,
     pub(crate) country_parameters: &'a CCountryParam,
     pub(crate) country_war: &'a mut CountryWarSys,
+    pub(crate) four_nation_war: &'a mut CFourNationWarSys,
     pub(crate) honor_ranks: &'a mut CHonorRanks,
     pub(crate) organizing_parameters: &'a mut COrganizingParam,
     pub(crate) player_ranks: &'a mut CPlayerRanks,
@@ -8559,6 +8563,7 @@ impl CGame {
         country_handler: &mut CCountryHandler,
         country_parameters: &CCountryParam,
         country_war: &mut CountryWarSys,
+        four_nation_war: &mut CFourNationWarSys,
         country_limits: CountryKingSaveLimits,
         faction_war_sys: &mut CFactionWarSys,
         attack_city: &mut CAttackCitySys,
@@ -8623,6 +8628,7 @@ impl CGame {
                             country_handler,
                             country_parameters,
                             country_war,
+                            four_nation_war,
                             country_limits,
                             faction_war_sys,
                             attack_city,
@@ -8690,6 +8696,7 @@ impl CGame {
                     country_handler,
                     country_parameters,
                     country_war,
+                    four_nation_war,
                     country_limits,
                     faction_war_sys,
                     attack_city,
@@ -8756,6 +8763,7 @@ impl CGame {
         country_handler: &mut CCountryHandler,
         country_parameters: &CCountryParam,
         country_war: &mut CountryWarSys,
+        four_nation_war: &mut CFourNationWarSys,
         country_limits: CountryKingSaveLimits,
         faction_war_sys: &mut CFactionWarSys,
         attack_city: &mut CAttackCitySys,
@@ -8817,6 +8825,7 @@ impl CGame {
             country_handler,
             country_parameters,
             country_war,
+            four_nation_war,
             country_limits,
             faction_war_sys,
             attack_city,
@@ -9920,6 +9929,7 @@ impl CGame {
             owners.country,
             owners.country_parameters,
             owners.country_war,
+            owners.four_nation_war,
             configuration.country_limits,
             owners.faction_war,
             owners.attack_city,
@@ -11997,6 +12007,24 @@ struct WorldCountryWarEffects<'a> {
         &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
 }
 
+struct WorldFourNationWarResultEffects<'a> {
+    game: &'a CGame,
+}
+
+impl FourNationWarResultContext for WorldFourNationWarResultEffects<'_> {
+    fn game_server_number_by_region_id(&mut self, region_id: i32) -> i32 {
+        self.game.game_server_number_by_region_id(region_id)
+    }
+
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError> {
+        message.send_to_map_id(self.game.current_game_server_sender().as_ref(), map_id)
+    }
+}
+
 impl CountryWarDeclarationContext for WorldCountryWarEffects<'_> {
     fn online_player_country(&mut self, player_id: i32) -> CountryWarDeclarationPlayer {
         let Some(player) = self.game.online_player_by_id(player_id as u32) else {
@@ -12220,6 +12248,7 @@ async fn process_world_message<TimerCallback, TeamOwner>(
     country_handler: &mut CCountryHandler,
     country_parameters: &CCountryParam,
     country_war: &mut CountryWarSys,
+    four_nation_war: &mut CFourNationWarSys,
     country_limits: CountryKingSaveLimits,
     faction_war_sys: &mut CFactionWarSys,
     attack_city: &mut CAttackCitySys,
@@ -12361,6 +12390,21 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::Country) {
+        let four_nation_result = {
+            let mut effects = WorldFourNationWarResultEffects { game };
+            dispatch_four_nation_war_result_message(
+                &mut message,
+                four_nation_war,
+                &mut effects,
+            )
+        };
+        if let Some(sync) = four_nation_result {
+            return ProcessedWorldEvent::CountryMessage {
+                source,
+                legacy_run_result,
+                outcome: WorldCountryMessageOutcome::FourNationWarResult(sync),
+            };
+        }
         let declaration = {
             let mut effects = WorldCountryWarEffects {
                 game,
