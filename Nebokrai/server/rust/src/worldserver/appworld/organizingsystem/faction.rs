@@ -9,6 +9,7 @@
 //! `SendInfoToAllMember/UpdateOtherFacInfoToClient` RVA
 //! `0x000B5890/0x000B58F0`,
 //! `Talk` RVA `0x000B5A50`,
+//! `DeleteOrgaToClient` RVA `0x000B8A20`,
 //! `AddMembersToByteArray` RVA `0x000B53D0`, PDB-inline
 //! `AddApplyPersonsToByteArray/AddLeaveWordsToByteArray` RVA
 //! `0x000B5D30/0x000B5DD0`,
@@ -337,6 +338,15 @@
 //! `recipient, 400, speaker_id, first_text\0, second_text\0`. Встроенный NUL в
 //! исходной `std::string` обрезает visible C-string. Exact ASM
 //! `0x004B5A50..0x004B5B63` подтверждает фильтр и порядок аргументов.
+//! `DeleteOrgaToClient(target)` для положительного target требует online,
+//! ненулевой GameServer и faction-data flag, затем отправляет только `0x7FE03`
+//! (`target, faction_id`). Для `target <= 0` сначала один раз разрешается
+//! `WS0191`, затем каждый online member с ненулевым GameServer — уже без
+//! faction-data gate — получает тот же delete message, после чего отдельно
+//! `SendOrgaInfoToClient(WS0191, WS0119, game_server_id, 0xFFDAEDFE, 0)`.
+//! `WS0119` разрешается заново после каждой отправки. Exact ASM
+//! `0x004B8A20..0x004B8DB2` подтверждает ветвление и порядок side effects;
+//! старое переполнение `char[100]` строкой `WS0191` заменено typed-границей.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -358,6 +368,7 @@ const PRONOUNCE_UPDATE_MESSAGE_TYPE: i32 = 0x7FE10;
 const OTHER_FACTION_UPDATE_MESSAGE_TYPE: i32 = 0x7FE15;
 const FACTION_TALK_MESSAGE_TYPE: i32 = 0x7FA02;
 const FACTION_TALK_CHANNEL: i32 = 400;
+const DELETE_ORGANIZING_MESSAGE_TYPE: i32 = 0x7FE03;
 const OWNED_CITY_UPDATE_MESSAGE_TYPE: i32 = 0x7FE13;
 const ENTER_REGION_BUFFER_CAPACITY: usize = 256;
 const ENEMY_WAR_LOG_BUFFER_CAPACITY: usize = 256;
@@ -367,6 +378,7 @@ const APPLY_PERSON_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_CONTENT_CAPACITY: usize = 2048;
 const OTHER_FACTION_NAME_CAPACITY: usize = 20;
+const DELETE_ORGANIZING_INFO_CAPACITY: usize = 100;
 const PRONOUNCE_DATA_SIZE: usize = 0x828;
 const FACTION_BASE_PROPERTY_SIZE: usize = 0x38;
 
@@ -607,6 +619,38 @@ pub(crate) struct FactionTalkDelivery {
     pub(crate) recipient_player_id: i32,
     pub(crate) game_server_id: i32,
     pub(crate) result: Result<i32, SendMessageError>,
+}
+
+/// Узкая граница исходных StringTable и COrganizingCtrl для удаления фракции.
+pub(crate) trait FactionDeleteOrganizingContext {
+    /// Возвращает независимую копию результата `StringTable::getStringByID`.
+    fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>>;
+
+    /// Повторяет `COrganizingCtrl::SendOrgaInfoToClient`.
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>);
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionDeleteOrganizingDelivery {
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionDeleteOrganizingOutcome {
+    SingleTarget {
+        delivery: Option<FactionDeleteOrganizingDelivery>,
+    },
+    Broadcast {
+        deliveries: Vec<FactionDeleteOrganizingDelivery>,
+        information_recipient_ids: Vec<i32>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FactionDeleteOrganizingBuildError {
+    pub(crate) localized_info_len: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2200,6 +2244,80 @@ impl CFaction {
         deliveries
     }
 
+    /// Удаляет faction-state у одного готового клиента либо у всех online member-ов.
+    pub(crate) fn delete_organizing_to_client<Context>(
+        &self,
+        game: &CGame,
+        target_player_id: i32,
+        context: &mut Context,
+    ) -> Result<FactionDeleteOrganizingOutcome, FactionDeleteOrganizingBuildError>
+    where
+        Context: FactionDeleteOrganizingContext,
+    {
+        if target_player_id > 0 {
+            let player = game.online_player_by_id(target_player_id as u32);
+            let game_server_id = game.game_server_number_by_player_id(target_player_id);
+            if player.is_none_or(|player| !player.faction_data_received()) || game_server_id == 0 {
+                return Ok(FactionDeleteOrganizingOutcome::SingleTarget { delivery: None });
+            }
+
+            let mut message = CMessage::new(DELETE_ORGANIZING_MESSAGE_TYPE);
+            message.base_mut().add_long(target_player_id);
+            message.base_mut().add_long(self.faction_id);
+            return Ok(FactionDeleteOrganizingOutcome::SingleTarget {
+                delivery: Some(FactionDeleteOrganizingDelivery {
+                    recipient_player_id: target_player_id,
+                    game_server_id,
+                    result: game.send_msg_to_game_server(game_server_id, &message),
+                }),
+            });
+        }
+
+        let first_text = context.world_string(b"WS0191").unwrap_or_default();
+        let first_text = legacy_c_string_visible_bytes(&first_text);
+        if first_text.len() >= DELETE_ORGANIZING_INFO_CAPACITY {
+            return Err(FactionDeleteOrganizingBuildError {
+                localized_info_len: first_text.len(),
+            });
+        }
+        let first_text = first_text.to_vec();
+
+        let mut deliveries = Vec::new();
+        let mut information_recipient_ids = Vec::new();
+        for &recipient_player_id in self.members.keys() {
+            let player = game.online_player_by_id(recipient_player_id as u32);
+            let game_server_id = game.game_server_number_by_player_id(recipient_player_id);
+            if player.is_none() || game_server_id == 0 {
+                continue;
+            }
+
+            let mut message = CMessage::new(DELETE_ORGANIZING_MESSAGE_TYPE);
+            message.base_mut().add_long(recipient_player_id);
+            message.base_mut().add_long(self.faction_id);
+            deliveries.push(FactionDeleteOrganizingDelivery {
+                recipient_player_id,
+                game_server_id,
+                result: game.send_msg_to_game_server(game_server_id, &message),
+            });
+
+            let second_text = context.world_string(b"WS0119").unwrap_or_default();
+            context.send_organizing_info(FactionMemberInfoRequest {
+                recipient_player_id,
+                first_text: &first_text,
+                second_text: legacy_c_string_visible_bytes(&second_text),
+                information_type: game_server_id,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            });
+            information_recipient_ids.push(recipient_player_id);
+        }
+
+        Ok(FactionDeleteOrganizingOutcome::Broadcast {
+            deliveries,
+            information_recipient_ids,
+        })
+    }
+
     /// Clamp-ит и публикует faction experience с исходным порядком эффектов.
     pub(crate) fn set_experience(
         &mut self,
@@ -3009,11 +3127,15 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
     output.extend_from_slice(&value.to_le_bytes());
 }
 
-fn legacy_c_string_wire_bytes(value: &[u8]) -> Vec<u8> {
-    let visible = match value.iter().position(|byte| *byte == 0) {
+fn legacy_c_string_visible_bytes(value: &[u8]) -> &[u8] {
+    match value.iter().position(|byte| *byte == 0) {
         Some(terminator) => &value[..terminator],
         None => value,
-    };
+    }
+}
+
+fn legacy_c_string_wire_bytes(value: &[u8]) -> Vec<u8> {
+    let visible = legacy_c_string_visible_bytes(value);
     let mut wire = Vec::with_capacity(visible.len() + 1);
     wire.extend_from_slice(visible);
     wire.push(0);
@@ -3668,7 +3790,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::DeleteOrgaToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1647
