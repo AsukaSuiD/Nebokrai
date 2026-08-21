@@ -1,8 +1,8 @@
 //! WorldServer-владелец country-war state `CountryWarSys`.
 //!
-//! `AddToByteArray` RVA `0x0008F800`, `player_declare` RVA `0x00091B00` и
-//! `on_flag_destory` (исходное PDB-написание) RVA `0x00091E00` имеют статус
-//! `IMPLEMENTED`; остальной корпус
+//! `AddToByteArray` RVA `0x0008F800`, `player_declare` RVA `0x00091B00`,
+//! `on_flag_destory` (исходное PDB-написание) RVA `0x00091E00` и
+//! `initialize` RVA `0x00092220` имеют статус `IMPLEMENTED`; остальной корпус
 //! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара `WorldServer/Nworldserver.exe +
 //! WorldServer/WorldServer.pdb`, исходник `appworld/country/countrywarsys.cpp`.
 //!
@@ -31,6 +31,29 @@
 //! не перенесены. 512-byte `_sprintf` overflow безопасно ограничен нормальным
 //! C-string payload в 511 байт без изменения штатного результата.
 //!
+//! `initialize` подтверждён RAW и точным disassembly
+//! `0x00492220..0x00492DCA`. Он очищает только `_country_wars`, читает восемь
+//! пар `label + signed long`, затем последовательно сканирует две секции `#`
+//! через общий `<end>`-ограничитель. `_war_regions` заранее не очищается, а
+//! каждая встреченная запись полностью обнуляет соответствующее состояние.
+//! Вторая секция имеет машинную странность: stack key обнуляется один раз и
+//! никогда не увеличивается, поэтому все допустимые времена пишутся под ID `0`
+//! и последняя запись заменяет предыдущую. Linux-донор выдумывал возрастающие
+//! ID; это исправлено по EXE. `TagTime` сохраняет исходный colon/`atoi` parser
+//! и минутную арифметику, `BTreeMap`, byte slices и `CTimer` заменяют только
+//! `ifstream`, STL и singleton plumbing. Неполные/нечисловые восемь параметров
+//! в оригинале оставляли чтение неинициализированного stack `long`; Rust
+//! локально блокирует такой malformed input вместо выдуманного значения.
+//!
+//! Регистрация событий также буквально сохраняет порядок EXE. Просроченный
+//! `EndTime` оставляет первый clear-event на `ClearTime`, ставит второй на
+//! текущее время и теряет ID первого. Event `DeclarEnd` ошибочно записывается
+//! в поле `DeclarBeginEventID`, а достижимый `DeclarBegin` перезаписывает его;
+//! отдельное поле `DeclarEndEventID` остаётся неизвестным. `Option<TimerId>`
+//! выражает эту constructor/stack-неизвестность без нулевой заглушки. Логи
+//! missing-file и восьми проверок порядка передаются существующему World
+//! log-owner-у в месте вызова.
+//!
 //! Snapshot намеренно сохраняет layout World EXE: `state_clear + 3 bytes
 //! padding`, затем defender и attacker. Парный Game EXE RVA `0x000EBD60`
 //! трактует те же 12 bytes как defender, attacker, `state_clear + padding` —
@@ -41,6 +64,124 @@
 use std::collections::BTreeMap;
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::public::date::{TagTime, TagTimeArithmeticBlock, TagTimeParseBlock};
+use crate::public::readwrite::read_to;
+use crate::public::timer::{CTimer, TimerId};
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CountryWarCallbacks<Callback> {
+    pub(crate) clear: Callback,
+    pub(crate) declare_begin: Callback,
+    pub(crate) declare_end: Callback,
+    pub(crate) prepare_begin: Callback,
+    pub(crate) prepare_end: Callback,
+    pub(crate) start: Callback,
+    pub(crate) end: Callback,
+    pub(crate) start_info: Callback,
+    pub(crate) end_info: Callback,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarLoadNotice {
+    PrepareBeginNotBeforePrepareEnd,
+    DeclareBeginNotBeforePrepareBegin,
+    DeclareBeginNotBeforeDeclareEnd,
+    DeclareBeginNotBeforeBegin,
+    BeginNotBeforeEnd,
+    InfoBeginNotBeforeBegin,
+    InfoEndNotBeforeEnd,
+    EndNotBeforeClear,
+}
+
+impl CountryWarLoadNotice {
+    pub(crate) const fn legacy_text(self) -> &'static [u8] {
+        match self {
+            Self::PrepareBeginNotBeforePrepareEnd => {
+                b"PrepareBeginTime >= PrepareEndTime, Ignore!"
+            }
+            Self::DeclareBeginNotBeforePrepareBegin => {
+                b"DeclarBeginTime >= PrepareBeginTime, Ignore!"
+            }
+            Self::DeclareBeginNotBeforeDeclareEnd => {
+                b"DeclarBeginTime >= DeclarEndTime, Ignore!"
+            }
+            Self::DeclareBeginNotBeforeBegin => b"DeclarBeginTime >= BeginTime, Ignore!",
+            Self::BeginNotBeforeEnd => b"BeginTime >= EndTime, Ignore!",
+            Self::InfoBeginNotBeforeBegin => b"InfoBeginTime >= BeginTime, Ignore!",
+            Self::InfoEndNotBeforeEnd => b"InfoEndTime >= EndTime, Ignore!",
+            Self::EndNotBeforeClear => b"EndTime >= ClearTime, Ignore!",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarLoadError {
+    MissingValue { field: &'static str },
+    InvalidValue { field: &'static str },
+    TimeParse(TagTimeParseBlock),
+    Arithmetic(TagTimeArithmeticBlock),
+}
+
+impl From<TagTimeParseBlock> for CountryWarLoadError {
+    fn from(value: TagTimeParseBlock) -> Self {
+        Self::TimeParse(value)
+    }
+}
+
+impl From<TagTimeArithmeticBlock> for CountryWarLoadError {
+    fn from(value: TagTimeArithmeticBlock) -> Self {
+        Self::Arithmetic(value)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CountryWarLoadReport {
+    pub(crate) resource_found: bool,
+    pub(crate) legacy_result: bool,
+    pub(crate) region_records: u32,
+    pub(crate) schedule_records: u32,
+    pub(crate) accepted_records: u32,
+    pub(crate) notices: Vec<CountryWarLoadNotice>,
+    pub(crate) registered_events: u32,
+}
+
+impl Default for CountryWarLoadReport {
+    fn default() -> Self {
+        Self {
+            resource_found: false,
+            legacy_result: false,
+            region_records: 0,
+            schedule_records: 0,
+            accepted_records: 0,
+            notices: Vec::new(),
+            registered_events: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct CountryWarTime {
+    // Exact EXE записывает event DeclarEnd в поле DeclarBeginEventID и при
+    // достижимом DeclarBegin затем перезаписывает его вторым ID.
+    declare_begin_event_id: Option<TimerId>,
+    declare_begin_time: TagTime,
+    declare_end_event_id: Option<TimerId>,
+    declare_end_time: TagTime,
+    prepare_begin_event_id: Option<TimerId>,
+    prepare_begin_time: TagTime,
+    prepare_end_event_id: Option<TimerId>,
+    prepare_end_time: TagTime,
+    start_info_event_id: Option<TimerId>,
+    start_info_time: TagTime,
+    start_event_id: Option<TimerId>,
+    start_time: TagTime,
+    end_info_event_id: Option<TimerId>,
+    end_info_time: TagTime,
+    end_event_id: Option<TimerId>,
+    end_time: TagTime,
+    clear_event_id: Option<TimerId>,
+    clear_time: TagTime,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CountryWarRegion {
@@ -189,12 +330,103 @@ impl CountryWarDeclarationReport {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct CountryWarSys {
     pub(crate) war_regions: BTreeMap<i32, CountryWarRegion>,
+    country_wars: BTreeMap<i32, CountryWarTime>,
 }
 
 impl CountryWarSys {
+    /// Загружает `setup/CountryWarSys.ini` и регистрирует исходные calendar events.
+    ///
+    /// `source` уже разрешён внешним resource owner-ом. Это заменяет только
+    /// `ifstream`; token-order, первый `<end>`, повторное использование stream,
+    /// map-key `0` и все timer-ветки сохранены по EXE `0x00492220..0x00492DCA`.
+    pub(crate) fn initialize<Callback, Log>(
+        &mut self,
+        source: Option<&[u8]>,
+        now: TagTime,
+        timer: &mut CTimer<Callback>,
+        callbacks: CountryWarCallbacks<Callback>,
+        mut add_log_text: Log,
+    ) -> Result<CountryWarLoadReport, CountryWarLoadError>
+    where
+        Callback: Copy,
+        Log: FnMut(&[u8]),
+    {
+        self.country_wars.clear();
+        let Some(source) = source else {
+            add_log_text(b"setup/CountryWarSys.ini can't found!");
+            return Ok(CountryWarLoadReport::default());
+        };
+        let mut report = CountryWarLoadReport {
+            resource_found: true,
+            legacy_result: true,
+            ..CountryWarLoadReport::default()
+        };
+        let mut tokens = source
+            .split(u8::is_ascii_whitespace)
+            .filter(|token| !token.is_empty());
+
+        let info_begin_minutes = read_labeled_i32(&mut tokens, "InfoBeginTime offset")?;
+        let info_end_minutes = read_labeled_i32(&mut tokens, "InfoEndTime offset")?;
+        let declare_begin_minutes = read_labeled_i32(&mut tokens, "DeclarBeginTime offset")?;
+        let declare_end_minutes = read_labeled_i32(&mut tokens, "DeclarEndTime offset")?;
+        let prepare_begin_minutes = read_labeled_i32(&mut tokens, "PrepareBeginTime offset")?;
+        let prepare_end_minutes = read_labeled_i32(&mut tokens, "PrepareEndTime offset")?;
+        let duration_minutes = read_labeled_i32(&mut tokens, "war duration")?;
+        let clear_minutes = read_labeled_i32(&mut tokens, "ClearTime offset")?;
+
+        while read_to(&mut tokens, b"#") {
+            let region_id = next_country_war_i32(&mut tokens, "country-war region ID")?;
+            self.war_regions.insert(
+                region_id,
+                CountryWarRegion {
+                    state_clear: false,
+                    defend_country: 0,
+                    attack_country: 0,
+                },
+            );
+            report.region_records = report.region_records.wrapping_add(1);
+        }
+
+        while read_to(&mut tokens, b"#") {
+            report.schedule_records = report.schedule_records.wrapping_add(1);
+            let begin_source = next_country_war_token(&mut tokens, "country-war BeginTime")?;
+            let begin_time = TagTime::from_legacy_string(begin_source)?;
+            let candidate = CountryWarTime::from_offsets(
+                begin_time,
+                CountryWarOffsets {
+                    info_begin_minutes,
+                    info_end_minutes,
+                    declare_begin_minutes,
+                    declare_end_minutes,
+                    prepare_begin_minutes,
+                    prepare_end_minutes,
+                    duration_minutes,
+                    clear_minutes,
+                },
+            )?;
+            if let Some(notice) = candidate.invalid_time_order() {
+                add_log_text(notice.legacy_text());
+                report.notices.push(notice);
+                continue;
+            }
+
+            // VERIFIED_DISASSEMBLY: exact `0x00492AE2` всегда передаёт
+            // stack long, обнулённый один раз в `0x0049257F`, без increment.
+            self.country_wars.insert(0, candidate);
+            report.accepted_records = report.accepted_records.wrapping_add(1);
+        }
+
+        for (&war_id, war) in &mut self.country_wars {
+            report.registered_events = report
+                .registered_events
+                .wrapping_add(war.register_initial_events(war_id, now, timer, callbacks));
+        }
+        Ok(report)
+    }
+
     pub(crate) fn add_to_byte_array(&self, output: &mut Vec<u8>) -> bool {
         output.extend_from_slice(&(self.war_regions.len() as u32).to_le_bytes());
         for (&region_id, state) in &self.war_regions {
@@ -414,6 +646,198 @@ impl CountryWarSys {
 
         Ok(report)
     }
+}
+
+#[derive(Clone, Copy)]
+struct CountryWarOffsets {
+    info_begin_minutes: i32,
+    info_end_minutes: i32,
+    declare_begin_minutes: i32,
+    declare_end_minutes: i32,
+    prepare_begin_minutes: i32,
+    prepare_end_minutes: i32,
+    duration_minutes: i32,
+    clear_minutes: i32,
+}
+
+impl CountryWarTime {
+    fn from_offsets(
+        begin_time: TagTime,
+        offsets: CountryWarOffsets,
+    ) -> Result<Self, TagTimeArithmeticBlock> {
+        Ok(Self {
+            declare_begin_event_id: None,
+            declare_begin_time: with_minute_offset(begin_time, offsets.declare_begin_minutes)?,
+            declare_end_event_id: None,
+            declare_end_time: with_minute_offset(begin_time, offsets.declare_end_minutes)?,
+            prepare_begin_event_id: None,
+            prepare_begin_time: with_minute_offset(begin_time, offsets.prepare_begin_minutes)?,
+            prepare_end_event_id: None,
+            prepare_end_time: with_minute_offset(begin_time, offsets.prepare_end_minutes)?,
+            start_info_event_id: None,
+            start_info_time: with_minute_offset(begin_time, offsets.info_begin_minutes)?,
+            start_event_id: None,
+            start_time: begin_time,
+            end_info_event_id: None,
+            end_info_time: with_minute_offset(begin_time, offsets.info_end_minutes)?,
+            end_event_id: None,
+            end_time: with_minute_offset(begin_time, offsets.duration_minutes)?,
+            clear_event_id: None,
+            clear_time: with_minute_offset(begin_time, offsets.clear_minutes)?,
+        })
+    }
+
+    fn invalid_time_order(&self) -> Option<CountryWarLoadNotice> {
+        if self.prepare_begin_time.legacy_ge(self.prepare_end_time) {
+            Some(CountryWarLoadNotice::PrepareBeginNotBeforePrepareEnd)
+        } else if self.declare_begin_time.legacy_ge(self.prepare_begin_time) {
+            Some(CountryWarLoadNotice::DeclareBeginNotBeforePrepareBegin)
+        } else if self.declare_begin_time.legacy_ge(self.declare_end_time) {
+            Some(CountryWarLoadNotice::DeclareBeginNotBeforeDeclareEnd)
+        } else if self.declare_begin_time.legacy_ge(self.start_time) {
+            Some(CountryWarLoadNotice::DeclareBeginNotBeforeBegin)
+        } else if self.start_time.legacy_ge(self.end_time) {
+            Some(CountryWarLoadNotice::BeginNotBeforeEnd)
+        } else if self.start_info_time.legacy_ge(self.start_time) {
+            Some(CountryWarLoadNotice::InfoBeginNotBeforeBegin)
+        } else if self.end_info_time.legacy_ge(self.end_time) {
+            Some(CountryWarLoadNotice::InfoEndNotBeforeEnd)
+        } else if self.end_time.legacy_ge(self.clear_time) {
+            Some(CountryWarLoadNotice::EndNotBeforeClear)
+        } else {
+            None
+        }
+    }
+
+    fn register_initial_events<Callback: Copy>(
+        &mut self,
+        war_id: i32,
+        now: TagTime,
+        timer: &mut CTimer<Callback>,
+        callbacks: CountryWarCallbacks<Callback>,
+    ) -> u32 {
+        if !self.clear_time.legacy_ge(now) {
+            return 0;
+        }
+
+        let mut registered = 1u32;
+        self.clear_event_id = Some(timer.set_time_event(self.clear_time, callbacks.clear, war_id));
+        if self.end_time.legacy_ge(now) {
+            self.end_event_id = Some(timer.set_time_event(self.end_time, callbacks.end, war_id));
+            registered = registered.wrapping_add(1);
+            self.end_info_event_id = Some(timer.set_time_event(
+                if self.end_info_time.legacy_ge(now) {
+                    self.end_info_time
+                } else {
+                    now
+                },
+                callbacks.end_info,
+                war_id,
+            ));
+            registered = registered.wrapping_add(1);
+
+            if self.start_time.legacy_ge(now) {
+                self.start_event_id =
+                    Some(timer.set_time_event(self.start_time, callbacks.start, war_id));
+                registered = registered.wrapping_add(1);
+                self.start_info_event_id = Some(timer.set_time_event(
+                    if self.start_info_time.legacy_ge(now) {
+                        self.start_info_time
+                    } else {
+                        now
+                    },
+                    callbacks.start_info,
+                    war_id,
+                ));
+                registered = registered.wrapping_add(1);
+
+                if self.declare_end_time.legacy_ge(now) {
+                    self.declare_begin_event_id = Some(timer.set_time_event(
+                        self.declare_end_time,
+                        callbacks.declare_end,
+                        war_id,
+                    ));
+                    registered = registered.wrapping_add(1);
+                    if self.declare_begin_time.legacy_ge(now) {
+                        self.declare_begin_event_id = Some(timer.set_time_event(
+                            self.declare_begin_time,
+                            callbacks.declare_begin,
+                            war_id,
+                        ));
+                        registered = registered.wrapping_add(1);
+                    }
+                }
+            }
+        } else {
+            // Exact сначала уже оставил clear-event на ClearTime, затем ставит
+            // второй на now и теряет ID первого через overwrite поля.
+            self.clear_event_id = Some(timer.set_time_event(now, callbacks.clear, war_id));
+            registered = registered.wrapping_add(1);
+        }
+
+        if self.prepare_end_time.legacy_ge(now) {
+            self.prepare_end_event_id = Some(timer.set_time_event(
+                self.prepare_end_time,
+                callbacks.prepare_end,
+                war_id,
+            ));
+            registered = registered.wrapping_add(1);
+            if self.prepare_begin_time.legacy_ge(now) {
+                self.prepare_begin_event_id = Some(timer.set_time_event(
+                    self.prepare_begin_time,
+                    callbacks.prepare_begin,
+                    war_id,
+                ));
+                registered = registered.wrapping_add(1);
+            }
+        }
+        registered
+    }
+}
+
+fn with_minute_offset(
+    mut time: TagTime,
+    minutes: i32,
+) -> Result<TagTime, TagTimeArithmeticBlock> {
+    let _ = time.add_minute(minutes)?;
+    Ok(time)
+}
+
+fn read_labeled_i32<'a, Tokens>(
+    tokens: &mut Tokens,
+    field: &'static str,
+) -> Result<i32, CountryWarLoadError>
+where
+    Tokens: Iterator<Item = &'a [u8]>,
+{
+    let _label = next_country_war_token(tokens, field)?;
+    next_country_war_i32(tokens, field)
+}
+
+fn next_country_war_i32<'a, Tokens>(
+    tokens: &mut Tokens,
+    field: &'static str,
+) -> Result<i32, CountryWarLoadError>
+where
+    Tokens: Iterator<Item = &'a [u8]>,
+{
+    let token = next_country_war_token(tokens, field)?;
+    std::str::from_utf8(token)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .ok_or(CountryWarLoadError::InvalidValue { field })
+}
+
+fn next_country_war_token<'a, Tokens>(
+    tokens: &mut Tokens,
+    field: &'static str,
+) -> Result<&'a [u8], CountryWarLoadError>
+where
+    Tokens: Iterator<Item = &'a [u8]>,
+{
+    tokens
+        .next()
+        .ok_or(CountryWarLoadError::MissingValue { field })
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
@@ -661,7 +1085,7 @@ impl CountryWarSys {
 
 // ============================================================================
 // FUNCTION: CountryWarSys::initialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:45
@@ -669,6 +1093,8 @@ impl CountryWarSys {
 // ADDRESS: 00492220
 // PROTOTYPE: bool __thiscall initialize(void)
 //
+// Реализовано выше по RAW и exact disassembly. Полный псевдокод ниже сохранён
+// как локальная provenance-документация timer/map quirks.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

@@ -994,8 +994,9 @@ use crate::worldserver::appworld::country::countryparam::{
     CCountryParam, CountryParamLoadError, CountryParamLoadReport,
 };
 use crate::worldserver::appworld::country::countrywarsys::{
-    CountryWarDeclarationAuthority, CountryWarDeclarationContext, CountryWarDeclarationPlayer,
-    CountryWarSys, CountryWarVictoryContext, CountryWarVictoryRegion,
+    CountryWarCallbacks, CountryWarDeclarationAuthority, CountryWarDeclarationContext,
+    CountryWarDeclarationPlayer, CountryWarLoadError, CountryWarLoadReport, CountryWarSys,
+    CountryWarVictoryContext, CountryWarVictoryRegion,
 };
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsOriginalNameIndex,
@@ -1375,7 +1376,6 @@ pub(crate) enum WorldGameInitBooleanOwner {
     InitializeAttackCity,
     InitializeFourNationWar,
     InitializeVillageWar,
-    InitializeCountryWar,
     LoadIncrementShopLog,
 }
 
@@ -1440,6 +1440,7 @@ pub(crate) enum WorldGameInitEvent {
     OrganizingParametersLoaded(OrganizingParamLoadReport),
     CountryParametersLoaded(CountryParamLoadReport),
     CountryHandlerInitialized(CountryHandlerInitializeReport),
+    CountryWarInitialized(CountryWarLoadReport),
     RegionOwnerRelationInitialized {
         region_id: i32,
     },
@@ -1486,6 +1487,8 @@ pub(crate) enum WorldGameInitBlockReason<ContextBlock> {
     OrganizingParameters(OrganizingParamLoadError),
     CountryParameters(CountryParamLoadError),
     CountryHandler,
+    CountryWarLoad(CountryWarLoadError),
+    CountryWar,
     PlayerRanksSchedule(PlayerRanksScheduleBlock),
     PlayerRanksStat(PlayerRanksStatRunBlock),
     NetworkClient(WorldClientInitializationError),
@@ -1544,6 +1547,7 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn load_jjc_configuration(&mut self) -> bool;
     fn load_region_parameters(&mut self, game: &mut CGame) -> bool;
     fn country_parameter_source(&mut self) -> Option<Vec<u8>>;
+    fn country_war_source(&mut self) -> Option<Vec<u8>>;
     fn initialize_words_filter(&mut self, invalid_strings: &[u8], char_codes: &[u8]);
     fn initialize_region_owner_relation(&mut self, region_id: i32, region: &mut CWorldRegion);
 
@@ -7379,11 +7383,12 @@ impl CGame {
     /// при включённой appellation-функции загрузить honor ranks, передать
     /// текущий локальный день в `CCountryHandler::Initialize`, проверить его
     /// результат, записать `Load Country SUCCESS...` и лишь затем запускать
-    /// country war. Rust использует тот же живой `CCountryParam` и
-    /// `CCountryHandler`; resource bytes, Tiberius-соединение и календарный
-    /// контекст передаются явно вместо resource manager, глобального DB-owner-а
-    /// и process-global времени оригинала. Эти технические замены не меняют
-    /// доказанный fail-fast порядок и вызов `SetNewDay` после успешной DB-load.
+    /// country war. Rust использует те же живые `CCountryParam`,
+    /// `CCountryHandler` и `CountryWarSys`; resource bytes,
+    /// Tiberius-соединение, `CTimer` и календарный контекст передаются явно
+    /// вместо resource manager, глобальных singleton-ов и process-global
+    /// времени оригинала. Эти технические замены не меняют доказанный
+    /// fail-fast порядок и вызов `SetNewDay` после успешной DB-load.
     #[allow(
         clippy::too_many_arguments,
         reason = "прямые PlayerRanks/country/timer owners заменяют прежние opaque callbacks"
@@ -7403,6 +7408,8 @@ impl CGame {
         country_database: &mut CountryDatabase,
         country_database_connection: Option<&mut WorldTdsClient>,
         country_context: &mut CountryContext,
+        country_war_system: &mut CountryWarSys,
+        country_war_callbacks: CountryWarCallbacks<TimerCallback>,
         honor_ranks: &mut CHonorRanks,
         auction_log: &mut CAuctionLog,
         log: &mut WorldLogTextOwner,
@@ -7873,11 +7880,37 @@ impl CGame {
         }
         self.record_game_init_log(&mut events, log, callbacks, b"Load Country SUCCESS...");
 
-        let owner = WorldGameInitBooleanOwner::InitializeCountryWar;
-        let succeeded = context.initialize_boolean_owner(owner);
-        events.push(WorldGameInitEvent::BooleanOwner { owner, succeeded });
+        let country_war_source = context.country_war_source();
+        let country_war_now = (callbacks.get_timer_local_time)();
+        let country_war_initialization = country_war_system.initialize(
+            country_war_source.as_deref(),
+            country_war_now,
+            timer,
+            country_war_callbacks,
+            |payload| {
+                let disposition = log.add_log_text(
+                    payload,
+                    self.setup.save_info_time_ms,
+                    &mut *callbacks.get_tick,
+                    &mut *callbacks.get_log_local_time,
+                    &mut *callbacks.put_log_info,
+                );
+                events.push(WorldGameInitEvent::Log {
+                    payload: payload.to_vec(),
+                    disposition,
+                });
+            },
+        );
+        let country_war_initialization = match country_war_initialization {
+            Ok(report) => report,
+            Err(source) => stop!(WorldGameInitBlockReason::CountryWarLoad(source)),
+        };
+        let succeeded = country_war_initialization.legacy_result;
+        events.push(WorldGameInitEvent::CountryWarInitialized(
+            country_war_initialization,
+        ));
         if !succeeded {
-            stop!(WorldGameInitBlockReason::BooleanOwner(owner));
+            stop!(WorldGameInitBlockReason::CountryWar);
         }
 
         for owner in [
