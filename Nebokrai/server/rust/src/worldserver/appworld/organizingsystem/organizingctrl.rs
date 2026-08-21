@@ -218,8 +218,8 @@ use super::faction::{
 use super::organizing::EOperator;
 use super::organizingparam::COrganizingParam;
 use super::union::{
-    CUnion, UnionMasterFactionQueryContext, UnionOperatorValidationContext,
-    UnionOwnedCityMutationContext,
+    CUnion, UnionFactionStateMutationContext, UnionMasterFactionQueryContext,
+    UnionOperatorValidationContext, UnionOwnedCityMutationContext,
 };
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::appworld::player::{
@@ -1288,6 +1288,11 @@ impl UnionMasterFactionQueryContext for COrganizingCtrl {
         self.faction_by_id(faction_id)
             .map(CFaction::has_city_war_enemy_faction)
     }
+
+    fn faction_enemy_leader_organizing_id(&self, faction_id: i32) -> Option<i32> {
+        self.faction_by_id(faction_id)
+            .map(CFaction::enemy_leader_organizing_id)
+    }
 }
 
 impl UnionOwnedCityMutationContext for COrganizingCtrl {
@@ -1345,6 +1350,49 @@ impl UnionOwnedCityMutationContext for COrganizingCtrl {
             return Ok(false);
         };
         faction.set_owned_cities(game, region_ids).map(|_| true)
+    }
+}
+
+impl UnionFactionStateMutationContext for COrganizingCtrl {
+    fn faction_clear_enemy_factions(&mut self, faction_id: i32) -> bool {
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return false;
+        };
+        faction.clear_enemy_factions();
+        true
+    }
+
+    fn faction_add_defence_victor_count(
+        &mut self,
+        faction_id: i32,
+        game: &CGame,
+    ) -> Result<Option<Vec<FactionPropertyDelivery>>, FactionInitialPropertyBlock> {
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return Ok(None);
+        };
+        faction.add_defence_victor_count(game).map(Some)
+    }
+
+    fn faction_add_offense_victor_count(
+        &mut self,
+        faction_id: i32,
+        game: &CGame,
+    ) -> Result<Option<Vec<FactionPropertyDelivery>>, FactionInitialPropertyBlock> {
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return Ok(None);
+        };
+        faction.add_offense_victor_count(game).map(Some)
+    }
+
+    fn faction_add_village_war_victor_count(
+        &mut self,
+        faction_id: i32,
+        game: &CGame,
+    ) -> Result<Option<Vec<FactionPropertyDelivery>>, FactionInitialPropertyBlock> {
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return Ok(None);
+        };
+        faction.add_village_war_victor_count(game).map(Some)
     }
 }
 

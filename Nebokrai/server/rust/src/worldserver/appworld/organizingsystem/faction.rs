@@ -74,6 +74,7 @@
 //! `0x000BA700/0x000BA760/0x000C1DD0`,
 //! set-copy getter-ы `GetEnemyList/GetCityWarEnemyList` RVA
 //! `0x000BA6A0/0x000BA6D0` и legacy `IsEnemyFaction` RVA `0x000C1830`,
+//! inert `GetEnemyLeaderOrgnizingID` RVA `0x000B4CD0`,
 //! `IsSuperiorOrganizing` RVA `0x000BD780`, `IsMaster` RVA `0x000C1EE0` и
 //! `SetIsPermit/OnMemberEnterGame` RVA `0x000C09A0/0x000C0A10` —
 //! `IMPLEMENTED`; спорные ключи и порядок side effect имеют статус
@@ -116,6 +117,9 @@
 //! уже выставленном `m_bGetFactionData`; результат каждого send игнорировался.
 //! Три victor-counter owner-а машинно подтверждают единый порядок: wrapping
 //! 32-битный `ADD`, property-send, затем dirty-bit `1`.
+//! Vtable slot `+0xC4` exact concrete `CFaction` указывает на RVA
+//! `0x000B4CD0`, состоящий только из `xor eax,eax; ret`; enemy-leader query
+//! поэтому остаётся отдельным literal `0`, а не выводится из enemy-set.
 //! Permission owner-ы используют player ID как map key и PDB enum `0..10` как
 //! индекс. `SetMemPV` в EXE единственный не проверял индекс и мог писать за
 //! `listPV`; safe Rust явно отклоняет недопустимое значение. Это исправление
@@ -3255,6 +3259,11 @@ impl CFaction {
 
     /// Сохраняет отдельный исторический stub, не подменяя его membership-check.
     pub(crate) const fn is_enemy_faction(&self, _faction_id: i32) -> i32 {
+        0
+    }
+
+    /// Исторический concrete virtual не читал state и всегда возвращал `0`.
+    pub(crate) const fn enemy_leader_organizing_id(&self) -> i32 {
         0
     }
 

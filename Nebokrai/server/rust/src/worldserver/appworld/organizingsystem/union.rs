@@ -15,7 +15,10 @@
 //! IsHaveCityEnemyFaction` RVA
 //! `0x000C2340/0x000C23A0/0x000C2650/0x000C2810/0x000C2870`, обе
 //! `AddOwnedCity`, `DelOwnedCity/ClearOwnedCity/SetOwnedCity` RVA
-//! `0x000C2400/0x000C2490/0x000C2510/0x000C2570/0x000C25F0` — `IMPLEMENTED`;
+//! `0x000C2400/0x000C2490/0x000C2510/0x000C2570/0x000C25F0`,
+//! `ClearEnemyFation/GetEnemyLeaderOrgnizingID` RVA
+//! `0x000C28D0/0x000C2950` и три victor fan-out RVA
+//! `0x000C29B0/0x000C2A30/0x000C2AB0` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -92,10 +95,18 @@
 //! master-фракции безаргументный slot `ClearOwnedCity` и возвращает `true`
 //! только при найденном ненулевом pointer. Старый Linux-донор исправлял это на
 //! обычный delete, но Rust сохраняет машинное поведение целевой версии явно.
+//! Enemy clear и три victor-owner-а снова проходят member-map в signed order,
+//! пропускают неположительные ID и miss/null faction. Exact vtable slots
+//! `+0xC8/+0x130/+0x134/+0x138` подтверждают concrete clear и порядок
+//! defence/offense/village счётчиков. Enemy-leader proxy использует только
+//! положительную master-faction и slot `+0xC4`; exact `CFaction`-реализация
+//! этого slot-а возвращает literal `0`.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use super::faction::OwnedCityMutationBuildError;
+use super::faction::{
+    FactionInitialPropertyBlock, FactionPropertyDelivery, OwnedCityMutationBuildError,
+};
 use super::organizing::{
     EOperator, EPurview, EPurviewOwnState, MemberPurviewMutation, TagMemInfo, TagTimeValue,
 };
@@ -119,6 +130,8 @@ pub(crate) trait UnionMasterFactionQueryContext {
     fn faction_has_enemy(&self, faction_id: i32) -> Option<bool>;
 
     fn faction_has_city_war_enemy(&self, faction_id: i32) -> Option<bool>;
+
+    fn faction_enemy_leader_organizing_id(&self, faction_id: i32) -> Option<i32>;
 }
 
 /// Узкая mutable-граница faction-map для owned-city virtual dispatch.
@@ -170,6 +183,52 @@ pub(crate) struct UnionOwnedCityMutationBlock {
 pub(crate) struct UnionOwnedCityBooleanMutationReport {
     pub(crate) legacy_result: bool,
     pub(crate) invoked_faction_ids: Vec<i32>,
+}
+
+/// Узкая mutable-граница standard enemy и victor virtual dispatch.
+pub(crate) trait UnionFactionStateMutationContext {
+    fn faction_clear_enemy_factions(&mut self, faction_id: i32) -> bool;
+
+    fn faction_add_defence_victor_count(
+        &mut self,
+        faction_id: i32,
+        game: &CGame,
+    ) -> Result<Option<Vec<FactionPropertyDelivery>>, FactionInitialPropertyBlock>;
+
+    fn faction_add_offense_victor_count(
+        &mut self,
+        faction_id: i32,
+        game: &CGame,
+    ) -> Result<Option<Vec<FactionPropertyDelivery>>, FactionInitialPropertyBlock>;
+
+    fn faction_add_village_war_victor_count(
+        &mut self,
+        faction_id: i32,
+        game: &CGame,
+    ) -> Result<Option<Vec<FactionPropertyDelivery>>, FactionInitialPropertyBlock>;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionFactionFanoutReport {
+    pub(crate) invoked_faction_ids: Vec<i32>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionVictorFactionReport {
+    pub(crate) faction_id: i32,
+    pub(crate) deliveries: Vec<FactionPropertyDelivery>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionVictorFanoutReport {
+    pub(crate) factions: Vec<UnionVictorFactionReport>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionVictorMutationBlock {
+    pub(crate) faction_id: i32,
+    pub(crate) completed_factions: Vec<UnionVictorFactionReport>,
+    pub(crate) source: FactionInitialPropertyBlock,
 }
 
 /// Поля `CUnion`, которые буквально копирует и читает save-цепочка.
@@ -505,6 +564,19 @@ impl CUnion {
                 .unwrap_or(false)
     }
 
+    /// Делегирует enemy-leader query только найденной master-faction.
+    pub(crate) fn enemy_leader_organizing_id<Context>(&self, context: &Context) -> i32
+    where
+        Context: UnionMasterFactionQueryContext,
+    {
+        if self.master_id <= 0 {
+            return 0;
+        }
+        context
+            .faction_enemy_leader_organizing_id(self.master_id)
+            .unwrap_or(0)
+    }
+
     fn fan_out_owned_city_mutation<Context, Dispatch>(
         &self,
         context: &mut Context,
@@ -648,6 +720,101 @@ impl CUnion {
                 source,
             }),
         }
+    }
+
+    /// Очищает standard enemy-set каждой найденной member-faction.
+    pub(crate) fn clear_enemy_factions<Context>(
+        &self,
+        context: &mut Context,
+    ) -> UnionFactionFanoutReport
+    where
+        Context: UnionFactionStateMutationContext,
+    {
+        let mut invoked_faction_ids = Vec::new();
+        for &faction_id in self.members.keys() {
+            if faction_id > 0 && context.faction_clear_enemy_factions(faction_id) {
+                invoked_faction_ids.push(faction_id);
+            }
+        }
+        UnionFactionFanoutReport {
+            invoked_faction_ids,
+        }
+    }
+
+    fn fan_out_victor_mutation<Context, Dispatch>(
+        &self,
+        context: &mut Context,
+        game: &CGame,
+        mut dispatch: Dispatch,
+    ) -> Result<UnionVictorFanoutReport, UnionVictorMutationBlock>
+    where
+        Context: UnionFactionStateMutationContext,
+        Dispatch: FnMut(
+            &mut Context,
+            i32,
+            &CGame,
+        ) -> Result<Option<Vec<FactionPropertyDelivery>>, FactionInitialPropertyBlock>,
+    {
+        let mut factions = Vec::new();
+        for &faction_id in self.members.keys() {
+            if faction_id <= 0 {
+                continue;
+            }
+            match dispatch(context, faction_id, game) {
+                Ok(Some(deliveries)) => factions.push(UnionVictorFactionReport {
+                    faction_id,
+                    deliveries,
+                }),
+                Ok(None) => {}
+                Err(source) => {
+                    return Err(UnionVictorMutationBlock {
+                        faction_id,
+                        completed_factions: factions,
+                        source,
+                    });
+                }
+            }
+        }
+        Ok(UnionVictorFanoutReport { factions })
+    }
+
+    pub(crate) fn add_defence_victor_counts<Context>(
+        &self,
+        context: &mut Context,
+        game: &CGame,
+    ) -> Result<UnionVictorFanoutReport, UnionVictorMutationBlock>
+    where
+        Context: UnionFactionStateMutationContext,
+    {
+        self.fan_out_victor_mutation(context, game, |context, faction_id, game| {
+            context.faction_add_defence_victor_count(faction_id, game)
+        })
+    }
+
+    pub(crate) fn add_offense_victor_counts<Context>(
+        &self,
+        context: &mut Context,
+        game: &CGame,
+    ) -> Result<UnionVictorFanoutReport, UnionVictorMutationBlock>
+    where
+        Context: UnionFactionStateMutationContext,
+    {
+        self.fan_out_victor_mutation(context, game, |context, faction_id, game| {
+            context.faction_add_offense_victor_count(faction_id, game)
+        })
+    }
+
+    pub(crate) fn add_village_war_victor_counts<Context>(
+        &self,
+        context: &mut Context,
+        game: &CGame,
+    ) -> Result<UnionVictorFanoutReport, UnionVictorMutationBlock>
+    where
+        Context: UnionFactionStateMutationContext,
+    {
+        self.fan_out_victor_mutation(context, game, |context, faction_id, game| {
+            context.faction_add_village_war_victor_count(faction_id, game)
+        })
     }
 
     pub(crate) const fn change_data_type(&self) -> i32 {
@@ -1283,7 +1450,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::ClearEnemyFation
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:367
@@ -1297,7 +1464,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::GetEnemyLeaderOrgnizingID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:383
@@ -1311,7 +1478,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::AddDefenceVictorCounts
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:392
@@ -1325,7 +1492,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::AddOffenseVictorCounts
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:402
@@ -1339,7 +1506,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::AddVillageWarVictorCounts
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:413
