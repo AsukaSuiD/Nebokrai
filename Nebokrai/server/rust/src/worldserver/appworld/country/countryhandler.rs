@@ -3,7 +3,8 @@
 //! Статус `CCountryHandler::GetCountry` RVA `0x00036C40`,
 //! `AddToByteArray` RVA `0x000449F0`,
 //! `send_info_to_client` RVA `0x00044760`, `GenerateSaveData` RVA `0x00044970`,
-//! `SetNewDay` RVA `0x00044A70`, `Append` RVA `0x000452B0`,
+//! `SetNewDay` RVA `0x00044A70`, `Initialize` RVA `0x00044B10`,
+//! `Append` RVA `0x000452B0`,
 //! `AddOneTopInfo` RVA `0x00045130` и полный `Run` RVA `0x00045040` —
 //! `IMPLEMENTED`; остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
 //! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
@@ -41,6 +42,11 @@
 //! `Append` отвергает null, затем делает `operator[]` по country byte и
 //! безусловно заменяет value. Rust сохраняет last-write-wins, но освобождает
 //! прежний owned country вместо исходной внутренней утечки pointer-а.
+//! `Initialize` exact `0x00444B10..0x00444B4D` снимает local day-of-month и
+//! записывает `m_nDay` до `CDBCountry::Load`; при false немедленно возвращает
+//! false, при true вызывает `SetNewDay(m_nDay)` и возвращает true. Источник
+//! локального времени передан caller-ом, а DB owner/connection — явно вместо
+//! process singleton и самостоятельно открываемого ADO connection.
 //!
 //! Initial-config wire начинается signed размером всей country-map и затем
 //! содержит `CCountry` records в unsigned key-order; отдельный map key не
@@ -55,6 +61,8 @@ use std::ffi::CStr;
 use std::fmt;
 use std::sync::atomic::{AtomicI32, Ordering};
 
+use crate::dbaccess::worlddb::dbcountry::DbCountryOwner;
+use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::CMessage;
 use crate::worldserver::appworld::country::country::{
     CCountry, CountryKingSaveLimits, CountrySerializeError, CountrySetNewDayContext,
@@ -136,6 +144,14 @@ pub(crate) struct CountryHandlerNewDayReport {
     pub(crate) skipped_null_country_keys: Vec<u8>,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountryHandlerInitializeReport {
+    pub(crate) local_day: i32,
+    pub(crate) database_loaded: bool,
+    pub(crate) new_day: Option<CountryHandlerNewDayReport>,
+    pub(crate) legacy_result: bool,
+}
+
 #[derive(Debug)]
 pub(crate) enum CountryAppendDisposition {
     NullRejected,
@@ -154,6 +170,7 @@ pub(crate) trait CountryInfoDeliveryContext {
 pub(crate) struct CCountryHandler {
     countries: BTreeMap<u8, Option<Box<CCountry>>>,
     top_infos: VecDeque<CountryTopInfo>,
+    day: i32,
 }
 
 impl CCountryHandler {
@@ -204,6 +221,34 @@ impl CCountryHandler {
         Self {
             countries: BTreeMap::new(),
             top_infos: VecDeque::new(),
+            day: 0,
+        }
+    }
+
+    /// Повторяет exact Initialize: local day записывается до DB load.
+    pub(crate) async fn initialize<Database, Context>(
+        &mut self,
+        local_day: i32,
+        database: &mut Database,
+        active_connection: Option<&mut WorldTdsClient>,
+        parameters: &mut CCountryParam,
+        context: &mut Context,
+    ) -> CountryHandlerInitializeReport
+    where
+        Database: DbCountryOwner,
+        Context: CountrySetNewDayContext + ?Sized,
+    {
+        self.day = local_day;
+        let database_loaded = database
+            .load(self, parameters, active_connection)
+            .await;
+        let new_day = database_loaded
+            .then(|| self.set_new_day(self.day, parameters, context));
+        CountryHandlerInitializeReport {
+            local_day,
+            database_loaded,
+            new_day,
+            legacy_result: database_loaded,
         }
     }
 
@@ -442,7 +487,7 @@ impl CCountryHandler {
 
 // ============================================================================
 // FUNCTION: CCountryHandler::Initialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countryhandler.cpp:21
