@@ -78,6 +78,13 @@
 //! затем ограничивает сверху `_max_country_treasury` и пишет `WS0091` в
 //! `king`. Rust `BTreeMap`-проекция и форматтер заменяют только STL/singleton/
 //! `_sprintf`; donor source/tail/ownership gates сюда не относятся.
+//! `SetNewDay` exact `0x004C9FD0..0x004CA058` сначала обнуляет silence/PK,
+//! затем только при прежнем `m_nDay != 0` начисляет village tax ненулевому
+//! королю, вызывает `NewTerm`, выполняет настоящий `operator[]` minister slot
+//! `7` и при ненулевом ID вызывает `AppointMinister(0, 7, 8)`. Новый signed
+//! day записывается последним на всех штатных ветвях. Safe Rust явно отражает
+//! вставленный null slot; это наблюдаемая семантика map, а не полезная
+//! донорская проверка.
 //! Последующий original clone разыменовывал null slot; безопасный save-clone
 //! его пропускает как внутренний UB, но два наблюдаемых wire-count сохраняет.
 //! `0x60309` использует тот же target/job/king/country wire и selector `1`.
@@ -204,6 +211,7 @@ pub(crate) struct CCountry {
     pub(crate) demise_faction: bool,
     pub(crate) king_timestamp_ms: u32,
     pub(crate) is_warring: bool,
+    pub(crate) day: i32,
     pub(crate) silence_count: i32,
     pub(crate) pk_count: i32,
     pub(crate) exile_count: i32,
@@ -302,6 +310,38 @@ pub(crate) struct CountryVillageTaxReport {
 pub(crate) enum CountryVillageTaxBlock {
     Parameter(CountryParameterUnavailable),
     Context(CountryVillageTaxContextBlock),
+}
+
+pub(crate) trait CountrySetNewDayContext:
+    CountryNewTermContext + CountryVillageTaxContext + CountryExileResultContext
+{
+}
+
+impl<Context> CountrySetNewDayContext for Context where
+    Context: CountryNewTermContext + CountryVillageTaxContext + CountryExileResultContext + ?Sized
+{
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountrySetNewDayDisposition {
+    FirstDay,
+    TaxBlocked(CountryVillageTaxBlock),
+    Rolled {
+        tax: Option<CountryVillageTaxReport>,
+        term: CountryNewTermReport,
+        minister_slot_inserted: bool,
+        minister_deposed: Option<CountryAppointMinisterReport>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountrySetNewDayReport {
+    pub(crate) requested_day: i32,
+    pub(crate) previous_day: i32,
+    pub(crate) applied_day: i32,
+    pub(crate) previous_silence_count: i32,
+    pub(crate) previous_pk_count: i32,
+    pub(crate) disposition: CountrySetNewDayDisposition,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -947,6 +987,71 @@ pub(crate) struct CountryAppointMinisterReport {
 }
 
 impl CCountry {
+    /// Повторяет exact дневной country lifecycle и mode `8` для job `7`.
+    pub(crate) fn set_new_day<Context: CountrySetNewDayContext + ?Sized>(
+        &mut self,
+        requested_day: i32,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> CountrySetNewDayReport {
+        let previous_day = self.day;
+        let previous_silence_count = std::mem::replace(&mut self.silence_count, 0);
+        let previous_pk_count = std::mem::replace(&mut self.pk_count, 0);
+        if previous_day == 0 {
+            self.day = requested_day;
+            return CountrySetNewDayReport {
+                requested_day,
+                previous_day,
+                applied_day: self.day,
+                previous_silence_count,
+                previous_pk_count,
+                disposition: CountrySetNewDayDisposition::FirstDay,
+            };
+        }
+
+        let tax = if self.king.id == 0 {
+            None
+        } else {
+            match self.add_village_tax_to_treasury(parameters, context) {
+                Ok(report) => Some(report),
+                Err(block) => {
+                    return CountrySetNewDayReport {
+                        requested_day,
+                        previous_day,
+                        applied_day: self.day,
+                        previous_silence_count,
+                        previous_pk_count,
+                        disposition: CountrySetNewDayDisposition::TaxBlocked(block),
+                    };
+                }
+            }
+        };
+        let term = self.new_term(context);
+
+        let minister_slot_inserted = !self.ministers.contains_key(&7)
+            && self.null_minister_slots.insert(7);
+        let should_depose_minister = self
+            .ministers
+            .get(&7)
+            .is_some_and(|minister| minister.snapshot.id != 0);
+        let minister_deposed = should_depose_minister
+            .then(|| self.appoint_minister(0, 7, 8, parameters, context));
+        self.day = requested_day;
+        CountrySetNewDayReport {
+            requested_day,
+            previous_day,
+            applied_day: self.day,
+            previous_silence_count,
+            previous_pk_count,
+            disposition: CountrySetNewDayDisposition::Rolled {
+                tax,
+                term,
+                minister_slot_inserted,
+                minister_deposed,
+            },
+        }
+    }
+
     /// Повторяет exact начисление дневной казны за каждую village-запись.
     pub(crate) fn add_village_tax_to_treasury<Context: CountryVillageTaxContext + ?Sized>(
         &mut self,
@@ -3988,7 +4093,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::SetNewDay
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1733

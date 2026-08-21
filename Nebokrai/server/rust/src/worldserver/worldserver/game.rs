@@ -12223,6 +12223,41 @@ impl CountryVillageTaxContext for WorldCountryExileResultEffects<'_> {
     }
 }
 
+impl CountryNewTermContext for WorldCountryDemiseEffects<'_> {
+    fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError> {
+        CountryNewTermContext::send_all(&mut self.base, message)
+    }
+}
+
+impl CountryVillageTaxContext for WorldCountryDemiseEffects<'_> {
+    fn village_regions(
+        &mut self,
+        country_id: u8,
+    ) -> Result<Vec<CountryVillageTaxRegion>, CountryVillageTaxContextBlock> {
+        CountryVillageTaxContext::village_regions(&mut self.base, country_id)
+    }
+
+    fn country_name(&mut self, country_id: u8) -> Vec<u8> {
+        CountryVillageTaxContext::country_name(&mut self.base, country_id)
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8> {
+        CountryVillageTaxContext::format_world_string(
+            &mut self.base,
+            string_id,
+            arguments,
+        )
+    }
+
+    fn put_king_log(&mut self, text: &[u8]) {
+        CountryVillageTaxContext::put_king_log(&mut self.base, text);
+    }
+}
+
 impl FourNationWarResultContext for WorldFourNationWarResultEffects<'_> {
     fn game_server_number_by_region_id(&mut self, region_id: i32) -> i32 {
         self.game.game_server_number_by_region_id(region_id)
