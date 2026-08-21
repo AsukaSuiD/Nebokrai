@@ -13075,11 +13075,19 @@ impl CountryWarVictoryContext for WorldCountryWarEffects<'_> {
         defend_country: i32,
         region_name: &[u8],
     ) -> Result<Vec<u8>, Self::Block> {
+        let attack_name = u8::try_from(attack_country)
+            .ok()
+            .and_then(|country| self.globe_setup.country_name(country))
+            .unwrap_or_default();
+        let defend_name = u8::try_from(defend_country)
+            .ok()
+            .and_then(|country| self.globe_setup.country_name(country))
+            .unwrap_or_default();
         let formatted = (self.format_world_string)(
             string_id,
             &[
-                UnionFormatArgument::Signed(attack_country),
-                UnionFormatArgument::Signed(defend_country),
+                UnionFormatArgument::Text(attack_name),
+                UnionFormatArgument::Text(defend_name),
                 UnionFormatArgument::Text(region_name),
             ],
         );

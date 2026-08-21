@@ -1,6 +1,7 @@
 //! WorldServer-владелец country-war state `CountryWarSys`.
 //!
 //! `AddToByteArray` RVA `0x0008F800`, `player_declare` RVA `0x00091B00`,
+//! `on_war_start` RVA `0x00090EC0`,
 //! `end_war` RVA `0x0008F890`, пять phase callbacks RVA
 //! `0x0008F490/0x0008FA00/0x0008FB40/0x0008FC80/0x00091530`,
 //! `on_flag_destory` (исходное PDB-написание) RVA `0x00091E00`, `initialize`
@@ -88,6 +89,16 @@
 //! форматирования concrete `CCountryHandler::AddOneTopInfo(2, duration, text)`
 //! вызывается до сырого `SendTopInfoToClient` с возвращённым ID. Уже добавленная
 //! запись не откатывается при block внешней send-границы.
+//!
+//! `on_war_start` подтверждён exact `0x00490EC0..0x004910F7`: сначала
+//! безусловный `0x7FF1B`, затем map-order обход записей с двумя ненулевыми
+//! сторонами. Для каждой такой записи clear-byte становится `1` до region
+//! lookup; отсутствующий/null region пропускает только `WS0092`, не откатывая
+//! state. Exact `0x00490F4A..0x00490F86` использует один region ID и для
+//! `find`, и для `operator[]`, исправляя ложный stack-key RAW. В `_sprintf`
+//! передавались именно `szCountryName[country][0x40]`, поэтому concrete
+//! adapter теперь форматирует именами стран, а не их числовыми ID. Старый
+//! 256-byte overflow безопасно ограничен 255 видимыми байтами.
 //!
 //! Snapshot намеренно сохраняет layout World EXE: `state_clear + 3 bytes
 //! padding`, затем defender и attacker. Парный Game EXE RVA `0x000EBD60`
@@ -316,6 +327,34 @@ pub(crate) struct CountryWarVictoryReport {
     pub(crate) result_pairs: usize,
     pub(crate) formatted_notices: usize,
     pub(crate) info_deliveries: Vec<i32>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CountryWarStartReport {
+    pub(crate) broadcast_delivery: i32,
+    pub(crate) active_regions: usize,
+    pub(crate) started_regions: Vec<i32>,
+    pub(crate) formatted_notices: usize,
+    pub(crate) info_deliveries: Vec<i32>,
+}
+
+#[derive(Debug)]
+pub(crate) enum CountryWarStartBlock<ContextBlock> {
+    Region {
+        region_id: i32,
+        report: CountryWarStartReport,
+        source: ContextBlock,
+    },
+    FormatNotice {
+        region_id: i32,
+        report: CountryWarStartReport,
+        source: ContextBlock,
+    },
+    SendInfo {
+        region_id: i32,
+        report: CountryWarStartReport,
+        source: ContextBlock,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -812,6 +851,75 @@ impl CountryWarSys {
             }
         };
         report.info_delivery = Some(info_delivery);
+        Ok(report)
+    }
+
+    /// Выполняет exact World `on_war_start`: общий broadcast, перевод
+    /// назначенных регионов в war-state и optional `WS0092` для живого региона.
+    pub(crate) fn run_war_start<Context>(
+        &mut self,
+        _war_id: i32,
+        context: &mut Context,
+    ) -> Result<CountryWarStartReport, CountryWarStartBlock<Context::Block>>
+    where
+        Context: CountryWarVictoryContext + ?Sized,
+    {
+        let message = CMessage::new(0x7ff1b);
+        let mut report = CountryWarStartReport {
+            broadcast_delivery: context.send_all(&message),
+            ..CountryWarStartReport::default()
+        };
+
+        for (&region_id, state) in &mut self.war_regions {
+            if state.defend_country == 0 || state.attack_country == 0 {
+                continue;
+            }
+            report.active_regions += 1;
+            state.state_clear = true;
+            report.started_regions.push(region_id);
+
+            let region = match context.region(region_id) {
+                Ok(region) => region,
+                Err(source) => {
+                    return Err(CountryWarStartBlock::Region {
+                        region_id,
+                        report,
+                        source,
+                    });
+                }
+            };
+            let Some(region) = region else {
+                continue;
+            };
+            let notice = match context.format_victory_notice(
+                b"WS0092",
+                state.attack_country,
+                state.defend_country,
+                &region.name,
+            ) {
+                Ok(notice) => notice,
+                Err(source) => {
+                    return Err(CountryWarStartBlock::FormatNotice {
+                        region_id,
+                        report,
+                        source,
+                    });
+                }
+            };
+            report.formatted_notices += 1;
+            let delivery =
+                match context.send_country_info(&notice, 0xffff_fe92, 0xffff_0000) {
+                    Ok(delivery) => delivery,
+                    Err(source) => {
+                        return Err(CountryWarStartBlock::SendInfo {
+                            region_id,
+                            report,
+                            source,
+                        });
+                    }
+                };
+            report.info_deliveries.push(delivery);
+        }
         Ok(report)
     }
 
@@ -1488,7 +1596,7 @@ where
 
 // ============================================================================
 // FUNCTION: CountryWarSys::on_war_start
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:376
@@ -1496,6 +1604,8 @@ where
 // ADDRESS: 00490ec0
 // PROTOTYPE: void __stdcall on_war_start(long param_1)
 //
+// Реализовано выше через `run_war_start`; exact disassembly
+// `0x00490EC0..0x004910F7` подтверждает общий region key и порядок side effects.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
