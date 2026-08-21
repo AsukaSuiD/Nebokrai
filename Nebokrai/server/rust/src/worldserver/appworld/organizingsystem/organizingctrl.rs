@@ -219,7 +219,7 @@ use super::organizing::EOperator;
 use super::organizingparam::COrganizingParam;
 use super::union::{
     CUnion, UnionFactionStateMutationContext, UnionMasterFactionQueryContext,
-    UnionOperatorValidationContext, UnionOwnedCityMutationContext,
+    UnionOperatorValidationContext, UnionOwnedCityMutationContext, UnionPlayerRefreshContext,
 };
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::appworld::player::{
@@ -1393,6 +1393,19 @@ impl UnionFactionStateMutationContext for COrganizingCtrl {
             return Ok(None);
         };
         faction.add_village_war_victor_count(game).map(Some)
+    }
+}
+
+impl UnionPlayerRefreshContext for COrganizingCtrl {
+    fn faction_update_player_info(
+        &self,
+        faction_id: i32,
+        game: &CGame,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Option<Vec<i32>> {
+        self.faction_by_id(faction_id).map(|faction| {
+            faction.update_player_faction_info(game, 0, update_player)
+        })
     }
 }
 

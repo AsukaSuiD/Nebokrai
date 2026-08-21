@@ -18,7 +18,8 @@
 //! `0x000C2400/0x000C2490/0x000C2510/0x000C2570/0x000C25F0`,
 //! `ClearEnemyFation/GetEnemyLeaderOrgnizingID` RVA
 //! `0x000C28D0/0x000C2950` и три victor fan-out RVA
-//! `0x000C29B0/0x000C2A30/0x000C2AB0` — `IMPLEMENTED`;
+//! `0x000C29B0/0x000C2A30/0x000C2AB0`, `UpdatePlayerFactionInfo` RVA
+//! `0x000C5770` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -101,6 +102,11 @@
 //! defence/offense/village счётчиков. Enemy-leader proxy использует только
 //! положительную master-faction и slot `+0xC4`; exact `CFaction`-реализация
 //! этого slot-а возвращает literal `0`.
+//! `UpdatePlayerFactionInfo(0)` проходит все положительные member-faction ID;
+//! положительный аргумент выбирает ровно этот ID без membership-check, а
+//! отрицательный не вызывает ничего. Каждый найденный target получает
+//! concrete `CFaction::UpdatePlayerFactionInfo(0)`; lookup miss/null тихо
+//! пропускается.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -229,6 +235,27 @@ pub(crate) struct UnionVictorMutationBlock {
     pub(crate) faction_id: i32,
     pub(crate) completed_factions: Vec<UnionVictorFactionReport>,
     pub(crate) source: FactionInitialPropertyBlock,
+}
+
+/// Read-only faction callback для обновления online player-состояния.
+pub(crate) trait UnionPlayerRefreshContext {
+    fn faction_update_player_info(
+        &self,
+        faction_id: i32,
+        game: &CGame,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Option<Vec<i32>>;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionFactionPlayerRefreshReport {
+    pub(crate) faction_id: i32,
+    pub(crate) refreshed_player_ids: Vec<i32>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionPlayerRefreshReport {
+    pub(crate) factions: Vec<UnionFactionPlayerRefreshReport>,
 }
 
 /// Поля `CUnion`, которые буквально копирует и читает save-цепочка.
@@ -815,6 +842,42 @@ impl CUnion {
         self.fan_out_victor_mutation(context, game, |context, faction_id, game| {
             context.faction_add_village_war_victor_count(faction_id, game)
         })
+    }
+
+    /// Обновляет online player-ов одной faction либо всех member-фракций.
+    pub(crate) fn update_player_faction_info<Context>(
+        &self,
+        faction_id: i32,
+        context: &Context,
+        game: &CGame,
+        update_player: &mut dyn FnMut(i32),
+    ) -> UnionPlayerRefreshReport
+    where
+        Context: UnionPlayerRefreshContext,
+    {
+        let target_faction_ids: Vec<i32> = if faction_id == 0 {
+            self.members.keys().copied().collect()
+        } else {
+            vec![faction_id]
+        };
+        let mut factions = Vec::new();
+        for target_faction_id in target_faction_ids {
+            if target_faction_id <= 0 {
+                continue;
+            }
+            let Some(refreshed_player_ids) = context.faction_update_player_info(
+                target_faction_id,
+                game,
+                update_player,
+            ) else {
+                continue;
+            };
+            factions.push(UnionFactionPlayerRefreshReport {
+                faction_id: target_faction_id,
+                refreshed_player_ids,
+            });
+        }
+        UnionPlayerRefreshReport { factions }
     }
 
     pub(crate) const fn change_data_type(&self) -> i32 {
@@ -1674,7 +1737,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::UpdatePlayerFactionInfo
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1198
