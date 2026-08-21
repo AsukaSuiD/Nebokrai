@@ -1,8 +1,8 @@
 //! Межрегиональная таблица маршрутизации исторического Miracle.
 //!
-//! Статус World `CRegionRouter::AddToByteArray` RVA `0x000B24D0`:
-//! `IMPLEMENTED`; loader, route search, singleton и Game decoder ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Статус World `CRegionRouter::AddToByteArray` RVA `0x000B24D0` и
+//! `CRegionRouter::ChageRegionRouter` RVA `0x000B4350`: `IMPLEMENTED`; loader,
+//! singleton и Game decoder ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
 //! SHA-256 PDB
@@ -16,8 +16,21 @@
 //! пишет ID из value; это различие сохранено. Параметр `sendSelf` точным
 //! serializer-ом не читался. `BTreeMap` и owned values заменяют MSVC tree и
 //! raw struct-copy, не меняя signed ordering или compact layout.
+//!
+//! Route search проверяет наличие обоих map keys, а при совпадении регионов
+//! возвращает единственную конечную точку. Для разных регионов EXE выбирает
+//! среди ещё не закрытых узлов минимальную hop-distance, при равенстве —
+//! меньший signed region key, и обновляет соседей только при строго меньшей
+//! дистанции. `BinaryHeap<Reverse<(distance, region)>>` и `BTreeMap` являются
+//! safe заменой копии MSVC tree и полного линейного поиска минимума; порядок и
+//! tie-break при этом совпадают. Маршрут использует map keys (не дублирующие
+//! ID из values), координаты перехода — из `next[next_region_key]`; для каждого
+//! промежуточного региона выдаются entry и exit-to-next, для конечного — entry
+//! и запрошенные X/Y. Отсутствующий переход даёт `(0, 0)`, как value-initialized
+//! временный `tagPOINT` в EXE. `pOut` и out-range эта функция не читает.
 
-use std::collections::BTreeMap;
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::error::Error;
 use std::fmt;
 
@@ -48,6 +61,21 @@ pub(crate) struct RegionRouter {
     nodes: BTreeMap<i32, RegionRouterNode>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RegionRouteStep {
+    pub(crate) region_id: i32,
+    pub(crate) point: RegionRoutePoint,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum RegionRouterChangeOutcome {
+    RegionNotFound {
+        from_region_found: bool,
+        to_region_found: bool,
+    },
+    Complete(Vec<RegionRouteStep>),
+}
+
 impl RegionRouter {
     pub(crate) fn insert_node(
         &mut self,
@@ -59,6 +87,118 @@ impl RegionRouter {
 
     pub(crate) fn clear(&mut self) {
         self.nodes.clear();
+    }
+
+    /// Восстанавливает exact World `ChageRegionRouter` с детерминированным
+    /// signed-key tie-break исходного `std::map`.
+    pub(crate) fn change_region_router(
+        &self,
+        from_region: i32,
+        to_region: i32,
+        target: RegionRoutePoint,
+    ) -> RegionRouterChangeOutcome {
+        let from_region_found = self.nodes.contains_key(&from_region);
+        let to_region_found = self.nodes.contains_key(&to_region);
+        if !from_region_found || !to_region_found {
+            return RegionRouterChangeOutcome::RegionNotFound {
+                from_region_found,
+                to_region_found,
+            };
+        }
+        if from_region == to_region {
+            return RegionRouterChangeOutcome::Complete(vec![RegionRouteStep {
+                region_id: to_region,
+                point: target,
+            }]);
+        }
+
+        const INITIAL_ROUTE_VALUE: i32 = 20_000_000;
+
+        let mut distance = self
+            .nodes
+            .keys()
+            .copied()
+            .map(|region_id| (region_id, INITIAL_ROUTE_VALUE))
+            .collect::<BTreeMap<_, _>>();
+        let mut predecessor = BTreeMap::<i32, i32>::new();
+        let mut settled = BTreeSet::<i32>::new();
+        let mut pending = BinaryHeap::<Reverse<(i32, i32)>>::new();
+        distance.insert(from_region, 0);
+        pending.push(Reverse((0, from_region)));
+
+        while let Some(Reverse((current_distance, current_region))) = pending.pop() {
+            if settled.contains(&current_region)
+                || distance.get(&current_region).copied() != Some(current_distance)
+            {
+                continue;
+            }
+            settled.insert(current_region);
+
+            let current_node = self
+                .nodes
+                .get(&current_region)
+                .expect("pending содержит только ключи RegionRouter");
+            // Машина сравнивает destination с `stRouterNode::lRegionId`, хотя
+            // путь и lookup-и строит по map key. Несовпадение полей сохраняем.
+            if current_node.region_id == to_region {
+                break;
+            }
+
+            let next_distance = current_distance + 1;
+            for next_region in current_node.next.keys().copied() {
+                let Some(known_distance) = distance.get_mut(&next_region) else {
+                    continue;
+                };
+                if next_distance < *known_distance {
+                    *known_distance = next_distance;
+                    predecessor.insert(next_region, current_region);
+                    pending.push(Reverse((next_distance, next_region)));
+                }
+            }
+        }
+
+        if !settled.contains(&to_region) {
+            return RegionRouterChangeOutcome::Complete(Vec::new());
+        }
+
+        let mut reverse_path = vec![to_region];
+        let mut current_region = to_region;
+        while current_region != from_region {
+            let Some(previous_region) = predecessor.get(&current_region).copied() else {
+                return RegionRouterChangeOutcome::Complete(Vec::new());
+            };
+            reverse_path.push(previous_region);
+            current_region = previous_region;
+        }
+        reverse_path.reverse();
+
+        let mut route = Vec::new();
+        for (index, region_id) in reverse_path.iter().copied().enumerate() {
+            let node = self
+                .nodes
+                .get(&region_id)
+                .expect("reconstructed path содержит только ключи RegionRouter");
+            if index == 0 {
+                let next_region = reverse_path[index + 1];
+                route.push(RegionRouteStep {
+                    region_id,
+                    point: node.next_point(next_region),
+                });
+                continue;
+            }
+
+            route.push(RegionRouteStep {
+                region_id,
+                point: node.entry,
+            });
+            let point = reverse_path
+                .get(index + 1)
+                .copied()
+                .map(|next_region| node.next_point(next_region))
+                .unwrap_or(target);
+            route.push(RegionRouteStep { region_id, point });
+        }
+        RegionRouterChangeOutcome::Complete(route)
     }
 
     pub(crate) fn add_to_byte_array(
@@ -81,6 +221,18 @@ impl RegionRouter {
             }
         }
         Ok(())
+    }
+}
+
+impl RegionRouterNode {
+    fn next_point(&self, next_region: i32) -> RegionRoutePoint {
+        self.next
+            .get(&next_region)
+            .map(|next| RegionRoutePoint {
+                x: next.x,
+                y: next.y,
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -120,8 +272,8 @@ fn write_count(
     Ok(())
 }
 
-// Сырой C++ ниже сохранён как локальная документация loader-а, route search,
-// singleton и Game decoder-а, а не как Rust-реализация.
+// Сырой C++ ниже сохранён как локальная документация loader-а, singleton-а,
+// уже материализованного World route search и Game decoder-а.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -254,7 +406,7 @@ fn write_count(
 
 // ============================================================================
 // FUNCTION: CRegionRouter::ChageRegionRouter
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\regionrouter.cpp:141

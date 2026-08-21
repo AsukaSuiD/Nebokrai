@@ -966,6 +966,7 @@ use crate::public::timer::{
     TimerRunReport,
 };
 use crate::setup::globesetup::GlobeSetupSnapshot;
+use crate::setup::regionrouter::RegionRouter;
 use crate::public::tools::ini_decode;
 use crate::transport::bind_tcp_ipv4;
 use crate::worldserver::appworld::country::country::{CCountry, CountryKingSaveLimits};
@@ -990,7 +991,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingAdmissionPermitDispatch, OrganizingAttackCityEndDispatch,
     OrganizingCityGateBlock, OrganizingCityGateDispatch, OrganizingCityTransferDispatch,
     OrganizingCityWarApplicationBlock, OrganizingCityWarApplicationDispatch,
-    OrganizingCityWarResultDispatch,
+    OrganizingChangeRegionRouterDispatch, OrganizingCityWarResultDispatch,
     OrganizingConsumedLongDispatch,
     OrganizingDeclareFactionWarBlock,
     OrganizingDeclareFactionWarDispatch, OrganizingDeclareWarFactionListBlock,
@@ -1017,7 +1018,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects,
     WorldUnionApplicationRuntimeOwner, dispatch_admission_permit, dispatch_attack_city_end,
     dispatch_city_gate, dispatch_city_transfer, dispatch_city_war_application,
-    dispatch_city_war_result,
+    dispatch_change_region_router, dispatch_city_war_result,
     dispatch_consumed_long, dispatch_declare_faction_war,
     dispatch_declare_war_faction_list, dispatch_faction_billboard, dispatch_faction_upgrade,
     dispatch_faction_contributor, dispatch_faction_experience, dispatch_faction_member_state,
@@ -2102,6 +2103,12 @@ pub(crate) enum ProcessedWorldEvent {
         outcome: Result<OrganizingFactionParameterDispatch, OrganizingFactionParameterBlock>,
         runtime: WorldUnionApplicationRuntimeReport,
     },
+    OrganizingChangeRegionRouter {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: OrganizingChangeRegionRouterDispatch,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
     OrganizingVillageWarResult {
         source: WorldMessageSource,
         legacy_run_result: i32,
@@ -2724,6 +2731,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) attack_city: &'a mut CAttackCitySys,
     pub(crate) attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
     pub(crate) globe_setup: &'a GlobeSetupSnapshot,
+    pub(crate) region_router: &'a RegionRouter,
     pub(crate) village_war: &'a mut CVillageWarSys,
     pub(crate) goods_war: &'a mut CGoodsWarMember,
     pub(crate) village_war_callbacks: VillageWarCallbacks<TimerCallback>,
@@ -8358,7 +8366,8 @@ impl CGame {
     /// `0x60135`, её result `0x60136`, city-war заявка `0x60137` и её result
     /// `0x60138`, Goods War command `0x60139`, faction-win `0x6013A` и player
     /// quest routes `0x6013B/0x6013C`, run-script `0x6013D` и faction parameter
-    /// `0x6013E` исполняются; остальные остаются owned pending. Terminal
+    /// `0x6013E` и region-router request `0x60144` исполняются; остальные
+    /// остаются owned pending. Terminal
     /// actions применяются FIFO до следующего сообщения.
     pub(crate) fn process_message<TimerCallback: Copy>(
         &mut self,
@@ -8370,6 +8379,7 @@ impl CGame {
         attack_city: &mut CAttackCitySys,
         attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
         globe_setup: &GlobeSetupSnapshot,
+        region_router: &RegionRouter,
         village_war: &mut CVillageWarSys,
         goods_war: &mut CGoodsWarMember,
         timer: &mut CTimer<TimerCallback>,
@@ -8413,6 +8423,7 @@ impl CGame {
                             attack_city,
                             attack_city_callbacks,
                             globe_setup,
+                            region_router,
                             village_war,
                             goods_war,
                             timer,
@@ -8464,6 +8475,7 @@ impl CGame {
                     attack_city,
                     attack_city_callbacks,
                     globe_setup,
+                    region_router,
                     village_war,
                     goods_war,
                     timer,
@@ -8514,6 +8526,7 @@ impl CGame {
         attack_city: &mut CAttackCitySys,
         attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
         globe_setup: &GlobeSetupSnapshot,
+        region_router: &RegionRouter,
         village_war: &mut CVillageWarSys,
         goods_war: &mut CGoodsWarMember,
         timer: &mut CTimer<TimerCallback>,
@@ -8545,6 +8558,7 @@ impl CGame {
             attack_city,
             attack_city_callbacks,
             globe_setup,
+            region_router,
             village_war,
             goods_war,
             timer,
@@ -9630,6 +9644,7 @@ impl CGame {
             owners.attack_city,
             owners.attack_city_callbacks,
             owners.globe_setup,
+            owners.region_router,
             owners.village_war,
             owners.goods_war,
             owners.timer,
@@ -11339,6 +11354,7 @@ fn process_world_message<TimerCallback: Copy>(
     attack_city: &mut CAttackCitySys,
     attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
     globe_setup: &GlobeSetupSnapshot,
+    region_router: &RegionRouter,
     village_war: &mut CVillageWarSys,
     goods_war: &mut CGoodsWarMember,
     timer: &mut CTimer<TimerCallback>,
@@ -12019,6 +12035,45 @@ fn process_world_message<TimerCallback: Copy>(
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingFactionParameter {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        if let Some(outcome) = dispatch_change_region_router(
+            &mut message,
+            region_router,
+            game_server_sender.as_ref(),
+        ) {
+            let callbacks = WorldUnionApplicationEffectCallbacks {
+                random: &mut *application_callbacks.random,
+                world_string: &mut *application_callbacks.world_string,
+                format_world_string: &mut *application_callbacks.format_world_string,
+                put_war_log: &mut *application_callbacks.put_war_log,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
+            };
+            let mut effects = WorldUnionApplicationEffects::new(
+                game,
+                net_sessions,
+                application_runtime,
+                callbacks,
+            );
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingChangeRegionRouter {
                 source,
                 legacy_run_result,
                 outcome,

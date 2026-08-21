@@ -8,7 +8,8 @@
 //! terminal `0x60133`, village-war application `0x60135`, её result ingress
 //! `0x60136`, city-war application `0x60137`, её result ingress `0x60138` и
 //! Goods War command `0x60139`, faction-win `0x6013A` и player quest routes
-//! `0x6013B/0x6013C`, run-script `0x6013D` и faction parameter `0x6013E`;
+//! `0x6013B/0x6013C`, run-script `0x6013D`, faction parameter `0x6013E` и
+//! межрегиональный маршрут `0x60144`;
 //! остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
@@ -216,6 +217,14 @@
 //! `ServerCommandHandle` снимаются непосредственно перед созданием session.
 //! Это техническая замена lifetime/lock plumbing, а не изменение wire, cookie,
 //! timeout или порядка terminal actions.
+//! Exact `0x004A8609..0x004A873A` для `0x60144` читает `(request ID, from
+//! region, to region, target X, target Y)`, синхронно вызывает World
+//! `CRegionRouter::ChageRegionRouter` и всегда строит broadcast `0x7FE4A`:
+//! request ID, signed route count и ordered тройки `(region ID, X, Y)`.
+//! Ответ отправляется и при missing/disconnected route с count `0`; входной
+//! map ID, ownership и хвост не проверяются. Exact route owner подтверждён в
+//! `0x004B4350..0x004B4B7D`; `BinaryHeap`/`BTreeMap` заменяют только внутренние
+//! MSVC containers, сохраняя signed tie-break и точки переходов.
 //!
 //! Legacy getters при нехватке возвращают ноль и не двигают cursor; Rust
 //! сохраняет это через `unwrap_or(0)`, а не добавляет отсутствовавший общий
@@ -233,6 +242,9 @@ use parking_lot::Mutex;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::servers::ServerCommandHandle;
 use crate::setup::globesetup::GlobeSetupSnapshot;
+use crate::setup::regionrouter::{
+    RegionRoutePoint, RegionRouter, RegionRouterChangeOutcome,
+};
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionCallbackOutcome};
 use crate::public::date::TagTime;
@@ -355,6 +367,8 @@ const GAME_RUN_SCRIPT_MESSAGE_TYPE: i32 = 0x7FE3A;
 const PLAYER_SCRIPT_CAPACITY: usize = 0x100;
 const SET_FACTION_PARAMETER_MESSAGE_TYPE: i32 = 0x6013E;
 const FACTION_PARAMETER_NAME_CAPACITY: usize = 0x32;
+const CHANGE_REGION_ROUTER_MESSAGE_TYPE: i32 = 0x60144;
+const CHANGE_REGION_ROUTER_RESPONSE_TYPE: i32 = 0x7FE4A;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -3892,6 +3906,62 @@ pub(crate) fn dispatch_faction_parameter(
         value,
         outcome,
     }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingChangeRegionRouterDispatch {
+    pub(crate) request_id: i32,
+    pub(crate) from_region: i32,
+    pub(crate) to_region: i32,
+    pub(crate) target: RegionRoutePoint,
+    pub(crate) outcome: RegionRouterChangeOutcome,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+/// Выполняет exact `0x60144 -> 0x7FE4A` и безусловный `SendAll`.
+pub(crate) fn dispatch_change_region_router(
+    message: &mut CMessage,
+    router: &RegionRouter,
+    sender: Option<&ServerCommandHandle>,
+) -> Option<OrganizingChangeRegionRouterDispatch> {
+    if message.message_type() != CHANGE_REGION_ROUTER_MESSAGE_TYPE {
+        return None;
+    }
+
+    let request_id = message.base_mut().get_long().unwrap_or(0);
+    let from_region = message.base_mut().get_long().unwrap_or(0);
+    let to_region = message.base_mut().get_long().unwrap_or(0);
+    let target = RegionRoutePoint {
+        x: message.base_mut().get_long().unwrap_or(0),
+        y: message.base_mut().get_long().unwrap_or(0),
+    };
+    let outcome = router.change_region_router(from_region, to_region, target);
+
+    let route = match &outcome {
+        RegionRouterChangeOutcome::RegionNotFound { .. } => &[][..],
+        RegionRouterChangeOutcome::Complete(route) => route.as_slice(),
+    };
+    let mut response = CMessage::new(CHANGE_REGION_ROUTER_RESPONSE_TYPE);
+    response.base_mut().add_long(request_id);
+    // `vector::size()` попадал в 32-битный `Add` низшими битами без range gate.
+    response.base_mut().add_long(route.len() as i32);
+    for step in route {
+        response.base_mut().add_long(step.region_id);
+        response.base_mut().add_long(step.point.x);
+        response.base_mut().add_long(step.point.y);
+    }
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = response.send_all(sender);
+    Some(OrganizingChangeRegionRouterDispatch {
+        request_id,
+        from_region,
+        to_region,
+        target,
+        outcome,
+        wire,
+        delivery,
+    })
 }
 
 #[derive(Debug, Eq, PartialEq)]
