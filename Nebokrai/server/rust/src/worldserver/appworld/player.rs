@@ -596,6 +596,14 @@ pub(crate) struct PlayerMurderCounterUpdate {
     pub(crate) pk_count: u16,
 }
 
+/// Результат native-width прибавления к `tagBaseProperty::dwExploit`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerExploitUpdate {
+    pub(crate) previous_exploit: u32,
+    pub(crate) increment: i32,
+    pub(crate) exploit: u32,
+}
+
 impl PlayerBaseProperty {
     fn read_u8(&self, offset: usize) -> u8 {
         self.wire[offset]
@@ -1289,6 +1297,19 @@ impl CPlayer {
             kill_count,
             previous_pk_count,
             pk_count,
+        }
+    }
+
+    /// Повторяет unsigned 32-bit сложение исходного `dwExploit += long`.
+    pub(crate) fn add_exploit_wrapping(&mut self, increment: i32) -> PlayerExploitUpdate {
+        let previous_exploit = self.base_property.read_u32(BASE_PROPERTY_EXPLOIT_OFFSET);
+        let exploit = previous_exploit.wrapping_add(increment as u32);
+        self.base_property
+            .write_u32(BASE_PROPERTY_EXPLOIT_OFFSET, exploit);
+        PlayerExploitUpdate {
+            previous_exploit,
+            increment,
+            exploit,
         }
     }
 

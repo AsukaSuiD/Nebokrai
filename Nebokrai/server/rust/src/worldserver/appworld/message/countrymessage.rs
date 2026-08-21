@@ -4,7 +4,7 @@
 //! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, а также вход country victory
 //! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, exile-time
 //! `0x60316 -> 0x7FF15`, war-declare `0x60317 -> 0x7FF16` и four-nation result
-//! `0x60319 -> 0x7FE49` имеют статус
+//! `0x60319 -> 0x7FE49` и `0x6031A -> 0x7FE46/DB` имеют статус
 //! `IMPLEMENTED`. Victory читает один
 //! unsigned country byte и вызывает исходно
 //! названный `CountryWarSys::on_flag_destory`; соседние opcodes helper не
@@ -40,6 +40,10 @@
 //! Exact `0x004A506A..0x004A5078` для `0x60319` только получает singleton и
 //! передаёт исходное сообщение static `RecvResultFromGS`: source metadata и
 //! хвост не проверяются, отдельного ответа источнику нет.
+//! Exact `0x004A5096..0x004A50B4` для `0x6031A` читает два signed long и
+//! вызывает `ConvertMoraleToExploit(player_id, increment)` без source/tail
+//! gate. Последующий DB/online-маршрут материализован в общем async
+//! `ProcessMessage`, поскольку `tiberius` требует await.
 //! Exact switch target `0x004A504E..0x004A5065` подтверждает, что `0x60318`
 //! читает один unsigned country byte и сразу передаёт его достигнутому
 //! `CountryWarSys`; конкретный region/country/localization/network context
@@ -56,9 +60,11 @@ use crate::worldserver::appworld::country::countryparam::{
     CCountryParam, CountryParameterUnavailable,
 };
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
-    CFourNationWarSys, FourNationWarResultContext, FourNationWarResultReport,
+    CFourNationWarSys, FourNationExploitLoadedReport, FourNationWarResultContext,
+    FourNationWarResultReport,
 };
 use crate::worldserver::worldserver::game::{CGame, legacy_tick_ms};
+use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
 use super::super::country::countrywarsys::{
     CountryWarDeclarationContext, CountryWarDeclarationReport, CountryWarSys,
@@ -162,6 +168,32 @@ pub(crate) struct WorldFourNationWarResultSync {
     pub(crate) report: FourNationWarResultReport,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldFourNationExploitRequest {
+    pub(crate) player_id: i32,
+    pub(crate) player_id_complete: bool,
+    pub(crate) increment: i32,
+    pub(crate) increment_complete: bool,
+    pub(crate) source_map_id: i32,
+    pub(crate) source_socket_id: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WorldFourNationExploitDatabaseDisposition {
+    NotRequired,
+    ConnectionUnavailable { log: AddLogTextDisposition },
+    Applied,
+    ExecutionFailed { error: String },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldFourNationExploitSync {
+    pub(crate) request: WorldFourNationExploitRequest,
+    pub(crate) initial: FourNationExploitLoadedReport,
+    pub(crate) database: WorldFourNationExploitDatabaseDisposition,
+    pub(crate) after_database: Option<FourNationExploitLoadedReport>,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryMessageOutcome {
     Relay(WorldCountryRelayOutcome),
@@ -171,6 +203,7 @@ pub(crate) enum WorldCountryMessageOutcome {
     CountryWarDeclared(WorldCountryWarDeclarationSync),
     CountryWarVictory(WorldCountryWarVictorySync),
     FourNationWarResult(WorldFourNationWarResultSync),
+    FourNationExploit(WorldFourNationExploitSync),
 }
 
 pub(crate) enum WorldCountryMessageDispatch {
@@ -427,6 +460,28 @@ pub(crate) fn dispatch_four_nation_war_result_message<
         source_map_id,
         source_socket_id,
         report,
+    })
+}
+
+pub(crate) fn decode_four_nation_exploit_message(
+    message: &mut CMessage,
+) -> Option<WorldFourNationExploitRequest> {
+    if message.message_type() != 0x6031a {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_player_id = message.base_mut().get_long();
+    let player_id = decoded_player_id.unwrap_or(0);
+    let decoded_increment = message.base_mut().get_long();
+    let increment = decoded_increment.unwrap_or(0);
+    Some(WorldFourNationExploitRequest {
+        player_id,
+        player_id_complete: decoded_player_id.is_some(),
+        increment,
+        increment_complete: decoded_increment.is_some(),
+        source_map_id,
+        source_socket_id,
     })
 }
 

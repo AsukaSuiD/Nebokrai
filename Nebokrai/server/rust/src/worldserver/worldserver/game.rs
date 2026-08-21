@@ -928,6 +928,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use parking_lot::Mutex;
 use rustix::system::uname;
 use rustix::time::{ClockId, clock_gettime};
+use tiberius::Query;
 
 use crate::dbaccess::worlddb::dbcountry::{CountrySaveSnapshot, DbCountryOwner};
 use crate::dbaccess::worlddb::dbgoods::DbGoodsOwner;
@@ -994,7 +995,8 @@ use crate::worldserver::appworld::jjcsystem::{
     CJJcSystem, JjcRunBlock, JjcRunConfig, JjcRunContext, JjcRunReport,
 };
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
-    CFourNationWarSys, FourNationWarResultContext,
+    CFourNationWarSys, FourNationExploitContext, FourNationExploitLoadedDisposition,
+    FourNationWarResultContext,
 };
 use crate::worldserver::appworld::leiting::{
     CLeiTing, LeiTingBlock, LeiTingContext, LeiTingLocalTime, LeiTingRunReport,
@@ -1004,6 +1006,8 @@ use crate::worldserver::appworld::message::othermessage::{
 };
 use crate::worldserver::appworld::message::countrymessage::{
     WorldCountryMessageDispatch, WorldCountryMessageOutcome,
+    WorldFourNationExploitDatabaseDisposition, WorldFourNationExploitSync,
+    decode_four_nation_exploit_message,
     dispatch_country_war_declaration_message, dispatch_country_war_victory_message,
     dispatch_four_nation_war_result_message, on_country_message,
 };
@@ -1097,8 +1101,8 @@ use crate::worldserver::appworld::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarCallbacks,
 };
 use crate::worldserver::appworld::player::{
-    CPlayer, PlayerCodecError, PlayerMurderCounterUpdate, PlayerOrganizingUpdateError,
-    PlayerPropertyCoefficients,
+    CPlayer, PlayerCodecError, PlayerExploitUpdate, PlayerMurderCounterUpdate,
+    PlayerOrganizingUpdateError, PlayerPropertyCoefficients,
 };
 use crate::worldserver::appworld::region::RegionSerializationBlock;
 use crate::worldserver::appworld::script::variablelist::{
@@ -10832,6 +10836,17 @@ impl CGame {
         self.players.get(&player_id).map(Box::as_ref)
     }
 
+    /// Выполняет прямую wrapping-мутацию `dwExploit` только map-owner-а.
+    pub(crate) fn add_map_player_exploit_wrapping(
+        &mut self,
+        player_id: u32,
+        increment: i32,
+    ) -> Option<PlayerExploitUpdate> {
+        self.players
+            .get_mut(&player_id)
+            .map(|player| player.add_exploit_wrapping(increment))
+    }
+
     /// Возвращает первый map-key с `_strcmpi`-равным именем, без online-gate.
     pub(crate) fn map_player_id_by_name(&self, name: &[u8]) -> u32 {
         let name = legacy_c_string_prefix(name);
@@ -12011,9 +12026,42 @@ struct WorldFourNationWarResultEffects<'a> {
     game: &'a CGame,
 }
 
+struct WorldFourNationExploitEffects<'a> {
+    game: &'a mut CGame,
+}
+
 impl FourNationWarResultContext for WorldFourNationWarResultEffects<'_> {
     fn game_server_number_by_region_id(&mut self, region_id: i32) -> i32 {
         self.game.game_server_number_by_region_id(region_id)
+    }
+
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError> {
+        message.send_to_map_id(self.game.current_game_server_sender().as_ref(), map_id)
+    }
+}
+
+impl FourNationExploitContext for WorldFourNationExploitEffects<'_> {
+    fn map_player_exists(&mut self, player_id: u32) -> bool {
+        self.game.map_player(player_id).is_some()
+    }
+
+    fn player_game_server_map_id(&mut self, player_id: i32) -> Option<i32> {
+        self.game
+            .player_game_server(player_id)
+            .map(|game_server| game_server.index as i32)
+    }
+
+    fn add_local_player_exploit(
+        &mut self,
+        player_id: u32,
+        increment: i32,
+    ) -> Option<PlayerExploitUpdate> {
+        self.game
+            .add_map_player_exploit_wrapping(player_id, increment)
     }
 
     fn send_to_map_id(
@@ -12266,7 +12314,7 @@ async fn process_world_message<TimerCallback, TeamOwner>(
     application_runtime: &WorldUnionApplicationRuntimeOwner,
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     rs_player: &mut TiberiusRsPlayer,
-    player_database: Option<&mut WorldTdsClient>,
+    mut player_database: Option<&mut WorldTdsClient>,
     save_thread_handle: &mut WorldSaveThreadHandleState,
     launch_save_thread: &mut dyn FnMut(
         &WorldSaveThreadLaunchRequest,
@@ -12371,7 +12419,7 @@ where
         match on_gm_message(
             game,
             rs_player,
-            player_database,
+            player_database.as_deref_mut(),
             reload_context,
             &mut *application_callbacks.world_string,
             message,
@@ -12390,6 +12438,79 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::Country) {
+        if let Some(request) = decode_four_nation_exploit_message(&mut message) {
+            let initial = {
+                let mut effects = WorldFourNationExploitEffects { game };
+                four_nation_war.convert_loaded_morale_to_exploit(
+                    request.player_id,
+                    request.increment,
+                    &mut effects,
+                )
+            };
+            let mut database = WorldFourNationExploitDatabaseDisposition::NotRequired;
+            let mut after_database = None;
+
+            if matches!(
+                &initial.disposition,
+                FourNationExploitLoadedDisposition::PlayerMissing
+            ) {
+                match player_database.as_deref_mut() {
+                    None => {
+                        let log = add_log_text(b"Error:failed to connect to DB!!");
+                        database =
+                            WorldFourNationExploitDatabaseDisposition::ConnectionUnavailable {
+                                log,
+                            };
+                        let mut effects = WorldFourNationExploitEffects { game };
+                        after_database = Some(
+                            four_nation_war.convert_loaded_morale_to_exploit(
+                                request.player_id,
+                                request.increment,
+                                &mut effects,
+                            ),
+                        );
+                    }
+                    Some(active_database) => {
+                        let mut query = Query::new(
+                            "UPDATE CSL_PLAYER_ABILITY SET Exploit = Exploit + @P1 WHERE ID = @P2",
+                        );
+                        query.bind(request.increment);
+                        query.bind(request.player_id);
+                        match query.execute(&mut *active_database).await {
+                            Ok(_) => {
+                                database = WorldFourNationExploitDatabaseDisposition::Applied;
+                                let mut effects = WorldFourNationExploitEffects { game };
+                                after_database = Some(
+                                    four_nation_war.convert_loaded_morale_to_exploit(
+                                        request.player_id,
+                                        request.increment,
+                                        &mut effects,
+                                    ),
+                                );
+                            }
+                            Err(error) => {
+                                database = WorldFourNationExploitDatabaseDisposition::ExecutionFailed {
+                                    error: error.to_string(),
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+
+            return ProcessedWorldEvent::CountryMessage {
+                source,
+                legacy_run_result,
+                outcome: WorldCountryMessageOutcome::FourNationExploit(
+                    WorldFourNationExploitSync {
+                        request,
+                        initial,
+                        database,
+                        after_database,
+                    },
+                ),
+            };
+        }
         let four_nation_result = {
             let mut effects = WorldFourNationWarResultEffects { game };
             dispatch_four_nation_war_result_message(

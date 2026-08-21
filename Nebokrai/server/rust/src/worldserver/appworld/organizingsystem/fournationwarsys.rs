@@ -1,7 +1,8 @@
 //! Система войны четырёх стран исторического WorldServer.
 //!
-//! Статус `CFourNationWarSys::AddToByteArray` RVA `0x00094250` и
-//! `RecvResultFromGS` RVA `0x00093C60`: `IMPLEMENTED`; loader, timers и
+//! Статус `CFourNationWarSys::AddToByteArray` RVA `0x00094250`,
+//! `RecvResultFromGS` RVA `0x00093C60` и `ConvertMoraleToExploit` RVA
+//! `0x00093F80`: `IMPLEMENTED`; loader, timers и
 //! остальной Game runtime ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -32,12 +33,26 @@
 //! fail-closed публикацию; это новая политика, а не контракт EXE. Rust хранит
 //! morale в instance-owner-е вместо process-global массива, сохраняя порядок
 //! mutation/read/send и не копируя static storage.
+//!
+//! Exact `0x00493F80..0x004941B1` сначала ищет map-player. Для найденного
+//! игрока он либо отправляет `0x7FE46 { player_id:i32, increment:i32 }` его
+//! online GameServer-у, либо выполняет unsigned wrapping-прибавление к
+//! `dwExploit`. Для отсутствующего игрока owner один раз обновляет
+//! `CSL_PLAYER_ABILITY`, затем повторяет тот же поиск и маршрут. Exact
+//! dispatcher `0x004A5096..0x004A50B4` читает два signed `long` в порядке
+//! player/increment. Source metadata, полный tail, connected-state и send
+//! result не проверяются. Linux-донор добавлял saturation, route ownership,
+//! очередь, coalescing и retry; они не переносятся как неоригинальная
+//! инфраструктура. SQL выполняется параметризованным `tiberius`-запросом в
+//! dispatcher-owner-е; COM exception plumbing заменён явным Rust-исходом без
+//! повторного player-поиска после ошибки выполнения.
 
 use std::error::Error;
 use std::fmt;
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
+use crate::worldserver::appworld::player::PlayerExploitUpdate;
 
 const FOUR_NATION_SETUP_WIRE_SIZE: usize = 196;
 const FOUR_NATION_RECT_COUNT: i32 = 5;
@@ -92,6 +107,40 @@ pub(crate) trait FourNationWarResultContext {
     ) -> Result<i32, SendMessageError>;
 }
 
+pub(crate) trait FourNationExploitContext {
+    fn map_player_exists(&mut self, player_id: u32) -> bool;
+    fn player_game_server_map_id(&mut self, player_id: i32) -> Option<i32>;
+    fn add_local_player_exploit(
+        &mut self,
+        player_id: u32,
+        increment: i32,
+    ) -> Option<PlayerExploitUpdate>;
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError>;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FourNationExploitLoadedDisposition {
+    PlayerMissing,
+    PlayerDisappearedBeforeLocalUpdate,
+    LocalUpdated(PlayerExploitUpdate),
+    Forwarded {
+        map_id: i32,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FourNationExploitLoadedReport {
+    pub(crate) player_id: i32,
+    pub(crate) increment: i32,
+    pub(crate) disposition: FourNationExploitLoadedDisposition,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FourNationMoralePublicationDisposition {
     RouteRejected,
@@ -140,6 +189,45 @@ impl CFourNationWarSys {
         };
         *slot = rect;
         true
+    }
+
+    /// Выполняет загруженную половину exact `ConvertMoraleToExploit`.
+    ///
+    /// Offline SQL остаётся у async dispatcher-а, который после успешной
+    /// попытки вызывает этот метод повторно, как машинный owner.
+    pub(crate) fn convert_loaded_morale_to_exploit<
+        Context: FourNationExploitContext + ?Sized,
+    >(
+        &mut self,
+        player_id: i32,
+        increment: i32,
+        context: &mut Context,
+    ) -> FourNationExploitLoadedReport {
+        let disposition = if !context.map_player_exists(player_id as u32) {
+            FourNationExploitLoadedDisposition::PlayerMissing
+        } else if let Some(map_id) = context.player_game_server_map_id(player_id) {
+            let mut forward = CMessage::new(0x7fe46);
+            forward.base_mut().add_long(player_id);
+            forward.base_mut().add_long(increment);
+            let wire = forward.as_wire_bytes().to_vec();
+            let delivery = context.send_to_map_id(&forward, map_id);
+            FourNationExploitLoadedDisposition::Forwarded {
+                map_id,
+                wire,
+                delivery,
+            }
+        } else {
+            match context.add_local_player_exploit(player_id as u32, increment) {
+                Some(update) => FourNationExploitLoadedDisposition::LocalUpdated(update),
+                None => FourNationExploitLoadedDisposition::PlayerDisappearedBeforeLocalUpdate,
+            }
+        };
+
+        FourNationExploitLoadedReport {
+            player_id,
+            increment,
+            disposition,
+        }
     }
 
     /// Повторяет exact static `RecvResultFromGS`, включая interleaving чтения
