@@ -1,6 +1,6 @@
 //! WorldServer dispatcher-owner country messages `OnCountryMessage`.
 //!
-//! Dispatcher RVA `0x000A47F0` остаётся `IMPLEMENTED_PARTIAL`: country relays
+//! Dispatcher RVA `0x000A47F0` — `IMPLEMENTED`: country relays
 //! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, смена country игрока
 //! `0x60301 -> CPlayer::ChangeCountry/0x7FF01`, а также вход country victory
 //! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, appoint-minister
@@ -117,6 +117,8 @@
 //! { player_id:i32, result:i32 }` исходному `m_lMapID`. При отсутствующем
 //! online-player ответа нет. Source socket, хвост и donor-ограничения country
 //! диапазона/ownership не участвуют.
+//! Exact `0x004A4FAE..0x004A4FC0` задаёт bodyless `0x60313`: без чтения
+//! payload/source metadata он вызывает `CCountryHandler::SetNewDay(10)`.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::tools::put_string_to_file;
@@ -130,10 +132,12 @@ use crate::worldserver::appworld::country::country::{
     CountryDeposeMinisterReport, CountryExileRequestDisposition,
     CountryExileResultContext, CountryExileTimeLookup, CountryQuestSwitchUpdate,
     CountryPlayersListContext, CountryPlayersListContextBlock, CountryPlayersListReport,
-    CountrySetKingReport,
+    CountrySetKingReport, CountrySetNewDayContext,
     CountryScalarUpdate, CountrySilenceReport, CountrySuccessExiledReport,
 };
-use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
+use crate::worldserver::appworld::country::countryhandler::{
+    CCountryHandler, CountryHandlerNewDayReport,
+};
 use crate::worldserver::appworld::country::countryparam::{
     CCountryParam, CountryParameterUnavailable,
 };
@@ -182,6 +186,13 @@ pub(crate) struct WorldCountryPlayerChangeSync {
     pub(crate) country_id: u8,
     pub(crate) country_complete: bool,
     pub(crate) disposition: WorldCountryPlayerChangeDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldCountryNewDaySync {
+    pub(crate) source_map_id: i32,
+    pub(crate) source_socket_id: i32,
+    pub(crate) report: CountryHandlerNewDayReport,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -576,6 +587,7 @@ pub(crate) struct WorldFourNationCountryFailSync {
 pub(crate) enum WorldCountryMessageOutcome {
     Relay(WorldCountryRelayOutcome),
     PlayerCountryChanged(WorldCountryPlayerChangeSync),
+    NewDaySet(WorldCountryNewDaySync),
     ScalarSynchronized(WorldCountryScalarSync),
     QuestSwitchSynchronized(WorldCountryQuestSwitchSync),
     ExileTimeSynchronized(WorldCountryExileTimeSync),
@@ -1266,6 +1278,22 @@ pub(crate) fn dispatch_country_player_change_message(
     })
 }
 
+pub(crate) fn dispatch_country_new_day_message<Context: CountrySetNewDayContext + ?Sized>(
+    message: &CMessage,
+    country_handler: &mut CCountryHandler,
+    country_parameters: &CCountryParam,
+    context: &mut Context,
+) -> Option<WorldCountryNewDaySync> {
+    if message.message_type() != 0x60313 {
+        return None;
+    }
+    Some(WorldCountryNewDaySync {
+        source_map_id: message.map_id(),
+        source_socket_id: message.socket_id(),
+        report: country_handler.set_new_day(10, country_parameters, context),
+    })
+}
+
 pub(crate) fn dispatch_country_direct_appointment_message<
     Context: CountryExileResultContext + ?Sized,
 >(
@@ -1609,7 +1637,7 @@ pub(crate) fn decode_four_nation_exploit_message(
 
 // ============================================================================
 // FUNCTION: OnCountryMessage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\countrymessage.cpp:21

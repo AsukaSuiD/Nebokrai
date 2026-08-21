@@ -1019,6 +1019,7 @@ use crate::worldserver::appworld::message::countrymessage::{
     dispatch_country_demise_message,
     dispatch_country_depose_minister_message,
     dispatch_country_direct_appointment_message,
+    dispatch_country_new_day_message,
     dispatch_country_player_change_message,
     dispatch_country_exile_result_message,
     dispatch_country_exile_request_message,
@@ -13212,6 +13213,40 @@ where
                 source,
                 legacy_run_result,
                 outcome: WorldCountryMessageOutcome::PlayerCountryChanged(sync),
+            };
+        }
+        let new_day = {
+            let faction_master_log_enabled =
+                game.setup.use_log_system && faction_master_log_enabled;
+            let base = WorldCountryExileResultEffects {
+                game,
+                globe_setup,
+                format_world_string: &mut *application_callbacks.format_world_string,
+            };
+            let mut effects = WorldCountryDemiseEffects {
+                base,
+                organizing,
+                organizing_parameters,
+                attack_city: &*attack_city,
+                goods_war: &*goods_war,
+                world_string: &mut *application_callbacks.world_string,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                update_player,
+                faction_master_log_enabled,
+                write_faction_master_log: &mut *write_faction_master_log,
+            };
+            dispatch_country_new_day_message(
+                &message,
+                country_handler,
+                country_parameters,
+                &mut effects,
+            )
+        };
+        if let Some(sync) = new_day {
+            return ProcessedWorldEvent::CountryMessage {
+                source,
+                legacy_run_result,
+                outcome: WorldCountryMessageOutcome::NewDaySet(sync),
             };
         }
         let direct_appointment = {

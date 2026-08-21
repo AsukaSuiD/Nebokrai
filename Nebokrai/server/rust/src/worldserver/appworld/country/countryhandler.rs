@@ -3,6 +3,7 @@
 //! Статус `CCountryHandler::GetCountry` RVA `0x00036C40`,
 //! `AddToByteArray` RVA `0x000449F0`,
 //! `send_info_to_client` RVA `0x00044760`, `GenerateSaveData` RVA `0x00044970`,
+//! `SetNewDay` RVA `0x00044A70`,
 //! `AddOneTopInfo` RVA `0x00045130` и полный `Run` RVA `0x00045040` —
 //! `IMPLEMENTED`; остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
 //! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
@@ -34,6 +35,9 @@
 //! `send_info_to_client` строит `0x7FA03` из четырёх consecutive unsigned long
 //! и C-строки; один overload target `0x00423C00` для обоих нулей/title/color
 //! подтверждён exact EXE.
+//! `SetNewDay` exact `0x00444A70..0x00444B04` проходит unsigned country-key
+//! map-order, пропускает null values и вызывает `CCountry::SetNewDay` с тем же
+//! signed day. `BTreeMap` заменяет только MSVC tree traversal.
 //!
 //! Initial-config wire начинается signed размером всей country-map и затем
 //! содержит `CCountry` records в unsigned key-order; отдельный map key не
@@ -50,8 +54,10 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::nets::networld::message::CMessage;
 use crate::worldserver::appworld::country::country::{
-    CCountry, CountryKingSaveLimits, CountrySerializeError,
+    CCountry, CountryKingSaveLimits, CountrySerializeError, CountrySetNewDayContext,
+    CountrySetNewDayReport,
 };
+use crate::worldserver::appworld::country::countryparam::CCountryParam;
 use crate::worldserver::worldserver::game::CGame;
 
 static NEXT_COUNTRY_TOP_INFO_ID: AtomicI32 = AtomicI32::new(1);
@@ -114,6 +120,19 @@ pub(crate) struct CountryRunReport {
     pub(crate) ai_country_ids: Vec<u8>,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountryHandlerNewDayEntry {
+    pub(crate) map_key: u8,
+    pub(crate) report: CountrySetNewDayReport,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountryHandlerNewDayReport {
+    pub(crate) requested_day: i32,
+    pub(crate) countries: Vec<CountryHandlerNewDayEntry>,
+    pub(crate) skipped_null_country_keys: Vec<u8>,
+}
+
 pub(crate) trait CountryInfoDeliveryContext {
     /// Синхронно повторяет `CMessage::SendAll`; старый return игнорировался.
     fn send_all(&mut self, message: &CMessage) -> i32;
@@ -126,6 +145,32 @@ pub(crate) struct CCountryHandler {
 }
 
 impl CCountryHandler {
+    /// Повторяет exact ordered map traversal `CCountryHandler::SetNewDay`.
+    pub(crate) fn set_new_day<Context: CountrySetNewDayContext + ?Sized>(
+        &mut self,
+        requested_day: i32,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> CountryHandlerNewDayReport {
+        let mut countries = Vec::new();
+        let mut skipped_null_country_keys = Vec::new();
+        for (&map_key, country) in &mut self.countries {
+            let Some(country) = country.as_deref_mut() else {
+                skipped_null_country_keys.push(map_key);
+                continue;
+            };
+            countries.push(CountryHandlerNewDayEntry {
+                map_key,
+                report: country.set_new_day(requested_day, parameters, context),
+            });
+        }
+        CountryHandlerNewDayReport {
+            requested_day,
+            countries,
+            skipped_null_country_keys,
+        }
+    }
+
     /// Создаёт доказанный пустой country-map.
     pub(crate) const fn with_reached_save_state() -> Self {
         Self {
@@ -355,7 +400,7 @@ impl CCountryHandler {
 
 // ============================================================================
 // FUNCTION: CCountryHandler::SetNewDay
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countryhandler.cpp:124
