@@ -262,6 +262,13 @@
 //! `0x004193D8..0x00419694` передают оба boolean как `false`. Соседние ещё
 //! сырые configuration owners представлены раздельными typed вызовами, а не
 //! одним непрозрачным reload callback.
+//! `Allthing` больше не является таким callback-ом: exact caller
+//! `0x00417F12..0x00417F45` передаёт byte-path `/data/LeitingAction.ini`,
+//! проверяет явный `0/1` loader-а и только после успеха допускает subtype
+//! `0x36`. Конкретный `CThingSetup` живёт у единственного `CGame`, поэтому
+//! startup/reload, initial-config serializer и daily LeiTing читают один
+//! owner; `VecDeque`, resource-context и safe codec заменяют лишь static STL,
+//! `CRFile` и безразмерный byte buffer.
 //! CountryWar-ветвь внешнего main-loop dispatcher-а теперь передаёт прямо
 //! живые `CountryWarSys`, `CTimer`, девять callback-ключей, local time,
 //! resource-context и текущий GameServer sender. Старый
@@ -1001,7 +1008,7 @@ use crate::public::timer::{
 };
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::godsbattleconf::CGodsBattleConf;
-use crate::setup::leitingsetup::CThingSetup;
+use crate::setup::leitingsetup::{CThingSetup, ThingSetupCodecError};
 use crate::setup::regionrouter::RegionRouter;
 use crate::public::tools::{ini_decode, put_string_to_file};
 use crate::transport::bind_tcp_ipv4;
@@ -3253,7 +3260,6 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) goods_war: &'a mut CGoodsWarMember,
     pub(crate) village_war_callbacks: VillageWarCallbacks<TimerCallback>,
     pub(crate) lei_ting: &'a mut CLeiTing,
-    pub(crate) thing_setup: &'a CThingSetup,
     pub(crate) db_misc: &'a mut CDbMisc,
     pub(crate) net_sessions: &'a CNetSessionManager,
     pub(crate) union_application_runtime: &'a WorldUnionApplicationRuntimeOwner,
@@ -3547,7 +3553,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     TaoZhuang,
     CiQing,
     Jjc,
-    AllThing,
     GodsBattle,
 }
 
@@ -3599,7 +3604,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     GoodsDestroy,
     TaoZhuang,
     CiQingAndLingBao,
-    AllThing,
     GodsBattle,
 }
 
@@ -5103,6 +5107,7 @@ pub(crate) struct WorldReloadRegionSnapshotBlock {
 pub(crate) enum WorldReloadBlock {
     RegionList(WorldRegionListBlock),
     RegionSnapshot(WorldReloadRegionSnapshotBlock),
+    ThingSetupCodec(ThingSetupCodecError),
     CountryWarOwnerRequired,
     CountryWar(CountryWarReloadBlock),
 }
@@ -5654,6 +5659,8 @@ impl PlayerFactionInfoContext for WorldPlayerFactionInfoContext<'_> {
 /// Достигнутая setup-часть исходного `CGame`; другие поля добавляются owners.
 pub(crate) struct CGame {
     setup: WorldSetup,
+    /// Process-global `CThingSetup` привязан к единственному World `CGame`.
+    thing_setup: CThingSetup,
     globe_variables: WorldGlobeVariables,
     net_client: Option<CMyNetClient>,
     net_server: Option<CMyNetServer>,
@@ -5706,6 +5713,7 @@ impl CGame {
     pub(crate) fn new() -> Self {
         Self {
             setup: WorldSetup::for_game(),
+            thing_setup: CThingSetup::new(),
             globe_variables: WorldGlobeVariables::default(),
             net_client: None,
             net_server: None,
@@ -5747,6 +5755,11 @@ impl CGame {
         self.script_file_data
             .get(legacy_c_string_prefix(path))
             .map(Vec::as_slice)
+    }
+
+    /// Возвращает загруженный LeiTing setup для initial-config serializer-а.
+    pub(crate) const fn thing_setup(&self) -> &CThingSetup {
+        &self.thing_setup
     }
 
     /// Nullable raw owner начального пакета function-list subtype `0x0A`.
@@ -6800,17 +6813,33 @@ impl CGame {
                 );
             }
             WorldReloadProfile::AllThing => {
-                self.reload_simple_serialized(
-                    context,
-                    WorldReloadBooleanOwner::AllThing,
-                    WorldReloadSerializationOwner::AllThing,
-                    0x36,
-                    b"Load LeitingAction.ini...ok!",
-                    b"Load...failed!",
-                    send_to_game_servers,
-                    false,
-                    &mut legacy_result,
-                );
+                const PATH: &[u8] = b"/data/LeitingAction.ini";
+                let loaded = if let Some(source) = context.read_resource(PATH) {
+                    self.thing_setup
+                        .load_all_thing_list(&source, PATH, |payload| {
+                            context.add_log_text(payload)
+                        })
+                        .is_ok()
+                } else {
+                    self.thing_setup.clear_all_things_for_load();
+                    let mut message = b"file '".to_vec();
+                    message.extend_from_slice(PATH);
+                    message.extend_from_slice(b"' can't found!");
+                    context.notify_reload_operator(b"error", &message);
+                    false
+                };
+                context.add_log_text(if loaded {
+                    b"Load LeitingAction.ini...ok!"
+                } else {
+                    b"Load...failed!"
+                });
+                if loaded && send_to_game_servers {
+                    let mut bytes = Vec::new();
+                    self.thing_setup
+                        .add_to_byte_array(&mut bytes)
+                        .map_err(WorldReloadBlock::ThingSetupCodec)?;
+                    self.send_reload_payload(0x36, &bytes);
+                }
             }
             WorldReloadProfile::GodsBattle => {
                 let succeeded = Self::reload_boolean_with_log(
@@ -10009,7 +10038,6 @@ impl CGame {
         &mut self,
         lei_ting: &mut CLeiTing,
         globe_setup: &GlobeSetupSnapshot,
-        thing_setup: &CThingSetup,
         context: &mut Context,
         mut get_local_time: GetLocalTime,
     ) -> Result<LeiTingRunReport, LeiTingBlock<Context::Block>>
@@ -10018,7 +10046,7 @@ impl CGame {
         GetLocalTime: FnMut() -> LeiTingLocalTime,
     {
         let current = get_local_time();
-        lei_ting.run(current, self, globe_setup, thing_setup, context)
+        lei_ting.run(current, self, globe_setup, context)
     }
 
     /// Выполняет соседний `DoneOutList -> Pop/DoneListIn -> LoadAuction` batch.
@@ -10862,7 +10890,6 @@ impl CGame {
             .run_main_loop_lei_ting_stage(
                 owners.lei_ting,
                 owners.globe_setup,
-                owners.thing_setup,
                 owners.lei_ting_context,
                 &mut *callbacks.get_lei_ting_local_time,
             )
@@ -11705,7 +11732,6 @@ impl CGame {
         update_kind: u32,
         stamp: &mut LeiTingLocalTime,
         globe_setup: &GlobeSetupSnapshot,
-        thing_setup: &CThingSetup,
         clock: &mut Clock,
     ) -> Result<
         Option<PlayerLeiTingUpdateReport>,
@@ -11719,7 +11745,7 @@ impl CGame {
                 update_kind,
                 stamp,
                 globe_setup.total_jing_li_dan_count(),
-                thing_setup,
+                &self.thing_setup,
                 clock,
             )
             .map(Some)

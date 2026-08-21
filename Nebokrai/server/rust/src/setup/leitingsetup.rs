@@ -1,9 +1,9 @@
 //! Владелец конфигурации ежедневных LeiTing-действий.
 //!
 //! `SetDailyUpdateStamp`, `AddToByteArray`, GameServer
-//! `DecordFromByteArray` и WorldServer `GetDailyThingList` — `IMPLEMENTED`;
-//! text loader ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точные пары EXE/PDB и исходные
-//! owners сохранены у raw-блоков.
+//! `DecordFromByteArray`, WorldServer `LoadAllThingList` и
+//! `GetDailyThingList` — `IMPLEMENTED`. Точные пары EXE/PDB и исходные owners
+//! сохранены у raw-блоков.
 //!
 //! Исходный singleton/static deque заменён обычным `CThingSetup` и
 //! `VecDeque`. Wire остаётся signed count, затем записи `u16 TID/max/point`
@@ -12,10 +12,25 @@
 //! снимается отдельным platform-вызовом для каждого недельного элемента.
 //! Если подходящих элементов нет, старый owner не очищал destination; Rust
 //! также оставляет его без изменения.
+//!
+//! Text loader очищает owner до открытия, ищет byte-exact whitespace-маркеры
+//! `#` общим доказанным `ReadTo`, логирует каждую добавленную запись и считает
+//! пустым файл без единого маркера. Exact EXE `0x00481DB0..0x00481FEE`
+//! подтвердил возврат `0` при open/empty и `1` после хотя бы одной записи.
+//! После найденного маркера исходный код нулями инициализировал node, добавлял
+//! его даже при fail-state formatted extraction и лишь затем прекращал scan;
+//! safe parser сохраняет node/prefix transition и явно сообщает место
+//! остановки в load-report. Точное значение, которое старый MSVC мог записать
+//! при numeric overflow, не переносится: штатный файл содержит только малые
+//! положительные `u16`, а malformed/out-of-range поле безопасно остаётся
+//! нулём. `std::fs` заменяет только `CRFile` plumbing.
 
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
+use std::path::Path;
+
+use crate::public::readwrite::read_to;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LeiTingLocalTime {
@@ -35,6 +50,16 @@ pub(crate) struct LeiTingThingNode {
     pub(crate) thing_id: u16,
     pub(crate) max_count: u16,
     pub(crate) point: u16,
+}
+
+impl Default for LeiTingThingNode {
+    fn default() -> Self {
+        Self {
+            thing_id: 0,
+            max_count: 0,
+            point: 0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -80,6 +105,70 @@ impl fmt::Display for ThingSetupCodecError {
 
 impl Error for ThingSetupCodecError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ThingSetupTextField {
+    ThingId,
+    MaximumCount,
+    Point,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ThingSetupTextCutoffReason {
+    UnexpectedEnd,
+    InvalidUnsignedShort { token: Vec<u8> },
+}
+
+/// Safe-диагностика исходного stream fail-state после уже добавленного node.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ThingSetupTextCutoff {
+    pub(crate) zero_based_line: usize,
+    pub(crate) field: ThingSetupTextField,
+    pub(crate) reason: ThingSetupTextCutoffReason,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ThingSetupLoadReport {
+    pub(crate) loaded_count: usize,
+    pub(crate) cutoff: Option<ThingSetupTextCutoff>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ThingSetupEmptyFile;
+
+impl fmt::Display for ThingSetupEmptyFile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("LeitingAction.ini не содержит ни одной #-записи")
+    }
+}
+
+impl Error for ThingSetupEmptyFile {}
+
+#[derive(Debug)]
+pub(crate) enum ThingSetupFileLoadError {
+    Io(std::io::Error),
+    Empty(ThingSetupEmptyFile),
+}
+
+impl fmt::Display for ThingSetupFileLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(source) => {
+                write!(formatter, "не удалось прочитать LeitingAction.ini: {source}")
+            }
+            Self::Empty(source) => source.fmt(formatter),
+        }
+    }
+}
+
+impl Error for ThingSetupFileLoadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Io(source) => Some(source),
+            Self::Empty(source) => Some(source),
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct CThingSetup {
     all_things: VecDeque<LeiTingThingNode>,
@@ -97,6 +186,90 @@ impl CThingSetup {
         local_time.hour = 23;
         local_time.minute = 59;
         local_time.second = 59;
+    }
+
+    /// Стандартная filesystem-граница для standalone owner-а. World resource
+    /// lifecycle передаёт уже прочитанные байты в `load_all_thing_list`.
+    pub(crate) fn load_all_thing_list_from_file(
+        &mut self,
+        path: impl AsRef<Path>,
+        add_log_text: impl FnMut(&[u8]),
+    ) -> Result<ThingSetupLoadReport, ThingSetupFileLoadError> {
+        self.all_things.clear();
+        let path = path.as_ref();
+        let source = std::fs::read(path).map_err(ThingSetupFileLoadError::Io)?;
+        let display_path = path.to_string_lossy();
+        self.load_all_thing_list(&source, display_path.as_bytes(), add_log_text)
+            .map_err(ThingSetupFileLoadError::Empty)
+    }
+
+    /// Очищает owner до следующей попытки открытия, как exact loader.
+    pub(crate) fn clear_all_things_for_load(&mut self) {
+        self.all_things.clear();
+    }
+
+    /// Повторяет byte-token loader и его логи. Невалидное поле безопасно
+    /// оставляет ноль/прочитанный prefix в уже добавляемой записи и завершает
+    /// дальнейший scan, как fail-state исходного `istream`.
+    pub(crate) fn load_all_thing_list(
+        &mut self,
+        source: &[u8],
+        file_name: &[u8],
+        mut add_log_text: impl FnMut(&[u8]),
+    ) -> Result<ThingSetupLoadReport, ThingSetupEmptyFile> {
+        self.all_things.clear();
+        let mut tokens = source
+            .split(u8::is_ascii_whitespace)
+            .filter(|token| !token.is_empty());
+        let mut cutoff = None;
+        let mut line = 0usize;
+
+        while read_to(&mut tokens, b"#") {
+            let mut thing = LeiTingThingNode::default();
+            for (field, destination) in [
+                (ThingSetupTextField::ThingId, &mut thing.thing_id),
+                (
+                    ThingSetupTextField::MaximumCount,
+                    &mut thing.max_count,
+                ),
+                (ThingSetupTextField::Point, &mut thing.point),
+            ] {
+                if let Err(reason) = read_formatted_u16(&mut tokens, destination) {
+                    cutoff = Some(ThingSetupTextCutoff {
+                        zero_based_line: line,
+                        field,
+                        reason,
+                    });
+                    break;
+                }
+            }
+
+            self.all_things.push_back(thing);
+            add_log_text(
+                format!(
+                    "<leiting>line {line}: {},{},{}",
+                    thing.thing_id, thing.max_count, thing.point
+                )
+                .as_bytes(),
+            );
+            line += 1;
+            if cutoff.is_some() {
+                break;
+            }
+        }
+
+        if line == 0 {
+            add_log_text(b"<Error>The File LeitingAction.ini is Empty!");
+            return Err(ThingSetupEmptyFile);
+        }
+
+        let mut summary = format!("We have {line} line data in ").into_bytes();
+        summary.extend_from_slice(file_name);
+        add_log_text(&summary);
+        Ok(ThingSetupLoadReport {
+            loaded_count: line,
+            cutoff,
+        })
     }
 
     /// Кодирует WorldServer initial-config projection.
@@ -165,6 +338,23 @@ impl CThingSetup {
             *destination = daily;
         }
     }
+}
+
+fn read_formatted_u16<'a>(
+    tokens: &mut impl Iterator<Item = &'a [u8]>,
+    destination: &mut u16,
+) -> Result<(), ThingSetupTextCutoffReason> {
+    let Some(token) = tokens.next() else {
+        return Err(ThingSetupTextCutoffReason::UnexpectedEnd);
+    };
+    let value = std::str::from_utf8(token)
+        .ok()
+        .and_then(|text| text.parse::<u16>().ok())
+        .ok_or_else(|| ThingSetupTextCutoffReason::InvalidUnsignedShort {
+            token: token.to_vec(),
+        })?;
+    *destination = value;
+    Ok(())
 }
 
 fn read_u16(source: &[u8], cursor: &mut usize) -> Result<u16, ThingSetupCodecError> {
@@ -514,7 +704,7 @@ fn read_i32(source: &[u8], cursor: &mut usize) -> Result<i32, ThingSetupCodecErr
 
 // ============================================================================
 // FUNCTION: CThingSetup::LoadAllThingList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\leitingsetup.cpp:17
@@ -522,6 +712,9 @@ fn read_i32(source: &[u8], cursor: &mut usize) -> Result<i32, ThingSetupCodecErr
 // ADDRESS: 00481db0
 // PROTOTYPE: int __cdecl LoadAllThingList(char * param_1)
 //
+// IMPLEMENTED_OWNER: `CThingSetup::load_all_thing_list` выше; `std::fs`
+// `0x00481DB0..0x00481FEE` подтвердил явные return `0/1`; malformed formatted
+// extraction безопасно выражена typed cutoff-ом с тем же добавленным node.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

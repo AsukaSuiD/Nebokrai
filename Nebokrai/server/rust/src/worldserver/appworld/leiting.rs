@@ -159,7 +159,6 @@ impl CLeiTing {
         mut current: LeiTingLocalTime,
         game: &mut CGame,
         globe_setup: &GlobeSetupSnapshot,
-        thing_setup: &CThingSetup,
         context: &mut Context,
     ) -> Result<LeiTingRunReport, LeiTingBlock<Context::Block>> {
         CThingSetup::set_daily_update_stamp(&mut current);
@@ -184,7 +183,6 @@ impl CLeiTing {
                     update_kind,
                     &mut current,
                     globe_setup,
-                    thing_setup,
                     context,
                 )
                 .map_err(LeiTingBlock::Player)?;
