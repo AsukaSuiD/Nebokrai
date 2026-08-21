@@ -246,7 +246,8 @@ use super::faction::{
     FactionDeleteOrganizingOutcome, FactionDisbandBlock, FactionDisbandContext,
     FactionDisbandOutcome, FactionDisbandProgress, FactionDisbandRejection,
     FactionEnemyDelivery, FactionFeatureFunctionUpdate, FactionInitialPropertyBlock,
-    FactionMemberInfoReport, FactionMemberInfoRequest,
+    FactionLeaveWordBlock, FactionLeaveWordOutcome, FactionMemberInfoReport,
+    FactionMemberInfoRequest,
     FactionOperationAuthorityContext, FactionOrganizingInfoContext, FactionOtherInfoBuildError,
     FactionOtherInfoDelivery, FactionOwnedCityDelivery, FactionOwnedCityRefreshBlock,
     FactionOwnedCityRefreshReport, FactionOwnedCityUpdateBuildError, FactionPlayerHeaderContext,
@@ -420,6 +421,24 @@ pub(crate) enum OrganizingLeaveWordEnableBlock {
     Property {
         faction_id: i32,
         source: FactionInitialPropertyBlock,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingLeaveWordOutcome {
+    FactionNotFound,
+    Applied {
+        faction_id: i32,
+        outcome: FactionLeaveWordOutcome,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingLeaveWordBlock {
+    Membership { map_key: i32 },
+    Faction {
+        faction_id: i32,
+        source: FactionLeaveWordBlock,
     },
 }
 
@@ -927,6 +946,38 @@ impl COrganizingCtrl {
             .set_leave_word_function(true, context)
             .map_err(|source| OrganizingLeaveWordEnableBlock::Property { faction_id, source })?;
         Ok(OrganizingLeaveWordEnableOutcome::Updated { faction_id, update })
+    }
+
+    /// Разрешает faction автора и выполняет concrete `CFaction::LeaveWord`.
+    pub(crate) fn leave_word_for_player(
+        &mut self,
+        game: &mut CGame,
+        player_id: i32,
+        content: &mut Vec<u8>,
+        time: TagTimeValue,
+    ) -> Result<OrganizingLeaveWordOutcome, OrganizingLeaveWordBlock> {
+        let faction_id = match self.is_free_player(player_id) {
+            FreePlayerLookup::NoFaction => {
+                return Ok(OrganizingLeaveWordOutcome::FactionNotFound);
+            }
+            FreePlayerLookup::Faction(faction_id) => faction_id,
+            FreePlayerLookup::BlockedNullFaction { map_key } => {
+                return Err(OrganizingLeaveWordBlock::Membership { map_key });
+            }
+        };
+        if faction_id < 1 {
+            return Ok(OrganizingLeaveWordOutcome::FactionNotFound);
+        }
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return Ok(OrganizingLeaveWordOutcome::FactionNotFound);
+        };
+        faction
+            .leave_word(game, player_id, content, time)
+            .map(|outcome| OrganizingLeaveWordOutcome::Applied {
+                faction_id,
+                outcome,
+            })
+            .map_err(|source| OrganizingLeaveWordBlock::Faction { faction_id, source })
     }
 
     /// Повторяет `GetUnion`: master-player -> faction -> union -> nullable owner.

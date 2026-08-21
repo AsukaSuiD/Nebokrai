@@ -19,6 +19,10 @@
 //! Exact `0x004A75FB..0x004A763F` подтверждает соседний `0x6011A`: один
 //! `GetLong`, ordered `IsFactionMaster`, nullable faction lookup и virtual
 //! `SetLWFunction(true)` в slot `+0x104`.
+//! Exact `0x004A7644..0x004A771A` для `0x6011B` очищает 210-byte buffer,
+//! вызывает `GetStr(..., 0xD2)`, читает player ID, разрешает его faction через
+//! `IsFreePlayer`, копирует все восемь WORD полей одного `GetLocalTime` в
+//! `tagTime` и вызывает virtual `CFaction::LeaveWord` в slot `+0x38`.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -44,13 +48,16 @@ use parking_lot::Mutex;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::servers::ServerCommandHandle;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionCallbackOutcome};
+use crate::public::date::TagTime;
 use crate::worldserver::appworld::organizingsystem::faction::{
     FactionMemberInfoRequest, FactionOrganizingInfoContext,
 };
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
-    COrganizingCtrl, OrganizingLeaveWordEnableBlock, OrganizingLeaveWordEnableOutcome,
+    COrganizingCtrl, OrganizingLeaveWordBlock, OrganizingLeaveWordEnableBlock,
+    OrganizingLeaveWordEnableOutcome, OrganizingLeaveWordOutcome,
     OrganizingUnionApplyForJoinDispatchBlock, OrganizingUnionApplyForJoinOutcome,
 };
+use crate::worldserver::appworld::organizingsystem::organizing::TagTimeValue;
 use crate::worldserver::appworld::organizingsystem::union::{
     UnionAddFactionEffects, UnionApplicationEndpointBlock, UnionApplicationSessionBlock,
     UnionApplicationSessionReport, UnionApplicationSessionRequest, UnionApplicationSessionRuntime,
@@ -63,6 +70,8 @@ const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
     [0x60117, 0x60119, 0x60120, 0x60122, 0x60124, 0x60131];
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
+const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
+const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct QueuedUnionApplicationTerminal {
@@ -372,6 +381,52 @@ where
         organizing
             .enable_leave_word_for_master(player_id, context)
             .map(|outcome| OrganizingLeaveWordEnableDispatch { player_id, outcome }),
+    )
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingLeaveWordDispatch {
+    pub(crate) player_id: i32,
+    pub(crate) content: Vec<u8>,
+    pub(crate) time: TagTimeValue,
+    pub(crate) outcome: OrganizingLeaveWordOutcome,
+}
+
+/// Выполняет `0x6011B`: bounded C-string, player membership и `LeaveWord`.
+pub(crate) fn dispatch_leave_word(
+    message: &mut CMessage,
+    game: &mut CGame,
+    organizing: &mut COrganizingCtrl,
+) -> Option<Result<OrganizingLeaveWordDispatch, OrganizingLeaveWordBlock>> {
+    if message.message_type() != LEAVE_WORD_MESSAGE_TYPE {
+        return None;
+    }
+
+    let mut content = message
+        .base_mut()
+        .get_str_bytes(LEAVE_WORD_INPUT_CAPACITY)
+        .unwrap_or_default();
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let local_time = TagTime::local_now();
+    let time = TagTimeValue {
+        year: local_time.year,
+        month: local_time.month,
+        day_of_week: local_time.day_of_week,
+        day: local_time.day,
+        hour: local_time.hour,
+        minute: local_time.minute,
+        second: local_time.second,
+        milliseconds: local_time.milliseconds,
+    };
+    Some(
+        organizing
+            .leave_word_for_player(game, player_id, &mut content, time)
+            .map(|outcome| OrganizingLeaveWordDispatch {
+                player_id,
+                content,
+                time,
+                outcome,
+            }),
     )
 }
 

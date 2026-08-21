@@ -161,7 +161,7 @@ pub(crate) enum MemberPurviewMutation {
 }
 
 /// Вложенное значение `tagTime`, нужное полному layout `tagMemInfo`.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub(crate) struct TagTimeValue {
     pub(crate) year: u16,
