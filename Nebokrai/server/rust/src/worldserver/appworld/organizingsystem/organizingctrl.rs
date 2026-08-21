@@ -62,6 +62,12 @@
 //! ищет его в `m_ConfedeOrganizings` и возвращает сохранённый pointer либо
 //! null при miss/null value. Exact ASM `0x00436BF0..0x00436C37` исправляет
 //! повреждённое raw-имя key; Rust `confederation_by_id` сохраняет контракт.
+//! Ingress `0x60110` повторяет `GetUnion(old master)` через
+//! `IsFactionMaster -> IsFreeFaction -> GetConfederationOrganizing`, после
+//! чего вызывает concrete `CUnion::Demise`. Rust временно извлекает только
+//! найденный union из map-slot, чтобы его faction lookup/fan-out callbacks
+//! видели остальной controller без raw aliasing, и обязательно возвращает
+//! owner до typed result; дополнительных controller-gates не добавлено.
 //! `GetCountryByFaction` сначала отбрасывает неположительный ID, затем делает
 //! тот же faction-map lookup и только для ненулевого owner-а вызывает virtual
 //! `GetCountry` slot `+0x190`. Exact ASM `0x00437B20..0x00437B6B`
@@ -423,7 +429,8 @@ use super::union::{
     UnionApplicationFactionSnapshot, UnionApplicationTerminal, UnionApplyForJoinBlock,
     UnionApplyForJoinContext, UnionApplyForJoinEffects, UnionApplyForJoinOutcome,
     UnionClientSnapshotContext, UnionDoJoinBlock, UnionDoJoinContext, UnionDoJoinOutcome,
-    UnionDisbandBlock, UnionDisbandOutcome, UnionExitBlock, UnionExitContext,
+    UnionDemiseBlock, UnionDemiseOutcome, UnionDisbandBlock, UnionDisbandOutcome,
+    UnionExitBlock, UnionExitContext,
     UnionExitOutcome,
     UnionFireOutBlock, UnionFireOutContext, UnionFireOutEffects, UnionFireOutOutcome,
     UnionFactionFanoutReport, UnionFactionJoinContext, UnionFactionLevelBlock,
@@ -1222,6 +1229,24 @@ pub(crate) enum OrganizingUnionFireOutBlock {
         union_id: i32,
         fire_out: UnionFireOutOutcome<UnionMemberDetachOutcome>,
         source: OrganizingConfederationDisbandBlock,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingUnionDemiseOutcome {
+    UnionNotFound,
+    Applied {
+        union_id: i32,
+        outcome: UnionDemiseOutcome,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingUnionDemiseBlock {
+    Lookup(OrganizingUnionByMasterBlock),
+    Demise {
+        union_id: i32,
+        source: UnionDemiseBlock<FactionMasterLookupBlock>,
     },
 }
 
@@ -3823,6 +3848,49 @@ impl COrganizingCtrl {
             outcome,
             automatic_disband,
         })
+    }
+
+    /// Выполняет exact controller-цепочку `0x60110`: `GetUnion(old master)` и
+    /// virtual `CUnion::Demise(old master, new master faction)`.
+    pub(crate) fn demise_union_by_master<Effects>(
+        &mut self,
+        game: &CGame,
+        old_master_player_id: i32,
+        new_master_faction_id: i32,
+        effects: &mut Effects,
+        get_tick: &mut dyn FnMut() -> u32,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<OrganizingUnionDemiseOutcome, OrganizingUnionDemiseBlock>
+    where
+        Effects: UnionFireOutEffects,
+    {
+        let Some(union_id) = self
+            .union_id_by_master_player(old_master_player_id)
+            .map_err(OrganizingUnionDemiseBlock::Lookup)?
+        else {
+            return Ok(OrganizingUnionDemiseOutcome::UnionNotFound);
+        };
+        let mut union = self
+            .confederations
+            .get_mut(&union_id)
+            .and_then(Option::take)
+            .expect("GetUnion вернул живой owner из того же controller map");
+        let result = union.demise(
+            game,
+            old_master_player_id,
+            new_master_faction_id,
+            self,
+            effects,
+            get_tick,
+            update_player,
+        );
+        *self
+            .confederations
+            .get_mut(&union_id)
+            .expect("detached union slot не удаляется") = Some(union);
+        result
+            .map(|outcome| OrganizingUnionDemiseOutcome::Applied { union_id, outcome })
+            .map_err(|source| OrganizingUnionDemiseBlock::Demise { union_id, source })
     }
 
     /// Выполняет exact `DisbandConferation`: war gates, concrete union

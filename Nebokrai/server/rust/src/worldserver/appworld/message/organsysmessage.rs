@@ -3,7 +3,7 @@
 //! заявки `0x60109`, решение по заявке `0x6010A`, исключение участника
 //! `0x6010B`, исключение фракции из союза `0x6010C`, выход из фракции
 //! `0x6010D`, выход фракции из союза `0x6010E`, передачу главы фракции
-//! `0x6010F`, заявку союза `0x60118`,
+//! `0x6010F`, передачу главы союза `0x60110`, заявку союза `0x60118`,
 //! общий session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
@@ -84,6 +84,16 @@
 //! slot `+0x44`. `char` второго аргумента в RAW — артефакт: ASM передаёт весь
 //! 32-битный ID. Между двумя lookup нет мутации, поэтому Rust удерживает один
 //! safe mutable owner. Route/online/tail gates и прямой wire-ответ отсутствуют.
+//! Exact `0x004A7283..0x004A72B3` для `0x60110` читает два полных `Long` как
+//! `(old master player ID, new master faction ID)`, вызывает готовый
+//! `COrganizingCtrl::GetUnion(old master)` и при non-null — virtual
+//! `CUnion::Demise(old, new faction)` в том же slot `+0x44`. Результат
+//! игнорируется; route/online/tail gates и прямой wire-ответ отсутствуют.
+//! Concrete owner `0x004C5060..0x004C5762` сохраняет wrapping cooldown,
+//! city/standard-war порядок, online operator gate, две `OP_Update`
+//! публикации, `WS0281/WS0282`, общий player refresh и второй tick в момент
+//! успеха. Linux-донор ошибочно заменял первую публикацию на `(0, Delete)`;
+//! exact ASM передаёт old faction ID и literal `2`.
 //! Exact диапазоны
 //! `0x004A74C6..0x004A7509` и `0x004A7511..0x004A7543` исправляют повреждённый
 //! RAW. Общий branch читает
@@ -387,6 +397,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingNameCountryBlock, OrganizingNameKind, OrganizingNameLookupBlock,
     OrganizingNameMatch, OrganizingNamedUnionApplicationBlock,
     OrganizingFactionDoJoinBlock, OrganizingFactionDoJoinOutcome, begin_city_transfer_session,
+    OrganizingUnionDemiseBlock, OrganizingUnionDemiseOutcome,
     OrganizingUnionExitBlock, OrganizingUnionExitOutcome,
     OrganizingUnionFireOutBlock, OrganizingUnionFireOutOutcome,
 };
@@ -409,7 +420,7 @@ use crate::worldserver::appworld::organizingsystem::villagewarsys::{
 };
 use crate::worldserver::appworld::player::{PlayerCodecError, PlayerPropertyCoefficients};
 use crate::worldserver::worldserver::game::{
-    CGame, WorldRegionNameLookup, WorldRegionParamUpdateOutcome,
+    CGame, WorldRegionNameLookup, WorldRegionParamUpdateOutcome, legacy_tick_ms,
 };
 
 const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
@@ -424,6 +435,7 @@ const UNION_FIRE_OUT_MESSAGE_TYPE: i32 = 0x6010C;
 const FACTION_EXIT_MESSAGE_TYPE: i32 = 0x6010D;
 const UNION_EXIT_MESSAGE_TYPE: i32 = 0x6010E;
 const FACTION_DEMISE_MESSAGE_TYPE: i32 = 0x6010F;
+const UNION_DEMISE_MESSAGE_TYPE: i32 = 0x60110;
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
@@ -2549,6 +2561,48 @@ pub(crate) fn dispatch_faction_demise(
     Some(Ok(OrganizingFactionDemiseDispatch {
         old_master_id,
         new_master_id,
+        outcome,
+    }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingUnionDemiseDispatch {
+    pub(crate) old_master_player_id: i32,
+    pub(crate) new_master_faction_id: i32,
+    pub(crate) outcome: OrganizingUnionDemiseOutcome,
+}
+
+/// Выполняет exact `0x60110`: два полных `Long`, nullable
+/// `GetUnion(old master)` и virtual `CUnion::Demise(old, new faction)`.
+pub(crate) fn dispatch_union_demise(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    update_player: &mut dyn FnMut(i32),
+) -> Option<Result<OrganizingUnionDemiseDispatch, OrganizingUnionDemiseBlock>> {
+    if message.message_type() != UNION_DEMISE_MESSAGE_TYPE {
+        return None;
+    }
+
+    let old_master_player_id = message.base_mut().get_long().unwrap_or(0);
+    let new_master_faction_id = message.base_mut().get_long().unwrap_or(0);
+    let mut effects = WorldUnionFireOutEffects { game, callbacks };
+    let mut get_tick = legacy_tick_ms;
+    let outcome = match organizing.demise_union_by_master(
+        game,
+        old_master_player_id,
+        new_master_faction_id,
+        &mut effects,
+        &mut get_tick,
+        update_player,
+    ) {
+        Ok(outcome) => outcome,
+        Err(source) => return Some(Err(source)),
+    };
+    Some(Ok(OrganizingUnionDemiseDispatch {
+        old_master_player_id,
+        new_master_faction_id,
         outcome,
     }))
 }

@@ -7,7 +7,8 @@
 //! `DubAndSetJobLvl/EditLeaveWord/OperatorTax/SetControbuter/Upgrade` RVA
 //! `0x000C18B0/0x000C1EC0/0x000C1ED0/0x000C1F20/0x000C1F30`,
 //! `GetEstablishedTime` RVA `0x000C1F00`, `Exit` RVA `0x000C3DD0`,
-//! `Disband` RVA `0x000C43F0`, `FireOut` RVA `0x000C49D0` и
+//! `Disband` RVA `0x000C43F0`, `FireOut` RVA `0x000C49D0`, `Demise` RVA
+//! `0x000C5060` и
 //! compiler-owned destructor RVA
 //! `0x000C1F40`, обе перегрузки `GetMemberList` RVA
 //! `0x000C1BB0/0x000C2710`, `IsUsingPV/SetMemPV/AbolishMemPV` RVA
@@ -49,8 +50,12 @@
 //! нулевой mask; иначе создаёт отдельного `CUnion`, копирует ровно эти поля и
 //! весь member-map в signed key-order. `m_ApplyPerson` clone не назначает:
 //! save-проекция хранит `None`, а live `Initial` — доказанный `Some(0)`.
-//! `m_dwLastDemiseTime` clone не назначает и DB-owner не читает, поэтому это
-//! поле пока не получает выдуманного Rust-состояния.
+//! `m_dwLastDemiseTime` clone не назначает и DB-owner не читает. При этом
+//! public-конструктор и `Initial` машинно тоже не инициализируют offset `+0x4C`,
+//! хотя `Demise` читает его до первой записи. Safe Rust устраняет этот
+//! внутренний uninitialized-read: live и DB-reached owner начинают с `0`, как
+//! явно делал поздний Linux-донор; поле остаётся transient и не считается
+//! частью save-контракта.
 //!
 //! `Vec<u8>`, `BTreeMap` и обычный `Clone/Drop` заменяют только MSVC string,
 //! tree и `new/delete`. Rust-layout не выдаётся за старый ABI. Узкий
@@ -83,6 +88,15 @@
 //! Destructor до следующего PDB-символа освобождает только member-map, string и
 //! base storage. Обычный `Drop` Rust-полей заменяет MSVC tree/string cleanup;
 //! ручного destructor callback-а нет.
+//! `Demise` сохраняет машинный порядок gates и mutations, включая странные
+//! `member count < 6` и сравнение old player ID с new faction ID. Exact ASM
+//! исправляет повреждённый RAW: после переноса обе faction публикуются как
+//! `OP_Update`, а `WS0282` получает old name/ID и new name/ID. Два вызова
+//! `timeGetTime`, wrapping cooldown `10_800_000`, notices, fan-out, dirty-mask
+//! `3` и общий player refresh сохранены. Неограниченные `strcpy/sprintf`
+//! заменены фиксированными typed-границами; повреждённый master-key, который
+//! старый `operator[]` превращал бы в неинициализированный member, также
+//! останавливается до UB.
 //! Обе `GetMemberList` сначала очищают caller-list, затем проходят member-map в
 //! signed key-order. ID-вариант возвращает ключи; organizing-вариант для
 //! каждого положительного ключа выполняет nullable faction lookup, пропускает
@@ -285,6 +299,10 @@ const DELETE_UNION_ORGANIZING_MESSAGE_TYPE: i32 = 0x7FE05;
 const UNION_MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0E;
 const UNION_APPLICATION_CONFIRMATION_MESSAGE_TYPE: i32 = 0x7FE17;
 const MAX_UNION_MEMBER_COUNT: i32 = 50;
+const UNION_DEMISE_MEMBER_LIMIT: usize = 6;
+const UNION_DEMISE_COOLDOWN_MS: u32 = 10_800_000;
+const UNION_DEMISE_INFORMATION_CAPACITY: usize = 256;
+const UNION_DEMISE_WAR_LOG_CAPACITY: usize = 232;
 
 /// Узкая read-only граница controller-wide `IsFactionMaster`.
 pub(crate) trait UnionOperatorValidationContext {
@@ -499,6 +517,25 @@ pub(crate) trait UnionFireOutContext:
         parameters: &COrganizingParam,
         faction_id: i32,
     ) -> Result<Self::DetachOutcome, Self::DetachBlock>;
+}
+
+/// Controller callbacks, которые `CUnion::Demise` вызывал через singleton.
+pub(crate) trait UnionDemiseContext:
+    UnionOperatorValidationContext
+    + UnionMasterFactionQueryContext
+    + UnionSendInfoContext
+    + UnionFactionMemberContext
+    + UnionPlayerRefreshContext
+{
+}
+
+impl<T> UnionDemiseContext for T where
+    T: UnionOperatorValidationContext
+        + UnionMasterFactionQueryContext
+        + UnionSendInfoContext
+        + UnionFactionMemberContext
+        + UnionPlayerRefreshContext
+{
 }
 
 /// Controller callbacks, которые `CUnion::Exit` вызывал через singleton.
@@ -986,6 +1023,97 @@ pub(crate) enum UnionFireOutBlock<OperatorBlock, DetachBlock> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UnionDemiseRejection {
+    MemberCountLimit {
+        member_count: usize,
+        limit: usize,
+    },
+    LegacyIdentifiersEqual,
+    OldMasterFactionNotFound,
+    ZeroNewMasterFaction,
+    Cooldown {
+        elapsed_ms: u32,
+        minimum_ms: u32,
+        notice_sent: bool,
+    },
+    CityWar {
+        notice_sent: bool,
+    },
+    StandardWar {
+        notice_sent: bool,
+    },
+    OldFactionIsNotCurrentMaster {
+        old_faction_id: i32,
+        current_master_faction_id: i32,
+    },
+    OldMemberNotFound {
+        old_faction_id: i32,
+    },
+    NewMemberNotFound {
+        new_faction_id: i32,
+    },
+    OldMasterOffline,
+    OldMasterOperatingFactionWar,
+    CurrentMasterFactionMissing {
+        faction_id: i32,
+    },
+    NewMasterFactionMissing {
+        faction_id: i32,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionDemiseReport {
+    pub(crate) old_faction_id: i32,
+    pub(crate) new_faction_id: i32,
+    pub(crate) old_member_update: UnionMemberUpdateReport,
+    pub(crate) new_member_update: UnionMemberUpdateReport,
+    pub(crate) member_information: UnionInfoFanoutReport,
+    pub(crate) player_refresh: UnionPlayerRefreshReport,
+    pub(crate) war_log: Option<Vec<u8>>,
+    pub(crate) completed_at_ms: u32,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionDemiseOutcome {
+    Rejected(UnionDemiseRejection),
+    Transferred(UnionDemiseReport),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionDemiseBlock<OperatorBlock> {
+    MasterLookup(OperatorBlock),
+    UnterminatedMemberField {
+        member_id: i32,
+        source: UnterminatedMemberField,
+    },
+    DemotedTitleWouldOverflow {
+        visible_length: usize,
+        capacity: usize,
+        master_changed: bool,
+    },
+    MemberUpdate {
+        target_faction_id: i32,
+        source: UnionMemberUpdateBlock,
+        old_member_update: Option<UnionMemberUpdateReport>,
+    },
+    InformationWouldOverflow {
+        visible_length: usize,
+        capacity: usize,
+        old_member_update: UnionMemberUpdateReport,
+        new_member_update: UnionMemberUpdateReport,
+    },
+    WarLogWouldOverflow {
+        visible_length: usize,
+        capacity: usize,
+        old_member_update: UnionMemberUpdateReport,
+        new_member_update: UnionMemberUpdateReport,
+        member_information: UnionInfoFanoutReport,
+        player_refresh: UnionPlayerRefreshReport,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum UnionExitRejection {
     StandardWar,
     CityWar,
@@ -1234,6 +1362,7 @@ pub(crate) struct CUnion {
     established_time: TagTimeValue,
     apply_person: Option<i32>,
     change_data_type: i32,
+    last_demise_time_ms: u32,
 }
 
 impl CUnion {
@@ -1263,6 +1392,7 @@ impl CUnion {
             established_time: current_local_member_time(),
             apply_person: None,
             change_data_type: 0,
+            last_demise_time_ms: 0,
         };
         match union.initial_live(master_title, context, parameters, game, update_player) {
             Ok(report) => Ok((union, report)),
@@ -1287,6 +1417,7 @@ impl CUnion {
             established_time,
             apply_person: None,
             change_data_type,
+            last_demise_time_ms: 0,
         }
     }
 
@@ -1395,6 +1526,7 @@ impl CUnion {
             established_time: self.established_time,
             apply_person: None,
             change_data_type: self.change_data_type,
+            last_demise_time_ms: 0,
         })
     }
 
@@ -1865,6 +1997,311 @@ impl CUnion {
             initial_snapshot_legacy_result,
             member_update,
             dirty_set: true,
+        }))
+    }
+
+    /// Передаёт руководство союза в точном порядке `CUnion::Demise`.
+    pub(crate) fn demise<Context, Effects>(
+        &mut self,
+        game: &CGame,
+        old_master_player_id: i32,
+        new_master_faction_id: i32,
+        context: &mut Context,
+        effects: &mut Effects,
+        get_tick: &mut dyn FnMut() -> u32,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<UnionDemiseOutcome, UnionDemiseBlock<Context::Block>>
+    where
+        Context: UnionDemiseContext,
+        Effects: UnionFireOutEffects,
+    {
+        if self.members.len() >= UNION_DEMISE_MEMBER_LIMIT {
+            return Ok(UnionDemiseOutcome::Rejected(
+                UnionDemiseRejection::MemberCountLimit {
+                    member_count: self.members.len(),
+                    limit: UNION_DEMISE_MEMBER_LIMIT,
+                },
+            ));
+        }
+        // Exact EXE сравнивает player ID с faction ID. Разные домены здесь
+        // намеренно не "исправляются": результат наблюдаем клиентом.
+        if old_master_player_id == new_master_faction_id {
+            return Ok(UnionDemiseOutcome::Rejected(
+                UnionDemiseRejection::LegacyIdentifiersEqual,
+            ));
+        }
+
+        let old_faction_id = context
+            .faction_id_by_master_player(old_master_player_id)
+            .map_err(UnionDemiseBlock::MasterLookup)?;
+        if old_faction_id == 0 {
+            return Ok(UnionDemiseOutcome::Rejected(
+                UnionDemiseRejection::OldMasterFactionNotFound,
+            ));
+        }
+        if new_master_faction_id == 0 {
+            return Ok(UnionDemiseOutcome::Rejected(
+                UnionDemiseRejection::ZeroNewMasterFaction,
+            ));
+        }
+
+        let now_ms = get_tick();
+        let elapsed_ms = now_ms.wrapping_sub(self.last_demise_time_ms);
+        if elapsed_ms < UNION_DEMISE_COOLDOWN_MS {
+            send_union_demise_notice(effects, old_master_player_id, b"WS0353");
+            return Ok(UnionDemiseOutcome::Rejected(
+                UnionDemiseRejection::Cooldown {
+                    elapsed_ms,
+                    minimum_ms: UNION_DEMISE_COOLDOWN_MS,
+                    notice_sent: true,
+                },
+            ));
+        }
+        if self.has_city_war_enemy_faction(context) {
+            send_union_demise_notice(effects, old_master_player_id, b"WS0279");
+            return Ok(UnionDemiseOutcome::Rejected(
+                UnionDemiseRejection::CityWar { notice_sent: true },
+            ));
+        }
+        if self.has_enemy_faction(context) {
+            send_union_demise_notice(effects, old_master_player_id, b"WS0280");
+            return Ok(UnionDemiseOutcome::Rejected(
+                UnionDemiseRejection::StandardWar { notice_sent: true },
+            ));
+        }
+        if old_faction_id != self.master_id {
+            return Ok(UnionDemiseOutcome::Rejected(
+                UnionDemiseRejection::OldFactionIsNotCurrentMaster {
+                    old_faction_id,
+                    current_master_faction_id: self.master_id,
+                },
+            ));
+        }
+        if !self.members.contains_key(&new_master_faction_id) {
+            return Ok(UnionDemiseOutcome::Rejected(
+                UnionDemiseRejection::NewMemberNotFound {
+                    new_faction_id: new_master_faction_id,
+                },
+            ));
+        }
+
+        let Some(old_master_player) = game.online_player_by_id(old_master_player_id as u32) else {
+            return Ok(UnionDemiseOutcome::Rejected(
+                UnionDemiseRejection::OldMasterOffline,
+            ));
+        };
+        if old_master_player.faction_war_operator() {
+            return Ok(UnionDemiseOutcome::Rejected(
+                UnionDemiseRejection::OldMasterOperatingFactionWar,
+            ));
+        }
+        if context.faction_name(self.master_id).is_none() {
+            return Ok(UnionDemiseOutcome::Rejected(
+                UnionDemiseRejection::CurrentMasterFactionMissing {
+                    faction_id: self.master_id,
+                },
+            ));
+        }
+        if context.faction_name(new_master_faction_id).is_none() {
+            return Ok(UnionDemiseOutcome::Rejected(
+                UnionDemiseRejection::NewMasterFactionMissing {
+                    faction_id: new_master_faction_id,
+                },
+            ));
+        }
+
+        // `IsMaster(old)` не гарантирует наличие повреждённого master-key в
+        // map. Старый operator[] тогда создавал частично неинициализированный
+        // tagMemInfo; safe owner останавливает этот внутренний UB.
+        let Some(old_member) = self.members.get(&old_faction_id) else {
+            return Ok(UnionDemiseOutcome::Rejected(
+                UnionDemiseRejection::OldMemberNotFound { old_faction_id },
+            ));
+        };
+        let old_title = old_member
+            .title_wire_bytes()
+            .map_err(|source| UnionDemiseBlock::UnterminatedMemberField {
+                member_id: old_faction_id,
+                source,
+            })?
+            .to_vec();
+        let old_name = old_member
+            .name_wire_bytes()
+            .map_err(|source| UnionDemiseBlock::UnterminatedMemberField {
+                member_id: old_faction_id,
+                source,
+            })?;
+        let old_name = old_name[..old_name.len() - 1].to_vec();
+        let new_member = self
+            .members
+            .get(&new_master_faction_id)
+            .expect("IsMember(new faction) проверен выше");
+        let new_name = new_member
+            .name_wire_bytes()
+            .map_err(|source| UnionDemiseBlock::UnterminatedMemberField {
+                member_id: new_master_faction_id,
+                source,
+            })?;
+        let new_name = new_name[..new_name.len() - 1].to_vec();
+        let old_purview = old_member.purview;
+        let old_job_level = old_member.job_level;
+
+        self.master_id = new_master_faction_id;
+        {
+            let new_member = self
+                .members
+                .get_mut(&new_master_faction_id)
+                .expect("new member существует до мутации");
+            new_member.title[..old_title.len()].copy_from_slice(&old_title);
+            new_member.purview = old_purview;
+            new_member.job_level = old_job_level;
+        }
+        {
+            let old_member = self
+                .members
+                .get_mut(&old_faction_id)
+                .expect("old member проверен до мутации");
+            old_member.job_level = 99;
+            old_member.id = old_faction_id;
+        }
+
+        let demoted_title = effects.world_string(b"WS0268");
+        let demoted_title = legacy_c_string_visible_bytes(&demoted_title);
+        let title_capacity = self
+            .members
+            .get(&old_faction_id)
+            .expect("old member существует при title assignment")
+            .title
+            .len();
+        if demoted_title.len() >= title_capacity {
+            return Err(UnionDemiseBlock::DemotedTitleWouldOverflow {
+                visible_length: demoted_title.len(),
+                capacity: title_capacity,
+                master_changed: true,
+            });
+        }
+        {
+            let old_member = self
+                .members
+                .get_mut(&old_faction_id)
+                .expect("old member существует при demotion");
+            old_member.title[..demoted_title.len()].copy_from_slice(demoted_title);
+            old_member.title[demoted_title.len()] = 0;
+        }
+        self.name = new_name.clone();
+        {
+            let old_member = self
+                .members
+                .get_mut(&old_faction_id)
+                .expect("old member существует при purview demotion");
+            old_member.purview = [
+                EPurviewOwnState::No,
+                EPurviewOwnState::Permit,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+            ];
+        }
+
+        let old_member_update = self
+            .update_member_info_to_client(game, old_faction_id, EOperator::Update, context)
+            .map_err(|source| UnionDemiseBlock::MemberUpdate {
+                target_faction_id: old_faction_id,
+                source,
+                old_member_update: None,
+            })?;
+        let new_member_update = match self.update_member_info_to_client(
+            game,
+            new_master_faction_id,
+            EOperator::Update,
+            context,
+        ) {
+            Ok(report) => report,
+            Err(source) => {
+                return Err(UnionDemiseBlock::MemberUpdate {
+                    target_faction_id: new_master_faction_id,
+                    source,
+                    old_member_update: Some(old_member_update),
+                });
+            }
+        };
+        self.set_change_data(3);
+
+        let information = effects.format_world_string(
+            b"WS0281",
+            &[
+                UnionFormatArgument::Text(&old_name),
+                UnionFormatArgument::Text(&new_name),
+            ],
+        );
+        let information = legacy_c_string_visible_bytes(&information);
+        if information.len() >= UNION_DEMISE_INFORMATION_CAPACITY {
+            return Err(UnionDemiseBlock::InformationWouldOverflow {
+                visible_length: information.len(),
+                capacity: UNION_DEMISE_INFORMATION_CAPACITY,
+                old_member_update,
+                new_member_update,
+            });
+        }
+        let title = effects.world_string(b"WS0188");
+        let member_information = self.send_info_to_all_members(
+            information,
+            legacy_c_string_visible_bytes(&title),
+            -1,
+            0x0087_A238,
+            context,
+            &mut |request| effects.send_organizing_info(request),
+        );
+        let player_refresh = self.update_player_faction_info(0, context, game, update_player);
+
+        // EXE после player refresh дважды повторяет nullable faction lookup.
+        // После назначения master оба lookup относятся к одной new faction.
+        let war_log = if context.faction_name(new_master_faction_id).is_some()
+            && context.faction_name(self.master_id).is_some()
+        {
+            let war_log = effects.format_world_string(
+                b"WS0282",
+                &[
+                    UnionFormatArgument::Text(&old_name),
+                    UnionFormatArgument::Signed(old_faction_id),
+                    UnionFormatArgument::Text(&new_name),
+                    UnionFormatArgument::Signed(new_master_faction_id),
+                ],
+            );
+            let war_log = legacy_c_string_visible_bytes(&war_log).to_vec();
+            if war_log.len() >= UNION_DEMISE_WAR_LOG_CAPACITY {
+                return Err(UnionDemiseBlock::WarLogWouldOverflow {
+                    visible_length: war_log.len(),
+                    capacity: UNION_DEMISE_WAR_LOG_CAPACITY,
+                    old_member_update,
+                    new_member_update,
+                    member_information,
+                    player_refresh,
+                });
+            }
+            effects.put_war_log(&war_log);
+            Some(war_log)
+        } else {
+            None
+        };
+        let completed_at_ms = get_tick();
+        self.last_demise_time_ms = completed_at_ms;
+
+        Ok(UnionDemiseOutcome::Transferred(UnionDemiseReport {
+            old_faction_id,
+            new_faction_id: new_master_faction_id,
+            old_member_update,
+            new_member_update,
+            member_information,
+            player_refresh,
+            war_log,
+            completed_at_ms,
         }))
     }
 
@@ -3302,6 +3739,25 @@ fn send_union_application_notice<Effects>(
     });
 }
 
+fn send_union_demise_notice<Effects>(
+    effects: &mut Effects,
+    recipient_player_id: i32,
+    text_id: &'static [u8],
+) where
+    Effects: UnionFireOutEffects,
+{
+    let second_text = effects.world_string(b"WS0119");
+    let first_text = effects.world_string(text_id);
+    effects.send_organizing_info(FactionMemberInfoRequest {
+        recipient_player_id,
+        first_text: legacy_c_string_visible_bytes(&first_text),
+        second_text: legacy_c_string_visible_bytes(&second_text),
+        information_type: -1,
+        color: 0xFFDA_EDFE,
+        trailing_value: 0,
+    });
+}
+
 fn append_i32(output: &mut Vec<u8>, value: i32) {
     output.extend_from_slice(&value.to_le_bytes());
 }
@@ -4075,7 +4531,8 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CUnion::Demise
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// IMPLEMENTED_OWNER: `CUnion::demise` выше.
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1061

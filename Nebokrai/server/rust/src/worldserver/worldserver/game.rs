@@ -1092,6 +1092,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingFactionDemiseBlock, OrganizingFactionDemiseDispatch,
     OrganizingFactionFireOutBlock, OrganizingFactionFireOutDispatch,
     OrganizingFactionExitBlock, OrganizingFactionExitDispatch,
+    OrganizingUnionDemiseDispatch,
     OrganizingUnionExitDispatch,
     OrganizingUnionFireOutDispatch,
     OrganizingFactionTaxBlock, OrganizingFactionTaxDispatch, OrganizingFactionUpgradeBlock,
@@ -1121,6 +1122,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     dispatch_faction_demise,
     dispatch_faction_fire_out,
     dispatch_faction_exit,
+    dispatch_union_demise,
     dispatch_union_exit,
     dispatch_union_fire_out,
     dispatch_faction_billboard, dispatch_faction_list,
@@ -1159,7 +1161,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingDisbandPlayer, OrganizingRunBlock, OrganizingRunReport, OrganizingSaveDataBlock,
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock, OrganizingLeaveWordEnableBlock,
     OrganizingFactionDoJoinBlock,
-    OrganizingUnionExitBlock, OrganizingUnionFireOutBlock,
+    OrganizingUnionDemiseBlock, OrganizingUnionExitBlock, OrganizingUnionFireOutBlock,
     OrganizingPronounceBlock, OrganizingSaveDataReport, OrganizingUnionApplicationCallbackBlock,
     OrganizingUnionApplicationCallbackReport, OrganizingUnionApplyForJoinDispatchBlock,
     FreeFactionLookup, FreePlayerLookup, PlayerEnterGameOutcome, PlayerExitGameOutcome,
@@ -2204,6 +2206,12 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: Result<OrganizingFactionDemiseDispatch, OrganizingFactionDemiseBlock>,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingUnionDemise {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<OrganizingUnionDemiseDispatch, OrganizingUnionDemiseBlock>,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingUnionFireOut {
@@ -15425,6 +15433,47 @@ where
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingFactionDemise {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        if let Some(outcome) = dispatch_union_demise(
+            &mut message,
+            game,
+            organizing,
+            application_callbacks,
+            update_player,
+        ) {
+            let callbacks = WorldUnionApplicationEffectCallbacks {
+                random: &mut *application_callbacks.random,
+                world_string: &mut *application_callbacks.world_string,
+                format_world_string: &mut *application_callbacks.format_world_string,
+                put_war_log: &mut *application_callbacks.put_war_log,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
+            };
+            let mut effects = WorldUnionApplicationEffects::new(
+                game,
+                net_sessions,
+                application_runtime,
+                callbacks,
+            );
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingUnionDemise {
                 source,
                 legacy_run_result,
                 outcome,
