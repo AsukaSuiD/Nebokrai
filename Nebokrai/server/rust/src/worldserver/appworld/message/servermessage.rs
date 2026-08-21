@@ -130,7 +130,8 @@
 //! payload без дополнительного framing между ними. Следующая граница —
 //! `CTaoZhuangSetup` subtype `0x34`, который сохраняет различие declared и
 //! фактических nested count-ов. Следующая граница — `CAttackCitySys` subtype
-//! `0x1B`.
+//! `0x1B`; он использует уже восстановленный schedule owner и его downstream-
+//! compatible snapshot. Следующая граница — `CVillageWarSys` subtype `0x1C`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -238,6 +239,7 @@ use crate::worldserver::appworld::goods::cbattlefairyproperty::{
     BattleFairyComposeWireError, CBattleFairyProperty,
 };
 use crate::worldserver::appworld::organizingsystem::factionwarsys::CFactionWarSys;
+use crate::worldserver::appworld::organizingsystem::attackcitysys::CAttackCitySys;
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
     CFourNationWarSys, FourNationWarSerializationBlock,
 };
@@ -939,6 +941,17 @@ pub(crate) enum WorldTaoZhuangConfigurationCompletion {
 pub(crate) struct WorldTaoZhuangConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldTaoZhuangConfigurationCompletion,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldAttackCityConfigurationCompletion {
+    VillageWarConfigurationPending { socket_id: i32 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldAttackCityConfigurationReport {
+    pub(crate) delivery: WorldInitialConfigurationDelivery,
+    pub(crate) completion: WorldAttackCityConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -2647,6 +2660,28 @@ pub(crate) fn continue_game_server_tao_zhuang_configuration(
             &payload,
         )),
         completion: WorldTaoZhuangConfigurationCompletion::AttackCityConfigurationPending {
+            socket_id,
+        },
+    }
+}
+
+/// Отправляет уже восстановленный `CAttackCitySys` snapshot subtype `0x1B`.
+pub(crate) fn continue_game_server_attack_city_configuration(
+    game: &CGame,
+    socket_id: i32,
+    attack_city: &CAttackCitySys,
+) -> WorldAttackCityConfigurationReport {
+    let mut payload = Vec::new();
+    let _legacy_success = attack_city.add_to_byte_array(&mut payload);
+    let sender = game.current_game_server_sender();
+    WorldAttackCityConfigurationReport {
+        delivery: send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x1B,
+            &payload,
+        ),
+        completion: WorldAttackCityConfigurationCompletion::VillageWarConfigurationPending {
             socket_id,
         },
     }
