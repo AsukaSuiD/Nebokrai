@@ -986,6 +986,9 @@ use crate::worldserver::appworld::leiting::{
 use crate::worldserver::appworld::message::othermessage::{
     WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
 };
+use crate::worldserver::appworld::message::playermessage::{
+    WorldPlayerMessageDispatch, WorldPlayerMessageOutcome, on_player_message,
+};
 use crate::worldserver::appworld::message::organsysmessage::{
     CityTransferConfirmationDelivery, OrganizingAdmissionPermitBlock,
     OrganizingAdmissionPermitDispatch, OrganizingAttackCityEndDispatch,
@@ -1934,6 +1937,11 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: WorldOtherMessageOutcome,
+    },
+    PlayerMessage {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: WorldPlayerMessageOutcome,
     },
     OrganizingSessionResult {
         source: WorldMessageSource,
@@ -8357,7 +8365,8 @@ impl CGame {
     /// заново читается текущий Login client и фиксируется его число сообщений.
     /// Поэтому typed reconnect из первой очереди заменяет owner до второго
     /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
-    /// ветви server-owner-а, honor `0x5FD0C/0x5FD0D`, organizing session
+    /// ветви server-owner-а, player relay `0x5FC01..0x5FC04`, honor
+    /// `0x5FD0C/0x5FD0D`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
     /// войны `0x6011E`, само объявление `0x6011F`, общий leaf
@@ -11388,6 +11397,19 @@ fn process_world_message<TimerCallback: Copy>(
                 };
             }
             WorldServerMessageDispatch::Pending(pending) => message = pending,
+        }
+    }
+
+    if selector.owner == Some(WorldMessageOwner::Player) {
+        match on_player_message(game, message) {
+            WorldPlayerMessageDispatch::Handled(outcome) => {
+                return ProcessedWorldEvent::PlayerMessage {
+                    source,
+                    legacy_run_result,
+                    outcome,
+                };
+            }
+            WorldPlayerMessageDispatch::Pending(pending) => message = pending,
         }
     }
 

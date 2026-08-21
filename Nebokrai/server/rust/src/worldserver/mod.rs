@@ -132,6 +132,7 @@ pub(crate) mod appworld {
             reason = "подключён точный локальный honor-reset перед остальными other opcodes"
         )]
         pub(crate) mod othermessage;
+        pub(crate) mod playermessage;
         pub(crate) mod servermessage;
     }
     pub(crate) mod monster;
