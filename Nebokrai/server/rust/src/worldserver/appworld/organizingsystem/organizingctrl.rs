@@ -20,6 +20,7 @@
 //! `AddOwnedCityToFaction` RVA `0x00037C20`,
 //! country-specific `GetFactionNumber` RVA `0x00033D10` и
 //! `AddFactionListToByteArray` RVA `0x00033D90`,
+//! `FindOrgaByName` RVA `0x000345A0`,
 //! `IsFactionMaster` RVA `0x000344A0`, `ReInitialFacFactionByLvl` RVA
 //! `0x00034C80` и `AddUnionToClientByFactionID` RVA `0x00038010` —
 //! `IMPLEMENTED`; `PushToEstaList` RVA `0x000367C0` и оба overload-а
@@ -80,6 +81,14 @@
 //! выбранной страны. Небезопасный `strcpy` в `char[256]` заменён локальной
 //! typed safe-границей только для имени, которое вместе с NUL не помещается;
 //! уже записанные count/ID/предыдущие записи сохраняются в progress.
+//! `FindOrgaByName` копирует visible C-string в две 260-байтовые границы,
+//! применяет linked CRT `_strlwr` и сначала проходит faction-map, затем
+//! union-map в signed order. Exact ASM `0x004345A0..0x00434801`, связанный
+//! `_strlwr` `0x0051F25E..0x0051F371` и отсутствие project-call к `_setlocale`
+//! подтверждают ASCII-only folding: high bytes сравниваются byte-exact. Rust
+//! не хранит внутренний `szfacNewName`, который читался только этим owner-ом;
+//! `BTreeMap` и `eq_ignore_ascii_case` заменяют tree/CRT storage. Переполнение
+//! исходного `strcpy/_snprintf` и null map-value остаются typed safe-границей.
 //! Через read-only `FactionOperationAuthorityContext` этот lookup и уже
 //! материализованный `IsFreeFaction` обслуживают faction tax/city-gate owner-ы;
 //! null во время membership scan остаётся typed-границей старого UB.
@@ -995,6 +1004,35 @@ pub(crate) enum FactionListPageBlock {
         page: FactionListPage,
         map_key: i32,
         required_bytes_with_nul: usize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingNameKind {
+    Faction,
+    Union,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingNameMatch {
+    pub(crate) kind: OrganizingNameKind,
+    pub(crate) map_key: i32,
+    pub(crate) organizing_id: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingNameLookupBlock {
+    RequestedNameWouldOverflow {
+        visible_len: usize,
+    },
+    NullOwner {
+        kind: OrganizingNameKind,
+        map_key: i32,
+    },
+    OwnerNameWouldOverflow {
+        kind: OrganizingNameKind,
+        map_key: i32,
+        visible_len: usize,
     },
 }
 
@@ -2536,6 +2574,71 @@ impl COrganizingCtrl {
             }
         }
         Ok(page)
+    }
+
+    /// Ищет organizing по имени в exact порядке faction-map, затем union-map.
+    pub(crate) fn organizing_by_name(
+        &self,
+        requested_name: &[u8],
+    ) -> Result<Option<OrganizingNameMatch>, OrganizingNameLookupBlock> {
+        const LEGACY_NAME_CAPACITY: usize = 260;
+
+        let requested_name = legacy_c_string_prefix(requested_name);
+        if requested_name.len() >= LEGACY_NAME_CAPACITY {
+            return Err(OrganizingNameLookupBlock::RequestedNameWouldOverflow {
+                visible_len: requested_name.len(),
+            });
+        }
+
+        for (&map_key, faction) in &self.factions {
+            let Some(faction) = faction.as_deref() else {
+                return Err(OrganizingNameLookupBlock::NullOwner {
+                    kind: OrganizingNameKind::Faction,
+                    map_key,
+                });
+            };
+            let owner_name = legacy_c_string_prefix(faction.name());
+            if owner_name.len() >= LEGACY_NAME_CAPACITY {
+                return Err(OrganizingNameLookupBlock::OwnerNameWouldOverflow {
+                    kind: OrganizingNameKind::Faction,
+                    map_key,
+                    visible_len: owner_name.len(),
+                });
+            }
+            if owner_name.eq_ignore_ascii_case(requested_name) {
+                return Ok(Some(OrganizingNameMatch {
+                    kind: OrganizingNameKind::Faction,
+                    map_key,
+                    organizing_id: faction.faction_id(),
+                }));
+            }
+        }
+
+        for (&map_key, union) in &self.confederations {
+            let Some(union) = union.as_deref() else {
+                return Err(OrganizingNameLookupBlock::NullOwner {
+                    kind: OrganizingNameKind::Union,
+                    map_key,
+                });
+            };
+            let owner_name = legacy_c_string_prefix(union.name());
+            if owner_name.len() >= LEGACY_NAME_CAPACITY {
+                return Err(OrganizingNameLookupBlock::OwnerNameWouldOverflow {
+                    kind: OrganizingNameKind::Union,
+                    map_key,
+                    visible_len: owner_name.len(),
+                });
+            }
+            if owner_name.eq_ignore_ascii_case(requested_name) {
+                return Ok(Some(OrganizingNameMatch {
+                    kind: OrganizingNameKind::Union,
+                    map_key,
+                    organizing_id: union.union_id(),
+                }));
+            }
+        }
+
+        Ok(None)
     }
 
     /// Строит payload одной 11-элементной страницы целей объявления войны.
@@ -5145,7 +5248,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::FindOrgaByName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1436
@@ -5153,6 +5256,8 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 004345a0
 // PROTOTYPE: COrganizing * __thiscall FindOrgaByName(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1)
 //
+// Реализовано выше как `organizing_by_name`; exact map-order, faction/union
+// приоритет, ASCII CRT-folding и локальные 260-byte safe-границы сохранены.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
