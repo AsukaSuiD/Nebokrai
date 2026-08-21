@@ -112,8 +112,9 @@
 //! `CHonorRanks` идут subtype `0x27..0x2A`; total-пакет сохраняет отдельный
 //! positional ноль перед тем же rank payload. Nullable function/variable
 //! file-data следуют subtype `10/11` как `signed size + exact raw bytes`, без
-//! C-string преобразования. Следующая граница — nullable general variable-list
-//! subtype `12`.
+//! C-string преобразования. Nullable general `CVariableList` затем передаёт
+//! `count + payload length + tagged values` subtype `12`. Следующая граница —
+//! ordered script-file map subtype `13`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -215,6 +216,9 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
 use crate::worldserver::appworld::organizingsystem::factionwarsys::CFactionWarSys;
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
 use crate::worldserver::appworld::player::{PlayerCodecError, PlayerPropertyCoefficients};
+use crate::worldserver::appworld::script::variablelist::{
+    CVariableList, VariableListSerializationBlock,
+};
 use crate::worldserver::appworld::skills::skillfactory::{
     CSkillFactory, SkillFactorySerializeError,
 };
@@ -755,6 +759,19 @@ pub(crate) enum WorldRawScriptListsConfigurationCompletion {
 pub(crate) struct WorldRawScriptListsConfigurationReport {
     pub(crate) deliveries: Vec<WorldRawScriptListConfigurationDelivery>,
     pub(crate) completion: WorldRawScriptListsConfigurationCompletion,
+}
+
+/// Следующая позиция после nullable general variable-list.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldGeneralVariableConfigurationCompletion {
+    VariableList(VariableListSerializationBlock),
+    ScriptFilesPending { socket_id: i32 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldGeneralVariableConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldGeneralVariableConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -2140,6 +2157,40 @@ pub(crate) fn continue_game_server_raw_script_lists_configuration(
         completion: WorldRawScriptListsConfigurationCompletion::GeneralVariableListPending {
             socket_id,
         },
+    }
+}
+
+/// Отправляет nullable общий `CVariableList` subtype `0x0C`.
+pub(crate) fn continue_game_server_general_variable_configuration(
+    game: &CGame,
+    socket_id: i32,
+    variables: Option<&CVariableList>,
+) -> WorldGeneralVariableConfigurationReport {
+    let Some(variables) = variables else {
+        return WorldGeneralVariableConfigurationReport {
+            delivery: None,
+            completion: WorldGeneralVariableConfigurationCompletion::ScriptFilesPending {
+                socket_id,
+            },
+        };
+    };
+    let mut payload = Vec::new();
+    if let Err(error) = variables.add_to_byte_array(&mut payload) {
+        return WorldGeneralVariableConfigurationReport {
+            delivery: None,
+            completion: WorldGeneralVariableConfigurationCompletion::VariableList(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldGeneralVariableConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x0C,
+            &payload,
+        )),
+        completion: WorldGeneralVariableConfigurationCompletion::ScriptFilesPending { socket_id },
     }
 }
 
