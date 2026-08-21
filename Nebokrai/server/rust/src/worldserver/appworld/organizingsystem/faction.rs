@@ -10,8 +10,10 @@
 //! `LeaveWord/LoadLeavewords` RVA `0x000BCA40/0x000BD3F0`,
 //! `UpdateAllApplyMemberToClient/UpdateApplyMemberToClient/RemoveApplyMember`
 //! RVA `0x000B60D0/0x000BEC80/0x000B9F50`,
-//! `ApplyForJoin/DoJoin/Exit/FireOut/DubAndSetJobLvl` RVA
-//! `0x000BE520/0x000BEE40/0x000BAAB0/0x000BB140/0x000BB8A0`,
+//! `ApplyForJoin/DoJoin/Exit/FireOut/DubAndSetJobLvl/EndueRightToMember/
+//! AbolishRightToMember` RVA
+//! `0x000BE520/0x000BEE40/0x000BAAB0/0x000BB140/0x000BB8A0/
+//! 0x000BBFB0/0x000BC500`,
 //! `SendInfoToAllMember/UpdateOtherFacInfoToClient` RVA
 //! `0x000B5890/0x000B58F0`,
 //! `Talk` RVA `0x000B5A50`,
@@ -464,6 +466,15 @@
 //! буферы и старый 32-байтовый old-title scratch. Rust сохраняет C-string
 //! prefix/tail семантику fixed title, но UB обеих `_sprintf/strcpy` границ
 //! заменяет typed progress-блокировкой; фильтр и лог остаются контекстом.
+//! Выдача и отзыв прав имеют общий gate: feature `EndueRight`, управляющее
+//! право `PV_EndueRor` и целевой диапазон `2..=9`. Оба owner-а вызывают
+//! permission-mutator, затем безусловно member `OP_Update` и dirty `2`, после
+//! чего выбирают точный notice ID (`WS0197..WS0204` либо `WS0205..WS0212`) и
+//! пишут purview-log type `0/1`. Только grant `PV_ConMem=3` дополнительно
+//! отправляет полный apply snapshot, причём exact ASM ставит его после member-
+//! update и dirty, а не до них, как Linux-донор. Диапазоны
+//! `0x004BBFB0..0x004BC4CF` и `0x004BC500..0x004BCA13` подтверждают эту
+//! асимметрию, 100-байтовые notice-буферы и string-ID mapping.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -506,6 +517,7 @@ const FACTION_MEMBER_TEXT_CAPACITY: usize = 64;
 const FACTION_MEMBER_NOTICE_CAPACITY: usize = 260;
 const FACTION_DUB_NOTICE_CAPACITY: usize = 100;
 const FACTION_DUB_OLD_TITLE_CAPACITY: usize = 32;
+const FACTION_PURVIEW_NOTICE_CAPACITY: usize = 100;
 const PRONOUNCE_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_CONTENT_CAPACITY: usize = 2048;
 const OTHER_FACTION_NAME_CAPACITY: usize = 20;
@@ -1041,6 +1053,53 @@ pub(crate) enum FactionDubBlock {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionPurviewChange {
+    Grant,
+    Revoke,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionPurviewChangeRejection {
+    FunctionDisabled,
+    OperatorValidationFailed,
+    InvalidPurview,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionPurviewChangeProgress {
+    pub(crate) mutation: MemberPurviewMutation,
+    pub(crate) member_update: Result<MemberUpdateReport, MemberUpdateBuildError>,
+    pub(crate) dirty_set: bool,
+    pub(crate) apply_snapshot:
+        Option<Result<Vec<FactionApplyMemberDelivery>, FactionApplyMemberUpdateBuildError>>,
+    pub(crate) member_information: Option<FactionMemberInfoReport>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionPurviewChangeOutcome {
+    Rejected(FactionPurviewChangeRejection),
+    Changed {
+        progress: FactionPurviewChangeProgress,
+        log_written: bool,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionPurviewChangeBlock {
+    MissingBaseProperty,
+    OperatorValidation(FactionOperatorValidationBlock),
+    UnterminatedMemberName {
+        player_id: i32,
+        source: UnterminatedMemberField,
+        progress: FactionPurviewChangeProgress,
+    },
+    NoticeWouldOverflow {
+        formatted_len: usize,
+        progress: FactionPurviewChangeProgress,
+    },
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FactionLeaveWordUpdateBuildError {
     MissingLastLeaveWord,
@@ -1368,6 +1427,26 @@ pub(crate) trait FactionDubContext: FactionOrganizingInfoContext {
         manager_name: &[u8],
         faction_id: i32,
         faction_name: &[u8],
+    );
+}
+
+/// Узкая граница локализации и faction-purview log-а.
+pub(crate) trait FactionPurviewChangeContext: FactionOrganizingInfoContext {
+    fn format_world_string(&mut self, string_id: &'static [u8], member_name: &[u8]) -> Vec<u8>;
+
+    fn faction_purview_log_enabled(&self, change: FactionPurviewChange) -> bool;
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_faction_purview_log(
+        &mut self,
+        member_id: i32,
+        member_name: &[u8],
+        purview: i32,
+        manager_id: i32,
+        manager_name: &[u8],
+        faction_id: i32,
+        faction_name: &[u8],
+        log_type: i32,
     );
 }
 
@@ -3630,6 +3709,178 @@ impl CFaction {
         })
     }
 
+    pub(crate) fn endue_right_to_member<Context>(
+        &mut self,
+        game: &CGame,
+        manager_id: i32,
+        target_id: i32,
+        purview: i32,
+        context: &mut Context,
+    ) -> Result<FactionPurviewChangeOutcome, FactionPurviewChangeBlock>
+    where
+        Context: FactionPurviewChangeContext,
+    {
+        self.change_member_purview(
+            game,
+            manager_id,
+            target_id,
+            purview,
+            FactionPurviewChange::Grant,
+            context,
+        )
+    }
+
+    pub(crate) fn abolish_right_to_member<Context>(
+        &mut self,
+        game: &CGame,
+        manager_id: i32,
+        target_id: i32,
+        purview: i32,
+        context: &mut Context,
+    ) -> Result<FactionPurviewChangeOutcome, FactionPurviewChangeBlock>
+    where
+        Context: FactionPurviewChangeContext,
+    {
+        self.change_member_purview(
+            game,
+            manager_id,
+            target_id,
+            purview,
+            FactionPurviewChange::Revoke,
+            context,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn change_member_purview<Context>(
+        &mut self,
+        game: &CGame,
+        manager_id: i32,
+        target_id: i32,
+        purview: i32,
+        change: FactionPurviewChange,
+        context: &mut Context,
+    ) -> Result<FactionPurviewChangeOutcome, FactionPurviewChangeBlock>
+    where
+        Context: FactionPurviewChangeContext,
+    {
+        let property = self
+            .base_property
+            .ok_or(FactionPurviewChangeBlock::MissingBaseProperty)?;
+        if !property.feature_function(FactionFeatureFunction::EndueRight) {
+            return Ok(FactionPurviewChangeOutcome::Rejected(
+                FactionPurviewChangeRejection::FunctionDisabled,
+            ));
+        }
+        let operation_valid = self
+            .check_operator_validate_target(manager_id, target_id, EPurview::EndueRor as i32)
+            .map_err(FactionPurviewChangeBlock::OperatorValidation)?;
+        if !operation_valid {
+            return Ok(FactionPurviewChangeOutcome::Rejected(
+                FactionPurviewChangeRejection::OperatorValidationFailed,
+            ));
+        }
+        if !(EPurview::DubJobLevel as i32..=EPurview::OperCityGate as i32).contains(&purview) {
+            return Ok(FactionPurviewChangeOutcome::Rejected(
+                FactionPurviewChangeRejection::InvalidPurview,
+            ));
+        }
+
+        let mutation = match change {
+            FactionPurviewChange::Grant => self.set_member_purview(target_id, purview),
+            FactionPurviewChange::Revoke => self.abolish_member_purview(target_id, purview),
+        };
+        let member_update =
+            self.update_member_info_to_client(game, target_id, EOperator::Update);
+        self.set_change_data(2);
+        let apply_snapshot = if change == FactionPurviewChange::Grant
+            && purview == EPurview::ConMem as i32
+        {
+            Some(self.update_all_apply_members_to_client(game, target_id))
+        } else {
+            None
+        };
+        let mut progress = FactionPurviewChangeProgress {
+            mutation,
+            member_update,
+            dirty_set: true,
+            apply_snapshot,
+            member_information: None,
+        };
+
+        let target = self
+            .members
+            .get(&target_id)
+            .expect("успешный CheckOperValidate гарантирует target member");
+        let target_name_wire = match target.name_wire_bytes() {
+            Ok(value) => value,
+            Err(source) => {
+                return Err(FactionPurviewChangeBlock::UnterminatedMemberName {
+                    player_id: target_id,
+                    source,
+                    progress,
+                });
+            }
+        };
+        let target_name = target_name_wire[..target_name_wire.len() - 1].to_vec();
+        let string_id = faction_purview_notice_string_id(change, purview);
+        let notice = context.format_world_string(string_id, &target_name);
+        let notice = legacy_c_string_visible_bytes(&notice);
+        if notice.len() >= FACTION_PURVIEW_NOTICE_CAPACITY {
+            return Err(FactionPurviewChangeBlock::NoticeWouldOverflow {
+                formatted_len: notice.len(),
+                progress,
+            });
+        }
+        let second_text = context.world_string(b"WS0119").unwrap_or_default();
+        progress.member_information = Some(self.send_info_to_all_members(
+            notice,
+            legacy_c_string_visible_bytes(&second_text),
+            -1,
+            |request| context.send_organizing_info(request),
+        ));
+
+        let log_written = context.faction_purview_log_enabled(change);
+        if log_written {
+            let target = self
+                .members
+                .get(&target_id)
+                .expect("permission owner не удаляет target");
+            let manager = self
+                .members
+                .get(&manager_id)
+                .expect("успешный CheckOperValidate гарантирует manager member");
+            let manager_name_wire = match manager.name_wire_bytes() {
+                Ok(value) => value,
+                Err(source) => {
+                    return Err(FactionPurviewChangeBlock::UnterminatedMemberName {
+                        player_id: manager_id,
+                        source,
+                        progress,
+                    });
+                }
+            };
+            context.write_faction_purview_log(
+                target.id,
+                &target_name,
+                purview,
+                manager.id,
+                &manager_name_wire[..manager_name_wire.len() - 1],
+                self.faction_id,
+                legacy_c_string_visible_bytes(&self.name),
+                match change {
+                    FactionPurviewChange::Grant => 0,
+                    FactionPurviewChange::Revoke => 1,
+                },
+            );
+        }
+
+        Ok(FactionPurviewChangeOutcome::Changed {
+            progress,
+            log_written,
+        })
+    }
+
     /// Отклоняет либо принимает уже существующую faction-заявку.
     pub(crate) fn do_join<Context>(
         &mut self,
@@ -5294,6 +5545,31 @@ fn ensure_do_join_string_fits<ContextBlock>(
     Ok(())
 }
 
+fn faction_purview_notice_string_id(
+    change: FactionPurviewChange,
+    purview: i32,
+) -> &'static [u8] {
+    match (change, purview) {
+        (FactionPurviewChange::Grant, 2) => b"WS0197",
+        (FactionPurviewChange::Grant, 3) => b"WS0198",
+        (FactionPurviewChange::Grant, 4) => b"WS0199",
+        (FactionPurviewChange::Grant, 5) => b"WS0200",
+        (FactionPurviewChange::Grant, 6) => b"WS0201",
+        (FactionPurviewChange::Grant, 7) => b"WS0204",
+        (FactionPurviewChange::Grant, 8) => b"WS0203",
+        (FactionPurviewChange::Grant, 9) => b"WS0202",
+        (FactionPurviewChange::Revoke, 2) => b"WS0205",
+        (FactionPurviewChange::Revoke, 3) => b"WS0206",
+        (FactionPurviewChange::Revoke, 4) => b"WS0207",
+        (FactionPurviewChange::Revoke, 5) => b"WS0208",
+        (FactionPurviewChange::Revoke, 6) => b"WS0209",
+        (FactionPurviewChange::Revoke, 7) => b"WS0212",
+        (FactionPurviewChange::Revoke, 8) => b"WS0211",
+        (FactionPurviewChange::Revoke, 9) => b"WS0210",
+        _ => unreachable!("purview диапазон проверен до выбора notice ID"),
+    }
+}
+
 fn fixed_do_join_string<const CAPACITY: usize, ContextBlock>(
     field: FactionDoJoinStringField,
     value: &[u8],
@@ -6297,7 +6573,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::EndueRightToMember
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1835
@@ -6311,7 +6587,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::AbolishRightToMember
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1923
