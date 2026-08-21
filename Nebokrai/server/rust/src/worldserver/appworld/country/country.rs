@@ -187,7 +187,9 @@ use crate::nets::networld::message::{CMessage, SendMessageError};
 use super::countryparam::{
     CCountryParam, CountryParameterUnavailable, CountryTechLevelLookup,
 };
-use super::king::{KingPointUpdate, set_control_point, set_material_point, set_war_point};
+use super::king::{
+    KingPointUpdate, change_control_point, set_control_point, set_material_point, set_war_point,
+};
 
 /// Три текущих максимума `CCountryParam`, читаемые во время clone.
 #[derive(Clone, Copy, Debug)]
@@ -2084,8 +2086,11 @@ impl CCountry {
                 ),
             };
         };
-        let requested = self.king.control_point.wrapping_sub(cost);
-        let control_point_update = match set_control_point(&mut self.king, requested, parameters) {
+        let control_point_update = match change_control_point(
+            &mut self.king,
+            cost.wrapping_neg(),
+            parameters,
+        ) {
             Ok(update) => update,
             Err(block) => {
                 return CountryRegisterKingReport {
@@ -2445,8 +2450,11 @@ impl CCountry {
                 None,
             );
         };
-        let requested = self.king.control_point.wrapping_sub(cost);
-        let control_point_update = match set_control_point(&mut self.king, requested, parameters) {
+        let control_point_update = match change_control_point(
+            &mut self.king,
+            cost.wrapping_neg(),
+            parameters,
+        ) {
             Ok(update) => update,
             Err(block) => {
                 return self.appoint_parameter_unavailable(player_id, job, mode, block, None);
@@ -2739,10 +2747,9 @@ impl CCountry {
                 None,
             );
         };
-        let requested_control_point = self.king.control_point.wrapping_sub(control_point_cost);
-        let control_point_update = match set_control_point(
+        let control_point_update = match change_control_point(
             &mut self.king,
-            requested_control_point,
+            control_point_cost.wrapping_neg(),
             parameters,
         ) {
             Ok(update) => update,
@@ -2956,10 +2963,9 @@ impl CCountry {
                 None,
             );
         };
-        let requested_control_point = self.king.control_point.wrapping_sub(control_point_cost);
-        let control_point_update = match set_control_point(
+        let control_point_update = match change_control_point(
             &mut self.king,
-            requested_control_point,
+            control_point_cost.wrapping_neg(),
             parameters,
         ) {
             Ok(update) => update,
@@ -3304,10 +3310,9 @@ impl CCountry {
                 },
             };
         };
-        let requested_control_point = self.king.control_point.wrapping_sub(control_point_cost);
-        let control_point_update = match set_control_point(
+        let control_point_update = match change_control_point(
             &mut self.king,
-            requested_control_point,
+            control_point_cost.wrapping_neg(),
             parameters,
         ) {
             Ok(update) => update,

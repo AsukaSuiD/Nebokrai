@@ -1,8 +1,14 @@
-//! Три setter-а king points RVA `0x000A46C0/0x000A46F0/0x000A4720` —
-//! `IMPLEMENTED`; constructor/destructor и change-owner ниже пока остаются RAW.
+//! Три setter-а king points RVA `0x000A46C0/0x000A46F0/0x000A4720` и
+//! `ChangeControlPoint` RVA `0x000DFD30` — `IMPLEMENTED`;
+//! constructor/destructor ниже остаются техническими RAW-фрагментами.
 //! Exact EXE подтверждает только upper clamp: отрицательные значения не
 //! исправляются. Rust применяет тот же контракт к достигнутому king-state без
 //! воспроизведения C++ inheritance/layout.
+//! `ChangeControlPoint` exact `0x004DFD30..0x004DFD5A` сначала делает wrapping
+//! signed add, затем сравнивает результат с `_max_king_control_point` и только
+//! превышение заменяет максимумом. Достигнутые country call-sites передают
+//! отрицание стоимости через `wrapping_neg`, сохраняя x86 `neg/add` даже для
+//! `INT_MIN`; parameter singleton заменён явной ссылкой на `CCountryParam`.
 
 use crate::dbaccess::worlddb::dbcountry::CountryKingSaveSnapshot;
 use crate::worldserver::appworld::country::countryparam::{
@@ -58,6 +64,15 @@ pub(crate) fn set_material_point(
         maximum,
         KingPointKind::Material,
     ))
+}
+
+pub(crate) fn change_control_point(
+    king: &mut CountryKingSaveSnapshot,
+    delta: i32,
+    parameters: &CCountryParam,
+) -> Result<KingPointUpdate, CountryParameterUnavailable> {
+    let requested = king.control_point.wrapping_add(delta);
+    set_control_point(king, requested, parameters)
 }
 
 pub(crate) fn set_war_point(
@@ -174,7 +189,7 @@ fn apply_point(
 
 // ============================================================================
 // FUNCTION: CKing::ChangeControlPoint
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\king.cpp:84
@@ -182,6 +197,8 @@ fn apply_point(
 // ADDRESS: 004dfd30
 // PROTOTYPE: void __thiscall ChangeControlPoint(long param_1)
 //
+// Реализовано выше через `change_control_point`; exact disassembly
+// `0x004DFD30..0x004DFD5A` подтверждает wrapping add и только upper clamp.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
