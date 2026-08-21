@@ -1,5 +1,6 @@
-//! Статус корпуса: `IMPLEMENTED_PARTIAL` для заявки союза `0x60118` и общего
-//! session-result dispatch; остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Статус корпуса: `IMPLEMENTED_PARTIAL` для достигнутых organizing opcode,
+//! включая заявку союза `0x60118`, общий session-result dispatch и billboard
+//! `0x60125`; остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
@@ -43,6 +44,16 @@
 //! `CFactionWarSys::DigUpTheHatchet` и отправляет `0x7FE19`. Стоимость войны
 //! попадает в ответ только при истинном результате; сам WorldServer её здесь
 //! не списывает.
+//! Exact `0x004A7976..0x004A7B19` для `0x60125` при первом входе лениво и
+//! навсегда локализует `WS0134/WS0133/WS0132`, затем читает `(request ID,
+//! billboard type)`. Значение выше `2` не получает ответа. Для `0/1/2`
+//! строится socket-response `0x7FE1D`: request ID, соответствующий C-string
+//! title и payload готового `AddFactionBillboardToByteArray`, после чего
+//! выполняется явный `Update`. Несовпадение нумерации сохранено: serializer
+//! распознаёт `1/2/3`, поэтому type `0` пишет count `0`, `1` отдаёт members,
+//! `2` — offense; defense недостижим. Отрицательный type исходник не отсекал
+//! и индексировал память перед process-static массивом; Rust останавливает
+//! этот внутренний out-of-bounds как локальный `BLOCKED_MISSING_FACT`.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -61,7 +72,7 @@
 //! материализованы; функция ниже добавляет только конкретный opcode dispatch.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
 
@@ -107,8 +118,12 @@ const DECLARE_WAR_FACTION_LIST_RESPONSE_TYPE: i32 = 0x7FE18;
 const DECLARE_FACTION_WAR_MESSAGE_TYPE: i32 = 0x6011F;
 const DECLARE_FACTION_WAR_RESPONSE_TYPE: i32 = 0x7FE19;
 const CONSUMED_LONG_MESSAGE_TYPES: [i32; 2] = [0x60121, 0x60123];
+const FACTION_BILLBOARD_MESSAGE_TYPE: i32 = 0x60125;
+const FACTION_BILLBOARD_RESPONSE_TYPE: i32 = 0x7FE1D;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
+
+static FACTION_BILLBOARD_TITLES: OnceLock<[Vec<u8>; 3]> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct QueuedUnionApplicationTerminal {
@@ -861,6 +876,100 @@ pub(crate) fn dispatch_declare_faction_war(
         response: OrganizingDeclareFactionWarResponse {
             socket_id,
             result_money,
+            wire,
+            delivery,
+        },
+    }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionBillboardResponse {
+    pub(crate) socket_id: i32,
+    pub(crate) title: Vec<u8>,
+    pub(crate) payload: Vec<u8>,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionBillboardOutcome {
+    TypeAboveRange {
+        request_id: i32,
+        billboard_type: i32,
+    },
+    Sent {
+        request_id: i32,
+        billboard_type: i32,
+        response: OrganizingFactionBillboardResponse,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionBillboardBlock {
+    pub(crate) request_id: i32,
+    pub(crate) billboard_type: i32,
+}
+
+/// Выполняет `0x60125` и сохраняет несовпадающую нумерацию request/serializer.
+pub(crate) fn dispatch_faction_billboard(
+    message: &mut CMessage,
+    organizing: &COrganizingCtrl,
+    world_string: &mut dyn FnMut(&[u8]) -> Vec<u8>,
+    sender: Option<&ServerCommandHandle>,
+) -> Option<Result<OrganizingFactionBillboardOutcome, OrganizingFactionBillboardBlock>> {
+    if message.message_type() != FACTION_BILLBOARD_MESSAGE_TYPE {
+        return None;
+    }
+
+    // Три `GetStringByID` исходник выполнял при первом входе в case, ещё до
+    // чтения request и проверки типа, после чего process-static строки уже не
+    // реагировали на reload string table.
+    let titles = FACTION_BILLBOARD_TITLES.get_or_init(|| {
+        [
+            legacy_c_string_prefix(&world_string(b"WS0134")).to_vec(),
+            legacy_c_string_prefix(&world_string(b"WS0133")).to_vec(),
+            legacy_c_string_prefix(&world_string(b"WS0132")).to_vec(),
+        ]
+    });
+    let socket_id = message.socket_id();
+    let request_id = message.base_mut().get_long().unwrap_or(0);
+    let billboard_type = message.base_mut().get_long().unwrap_or(0);
+    if billboard_type > 2 {
+        return Some(Ok(OrganizingFactionBillboardOutcome::TypeAboveRange {
+            request_id,
+            billboard_type,
+        }));
+    }
+    let Ok(title_index) = usize::try_from(billboard_type) else {
+        // BLOCKED_MISSING_FACT: EXE проверяет только `2 < type`, после чего
+        // отрицательный type индексирует process-static `std::string[3]` до
+        // массива. Результат такого out-of-bounds чтения не имитируется.
+        return Some(Err(OrganizingFactionBillboardBlock {
+            request_id,
+            billboard_type,
+        }));
+    };
+
+    let title = titles[title_index].clone();
+    let mut payload = Vec::new();
+    organizing.add_faction_billboard_to_byte_array(&mut payload, billboard_type);
+
+    let mut response = CMessage::new(FACTION_BILLBOARD_RESPONSE_TYPE);
+    response.base_mut().add_long(request_id);
+    response.base_mut().add(&title);
+    response.base_mut().add_byte(0);
+    response.base_mut().add(&payload);
+    response.base_mut().update();
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = response.send_to_socket(sender, socket_id);
+
+    Some(Ok(OrganizingFactionBillboardOutcome::Sent {
+        request_id,
+        billboard_type,
+        response: OrganizingFactionBillboardResponse {
+            socket_id,
+            title,
+            payload,
             wire,
             delivery,
         },

@@ -979,7 +979,8 @@ use crate::worldserver::appworld::message::othermessage::{
 use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingConsumedLongDispatch, OrganizingDeclareFactionWarBlock,
     OrganizingDeclareFactionWarDispatch, OrganizingDeclareWarFactionListBlock,
-    OrganizingDeclareWarFactionListDispatch, OrganizingLeaveWordDispatch,
+    OrganizingDeclareWarFactionListDispatch, OrganizingFactionBillboardBlock,
+    OrganizingFactionBillboardOutcome, OrganizingLeaveWordDispatch,
     OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEnableDispatch,
     OrganizingPronounceDispatch, OrganizingSessionResultDispatch,
     OrganizingUnionApplicationDispatch,
@@ -987,7 +988,8 @@ use crate::worldserver::appworld::message::organsysmessage::{
     UnionApplicationConfirmationDelivery,
     WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects,
     WorldUnionApplicationRuntimeOwner, dispatch_consumed_long, dispatch_declare_faction_war,
-    dispatch_declare_war_faction_list, dispatch_leave_word, dispatch_leave_word_edit,
+    dispatch_declare_war_faction_list, dispatch_faction_billboard, dispatch_leave_word,
+    dispatch_leave_word_edit,
     dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_pronounce,
     dispatch_union_application,
 };
@@ -1899,6 +1901,12 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: Result<OrganizingDeclareFactionWarDispatch, OrganizingDeclareFactionWarBlock>,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingFactionBillboard {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<OrganizingFactionBillboardOutcome, OrganizingFactionBillboardBlock>,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingUnionApplication {
@@ -11140,6 +11148,41 @@ fn process_world_message(
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingDeclareFactionWar {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        let game_server_sender = game.current_game_server_sender();
+        if let Some(outcome) = dispatch_faction_billboard(
+            &mut message,
+            organizing,
+            &mut *application_callbacks.world_string,
+            game_server_sender.as_ref(),
+        ) {
+            let callbacks = WorldUnionApplicationEffectCallbacks {
+                random: &mut *application_callbacks.random,
+                world_string: &mut *application_callbacks.world_string,
+                format_world_string: &mut *application_callbacks.format_world_string,
+                put_war_log: &mut *application_callbacks.put_war_log,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+            };
+            let mut effects = WorldUnionApplicationEffects::new(
+                game,
+                net_sessions,
+                application_runtime,
+                callbacks,
+            );
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingFactionBillboard {
                 source,
                 legacy_run_result,
                 outcome,

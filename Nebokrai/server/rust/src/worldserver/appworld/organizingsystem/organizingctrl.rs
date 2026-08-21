@@ -17,7 +17,9 @@
 //! `IsFactionMaster` RVA `0x000344A0`, `ReInitialFacFactionByLvl` RVA
 //! `0x00034C80` и `AddUnionToClientByFactionID` RVA `0x00038010` —
 //! `IMPLEMENTED`; `PushToEstaList` RVA `0x000367C0` и оба overload-а
-//! `SendOrgaInfoToClient` RVA `0x00033750/0x00033840` — `IMPLEMENTED`. Точная пара:
+//! `SendOrgaInfoToClient` RVA `0x00033750/0x00033840`, billboard serializer-ы
+//! RVA `0x000339D0/0x00033A50/0x00033AD0/0x00033CC0` и три stat-owner-а
+//! RVA `0x0003AC70/0x0003B050/0x0003B430` — `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -234,8 +236,32 @@
 //! в update/log — второй аргумент, player ID — первый. Наблюдаемая дубликация
 //! сохранена; утечка 256-байтового SQL buffer при offline player устранена как
 //! чисто внутренний дефект, а DB/war/player owners оставлены узким context.
+//!
+//! Billboard snapshot очищается и строится из faction-map: null value
+//! пропускается, ID/name/value копируются из concrete faction. Specialized
+//! `std::map::insert` по exact ASM `0x00436AF0..0x00436BEB` сортирует signed
+//! value по убыванию; при равенстве member-таблица ставит более раннее время
+//! основания первой, offense/defence — более позднее. `tagTime::operator>`
+//! сравнивает year/month/day/hour/minute/second и игнорирует day-of-week с
+//! milliseconds. Равные value и эти шесть полей являются одним map-key:
+//! faction-ID tie-break отсутствует, поэтому остаётся первая faction из
+//! signed map-order. Stable Rust sort и явное удаление повторных key сохраняют
+//! этот эффект; старый Linux-донор ошибочно добавлял tie-break по faction ID.
+//! Отсутствующие reached time/property останавливают конкретный stat-owner
+//! после очистки его списка, не получая выдуманного default.
+//!
+//! Три serializer-а пишут `min(unsigned list size, unsigned configured size)`,
+//! затем для каждого элемента `faction ID, name\0, value`; constructor задаёт
+//! size `10`. Dispatcher намеренно принимает members/offense/defence как
+//! `1/2/3`, иначе пишет нулевой count. Запрос `0x60125` допускает лишь `0/1/2`,
+//! поэтому type `0` получает пустой payload, `1` — members, `2` — offense, а
+//! defence через этот opcode недостижим. Наблюдаемый off-by-one подтверждён
+//! EXE и не «исправлен» по старому донору. Запрос сериализует сохранённый
+//! snapshot без скрытого пересчёта: его lifecycle остаётся `Initialize` и
+//! явным `StatBillboard` после завершения city-war.
 
 use std::cell::Cell;
+use std::cmp::Ordering as CmpOrdering;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -284,6 +310,7 @@ const TOP_INFO_MESSAGE_TYPE: i32 = 0x7FA04;
 const UNION_INITIAL_MESSAGE_TYPE: i32 = 0x7FE04;
 const EXPIRING_TIMER_FLAG: i32 = 2;
 const DECLARE_WAR_FACTION_PAGE_SIZE: i32 = 11;
+const DEFAULT_FACTION_BILLBOARD_SIZE: i32 = 10;
 
 const UNUSED_UNION_APPLICATION_TIME: TagTimeValue = TagTimeValue {
     year: 0,
@@ -305,6 +332,35 @@ struct StTopInfo {
     param: i32,
     started_at_ms: u32,
     info: Vec<u8>,
+}
+
+/// Rust-представление исходного `tagFacBillboard` без MSVC string ABI.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FactionBillboardEntry {
+    faction_id: i32,
+    name: Vec<u8>,
+    number: i32,
+}
+
+/// Конкретный billboard, на котором остановился общий snapshot-проход.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionBillboardKind {
+    MemberCount,
+    OffenseVictories,
+    DefenceVictories,
+}
+
+/// Safe-граница ещё не загруженного reached-поля concrete faction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionBillboardStatBlock {
+    MissingEstablishedTime {
+        map_key: i32,
+        billboard: FactionBillboardKind,
+    },
+    MissingBaseProperty {
+        map_key: i32,
+        billboard: FactionBillboardKind,
+    },
 }
 
 /// Результат одной исходно игнорировавшейся отправки top-info.
@@ -1092,6 +1148,10 @@ pub(crate) struct COrganizingCtrl {
     delete_unions: VecDeque<i32>,
     top_infos: VecDeque<StTopInfo>,
     request_establishment_union_players: VecDeque<i32>,
+    faction_billboard_size: i32,
+    member_count_billboard: Vec<FactionBillboardEntry>,
+    offense_victories_billboard: Vec<FactionBillboardEntry>,
+    defence_victories_billboard: Vec<FactionBillboardEntry>,
     detached_union_membership_lookup: Cell<Option<(i32, FreeFactionLookup)>>,
 }
 
@@ -1116,8 +1176,153 @@ impl COrganizingCtrl {
             delete_unions: VecDeque::new(),
             top_infos: VecDeque::new(),
             request_establishment_union_players: VecDeque::new(),
+            faction_billboard_size: DEFAULT_FACTION_BILLBOARD_SIZE,
+            member_count_billboard: Vec::new(),
+            offense_victories_billboard: Vec::new(),
+            defence_victories_billboard: Vec::new(),
             detached_union_membership_lookup: Cell::new(None),
         }
+    }
+
+    /// Перестраивает три snapshot-а в точном порядке исходного `StatBillboard`.
+    pub(crate) fn stat_billboard(&mut self) -> Result<(), FactionBillboardStatBlock> {
+        self.stat_member_count_billboard()?;
+        self.stat_offense_victories_billboard()?;
+        self.stat_defence_victories_billboard()
+    }
+
+    /// Сериализует выбранный snapshot с исходной нумерацией dispatcher-а.
+    ///
+    /// Значения `1/2/3` означают members/offense/defence. Любое другое
+    /// значение добавляет только нулевой 32-битный count; это сохраняет
+    /// наблюдаемый off-by-one относительно запроса `0x60125`, принимающего
+    /// только `0/1/2`.
+    pub(crate) fn add_faction_billboard_to_byte_array(
+        &self,
+        output: &mut Vec<u8>,
+        billboard_type: i32,
+    ) {
+        match billboard_type {
+            1 => self.add_billboard_to_byte_array(output, &self.member_count_billboard),
+            2 => self.add_billboard_to_byte_array(output, &self.offense_victories_billboard),
+            3 => self.add_billboard_to_byte_array(output, &self.defence_victories_billboard),
+            _ => append_i32(output, 0),
+        }
+    }
+
+    fn add_billboard_to_byte_array(
+        &self,
+        output: &mut Vec<u8>,
+        billboard: &[FactionBillboardEntry],
+    ) {
+        let stored_size = u32::from_le_bytes(self.faction_billboard_size.to_le_bytes());
+        let list_size = u32::try_from(billboard.len()).unwrap_or(u32::MAX);
+        let count = list_size.min(stored_size);
+        output.extend_from_slice(&count.to_le_bytes());
+        for entry in billboard.iter().take(count as usize) {
+            append_i32(output, entry.faction_id);
+            output.extend_from_slice(legacy_c_string_prefix(&entry.name));
+            output.push(0);
+            append_i32(output, entry.number);
+        }
+    }
+
+    fn stat_member_count_billboard(&mut self) -> Result<(), FactionBillboardStatBlock> {
+        self.member_count_billboard.clear();
+        let mut rows = Vec::new();
+        for (&map_key, faction) in &self.factions {
+            let Some(faction) = faction.as_deref() else {
+                continue;
+            };
+            let established_time = faction.established_time().ok_or(
+                FactionBillboardStatBlock::MissingEstablishedTime {
+                    map_key,
+                    billboard: FactionBillboardKind::MemberCount,
+                },
+            )?;
+            rows.push((
+                faction.get_member_num(),
+                established_time,
+                FactionBillboardEntry {
+                    faction_id: faction.faction_id(),
+                    name: faction.name().to_vec(),
+                    number: faction.get_member_num(),
+                },
+            ));
+        }
+        finish_billboard_rows(&mut rows, BillboardTimeOrder::Early);
+        self.member_count_billboard = rows.into_iter().map(|(_, _, entry)| entry).collect();
+        Ok(())
+    }
+
+    fn stat_offense_victories_billboard(&mut self) -> Result<(), FactionBillboardStatBlock> {
+        self.offense_victories_billboard.clear();
+        let mut rows = Vec::new();
+        for (&map_key, faction) in &self.factions {
+            let Some(faction) = faction.as_deref() else {
+                continue;
+            };
+            let number = faction.offense_victor_counts().ok_or(
+                FactionBillboardStatBlock::MissingBaseProperty {
+                    map_key,
+                    billboard: FactionBillboardKind::OffenseVictories,
+                },
+            )?;
+            let established_time = faction.established_time().ok_or(
+                FactionBillboardStatBlock::MissingEstablishedTime {
+                    map_key,
+                    billboard: FactionBillboardKind::OffenseVictories,
+                },
+            )?;
+            rows.push((
+                number,
+                established_time,
+                FactionBillboardEntry {
+                    faction_id: faction.faction_id(),
+                    name: faction.name().to_vec(),
+                    number,
+                },
+            ));
+        }
+        finish_billboard_rows(&mut rows, BillboardTimeOrder::Late);
+        self.offense_victories_billboard =
+            rows.into_iter().map(|(_, _, entry)| entry).collect();
+        Ok(())
+    }
+
+    fn stat_defence_victories_billboard(&mut self) -> Result<(), FactionBillboardStatBlock> {
+        self.defence_victories_billboard.clear();
+        let mut rows = Vec::new();
+        for (&map_key, faction) in &self.factions {
+            let Some(faction) = faction.as_deref() else {
+                continue;
+            };
+            let number = faction.defence_victor_counts().ok_or(
+                FactionBillboardStatBlock::MissingBaseProperty {
+                    map_key,
+                    billboard: FactionBillboardKind::DefenceVictories,
+                },
+            )?;
+            let established_time = faction.established_time().ok_or(
+                FactionBillboardStatBlock::MissingEstablishedTime {
+                    map_key,
+                    billboard: FactionBillboardKind::DefenceVictories,
+                },
+            )?;
+            rows.push((
+                number,
+                established_time,
+                FactionBillboardEntry {
+                    faction_id: faction.faction_id(),
+                    name: faction.name().to_vec(),
+                    number,
+                },
+            ));
+        }
+        finish_billboard_rows(&mut rows, BillboardTimeOrder::Late);
+        self.defence_victories_billboard =
+            rows.into_iter().map(|(_, _, entry)| entry).collect();
+        Ok(())
     }
 
     /// Материализует organizing save/delete очереди в `CGame::tagDBData`.
@@ -2912,6 +3117,57 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
     output.extend_from_slice(&value.to_le_bytes());
 }
 
+#[derive(Clone, Copy)]
+enum BillboardTimeOrder {
+    Early,
+    Late,
+}
+
+fn finish_billboard_rows(
+    rows: &mut Vec<(i32, TagTimeValue, FactionBillboardEntry)>,
+    time_order: BillboardTimeOrder,
+) {
+    rows.sort_by(|left, right| {
+        let number_order = right.0.cmp(&left.0);
+        if number_order != CmpOrdering::Equal {
+            return number_order;
+        }
+        match time_order {
+            BillboardTimeOrder::Early => {
+                billboard_time_fields(left.1).cmp(&billboard_time_fields(right.1))
+            }
+            BillboardTimeOrder::Late => {
+                billboard_time_fields(right.1).cmp(&billboard_time_fields(left.1))
+            }
+        }
+    });
+
+    // Исходный `std::map<tagKey, ...>` не имел faction-ID tie-break:
+    // одинаковые number и шесть сравниваемых полей времени оставляли первую
+    // faction из signed map-order. Stable sort + retain сохраняют именно её.
+    let mut previous_key = None;
+    rows.retain(|(number, time, _)| {
+        let key = (*number, billboard_time_fields(*time));
+        if previous_key == Some(key) {
+            false
+        } else {
+            previous_key = Some(key);
+            true
+        }
+    });
+}
+
+fn billboard_time_fields(time: TagTimeValue) -> [u16; 6] {
+    [
+        time.year,
+        time.month,
+        time.day,
+        time.hour,
+        time.minute,
+        time.second,
+    ]
+}
+
 fn top_info_message(
     player_id: i32,
     top_info_id: i32,
@@ -3029,7 +3285,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::AddFactionMemBillboardToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:333
@@ -3043,7 +3299,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::AddFactionOffBillboardToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:348
@@ -3057,7 +3313,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::AddFactionDefBillboardToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:363
@@ -3085,7 +3341,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::AddFactionBillboardToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:312
@@ -3750,7 +4006,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::StatMemberNumBillboard
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1738
@@ -3764,7 +4020,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::StatOffenseVictorCountsBillboard
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1768
@@ -3778,7 +4034,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::StatDefenceVictorCountsBillboard
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1801
@@ -3792,7 +4048,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::StatBillboard
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1731
