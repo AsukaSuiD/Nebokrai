@@ -3,9 +3,10 @@
 //! `RequestCountList` RVA `0x000A1C60`, `AppendOneFaction2Count`
 //! `0x000A1DD0`, `RefreshMembers/RefreshlistFid/RefreshAll`
 //! `0x000A2090/0x000A21D0/0x000A22C0`, `DeleteOneMember` `0x000A27A0` и
-//! `InsertOneFaction` `0x000A2960`, `MkOne` `0x000A2B60` и `FactionWin`
-//! `0x000A2BD0` имеют статус `IMPLEMENTED`; DB reload и остальные mutations
-//! ниже пока `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `InsertOneFaction` `0x000A2960`, `MkOne` `0x000A2B60`, `FactionWin`
+//! `0x000A2BD0`, `DelOneFactionfCount` `0x000A1FA0` и
+//! `DeleteMembersByFactionId` `0x000A2850` имеют статус `IMPLEMENTED`; DB
+//! reload и остальные mutations ниже пока `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
@@ -35,6 +36,12 @@
 //! не вставляется. После `SendAll` legacy-аудит дописывается в `bzhsmd.txt`;
 //! `OpenOptions`/`Write` заменяют CRT FILE plumbing, а CRLF фиксирует байты,
 //! которые исходный Windows text-mode получал из `\n`.
+//! `DeleteMembersByFactionId` exact `0x004A2850..0x004A2953` удаляет все
+//! пары с данным faction ID в signed player-order и только при хотя бы одном
+//! удалении публикует `0x7FF20 { operation=3, faction_id }` один раз.
+//! `DelOneFactionfCount` exact `0x004A1FA0..0x004A2084` сначала требует живой
+//! faction-owner, затем удаляет только первую C-string-равную count-запись и
+//! немедленно публикует обновлённый top-five через `RequestCountList`.
 //!
 //! Старый unbounded copy faction-name в `char[20]` мог перезаписать count и
 //! links. Это внутренний UB, а не протокол: Rust останавливает append при
@@ -241,6 +248,63 @@ impl CGoodsWarMember {
             state_changed: true,
             delivery: Some(context.send_all(&message)),
         }
+    }
+
+    /// Удаляет все member-записи faction и публикует один exact operation `3`.
+    pub(crate) fn delete_members_by_faction_id<Context: GoodsWarMemberContext + ?Sized>(
+        &mut self,
+        faction_id: i32,
+        context: &mut Context,
+    ) -> GoodsWarMutationReport {
+        let previous_len = self.members.len();
+        self.members
+            .retain(|_, member_faction_id| *member_faction_id != faction_id);
+        if self.members.len() == previous_len {
+            return GoodsWarMutationReport::default();
+        }
+
+        let mut message = CMessage::new(GOODS_WAR_STATE_MESSAGE_TYPE);
+        message.base_mut().add_long(3);
+        message.base_mut().add_long(faction_id);
+        GoodsWarMutationReport {
+            target_found: true,
+            state_changed: true,
+            delivery: Some(context.send_all(&message)),
+        }
+    }
+
+    /// Удаляет первую count-запись живой faction по exact C-string имени.
+    pub(crate) fn delete_one_faction_count<Context>(
+        &mut self,
+        faction_id: i32,
+        context: &mut Context,
+    ) -> Result<GoodsWarMutationReport, GoodsWarMemberBlock<Context::Block>>
+    where
+        Context: GoodsWarMemberContext + ?Sized,
+    {
+        let Some(snapshot) = context
+            .faction_snapshot(faction_id)
+            .map_err(GoodsWarMemberBlock::Context)?
+        else {
+            return Ok(GoodsWarMutationReport::default());
+        };
+        let faction_name = legacy_c_string_prefix(&snapshot.name);
+        let Some(position) = self
+            .counts
+            .iter()
+            .position(|entry| legacy_c_string_prefix(&entry.name) == faction_name)
+        else {
+            return Ok(GoodsWarMutationReport {
+                target_found: true,
+                ..GoodsWarMutationReport::default()
+            });
+        };
+        self.counts.remove(position);
+        Ok(GoodsWarMutationReport {
+            target_found: true,
+            state_changed: true,
+            delivery: Some(self.send_count_list(context)),
+        })
     }
 
     /// Вставляет существующую faction и при новой записи публикует весь set.
@@ -529,7 +593,7 @@ fn append_faction_win_audit<Context: GoodsWarMemberContext + ?Sized>(
 
 // ============================================================================
 // FUNCTION: CGoodsWarMember::DelOneFactionfCount
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goodswarmember.cpp:289
@@ -537,6 +601,8 @@ fn append_faction_win_audit<Context: GoodsWarMemberContext + ?Sized>(
 // ADDRESS: 004a1fa0
 // PROTOTYPE: bool __thiscall DelOneFactionfCount(long param_1)
 //
+// Реализовано выше как `delete_one_faction_count`; exact disassembly
+// `0x004A1FA0..0x004A2084` подтверждает first-match erase и публикацию.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -655,7 +721,7 @@ fn append_faction_win_audit<Context: GoodsWarMemberContext + ?Sized>(
 
 // ============================================================================
 // FUNCTION: CGoodsWarMember::DeleteMembersByFactionId
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goodswarmember.cpp:88
@@ -663,6 +729,8 @@ fn append_faction_win_audit<Context: GoodsWarMemberContext + ?Sized>(
 // ADDRESS: 004a2850
 // PROTOTYPE: void __thiscall DeleteMembersByFactionId(long param_1)
 //
+// Реализовано выше как `delete_members_by_faction_id`; exact disassembly
+// `0x004A2850..0x004A2953` подтверждает erase-all и один conditional send.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
