@@ -8472,7 +8472,8 @@ impl CGame {
     /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, other
     /// transport/cursor `0x5FD02/0x5FD06..0x5FD09/0x5FD0E`, copy-number
     /// `0x5FD0B`, LeiTing update `0x5FD10`, honor
-    /// `0x5FD0C/0x5FD0D`, server `0x5FA06/0x5FA07/0x5FA09`, organizing session
+    /// `0x5FD0C/0x5FD0D`, server `0x5FA04/0x5FA06/0x5FA07/0x5FA09`,
+    /// organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
     /// войны `0x6011E`, само объявление `0x6011F`, общий leaf

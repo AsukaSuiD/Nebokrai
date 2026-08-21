@@ -4,7 +4,7 @@
 //! внутрипроцессного события `0x3FC03`,
 //! регистрации GameServer и reconnect player-data хвоста в `0x5FA01`,
 //! snapshot/cleanup хвоста `0x5FA03`, обычных opcode `0x4FC01..=0x4FC03`,
-//! `0x5FA06`, `0x5FA07`, `0x5FA09` и `0x5FA0A..=0x5FA0D` из
+//! `0x5FA04`, `0x5FA06`, `0x5FA07`, `0x5FA09` и `0x5FA0A..=0x5FA0D` из
 //! `OnServerMessage` RVA `0x000ADCF0`;
 //! остальные ветви остаются `UNKNOWN` (исследовательский декомпилят хранится локально) ниже. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
@@ -206,6 +206,15 @@
 //! получает выдуманное значение; player decode после него всё равно идёт в
 //! исходном порядке и сохраняет независимые доказанные эффекты.
 //!
+//! `0x5FA04` сначала читает имя `0x18`, text `0x400` и три signed `long`.
+//! Если named online-player найден, `0x7F804` уходит его GameServer как
+//! `player ID + text + два positional long + target display name`; offline
+//! target отображается ASCII `uid[signed ID]`. Если named player отсутствует,
+//! но online target из третьего long существует, тому уходит failure
+//! `0 + requested name + target ID`. Отсутствующий player или нулевой route
+//! подавляет send после уже выполненных чтений. Все C-строки остаются
+//! byte-exact, результаты transport-а не управляют дальнейшими эффектами.
+//!
 //! Reached хвост `0x5FA03` после равенства response-count сначала уже сбросил
 //! `m_nDBResponsed`, затем выполняет полный `GenerateDBData` и строго
 //! `ClearMapPlayerForOffline -> ClearRestorePlayer -> ClearCreationPlayer ->
@@ -341,6 +350,7 @@ pub(crate) enum WorldServerMessageOutcome {
     MurderReported(WorldMurderReport),
     OpaqueFieldsRead(WorldOpaqueServerFields),
     PlayerDataSynchronized(WorldPlayerDataSync),
+    PlayerNameMessageRelayed(WorldPlayerNameMessageRelay),
     RegionParametersUpdated(WorldRegionParameterUpdate),
     RegionMessageRelayed(WorldRegionMessageRelay),
 }
@@ -412,6 +422,43 @@ pub(crate) enum WorldPlayerDataSyncDisposition {
         operator_notice: bool,
     },
     Ignored,
+}
+
+/// Наблюдаемый итог lookup/relay ветки `0x5FA04`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerNameMessageRelay {
+    pub(crate) requested_name: Vec<u8>,
+    pub(crate) text: Vec<u8>,
+    pub(crate) values: [i32; 3],
+    pub(crate) values_complete: [bool; 3],
+    pub(crate) resolved_named_player_id: u32,
+    pub(crate) disposition: WorldPlayerNameMessageDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldPlayerNameMessageDisposition {
+    Suppressed(WorldPlayerNameMessageSuppression),
+    MissingNamedPlayer {
+        target_player_id: i32,
+        game_server_number: i32,
+        message_type: i32,
+        delivery: Result<i32, SendMessageError>,
+    },
+    NamedPlayer {
+        player_id: i32,
+        game_server_number: i32,
+        displayed_target: Vec<u8>,
+        target_online: bool,
+        message_type: i32,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldPlayerNameMessageSuppression {
+    TargetPlayerNotOnline,
+    TargetRouteMissing,
+    NamedPlayerRouteMissing,
 }
 
 /// Следующая точная позиция ветки `0x5FA01` после достигнутой начальной части.
@@ -1418,6 +1465,110 @@ pub(crate) fn on_server_message(
             WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::GameServerConnection(
                 on_game_server_connected(game, &mut message, None),
             ))
+        }
+        0x0005_FA04 => {
+            let requested_name = message
+                .base_mut()
+                .get_str_bytes(0x18)
+                .expect("ненулевая GetStr-граница задана точным owner-ом");
+            let text = message
+                .base_mut()
+                .get_str_bytes(0x400)
+                .expect("ненулевая GetStr-граница задана точным owner-ом");
+            let decoded = [
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+            ];
+            let values = decoded.map(|value| value.unwrap_or(0));
+            let values_complete = decoded.map(|value| value.is_some());
+            let target_player_id = values[2];
+            let resolved_named_player_id = game.online_player_id_by_name(&requested_name);
+
+            let disposition = if let Some(named_player_id) = game
+                .online_player_by_id(resolved_named_player_id)
+                .map(|player| player.get_id())
+            {
+                let game_server_number = game.game_server_number_by_player_id(named_player_id);
+                if game_server_number == 0 {
+                    WorldPlayerNameMessageDisposition::Suppressed(
+                        WorldPlayerNameMessageSuppression::NamedPlayerRouteMissing,
+                    )
+                } else {
+                    let (displayed_target, target_online) = game
+                        .online_player_by_id(target_player_id as u32)
+                        .map_or_else(
+                            || {
+                                (
+                                    format!("uid[{target_player_id}]").into_bytes(),
+                                    false,
+                                )
+                            },
+                            |player| {
+                                let name = player.get_name();
+                                let end = name
+                                    .iter()
+                                    .position(|byte| *byte == 0)
+                                    .unwrap_or(name.len());
+                                (name[..end].to_vec(), true)
+                            },
+                        );
+                    let mut forwarded = CMessage::new(0x0007_F804);
+                    forwarded.base_mut().add_long(named_player_id);
+                    add_legacy_c_string(forwarded.base_mut(), &text);
+                    forwarded.base_mut().add_long(values[0]);
+                    forwarded.base_mut().add_long(values[1]);
+                    add_legacy_c_string(forwarded.base_mut(), &displayed_target);
+                    let delivery = game.send_msg_to_game_server(game_server_number, &forwarded);
+                    WorldPlayerNameMessageDisposition::NamedPlayer {
+                        player_id: named_player_id,
+                        game_server_number,
+                        displayed_target,
+                        target_online,
+                        message_type: 0x0007_F804,
+                        delivery,
+                    }
+                }
+            } else if let Some(target_id) = game
+                .online_player_by_id(target_player_id as u32)
+                .map(|player| player.get_id())
+            {
+                let game_server_number = game.game_server_number_by_player_id(target_id);
+                if game_server_number == 0 {
+                    WorldPlayerNameMessageDisposition::Suppressed(
+                        WorldPlayerNameMessageSuppression::TargetRouteMissing,
+                    )
+                } else {
+                    let mut failure = CMessage::new(0x0007_F804);
+                    failure.base_mut().add_long(0);
+                    add_legacy_c_string(failure.base_mut(), &requested_name);
+                    failure.base_mut().add_long(target_player_id);
+                    let delivery = game.send_msg_to_game_server(game_server_number, &failure);
+                    WorldPlayerNameMessageDisposition::MissingNamedPlayer {
+                        target_player_id,
+                        game_server_number,
+                        message_type: 0x0007_F804,
+                        delivery,
+                    }
+                }
+            } else {
+                WorldPlayerNameMessageDisposition::Suppressed(
+                    WorldPlayerNameMessageSuppression::TargetPlayerNotOnline,
+                )
+            };
+
+            WorldServerMessageDispatch::Handled(
+                WorldServerMessageOutcome::PlayerNameMessageRelayed(
+                    WorldPlayerNameMessageRelay {
+                        requested_name,
+                        text,
+                        values,
+                        values_complete,
+                        resolved_named_player_id,
+                        disposition,
+                    },
+                ),
+            )
         }
         0x0005_FA06 => {
             let decoded = [
