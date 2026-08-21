@@ -1018,6 +1018,7 @@ use crate::worldserver::appworld::message::countrymessage::{
     dispatch_country_demise_message,
     dispatch_country_depose_minister_message,
     dispatch_country_direct_appointment_message,
+    dispatch_country_player_change_message,
     dispatch_country_exile_result_message,
     dispatch_country_exile_request_message,
     dispatch_country_info_message,
@@ -1119,8 +1120,9 @@ use crate::worldserver::appworld::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarCallbacks,
 };
 use crate::worldserver::appworld::player::{
-    CPlayer, PlayerCodecError, PlayerExploitUpdate, PlayerMurderCounterReset,
-    PlayerMurderCounterUpdate, PlayerOrganizingUpdateError, PlayerPropertyCoefficients,
+    CPlayer, PlayerCodecError, PlayerCountryChangeReport, PlayerExploitUpdate,
+    PlayerMurderCounterReset, PlayerMurderCounterUpdate, PlayerOrganizingUpdateError,
+    PlayerPropertyCoefficients,
 };
 use crate::worldserver::appworld::region::RegionSerializationBlock;
 use crate::worldserver::appworld::script::variablelist::{
@@ -10934,6 +10936,25 @@ impl CGame {
         self.map_player(player_id)
     }
 
+    /// Меняет country только у owner-а, подтверждённого exact online-list.
+    pub(crate) fn change_online_player_country(
+        &mut self,
+        player_id: u32,
+        requested_country: u8,
+        country_exists: impl FnOnce(u8) -> bool,
+    ) -> Option<PlayerCountryChangeReport> {
+        if !self
+            .online_players
+            .iter()
+            .any(|&online_id| online_id == player_id)
+        {
+            return None;
+        }
+        self.players
+            .get_mut(&player_id)
+            .map(|player| player.change_country(requested_country, country_exists))
+    }
+
     /// Мутирует silence-поле только игрока, подтверждённого online-list.
     pub(crate) fn replace_online_player_silience_time(
         &mut self,
@@ -13078,6 +13099,17 @@ where
                         after_database,
                     },
                 ),
+            };
+        }
+        if let Some(sync) = dispatch_country_player_change_message(
+            &mut message,
+            game,
+            &*country_handler,
+        ) {
+            return ProcessedWorldEvent::CountryMessage {
+                source,
+                legacy_run_result,
+                outcome: WorldCountryMessageOutcome::PlayerCountryChanged(sync),
             };
         }
         let direct_appointment = {

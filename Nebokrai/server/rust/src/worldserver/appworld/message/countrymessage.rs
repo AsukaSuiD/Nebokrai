@@ -1,7 +1,8 @@
 //! WorldServer dispatcher-owner country messages `OnCountryMessage`.
 //!
 //! Dispatcher RVA `0x000A47F0` остаётся `IMPLEMENTED_PARTIAL`: country relays
-//! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, а также вход country victory
+//! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, смена country игрока
+//! `0x60301 -> CPlayer::ChangeCountry/0x7FF01`, а также вход country victory
 //! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, appoint-minister
 //! `0x60304 -> SetKing/RegisterKing(0)` либо minister mode `7/6`,
 //! `0x60306 -> GetInfo/0x7FF07`, `0x60307 -> InitialOLPlayersList/Sort/0x7FF08`,
@@ -111,6 +112,11 @@
 //! читает один unsigned country byte и сразу передаёт его достигнутому
 //! `CountryWarSys`; конкретный region/country/localization/network context
 //! подключён в общем `ProcessMessage`, а не оставлен отдельным helper-ом.
+//! Exact `0x004A483F..0x004A48B0` задаёт для `0x60301` signed player DWORD и
+//! `char -> unsigned char` country, online lookup, затем ответ `0x7FF01`
+//! { player_id:i32, result:i32 }` исходному `m_lMapID`. При отсутствующем
+//! online-player ответа нет. Source socket, хвост и donor-ограничения country
+//! диапазона/ownership не участвуют.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::tools::put_string_to_file;
@@ -137,6 +143,7 @@ use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
     FourNationExploitLoadedReport, FourNationSignUpDisposition, FourNationWarResultContext,
     FourNationWarResultReport, FourNationWarTimeReport,
 };
+use crate::worldserver::appworld::player::PlayerCountryChangeReport;
 use crate::worldserver::worldserver::game::{CGame, legacy_tick_ms};
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
@@ -154,6 +161,27 @@ pub(crate) struct WorldCountryRelayOutcome {
     pub(crate) response_type: i32,
     pub(crate) wire: Vec<u8>,
     pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldCountryPlayerChangeDisposition {
+    PlayerMissing,
+    Responded {
+        change: PlayerCountryChangeReport,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldCountryPlayerChangeSync {
+    pub(crate) source_map_id: i32,
+    pub(crate) source_socket_id: i32,
+    pub(crate) player_id: i32,
+    pub(crate) player_complete: bool,
+    pub(crate) country_id: u8,
+    pub(crate) country_complete: bool,
+    pub(crate) disposition: WorldCountryPlayerChangeDisposition,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -547,6 +575,7 @@ pub(crate) struct WorldFourNationCountryFailSync {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryMessageOutcome {
     Relay(WorldCountryRelayOutcome),
+    PlayerCountryChanged(WorldCountryPlayerChangeSync),
     ScalarSynchronized(WorldCountryScalarSync),
     QuestSwitchSynchronized(WorldCountryQuestSwitchSync),
     ExileTimeSynchronized(WorldCountryExileTimeSync),
@@ -1184,6 +1213,53 @@ pub(crate) fn dispatch_country_players_list_message<
         page_complete: decoded_page.is_some(),
         king_player_id,
         king_complete: decoded_king.is_some(),
+        country_id,
+        country_complete: decoded_country.is_some(),
+        disposition,
+    })
+}
+
+pub(crate) fn dispatch_country_player_change_message(
+    message: &mut CMessage,
+    game: &mut CGame,
+    country_handler: &CCountryHandler,
+) -> Option<WorldCountryPlayerChangeSync> {
+    if message.message_type() != 0x60301 {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_player = message.base_mut().get_long();
+    let player_id = decoded_player.unwrap_or(0);
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+    let disposition = match game.change_online_player_country(
+        player_id as u32,
+        country_id,
+        |requested_country| country_handler.get_country(requested_country).is_some(),
+    ) {
+        None => WorldCountryPlayerChangeDisposition::PlayerMissing,
+        Some(change) => {
+            let mut response = CMessage::new(0x7ff01);
+            response.base_mut().add_long(player_id);
+            response.base_mut().add_long(change.legacy_result);
+            let wire = response.as_wire_bytes().to_vec();
+            let delivery = response.send_to_map_id(
+                game.current_game_server_sender().as_ref(),
+                source_map_id,
+            );
+            WorldCountryPlayerChangeDisposition::Responded {
+                change,
+                wire,
+                delivery,
+            }
+        }
+    };
+    Some(WorldCountryPlayerChangeSync {
+        source_map_id,
+        source_socket_id,
+        player_id,
+        player_complete: decoded_player.is_some(),
         country_id,
         country_complete: decoded_country.is_some(),
         disposition,

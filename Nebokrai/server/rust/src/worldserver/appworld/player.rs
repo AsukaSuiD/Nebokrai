@@ -2,7 +2,8 @@
 //!
 //! Статус `CPlayer::GetAccount` RVA `0x00002F90`, `CPlayer::SaveData` RVA
 //! `0x0005B4E0`, `CPlayer::CheckGoodsInPacket` RVA `0x0005BA90`, inherited
-//! `GetName`, reached `ProcessPlayerDataQueue`
+//! `GetName`, reached `ProcessPlayerDataQueue`, `CPlayer::ChangeCountry` RVA
+//! `0x0005EA30`
 //! accessors для level/friends и inherited `CShape::SetState`,
 //! process-wide `CPlayer::GetNetExID` inline-path в `CUnion::ApplyForJoin`
 //! `0x004C2C51..0x004C2C5E`,
@@ -66,6 +67,16 @@
 //! сравнения именно с `true`. Raw constructor назначает `false`, поэтому
 //! reached-state хранится отдельным Rust `bool`, не расширяя это до заявления
 //! о полном layout `CPlayer`.
+//!
+//! `ChangeCountry` exact `0x0045EA30..0x0045EA81` сначала сравнивает unsigned
+//! byte `m_btCountry +0x844`, затем требует signed `m_lFactionID +0x86C == 0`,
+//! проверяет новый byte через `CCountryHandler::GetCountry`, пишет только
+//! `m_btCountry` и возвращает новый country как unsigned integer. Ошибки
+//! соответственно `-1`, `-3`, `-5`; дополнительных DB/faction side effects
+//! нет. Rust получает результат проверки country-owner явным аргументом,
+//! заменяя только process-singleton lookup. `Option<u8>` остаётся safe-
+//! проекцией ещё не декодированного partial player-state, а не частью старого
+//! ABI.
 //!
 //! Достигнутый через `CGame::ResetHonorElimilateInfo` reset напрямую меняет
 //! три DWORD `tagBaseProperty`: day обнуляется безусловно, week только при
@@ -851,6 +862,21 @@ pub(crate) struct PlayerDbProjection<'player> {
     variable_data: &'player [u8],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerCountryChangeDisposition {
+    SameCountry,
+    FactionMember { faction_id: i32 },
+    CountryMissing,
+    Changed { previous_country: Option<u8> },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerCountryChangeReport {
+    pub(crate) requested_country: u8,
+    pub(crate) legacy_result: i32,
+    pub(crate) disposition: PlayerCountryChangeDisposition,
+}
+
 impl PlayerGoodsDbProjection {
     /// Заимствует все containers в exact `SaveGoodsFiled` place-порядке.
     pub(crate) fn snapshot(&self, player_id: i32) -> PlayerGoodsFiledSnapshot<'_> {
@@ -1421,6 +1447,37 @@ impl CPlayer {
     /// Возвращает country только после материализации player-state.
     pub(crate) const fn country(&self) -> Option<u8> {
         self.country
+    }
+
+    /// Повторяет exact `CPlayer::ChangeCountry`, получая singleton lookup явно.
+    pub(crate) fn change_country(
+        &mut self,
+        requested_country: u8,
+        country_exists: impl FnOnce(u8) -> bool,
+    ) -> PlayerCountryChangeReport {
+        let (legacy_result, disposition) = if self.country == Some(requested_country) {
+            (-1, PlayerCountryChangeDisposition::SameCountry)
+        } else if self.organizing.faction_id != 0 {
+            (
+                -3,
+                PlayerCountryChangeDisposition::FactionMember {
+                    faction_id: self.organizing.faction_id,
+                },
+            )
+        } else if !country_exists(requested_country) {
+            (-5, PlayerCountryChangeDisposition::CountryMissing)
+        } else {
+            let previous_country = self.country.replace(requested_country);
+            (
+                i32::from(requested_country),
+                PlayerCountryChangeDisposition::Changed { previous_country },
+            )
+        };
+        PlayerCountryChangeReport {
+            requested_country,
+            legacy_result,
+            disposition,
+        }
     }
 
     /// Возвращает достигнутый signed faction ID без преобразования.
@@ -3017,7 +3074,7 @@ fn read_player_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CPlayer::ChangeCountry
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:884
