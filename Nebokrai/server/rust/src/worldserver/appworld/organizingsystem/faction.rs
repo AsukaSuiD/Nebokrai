@@ -10,7 +10,8 @@
 //! `LeaveWord/LoadLeavewords` RVA `0x000BCA40/0x000BD3F0`,
 //! `UpdateAllApplyMemberToClient/UpdateApplyMemberToClient/RemoveApplyMember`
 //! RVA `0x000B60D0/0x000BEC80/0x000B9F50`,
-//! `ApplyForJoin/DoJoin/Exit` RVA `0x000BE520/0x000BEE40/0x000BAAB0`,
+//! `ApplyForJoin/DoJoin/Exit/FireOut` RVA
+//! `0x000BE520/0x000BEE40/0x000BAAB0/0x000BB140`,
 //! `SendInfoToAllMember/UpdateOtherFacInfoToClient` RVA
 //! `0x000B5890/0x000B58F0`,
 //! `Talk` RVA `0x000B5A50`,
@@ -443,6 +444,15 @@
 //! переставлял player/member update и ошибочно возвращал `false` после Goods
 //! War. Форматирование, лог и Goods War plumbing выражены bounded данными и
 //! узким контекстом; старые `_sprintf/strcpy` не переносятся.
+//! `FireOut` в отличие от `Exit` действительно завершает Goods War gate после
+//! `WS0363 ` (ID содержит trailing space). Затем он делает трёхаргументный
+//! `CheckOperValidate(manager, target, PV_FireOut)`, `WS0192(name)/WS0119`
+//! старым членам и эффекты в машинном порядке: `DelMember`, player refresh,
+//! member `OP_Delete`, delete faction-state, dirty `2`, fire-log type `1`,
+//! Goods War delete и локальное fixed-frame сообщение `0x60508` как
+//! `target_id + faction_name[32]`. Exact ASM `0x004BB140..0x004BB897`
+//! подтверждает порядок, framing и игнорирование send/queue результатов;
+//! Linux-донор переставлял три callback-а после удаления.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -458,10 +468,11 @@ use super::organizing::{
 use super::organizingparam::COrganizingParam;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::worldserver::game::{
-    CGame, WorldLeaveWordIdBlock, WorldRegionNameLookup,
+    CGame, WorldLeaveWordIdBlock, WorldLocalMessageQueueBlock, WorldRegionNameLookup,
 };
 
 const MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0D;
+const FACTION_MEMBER_REMOVED_LOCAL_MESSAGE_TYPE: i32 = 0x60508;
 const APPLY_MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0A;
 const MAX_APPLY_PERSON_COUNT: u32 = 40;
 const APPLY_JOIN_NOTICE_CAPACITY: usize = 256;
@@ -481,7 +492,7 @@ const LEAVE_WORD_LIMIT: usize = 60;
 const APPLY_PERSON_NAME_CAPACITY: usize = 20;
 const FACTION_MEMBER_NAME_CAPACITY: usize = 32;
 const FACTION_MEMBER_TEXT_CAPACITY: usize = 64;
-const FACTION_EXIT_NOTICE_CAPACITY: usize = 260;
+const FACTION_MEMBER_NOTICE_CAPACITY: usize = 260;
 const PRONOUNCE_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_CONTENT_CAPACITY: usize = 2048;
 const OTHER_FACTION_NAME_CAPACITY: usize = 20;
@@ -900,6 +911,60 @@ pub(crate) enum FactionExitBlock {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionFireOutRejection {
+    StandardOrVillageWar,
+    CityWar,
+    GoodsWar,
+    OperatorValidationFailed,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionFireOutOutcome {
+    Rejected(FactionFireOutRejection),
+    Fired {
+        member_information: FactionMemberInfoReport,
+        member_removal: Option<FactionDelMemberReport>,
+        refreshed_player_ids: Vec<i32>,
+        member_update: Result<MemberUpdateReport, MemberUpdateBuildError>,
+        delete_organizing: FactionDeleteOrganizingOutcome,
+        log_written: bool,
+        local_message: Result<(), WorldLocalMessageQueueBlock>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionFireOutBlock {
+    OperatorValidation(FactionOperatorValidationBlock),
+    UnterminatedTargetName {
+        target_id: i32,
+    },
+    NoticeWouldOverflow {
+        target_id: i32,
+        formatted_len: usize,
+    },
+    DelMember {
+        source: FactionDelMemberBlock,
+        member_information: FactionMemberInfoReport,
+        member_removed: bool,
+    },
+    DeleteOrganizing {
+        source: FactionDeleteOrganizingBuildError,
+        member_information: FactionMemberInfoReport,
+        member_removal: Option<FactionDelMemberReport>,
+        refreshed_player_ids: Vec<i32>,
+        member_update: Result<MemberUpdateReport, MemberUpdateBuildError>,
+    },
+    UnterminatedManagerName {
+        manager_id: i32,
+        member_information: FactionMemberInfoReport,
+        member_removal: Option<FactionDelMemberReport>,
+        refreshed_player_ids: Vec<i32>,
+        member_update: Result<MemberUpdateReport, MemberUpdateBuildError>,
+        delete_organizing: FactionDeleteOrganizingOutcome,
+    },
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FactionLeaveWordUpdateBuildError {
     MissingLastLeaveWord,
@@ -1167,6 +1232,35 @@ pub(crate) trait FactionExitContext: FactionOrganizingInfoContext {
         faction_name: &[u8],
         player_id: i32,
         player_name: &[u8],
+        log_type: i32,
+    );
+
+    fn delete_goods_war_member(&mut self, player_id: i32);
+}
+
+/// Узкая граница war-system, player-owner, fire-log и Goods War для `FireOut`.
+pub(crate) trait FactionFireOutContext: FactionOrganizingInfoContext {
+    fn already_declared_for_village_war(&self, faction_id: i32) -> bool;
+
+    fn already_declared_for_city_war(&self, faction_id: i32) -> bool;
+
+    fn goods_war_blocks_fire_out(&self, faction_id: i32, manager_id: i32) -> bool;
+
+    fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8>;
+
+    fn update_player_faction_info(&mut self, player_id: i32);
+
+    fn faction_fire_out_log_enabled(&self) -> bool;
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_faction_fire_out_log(
+        &mut self,
+        member_id: i32,
+        member_name: &[u8],
+        manager_id: i32,
+        manager_name: &[u8],
+        faction_id: i32,
+        faction_name: &[u8],
         log_type: i32,
     );
 
@@ -2983,7 +3077,7 @@ impl CFaction {
         let player_name = player_name_wire[..player_name_wire.len() - 1].to_vec();
         let notice = context.format_world_string(b"WS0187", &[&player_name]);
         let notice = legacy_c_string_visible_bytes(&notice);
-        if notice.len() >= FACTION_EXIT_NOTICE_CAPACITY {
+        if notice.len() >= FACTION_MEMBER_NOTICE_CAPACITY {
             return Err(FactionExitBlock::NoticeWouldOverflow {
                 player_id,
                 formatted_len: notice.len(),
@@ -3047,6 +3141,151 @@ impl CFaction {
             refreshed_player_ids,
             member_update,
             log_written,
+        })
+    }
+
+    /// Исключает участника с точным FireOut-порядком уведомлений и callback-ов.
+    pub(crate) fn fire_out<Context>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        manager_id: i32,
+        target_id: i32,
+        context: &mut Context,
+    ) -> Result<FactionFireOutOutcome, FactionFireOutBlock>
+    where
+        Context: FactionFireOutContext,
+    {
+        if self.has_enemy_faction() || context.already_declared_for_village_war(self.faction_id) {
+            send_apply_join_information(context, manager_id, b"WS0162", b"WS0121");
+            return Ok(FactionFireOutOutcome::Rejected(
+                FactionFireOutRejection::StandardOrVillageWar,
+            ));
+        }
+        if self.has_city_war_enemy_faction()
+            || context.already_declared_for_city_war(self.faction_id)
+        {
+            send_apply_join_information(context, manager_id, b"WS0163", b"WS0121");
+            return Ok(FactionFireOutOutcome::Rejected(
+                FactionFireOutRejection::CityWar,
+            ));
+        }
+        if context.goods_war_blocks_fire_out(self.faction_id, manager_id) {
+            send_apply_join_information(context, manager_id, b"WS0363 ", b"WS0121");
+            return Ok(FactionFireOutOutcome::Rejected(
+                FactionFireOutRejection::GoodsWar,
+            ));
+        }
+
+        let operation_valid = self
+            .check_operator_validate_target(manager_id, target_id, EPurview::FireOut as i32)
+            .map_err(FactionFireOutBlock::OperatorValidation)?;
+        if !operation_valid {
+            return Ok(FactionFireOutOutcome::Rejected(
+                FactionFireOutRejection::OperatorValidationFailed,
+            ));
+        }
+
+        let target = self
+            .members
+            .get(&target_id)
+            .expect("успешный CheckOperValidate гарантирует target member");
+        let target_name_wire = target
+            .name_wire_bytes()
+            .map_err(|_| FactionFireOutBlock::UnterminatedTargetName { target_id })?;
+        let target_name = target_name_wire[..target_name_wire.len() - 1].to_vec();
+        let notice = context.format_world_string(b"WS0192", &[&target_name]);
+        let notice = legacy_c_string_visible_bytes(&notice);
+        if notice.len() >= FACTION_MEMBER_NOTICE_CAPACITY {
+            return Err(FactionFireOutBlock::NoticeWouldOverflow {
+                target_id,
+                formatted_len: notice.len(),
+            });
+        }
+        let second_text = context.world_string(b"WS0119").unwrap_or_default();
+        let member_information = self.send_info_to_all_members(
+            notice,
+            legacy_c_string_visible_bytes(&second_text),
+            -1,
+            |request| context.send_organizing_info(request),
+        );
+
+        let member_removal = match self.del_member(target_id, parameters) {
+            Ok(report) => report,
+            Err(source) => {
+                return Err(FactionFireOutBlock::DelMember {
+                    source,
+                    member_information,
+                    member_removed: !self.members.contains_key(&target_id),
+                });
+            }
+        };
+        let refreshed_player_ids =
+            self.update_player_faction_info(game, target_id, |player_id| {
+                context.update_player_faction_info(player_id);
+            });
+        let member_update = self.update_member_info_to_client(game, target_id, EOperator::Delete);
+        let delete_organizing = match self.delete_organizing_to_client(game, target_id, context) {
+            Ok(outcome) => outcome,
+            Err(source) => {
+                return Err(FactionFireOutBlock::DeleteOrganizing {
+                    source,
+                    member_information,
+                    member_removal,
+                    refreshed_player_ids,
+                    member_update,
+                });
+            }
+        };
+        self.set_change_data(2);
+
+        let log_written = context.faction_fire_out_log_enabled();
+        if log_written {
+            let manager = self
+                .members
+                .get(&manager_id)
+                .expect("успешный CheckOperValidate сохраняет manager member");
+            let manager_name = match manager.name_wire_bytes() {
+                Ok(name) => &name[..name.len() - 1],
+                Err(_) => {
+                    return Err(FactionFireOutBlock::UnterminatedManagerName {
+                        manager_id,
+                        member_information,
+                        member_removal,
+                        refreshed_player_ids,
+                        member_update,
+                        delete_organizing,
+                    });
+                }
+            };
+            context.write_faction_fire_out_log(
+                target_id,
+                &target_name,
+                manager.id,
+                manager_name,
+                self.faction_id,
+                legacy_c_string_visible_bytes(&self.name),
+                1,
+            );
+        }
+        context.delete_goods_war_member(target_id);
+
+        let mut message = CMessage::new(FACTION_MEMBER_REMOVED_LOCAL_MESSAGE_TYPE);
+        message.base_mut().add_long(target_id);
+        let mut fixed_faction_name = [0; FACTION_MEMBER_NAME_CAPACITY];
+        let copied_name_len = self.name.len().min(FACTION_MEMBER_NAME_CAPACITY);
+        fixed_faction_name[..copied_name_len].copy_from_slice(&self.name[..copied_name_len]);
+        message.base_mut().add(&fixed_faction_name);
+        let local_message = game.queue_local_world_message(message);
+
+        Ok(FactionFireOutOutcome::Fired {
+            member_information,
+            member_removal,
+            refreshed_player_ids,
+            member_update,
+            delete_organizing,
+            log_written,
+            local_message,
         })
     }
 
@@ -5689,7 +5928,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::FireOut
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1684
