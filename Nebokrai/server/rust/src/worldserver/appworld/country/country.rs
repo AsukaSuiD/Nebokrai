@@ -2,8 +2,8 @@
 //!
 //! Статус `CCountry::SetCountryPower/SetCountryTreasury/SetCountryTech` RVA
 //! `0x000A4750/0x000A4790/0x000A47D0`, `CCountry::AddToByteArray` RVA `0x000C6E30`,
-//! `CCountry::IsKing/CanOperate/Exile/SuccessExiled` RVA
-//! `0x000C7160/0x000C7520/0x000C7AD0/0x000C7EE0`,
+//! `CCountry::IsKing/CanOperate/Exile/SuccessExiled/Silence` RVA
+//! `0x000C7160/0x000C7520/0x000C7AD0/0x000C7EE0/0x000C81D0`,
 //! `CCountry::CloneCountryData` RVA `0x000C9CE0` и
 //! `CCountry::CloneSaveData` RVA `0x000CC470` — `IMPLEMENTED`; остальной корпус
 //! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
@@ -41,6 +41,16 @@
 //! `0x7FF0E { country:u8, player:i32 }`; `0x004C7EAF` возвращает player ID,
 //! все отказные ветки возвращают ноль. Linux-донор добавлял socket-correlation,
 //! request registry и source/tail validation — их нет в поставочном EXE.
+//! Для входного `0x6030C` exact сохраняет тот же порядок `IsKing`, затем
+//! `CanOperate(5)`: minimum читается до проверки войны, а daily-limit
+//! сравнивается как `m_lSilenceNum <= wrapping(_max_silence_num - 1)`.
+//! `Silence` отклоняет короля (`WS0079`, только log), отсутствующего игрока,
+//! чужую страну и inherited `m_bIsGod` (`WS0080..WS0082`, log затем private).
+//! Успех wrapping увеличивает счётчик, списывает control point с upper-only
+//! clamp, пишет `WS0083`, затем отправляет `0x7FF10` королю,
+//! `0x7FF0D { country:u8, player:i32, silence_count:i32 }` на маршрут цели и
+//! `0x7FF11` всем connected GameServer. Exact `0x004C853E` возвращает ID цели;
+//! все отказы возвращают ноль. Linux-донор здесь не добавляет контрактов.
 //! Clone копирует country ID, treasury, power,
 //! current/level-up tech exp, tech level, king identity/flags и war-result.
 //! Три king-point ограничиваются соответствующими максимумами `CCountryParam`.
@@ -119,6 +129,7 @@ pub(crate) struct CCountry {
     pub(crate) country_war_result: i32,
     pub(crate) ministers: BTreeMap<u8, CountryMinisterState>,
     pub(crate) is_warring: bool,
+    pub(crate) silence_count: i32,
     pub(crate) exile_count: i32,
     pub(crate) exile_started_at_ms: BTreeMap<i32, i32>,
 }
@@ -188,6 +199,7 @@ pub(crate) struct CountryExileTarget {
     pub(crate) name: Vec<u8>,
     pub(crate) country: Option<u8>,
     pub(crate) pk_count: u16,
+    pub(crate) is_god: bool,
 }
 
 /// Узкая граница player/localization/network/log эффектов исходного owner-а.
@@ -285,6 +297,60 @@ pub(crate) enum CountryExileRequestDisposition {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountrySilenceRejection {
+    CountryAtWar,
+    InsufficientControlPoint,
+    DailyLimitReached,
+    TargetIsKing,
+    TargetMissing,
+    TargetCountryUnavailable,
+    TargetFromAnotherCountry,
+    TargetIsGod,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountryCanSilenceDisposition {
+    Allowed,
+    ParameterUnavailable(CountryParameterUnavailable),
+    Rejected {
+        reason: CountrySilenceRejection,
+        text: Vec<u8>,
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountrySilenceDisposition {
+    Rejected {
+        reason: CountrySilenceRejection,
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+    ParameterUnavailable {
+        block: CountryParameterUnavailable,
+        previous_silence_count: i32,
+        applied_silence_count: i32,
+        control_point_update: Option<KingPointUpdate>,
+    },
+    Applied {
+        previous_silence_count: i32,
+        applied_silence_count: i32,
+        control_point_update: KingPointUpdate,
+        control_point_delivery: CountryExileMessageDelivery,
+        target_delivery: CountryExileMessageDelivery,
+        target_wire: Vec<u8>,
+        country_deliveries: Vec<CountryExileMessageDelivery>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountrySilenceReport {
+    pub(crate) player_id: i32,
+    pub(crate) legacy_result: i32,
+    pub(crate) text: Vec<u8>,
+    pub(crate) disposition: CountrySilenceDisposition,
+}
+
 impl CCountry {
     /// Exact `IsKing`: нулевой candidate всегда отклоняется с `WS0033`.
     pub(crate) fn authorize_king<Context: CountryExileResultContext + ?Sized>(
@@ -303,6 +369,240 @@ impl CCountry {
         ));
         context.put_king_log(&text);
         false
+    }
+
+    /// Exact `CanOperate(5)` с исходным порядком warring/points/daily-limit.
+    pub(crate) fn can_silence<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> CountryCanSilenceDisposition {
+        let Some(minimum) = parameters.min_king_control_point() else {
+            return CountryCanSilenceDisposition::ParameterUnavailable(
+                CountryParameterUnavailable { field: "_min_king_control_point" },
+            );
+        };
+        let rejection = if self.is_warring {
+            Some((CountrySilenceRejection::CountryAtWar, b"WS0050" as &'static [u8], None))
+        } else if self.king.control_point < minimum {
+            Some((
+                CountrySilenceRejection::InsufficientControlPoint,
+                b"WS0051" as &'static [u8],
+                Some(minimum),
+            ))
+        } else {
+            let Some(maximum) = parameters.max_silence_count() else {
+                return CountryCanSilenceDisposition::ParameterUnavailable(
+                    CountryParameterUnavailable { field: "_max_silence_num" },
+                );
+            };
+            if self.silence_count <= maximum.wrapping_sub(1) {
+                None
+            } else {
+                Some((
+                    CountrySilenceRejection::DailyLimitReached,
+                    b"WS0052" as &'static [u8],
+                    Some(maximum),
+                ))
+            }
+        };
+        let Some((reason, string_id, argument)) = rejection else {
+            return CountryCanSilenceDisposition::Allowed;
+        };
+        let arguments = argument
+            .as_ref()
+            .map(|value| [CountryExileTextArgument::Signed(*value)]);
+        let text = legacy_country_text(context.format_world_string(
+            string_id,
+            arguments.as_ref().map_or(&[], |arguments| arguments.as_slice()),
+        ));
+        let private_delivery = self.send_private_message(&text, 0, context);
+        CountryCanSilenceDisposition::Rejected { reason, text, private_delivery }
+    }
+
+    /// Exact `CCountry::Silence`: mutating success и три исходных wire-effect.
+    pub(crate) fn silence<Context: CountryExileResultContext + ?Sized>(
+        &mut self,
+        player_id: i32,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> CountrySilenceReport {
+        if player_id == self.king.id {
+            let country_name = context.country_name(self.country_id);
+            return self.reject_silence(
+                player_id,
+                CountrySilenceRejection::TargetIsKing,
+                b"WS0079",
+                &[CountryExileTextArgument::Text(&country_name)],
+                false,
+                context,
+            );
+        }
+        let Some(player) = context.online_player(player_id) else {
+            return self.reject_silence(
+                player_id,
+                CountrySilenceRejection::TargetMissing,
+                b"WS0080",
+                &[],
+                true,
+                context,
+            );
+        };
+        let Some(player_country) = player.country else {
+            return CountrySilenceReport {
+                player_id,
+                legacy_result: 0,
+                text: Vec::new(),
+                disposition: CountrySilenceDisposition::Rejected {
+                    reason: CountrySilenceRejection::TargetCountryUnavailable,
+                    private_delivery: None,
+                },
+            };
+        };
+        if player_country != self.country_id {
+            return self.reject_silence(
+                player_id,
+                CountrySilenceRejection::TargetFromAnotherCountry,
+                b"WS0081",
+                &[],
+                true,
+                context,
+            );
+        }
+        if player.is_god {
+            return self.reject_silence(
+                player_id,
+                CountrySilenceRejection::TargetIsGod,
+                b"WS0082",
+                &[],
+                true,
+                context,
+            );
+        }
+
+        let previous_silence_count = self.silence_count;
+        self.silence_count = self.silence_count.wrapping_add(1);
+        let Some(control_point_cost) = parameters.silence_control_point_cost() else {
+            return self.silence_parameter_unavailable(
+                player_id,
+                previous_silence_count,
+                CountryParameterUnavailable { field: "_dec_king_control_point_silence" },
+                None,
+            );
+        };
+        let requested_control_point = self.king.control_point.wrapping_sub(control_point_cost);
+        let control_point_update = match set_control_point(
+            &mut self.king,
+            requested_control_point,
+            parameters,
+        ) {
+            Ok(update) => update,
+            Err(block) => {
+                return self.silence_parameter_unavailable(
+                    player_id,
+                    previous_silence_count,
+                    block,
+                    None,
+                );
+            }
+        };
+        let Some(silence_time) = parameters.silence_time() else {
+            return self.silence_parameter_unavailable(
+                player_id,
+                previous_silence_count,
+                CountryParameterUnavailable { field: "_silence_time" },
+                Some(control_point_update),
+            );
+        };
+
+        let country_name = context.country_name(self.country_id);
+        let text = legacy_country_text(context.format_world_string(
+            b"WS0083",
+            &[
+                CountryExileTextArgument::Text(&country_name),
+                CountryExileTextArgument::Text(&player.name),
+                CountryExileTextArgument::Signed(silence_time),
+            ],
+        ));
+        context.put_king_log(&text);
+
+        let king_map_id = context.game_server_number_by_player_id(self.king.id);
+        let mut control_point_message = CMessage::new(0x0007_FF10);
+        control_point_message.base_mut().add_long(self.king.id);
+        control_point_message.base_mut().add_byte(self.country_id);
+        control_point_message.base_mut().add_long(self.king.control_point);
+        let control_point_delivery = CountryExileMessageDelivery {
+            map_id: king_map_id,
+            delivery: context.send_to_map_id(&control_point_message, king_map_id),
+        };
+
+        let target_map_id = context.game_server_number_by_player_id(player_id);
+        let mut target_message = CMessage::new(0x0007_FF0D);
+        target_message.base_mut().add_byte(self.country_id);
+        target_message.base_mut().add_long(player_id);
+        target_message.base_mut().add_long(self.silence_count);
+        let target_wire = target_message.as_wire_bytes().to_vec();
+        let target_delivery = CountryExileMessageDelivery {
+            map_id: target_map_id,
+            delivery: context.send_to_map_id(&target_message, target_map_id),
+        };
+        let country_deliveries = self.send_country_message(&text, context);
+        CountrySilenceReport {
+            player_id,
+            legacy_result: player_id,
+            text,
+            disposition: CountrySilenceDisposition::Applied {
+                previous_silence_count,
+                applied_silence_count: self.silence_count,
+                control_point_update,
+                control_point_delivery,
+                target_delivery,
+                target_wire,
+                country_deliveries,
+            },
+        }
+    }
+
+    fn reject_silence<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        player_id: i32,
+        reason: CountrySilenceRejection,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+        notify_king: bool,
+        context: &mut Context,
+    ) -> CountrySilenceReport {
+        let text = legacy_country_text(context.format_world_string(string_id, arguments));
+        context.put_king_log(&text);
+        let private_delivery = notify_king
+            .then(|| self.send_private_message(&text, 0, context))
+            .flatten();
+        CountrySilenceReport {
+            player_id,
+            legacy_result: 0,
+            text,
+            disposition: CountrySilenceDisposition::Rejected { reason, private_delivery },
+        }
+    }
+
+    fn silence_parameter_unavailable(
+        &self,
+        player_id: i32,
+        previous_silence_count: i32,
+        block: CountryParameterUnavailable,
+        control_point_update: Option<KingPointUpdate>,
+    ) -> CountrySilenceReport {
+        CountrySilenceReport {
+            player_id,
+            legacy_result: 0,
+            text: Vec::new(),
+            disposition: CountrySilenceDisposition::ParameterUnavailable {
+                block,
+                previous_silence_count,
+                applied_silence_count: self.silence_count,
+                control_point_update,
+            },
+        }
     }
 
     /// Exact `CanOperate(4)` с исходным порядком warring/points/daily-limit.
@@ -1137,8 +1437,8 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 // ADDRESS: 004c7520
 // PROTOTYPE: bool __thiscall CanOperate(uchar param_1)
 //
-// Ветка operation `4` реализована выше как `can_exile`; остальные selectors
-// остаются source-reference.
+// Ветки operation `4/5` реализованы выше как `can_exile/can_silence`; остальные
+// selectors остаются source-reference.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1175,7 +1475,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::Silence
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1342
@@ -1183,6 +1483,8 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 // ADDRESS: 004c81d0
 // PROTOTYPE: long __thiscall Silence(long param_1)
 //
+// Реализация выше сохраняет exact проверки, side-effect order, wire и возврат;
+// raw оставлен только как локальная документация исходного owner-а.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

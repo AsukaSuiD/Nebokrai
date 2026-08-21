@@ -1305,6 +1305,11 @@ impl CPlayer {
         self.base_property.read_u16(BASE_PROPERTY_PK_COUNT_OFFSET)
     }
 
+    /// Возвращает унаследованный exact `CMoveShape::m_bIsGod`.
+    pub(crate) const fn is_god(&self) -> bool {
+        self.move_shape_base.is_god()
+    }
+
     /// Повторяет unsigned 32-bit сложение исходного `dwExploit += long`.
     pub(crate) fn add_exploit_wrapping(&mut self, increment: i32) -> PlayerExploitUpdate {
         let previous_exploit = self.base_property.read_u32(BASE_PROPERTY_EXPLOIT_OFFSET);

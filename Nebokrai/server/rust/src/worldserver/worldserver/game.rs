@@ -1013,6 +1013,7 @@ use crate::worldserver::appworld::message::countrymessage::{
     decode_four_nation_exploit_message,
     dispatch_country_exile_result_message,
     dispatch_country_exile_request_message,
+    dispatch_country_silence_request_message,
     dispatch_country_war_declaration_message, dispatch_country_war_victory_message,
     dispatch_four_nation_country_fail_message, dispatch_four_nation_war_result_message,
     dispatch_four_nation_war_time_message, on_country_message,
@@ -12087,6 +12088,7 @@ impl CountryExileResultContext for WorldCountryExileResultEffects<'_> {
                 name: legacy_c_string_prefix(player.get_name()).to_vec(),
                 country: player.country(),
                 pk_count: player.pk_count(),
+                is_god: player.is_god(),
             })
     }
 
@@ -12659,6 +12661,26 @@ where
                 source,
                 legacy_run_result,
                 outcome: WorldCountryMessageOutcome::ExileResultSynchronized(sync),
+            };
+        }
+        let silence_request = {
+            let mut effects = WorldCountryExileResultEffects {
+                game,
+                globe_setup,
+                format_world_string: &mut *application_callbacks.format_world_string,
+            };
+            dispatch_country_silence_request_message(
+                &mut message,
+                country_handler,
+                country_parameters,
+                &mut effects,
+            )
+        };
+        if let Some(sync) = silence_request {
+            return ProcessedWorldEvent::CountryMessage {
+                source,
+                legacy_run_result,
+                outcome: WorldCountryMessageOutcome::SilenceRequested(sync),
             };
         }
         let exile_request = {
