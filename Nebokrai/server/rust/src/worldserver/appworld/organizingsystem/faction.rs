@@ -1765,21 +1765,11 @@ pub(crate) trait FactionOrganizingInfoContext {
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>);
 }
 
-/// Узкая граница war-system, organizing-controller, локализации и apply-log.
-pub(crate) trait FactionApplyForJoinContext: FactionOrganizingInfoContext {
-    type Block;
-
+/// Внешние war/string/log эффекты заявки, не владеющие faction-map.
+pub(crate) trait FactionApplyForJoinEffects: FactionOrganizingInfoContext {
     fn already_declared_for_village_war(&self, faction_id: i32) -> bool;
 
     fn already_declared_for_city_war(&self, faction_id: i32) -> bool;
-
-    fn player_already_in_faction(&self, player_id: i32) -> Result<bool, Self::Block>;
-
-    fn remove_previous_faction_applications(
-        &mut self,
-        game: &CGame,
-        player_id: i32,
-    ) -> Result<(), Self::Block>;
 
     fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8>;
 
@@ -1793,6 +1783,24 @@ pub(crate) trait FactionApplyForJoinContext: FactionOrganizingInfoContext {
         player_name: &[u8],
         log_type: i32,
     );
+}
+
+/// Safe reentrant-граница target faction и полного organizing-controller.
+pub(crate) trait FactionApplyForJoinContext: FactionApplyForJoinEffects {
+    type Block;
+
+    fn player_already_in_faction(
+        &self,
+        current_faction: &CFaction,
+        player_id: i32,
+    ) -> Result<bool, Self::Block>;
+
+    fn remove_previous_faction_applications(
+        &mut self,
+        game: &CGame,
+        current_faction: &mut CFaction,
+        player_id: i32,
+    ) -> Result<(), Self::Block>;
 }
 
 /// Узкая граница внешних систем полного approve/reject join-пути.
@@ -3762,7 +3770,7 @@ impl CFaction {
         }
 
         if context
-            .player_already_in_faction(player_id)
+            .player_already_in_faction(self, player_id)
             .map_err(|source| FactionApplyForJoinBlock::Context {
                 operation: FactionApplyForJoinContextOperation::PlayerMembershipLookup,
                 source,
@@ -3773,7 +3781,7 @@ impl CFaction {
             ));
         }
         context
-            .remove_previous_faction_applications(game, player_id)
+            .remove_previous_faction_applications(game, self, player_id)
             .map_err(|source| FactionApplyForJoinBlock::Context {
                 operation: FactionApplyForJoinContextOperation::RemovePreviousApplications,
                 source,

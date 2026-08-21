@@ -89,6 +89,15 @@
 //! не хранит внутренний `szfacNewName`, который читался только этим owner-ом;
 //! `BTreeMap` и `eq_ignore_ascii_case` заменяют tree/CRT storage. Переполнение
 //! исходного `strcpy/_snprintf` и null map-value остаются typed safe-границей.
+//! Для найденной `0x60108` faction её `ApplyForJoin` временно получает
+//! detached concrete owner и reentrant adapter полного controller-map:
+//! membership и удаление прежних заявок по-прежнему идут в signed key-order,
+//! а target slot в своей точной позиции заменяется живой detached faction.
+//! Union-ветвь так же временно извлекает target owner, заранее фиксирует
+//! результат `IsFreeFaction(applicant)` и обязательно возвращает slot после
+//! concrete вызова. Это safe ownership-замена raw-pointer aliasing; машинный
+//! `CUnion::GetCountry` `0x004C1F10..0x004C1F12` возвращает literal `0`, что
+//! намеренно важнее противоречащего Linux-донора.
 //! Через read-only `FactionOperationAuthorityContext` этот lookup и уже
 //! материализованный `IsFreeFaction` обслуживают faction tax/city-gate owner-ы;
 //! null во время membership scan остаётся typed-границей старого UB.
@@ -356,7 +365,8 @@ use rustix::time::{ClockId, clock_gettime};
 use super::attackcitysys::CAttackCitySys;
 use super::faction::{
     CFaction, CityWarEnemyRefreshOutcome, FactionCloneSaveBlock, FactionContributorBlock,
-    FactionContributorContext,
+    FactionApplyForJoinBlock, FactionApplyForJoinContext, FactionApplyForJoinEffects,
+    FactionApplyForJoinOutcome, FactionContributorContext,
     FactionContributorOutcome, FactionDeleteOrganizingBuildError,
     FactionDeleteOrganizingOutcome, FactionDisbandBlock, FactionDisbandContext,
     FactionDisbandOutcome, FactionDisbandProgress, FactionDisbandRejection,
@@ -1033,6 +1043,51 @@ pub(crate) enum OrganizingNameLookupBlock {
         kind: OrganizingNameKind,
         map_key: i32,
         visible_len: usize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingNameCountryBlock {
+    TargetMissing {
+        kind: OrganizingNameKind,
+        map_key: i32,
+    },
+    MissingFactionProperty {
+        map_key: i32,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingNamedUnionApplicationBlock<SessionBlock> {
+    TargetMissing {
+        map_key: i32,
+    },
+    Apply {
+        map_key: i32,
+        union_id: i32,
+        source: UnionApplyForJoinBlock<FactionUnionMembershipLookupBlock, SessionBlock>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum DetachedFactionApplicationContextBlock {
+    MembershipNullFaction {
+        map_key: i32,
+    },
+    RemovalNullFaction {
+        map_key: i32,
+        completed_removals: Vec<ApplyFactionRemoval>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionApplicationBlock {
+    TargetMissing {
+        map_key: i32,
+    },
+    Apply {
+        map_key: i32,
+        source: FactionApplyForJoinBlock<DetachedFactionApplicationContextBlock>,
     },
 }
 
@@ -1793,6 +1848,117 @@ struct UnionFactionMapView<'a> {
 pub(crate) struct COrganizingPlayerUpdater<'a> {
     controller: &'a COrganizingCtrl,
     region_types: &'a BTreeMap<i32, Option<u16>>,
+}
+
+/// Временно соединяет detached target faction с остальным controller-map.
+struct DetachedFactionApplicationContext<'a, Effects> {
+    controller: &'a mut COrganizingCtrl,
+    target_map_key: i32,
+    effects: &'a mut Effects,
+}
+
+impl<Effects> FactionOrganizingInfoContext for DetachedFactionApplicationContext<'_, Effects>
+where
+    Effects: FactionApplyForJoinEffects,
+{
+    fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
+        self.effects.world_string(string_id)
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        self.effects.send_organizing_info(request);
+    }
+}
+
+impl<Effects> FactionApplyForJoinEffects for DetachedFactionApplicationContext<'_, Effects>
+where
+    Effects: FactionApplyForJoinEffects,
+{
+    fn already_declared_for_village_war(&self, faction_id: i32) -> bool {
+        self.effects.already_declared_for_village_war(faction_id)
+    }
+
+    fn already_declared_for_city_war(&self, faction_id: i32) -> bool {
+        self.effects.already_declared_for_city_war(faction_id)
+    }
+
+    fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8> {
+        self.effects.format_world_string(string_id, arguments)
+    }
+
+    fn faction_apply_log_enabled(&self) -> bool {
+        self.effects.faction_apply_log_enabled()
+    }
+
+    fn write_faction_apply_log(
+        &mut self,
+        faction_id: i32,
+        faction_name: &[u8],
+        player_id: i32,
+        player_name: &[u8],
+        log_type: i32,
+    ) {
+        self.effects.write_faction_apply_log(
+            faction_id,
+            faction_name,
+            player_id,
+            player_name,
+            log_type,
+        );
+    }
+}
+
+impl<Effects> FactionApplyForJoinContext for DetachedFactionApplicationContext<'_, Effects>
+where
+    Effects: FactionApplyForJoinEffects,
+{
+    type Block = DetachedFactionApplicationContextBlock;
+
+    fn player_already_in_faction(
+        &self,
+        current_faction: &CFaction,
+        player_id: i32,
+    ) -> Result<bool, Self::Block> {
+        for (&map_key, faction) in &self.controller.factions {
+            let faction = if map_key == self.target_map_key {
+                current_faction
+            } else {
+                faction.as_deref().ok_or(
+                    DetachedFactionApplicationContextBlock::MembershipNullFaction { map_key },
+                )?
+            };
+            if faction.is_member(player_id) > 0 {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn remove_previous_faction_applications(
+        &mut self,
+        game: &CGame,
+        current_faction: &mut CFaction,
+        player_id: i32,
+    ) -> Result<(), Self::Block> {
+        let mut completed_removals = Vec::with_capacity(self.controller.factions.len());
+        for (&map_key, faction) in &mut self.controller.factions {
+            let outcome = if map_key == self.target_map_key {
+                current_faction.remove_apply_member(game, player_id)
+            } else {
+                let Some(faction) = faction.as_deref_mut() else {
+                    return Err(
+                        DetachedFactionApplicationContextBlock::RemovalNullFaction {
+                            map_key,
+                            completed_removals,
+                        },
+                    );
+                };
+                faction.remove_apply_member(game, player_id)
+            };
+            completed_removals.push(ApplyFactionRemoval { map_key, outcome });
+        }
+        Ok(())
+    }
 }
 
 impl COrganizingCtrl {
@@ -2639,6 +2805,129 @@ impl COrganizingCtrl {
         }
 
         Ok(None)
+    }
+
+    /// Выполняет virtual `GetCountry` для результата `FindOrgaByName`.
+    pub(crate) fn country_by_name_match(
+        &self,
+        matched: OrganizingNameMatch,
+    ) -> Result<u8, OrganizingNameCountryBlock> {
+        match matched.kind {
+            OrganizingNameKind::Faction => {
+                let faction = self
+                    .factions
+                    .get(&matched.map_key)
+                    .and_then(Option::as_deref)
+                    .ok_or(OrganizingNameCountryBlock::TargetMissing {
+                        kind: matched.kind,
+                        map_key: matched.map_key,
+                    })?;
+                faction.country().ok_or(
+                    OrganizingNameCountryBlock::MissingFactionProperty {
+                        map_key: matched.map_key,
+                    },
+                )
+            }
+            OrganizingNameKind::Union => {
+                self
+                    .confederations
+                    .get(&matched.map_key)
+                    .and_then(Option::as_deref)
+                    .ok_or(OrganizingNameCountryBlock::TargetMissing {
+                        kind: matched.kind,
+                        map_key: matched.map_key,
+                    })?;
+                Ok(0)
+            }
+        }
+    }
+
+    /// Вызывает union `ApplyForJoin` по уже найденному map-key, не повторяя
+    /// master-player lookup ветки `0x60118`.
+    pub(crate) fn apply_for_named_union_join<Effects>(
+        &mut self,
+        game: &CGame,
+        map_key: i32,
+        applicant_faction_id: i32,
+        second_parameter: i32,
+        third_parameter: i32,
+        effects: &mut Effects,
+    ) -> Result<
+        UnionApplyForJoinOutcome<Effects::SessionReport>,
+        OrganizingNamedUnionApplicationBlock<Effects::SessionBlock>,
+    >
+    where
+        Effects: UnionApplyForJoinEffects,
+    {
+        let Some(mut union) = self
+            .confederations
+            .get_mut(&map_key)
+            .and_then(Option::take)
+        else {
+            return Err(OrganizingNamedUnionApplicationBlock::TargetMissing { map_key });
+        };
+        let union_id = union.union_id();
+        let applicant_membership = self.is_free_faction(applicant_faction_id);
+        self.detached_union_membership_lookup
+            .set(Some((applicant_faction_id, applicant_membership)));
+        let result = union.apply_for_join(
+            game,
+            applicant_faction_id,
+            second_parameter,
+            third_parameter,
+            self,
+            effects,
+        );
+        self.detached_union_membership_lookup.set(None);
+        *self
+            .confederations
+            .get_mut(&map_key)
+            .expect("detached union slot не удаляется") = Some(union);
+        result.map_err(|source| OrganizingNamedUnionApplicationBlock::Apply {
+            map_key,
+            union_id,
+            source,
+        })
+    }
+
+    /// Вызывает faction `ApplyForJoin` через detached owner, сохраняя полный
+    /// signed map-order его reentrant membership/remove проходов.
+    pub(crate) fn apply_for_faction_join_by_map_key<Effects>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        map_key: i32,
+        player_id: i32,
+        second_parameter: i32,
+        third_parameter: i32,
+        effects: &mut Effects,
+    ) -> Result<FactionApplyForJoinOutcome, OrganizingFactionApplicationBlock>
+    where
+        Effects: FactionApplyForJoinEffects,
+    {
+        let Some(mut faction) = self.factions.get_mut(&map_key).and_then(Option::take) else {
+            return Err(OrganizingFactionApplicationBlock::TargetMissing { map_key });
+        };
+        let result = {
+            let mut context = DetachedFactionApplicationContext {
+                controller: self,
+                target_map_key: map_key,
+                effects,
+            };
+            faction.apply_for_join(
+                game,
+                parameters,
+                player_id,
+                second_parameter,
+                third_parameter,
+                &mut context,
+            )
+        };
+        *self
+            .factions
+            .get_mut(&map_key)
+            .expect("detached faction slot не удаляется") = Some(faction);
+        result.map_err(|source| OrganizingFactionApplicationBlock::Apply { map_key, source })
     }
 
     /// Строит payload одной 11-элементной страницы целей объявления войны.

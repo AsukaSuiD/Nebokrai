@@ -1084,6 +1084,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingDeclareFactionWarDispatch, OrganizingDeclareWarFactionListBlock,
     OrganizingDeclareWarFactionListDispatch, OrganizingFactionBillboardBlock,
     OrganizingFactionApplicationCancelBlock, OrganizingFactionApplicationCancelDispatch,
+    OrganizingFactionApplicationDispatch, OrganizingFactionApplicationDispatchBlock,
     OrganizingFactionListBlock, OrganizingFactionListDispatch,
     OrganizingFactionBillboardOutcome, OrganizingFactionContributorDispatch,
     OrganizingFactionExperienceDispatch, OrganizingFactionMemberStateDispatch,
@@ -1109,7 +1110,8 @@ use crate::worldserver::appworld::message::organsysmessage::{
     dispatch_city_gate, dispatch_city_transfer, dispatch_city_war_application,
     dispatch_change_region_router, dispatch_city_war_result,
     dispatch_consumed_long, dispatch_declare_faction_war,
-    dispatch_declare_war_faction_list, dispatch_faction_billboard, dispatch_faction_list,
+    dispatch_declare_war_faction_list, dispatch_faction_application,
+    dispatch_faction_billboard, dispatch_faction_list,
     dispatch_faction_application_cancel,
     dispatch_faction_upgrade,
     dispatch_faction_contributor, dispatch_faction_experience, dispatch_faction_member_state,
@@ -2148,6 +2150,15 @@ pub(crate) enum ProcessedWorldEvent {
         >,
         runtime: WorldUnionApplicationRuntimeReport,
     },
+    OrganizingFactionApplication {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<
+            OrganizingFactionApplicationDispatch<UnionApplicationSessionReport>,
+            OrganizingFactionApplicationDispatchBlock<UnionApplicationSessionBlock>,
+        >,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
     OrganizingDeclareFactionWar {
         source: WorldMessageSource,
         legacy_run_result: i32,
@@ -3103,6 +3114,10 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     pub(crate) faction_experience_log_enabled: bool,
     pub(crate) write_faction_experience_log:
         &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, i32),
+    /// Внешний feature-gate `CLogSystem::FactionApplyEnabled`.
+    pub(crate) faction_apply_log_enabled: bool,
+    pub(crate) write_faction_apply_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
     /// Внешний feature-gate `CLogSystem::FactionMasterChangedEnabled`.
     pub(crate) faction_master_log_enabled: bool,
     pub(crate) write_faction_master_log:
@@ -8905,8 +8920,9 @@ impl CGame {
     /// `0x5FD0B`, LeiTing update `0x5FD10`, honor
     /// `0x5FD0C/0x5FD0D`, server `0x5FA01..=0x5FA07/0x5FA09/0x5FA0F/0x5FA10`,
     /// organizing session
-    /// result, список faction страны `0x60107`, отмена заявки `0x60109`, union
-    /// application `0x60118`, leave-word enable `0x6011A`, запись
+    /// result, список faction страны `0x60107`, подача заявки `0x60108`,
+    /// отмена заявки `0x60109`, union application `0x60118`, leave-word enable
+    /// `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
     /// войны `0x6011E`, само объявление `0x6011F`, общий leaf
     /// `0x60121/0x60123`, передача города `0x60130`, admission permit
@@ -8943,6 +8959,9 @@ impl CGame {
         net_sessions: &CNetSessionManager,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+        faction_apply_log_enabled: bool,
+        write_faction_apply_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
         faction_master_log_enabled: bool,
         write_faction_master_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
@@ -9009,6 +9028,8 @@ impl CGame {
                             net_sessions,
                             application_runtime,
                             application_callbacks,
+                            faction_apply_log_enabled,
+                            &mut *write_faction_apply_log,
                             faction_master_log_enabled,
                             &mut *write_faction_master_log,
                             &mut *rs_player,
@@ -9075,10 +9096,12 @@ impl CGame {
                     original_name_index,
                     coefficients,
                     net_sessions,
-                            application_runtime,
-                            application_callbacks,
-                            faction_master_log_enabled,
-                            &mut *write_faction_master_log,
+                    application_runtime,
+                    application_callbacks,
+                    faction_apply_log_enabled,
+                    &mut *write_faction_apply_log,
+                    faction_master_log_enabled,
+                    &mut *write_faction_master_log,
                     &mut *rs_player,
                     player_database.as_deref_mut(),
                     &mut *save_thread_handle,
@@ -9144,6 +9167,9 @@ impl CGame {
         net_sessions: &CNetSessionManager,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+        faction_apply_log_enabled: bool,
+        write_faction_apply_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
         faction_master_log_enabled: bool,
         write_faction_master_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
@@ -9207,6 +9233,8 @@ impl CGame {
             net_sessions,
             application_runtime,
             application_callbacks,
+            faction_apply_log_enabled,
+            write_faction_apply_log,
             faction_master_log_enabled,
             write_faction_master_log,
             rs_player,
@@ -10403,6 +10431,8 @@ impl CGame {
             owners.net_sessions,
             owners.union_application_runtime,
             &mut union_application_callbacks,
+            callbacks.faction_apply_log_enabled,
+            &mut *callbacks.write_faction_apply_log,
             callbacks.faction_master_log_enabled,
             &mut *callbacks.write_faction_master_log,
             owners.rs_player,
@@ -13618,6 +13648,9 @@ async fn process_world_message<TimerCallback, TeamOwner>(
     net_sessions: &CNetSessionManager,
     application_runtime: &WorldUnionApplicationRuntimeOwner,
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    faction_apply_log_enabled: bool,
+    write_faction_apply_log:
+        &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
     faction_master_log_enabled: bool,
     write_faction_master_log:
         &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
@@ -15200,6 +15233,33 @@ where
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingFactionList {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        if let Some(outcome) = dispatch_faction_application(
+            &mut message,
+            game,
+            organizing,
+            organizing_parameters,
+            village_war,
+            attack_city,
+            game.setup.use_log_system,
+            faction_apply_log_enabled,
+            write_faction_apply_log,
+            &mut effects,
+        ) {
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingFactionApplication {
                 source,
                 legacy_run_result,
                 outcome,

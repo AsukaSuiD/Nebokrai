@@ -1,6 +1,6 @@
 //! Статус корпуса: `IMPLEMENTED_PARTIAL` для достигнутых organizing opcode,
-//! включая список фракций страны `0x60107`, отмену заявки `0x60109`, заявку
-//! союза `0x60118`, общий session-result dispatch, billboard
+//! включая список фракций страны `0x60107`, подачу заявки `0x60108`, отмену
+//! заявки `0x60109`, заявку союза `0x60118`, общий session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
 //! `0x6012A`, парные city-tax gate `0x6012B/0x6012C` и region-param update
@@ -24,6 +24,15 @@
 //! текущую apply-faction игрока и exact payload `AddFactionListToByteArray`.
 //! Страница вне signed wrapping-границы ответа не получает. Проверки route,
 //! exact-tail и batch-map отправка старого Linux-донора в EXE отсутствуют.
+//! Exact `0x004A6EC9..0x004A6FA7` для `0x60108` читает `(player ID,
+//! discarded Long, name[20])`, требует online player, находит faction либо
+//! union готовым `FindOrgaByName` и сравнивает virtual `GetCountry` с player
+//! country. Только при равенстве вызывает virtual
+//! `ApplyForJoin(player ID, 0, 0)`. Vtable `CUnion` подтверждает, что его
+//! `GetCountry` `0x004C1F10..0x004C1F12` возвращает literal `0`, а не страну
+//! master-faction, как предполагал старый Linux-донор. Route/tail gates и
+//! прямой wire-ответ отсутствуют; union-ветвь поэтому достижима только для
+//! player country `0` и сохраняет странный player-ID-as-faction-ID вызов.
 //! Exact `0x004A6FAC..0x004A70E1` для `0x60109` читает только player ID,
 //! запоминает первую apply-faction, удаляет player из apply-list всех faction
 //! в signed map-order и лишь при переходе `positive -> non-positive` отправляет
@@ -284,7 +293,8 @@ use crate::worldserver::appworld::goodswarmember::{
     GoodsWarRefreshReport,
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
-    FactionContributorContext, FactionEnemyMutationBlock, FactionEnemyMutationContext,
+    FactionApplyForJoinEffects, FactionApplyForJoinOutcome, FactionContributorContext,
+    FactionEnemyMutationBlock, FactionEnemyMutationContext,
     FactionEnemyWarLogArgument, FactionExperienceBlock, FactionExperienceUpdate,
     FactionLevelContext, FactionMemberInfoRequest, FactionOrganizingInfoContext,
     FactionInitialPropertyBlock, FactionOperationBlock, FactionOperationOutcome,
@@ -322,7 +332,9 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingFactionWarDeclarationBlock, WorldFactionWarDeclarationEffects,
     OrganizingLeaveWordEnableOutcome, OrganizingLeaveWordOutcome, OrganizingPronounceBlock,
     OrganizingPronounceOutcome, OrganizingUnionApplyForJoinDispatchBlock,
-    OrganizingUnionApplyForJoinOutcome, begin_city_transfer_session,
+    OrganizingUnionApplyForJoinOutcome, OrganizingFactionApplicationBlock,
+    OrganizingNameCountryBlock, OrganizingNameKind, OrganizingNameLookupBlock,
+    OrganizingNameMatch, OrganizingNamedUnionApplicationBlock, begin_city_transfer_session,
 };
 use crate::worldserver::appworld::organizingsystem::organizing::{
     ECityState, EOperator, TagTimeValue,
@@ -331,7 +343,8 @@ use crate::worldserver::appworld::organizingsystem::organizingparam::COrganizing
 use crate::worldserver::appworld::organizingsystem::union::{
     UnionAddFactionEffects, UnionApplicationEndpointBlock, UnionApplicationSessionBlock,
     UnionApplicationSessionReport, UnionApplicationSessionRequest, UnionApplicationSessionRuntime,
-    UnionApplicationTerminal, UnionApplyForJoinEffects, UnionFactionStateMutationContext,
+    UnionApplicationTerminal, UnionApplyForJoinEffects, UnionApplyForJoinOutcome,
+    UnionFactionStateMutationContext,
     UnionFormatArgument, UnionOwnedCityMutationContext,
     begin_union_application_session,
 };
@@ -349,6 +362,7 @@ const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
     [0x60117, 0x60119, 0x60120, 0x60122, 0x60124, 0x60131];
 const FACTION_LIST_MESSAGE_TYPE: i32 = 0x60107;
 const FACTION_LIST_RESPONSE_TYPE: i32 = 0x7FE07;
+const FACTION_APPLICATION_MESSAGE_TYPE: i32 = 0x60108;
 const CANCEL_FACTION_APPLICATION_MESSAGE_TYPE: i32 = 0x60109;
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
@@ -776,6 +790,66 @@ impl FactionApplicationListContext for WorldUnionApplicationEffects<'_> {
         self.game
             .online_player_by_id(player_id as u32)
             .map(|player| player.country())
+    }
+}
+
+/// Узкий war/string/log adapter faction-ветви `0x60108` поверх общего
+/// session/transport owner-а, который нужен соседней union-ветви.
+struct WorldFactionApplicationEffects<'owner, 'effects> {
+    village_war: &'owner CVillageWarSys,
+    attack_city: &'owner CAttackCitySys,
+    use_log_system: bool,
+    faction_apply_log_enabled: bool,
+    write_faction_apply_log: &'owner mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
+    owner: &'owner mut WorldUnionApplicationEffects<'effects>,
+}
+
+impl FactionOrganizingInfoContext for WorldFactionApplicationEffects<'_, '_> {
+    fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
+        Some((self.owner.callbacks.world_string)(string_id))
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.owner.game, request);
+    }
+}
+
+impl FactionApplyForJoinEffects for WorldFactionApplicationEffects<'_, '_> {
+    fn already_declared_for_village_war(&self, faction_id: i32) -> bool {
+        self.village_war.is_already_declared_for_war(faction_id)
+    }
+
+    fn already_declared_for_city_war(&self, faction_id: i32) -> bool {
+        self.attack_city.is_already_declared_for_war(faction_id)
+    }
+
+    fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| UnionFormatArgument::Text(*argument))
+            .collect::<Vec<_>>();
+        (self.owner.callbacks.format_world_string)(string_id, &arguments)
+    }
+
+    fn faction_apply_log_enabled(&self) -> bool {
+        self.use_log_system && self.faction_apply_log_enabled
+    }
+
+    fn write_faction_apply_log(
+        &mut self,
+        faction_id: i32,
+        faction_name: &[u8],
+        player_id: i32,
+        player_name: &[u8],
+        log_type: i32,
+    ) {
+        (self.write_faction_apply_log)(
+            faction_id,
+            faction_name,
+            player_id,
+            player_name,
+            log_type,
+        );
     }
 }
 
@@ -1354,6 +1428,179 @@ where
         cookie,
         player_id,
         page,
+        outcome,
+    }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionApplicationOutcome<SessionReport> {
+    PlayerOffline,
+    OrganizingNotFound,
+    CountryMismatch {
+        matched: OrganizingNameMatch,
+        player_country: u8,
+        organizing_country: u8,
+    },
+    Faction {
+        matched: OrganizingNameMatch,
+        outcome: FactionApplyForJoinOutcome,
+    },
+    Union {
+        matched: OrganizingNameMatch,
+        outcome: UnionApplyForJoinOutcome<SessionReport>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionApplicationDispatchBlock<SessionBlock> {
+    PlayerCountry {
+        player_id: i32,
+    },
+    NameLookup(OrganizingNameLookupBlock),
+    OrganizingCountry(OrganizingNameCountryBlock),
+    Faction(OrganizingFactionApplicationBlock),
+    Union(OrganizingNamedUnionApplicationBlock<SessionBlock>),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionApplicationDispatch<SessionReport> {
+    pub(crate) player_id: i32,
+    pub(crate) discarded_value: i32,
+    pub(crate) organizing_name: Vec<u8>,
+    pub(crate) outcome: OrganizingFactionApplicationOutcome<SessionReport>,
+}
+
+/// Выполняет exact `0x60108`: `(player ID, discarded Long, name[20])`,
+/// online/country gate и virtual `ApplyForJoin(player ID, 0, 0)`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn dispatch_faction_application(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    parameters: &COrganizingParam,
+    village_war: &CVillageWarSys,
+    attack_city: &CAttackCitySys,
+    use_log_system: bool,
+    faction_apply_log_enabled: bool,
+    write_faction_apply_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
+    effects: &mut WorldUnionApplicationEffects<'_>,
+) -> Option<
+    Result<
+        OrganizingFactionApplicationDispatch<UnionApplicationSessionReport>,
+        OrganizingFactionApplicationDispatchBlock<UnionApplicationSessionBlock>,
+    >,
+> {
+    if message.message_type() != FACTION_APPLICATION_MESSAGE_TYPE {
+        return None;
+    }
+
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let discarded_value = message.base_mut().get_long().unwrap_or(0);
+    let organizing_name = message
+        .base_mut()
+        .get_str_bytes(20)
+        .unwrap_or_default();
+    let Some(player) = game.online_player_by_id(player_id as u32) else {
+        return Some(Ok(OrganizingFactionApplicationDispatch {
+            player_id,
+            discarded_value,
+            organizing_name,
+            outcome: OrganizingFactionApplicationOutcome::PlayerOffline,
+        }));
+    };
+    let Some(player_country) = player.country() else {
+        return Some(Err(
+            OrganizingFactionApplicationDispatchBlock::PlayerCountry { player_id },
+        ));
+    };
+    let matched = match organizing.organizing_by_name(&organizing_name) {
+        Ok(Some(matched)) => matched,
+        Ok(None) => {
+            return Some(Ok(OrganizingFactionApplicationDispatch {
+                player_id,
+                discarded_value,
+                organizing_name,
+                outcome: OrganizingFactionApplicationOutcome::OrganizingNotFound,
+            }));
+        }
+        Err(source) => {
+            return Some(Err(
+                OrganizingFactionApplicationDispatchBlock::NameLookup(source),
+            ));
+        }
+    };
+    let organizing_country = match organizing.country_by_name_match(matched) {
+        Ok(country) => country,
+        Err(source) => {
+            return Some(Err(
+                OrganizingFactionApplicationDispatchBlock::OrganizingCountry(source),
+            ));
+        }
+    };
+    if player_country != organizing_country {
+        return Some(Ok(OrganizingFactionApplicationDispatch {
+            player_id,
+            discarded_value,
+            organizing_name,
+            outcome: OrganizingFactionApplicationOutcome::CountryMismatch {
+                matched,
+                player_country,
+                organizing_country,
+            },
+        }));
+    }
+
+    let outcome = match matched.kind {
+        OrganizingNameKind::Faction => {
+            let mut faction_effects = WorldFactionApplicationEffects {
+                village_war,
+                attack_city,
+                use_log_system,
+                faction_apply_log_enabled,
+                write_faction_apply_log,
+                owner: effects,
+            };
+            let outcome = match organizing.apply_for_faction_join_by_map_key(
+                game,
+                parameters,
+                matched.map_key,
+                player_id,
+                0,
+                0,
+                &mut faction_effects,
+            ) {
+                Ok(outcome) => outcome,
+                Err(source) => {
+                    return Some(Err(
+                        OrganizingFactionApplicationDispatchBlock::Faction(source),
+                    ));
+                }
+            };
+            OrganizingFactionApplicationOutcome::Faction { matched, outcome }
+        }
+        OrganizingNameKind::Union => {
+            let outcome = match organizing.apply_for_named_union_join(
+                game,
+                matched.map_key,
+                player_id,
+                0,
+                0,
+                effects,
+            ) {
+                Ok(outcome) => outcome,
+                Err(source) => {
+                    return Some(Err(
+                        OrganizingFactionApplicationDispatchBlock::Union(source),
+                    ));
+                }
+            };
+            OrganizingFactionApplicationOutcome::Union { matched, outcome }
+        }
+    };
+    Some(Ok(OrganizingFactionApplicationDispatch {
+        player_id,
+        discarded_value,
+        organizing_name,
         outcome,
     }))
 }
