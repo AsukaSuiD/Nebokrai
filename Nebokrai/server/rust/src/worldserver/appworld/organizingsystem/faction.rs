@@ -10,8 +10,8 @@
 //! `LeaveWord/LoadLeavewords` RVA `0x000BCA40/0x000BD3F0`,
 //! `UpdateAllApplyMemberToClient/UpdateApplyMemberToClient/RemoveApplyMember`
 //! RVA `0x000B60D0/0x000BEC80/0x000B9F50`,
-//! `ApplyForJoin/DoJoin/Exit/FireOut` RVA
-//! `0x000BE520/0x000BEE40/0x000BAAB0/0x000BB140`,
+//! `ApplyForJoin/DoJoin/Exit/FireOut/DubAndSetJobLvl` RVA
+//! `0x000BE520/0x000BEE40/0x000BAAB0/0x000BB140/0x000BB8A0`,
 //! `SendInfoToAllMember/UpdateOtherFacInfoToClient` RVA
 //! `0x000B5890/0x000B58F0`,
 //! `Talk` RVA `0x000B5A50`,
@@ -453,6 +453,17 @@
 //! `target_id + faction_name[32]`. Exact ASM `0x004BB140..0x004BB897`
 //! подтверждает порядок, framing и игнорирование send/queue результатов;
 //! Linux-донор переставлял три callback-а после удаления.
+//! `DubAndSetJobLvl` сначала передаёт изменяемый title в общий invalid-string
+//! owner, затем проверяет `PV_DubJobLevel` и диапазон job-level `1..=99`, после
+//! чего обрезает сам входной `std::string&` до 20 bytes. Title и job-level
+//! меняются независимыми ветками с `WS0195/WS0196`; только title-ветка делает
+//! player refresh. Даже при отсутствии обеих изменений owner всегда публикует
+//! member `OP_Update`, ставит dirty `2` и при включённом логе пишет title-log;
+//! old-title там остаётся пустым, если title не менялся. Exact ASM
+//! `0x004BB8A0..0x004BBFA5` подтверждает этот порядок, 100-байтовые notice-
+//! буферы и старый 32-байтовый old-title scratch. Rust сохраняет C-string
+//! prefix/tail семантику fixed title, но UB обеих `_sprintf/strcpy` границ
+//! заменяет typed progress-блокировкой; фильтр и лог остаются контекстом.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -493,6 +504,8 @@ const APPLY_PERSON_NAME_CAPACITY: usize = 20;
 const FACTION_MEMBER_NAME_CAPACITY: usize = 32;
 const FACTION_MEMBER_TEXT_CAPACITY: usize = 64;
 const FACTION_MEMBER_NOTICE_CAPACITY: usize = 260;
+const FACTION_DUB_NOTICE_CAPACITY: usize = 100;
+const FACTION_DUB_OLD_TITLE_CAPACITY: usize = 32;
 const PRONOUNCE_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_CONTENT_CAPACITY: usize = 2048;
 const OTHER_FACTION_NAME_CAPACITY: usize = 20;
@@ -964,6 +977,70 @@ pub(crate) enum FactionFireOutBlock {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionDubRejection {
+    InvalidTitle,
+    OperatorValidationFailed,
+    InvalidJobLevel,
+    TargetNotFound,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionDubNotice {
+    Title,
+    JobLevel,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionDubFormatArgument<'a> {
+    Text(&'a [u8]),
+    Signed(i32),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionDubProgress {
+    pub(crate) input_title_truncated: bool,
+    pub(crate) title_changed: bool,
+    pub(crate) job_level_changed: bool,
+    pub(crate) title_information: Option<FactionMemberInfoReport>,
+    pub(crate) title_refreshed_player_ids: Vec<i32>,
+    pub(crate) job_level_information: Option<FactionMemberInfoReport>,
+    pub(crate) member_update: Option<Result<MemberUpdateReport, MemberUpdateBuildError>>,
+    pub(crate) dirty_set: bool,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionDubOutcome {
+    Rejected {
+        reason: FactionDubRejection,
+        input_title_truncated: bool,
+    },
+    Updated {
+        progress: FactionDubProgress,
+        log_written: bool,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionDubBlock {
+    OperatorValidation(FactionOperatorValidationBlock),
+    UnterminatedMemberField {
+        player_id: i32,
+        source: UnterminatedMemberField,
+        progress: FactionDubProgress,
+    },
+    OldTitleWouldOverflow {
+        target_id: i32,
+        visible_len: usize,
+        progress: FactionDubProgress,
+    },
+    NoticeWouldOverflow {
+        notice: FactionDubNotice,
+        formatted_len: usize,
+        progress: FactionDubProgress,
+    },
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FactionLeaveWordUpdateBuildError {
     MissingLastLeaveWord,
@@ -1264,6 +1341,34 @@ pub(crate) trait FactionFireOutContext: FactionOrganizingInfoContext {
     );
 
     fn delete_goods_war_member(&mut self, player_id: i32);
+}
+
+/// Узкая граница общего text-filter, локализации, player-owner и title-log.
+pub(crate) trait FactionDubContext: FactionOrganizingInfoContext {
+    fn check_invalid_string(&mut self, value: &mut Vec<u8>, mode: bool) -> bool;
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[FactionDubFormatArgument<'_>],
+    ) -> Vec<u8>;
+
+    fn update_player_faction_info(&mut self, player_id: i32);
+
+    fn faction_title_log_enabled(&self) -> bool;
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_faction_title_log(
+        &mut self,
+        member_id: i32,
+        member_name: &[u8],
+        old_title: &[u8],
+        new_title: &[u8],
+        manager_id: i32,
+        manager_name: &[u8],
+        faction_id: i32,
+        faction_name: &[u8],
+    );
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -3284,6 +3389,244 @@ impl CFaction {
             refreshed_player_ids,
             log_written,
             local_message,
+        })
+    }
+
+    /// Изменяет title и job-level двумя независимыми исходными ветками.
+    pub(crate) fn dub_and_set_job_level<Context>(
+        &mut self,
+        game: &CGame,
+        manager_id: i32,
+        target_id: i32,
+        title: &mut Vec<u8>,
+        job_level: i32,
+        context: &mut Context,
+    ) -> Result<FactionDubOutcome, FactionDubBlock>
+    where
+        Context: FactionDubContext,
+    {
+        let mut progress = FactionDubProgress {
+            input_title_truncated: false,
+            title_changed: false,
+            job_level_changed: false,
+            title_information: None,
+            title_refreshed_player_ids: Vec::new(),
+            job_level_information: None,
+            member_update: None,
+            dirty_set: false,
+        };
+
+        if !context.check_invalid_string(title, false) {
+            send_apply_join_information(context, manager_id, b"WS0194", b"WS0193");
+            return Ok(FactionDubOutcome::Rejected {
+                reason: FactionDubRejection::InvalidTitle,
+                input_title_truncated: false,
+            });
+        }
+        let operation_valid = self
+            .check_operator_validate_target(manager_id, target_id, EPurview::DubJobLevel as i32)
+            .map_err(FactionDubBlock::OperatorValidation)?;
+        if !operation_valid {
+            return Ok(FactionDubOutcome::Rejected {
+                reason: FactionDubRejection::OperatorValidationFailed,
+                input_title_truncated: false,
+            });
+        }
+        if !(1..=99).contains(&job_level) {
+            return Ok(FactionDubOutcome::Rejected {
+                reason: FactionDubRejection::InvalidJobLevel,
+                input_title_truncated: false,
+            });
+        }
+
+        if 20 < title.len() {
+            title.truncate(20);
+            progress.input_title_truncated = true;
+        }
+        let Some(target) = self.members.get(&target_id) else {
+            return Ok(FactionDubOutcome::Rejected {
+                reason: FactionDubRejection::TargetNotFound,
+                input_title_truncated: progress.input_title_truncated,
+            });
+        };
+        let target_title_wire = match target.title_wire_bytes() {
+            Ok(value) => value,
+            Err(source) => {
+                return Err(FactionDubBlock::UnterminatedMemberField {
+                    player_id: target_id,
+                    source,
+                    progress,
+                });
+            }
+        };
+        let target_title = &target_title_wire[..target_title_wire.len() - 1];
+        let new_title = legacy_c_string_visible_bytes(title).to_vec();
+        let mut old_title = Vec::new();
+
+        if target_title != new_title {
+            if target_title.len() >= FACTION_DUB_OLD_TITLE_CAPACITY {
+                return Err(FactionDubBlock::OldTitleWouldOverflow {
+                    target_id,
+                    visible_len: target_title.len(),
+                    progress,
+                });
+            }
+            old_title.extend_from_slice(target_title);
+            let target = self
+                .members
+                .get_mut(&target_id)
+                .expect("target найден до title-ветки");
+            target.title[..new_title.len()].copy_from_slice(&new_title);
+            target.title[new_title.len()] = 0;
+            progress.title_changed = true;
+
+            let target = self
+                .members
+                .get(&target_id)
+                .expect("title-ветка не удаляет target");
+            let target_name_wire = match target.name_wire_bytes() {
+                Ok(value) => value,
+                Err(source) => {
+                    return Err(FactionDubBlock::UnterminatedMemberField {
+                        player_id: target_id,
+                        source,
+                        progress,
+                    });
+                }
+            };
+            let target_name = &target_name_wire[..target_name_wire.len() - 1];
+            let notice = context.format_world_string(
+                b"WS0195",
+                &[
+                    FactionDubFormatArgument::Text(target_name),
+                    FactionDubFormatArgument::Text(&new_title),
+                ],
+            );
+            let notice = legacy_c_string_visible_bytes(&notice);
+            if notice.len() >= FACTION_DUB_NOTICE_CAPACITY {
+                return Err(FactionDubBlock::NoticeWouldOverflow {
+                    notice: FactionDubNotice::Title,
+                    formatted_len: notice.len(),
+                    progress,
+                });
+            }
+            let second_text = context.world_string(b"WS0119").unwrap_or_default();
+            progress.title_information = Some(self.send_info_to_all_members(
+                notice,
+                legacy_c_string_visible_bytes(&second_text),
+                -1,
+                |request| context.send_organizing_info(request),
+            ));
+            progress.title_refreshed_player_ids =
+                self.update_player_faction_info(game, target_id, |player_id| {
+                    context.update_player_faction_info(player_id);
+                });
+        }
+
+        let current_job_level = self
+            .members
+            .get(&target_id)
+            .expect("target найден до job-level ветки")
+            .job_level;
+        if current_job_level != job_level {
+            self.members
+                .get_mut(&target_id)
+                .expect("target найден до job-level записи")
+                .job_level = job_level;
+            progress.job_level_changed = true;
+
+            let target = self
+                .members
+                .get(&target_id)
+                .expect("job-level ветка не удаляет target");
+            let target_name_wire = match target.name_wire_bytes() {
+                Ok(value) => value,
+                Err(source) => {
+                    return Err(FactionDubBlock::UnterminatedMemberField {
+                        player_id: target_id,
+                        source,
+                        progress,
+                    });
+                }
+            };
+            let target_name = &target_name_wire[..target_name_wire.len() - 1];
+            let notice = context.format_world_string(
+                b"WS0196",
+                &[
+                    FactionDubFormatArgument::Text(target_name),
+                    FactionDubFormatArgument::Signed(job_level),
+                ],
+            );
+            let notice = legacy_c_string_visible_bytes(&notice);
+            if notice.len() >= FACTION_DUB_NOTICE_CAPACITY {
+                return Err(FactionDubBlock::NoticeWouldOverflow {
+                    notice: FactionDubNotice::JobLevel,
+                    formatted_len: notice.len(),
+                    progress,
+                });
+            }
+            let second_text = context.world_string(b"WS0119").unwrap_or_default();
+            progress.job_level_information = Some(self.send_info_to_all_members(
+                notice,
+                legacy_c_string_visible_bytes(&second_text),
+                -1,
+                |request| context.send_organizing_info(request),
+            ));
+        }
+
+        progress.member_update = Some(self.update_member_info_to_client(
+            game,
+            target_id,
+            EOperator::Update,
+        ));
+        self.set_change_data(2);
+        progress.dirty_set = true;
+
+        let log_written = context.faction_title_log_enabled();
+        if log_written {
+            let target = self
+                .members
+                .get(&target_id)
+                .expect("успешный owner сохраняет target member");
+            let target_name_wire = match target.name_wire_bytes() {
+                Ok(value) => value,
+                Err(source) => {
+                    return Err(FactionDubBlock::UnterminatedMemberField {
+                        player_id: target_id,
+                        source,
+                        progress,
+                    });
+                }
+            };
+            let manager = self
+                .members
+                .get(&manager_id)
+                .expect("успешный CheckOperValidate сохраняет manager member");
+            let manager_name_wire = match manager.name_wire_bytes() {
+                Ok(value) => value,
+                Err(source) => {
+                    return Err(FactionDubBlock::UnterminatedMemberField {
+                        player_id: manager_id,
+                        source,
+                        progress,
+                    });
+                }
+            };
+            context.write_faction_title_log(
+                target.id,
+                &target_name_wire[..target_name_wire.len() - 1],
+                &old_title,
+                &new_title,
+                manager.id,
+                &manager_name_wire[..manager_name_wire.len() - 1],
+                self.faction_id,
+                legacy_c_string_visible_bytes(&self.name),
+            );
+        }
+
+        Ok(FactionDubOutcome::Updated {
+            progress,
+            log_written,
         })
     }
 
@@ -5940,7 +6283,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::DubAndSetJobLvl
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1759
