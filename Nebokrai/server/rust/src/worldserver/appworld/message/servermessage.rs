@@ -158,6 +158,7 @@ use crate::setup::monsterlist::{
     MonsterDropRegistry, MonsterListSerializeError, MonsterRegistry, serialize_monster_list,
 };
 use crate::setup::playerlist::{CPlayerList, PlayerListSerializeError};
+use crate::setup::preciousboxconf::{PreciousBoxConf, PreciousBoxSerializeError};
 use crate::setup::prisonconf::{PrisonConf, PrisonConfSerializeError};
 use crate::setup::tradelist::{CTradeList, TradeListSerializeError};
 use crate::worldserver::appworld::country::country::CountryKingSaveLimits;
@@ -433,6 +434,20 @@ pub(crate) enum WorldPrisonConfigurationCompletion {
 pub(crate) struct WorldPrisonConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldPrisonConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после `PreciousBoxConf`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldPreciousBoxConfigurationCompletion {
+    PreciousBox(PreciousBoxSerializeError),
+    FairyExpConfigurationPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/0x1E` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldPreciousBoxConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldPreciousBoxConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1255,6 +1270,34 @@ pub(crate) fn continue_game_server_prison_configuration(
             &payload,
         )),
         completion: WorldPrisonConfigurationCompletion::PreciousBoxConfigurationPending {
+            socket_id,
+        },
+    }
+}
+
+/// Кодирует и отправляет точный `PreciousBoxConf` initial-config packet.
+pub(crate) fn continue_game_server_precious_box_configuration(
+    game: &CGame,
+    socket_id: i32,
+    precious_boxes: &PreciousBoxConf,
+) -> WorldPreciousBoxConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = precious_boxes.add_to_byte_array(&mut payload) {
+        return WorldPreciousBoxConfigurationReport {
+            delivery: None,
+            completion: WorldPreciousBoxConfigurationCompletion::PreciousBox(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldPreciousBoxConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x1E,
+            &payload,
+        )),
+        completion: WorldPreciousBoxConfigurationCompletion::FairyExpConfigurationPending {
             socket_id,
         },
     }
