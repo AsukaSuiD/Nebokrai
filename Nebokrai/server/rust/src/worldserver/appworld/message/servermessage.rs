@@ -158,6 +158,7 @@ use crate::setup::cbattlefairyexpconfig::{
 };
 use crate::setup::contributesetup::{CContributeSetup, ContributeSetupSerializeError};
 use crate::setup::emotion::{CEmotion, EmotionSerializeError};
+use crate::setup::goodsdestructionconfig::{GoodsDestroySerializeError, GoodsDestroySetup};
 use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelSerializeError};
 use crate::setup::incrementshoplist::{CIncrementShopList, IncrementShopSerializeError};
 use crate::setup::monsterlist::{
@@ -514,6 +515,20 @@ pub(crate) enum WorldNewSkillMonsterConfigurationCompletion {
 pub(crate) struct WorldNewSkillMonsterConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldNewSkillMonsterConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после `CGoodsDestroySetup`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldGoodsDestroyConfigurationCompletion {
+    GoodsDestroy(GoodsDestroySerializeError),
+    GlobeSetupConfigurationPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/0x23` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldGoodsDestroyConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldGoodsDestroyConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1477,6 +1492,34 @@ pub(crate) fn continue_game_server_new_skill_monster_configuration(
             &payload,
         )),
         completion: WorldNewSkillMonsterConfigurationCompletion::GoodsDestroyConfigurationPending {
+            socket_id,
+        },
+    }
+}
+
+/// Кодирует и отправляет точный `CGoodsDestroySetup` initial-config packet.
+pub(crate) fn continue_game_server_goods_destroy_configuration(
+    game: &CGame,
+    socket_id: i32,
+    goods_destroy: &GoodsDestroySetup,
+) -> WorldGoodsDestroyConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = goods_destroy.add_to_byte_array(&mut payload) {
+        return WorldGoodsDestroyConfigurationReport {
+            delivery: None,
+            completion: WorldGoodsDestroyConfigurationCompletion::GoodsDestroy(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldGoodsDestroyConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x23,
+            &payload,
+        )),
+        completion: WorldGoodsDestroyConfigurationCompletion::GlobeSetupConfigurationPending {
             socket_id,
         },
     }

@@ -11,6 +11,11 @@ pub(crate) mod cbattlefairyexpconfig;
 )]
 pub(crate) mod contributesetup;
 pub(crate) mod emotion;
+#[allow(
+    dead_code,
+    reason = "goods-destroy serializer подключён к initial-config до text loader-а"
+)]
+pub(crate) mod goodsdestructionconfig;
 pub(crate) mod hitlevelsetup;
 #[allow(
     dead_code,
