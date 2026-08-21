@@ -150,6 +150,9 @@ use crate::nets::basemessage::CBaseMessage;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::networld::mynetclient::CMyNetClient;
 use crate::nets::servers::ServerCommandHandle;
+use crate::setup::cbattlefairyexpconfig::{
+    BattleFairyExpSerializeError, CBattleFairyExpConfig,
+};
 use crate::setup::contributesetup::{CContributeSetup, ContributeSetupSerializeError};
 use crate::setup::emotion::{CEmotion, EmotionSerializeError};
 use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelSerializeError};
@@ -448,6 +451,20 @@ pub(crate) enum WorldPreciousBoxConfigurationCompletion {
 pub(crate) struct WorldPreciousBoxConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldPreciousBoxConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после `CFairyExpConf`/base serializer-а.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldFairyExpConfigurationCompletion {
+    FairyExp(BattleFairyExpSerializeError),
+    SynthesisConfigurationPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/0x20` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldFairyExpConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldFairyExpConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1298,6 +1315,34 @@ pub(crate) fn continue_game_server_precious_box_configuration(
             &payload,
         )),
         completion: WorldPreciousBoxConfigurationCompletion::FairyExpConfigurationPending {
+            socket_id,
+        },
+    }
+}
+
+/// Кодирует общий base-state `CFairyExpConf` и отправляет exact packet.
+pub(crate) fn continue_game_server_fairy_exp_configuration(
+    game: &CGame,
+    socket_id: i32,
+    fairy_exp: &CBattleFairyExpConfig,
+) -> WorldFairyExpConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = fairy_exp.add_to_byte_array(&mut payload) {
+        return WorldFairyExpConfigurationReport {
+            delivery: None,
+            completion: WorldFairyExpConfigurationCompletion::FairyExp(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldFairyExpConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x20,
+            &payload,
+        )),
+        completion: WorldFairyExpConfigurationCompletion::SynthesisConfigurationPending {
             socket_id,
         },
     }

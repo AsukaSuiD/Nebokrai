@@ -1,6 +1,104 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Таблица опыта боевых духов исторического Miracle.
+//!
+//! Статус World `CBattleFairyExpConfig::AddToByteArray` RVA `0x00049120`:
+//! `IMPLEMENTED`; XML loaders, singleton plumbing и Game decoder/query ниже
+//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
+//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
+//! SHA-256 PDB
+//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Исходный владелец PDB:
+//! `e:\svn\fengyun_russia_dev\server\setup\cbattlefairyexpconfig.cpp:175`.
+//!
+//! `CFairyExpConf` наследует этот owner и заполняет тот же protected map своим
+//! XML loader-ом. Поэтому reconnect call-site получает `CFairyExpConf`
+//! singleton, но вызывает именно base serializer. Wire: signed group count,
+//! затем ordered `u32 owner_level + signed value_count + u32 exp...`; все поля
+//! передаются little-endian по четыре байта. `BTreeMap<u32, Vec<u32>>`
+//! сохраняет MSVC map/vector контракт, а Rust ownership заменяет singleton
+//! allocation и ручной lifetime без изменения wire.
+
+use std::collections::BTreeMap;
+use std::error::Error;
+use std::fmt;
+
+/// Safe owner общего state `CBattleFairyExpConfig`/`CFairyExpConf`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CBattleFairyExpConfig {
+    exp_lists: BTreeMap<u32, Vec<u32>>,
+}
+
+impl CBattleFairyExpConfig {
+    /// Явная граница для последующего точного XML loader-а производного owner-а.
+    pub(crate) fn insert_exp_list(
+        &mut self,
+        owner_level: u32,
+        values: Vec<u32>,
+    ) -> Option<Vec<u32>> {
+        self.exp_lists.insert(owner_level, values)
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.exp_lists.clear();
+    }
+
+    /// Дописывает exact ordered map/vector wire.
+    pub(crate) fn add_to_byte_array(
+        &self,
+        destination: &mut Vec<u8>,
+    ) -> Result<(), BattleFairyExpSerializeError> {
+        write_count(destination, self.exp_lists.len(), None)?;
+        for (&owner_level, values) in &self.exp_lists {
+            destination.extend_from_slice(&owner_level.to_le_bytes());
+            write_count(destination, values.len(), Some(owner_level))?;
+            for &value in values {
+                destination.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyExpSerializeError {
+    pub(crate) owner_level: Option<u32>,
+    pub(crate) count: usize,
+}
+
+impl fmt::Display for BattleFairyExpSerializeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.owner_level {
+            Some(owner_level) => write!(
+                formatter,
+                "таблица owner level {owner_level} содержит {} значений вне signed 32-битного диапазона",
+                self.count
+            ),
+            None => write!(
+                formatter,
+                "FairyExp содержит {} групп вне signed 32-битного диапазона",
+                self.count
+            ),
+        }
+    }
+}
+
+impl Error for BattleFairyExpSerializeError {}
+
+fn write_count(
+    destination: &mut Vec<u8>,
+    count: usize,
+    owner_level: Option<u32>,
+) -> Result<(), BattleFairyExpSerializeError> {
+    let count_i32 = i32::try_from(count).map_err(|_| BattleFairyExpSerializeError {
+        owner_level,
+        count,
+    })?;
+    destination.extend_from_slice(&count_i32.to_le_bytes());
+    Ok(())
+}
+
+// Сырой C++ ниже сохранён как локальная документация loaders, singleton и
+// Game decoder/query, а не как Rust-реализация.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
