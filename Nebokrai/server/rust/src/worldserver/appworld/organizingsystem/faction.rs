@@ -33,7 +33,7 @@
 //! `OnMemberExitGame` RVA `0x000B64D0`,
 //! `ClearApplyList/IsInApplyMembers` RVA `0x000B6450/0x000B6760`,
 //! free owner `GoodsWarCheckforFaction` RVA `0x000B5070`,
-//! `InitialPropertyByLvl` RVA `0x000B4BA0`,
+//! `Initial/InitialPropertyByLvl` RVA `0x000BD950/0x000B4BA0`,
 //! `AddEnemyFactionsToByteArray/AddCityWarEnemyFactionsToByteArray` RVA
 //! `0x000B5E40/0x000B5ED0`,
 //! `ClearEnemyFation/ClearCityWarEnemyFation` RVA `0x000B6030/0x000B6080`,
@@ -104,6 +104,14 @@
 //! upgrade experience — только после неё. Поэтому отсутствующий уровень
 //! сохраняет уже выполненный prefix и возвращает старый `false`; отсутствующий
 //! live property остаётся отдельной safe-границей узкого Rust-owner-а.
+//! `Initial` для нового owner-а материализован в `CFaction::for_creation`:
+//! master берётся из online player либо получает literal level/occupation
+//! `1/1`, job-level `1`, title `WS0157`, established time и все права `Permit`,
+//! кроме `PV_DubJobLvl = No`. Property начинает с level/member-count `1/1`,
+//! permit `true`, countdown — с `m_lDisbandFactionTime`, после чего вызывается
+//! тот же `InitialPropertyByLvl`. Exact ASM `0x004BD950..0x004BDD69`
+//! подтверждает порядок и значения. Небезопасные `strcpy` имени, title и
+//! region заменены typed overflow-границей, не меняющей допустимые строки.
 //! `SetSuperiorOrganizing` так же принимает параметры явно. Машинный проход
 //! `0x004B5110..0x004B5167` подтверждает, что union ID меняется первым, positive
 //! ID только отменяет положительный countdown, а negative/zero ID сравнивает
@@ -786,6 +794,20 @@ pub(crate) enum FactionCloneSaveBlock {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FactionInitialPropertyBlock;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionInitialStringField {
+    MasterName,
+    MasterTitle,
+    MasterRegion,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FactionInitialBlock {
+    pub(crate) field: FactionInitialStringField,
+    pub(crate) visible_len: usize,
+    pub(crate) capacity: usize,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FactionSuperiorOrganizingBlock {
@@ -2710,6 +2732,102 @@ impl CFaction {
             goods_war_count: 0,
             goods_war_last_win_time: String::new(),
         }
+    }
+
+    /// Строит exact live-state нового `CFaction` из constructor + `Initial`.
+    ///
+    /// MSVC `strcpy` для трёх fixed-полей заменён явной границей: допустимые
+    /// C-string дают те же байты, а переполнение не превращается в memory UB.
+    pub(crate) fn for_creation(
+        faction_id: i32,
+        master_id: i32,
+        established_time: TagTimeValue,
+        faction_name: &[u8],
+        master_title: &[u8],
+        game: &CGame,
+        parameters: &COrganizingParam,
+    ) -> Result<Self, FactionInitialBlock> {
+        let (master_name, master_level, master_occupation, master_region) =
+            if let Some(player) = game.online_player_by_id(master_id as u32) {
+                let master_name = fixed_initial_string::<FACTION_MEMBER_NAME_CAPACITY>(
+                    FactionInitialStringField::MasterName,
+                    player.get_name(),
+                )?;
+                let region_name = match game.region_name(player.get_region_id()) {
+                    WorldRegionNameLookup::RegionNotFound
+                    | WorldRegionNameLookup::NullRegionPointer => &[][..],
+                    WorldRegionNameLookup::Name(name) => name,
+                };
+                let master_region = fixed_initial_string::<FACTION_MEMBER_TEXT_CAPACITY>(
+                    FactionInitialStringField::MasterRegion,
+                    region_name,
+                )?;
+                (
+                    master_name,
+                    i32::from(player.get_level()),
+                    i32::from(player.get_occupation()),
+                    master_region,
+                )
+            } else {
+                (
+                    [0; FACTION_MEMBER_NAME_CAPACITY],
+                    1,
+                    1,
+                    [0; FACTION_MEMBER_TEXT_CAPACITY],
+                )
+            };
+        let master_title = fixed_initial_string::<FACTION_MEMBER_TEXT_CAPACITY>(
+            FactionInitialStringField::MasterTitle,
+            master_title,
+        )?;
+
+        let mut purview = [EPurviewOwnState::Permit; 11];
+        purview[EPurview::DubJobLevel.index()] = EPurviewOwnState::No;
+        let master = TagMemInfo::from_complete_fields(
+            master_id,
+            master_name,
+            master_level,
+            master_occupation,
+            1,
+            master_title,
+            purview,
+            master_region,
+            established_time,
+            false,
+        );
+
+        let mut property = FactionBaseProperty::from_complete_bytes([0; FACTION_BASE_PROPERTY_SIZE]);
+        property.write_signed(0x00, 1);
+        property.write_signed(0x14, 1);
+        property.set_permit(true);
+
+        let mut faction = Self {
+            faction_id,
+            name: legacy_c_string_visible_bytes(faction_name).to_vec(),
+            master_id: Some(master_id),
+            members: BTreeMap::from([(master_id, master)]),
+            base_property: Some(property),
+            established_time: Some(established_time),
+            delete_remain_time: Some(parameters.disband_faction_minutes()),
+            owned_cities: VecDeque::new(),
+            enemy_factions: BTreeSet::new(),
+            city_war_enemy_factions: BTreeSet::new(),
+            permit_demise: Some(true),
+            enemy_factions_changed: None,
+            city_war_enemy_factions_changed: None,
+            apply_persons: BTreeMap::new(),
+            pronounce: TagPronounceWord::ZERO,
+            leave_words: VecDeque::new(),
+            last_upload_icon_time: established_time,
+            icon_data: Vec::new(),
+            change_data_type: 0,
+            goods_war_count: 0,
+            goods_war_last_win_time: String::new(),
+        };
+        let _ = faction
+            .initial_property_by_level(parameters)
+            .expect("for_creation всегда материализует полный base property");
+        Ok(faction)
     }
 
     /// Возвращает исходный signed `m_lID`.
@@ -7693,6 +7811,23 @@ fn fixed_do_join_string<const CAPACITY: usize, ContextBlock>(
     Ok(output)
 }
 
+fn fixed_initial_string<const CAPACITY: usize>(
+    field: FactionInitialStringField,
+    value: &[u8],
+) -> Result<[u8; CAPACITY], FactionInitialBlock> {
+    let visible = legacy_c_string_visible_bytes(value);
+    if visible.len() >= CAPACITY {
+        return Err(FactionInitialBlock {
+            field,
+            visible_len: visible.len(),
+            capacity: CAPACITY,
+        });
+    }
+    let mut output = [0; CAPACITY];
+    output[..visible.len()].copy_from_slice(visible);
+    Ok(output)
+}
+
 fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
     output.extend_from_slice(&(values.len() as u32).to_le_bytes());
     for &value in values {
@@ -9041,7 +9176,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::Initial
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:66
@@ -9049,6 +9184,8 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 // ADDRESS: 004bd950
 // PROTOTYPE: bool __thiscall Initial(void)
 //
+// IMPLEMENTED_OWNER: `CFaction::for_creation` выше материализует constructor
+// state и exact initial-state без allocator/STL plumbing.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
