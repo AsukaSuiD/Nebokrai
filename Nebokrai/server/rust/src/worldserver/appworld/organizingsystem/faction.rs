@@ -483,7 +483,7 @@
 //! 256-байтовый buffer и рассылает его всем member key. Exact ASM
 //! `0x004B8710..0x004B893C` и `0x004B8940..0x004B8A18` подтверждает порядок;
 //! typed block сохраняет уже изменённое поле вместо воспроизведения overflow.
-//! `Upgrade` проверяет membership, level `<12`, current level-record, faction
+//! `Upgrade` проверяет master-owner (`vtable +0xD8`), level `<12`, current level-record, faction
 //! experience, online-player, unsigned money, master-level и optional goods
 //! именно в этом порядке; отказы `WS0220..WS0223` адресуются инициатору.
 //! Success сначала вызывает полный `SetLvl`, затем `SetExp`, отправляет charge
@@ -496,22 +496,37 @@
 //! заставляет `SetExp` вернуть MaximumLevel без списания faction experience.
 //! Goods catalog, inventory/money и DB-log остаются узким контекстом; charge и
 //! wire framing строятся существующим `CMessage`.
-//! `SetControbuter` допускает любого текущего member-а как requester-а, при
+//! `SetControbuter` допускает только текущего master-а как requester-а, при
 //! включении проверяет signed maximum contributor-ов, затем меняет target flag.
 //! После мутации exact order: member `Update`, player refresh, форматированный
 //! `WS0227/WS0228(target name)`, broadcast с `WS0119`, типом `-1` и цветом
 //! `0x87A238`, затем dirty `2`. ASM `0x004B92F0..0x004B9509` подтверждает два
 //! разных requester/target ID, 256-байтовый `_sprintf` buffer и отсутствие
-//! отдельной purview-проверки. Локализация и player-owner остаются контекстом;
+//! отдельной purview-проверки. Vtable подтверждает `+0xD8 = IsMaster`, а не
+//! донорский `IsMember`. Локализация и player-owner остаются контекстом;
 //! нетерминированное имя и overflow заменены typed-границами после уже
 //! совершённых эффектов.
 //! `UploadIcon`, вопреки имени, не принимает icon bytes и не выполняет file I/O:
-//! аргумент `tagTime` не читается. Member-gate и property flag дают silent miss
+//! аргумент `tagTime` не читается. Master-gate (`vtable +0xD8`) и property flag дают silent miss
 //! либо `WS0225/WS0119`; разрешённый interval `<1` лишь ставит dirty `8` и
 //! возвращает `true`, положительный interval отправляет `WS0226(minutes)` и
 //! возвращает `false`. Exact ASM `0x004B8F30..0x004B92ED` подтверждает
 //! 256-байтовый `_sprintf` buffer и отсутствие иных эффектов. Локализация
 //! остаётся тонким контекстом, overflow старого buffer-а — typed-границей.
+//! `Demise` начинает с `IsMaster(old)` и `IsMember(new)`, затем дважды вызывает
+//! один и тот же `CAttackCitySys::IsAlreadyDeclarForWar`: после обычного и
+//! city enemy-set. Этот наблюдаемый quirk сохранён, как и literal `"???"` для
+//! Goods War. Оба игрока обязаны быть online и не иметь
+//! `m_bFactionWarOperator`; новый master проходит level, transient permit и
+//! country-king gates. Success меняет master ID, title/job/purview обоих
+//! member-ов, публикует `Update(old)`, `Update(new)`, dirty `1`, dirty `2`,
+//! refresh `0`, затем `WS0219(old,new)` с цветом `0x87A238` и optional log.
+//! Exact ASM `0x004BFDE0..0x004C0874` подтверждает этот порядок, true/false и
+//! размеры buffers: 256 для block notice, 100 для success. Старый
+//! `map::operator[]` при отсутствующем old-master создавал запись из частично
+//! неинициализированного stack-value; corrupted invariant теперь даёт typed
+//! block без UB. Fixed title/name/format overflows также остаются локальными
+//! typed-границами, country/war/log plumbing — узким контекстом.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -560,6 +575,8 @@ const FACTION_MAXIMUM_MEMBERS_NOTICE_CAPACITY: usize = 256;
 const FACTION_UPGRADE_NOTICE_CAPACITY: usize = 256;
 const FACTION_CONTRIBUTOR_NOTICE_CAPACITY: usize = 256;
 const FACTION_UPLOAD_ICON_NOTICE_CAPACITY: usize = 256;
+const FACTION_DEMISE_BLOCK_NOTICE_CAPACITY: usize = 256;
+const FACTION_DEMISE_NOTICE_CAPACITY: usize = 100;
 const PRONOUNCE_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_CONTENT_CAPACITY: usize = 2048;
 const OTHER_FACTION_NAME_CAPACITY: usize = 20;
@@ -1189,7 +1206,7 @@ pub(crate) enum FactionLevelBlock {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FactionUpgradeRejection {
-    PlayerNotMember,
+    PlayerNotMaster,
     MaximumLevel,
     CurrentLevelParametersMissing,
     InsufficientExperience,
@@ -1275,7 +1292,7 @@ pub(crate) enum FactionUpgradeBlock {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FactionContributorRejection {
-    RequesterNotMember,
+    RequesterNotMaster,
     MaximumContributors,
     TargetNotMember,
     Unchanged,
@@ -1315,7 +1332,7 @@ pub(crate) enum FactionContributorBlock {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FactionUploadIconRejection {
-    PlayerNotMember,
+    PlayerNotMaster,
     FunctionDisabled,
     IntervalActive,
 }
@@ -1336,6 +1353,92 @@ pub(crate) enum FactionUploadIconBlock {
     MissingBaseProperty,
     NoticeWouldOverflow {
         formatted_len: usize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionDemiseRejection {
+    SamePlayer,
+    OldPlayerNotMaster,
+    NewPlayerNotMember,
+    StandardWar,
+    CityWar,
+    GoodsWar,
+    OldPlayerOffline,
+    NewPlayerOffline,
+    NewPlayerOperatingFactionWar,
+    OldPlayerOperatingFactionWar,
+    NewMasterLevelTooLow,
+    DemiseForbidden,
+    CountryKingBlocked,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionDemiseMember {
+    OldMaster,
+    NewMaster,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionDemiseNotice {
+    RequiredLevel,
+    DemiseForbidden,
+    CountryKingBlocked,
+    Success,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionDemiseProgress {
+    pub(crate) permit_demise_disabled: bool,
+    pub(crate) master_changed: bool,
+    pub(crate) new_member_changed: bool,
+    pub(crate) old_member_changed: bool,
+    pub(crate) old_member_update: Option<MemberUpdateReport>,
+    pub(crate) new_member_update: Option<MemberUpdateReport>,
+    pub(crate) base_dirty_set: bool,
+    pub(crate) members_dirty_set: bool,
+    pub(crate) refreshed_player_ids: Vec<i32>,
+    pub(crate) member_information: Option<FactionMemberInfoReport>,
+    pub(crate) log_written: bool,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionDemiseOutcome {
+    Rejected {
+        reason: FactionDemiseRejection,
+        notice_sent: bool,
+    },
+    Transferred(FactionDemiseProgress),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionDemiseBlock {
+    MissingBaseProperty,
+    PermitDemiseUnknown,
+    OldMasterMemberMissing {
+        player_id: i32,
+    },
+    TitleWouldOverflow {
+        member: FactionDemiseMember,
+        string_id: &'static [u8],
+        visible_len: usize,
+        progress: FactionDemiseProgress,
+    },
+    MemberUpdate {
+        member: FactionDemiseMember,
+        source: MemberUpdateBuildError,
+        progress: FactionDemiseProgress,
+    },
+    UnterminatedMemberName {
+        member: FactionDemiseMember,
+        player_id: i32,
+        source: UnterminatedMemberField,
+        progress: FactionDemiseProgress,
+    },
+    NoticeWouldOverflow {
+        notice: FactionDemiseNotice,
+        formatted_len: usize,
+        progress: FactionDemiseProgress,
     },
 }
 
@@ -1740,6 +1843,43 @@ pub(crate) trait FactionUploadIconContext: FactionOrganizingInfoContext {
         string_id: &'static [u8],
         interval_minutes: i32,
     ) -> Vec<u8>;
+}
+
+/// Узкая граница war/country/localization/player-refresh/log для `Demise`.
+pub(crate) trait FactionDemiseContext: FactionOrganizingInfoContext {
+    fn attack_city_system_declared(&self, faction_id: i32) -> bool;
+
+    fn goods_war_blocks_demise(&self, faction_id: i32, old_master_id: i32) -> bool;
+
+    fn country_blocks_demise(&self, country: u8, old_master_id: i32) -> bool;
+
+    fn format_demise_signed(
+        &mut self,
+        string_id: &'static [u8],
+        value: i32,
+    ) -> Vec<u8>;
+
+    fn format_demise_change(
+        &mut self,
+        string_id: &'static [u8],
+        old_master_name: &[u8],
+        new_master_name: &[u8],
+    ) -> Vec<u8>;
+
+    fn update_player_faction_info(&mut self, player_id: i32);
+
+    fn faction_master_log_enabled(&self) -> bool;
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_faction_master_log(
+        &mut self,
+        old_master_id: i32,
+        old_master_name: &[u8],
+        new_master_id: i32,
+        new_master_name: &[u8],
+        faction_id: i32,
+        faction_name: &[u8],
+    );
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -4183,9 +4323,9 @@ impl CFaction {
         Context: FactionUpgradeContext,
     {
         let mut progress = empty_faction_upgrade_progress();
-        if self.is_member(player_id) == 0 {
+        if self.is_master(player_id) == 0 {
             return Ok(FactionUpgradeOutcome::Rejected {
-                reason: FactionUpgradeRejection::PlayerNotMember,
+                reason: FactionUpgradeRejection::PlayerNotMaster,
                 notice_sent: false,
                 progress,
             });
@@ -4444,7 +4584,7 @@ impl CFaction {
             let member = self
                 .members
                 .get(&player_id)
-                .expect("membership gate и Upgrade не удаляют member");
+                .expect("master invariant и Upgrade не удаляют member");
             let member_name_wire = match member.name_wire_bytes() {
                 Ok(value) => value,
                 Err(source) => {
@@ -5141,9 +5281,9 @@ impl CFaction {
     where
         Context: FactionUploadIconContext,
     {
-        if self.is_member(player_id) == 0 {
+        if self.is_master(player_id) == 0 {
             return Ok(FactionUploadIconOutcome::Rejected {
-                reason: FactionUploadIconRejection::PlayerNotMember,
+                reason: FactionUploadIconRejection::PlayerNotMaster,
                 notice_sent: false,
             });
         }
@@ -5184,6 +5324,334 @@ impl CFaction {
             reason: FactionUploadIconRejection::IntervalActive,
             notice_sent: true,
         })
+    }
+
+    /// Передаёт leadership с точными gates, member-state и порядком публикации.
+    pub(crate) fn demise<Context>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        old_master_id: i32,
+        new_master_id: i32,
+        context: &mut Context,
+    ) -> Result<FactionDemiseOutcome, FactionDemiseBlock>
+    where
+        Context: FactionDemiseContext,
+    {
+        if old_master_id == new_master_id {
+            return Ok(FactionDemiseOutcome::Rejected {
+                reason: FactionDemiseRejection::SamePlayer,
+                notice_sent: false,
+            });
+        }
+        if self.is_master(old_master_id) == 0 {
+            return Ok(FactionDemiseOutcome::Rejected {
+                reason: FactionDemiseRejection::OldPlayerNotMaster,
+                notice_sent: false,
+            });
+        }
+        if self.is_member(new_master_id) == 0 {
+            return Ok(FactionDemiseOutcome::Rejected {
+                reason: FactionDemiseRejection::NewPlayerNotMember,
+                notice_sent: false,
+            });
+        }
+        if self.has_enemy_faction() || context.attack_city_system_declared(self.faction_id) {
+            send_apply_join_information(context, old_master_id, b"WS0213", b"WS0119");
+            return Ok(FactionDemiseOutcome::Rejected {
+                reason: FactionDemiseRejection::StandardWar,
+                notice_sent: true,
+            });
+        }
+        if self.has_city_war_enemy_faction()
+            || context.attack_city_system_declared(self.faction_id)
+        {
+            send_apply_join_information(context, old_master_id, b"WS0214", b"WS0119");
+            return Ok(FactionDemiseOutcome::Rejected {
+                reason: FactionDemiseRejection::CityWar,
+                notice_sent: true,
+            });
+        }
+        if context.goods_war_blocks_demise(self.faction_id, old_master_id) {
+            let second_text = context.world_string(b"WS0119").unwrap_or_default();
+            context.send_organizing_info(FactionMemberInfoRequest {
+                recipient_player_id: old_master_id,
+                first_text: b"???",
+                second_text: legacy_c_string_visible_bytes(&second_text),
+                information_type: -1,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            });
+            return Ok(FactionDemiseOutcome::Rejected {
+                reason: FactionDemiseRejection::GoodsWar,
+                notice_sent: true,
+            });
+        }
+
+        let old_player = game.online_player_by_id(old_master_id as u32);
+        let new_player = game.online_player_by_id(new_master_id as u32);
+        let Some(old_player) = old_player else {
+            return Ok(FactionDemiseOutcome::Rejected {
+                reason: FactionDemiseRejection::OldPlayerOffline,
+                notice_sent: false,
+            });
+        };
+        let Some(new_player) = new_player else {
+            return Ok(FactionDemiseOutcome::Rejected {
+                reason: FactionDemiseRejection::NewPlayerOffline,
+                notice_sent: false,
+            });
+        };
+        if new_player.faction_war_operator() {
+            return Ok(FactionDemiseOutcome::Rejected {
+                reason: FactionDemiseRejection::NewPlayerOperatingFactionWar,
+                notice_sent: false,
+            });
+        }
+        if old_player.faction_war_operator() {
+            return Ok(FactionDemiseOutcome::Rejected {
+                reason: FactionDemiseRejection::OldPlayerOperatingFactionWar,
+                notice_sent: false,
+            });
+        }
+
+        let required_level = parameters.create_faction_player_level();
+        if i32::from(new_player.get_level()) < required_level {
+            let notice = context.format_demise_signed(b"WS0215", required_level);
+            let notice = bounded_demise_notice(&notice, FACTION_DEMISE_BLOCK_NOTICE_CAPACITY)
+                .map_err(|formatted_len| FactionDemiseBlock::NoticeWouldOverflow {
+                    notice: FactionDemiseNotice::RequiredLevel,
+                    formatted_len,
+                    progress: empty_faction_demise_progress(),
+                })?;
+            let second_text = context.world_string(b"WS0119").unwrap_or_default();
+            context.send_organizing_info(FactionMemberInfoRequest {
+                recipient_player_id: old_master_id,
+                first_text: &notice,
+                second_text: legacy_c_string_visible_bytes(&second_text),
+                information_type: -1,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            });
+            return Ok(FactionDemiseOutcome::Rejected {
+                reason: FactionDemiseRejection::NewMasterLevelTooLow,
+                notice_sent: true,
+            });
+        }
+
+        let permit_demise = self
+            .permit_demise
+            .ok_or(FactionDemiseBlock::PermitDemiseUnknown)?;
+        if !permit_demise {
+            let notice = context.world_string(b"WS0216").unwrap_or_default();
+            let notice = bounded_demise_notice(&notice, FACTION_DEMISE_BLOCK_NOTICE_CAPACITY)
+                .map_err(|formatted_len| FactionDemiseBlock::NoticeWouldOverflow {
+                    notice: FactionDemiseNotice::DemiseForbidden,
+                    formatted_len,
+                    progress: empty_faction_demise_progress(),
+                })?;
+            let second_text = context.world_string(b"WS0119").unwrap_or_default();
+            context.send_organizing_info(FactionMemberInfoRequest {
+                recipient_player_id: old_master_id,
+                first_text: &notice,
+                second_text: legacy_c_string_visible_bytes(&second_text),
+                information_type: -1,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            });
+            return Ok(FactionDemiseOutcome::Rejected {
+                reason: FactionDemiseRejection::DemiseForbidden,
+                notice_sent: true,
+            });
+        }
+
+        let country = self
+            .country()
+            .ok_or(FactionDemiseBlock::MissingBaseProperty)?;
+        if context.country_blocks_demise(country, old_master_id) {
+            let notice = context.format_demise_signed(b"WS0217", required_level);
+            let notice = bounded_demise_notice(&notice, FACTION_DEMISE_BLOCK_NOTICE_CAPACITY)
+                .map_err(|formatted_len| FactionDemiseBlock::NoticeWouldOverflow {
+                    notice: FactionDemiseNotice::CountryKingBlocked,
+                    formatted_len,
+                    progress: empty_faction_demise_progress(),
+                })?;
+            let second_text = context.world_string(b"WS0119").unwrap_or_default();
+            context.send_organizing_info(FactionMemberInfoRequest {
+                recipient_player_id: old_master_id,
+                first_text: &notice,
+                second_text: legacy_c_string_visible_bytes(&second_text),
+                information_type: -1,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            });
+            return Ok(FactionDemiseOutcome::Rejected {
+                reason: FactionDemiseRejection::CountryKingBlocked,
+                notice_sent: true,
+            });
+        }
+
+        if !self.members.contains_key(&old_master_id) {
+            return Err(FactionDemiseBlock::OldMasterMemberMissing {
+                player_id: old_master_id,
+            });
+        }
+
+        let mut progress = empty_faction_demise_progress();
+        self.permit_demise = Some(false);
+        progress.permit_demise_disabled = true;
+        self.master_id = Some(new_master_id);
+        progress.master_changed = true;
+
+        let new_title_source = context.world_string(b"WS0157").unwrap_or_default();
+        let new_title = match fixed_demise_title(&new_title_source) {
+            Ok(title) => title,
+            Err(visible_len) => {
+                return Err(FactionDemiseBlock::TitleWouldOverflow {
+                    member: FactionDemiseMember::NewMaster,
+                    string_id: b"WS0157",
+                    visible_len,
+                    progress,
+                });
+            }
+        };
+        let new_member = self
+            .members
+            .get_mut(&new_master_id)
+            .expect("IsMember(new) и Demise не удаляют member");
+        new_member.title = new_title;
+        new_member.job_level = 1;
+        new_member.id = new_master_id;
+        new_member.purview = demise_new_master_purview();
+        progress.new_member_changed = true;
+
+        let old_title_source = context.world_string(b"WS0218").unwrap_or_default();
+        let old_title = match fixed_demise_title(&old_title_source) {
+            Ok(title) => title,
+            Err(visible_len) => {
+                return Err(FactionDemiseBlock::TitleWouldOverflow {
+                    member: FactionDemiseMember::OldMaster,
+                    string_id: b"WS0218",
+                    visible_len,
+                    progress,
+                });
+            }
+        };
+        let old_member = self
+            .members
+            .get_mut(&old_master_id)
+            .expect("old-master invariant проверен до leadership mutation");
+        old_member.id = old_master_id;
+        old_member.job_level = 99;
+        old_member.title = old_title;
+        old_member.purview = demise_old_master_purview();
+        progress.old_member_changed = true;
+
+        progress.old_member_update = Some(match self.update_member_info_to_client(
+            game,
+            old_master_id,
+            EOperator::Update,
+        ) {
+            Ok(report) => report,
+            Err(source) => {
+                return Err(FactionDemiseBlock::MemberUpdate {
+                    member: FactionDemiseMember::OldMaster,
+                    source,
+                    progress,
+                });
+            }
+        });
+        progress.new_member_update = Some(match self.update_member_info_to_client(
+            game,
+            new_master_id,
+            EOperator::Update,
+        ) {
+            Ok(report) => report,
+            Err(source) => {
+                return Err(FactionDemiseBlock::MemberUpdate {
+                    member: FactionDemiseMember::NewMaster,
+                    source,
+                    progress,
+                });
+            }
+        });
+        self.set_change_data(1);
+        progress.base_dirty_set = true;
+        self.set_change_data(2);
+        progress.members_dirty_set = true;
+        progress.refreshed_player_ids = self.update_player_faction_info(game, 0, |player_id| {
+            context.update_player_faction_info(player_id);
+        });
+
+        let old_master_name = match self
+            .members
+            .get(&old_master_id)
+            .expect("old-master member сохранён")
+            .name_wire_bytes()
+        {
+            Ok(name) => name[..name.len() - 1].to_vec(),
+            Err(source) => {
+                return Err(FactionDemiseBlock::UnterminatedMemberName {
+                    member: FactionDemiseMember::OldMaster,
+                    player_id: old_master_id,
+                    source,
+                    progress,
+                });
+            }
+        };
+        let new_master_name = match self
+            .members
+            .get(&new_master_id)
+            .expect("new-master member сохранён")
+            .name_wire_bytes()
+        {
+            Ok(name) => name[..name.len() - 1].to_vec(),
+            Err(source) => {
+                return Err(FactionDemiseBlock::UnterminatedMemberName {
+                    member: FactionDemiseMember::NewMaster,
+                    player_id: new_master_id,
+                    source,
+                    progress,
+                });
+            }
+        };
+        let notice = context.format_demise_change(
+            b"WS0219",
+            &old_master_name,
+            &new_master_name,
+        );
+        let notice = match bounded_demise_notice(&notice, FACTION_DEMISE_NOTICE_CAPACITY) {
+            Ok(notice) => notice,
+            Err(formatted_len) => {
+                return Err(FactionDemiseBlock::NoticeWouldOverflow {
+                    notice: FactionDemiseNotice::Success,
+                    formatted_len,
+                    progress,
+                });
+            }
+        };
+        let second_text = context.world_string(b"WS0119").unwrap_or_default();
+        progress.member_information = Some(self.send_info_to_all_members_with_color(
+            &notice,
+            legacy_c_string_visible_bytes(&second_text),
+            -1,
+            0x0087_A238,
+            |request| context.send_organizing_info(request),
+        ));
+
+        if context.faction_master_log_enabled() {
+            context.write_faction_master_log(
+                old_master_id,
+                &old_master_name,
+                new_master_id,
+                &new_master_name,
+                self.faction_id,
+                legacy_c_string_visible_bytes(&self.name),
+            );
+            progress.log_written = true;
+        }
+
+        Ok(FactionDemiseOutcome::Transferred(progress))
     }
 
     /// Передаёт organizing-info каждому member без online-фильтра этого owner-а.
@@ -5622,9 +6090,9 @@ impl CFaction {
     where
         Context: FactionContributorContext,
     {
-        if self.is_member(requester_id) == 0 {
+        if self.is_master(requester_id) == 0 {
             return Ok(FactionContributorOutcome::Rejected(
-                FactionContributorRejection::RequesterNotMember,
+                FactionContributorRejection::RequesterNotMaster,
             ));
         }
         if enabled && parameters.maximum_contributors() <= self.contributor_count() {
@@ -6471,6 +6939,74 @@ fn empty_faction_upgrade_progress() -> FactionUpgradeProgress {
         refreshed_player_ids: Vec::new(),
         log_written: false,
     }
+}
+
+fn empty_faction_demise_progress() -> FactionDemiseProgress {
+    FactionDemiseProgress {
+        permit_demise_disabled: false,
+        master_changed: false,
+        new_member_changed: false,
+        old_member_changed: false,
+        old_member_update: None,
+        new_member_update: None,
+        base_dirty_set: false,
+        members_dirty_set: false,
+        refreshed_player_ids: Vec::new(),
+        member_information: None,
+        log_written: false,
+    }
+}
+
+fn bounded_demise_notice(value: &[u8], capacity: usize) -> Result<Vec<u8>, usize> {
+    let visible = legacy_c_string_visible_bytes(value);
+    if visible.len() >= capacity {
+        return Err(visible.len());
+    }
+    Ok(visible.to_vec())
+}
+
+fn fixed_demise_title(
+    value: &[u8],
+) -> Result<[u8; FACTION_MEMBER_TEXT_CAPACITY], usize> {
+    let visible = legacy_c_string_visible_bytes(value);
+    if visible.len() >= FACTION_MEMBER_TEXT_CAPACITY {
+        return Err(visible.len());
+    }
+    let mut title = [0; FACTION_MEMBER_TEXT_CAPACITY];
+    title[..visible.len()].copy_from_slice(visible);
+    Ok(title)
+}
+
+fn demise_new_master_purview() -> [EPurviewOwnState; 11] {
+    [
+        EPurviewOwnState::Permit,
+        EPurviewOwnState::No,
+        EPurviewOwnState::Permit,
+        EPurviewOwnState::Permit,
+        EPurviewOwnState::Permit,
+        EPurviewOwnState::Permit,
+        EPurviewOwnState::Permit,
+        EPurviewOwnState::Permit,
+        EPurviewOwnState::Permit,
+        EPurviewOwnState::Permit,
+        EPurviewOwnState::Permit,
+    ]
+}
+
+fn demise_old_master_purview() -> [EPurviewOwnState; 11] {
+    [
+        EPurviewOwnState::No,
+        EPurviewOwnState::Permit,
+        EPurviewOwnState::No,
+        EPurviewOwnState::No,
+        EPurviewOwnState::No,
+        EPurviewOwnState::No,
+        EPurviewOwnState::Permit,
+        EPurviewOwnState::No,
+        EPurviewOwnState::No,
+        EPurviewOwnState::No,
+        EPurviewOwnState::No,
+    ]
 }
 
 fn faction_upgrade_notice_string_id(notice: FactionUpgradeNotice) -> &'static [u8] {
@@ -8009,7 +8545,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::Demise
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2099

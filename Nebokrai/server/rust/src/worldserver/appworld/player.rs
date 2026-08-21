@@ -53,6 +53,12 @@
 //! диапазоне `0x004BA82D..0x004BA834`, поэтому offset дополнительно имеет
 //! статус `VERIFIED_DISASSEMBLY`.
 //!
+//! `CFaction::Demise` дважды читает `m_bFactionWarOperator` по PDB-offset
+//! `CPlayer+0x8ED`; exact диапазон `0x004BFF25..0x004BFF39` подтверждает оба
+//! сравнения именно с `true`. Raw constructor назначает `false`, поэтому
+//! reached-state хранится отдельным Rust `bool`, не расширяя это до заявления
+//! о полном layout `CPlayer`.
+//!
 //! Достигнутый через `CGame::ResetHonorElimilateInfo` reset напрямую меняет
 //! три DWORD `tagBaseProperty`: day обнуляется безусловно, week только при
 //! `mask & 2`, month только при `mask & 4`; накопительный total не меняется.
@@ -880,6 +886,7 @@ pub(crate) struct CPlayer {
     session_id: Vec<u8>,
     organizing: PlayerOrganizingState,
     faction_data_received: bool,
+    faction_war_operator: bool,
 }
 
 impl PlayerDbProjection<'_> {
@@ -1207,6 +1214,7 @@ impl CPlayer {
                 owned_regions: VecDeque::new(),
             },
             faction_data_received: false,
+            faction_war_operator: false,
         }
     }
 
@@ -1244,6 +1252,15 @@ impl CPlayer {
     /// Сохраняет доказанную прямую мутацию `m_bGetFactionData`.
     pub(crate) const fn set_faction_data_received(&mut self, received: bool) {
         self.faction_data_received = received;
+    }
+
+    /// Возвращает exact transient-флаг, блокирующий смену главы faction.
+    pub(crate) const fn faction_war_operator(&self) -> bool {
+        self.faction_war_operator
+    }
+
+    pub(crate) const fn set_faction_war_operator(&mut self, enabled: bool) {
+        self.faction_war_operator = enabled;
     }
 
     /// Возвращает signed ID через унаследованный `CBaseObject` owner.

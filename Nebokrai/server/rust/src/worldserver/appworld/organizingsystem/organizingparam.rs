@@ -253,6 +253,10 @@ impl COrganizingParam {
         self.maximum_contributors
     }
 
+    pub(crate) const fn create_faction_player_level(&self) -> i32 {
+        self.create_faction_player_level
+    }
+
     pub(crate) const fn latest_tax_event_id(&self) -> Option<TimerId> {
         self.latest_tax_event_id
     }
