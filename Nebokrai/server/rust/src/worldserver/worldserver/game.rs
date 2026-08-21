@@ -118,11 +118,15 @@
 //! reload и subsystem owners, region relation, log/network/queue и worker-start
 //! эффектов. Готовые `LoadSetup`, `LoadServerSetup`, `InitNetClient`,
 //! `InitNetServer`, `CRsSetup` ID-публикация и `CPlayerDataQueue::Clear`
-//! исполняются непосредственно; ещё сырые соседние owners переданы одним
+//! исполняются непосредственно. `CPlayerRanks::Initialize` получает уже
+//! загруженные organizing-параметры, ставит calendar event, затем начальный
+//! `StatPlayerRanks` напрямую читает DB без публикации — точный caller на
+//! `0x004197C1/0x004197CD` не проверяет bool первого вызова, а второй является
+//! void. Ещё сырые соседние owners переданы одним
 //! ordered context-контрактом и не объявлены реализованными. Первый доказанный
 //! false-result прекращает дальнейшие эффекты, а старые `MessageBoxA` и
-//! `__beginthreadex` представлены operator/worker boundaries. Async-форма нужна
-//! только Linux connect-owner-у и не меняет порядок старого caller-а. Повторная
+//! `__beginthreadex` представлены operator/worker boundaries. Async-форма DB и
+//! connect-owner-ов сохраняет их старые синхронные caller-позиции. Повторная
 //! запись control-send после `InitNetClient` схлопнута с уже выполненной
 //! идемпотентной публикацией того же значения.
 //!
@@ -283,6 +287,8 @@
 //! PlayerRanks DB-чтение, `CHonorRanks` и `CAuctionLog` исполняются напрямую.
 //! PlayerRanks сохраняет clear/log/tick/stream-prefix/log/send порядок и
 //! продолжает публикацию даже после DB `false`, как исходный void-wrapper.
+//! Тот же stat/send helper используется calendar `OnStatRanks`, но именно
+//! timer-owner после него снимает отдельное local time и ставит следующий день.
 //! Суточная
 //! AuctionBang-ветвь передаёт реальный Log DB connection, присваивает день до
 //! update и сохраняет его неатомарный outcome. Неинициализированный исходным
@@ -745,9 +751,13 @@
 //! MainLoop использует назначенный предыдущей стадией shared tick, добавляет
 //! wrapping elapsed в `DAT_0056e524` и отдельным tick начинает сырой
 //! `CTimer::Run`; при safe block эти недостигнутые clock-эффекты не создаются.
-//! Следующие две стадии также достигнуты: timer-call закрывает wrapping
-//! `DAT_0056e520` и отдельным tick начинает `CFactionWarSys::Run`, а faction-
-//! war call после полного expiry-пути единственным end tick увеличивает
+//! Timer-dispatch теперь сам выполняет exact `CPlayerRanks::OnStatRanks`:
+//! stat, публикация, отдельный local-time, событие следующего дня и только
+//! затем удаление текущей calendar-записи. Async TDS await остаётся внутри этой
+//! позиции; остальные callbacks проходят прежний sync dispatcher. После
+//! полного timer-call wrapping закрывает `DAT_0056e520`, а отдельный tick
+//! начинает `CFactionWarSys::Run`. Faction-war call после полного expiry-пути
+//! единственным end tick увеличивает
 //! `DAT_0056e51c`. Перед следующим `CLeiTing::Run` новый shared tick в exact
 //! MainLoop отсутствует, поэтому Rust его не добавляет. Сам следующий
 //! непрофилированный `CLeiTing::Run` также связан: caller снимает ровно один
@@ -934,7 +944,11 @@ use crate::public::auctionlog::{
 use crate::public::date::TagTime;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
 use crate::public::readwrite::read_to;
-use crate::public::timer::{CTimer, TimerCallbackInvocation, TimerRunReport};
+use crate::public::timer::{
+    AsyncTimerCallbackDisposition, AsyncTimerCallbackHandler, AsyncTimerRunBlock,
+    CalendarTimerRegistration, CTimer, TimerCallbackInvocation, TimerCallbackSource, TimerId,
+    TimerRunReport,
+};
 use crate::public::tools::ini_decode;
 use crate::transport::bind_tcp_ipv4;
 use crate::worldserver::appworld::country::country::{CCountry, CountryKingSaveLimits};
@@ -988,7 +1002,8 @@ use crate::worldserver::worldserver::honorranks::{
     CHonorRanks, HonorRanksNewDayBlock, HonorRanksNewDayReport,
 };
 use crate::worldserver::worldserver::playerranks::{
-    CPlayerRanks, PlayerRanksGameServerUpdate, PlayerRanksSerializationBlock,
+    CPlayerRanks, PlayerRanksGameServerUpdate, PlayerRanksInitializationConfig,
+    PlayerRanksInitializationReport, PlayerRanksScheduleBlock, PlayerRanksSerializationBlock,
 };
 use crate::worldserver::worldserver::savedb::{
     DoSaveDataLifecycleReport, SaveDataFinalDisposition, SaveDataLifecycleState, SaveDataLogEvent,
@@ -1194,8 +1209,6 @@ pub(crate) enum WorldGameInitVoidOwner {
     InitializeOrganizingController,
     InitializeFactionWar,
     InitializeQuestSystem,
-    InitializePlayerRanks,
-    StatPlayerRanks,
     InitializeCountryParameters,
     CreateGeneralVariableList,
     LoadGeneralVariableList,
@@ -1279,6 +1292,8 @@ pub(crate) enum WorldGameInitEvent {
     RegionOwnerRelationInitialized {
         region_id: i32,
     },
+    PlayerRanksInitialized(PlayerRanksInitializationReport),
+    PlayerRanksLoaded(PlayerRanksStatRunReport),
     HonorRanksLoaded {
         started_at_ms: u32,
         finished_at_ms: u32,
@@ -1317,6 +1332,8 @@ pub(crate) enum WorldGameInitBlockReason<ContextBlock> {
     Reload(WorldReloadBlock),
     JjcConfiguration,
     BooleanOwner(WorldGameInitBooleanOwner),
+    PlayerRanksSchedule(PlayerRanksScheduleBlock),
+    PlayerRanksStat(PlayerRanksStatRunBlock),
     NetworkClient(WorldClientInitializationError),
     NetworkServer(WorldNetworkInitializationError),
 }
@@ -1375,9 +1392,11 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn initialize_words_filter(&mut self, invalid_strings: &[u8], char_codes: &[u8]);
     fn initialize_region_owner_relation(&mut self, region_id: i32, region: &mut CWorldRegion);
 
+    /// Пара полей уже успешно загруженного `COrganizingParam`.
+    fn player_ranks_initialization_config(&mut self) -> PlayerRanksInitializationConfig;
     fn use_appellation_function(&mut self) -> bool;
     /// Возвращает достигнутый player DB-owner и его текущий caller-connection.
-    fn honor_ranks_database(
+    fn player_database(
         &mut self,
     ) -> (&mut Self::PlayerDatabase, Option<&mut WorldTdsClient>);
     /// Возвращает уже открытый Log DB connection техническому auction-owner-у.
@@ -1395,6 +1414,7 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
 pub(crate) struct WorldGameInitCallbacks<'a> {
     pub(crate) get_tick: &'a mut dyn FnMut() -> u32,
     pub(crate) get_log_local_time: &'a mut dyn FnMut() -> WorldLogLocalTime,
+    pub(crate) get_timer_local_time: &'a mut dyn FnMut() -> TagTime,
     pub(crate) put_log_info: &'a mut dyn FnMut(&[u8]),
 }
 
@@ -1990,14 +2010,132 @@ pub(crate) enum WorldMainLoopPlayerDataQueueStageReport {
     },
 }
 
+/// Один exact `CPlayerRanks::OnStatRanks`, выполненный внутри calendar callback.
+#[derive(Debug)]
+pub(crate) struct PlayerRanksTimerRefreshReport {
+    pub(crate) stat: PlayerRanksStatRunReport,
+    pub(crate) publication: PlayerRanksGameServerUpdate,
+    pub(crate) next_time: TagTime,
+    pub(crate) next_event_id: Option<TimerId>,
+}
+
+#[derive(Debug)]
+pub(crate) enum PlayerRanksTimerRefreshBlock {
+    Stat(PlayerRanksStatRunBlock),
+    Serialization(PlayerRanksSerializationBlock),
+    Schedule(PlayerRanksScheduleBlock),
+}
+
+/// Выполненный prefix `CTimer::Run` перед PlayerRanks safe-границей.
+#[derive(Debug)]
+pub(crate) struct WorldMainLoopTimerStageBlock {
+    pub(crate) timer: TimerRunReport,
+    pub(crate) source: PlayerRanksTimerRefreshBlock,
+}
+
 /// Полный `CTimer::Run` и окружающий его accumulator `DAT_0056e520`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct WorldMainLoopTimerStageReport {
     pub(crate) timer: TimerRunReport,
+    pub(crate) player_ranks: Vec<PlayerRanksTimerRefreshReport>,
     pub(crate) finished_at_ms: u32,
     pub(crate) elapsed_ms: u32,
     pub(crate) accumulated_time_ms: u32,
     pub(crate) next_stage_started_at_ms: u32,
+}
+
+struct PlayerRanksTimerHandler<'a> {
+    game: &'a CGame,
+    player_ranks: &'a mut CPlayerRanks,
+    rs_player: &'a mut TiberiusRsPlayer,
+    player_database: Option<&'a mut WorldTdsClient>,
+    organizing: &'a COrganizingCtrl,
+    log: &'a mut WorldLogTextOwner,
+    get_log_local_time: &'a mut dyn FnMut() -> WorldLogLocalTime,
+    put_log_info: &'a mut dyn FnMut(&[u8]),
+    refreshes: Vec<PlayerRanksTimerRefreshReport>,
+    pending_registration: Option<usize>,
+}
+
+impl<Callback, GetTick, GetTimerLocalTime>
+    AsyncTimerCallbackHandler<Callback, GetTick, GetTimerLocalTime>
+    for PlayerRanksTimerHandler<'_>
+where
+    Callback: Copy,
+    GetTick: FnMut() -> u32,
+    GetTimerLocalTime: FnMut() -> TagTime,
+{
+    type Block = PlayerRanksTimerRefreshBlock;
+
+    async fn dispatch(
+        &mut self,
+        invocation: TimerCallbackInvocation<Callback>,
+        get_tick: &mut GetTick,
+        get_timer_local_time: &mut GetTimerLocalTime,
+    ) -> Result<AsyncTimerCallbackDisposition<Callback>, Self::Block> {
+        let is_player_ranks_event = matches!(
+            invocation.source,
+            TimerCallbackSource::Calendar(event_id)
+                if self.player_ranks.stat_event_id() == Some(event_id)
+        );
+        if !is_player_ranks_event {
+            return Ok(AsyncTimerCallbackDisposition::PassThrough);
+        }
+
+        let stat = self
+            .game
+            .stat_player_ranks(
+                self.player_ranks,
+                self.rs_player,
+                self.player_database.as_deref_mut(),
+                self.organizing,
+                self.log,
+                get_tick,
+                &mut *self.get_log_local_time,
+                &mut *self.put_log_info,
+            )
+            .await
+            .map_err(PlayerRanksTimerRefreshBlock::Stat)?;
+        let sender = self.game.current_game_server_sender();
+        let publication = self
+            .player_ranks
+            .update_ranks_to_game_server(sender.as_ref())
+            .map_err(PlayerRanksTimerRefreshBlock::Serialization)?;
+        let current_time = get_timer_local_time();
+        let next_time = self
+            .player_ranks
+            .next_stat_time(current_time)
+            .map_err(PlayerRanksTimerRefreshBlock::Schedule)?;
+        let refresh_index = self.refreshes.len();
+        self.refreshes.push(PlayerRanksTimerRefreshReport {
+            stat,
+            publication,
+            next_time,
+            next_event_id: None,
+        });
+        self.pending_registration = Some(refresh_index);
+
+        Ok(AsyncTimerCallbackDisposition::Handled {
+            next_calendar_event: Some(CalendarTimerRegistration {
+                time: next_time,
+                callback: invocation.callback,
+                parameter: 0,
+            }),
+        })
+    }
+
+    fn calendar_event_registered(
+        &mut self,
+        _invocation: TimerCallbackInvocation<Callback>,
+        event_id: TimerId,
+    ) {
+        self.player_ranks.finish_stat_schedule(event_id);
+        let refresh_index = self
+            .pending_registration
+            .take()
+            .expect("handled PlayerRanks callback всегда просит следующее событие");
+        self.refreshes[refresh_index].next_event_id = Some(event_id);
+    }
 }
 
 /// Полный `CFactionWarSys::Run` и окружающий accumulator `DAT_0056e51c`.
@@ -2259,6 +2397,7 @@ pub(crate) enum WorldMainLoopBlock<FactionContextBlock, LeiTingContextBlock> {
     },
     ProcessMessage(WorldProcessMessageStageReport),
     PlayerDataQueue(WorldMainLoopPlayerDataQueueStageReport),
+    Timer(WorldMainLoopTimerStageBlock),
     FactionWar(FactionWarStopBlock<FactionContextBlock>),
     LeiTing(LeiTingBlock<LeiTingContextBlock>),
     DbMisc(DbMiscDoneOutBlock),
@@ -2967,14 +3106,28 @@ impl WorldPlayerRanksRequestState {
 pub(crate) enum WorldPlayerRanksMaintenanceDisposition {
     NotRequested,
     Updated {
-        started_at_ms: u32,
-        finished_at_ms: u32,
-        elapsed_ms: u32,
-        stat: PlayerRanksStatOutcome,
-        start_log: AddLogTextDisposition,
-        complete_log: AddLogTextDisposition,
+        stat: PlayerRanksStatRunReport,
         publication: PlayerRanksGameServerUpdate,
     },
+}
+
+/// Полный exact `CPlayerRanks::StatPlayerRanks` без последующей публикации.
+#[derive(Debug)]
+pub(crate) struct PlayerRanksStatRunReport {
+    pub(crate) started_at_ms: u32,
+    pub(crate) finished_at_ms: u32,
+    pub(crate) elapsed_ms: u32,
+    pub(crate) outcome: PlayerRanksStatOutcome,
+    pub(crate) start_log: AddLogTextDisposition,
+    pub(crate) complete_log: AddLogTextDisposition,
+}
+
+/// Выполненный prefix `StatPlayerRanks` перед безопасной unknown-границей.
+#[derive(Debug)]
+pub(crate) struct PlayerRanksStatRunBlock {
+    pub(crate) started_at_ms: u32,
+    pub(crate) start_log: AddLogTextDisposition,
+    pub(crate) source: PlayerRanksStatBlock,
 }
 
 /// Итог optional daily HonorRanks-ветви.
@@ -3027,11 +3180,7 @@ pub(crate) enum WorldAuctionBangMaintenanceDisposition {
 /// Первая безопасно неразрешимая граница maintenance-блока.
 #[derive(Debug)]
 pub(crate) enum WorldMainLoopMaintenanceBlock {
-    PlayerRanksStat {
-        started_at_ms: u32,
-        start_log: AddLogTextDisposition,
-        source: PlayerRanksStatBlock,
-    },
+    PlayerRanksStat(PlayerRanksStatRunBlock),
     PlayerRanksSerialization(PlayerRanksSerializationBlock),
     HonorRanks(WorldHonorRanksMaintenanceBlock),
     AuctionOldDayUnknown { current_month_day: i32 },
@@ -6584,15 +6733,27 @@ impl CGame {
     /// Windows crash reporter, GUI notice и thread creation передаются точным
     /// внешним границам; file/network owners и live `CGame` мутации исполняются
     /// непосредственно здесь. Первый false/block прекращает оставшийся порядок.
-    pub(crate) async fn init<Context: WorldGameInitContext>(
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "прямые PlayerRanks/timer owners заменяют два прежних opaque callbacks"
+    )]
+    pub(crate) async fn init<Context, TimerCallback>(
         &mut self,
         runtime_directory: &Path,
         context: &mut Context,
+        player_ranks: &mut CPlayerRanks,
+        player_ranks_timer: &mut CTimer<TimerCallback>,
+        player_ranks_callback: TimerCallback,
+        organizing: &COrganizingCtrl,
         honor_ranks: &mut CHonorRanks,
         auction_log: &mut CAuctionLog,
         log: &mut WorldLogTextOwner,
         callbacks: &mut WorldGameInitCallbacks<'_>,
-    ) -> WorldGameInitResult<Context::Block> {
+    ) -> WorldGameInitResult<Context::Block>
+    where
+        Context: WorldGameInitContext,
+        TimerCallback: Copy,
+    {
         let mut events = Vec::new();
         macro_rules! stop {
             ($reason:expr) => {
@@ -6937,20 +7098,55 @@ impl CGame {
         for owner in [
             WorldGameInitVoidOwner::InitializeFactionWar,
             WorldGameInitVoidOwner::InitializeQuestSystem,
-            WorldGameInitVoidOwner::InitializePlayerRanks,
-            WorldGameInitVoidOwner::StatPlayerRanks,
-            WorldGameInitVoidOwner::InitializeCountryParameters,
         ] {
             context.initialize_void_owner(owner);
             events.push(WorldGameInitEvent::VoidOwner(owner));
         }
+
+        let player_ranks_configuration = context.player_ranks_initialization_config();
+        let player_ranks_now = (callbacks.get_timer_local_time)();
+        let player_ranks_initialization = match player_ranks.initialize(
+            player_ranks_configuration,
+            player_ranks_now,
+            player_ranks_timer,
+            player_ranks_callback,
+        ) {
+            Ok(report) => report,
+            Err(source) => stop!(WorldGameInitBlockReason::PlayerRanksSchedule(source)),
+        };
+        events.push(WorldGameInitEvent::PlayerRanksInitialized(
+            player_ranks_initialization,
+        ));
+        let player_ranks_stat = {
+            let (database, active_transaction) = context.player_database();
+            self.stat_player_ranks(
+                player_ranks,
+                database,
+                active_transaction,
+                organizing,
+                log,
+                &mut *callbacks.get_tick,
+                &mut *callbacks.get_log_local_time,
+                &mut *callbacks.put_log_info,
+            )
+            .await
+        };
+        let player_ranks_stat = match player_ranks_stat {
+            Ok(report) => report,
+            Err(source) => stop!(WorldGameInitBlockReason::PlayerRanksStat(source)),
+        };
+        events.push(WorldGameInitEvent::PlayerRanksLoaded(player_ranks_stat));
+
+        let owner = WorldGameInitVoidOwner::InitializeCountryParameters;
+        context.initialize_void_owner(owner);
+        events.push(WorldGameInitEvent::VoidOwner(owner));
 
         if context.use_appellation_function() {
             let _unused_system_time = (callbacks.get_log_local_time)();
             let started_at_ms = (callbacks.get_tick)();
             self.record_game_init_log(&mut events, log, callbacks, b"Start total HonorRankks!");
             let outcome = {
-                let (database, active_transaction) = context.honor_ranks_database();
+                let (database, active_transaction) = context.player_database();
                 honor_ranks
                     .load_honor_ranks(database, active_transaction)
                     .await
@@ -8108,39 +8304,78 @@ impl CGame {
     /// `profile_state.ai_calls` является текущим `CGame::s_lAITick`. Timer
     /// получает тот же tick-provider, которым затем MainLoop закрывает стадию
     /// и отдельно назначает shared start для сырого `CFactionWarSys::Run`.
-    pub(crate) fn run_main_loop_timer_stage<Callback, GetTick, GetLocalTime, Dispatch>(
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "timer callback сохраняет явные DB, ranking, clock и log owners"
+    )]
+    pub(crate) async fn run_main_loop_timer_stage<
+        Callback,
+        GetTick,
+        GetTimerLocalTime,
+        Dispatch,
+    >(
         &self,
         timer: &mut CTimer<Callback>,
         clocks: &mut WorldMainLoopClockState,
         profile_state: &mut WorldMainLoopProfileState,
-        mut get_tick: GetTick,
-        mut get_local_time: GetLocalTime,
-        mut dispatch: Dispatch,
-    ) -> WorldMainLoopTimerStageReport
+        player_ranks: &mut CPlayerRanks,
+        rs_player: &mut TiberiusRsPlayer,
+        player_database: Option<&mut WorldTdsClient>,
+        organizing: &COrganizingCtrl,
+        log: &mut WorldLogTextOwner,
+        get_tick: &mut GetTick,
+        get_timer_local_time: &mut GetTimerLocalTime,
+        get_log_local_time: &mut dyn FnMut() -> WorldLogLocalTime,
+        put_log_info: &mut dyn FnMut(&[u8]),
+        dispatch: &mut Dispatch,
+    ) -> Result<WorldMainLoopTimerStageReport, WorldMainLoopTimerStageBlock>
     where
         Callback: Copy,
-        GetTick: FnMut() -> u32,
-        GetLocalTime: FnMut() -> TagTime,
-        Dispatch: FnMut(&mut CTimer<Callback>, TimerCallbackInvocation<Callback>),
+        GetTick: FnMut() -> u32 + ?Sized,
+        GetTimerLocalTime: FnMut() -> TagTime + ?Sized,
+        Dispatch: FnMut(&mut CTimer<Callback>, TimerCallbackInvocation<Callback>) + ?Sized,
     {
-        let timer_report = timer.run(
-            profile_state.ai_calls,
-            &mut get_tick,
-            &mut get_local_time,
-            &mut dispatch,
-        );
+        let mut handler = PlayerRanksTimerHandler {
+            game: self,
+            player_ranks,
+            rs_player,
+            player_database,
+            organizing,
+            log,
+            get_log_local_time,
+            put_log_info,
+            refreshes: Vec::new(),
+            pending_registration: None,
+        };
+        let timer_report = timer
+            .run_with_async_handler(
+                profile_state.ai_calls,
+                &mut *get_tick,
+                &mut *get_timer_local_time,
+                &mut handler,
+                &mut *dispatch,
+            )
+            .await;
+        let timer_report = match timer_report {
+            Ok(timer_report) => timer_report,
+            Err(AsyncTimerRunBlock { timer, source }) => {
+                return Err(WorldMainLoopTimerStageBlock { timer, source });
+            }
+        };
+        let player_ranks = handler.refreshes;
         let finished_at_ms = get_tick();
         let elapsed_ms = finished_at_ms.wrapping_sub(clocks.stage_started_at_ms);
         profile_state.timer_time_ms = profile_state.timer_time_ms.wrapping_add(elapsed_ms);
         let next_stage_started_at_ms = get_tick();
         clocks.stage_started_at_ms = next_stage_started_at_ms;
-        WorldMainLoopTimerStageReport {
+        Ok(WorldMainLoopTimerStageReport {
             timer: timer_report,
+            player_ranks,
             finished_at_ms,
             elapsed_ms,
             accumulated_time_ms: profile_state.timer_time_ms,
             next_stage_started_at_ms,
-        }
+        })
     }
 
     /// Выполняет `CFactionWarSys::Run` и закрывает `DAT_0056e51c`.
@@ -8814,14 +9049,24 @@ impl CGame {
                 return Err(Box::new(WorldMainLoopBlock::PlayerDataQueue(blocked)));
             }
         };
-        let timer = self.run_main_loop_timer_stage(
-            owners.timer,
-            state.clocks,
-            state.profile,
-            &mut *callbacks.get_tick,
-            &mut *callbacks.get_timer_local_time,
-            &mut *callbacks.dispatch_timer,
-        );
+        let timer = self
+            .run_main_loop_timer_stage(
+                owners.timer,
+                state.clocks,
+                state.profile,
+                owners.player_ranks,
+                owners.rs_player,
+                owners.player_database.as_deref_mut(),
+                owners.organizing,
+                owners.log,
+                &mut *callbacks.get_tick,
+                &mut *callbacks.get_timer_local_time,
+                &mut *callbacks.get_log_local_time,
+                &mut *callbacks.put_log_info,
+                &mut *callbacks.dispatch_timer,
+            )
+            .await
+            .map_err(|block| Box::new(WorldMainLoopBlock::Timer(block)))?;
         let faction_war = self
             .run_main_loop_faction_war_stage(
                 owners.faction_war,
@@ -9061,6 +9306,71 @@ impl CGame {
         }
     }
 
+    /// Выполняет exact clear/log/tick/DB/tick/log owner `StatPlayerRanks`.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "явные DB, organizing, clock и log owners сохраняют исходный порядок"
+    )]
+    async fn stat_player_ranks<PlayerDatabase, GetTick, GetLocalTime, PutLogInfo>(
+        &self,
+        player_ranks: &mut CPlayerRanks,
+        rs_player: &mut PlayerDatabase,
+        player_database: Option<&mut WorldTdsClient>,
+        organizing: &COrganizingCtrl,
+        log: &mut WorldLogTextOwner,
+        get_tick: &mut GetTick,
+        get_local_time: &mut GetLocalTime,
+        put_log_info: &mut PutLogInfo,
+    ) -> Result<PlayerRanksStatRunReport, PlayerRanksStatRunBlock>
+    where
+        PlayerDatabase: RsPlayerOwner,
+        GetTick: FnMut() -> u32 + ?Sized,
+        GetLocalTime: FnMut() -> WorldLogLocalTime + ?Sized,
+        PutLogInfo: FnMut(&[u8]) + ?Sized,
+    {
+        player_ranks.clear();
+        let start_log = log.add_log_text(
+            b"PlayerRanks Stat. START...",
+            self.setup.save_info_time_ms,
+            &mut *get_tick,
+            &mut *get_local_time,
+            &mut *put_log_info,
+        );
+        let started_at_ms = get_tick();
+        let outcome = rs_player
+            .stat_ranks(player_ranks, organizing, player_database)
+            .await;
+        if let PlayerRanksStatOutcome::BlockedMissingFact(source) = &outcome {
+            return Err(PlayerRanksStatRunBlock {
+                started_at_ms,
+                start_log,
+                source: *source,
+            });
+        }
+        let finished_at_ms = get_tick();
+        let elapsed_ms = finished_at_ms.wrapping_sub(started_at_ms);
+        let complete_text = format!(
+            "PlayerRanks Stat. END(USED TIME:{}MS)",
+            elapsed_ms as i32,
+        )
+        .into_bytes();
+        let complete_log = log.add_log_text(
+            &complete_text,
+            self.setup.save_info_time_ms,
+            &mut *get_tick,
+            &mut *get_local_time,
+            &mut *put_log_info,
+        );
+        Ok(PlayerRanksStatRunReport {
+            started_at_ms,
+            finished_at_ms,
+            elapsed_ms,
+            outcome,
+            start_log,
+            complete_log,
+        })
+    }
+
     /// Выполняет цельный PlayerRanks/HonorRanks/AuctionBang maintenance-блок.
     #[allow(
         clippy::too_many_arguments,
@@ -9095,50 +9405,25 @@ impl CGame {
         PutLogInfo: FnMut(&[u8]),
     {
         let player_ranks = if player_ranks_request.take_if_requested() {
-            player_ranks.clear();
-            let start_log = log.add_log_text(
-                b"PlayerRanks Stat. START...",
-                self.setup.save_info_time_ms,
-                &mut *get_tick,
-                &mut *get_local_time,
-                &mut *put_log_info,
-            );
-            let started_at_ms = get_tick();
-            let stat = rs_player
-                .stat_ranks(player_ranks, organizing, player_database)
-                .await;
-            if let PlayerRanksStatOutcome::BlockedMissingFact(source) = &stat {
-                return Err(WorldMainLoopMaintenanceBlock::PlayerRanksStat {
-                    started_at_ms,
-                    start_log,
-                    source: *source,
-                });
-            }
-            let finished_at_ms = get_tick();
-            let elapsed_ms = finished_at_ms.wrapping_sub(started_at_ms);
-            let complete_text = format!(
-                "PlayerRanks Stat. END(USED TIME:{}MS)",
-                elapsed_ms as i32,
-            )
-            .into_bytes();
-            let complete_log = log.add_log_text(
-                &complete_text,
-                self.setup.save_info_time_ms,
-                &mut *get_tick,
-                &mut *get_local_time,
-                &mut *put_log_info,
-            );
+            let stat = self
+                .stat_player_ranks(
+                    player_ranks,
+                    rs_player,
+                    player_database,
+                    organizing,
+                    log,
+                    get_tick,
+                    get_local_time,
+                    put_log_info,
+                )
+                .await
+                .map_err(WorldMainLoopMaintenanceBlock::PlayerRanksStat)?;
             let sender = self.current_game_server_sender();
             let publication = player_ranks
                 .update_ranks_to_game_server(sender.as_ref())
                 .map_err(WorldMainLoopMaintenanceBlock::PlayerRanksSerialization)?;
             WorldPlayerRanksMaintenanceDisposition::Updated {
-                started_at_ms,
-                finished_at_ms,
-                elapsed_ms,
                 stat,
-                start_log,
-                complete_log,
                 publication,
             }
         } else {
@@ -10210,6 +10495,8 @@ fn classify_game_init_for_caller<ContextBlock>(
         WorldGameInitBlockReason::MissingPlayerLoadThreadCount
         | WorldGameInitBlockReason::Context(_)
         | WorldGameInitBlockReason::Reload(_)
+        | WorldGameInitBlockReason::PlayerRanksSchedule(_)
+        | WorldGameInitBlockReason::PlayerRanksStat(_)
         | WorldGameInitBlockReason::NetworkClient(
             WorldClientInitializationError::MissingSetupField(_)
             | WorldClientInitializationError::LoginAddressTooLongReactionUnknown { .. }

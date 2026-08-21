@@ -2,8 +2,8 @@
 //!
 //! Статус World `CPlayerRanks::AddToByteArray` RVA `0x0001B760` и
 //! `UpdateRanksToGameServer` RVA `0x0001B890`, `StatPlayerRanks` RVA
-//! `0x0001C0D0` и `AddRank` RVA `0x0001C1A0`: `IMPLEMENTED`; timer/init
-//! lifecycle ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `0x0001C0D0`, `AddRank` RVA `0x0001C1A0`, `OnStatRanks` RVA
+//! `0x0001C370` и `Initialize` RVA `0x0001C450`: `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -26,12 +26,26 @@
 //! всегда идут end-log и публикация даже после DB `false`. `AddRank` получает
 //! organizing явно вместо singleton-а и сохраняет empty-name ветви отсутствия
 //! faction; исходный null внутри map остаётся typed-блоком.
+//!
+//! `Initialize` копирует время и signed maximum из `COrganizingParam`, заменяет
+//! в календарной копии только текущие year/month/day и переносит событие на
+//! сутки лишь при strict `< now`. `OnStatRanks` после stat/publication снова
+//! берёт исходное время, подставляет текущую дату и уже безусловно добавляет
+//! сутки. Эти три присваивания исправляют неточность decompiler-а и подтверждены
+//! инструкциями `0x0041C4DD..0x0041C4E9` и `0x0041C3EE..0x0041C40C`.
+//! `Option<TimerId>` заменяет неинициализированный constructor-ом event ID;
+//! сам `CTimer` остаётся библиотечным ordered owner-ом.
+//! Парсинг двух входных полей пока принадлежит отдельному сырому
+//! `COrganizingParam`; PlayerRanks принимает уже доказанную typed-проекцию и
+//! не угадывает формат его конфигурационного файла.
 
 use std::error::Error;
 use std::fmt;
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::servers::ServerCommandHandle;
+use crate::public::date::{TagTime, TagTimeArithmeticBlock};
+use crate::public::timer::{CTimer, TimerId};
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     COrganizingCtrl, FreePlayerLookup,
 };
@@ -45,10 +59,31 @@ pub(crate) struct PlayerRankEntry {
     pub(crate) faction_name: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct CPlayerRanks {
+    stat: bool,
+    stat_time: TagTime,
+    stat_event_id: Option<TimerId>,
     maximum_count: Option<i32>,
     ranks: Vec<PlayerRankEntry>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PlayerRanksInitializationConfig {
+    pub(crate) stat_time: TagTime,
+    pub(crate) maximum_count: i32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PlayerRanksInitializationReport {
+    pub(crate) scheduled_time: TagTime,
+    pub(crate) event_id: TimerId,
+    pub(crate) legacy_result: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerRanksScheduleBlock {
+    DateArithmetic(TagTimeArithmeticBlock),
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -59,6 +94,64 @@ pub(crate) struct PlayerRanksGameServerUpdate {
 }
 
 impl CPlayerRanks {
+    /// Копирует параметры и ставит первое календарное событие exact owner-а.
+    pub(crate) fn initialize<Callback: Copy>(
+        &mut self,
+        configuration: PlayerRanksInitializationConfig,
+        current_time: TagTime,
+        timer: &mut CTimer<Callback>,
+        callback: Callback,
+    ) -> Result<PlayerRanksInitializationReport, PlayerRanksScheduleBlock> {
+        self.maximum_count = Some(configuration.maximum_count);
+        self.stat_time = configuration.stat_time;
+
+        let mut scheduled_time = self.stat_time_for_current_date(current_time);
+        if scheduled_time.legacy_lt(current_time) {
+            scheduled_time
+                .add_day(1)
+                .map_err(PlayerRanksScheduleBlock::DateArithmetic)?;
+        }
+
+        self.stat = false;
+        let event_id = timer.set_time_event(scheduled_time, callback, 0);
+        self.stat_event_id = Some(event_id);
+        Ok(PlayerRanksInitializationReport {
+            scheduled_time,
+            event_id,
+            legacy_result: true,
+        })
+    }
+
+    /// Готовит следующее событие после синхронного `OnStatRanks` callback-а.
+    pub(crate) fn next_stat_time(
+        &self,
+        current_time: TagTime,
+    ) -> Result<TagTime, PlayerRanksScheduleBlock> {
+        let mut scheduled_time = self.stat_time_for_current_date(current_time);
+        scheduled_time
+            .add_day(1)
+            .map_err(PlayerRanksScheduleBlock::DateArithmetic)?;
+        Ok(scheduled_time)
+    }
+
+    /// Фиксирует side effects после exact `SetTimeEvent` следующего дня.
+    pub(crate) fn finish_stat_schedule(&mut self, event_id: TimerId) {
+        self.stat_event_id = Some(event_id);
+        self.stat = true;
+    }
+
+    pub(crate) const fn stat_enabled(&self) -> bool {
+        self.stat
+    }
+
+    pub(crate) const fn stat_time(&self) -> TagTime {
+        self.stat_time
+    }
+
+    pub(crate) const fn stat_event_id(&self) -> Option<TimerId> {
+        self.stat_event_id
+    }
+
     pub(crate) const fn maximum_count(&self) -> Option<i32> {
         self.maximum_count
     }
@@ -105,6 +198,14 @@ impl CPlayerRanks {
 
     pub(crate) fn ranks(&self) -> &[PlayerRankEntry] {
         &self.ranks
+    }
+
+    fn stat_time_for_current_date(&self, current_time: TagTime) -> TagTime {
+        let mut scheduled_time = self.stat_time;
+        scheduled_time.year = current_time.year;
+        scheduled_time.month = current_time.month;
+        scheduled_time.day = current_time.day;
+        scheduled_time
     }
 
     pub(crate) fn add_to_byte_array(
@@ -332,7 +433,7 @@ fn write_player_rank_string(destination: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CPlayerRanks::OnStatRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\playerranks.cpp:144
@@ -340,13 +441,15 @@ fn write_player_rank_string(destination: &mut Vec<u8>, value: &[u8]) {
 // ADDRESS: 0041c370
 // PROTOTYPE: void __stdcall OnStatRanks(long param_1)
 //
+// Реализовано async timer-adapter-ом в `CGame::run_main_loop_timer_stage`;
+// календарная часть и state mutation находятся в этом owner-е выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CPlayerRanks::Initialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\playerranks.cpp:43
@@ -354,6 +457,7 @@ fn write_player_rank_string(destination: &mut Vec<u8>, value: &[u8]) {
 // ADDRESS: 0041c450
 // PROTOTYPE: bool __thiscall Initialize(void)
 //
+// Реализовано выше через `PlayerRanksInitializationConfig` и готовый `CTimer`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

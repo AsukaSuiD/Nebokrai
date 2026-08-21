@@ -30,6 +30,10 @@
 //! доказанные callbacks `ClearCopyNum` и `CPlayerRanks::OnStatRanks` могут
 //! зарегистрировать следующее событие и сразу получить его ID. Возврат старого
 //! `long (__stdcall*)(long)` нигде не читался и в Rust-границу не переносится.
+//! Для достигнутого PlayerRanks DB-callback-а есть второй traversal adapter:
+//! он ждёт библиотечный async TDS вызов прямо в старой callback-позиции, затем
+//! регистрирует возвращённое calendar-событие до удаления текущего. Все прочие
+//! callbacks по-прежнему немедленно передаются обычному sync dispatcher-у.
 //! `u32` параметр/ID и `i32` lparam сохраняют точную signedness.
 //!
 //! `SetTimeEvent` копирует запись и использует общий wrapping ID, начинающийся
@@ -104,6 +108,51 @@ pub(crate) struct TimerCallbackInvocation<Callback> {
 pub(crate) struct TimerRunReport {
     pub(crate) periodic_callbacks: u32,
     pub(crate) calendar_callbacks: u32,
+}
+
+/// Новое calendar-событие, которое async domain-callback просит поставить до
+/// удаления текущей записи.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CalendarTimerRegistration<Callback> {
+    pub(crate) time: TagTime,
+    pub(crate) callback: Callback,
+    pub(crate) parameter: i32,
+}
+
+/// Решение async handler-а для одного уже достигнутого callback-а.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum AsyncTimerCallbackDisposition<Callback> {
+    PassThrough,
+    Handled {
+        next_calendar_event: Option<CalendarTimerRegistration<Callback>>,
+    },
+}
+
+/// Выполненный prefix `Run` перед локальной safe-границей domain callback-а.
+#[derive(Debug)]
+pub(crate) struct AsyncTimerRunBlock<Block> {
+    pub(crate) timer: TimerRunReport,
+    pub(crate) source: Block,
+}
+
+/// Async adapter для исходно синхронных callback-ов, которые теперь достигают
+/// библиотечного DB owner-а. Остальные callbacks остаются в sync dispatcher-е.
+pub(crate) trait AsyncTimerCallbackHandler<Callback, GetTick, GetLocalTime> {
+    type Block;
+
+    async fn dispatch(
+        &mut self,
+        invocation: TimerCallbackInvocation<Callback>,
+        get_tick: &mut GetTick,
+        get_local_time: &mut GetLocalTime,
+    ) -> Result<AsyncTimerCallbackDisposition<Callback>, Self::Block>;
+
+    fn calendar_event_registered(
+        &mut self,
+        _invocation: TimerCallbackInvocation<Callback>,
+        _event_id: TimerId,
+    ) {
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -259,5 +308,138 @@ impl<Callback: Copy> CTimer<Callback> {
                 .map(|(&next_id, _)| next_id);
         }
         report
+    }
+
+    /// Сохраняет ordered traversal `Run`, но разрешает одному domain adapter-у
+    /// дождаться библиотечной async DB-операции внутри исходной callback-позиции.
+    pub(crate) async fn run_with_async_handler<GetTick, GetLocalTime, Handler, Dispatch>(
+        &mut self,
+        ai_tick: u32,
+        mut get_tick: GetTick,
+        mut get_local_time: GetLocalTime,
+        handler: &mut Handler,
+        mut dispatch: Dispatch,
+    ) -> Result<TimerRunReport, AsyncTimerRunBlock<Handler::Block>>
+    where
+        Handler: AsyncTimerCallbackHandler<Callback, GetTick, GetLocalTime>,
+        GetTick: FnMut() -> u32,
+        GetLocalTime: FnMut() -> TagTime,
+        Dispatch: FnMut(&mut Self, TimerCallbackInvocation<Callback>),
+    {
+        let mut report = TimerRunReport::default();
+        let mut periodic_id = self.periodic_timers.keys().next().copied();
+        while let Some(id) = periodic_id {
+            let invocation = {
+                let timer = self
+                    .periodic_timers
+                    .get_mut(&id)
+                    .expect("ID получен из текущего periodic registry");
+                if !timer.open {
+                    None
+                } else if timer.use_ai_tick {
+                    let elapsed = ai_tick.wrapping_sub(timer.start_ai_tick);
+                    if timer.elapsed_ai_tick <= elapsed {
+                        timer.start_ai_tick = ai_tick;
+                        Some(TimerCallbackInvocation {
+                            source: TimerCallbackSource::Periodic(id),
+                            callback: timer.callback,
+                            parameter: timer.parameter,
+                        })
+                    } else {
+                        None
+                    }
+                } else {
+                    let now = get_tick();
+                    let elapsed = now.wrapping_sub(timer.start_time_ms);
+                    if timer.elapsed_time_ms <= elapsed {
+                        timer.start_time_ms = now;
+                        Some(TimerCallbackInvocation {
+                            source: TimerCallbackSource::Periodic(id),
+                            callback: timer.callback,
+                            parameter: timer.parameter,
+                        })
+                    } else {
+                        None
+                    }
+                }
+            };
+            if let Some(invocation) = invocation {
+                report.periodic_callbacks = report.periodic_callbacks.wrapping_add(1);
+                let disposition = handler
+                    .dispatch(invocation, &mut get_tick, &mut get_local_time)
+                    .await
+                    .map_err(|source| AsyncTimerRunBlock {
+                        timer: report,
+                        source,
+                    })?;
+                match disposition {
+                    AsyncTimerCallbackDisposition::PassThrough => dispatch(self, invocation),
+                    AsyncTimerCallbackDisposition::Handled {
+                        next_calendar_event,
+                    } => {
+                        if let Some(event) = next_calendar_event {
+                            let event_id = self.set_time_event(
+                                event.time,
+                                event.callback,
+                                event.parameter,
+                            );
+                            handler.calendar_event_registered(invocation, event_id);
+                        }
+                    }
+                }
+            }
+            periodic_id = self
+                .periodic_timers
+                .range((Excluded(id), Unbounded))
+                .next()
+                .map(|(&next_id, _)| next_id);
+        }
+
+        let mut event_id = self.time_events.keys().next().copied();
+        while let Some(id) = event_id {
+            let now = get_local_time();
+            let event = *self
+                .time_events
+                .get(&id)
+                .expect("ID получен из текущего calendar registry");
+            debug_assert_eq!(event.id, id);
+            if now.legacy_ge(event.time) {
+                report.calendar_callbacks = report.calendar_callbacks.wrapping_add(1);
+                let invocation = TimerCallbackInvocation {
+                    source: TimerCallbackSource::Calendar(id),
+                    callback: event.callback,
+                    parameter: event.parameter,
+                };
+                let disposition = handler
+                    .dispatch(invocation, &mut get_tick, &mut get_local_time)
+                    .await
+                    .map_err(|source| AsyncTimerRunBlock {
+                        timer: report,
+                        source,
+                    })?;
+                match disposition {
+                    AsyncTimerCallbackDisposition::PassThrough => dispatch(self, invocation),
+                    AsyncTimerCallbackDisposition::Handled {
+                        next_calendar_event,
+                    } => {
+                        if let Some(event) = next_calendar_event {
+                            let next_id = self.set_time_event(
+                                event.time,
+                                event.callback,
+                                event.parameter,
+                            );
+                            handler.calendar_event_registered(invocation, next_id);
+                        }
+                    }
+                }
+                self.time_events.remove(&id);
+            }
+            event_id = self
+                .time_events
+                .range((Excluded(id), Unbounded))
+                .next()
+                .map(|(&next_id, _)| next_id);
+        }
+        Ok(report)
     }
 }
