@@ -1,8 +1,8 @@
 //! Владелец общего organizing-состояния исторического `WorldServer`.
 //!
 //! Статус PDB-layout `COrganizing::tagMemInfo` и его вложенного
-//! `ePurviewOwnState` — `IMPLEMENTED`; полный `COrganizing`, billboard-типы и
-//! их методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `ePurview/ePurviewOwnState` — `IMPLEMENTED`; полный `COrganizing`,
+//! billboard-типы и их методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -80,6 +80,47 @@ pub(crate) enum ECityState {
     Fight = 3,
 }
 
+/// Одиннадцать точных organizing-прав из PDB `COrganizing::ePurview`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(i32)]
+pub(crate) enum EPurview {
+    Disband = 0,
+    Exit = 1,
+    DubJobLevel = 2,
+    ConMem = 3,
+    FireOut = 4,
+    Pronounce = 5,
+    LeaveWord = 6,
+    EditLeaveWord = 7,
+    ObtainTax = 8,
+    OperCityGate = 9,
+    EndueRor = 10,
+}
+
+impl EPurview {
+    /// Отделяет допустимый enum-контракт от произвольного входного `long`.
+    pub(crate) const fn from_wire_value(value: i32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Disband),
+            1 => Some(Self::Exit),
+            2 => Some(Self::DubJobLevel),
+            3 => Some(Self::ConMem),
+            4 => Some(Self::FireOut),
+            5 => Some(Self::Pronounce),
+            6 => Some(Self::LeaveWord),
+            7 => Some(Self::EditLeaveWord),
+            8 => Some(Self::ObtainTax),
+            9 => Some(Self::OperCityGate),
+            10 => Some(Self::EndueRor),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn index(self) -> usize {
+        self as usize
+    }
+}
+
 impl ECityState {
     /// Возвращает исходное signed значение enum для wire и message boundaries.
     pub(crate) const fn wire_value(self) -> i32 {
@@ -95,7 +136,7 @@ impl EOperator {
 }
 
 /// Три состояния одного organizing-права с точным signed wire-значением.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
 pub(crate) enum EPurviewOwnState {
     No = 0,
@@ -256,6 +297,7 @@ fn terminated_field<'a>(
 
 const _: () = {
     assert!(size_of::<EOperator>() == 4);
+    assert!(size_of::<EPurview>() == 4);
     assert!(size_of::<EPurviewOwnState>() == 4);
     assert!(size_of::<TagTimeValue>() == 0x10);
     assert!(size_of::<TagMemInfo>() == 0xF0);

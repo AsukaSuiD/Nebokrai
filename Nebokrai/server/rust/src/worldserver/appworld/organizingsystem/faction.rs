@@ -19,6 +19,8 @@
 //! `AddDefence/Offense/VillageWarVictorCounts` RVA
 //! `0x000BA3B0/0x000BA3D0/0x000BA3F0`,
 //! `ReInitialPropertyByLvl` RVA `0x000BA630`,
+//! `IsUsingPV/SetMemPV/AbolishMemPV` RVA
+//! `0x000BA700/0x000BA760/0x000C1DD0`,
 //! `IsSuperiorOrganizing` RVA `0x000BD780`, `IsMaster` RVA `0x000C1EE0` и
 //! `OnMemberEnterGame` RVA `0x000C0A10` — `IMPLEMENTED`; спорные ключи lookup
 //! имеют статус `VERIFIED_DISASSEMBLY`.
@@ -58,6 +60,10 @@
 //! уже выставленном `m_bGetFactionData`; результат каждого send игнорировался.
 //! Три victor-counter owner-а машинно подтверждают единый порядок: wrapping
 //! 32-битный `ADD`, property-send, затем dirty-bit `1`.
+//! Permission owner-ы используют player ID как map key и PDB enum `0..10` как
+//! индекс. `SetMemPV` в EXE единственный не проверял индекс и мог писать за
+//! `listPV`; safe Rust явно отклоняет недопустимое значение. Это исправление
+//! внутреннего memory bug, а не новая Miracle-семантика допустимых прав.
 //! Достигнутый `SetPlayerOrganizing` дополнительно читает `m_strName`,
 //! `m_lMastterID`, `m_Property.lLvl/lExp`, `m_OwnedCities` и два enemy-set.
 //! Коллекции, которые constructor действительно создавал пустыми, хранятся
@@ -186,7 +192,10 @@ use std::mem::{offset_of, size_of};
 
 use chrono::{Datelike, Local, Timelike};
 
-use super::organizing::{EOperator, TagMemInfo, TagTimeValue, UnterminatedMemberField};
+use super::organizing::{
+    EOperator, EPurview, EPurviewOwnState, TagMemInfo, TagTimeValue,
+    UnterminatedMemberField,
+};
 use super::organizingparam::COrganizingParam;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::worldserver::game::{CGame, WorldRegionNameLookup};
@@ -326,6 +335,14 @@ pub(crate) enum FactionDelMemberBlock {
 pub(crate) struct FactionDelMemberReport {
     pub(crate) removed: bool,
     pub(crate) disband_countdown_started: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MemberPurviewMutation {
+    InvalidPurview,
+    MemberNotFound,
+    Unchanged,
+    Changed,
 }
 
 /// Результат одной исходно игнорировавшейся отправки полного property.
@@ -848,6 +865,56 @@ impl CFaction {
         self.members
             .get(&player_id)
             .is_some_and(|member| member.contribute)
+    }
+
+    /// Проверяет точное состояние `PST_Permit` одного member-права.
+    pub(crate) fn is_using_purview(&self, player_id: i32, purview: i32) -> bool {
+        let Some(purview) = EPurview::from_wire_value(purview) else {
+            return false;
+        };
+        self.members
+            .get(&player_id)
+            .is_some_and(|member| member.purview[purview.index()] == EPurviewOwnState::Permit)
+    }
+
+    /// Переводит только `PST_No` в `PST_Permit`.
+    pub(crate) fn set_member_purview(
+        &mut self,
+        player_id: i32,
+        purview: i32,
+    ) -> MemberPurviewMutation {
+        let Some(purview) = EPurview::from_wire_value(purview) else {
+            return MemberPurviewMutation::InvalidPurview;
+        };
+        let Some(member) = self.members.get_mut(&player_id) else {
+            return MemberPurviewMutation::MemberNotFound;
+        };
+        let state = &mut member.purview[purview.index()];
+        if *state != EPurviewOwnState::No {
+            return MemberPurviewMutation::Unchanged;
+        }
+        *state = EPurviewOwnState::Permit;
+        MemberPurviewMutation::Changed
+    }
+
+    /// Переводит любое не-`PST_No` состояние в `PST_No`.
+    pub(crate) fn abolish_member_purview(
+        &mut self,
+        player_id: i32,
+        purview: i32,
+    ) -> MemberPurviewMutation {
+        let Some(purview) = EPurview::from_wire_value(purview) else {
+            return MemberPurviewMutation::InvalidPurview;
+        };
+        let Some(member) = self.members.get_mut(&player_id) else {
+            return MemberPurviewMutation::MemberNotFound;
+        };
+        let state = &mut member.purview[purview.index()];
+        if *state == EPurviewOwnState::No {
+            return MemberPurviewMutation::Unchanged;
+        }
+        *state = EPurviewOwnState::No;
+        MemberPurviewMutation::Changed
     }
 
     /// Возвращает один снимок исходной signed dirty-bit mask.
@@ -2188,7 +2255,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::IsUsingPV
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:691
@@ -2202,7 +2269,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetMemPV
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:705
@@ -2960,7 +3027,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::AbolishMemPV
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:716
