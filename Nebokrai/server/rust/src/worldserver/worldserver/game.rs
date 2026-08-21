@@ -979,12 +979,14 @@ use crate::worldserver::appworld::message::othermessage::{
 use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingLeaveWordDispatch, OrganizingLeaveWordEditDispatch,
     OrganizingLeaveWordEnableDispatch,
-    OrganizingSessionResultDispatch, OrganizingUnionApplicationDispatch,
+    OrganizingPronounceDispatch, OrganizingSessionResultDispatch,
+    OrganizingUnionApplicationDispatch,
     QueuedUnionApplicationTerminal,
     UnionApplicationConfirmationDelivery,
     WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects,
     WorldUnionApplicationRuntimeOwner, dispatch_leave_word, dispatch_leave_word_edit,
-    dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_union_application,
+    dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_pronounce,
+    dispatch_union_application,
 };
 use crate::worldserver::appworld::message::servermessage::{
     WorldLoginClientReplacement, WorldServerMessageDispatch, WorldServerMessageError,
@@ -997,7 +999,7 @@ use crate::worldserver::appworld::organizingsystem::factionwarsys::{
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     COrganizingCtrl, OrganizingRunBlock, OrganizingRunReport, OrganizingSaveDataBlock,
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock, OrganizingLeaveWordEnableBlock,
-    OrganizingSaveDataReport, OrganizingUnionApplicationCallbackBlock,
+    OrganizingPronounceBlock, OrganizingSaveDataReport, OrganizingUnionApplicationCallbackBlock,
     OrganizingUnionApplicationCallbackReport, OrganizingUnionApplyForJoinDispatchBlock,
     PlayerEnterGameOutcome, PlayerExitGameOutcome,
 };
@@ -1900,6 +1902,12 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: Result<OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEditBlock>,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingPronounce {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<OrganizingPronounceDispatch, OrganizingPronounceBlock>,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     LoginClientReconnected(WorldLoginClientReplacement),
@@ -8088,8 +8096,9 @@ impl CGame {
     /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
     /// ветви server-owner-а, honor `0x5FD0C/0x5FD0D`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
-    /// `0x6011B` и её удаление `0x6011C` исполняются, остальные остаются owned
-    /// pending. Terminal session actions применяются FIFO до следующего сообщения.
+    /// `0x6011B`, её удаление `0x6011C` и объявление `0x6011D` исполняются,
+    /// остальные остаются owned pending. Terminal session actions применяются
+    /// FIFO до следующего сообщения.
     pub(crate) fn process_message(
         &mut self,
         honor_ranks: &mut CHonorRanks,
@@ -10992,6 +11001,35 @@ fn process_world_message(
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingLeaveWordEdit {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        if let Some(outcome) = dispatch_pronounce(&mut message, game, organizing) {
+            let callbacks = WorldUnionApplicationEffectCallbacks {
+                random: &mut *application_callbacks.random,
+                world_string: &mut *application_callbacks.world_string,
+                format_world_string: &mut *application_callbacks.format_world_string,
+                put_war_log: &mut *application_callbacks.put_war_log,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+            };
+            let mut effects = WorldUnionApplicationEffects::new(
+                game,
+                net_sessions,
+                application_runtime,
+                callbacks,
+            );
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingPronounce {
                 source,
                 legacy_run_result,
                 outcome,

@@ -252,9 +252,9 @@ use super::faction::{
     FactionOperationAuthorityContext, FactionOrganizingInfoContext, FactionOtherInfoBuildError,
     FactionOtherInfoDelivery, FactionOwnedCityDelivery, FactionOwnedCityRefreshBlock,
     FactionOwnedCityRefreshReport, FactionOwnedCityUpdateBuildError, FactionPlayerHeaderContext,
-    FactionPropertyDelivery, FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome,
-    FactionSuperiorOrganizingBlock, MemberEnterOutcome, MemberExitOutcome,
-    OwnedCityMutationBuildError,
+    FactionPronounceBlock, FactionPronounceOutcome, FactionPropertyDelivery,
+    FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome, FactionSuperiorOrganizingBlock,
+    MemberEnterOutcome, MemberExitOutcome, OwnedCityMutationBuildError,
 };
 use super::organizing::{EOperator, TagTimeValue};
 use super::organizingparam::COrganizingParam;
@@ -458,6 +458,24 @@ pub(crate) enum OrganizingLeaveWordEditBlock {
     Property {
         faction_id: i32,
         source: FactionInitialPropertyBlock,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingPronounceOutcome {
+    FactionNotFound,
+    Applied {
+        faction_id: i32,
+        outcome: FactionPronounceOutcome,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingPronounceBlock {
+    Membership { map_key: i32 },
+    Faction {
+        faction_id: i32,
+        source: FactionPronounceBlock,
     },
 }
 
@@ -1029,6 +1047,38 @@ impl COrganizingCtrl {
                 outcome,
             })
             .map_err(|source| OrganizingLeaveWordEditBlock::Property { faction_id, source })
+    }
+
+    /// Разрешает faction автора и заменяет её текущее объявление.
+    pub(crate) fn pronounce_for_player(
+        &mut self,
+        game: &CGame,
+        player_id: i32,
+        content: &mut Vec<u8>,
+        time: TagTimeValue,
+    ) -> Result<OrganizingPronounceOutcome, OrganizingPronounceBlock> {
+        let faction_id = match self.is_free_player(player_id) {
+            FreePlayerLookup::NoFaction => {
+                return Ok(OrganizingPronounceOutcome::FactionNotFound);
+            }
+            FreePlayerLookup::Faction(faction_id) => faction_id,
+            FreePlayerLookup::BlockedNullFaction { map_key } => {
+                return Err(OrganizingPronounceBlock::Membership { map_key });
+            }
+        };
+        if faction_id < 1 {
+            return Ok(OrganizingPronounceOutcome::FactionNotFound);
+        }
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return Ok(OrganizingPronounceOutcome::FactionNotFound);
+        };
+        faction
+            .pronounce(game, player_id, content, time)
+            .map(|outcome| OrganizingPronounceOutcome::Applied {
+                faction_id,
+                outcome,
+            })
+            .map_err(|source| OrganizingPronounceBlock::Faction { faction_id, source })
     }
 
     /// Повторяет `GetUnion`: master-player -> faction -> union -> nullable owner.

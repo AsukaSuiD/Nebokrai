@@ -27,6 +27,10 @@
 //! player ID, разрешает faction через `IsFreePlayer` и вызывает virtual
 //! `CFaction::EditLeaveWord(player ID, leave-word ID, EOperator::Delete)` в
 //! slot `+0x3C`.
+//! Exact `0x004A7772..0x004A784A` для `0x6011D` очищает 0x5000-byte buffer,
+//! вызывает `GetStr(..., 0x5000)`, читает player ID, разрешает faction через
+//! `IsFreePlayer`, снимает один local `tagTime` и вызывает virtual
+//! `CFaction::Pronounce` в slot `+0x34`.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -59,7 +63,8 @@ use crate::worldserver::appworld::organizingsystem::faction::{
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     COrganizingCtrl, OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock,
     OrganizingLeaveWordEditOutcome, OrganizingLeaveWordEnableBlock,
-    OrganizingLeaveWordEnableOutcome, OrganizingLeaveWordOutcome,
+    OrganizingLeaveWordEnableOutcome, OrganizingLeaveWordOutcome, OrganizingPronounceBlock,
+    OrganizingPronounceOutcome,
     OrganizingUnionApplyForJoinDispatchBlock, OrganizingUnionApplyForJoinOutcome,
 };
 use crate::worldserver::appworld::organizingsystem::organizing::{EOperator, TagTimeValue};
@@ -77,7 +82,9 @@ const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
 const EDIT_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011C;
+const PRONOUNCE_MESSAGE_TYPE: i32 = 0x6011D;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
+const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct QueuedUnionApplicationTerminal {
@@ -461,6 +468,52 @@ pub(crate) fn dispatch_leave_word_edit(
             .map(|outcome| OrganizingLeaveWordEditDispatch {
                 leave_word_id,
                 player_id,
+                outcome,
+            }),
+    )
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingPronounceDispatch {
+    pub(crate) player_id: i32,
+    pub(crate) content: Vec<u8>,
+    pub(crate) time: TagTimeValue,
+    pub(crate) outcome: OrganizingPronounceOutcome,
+}
+
+/// Выполняет `0x6011D`: bounded C-string, player membership и `Pronounce`.
+pub(crate) fn dispatch_pronounce(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+) -> Option<Result<OrganizingPronounceDispatch, OrganizingPronounceBlock>> {
+    if message.message_type() != PRONOUNCE_MESSAGE_TYPE {
+        return None;
+    }
+
+    let mut content = message
+        .base_mut()
+        .get_str_bytes(PRONOUNCE_INPUT_CAPACITY)
+        .unwrap_or_default();
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let local_time = TagTime::local_now();
+    let time = TagTimeValue {
+        year: local_time.year,
+        month: local_time.month,
+        day_of_week: local_time.day_of_week,
+        day: local_time.day,
+        hour: local_time.hour,
+        minute: local_time.minute,
+        second: local_time.second,
+        milliseconds: local_time.milliseconds,
+    };
+    Some(
+        organizing
+            .pronounce_for_player(game, player_id, &mut content, time)
+            .map(|outcome| OrganizingPronounceDispatch {
+                player_id,
+                content,
+                time,
                 outcome,
             }),
     )
