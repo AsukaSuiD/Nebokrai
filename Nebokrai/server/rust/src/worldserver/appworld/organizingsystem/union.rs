@@ -13,7 +13,9 @@
 //! `0x000C18D0/0x000C1970`, empty enemy-set getter-ы RVA `0x000C1C50`,
 //! `IsOwnedCity/IsEnemyFaction/GetOwnedCities/IsHaveEnymyFaction/
 //! IsHaveCityEnemyFaction` RVA
-//! `0x000C2340/0x000C23A0/0x000C2650/0x000C2810/0x000C2870` — `IMPLEMENTED`;
+//! `0x000C2340/0x000C23A0/0x000C2650/0x000C2810/0x000C2870`, обе
+//! `AddOwnedCity`, `DelOwnedCity/ClearOwnedCity/SetOwnedCity` RVA
+//! `0x000C2400/0x000C2490/0x000C2510/0x000C2570/0x000C25F0` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -81,12 +83,23 @@
 //! возвращал ссылку на уже уничтоженный локальный list. Safe Rust исправляет
 //! этот чистый lifetime/UB-дефект, возвращая owned snapshot либо пустой
 //! `VecDeque`, не меняя задуманное значение нормальных ветвей.
+//! Owned-city fan-out проходит member-map в signed key-order, пропускает
+//! неположительные ID и nullable faction lookup. Одиночное и списочное
+//! добавление вызывают каждую найденную faction; clear делает то же и всегда
+//! возвращал `true`; set обращается только к положительной найденной
+//! master-faction. Exact ASM `0x004C2510..0x004C256C` отдельно подтверждает
+//! внешний legacy-баг: `DelOwnedCity(region)` не читает `region`, вызывает у
+//! master-фракции безаргументный slot `ClearOwnedCity` и возвращает `true`
+//! только при найденном ненулевом pointer. Старый Linux-донор исправлял это на
+//! обычный delete, но Rust сохраняет машинное поведение целевой версии явно.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use super::faction::OwnedCityMutationBuildError;
 use super::organizing::{
     EOperator, EPurview, EPurviewOwnState, MemberPurviewMutation, TagMemInfo, TagTimeValue,
 };
+use crate::worldserver::worldserver::game::CGame;
 
 /// Узкая read-only граница controller-wide `IsFactionMaster`.
 pub(crate) trait UnionOperatorValidationContext {
@@ -106,6 +119,57 @@ pub(crate) trait UnionMasterFactionQueryContext {
     fn faction_has_enemy(&self, faction_id: i32) -> Option<bool>;
 
     fn faction_has_city_war_enemy(&self, faction_id: i32) -> Option<bool>;
+}
+
+/// Узкая mutable-граница faction-map для owned-city virtual dispatch.
+pub(crate) trait UnionOwnedCityMutationContext {
+    fn faction_add_owned_city(
+        &mut self,
+        faction_id: i32,
+        game: &CGame,
+        region_id: i32,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<bool, OwnedCityMutationBuildError>;
+
+    fn faction_add_owned_cities(
+        &mut self,
+        faction_id: i32,
+        game: &CGame,
+        region_ids: &VecDeque<i32>,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<bool, OwnedCityMutationBuildError>;
+
+    fn faction_clear_owned_cities(
+        &mut self,
+        faction_id: i32,
+        game: &CGame,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<bool, OwnedCityMutationBuildError>;
+
+    fn faction_set_owned_cities(
+        &mut self,
+        faction_id: i32,
+        game: &CGame,
+        region_ids: &VecDeque<i32>,
+    ) -> Result<bool, OwnedCityMutationBuildError>;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionOwnedCityFanoutReport {
+    pub(crate) invoked_faction_ids: Vec<i32>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionOwnedCityMutationBlock {
+    pub(crate) faction_id: i32,
+    pub(crate) completed_faction_ids: Vec<i32>,
+    pub(crate) source: OwnedCityMutationBuildError,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionOwnedCityBooleanMutationReport {
+    pub(crate) legacy_result: bool,
+    pub(crate) invoked_faction_ids: Vec<i32>,
 }
 
 /// Поля `CUnion`, которые буквально копирует и читает save-цепочка.
@@ -439,6 +503,151 @@ impl CUnion {
             && context
                 .faction_has_city_war_enemy(self.master_id)
                 .unwrap_or(false)
+    }
+
+    fn fan_out_owned_city_mutation<Context, Dispatch>(
+        &self,
+        context: &mut Context,
+        mut dispatch: Dispatch,
+    ) -> Result<UnionOwnedCityFanoutReport, UnionOwnedCityMutationBlock>
+    where
+        Context: UnionOwnedCityMutationContext,
+        Dispatch: FnMut(
+            &mut Context,
+            i32,
+        ) -> Result<bool, OwnedCityMutationBuildError>,
+    {
+        let mut invoked_faction_ids = Vec::new();
+        for &faction_id in self.members.keys() {
+            if faction_id <= 0 {
+                continue;
+            }
+            match dispatch(context, faction_id) {
+                Ok(true) => invoked_faction_ids.push(faction_id),
+                Ok(false) => {}
+                Err(source) => {
+                    return Err(UnionOwnedCityMutationBlock {
+                        faction_id,
+                        completed_faction_ids: invoked_faction_ids,
+                        source,
+                    });
+                }
+            }
+        }
+        Ok(UnionOwnedCityFanoutReport {
+            invoked_faction_ids,
+        })
+    }
+
+    /// Добавляет region каждой найденной положительной member-faction.
+    pub(crate) fn add_owned_city<Context>(
+        &self,
+        context: &mut Context,
+        game: &CGame,
+        region_id: i32,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<UnionOwnedCityFanoutReport, UnionOwnedCityMutationBlock>
+    where
+        Context: UnionOwnedCityMutationContext,
+    {
+        self.fan_out_owned_city_mutation(context, |context, faction_id| {
+            context.faction_add_owned_city(faction_id, game, region_id, update_player)
+        })
+    }
+
+    /// Добавляет исходный list каждой найденной положительной member-faction.
+    pub(crate) fn add_owned_cities<Context>(
+        &self,
+        context: &mut Context,
+        game: &CGame,
+        region_ids: &VecDeque<i32>,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<UnionOwnedCityFanoutReport, UnionOwnedCityMutationBlock>
+    where
+        Context: UnionOwnedCityMutationContext,
+    {
+        self.fan_out_owned_city_mutation(context, |context, faction_id| {
+            context.faction_add_owned_cities(faction_id, game, region_ids, update_player)
+        })
+    }
+
+    /// Очищает owned-city state всех найденных member-фракций.
+    pub(crate) fn clear_owned_cities<Context>(
+        &self,
+        context: &mut Context,
+        game: &CGame,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<UnionOwnedCityBooleanMutationReport, UnionOwnedCityMutationBlock>
+    where
+        Context: UnionOwnedCityMutationContext,
+    {
+        let fanout = self.fan_out_owned_city_mutation(context, |context, faction_id| {
+            context.faction_clear_owned_cities(faction_id, game, update_player)
+        })?;
+        Ok(UnionOwnedCityBooleanMutationReport {
+            legacy_result: true,
+            invoked_faction_ids: fanout.invoked_faction_ids,
+        })
+    }
+
+    /// Заменяет owned-city list только у найденной положительной master-faction.
+    pub(crate) fn set_owned_cities<Context>(
+        &self,
+        context: &mut Context,
+        game: &CGame,
+        region_ids: &VecDeque<i32>,
+    ) -> Result<UnionOwnedCityFanoutReport, UnionOwnedCityMutationBlock>
+    where
+        Context: UnionOwnedCityMutationContext,
+    {
+        if self.master_id <= 0 {
+            return Ok(UnionOwnedCityFanoutReport {
+                invoked_faction_ids: Vec::new(),
+            });
+        }
+        match context.faction_set_owned_cities(self.master_id, game, region_ids) {
+            Ok(true) => Ok(UnionOwnedCityFanoutReport {
+                invoked_faction_ids: vec![self.master_id],
+            }),
+            Ok(false) => Ok(UnionOwnedCityFanoutReport {
+                invoked_faction_ids: Vec::new(),
+            }),
+            Err(source) => Err(UnionOwnedCityMutationBlock {
+                faction_id: self.master_id,
+                completed_faction_ids: Vec::new(),
+                source,
+            }),
+        }
+    }
+
+    /// Сохраняет подтверждённый баг: аргумент игнорируется, master-list очищается.
+    pub(crate) fn delete_owned_city<Context>(
+        &self,
+        context: &mut Context,
+        game: &CGame,
+        _region_id: i32,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<UnionOwnedCityBooleanMutationReport, UnionOwnedCityMutationBlock>
+    where
+        Context: UnionOwnedCityMutationContext,
+    {
+        if self.master_id <= 0 {
+            return Ok(UnionOwnedCityBooleanMutationReport {
+                legacy_result: false,
+                invoked_faction_ids: Vec::new(),
+            });
+        }
+        match context.faction_clear_owned_cities(self.master_id, game, update_player) {
+            Ok(found) => Ok(UnionOwnedCityBooleanMutationReport {
+                legacy_result: found,
+                invoked_faction_ids: found.then_some(self.master_id).into_iter().collect(),
+            }),
+            Err(source) => Err(UnionOwnedCityMutationBlock {
+                faction_id: self.master_id,
+                completed_faction_ids: Vec::new(),
+                source,
+            }),
+        }
     }
 
     pub(crate) const fn change_data_type(&self) -> i32 {
@@ -948,7 +1157,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::AddOwnedCity
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:210
@@ -962,7 +1171,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::AddOwnedCity
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:224
@@ -976,7 +1185,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::DelOwnedCity
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:237
@@ -990,7 +1199,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::ClearOwnedCity
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:250
@@ -1004,7 +1213,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::SetOwnedCity
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:265

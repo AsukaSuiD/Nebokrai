@@ -213,11 +213,14 @@ use super::faction::{
     FactionOrganizingInfoContext, FactionOtherInfoBuildError, FactionOtherInfoDelivery,
     FactionPlayerHeaderContext, FactionPropertyDelivery, FactionPropertyReinitialization,
     FactionRemoveApplyMemberOutcome, FactionSuperiorOrganizingBlock, MemberEnterOutcome,
-    MemberExitOutcome,
+    MemberExitOutcome, OwnedCityMutationBuildError,
 };
 use super::organizing::EOperator;
 use super::organizingparam::COrganizingParam;
-use super::union::{CUnion, UnionMasterFactionQueryContext, UnionOperatorValidationContext};
+use super::union::{
+    CUnion, UnionMasterFactionQueryContext, UnionOperatorValidationContext,
+    UnionOwnedCityMutationContext,
+};
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::appworld::player::{
     PlayerOrganizingState, PlayerOrganizingUpdateError, PlayerOrganizingUpdater,
@@ -653,6 +656,13 @@ impl COrganizingCtrl {
     /// `nullptr`; caller сам сохраняет последующую pointer-семантику.
     pub(crate) fn faction_by_id(&self, faction_id: i32) -> Option<&CFaction> {
         self.factions.get(&faction_id).and_then(Option::as_deref)
+    }
+
+    /// Mutable-вариант того же nullable faction lookup для virtual dispatch.
+    fn faction_by_id_mut(&mut self, faction_id: i32) -> Option<&mut CFaction> {
+        self.factions
+            .get_mut(&faction_id)
+            .and_then(Option::as_deref_mut)
     }
 
     /// Повторяет nullable `GetConfederationOrganizing` для положительного ID.
@@ -1277,6 +1287,64 @@ impl UnionMasterFactionQueryContext for COrganizingCtrl {
     fn faction_has_city_war_enemy(&self, faction_id: i32) -> Option<bool> {
         self.faction_by_id(faction_id)
             .map(CFaction::has_city_war_enemy_faction)
+    }
+}
+
+impl UnionOwnedCityMutationContext for COrganizingCtrl {
+    fn faction_add_owned_city(
+        &mut self,
+        faction_id: i32,
+        game: &CGame,
+        region_id: i32,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<bool, OwnedCityMutationBuildError> {
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return Ok(false);
+        };
+        faction
+            .add_owned_city(game, region_id, update_player)
+            .map(|_| true)
+    }
+
+    fn faction_add_owned_cities(
+        &mut self,
+        faction_id: i32,
+        game: &CGame,
+        region_ids: &VecDeque<i32>,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<bool, OwnedCityMutationBuildError> {
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return Ok(false);
+        };
+        faction
+            .add_owned_city_list(game, region_ids, update_player)
+            .map(|_| true)
+    }
+
+    fn faction_clear_owned_cities(
+        &mut self,
+        faction_id: i32,
+        game: &CGame,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<bool, OwnedCityMutationBuildError> {
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return Ok(false);
+        };
+        faction
+            .clear_owned_cities(game, update_player)
+            .map(|_| true)
+    }
+
+    fn faction_set_owned_cities(
+        &mut self,
+        faction_id: i32,
+        game: &CGame,
+        region_ids: &VecDeque<i32>,
+    ) -> Result<bool, OwnedCityMutationBuildError> {
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return Ok(false);
+        };
+        faction.set_owned_cities(game, region_ids).map(|_| true)
     }
 }
 
