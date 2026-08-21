@@ -7,7 +7,8 @@
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`, `DisbandFaction` RVA `0x00038550` и
 //! `UpdateOtherFacInfoToClient` RVA `0x00034980` и `DisbandConferation` RVA
 //! `0x000393B0` — `IMPLEMENTED`;
-//! `IsFreePlayer` RVA `0x000343A0`, `IsFreeFaction` RVA `0x00034420`,
+//! `GenerateDBOrganizingID` RVA `0x000341C0`, `IsFreePlayer` RVA
+//! `0x000343A0`, `IsFreeFaction` RVA `0x00034420`,
 //! `SetAllCityFacEnemyChanged/ClearAllCityFacRelation/UpdateAllCityEneFacRelation`
 //! RVA `0x00034240/0x000342C0/0x00034330`,
 //! `RemovePersonFromApplyFactionList/GetFactionByPlayerInApplyList` RVA
@@ -4338,6 +4339,22 @@ impl COrganizingCtrl {
         Ok(true)
     }
 
+    /// Возвращает следующий organizing ID по exact signed maximum обоих map.
+    pub(crate) fn generate_db_organizing_id(&self) -> i32 {
+        let mut maximum = 1_i32;
+        if let Some(&faction_maximum) = self.factions.keys().next_back()
+            && 1 < faction_maximum
+        {
+            maximum = faction_maximum;
+        }
+        if let Some(&union_maximum) = self.confederations.keys().next_back()
+            && maximum < union_maximum
+        {
+            return union_maximum.wrapping_add(1);
+        }
+        maximum.wrapping_add(1)
+    }
+
     /// Ставит city-war changed-флаг всем живым faction в signed map-order.
     pub(crate) fn set_all_city_faction_enemy_changed(&mut self, changed: bool) {
         for faction in self.factions.values_mut().flatten() {
@@ -6380,7 +6397,8 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::GenerateDBOrganizingID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
+// IMPLEMENTED_OWNER: `COrganizingCtrl::generate_db_organizing_id` выше.
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:214
