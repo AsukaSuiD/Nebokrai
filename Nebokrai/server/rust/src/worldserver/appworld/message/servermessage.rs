@@ -122,7 +122,9 @@
 //! точный narrowing cast `u32 -> u8`; старшее содержимое исходного `dwIndex`
 //! отбрасывается, как в EXE. `CFourNationWarSys` следом передаёт ABI-точную
 //! setup/RECT конфигурацию subtype `0x25`. Следующая граница — повторная
-//! battle-fairy-exp конфигурация subtype `0x2C`.
+//! battle-fairy-exp конфигурация subtype `0x2C`; она использует уже
+//! восстановленный общий base-owner. Следующая граница —
+//! `CBattleFairyProperty` subtype `0x2D`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -876,6 +878,18 @@ pub(crate) enum WorldFourNationWarConfigurationCompletion {
 pub(crate) struct WorldFourNationWarConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldFourNationWarConfigurationCompletion,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldBattleFairyExpConfigurationCompletion {
+    BattleFairyExp(BattleFairyExpSerializeError),
+    BattleFairyPropertyPending { socket_id: i32 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldBattleFairyExpConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldBattleFairyExpConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -2469,6 +2483,33 @@ pub(crate) fn continue_game_server_four_nation_war_configuration(
             WorldFourNationWarConfigurationCompletion::BattleFairyExpConfigurationPending {
                 socket_id,
             },
+    }
+}
+
+/// Повторно кодирует общий battle-fairy-exp owner как exact subtype `0x2C`.
+pub(crate) fn continue_game_server_battle_fairy_exp_configuration(
+    game: &CGame,
+    socket_id: i32,
+    battle_fairy_exp: &CBattleFairyExpConfig,
+) -> WorldBattleFairyExpConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = battle_fairy_exp.add_to_byte_array(&mut payload) {
+        return WorldBattleFairyExpConfigurationReport {
+            delivery: None,
+            completion: WorldBattleFairyExpConfigurationCompletion::BattleFairyExp(error),
+        };
+    }
+    let sender = game.current_game_server_sender();
+    WorldBattleFairyExpConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x2C,
+            &payload,
+        )),
+        completion: WorldBattleFairyExpConfigurationCompletion::BattleFairyPropertyPending {
+            socket_id,
+        },
     }
 }
 
