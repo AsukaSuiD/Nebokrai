@@ -1,8 +1,9 @@
 //! WorldServer-владелец country-war state `CountryWarSys`.
 //!
 //! `AddToByteArray` RVA `0x0008F800`, `player_declare` RVA `0x00091B00`,
-//! `on_flag_destory` (исходное PDB-написание) RVA `0x00091E00` и
-//! `initialize` RVA `0x00092220` имеют статус `IMPLEMENTED`; остальной корпус
+//! `end_war` RVA `0x0008F890`, `on_flag_destory` (исходное PDB-написание) RVA
+//! `0x00091E00`, `initialize` RVA `0x00092220` и `reload` RVA `0x00092DF0`
+//! имеют статус `IMPLEMENTED`; остальной корпус
 //! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара `WorldServer/Nworldserver.exe +
 //! WorldServer/WorldServer.pdb`, исходник `appworld/country/countrywarsys.cpp`.
 //!
@@ -53,6 +54,14 @@
 //! выражает эту constructor/stack-неизвестность без нулевой заглушки. Логи
 //! missing-file и восьми проверок порядка передаются существующему World
 //! log-owner-у в месте вызова.
+//!
+//! `end_war` сохраняет ещё одно отличие от Linux-донора: exact EXE обнуляет
+//! только defender/attacker, не трогая `state_clear`, и затем безусловно
+//! рассылает `0x7FF1D`. `reload` в map-order безусловно читает и передаёт в
+//! `KillTimeEvent` девять ID, затем вызывает `end_war -> initialize`.
+//! `Option<TimerId>` не пропускает отсутствующее поле как donor helper
+//! `KillEvent(0)`: typed block возвращается в точке первого недоказанного ID и
+//! сохраняет счётчики уже выполненных kill side effects.
 //!
 //! Snapshot намеренно сохраняет layout World EXE: `state_clear + 3 bytes
 //! padding`, затем defender и attacker. Парный Game EXE RVA `0x000EBD60`
@@ -143,6 +152,50 @@ pub(crate) struct CountryWarLoadReport {
     pub(crate) accepted_records: u32,
     pub(crate) notices: Vec<CountryWarLoadNotice>,
     pub(crate) registered_events: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryWarEndReport {
+    pub(crate) reset_regions: usize,
+    pub(crate) delivery: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarReloadEvent {
+    PrepareBegin,
+    PrepareEnd,
+    DeclareBegin,
+    DeclareEnd,
+    InfoBegin,
+    Begin,
+    InfoEnd,
+    End,
+    Clear,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CountryWarReloadReport {
+    pub(crate) previous_schedules: usize,
+    pub(crate) kill_requests: u32,
+    pub(crate) killed_events: u32,
+    pub(crate) end_war: CountryWarEndReport,
+    pub(crate) load: CountryWarLoadReport,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarReloadBlock {
+    MissingEventId {
+        war_id: i32,
+        event: CountryWarReloadEvent,
+        kill_requests: u32,
+        killed_events: u32,
+    },
+    Load {
+        source: CountryWarLoadError,
+        kill_requests: u32,
+        killed_events: u32,
+        end_war: CountryWarEndReport,
+    },
 }
 
 impl Default for CountryWarLoadReport {
@@ -427,6 +480,75 @@ impl CountryWarSys {
         Ok(report)
     }
 
+    /// Отменяет все старые event-ID, завершает войны и повторяет `initialize`.
+    pub(crate) fn reload<Callback, Log, SendAll>(
+        &mut self,
+        source: Option<&[u8]>,
+        now: TagTime,
+        timer: &mut CTimer<Callback>,
+        callbacks: CountryWarCallbacks<Callback>,
+        add_log_text: Log,
+        mut send_all: SendAll,
+    ) -> Result<CountryWarReloadReport, CountryWarReloadBlock>
+    where
+        Callback: Copy,
+        Log: FnMut(&[u8]),
+        SendAll: FnMut(&CMessage) -> i32,
+    {
+        let previous_schedules = self.country_wars.len();
+        let mut kill_requests = 0u32;
+        let mut killed_events = 0u32;
+        for (&war_id, war) in &self.country_wars {
+            for (event, event_id) in war.reload_event_ids() {
+                kill_requests = kill_requests.wrapping_add(1);
+                let Some(event_id) = event_id else {
+                    return Err(CountryWarReloadBlock::MissingEventId {
+                        war_id,
+                        event,
+                        kill_requests,
+                        killed_events,
+                    });
+                };
+                if timer.kill_time_event(event_id) {
+                    killed_events = killed_events.wrapping_add(1);
+                }
+            }
+        }
+
+        let end_war = self.end_war(&mut send_all);
+        let load = self
+            .initialize(source, now, timer, callbacks, add_log_text)
+            .map_err(|source| CountryWarReloadBlock::Load {
+                source,
+                kill_requests,
+                killed_events,
+                end_war,
+            })?;
+        Ok(CountryWarReloadReport {
+            previous_schedules,
+            kill_requests,
+            killed_events,
+            end_war,
+            load,
+        })
+    }
+
+    /// Сбрасывает только обе стороны каждой войны и рассылает exact `0x7FF1D`.
+    pub(crate) fn end_war<SendAll>(&mut self, mut send_all: SendAll) -> CountryWarEndReport
+    where
+        SendAll: FnMut(&CMessage) -> i32,
+    {
+        for state in self.war_regions.values_mut() {
+            state.defend_country = 0;
+            state.attack_country = 0;
+        }
+        let message = CMessage::new(0x7ff1d);
+        CountryWarEndReport {
+            reset_regions: self.war_regions.len(),
+            delivery: send_all(&message),
+        }
+    }
+
     pub(crate) fn add_to_byte_array(&self, output: &mut Vec<u8>) -> bool {
         output.extend_from_slice(&(self.war_regions.len() as u32).to_le_bytes());
         for (&region_id, state) in &self.war_regions {
@@ -709,6 +831,34 @@ impl CountryWarTime {
         }
     }
 
+    fn reload_event_ids(
+        &self,
+    ) -> [(CountryWarReloadEvent, Option<TimerId>); 9] {
+        [
+            (
+                CountryWarReloadEvent::PrepareBegin,
+                self.prepare_begin_event_id,
+            ),
+            (
+                CountryWarReloadEvent::PrepareEnd,
+                self.prepare_end_event_id,
+            ),
+            (
+                CountryWarReloadEvent::DeclareBegin,
+                self.declare_begin_event_id,
+            ),
+            (
+                CountryWarReloadEvent::DeclareEnd,
+                self.declare_end_event_id,
+            ),
+            (CountryWarReloadEvent::InfoBegin, self.start_info_event_id),
+            (CountryWarReloadEvent::Begin, self.start_event_id),
+            (CountryWarReloadEvent::InfoEnd, self.end_info_event_id),
+            (CountryWarReloadEvent::End, self.end_event_id),
+            (CountryWarReloadEvent::Clear, self.clear_event_id),
+        ]
+    }
+
     fn register_initial_events<Callback: Copy>(
         &mut self,
         war_id: i32,
@@ -905,7 +1055,7 @@ where
 
 // ============================================================================
 // FUNCTION: CountryWarSys::end_war
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:482
@@ -913,6 +1063,8 @@ where
 // ADDRESS: 0048f890
 // PROTOTYPE: void __thiscall end_war(void)
 //
+// Реализовано выше; raw сохранён как локальная проверка того, что clear-byte
+// исходного CountryWarRegion здесь не менялся.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1101,7 +1253,7 @@ where
 
 // ============================================================================
 // FUNCTION: CountryWarSys::reload
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:351
@@ -1109,6 +1261,7 @@ where
 // ADDRESS: 00492df0
 // PROTOTYPE: bool __thiscall reload(void)
 //
+// Реализовано выше с точным kill-order и явной границей неизвестных event-ID.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
