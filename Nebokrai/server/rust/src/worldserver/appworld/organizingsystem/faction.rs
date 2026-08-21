@@ -24,6 +24,9 @@
 //! `IsCreateUnionFun` RVA `0x000BD790..0x000BD7B0`, victor/delete getter-ы
 //! RVA `0x000BD800..0x000BD820` и member query-owner-ы
 //! `GetTitleByID/GetJobLvlByID` RVA `0x000BD870/0x000BD910`,
+//! прямые mutator-owner-ы `SetPermitDemise/SetCountry` RVA
+//! `0x000BD750/0x000BD770`, enemy-changed setter-ы RVA
+//! `0x000BD7E0/0x000BD7F0` и `SetName` RVA `0x000C1B90`,
 //! `DelMember` RVA `0x000B9EF0`,
 //! `UpdatePropertyToClient` RVA `0x000B9FB0`,
 //! `UpdateEnemyFactionToClient/UpdateCityWarEnemyFactionToClient` RVA
@@ -87,6 +90,10 @@
 //! Простые query-owner-ы возвращают достигнутые scalar/property/member поля
 //! без side effect. Для ещё не назначенного partial state Rust возвращает
 //! `Option`, а bounded C-строка title не воспроизводит старое чтение за массивом.
+//! Прямые setter-ы сохраняют отсутствие side effect: country меняет ровно один
+//! property-byte, name копируется byte-exact и по старому контракту всегда
+//! сообщает успех. Три transient bool до первого достигнутого присваивания
+//! остаются `Option`, потому что один constructor сам их не инициализировал.
 //! Достигнутый `SetPlayerOrganizing` дополнительно читает `m_strName`,
 //! `m_lMastterID`, `m_Property.lLvl/lExp`, `m_OwnedCities` и два enemy-set.
 //! Коллекции, которые constructor действительно создавал пустыми, хранятся
@@ -328,6 +335,10 @@ impl FactionBaseProperty {
 
     fn write_signed(&mut self, offset: usize, value: i32) {
         self.bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn set_country(&mut self, country: u8) {
+        self.bytes[0x2C] = country;
     }
 
     fn set_initial_level_permissions(&mut self, parameters: &COrganizingParam) {
@@ -621,6 +632,9 @@ pub(crate) struct CFaction {
     owned_cities: VecDeque<i32>,
     enemy_factions: BTreeSet<i32>,
     city_war_enemy_factions: BTreeSet<i32>,
+    permit_demise: Option<bool>,
+    enemy_factions_changed: Option<bool>,
+    city_war_enemy_factions_changed: Option<bool>,
     apply_person_ids: BTreeSet<i32>,
     pronounce_data: [u8; PRONOUNCE_DATA_SIZE],
     leave_words: VecDeque<TagLeaveWord>,
@@ -645,6 +659,9 @@ impl CFaction {
             owned_cities: VecDeque::new(),
             enemy_factions: BTreeSet::new(),
             city_war_enemy_factions: BTreeSet::new(),
+            permit_demise: None,
+            enemy_factions_changed: None,
+            city_war_enemy_factions_changed: None,
             apply_person_ids: BTreeSet::new(),
             pronounce_data: [0; PRONOUNCE_DATA_SIZE],
             leave_words: VecDeque::new(),
@@ -664,6 +681,13 @@ impl CFaction {
     /// Возвращает byte-exact содержимое исходного `m_strName`.
     pub(crate) fn name(&self) -> &[u8] {
         &self.name
+    }
+
+    /// Копирует `std::string` byte-exact; исходный virtual всегда возвращал `true`.
+    pub(crate) fn set_name(&mut self, name: &[u8]) -> bool {
+        self.name.clear();
+        self.name.extend_from_slice(name);
+        true
     }
 
     /// Возвращает достигнутый `m_lMastterID`; narrow state его не назначает.
@@ -697,6 +721,43 @@ impl CFaction {
             Some(property) => Some(property.country()),
             None => None,
         }
+    }
+
+    /// Меняет только `m_Property.btCountry`; partial property остаётся safe-границей.
+    pub(crate) fn set_country(
+        &mut self,
+        country: u8,
+    ) -> Result<(), FactionInitialPropertyBlock> {
+        let property = self
+            .base_property
+            .as_mut()
+            .ok_or(FactionInitialPropertyBlock)?;
+        property.set_country(country);
+        Ok(())
+    }
+
+    pub(crate) const fn permit_demise(&self) -> Option<bool> {
+        self.permit_demise
+    }
+
+    pub(crate) fn set_permit_demise(&mut self, permit: bool) {
+        self.permit_demise = Some(permit);
+    }
+
+    pub(crate) const fn enemy_factions_changed(&self) -> Option<bool> {
+        self.enemy_factions_changed
+    }
+
+    pub(crate) fn set_enemy_factions_changed(&mut self, changed: bool) {
+        self.enemy_factions_changed = Some(changed);
+    }
+
+    pub(crate) const fn city_war_enemy_factions_changed(&self) -> Option<bool> {
+        self.city_war_enemy_factions_changed
+    }
+
+    pub(crate) fn set_city_war_enemy_factions_changed(&mut self, changed: bool) {
+        self.city_war_enemy_factions_changed = Some(changed);
     }
 
     pub(crate) const fn is_permitted(&self) -> Option<bool> {
@@ -1286,6 +1347,10 @@ impl CFaction {
             // CloneSaveData не копирует оба runtime enemy-set.
             enemy_factions: BTreeSet::new(),
             city_war_enemy_factions: BTreeSet::new(),
+            // Private clone-constructor не назначает transient bool.
+            permit_demise: None,
+            enemy_factions_changed: None,
+            city_war_enemy_factions_changed: None,
             // DB ability-owner читает только ordered keys; значения
             // tagApplyPerson в достигнутой цепочке не наблюдаются.
             apply_person_ids: if change_data_type & 8 != 0 {
@@ -2797,7 +2862,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetPermitDemise
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:168
@@ -2825,7 +2890,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetCountry
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:172
@@ -2909,7 +2974,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetEneFacChanged
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:269
@@ -2923,7 +2988,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetCityEneFacChagned
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:270
@@ -3331,7 +3396,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:448
