@@ -124,7 +124,9 @@
 //! setup/RECT конфигурацию subtype `0x25`. Следующая граница — повторная
 //! battle-fairy-exp конфигурация subtype `0x2C`; она использует уже
 //! восстановленный общий base-owner. Следующая граница —
-//! `CBattleFairyProperty` subtype `0x2D`.
+//! `CBattleFairyProperty` subtype `0x2D`, подключённый через его точный
+//! MSVC-SSO serializer. Следующая граница — объединённые `CCiQingSetup +
+//! CLingBaoSetup` subtype `0x35`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -224,6 +226,9 @@ use crate::worldserver::appworld::country::countryhandler::{
 };
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsRegistrySerializeError, serialize_goods_registry,
+};
+use crate::worldserver::appworld::goods::cbattlefairyproperty::{
+    BattleFairyComposeWireError, CBattleFairyProperty,
 };
 use crate::worldserver::appworld::organizingsystem::factionwarsys::CFactionWarSys;
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
@@ -890,6 +895,18 @@ pub(crate) enum WorldBattleFairyExpConfigurationCompletion {
 pub(crate) struct WorldBattleFairyExpConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldBattleFairyExpConfigurationCompletion,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldBattleFairyPropertyConfigurationCompletion {
+    BattleFairyProperty(BattleFairyComposeWireError),
+    CiQingLingBaoConfigurationPending { socket_id: i32 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldBattleFairyPropertyConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldBattleFairyPropertyConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -2510,6 +2527,35 @@ pub(crate) fn continue_game_server_battle_fairy_exp_configuration(
         completion: WorldBattleFairyExpConfigurationCompletion::BattleFairyPropertyPending {
             socket_id,
         },
+    }
+}
+
+/// Кодирует exact MSVC-SSO compose records в subtype `0x2D`.
+pub(crate) fn continue_game_server_battle_fairy_property_configuration(
+    game: &CGame,
+    socket_id: i32,
+    battle_fairy_property: &CBattleFairyProperty,
+) -> WorldBattleFairyPropertyConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = battle_fairy_property.serialize_combine(&mut payload) {
+        return WorldBattleFairyPropertyConfigurationReport {
+            delivery: None,
+            completion:
+                WorldBattleFairyPropertyConfigurationCompletion::BattleFairyProperty(error),
+        };
+    }
+    let sender = game.current_game_server_sender();
+    WorldBattleFairyPropertyConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x2D,
+            &payload,
+        )),
+        completion:
+            WorldBattleFairyPropertyConfigurationCompletion::CiQingLingBaoConfigurationPending {
+                socket_id,
+            },
     }
 }
 
