@@ -511,6 +511,10 @@
 //! секциях нет project-call к `_setlocale` `0x00520AA9`. Поэтому
 //! `eq_ignore_ascii_case` над C-string prefix сохраняет ASCII-регистр и
 //! byte-exact high bytes без Windows CRT в Linux runtime.
+//! `GetMapPlayerIDByName` использует тот же map-order и `_strcmpi`, но не
+//! проверяет online-list: первое совпавшее имя сразу возвращает map-key, иначе
+//! результат равен нулю. Общий Rust helper C-string prefix сохраняет остановку
+//! на NUL, а `BTreeMap` — исходный unsigned порядок MSVC map.
 //!
 //! `GetLoginPlayerIDByName`, напротив, проходит login-list по порядку, ищет
 //! player-map owner по `tagLoginPlayer::dwPlayerID`, пропускает отсутствующий
@@ -8418,8 +8422,8 @@ impl CGame {
     /// заново читается текущий Login client и фиксируется его число сообщений.
     /// Поэтому typed reconnect из первой очереди заменяет owner до второго
     /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
-    /// ветви server-owner-а, GMA `0x4FD01/0x4FD04/0x60401/0x60402`, GM
-    /// query/reload/state/transport ветви GM `0x5FF01..11/13..16`,
+    /// ветви server-owner-а, GMA `0x4FD01/0x4FD04/0x60401/0x60402`, полный GM
+    /// owner `0x5FF01..0x5FF16`,
     /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, honor
     /// `0x5FD0C/0x5FD0D`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
@@ -8432,8 +8436,9 @@ impl CGame {
     /// quest routes `0x6013B/0x6013C`, run-script `0x6013D` и faction parameter
     /// `0x6013E` и region-router request `0x60144` исполняются; остальные
     /// остаются owned pending. Terminal
-    /// actions применяются FIFO до следующего сообщения.
-    pub(crate) fn process_message<TimerCallback: Copy>(
+    /// actions применяются FIFO до следующего сообщения. Async TDS lookup
+    /// `0x5FF12` завершается до следующего slot-а, как синхронный ADO EXE.
+    pub(crate) async fn process_message<TimerCallback: Copy>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
         organizing: &mut COrganizingCtrl,
@@ -8454,6 +8459,8 @@ impl CGame {
         net_sessions: &CNetSessionManager,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+        rs_player: &mut TiberiusRsPlayer,
+        mut player_database: Option<&mut WorldTdsClient>,
         reload_context: &mut dyn WorldReloadContext,
         add_gma_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
         update_player: &mut dyn FnMut(i32),
@@ -8500,6 +8507,8 @@ impl CGame {
                             net_sessions,
                             application_runtime,
                             application_callbacks,
+                            &mut *rs_player,
+                            player_database.as_deref_mut(),
                             &mut *reload_context,
                             &mut *add_gma_log_text,
                             update_player,
@@ -8507,7 +8516,8 @@ impl CGame {
                             set_city_war_country_king_and_city,
                             WorldMessageSource::GameServer,
                             message,
-                        ));
+                        )
+                        .await);
                     }
                     WorldServerEvent::LoginClientReconnected(client) => {
                         let replacement = on_login_client_reconnected(self, client)
@@ -8554,6 +8564,8 @@ impl CGame {
                     net_sessions,
                     application_runtime,
                     application_callbacks,
+                    &mut *rs_player,
+                    player_database.as_deref_mut(),
                     &mut *reload_context,
                     &mut *add_gma_log_text,
                     update_player,
@@ -8561,7 +8573,8 @@ impl CGame {
                     set_city_war_country_king_and_city,
                     WorldMessageSource::LoginServer,
                     message,
-                ));
+                )
+                .await);
             }
             login_remaining -= 1;
             login_slots_visited += 1;
@@ -8586,7 +8599,7 @@ impl CGame {
     ///
     /// Safe block не получает придуманных end/next-stage ticks и не меняет
     /// накопитель: исходный невозвратившийся путь их не достигал.
-    pub(crate) fn process_message_main_loop_stage<TimerCallback, GetTick>(
+    pub(crate) async fn process_message_main_loop_stage<TimerCallback, GetTick>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
         organizing: &mut COrganizingCtrl,
@@ -8607,6 +8620,8 @@ impl CGame {
         net_sessions: &CNetSessionManager,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+        rs_player: &mut TiberiusRsPlayer,
+        player_database: Option<&mut WorldTdsClient>,
         reload_context: &mut dyn WorldReloadContext,
         log: &mut WorldLogTextOwner,
         get_log_local_time: &mut dyn FnMut() -> WorldLogLocalTime,
@@ -8653,12 +8668,16 @@ impl CGame {
             net_sessions,
             application_runtime,
             application_callbacks,
+            rs_player,
+            player_database,
             reload_context,
             &mut add_gma_log_text,
             update_player,
             clear_city_war_country_warring,
             set_city_war_country_king_and_city,
-        ) {
+        )
+        .await
+        {
             Ok(outcome) => outcome,
             Err(error) => {
                 return WorldProcessMessageStageReport::Blocked {
@@ -9742,6 +9761,8 @@ impl CGame {
             owners.net_sessions,
             owners.union_application_runtime,
             &mut union_application_callbacks,
+            owners.rs_player,
+            owners.player_database.as_deref_mut(),
             &mut *callbacks.reload_context,
             owners.log,
             &mut *callbacks.get_log_local_time,
@@ -9752,7 +9773,9 @@ impl CGame {
             state.clocks,
             state.process_message,
             &mut *callbacks.get_tick,
-        ) {
+        )
+        .await
+        {
             complete @ WorldProcessMessageStageReport::Complete { .. } => complete,
             blocked @ WorldProcessMessageStageReport::Blocked { .. } => {
                 return Err(Box::new(WorldMainLoopBlock::ProcessMessage(blocked)));
@@ -10567,6 +10590,19 @@ impl CGame {
     /// Возвращает игрока непосредственно из владеющего map либо `None`.
     pub(crate) fn map_player(&self, player_id: u32) -> Option<&CPlayer> {
         self.players.get(&player_id).map(Box::as_ref)
+    }
+
+    /// Возвращает первый map-key с `_strcmpi`-равным именем, без online-gate.
+    pub(crate) fn map_player_id_by_name(&self, name: &[u8]) -> u32 {
+        let name = legacy_c_string_prefix(name);
+        self.players
+            .iter()
+            .find_map(|(&player_id, player)| {
+                legacy_c_string_prefix(player.get_name())
+                    .eq_ignore_ascii_case(name)
+                    .then_some(player_id)
+            })
+            .unwrap_or(0)
     }
 
     /// Передаёт non-null player-owner map либо сохраняет его у caller-а.
@@ -11536,7 +11572,7 @@ pub(crate) async fn game_thread_func<Runtime: WorldGameThreadRuntime>(
     }
 }
 
-fn process_world_message<TimerCallback: Copy>(
+async fn process_world_message<TimerCallback: Copy>(
     game: &mut CGame,
     honor_ranks: &mut CHonorRanks,
     organizing: &mut COrganizingCtrl,
@@ -11557,6 +11593,8 @@ fn process_world_message<TimerCallback: Copy>(
     net_sessions: &CNetSessionManager,
     application_runtime: &WorldUnionApplicationRuntimeOwner,
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    rs_player: &mut TiberiusRsPlayer,
+    player_database: Option<&mut WorldTdsClient>,
     reload_context: &mut dyn WorldReloadContext,
     add_gma_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     update_player: &mut dyn FnMut(i32),
@@ -11627,10 +11665,14 @@ fn process_world_message<TimerCallback: Copy>(
     if selector.owner == Some(WorldMessageOwner::Gm) {
         match on_gm_message(
             game,
+            rs_player,
+            player_database,
             reload_context,
             &mut *application_callbacks.world_string,
             message,
-        ) {
+        )
+        .await
+        {
             WorldGmMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::GmMessage {
                     source,
@@ -13775,7 +13817,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::GetMapPlayerIDByName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:3408

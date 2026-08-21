@@ -8,6 +8,7 @@
 //! `0x00106A60`, `SaveQuestData` RVA `0x00106270`,
 //! `CreatePlayerAbilities` RVA `0x00106CE0`, внешний
 //! `CreatePlayer` RVA `0x0010ED40`, внешний `SavePlayer` RVA `0x0010EE70`,
+//! `GetPlayerID` RVA `0x00102080`, `GetCDKey` RVA `0x0010EA20`,
 //! `RestorePlayer` RVA `0x00101260` и
 //! `DeletePlayer` RVA `0x00101A60`, а также `LoadHonorRanksByType` RVA
 //! `0x0010FB90`, внешний `LoadHonorRanks` RVA `0x001113B0`, `InsertHonorRanks`
@@ -415,6 +416,14 @@
 //! Неинициализированный constructor-ом `m_nMaxNum` и null faction внутри
 //! `IsFreePlayer` остаются локальными typed-границами вместо чтения мусора или
 //! raw null-dereference.
+//!
+//! `GetCDKey` сначала выполняет точный логический `GetPlayerID(name)`, затем
+//! читает `Account` из `CSL_Player_base` по найденному signed ID. Отсутствующая
+//! строка, пустой account и DB-ошибка дают пустую строку; ошибки двух стадий
+//! сохраняются раздельными notice-ами, как исходные `get palyer id ERROR` и
+//! `get cdkey ERROR`. Параметризованный `tiberius::Query` заменяет только
+//! `_sprintf`/ADO и исключает старый SQL-injection/buffer-overflow дефект;
+//! Windows-1251 сохраняет ANSI C-string границу имени и результата.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::Infallible;
@@ -917,6 +926,8 @@ pub(crate) struct RsPlayerNotice {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum RsPlayerOperation {
+    GetPlayerId,
+    GetCdKey,
     StatRanks,
     Outer,
     BaseRow,
@@ -1056,6 +1067,13 @@ fn read_ado_integer(
 
 /// Узкая объектная граница достигнутой стадии исходного `CRsPlayer`.
 pub(crate) trait RsPlayerOwner {
+    /// Возвращает account по имени либо исходную пустую строку при любом отказе.
+    async fn get_cd_key(
+        &mut self,
+        player_name: &[u8],
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> Vec<u8>;
+
     /// Потоково добавляет exact TOP-рейтинг в уже очищенный live owner.
     async fn stat_ranks(
         &mut self,
@@ -1931,6 +1949,103 @@ pub(crate) fn save_thing_field<S: PlayerAbilityFieldSink>(
 }
 
 impl RsPlayerOwner for TiberiusRsPlayer {
+    async fn get_cd_key(
+        &mut self,
+        player_name: &[u8],
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> Vec<u8> {
+        let Some(active_transaction) = active_transaction else {
+            self.notices.push_back(RsPlayerNotice {
+                operation: RsPlayerOperation::GetPlayerId,
+                error: RsPlayerSaveError::MissingConnection,
+            });
+            return Vec::new();
+        };
+
+        let (player_name, _, _) = WINDOWS_1251.decode(visible_c_string(player_name));
+        let mut player_query = Query::new("SELECT * FROM CSL_PLAYER_BASE WHERE name=@P1");
+        player_query.bind(player_name.into_owned());
+        let player_row = match player_query.query(&mut *active_transaction).await {
+            Ok(stream) => match stream.into_row().await {
+                Ok(row) => row,
+                Err(error) => {
+                    self.notices.push_back(RsPlayerNotice {
+                        operation: RsPlayerOperation::GetPlayerId,
+                        error: RsPlayerSaveError::Database(error.into()),
+                    });
+                    return Vec::new();
+                }
+            },
+            Err(error) => {
+                self.notices.push_back(RsPlayerNotice {
+                    operation: RsPlayerOperation::GetPlayerId,
+                    error: RsPlayerSaveError::Database(error.into()),
+                });
+                return Vec::new();
+            }
+        };
+        let Some(player_row) = player_row else {
+            return Vec::new();
+        };
+        let player_id = match read_ado_integer(&player_row, "ID") {
+            Ok(Some(value)) => match i32::try_from(value) {
+                Ok(value) => value,
+                Err(_) => return Vec::new(),
+            },
+            Ok(None) => return Vec::new(),
+            Err(error) => {
+                self.notices.push_back(RsPlayerNotice {
+                    operation: RsPlayerOperation::GetPlayerId,
+                    error: RsPlayerSaveError::Database(error.into()),
+                });
+                return Vec::new();
+            }
+        };
+        if player_id == 0 {
+            return Vec::new();
+        }
+
+        let mut account_query =
+            Query::new("SELECT Account FROM CSL_Player_base WHERE ID=@P1");
+        account_query.bind(player_id);
+        let account_row = match account_query.query(active_transaction).await {
+            Ok(stream) => match stream.into_row().await {
+                Ok(row) => row,
+                Err(error) => {
+                    self.notices.push_back(RsPlayerNotice {
+                        operation: RsPlayerOperation::GetCdKey,
+                        error: RsPlayerSaveError::Database(error.into()),
+                    });
+                    return Vec::new();
+                }
+            },
+            Err(error) => {
+                self.notices.push_back(RsPlayerNotice {
+                    operation: RsPlayerOperation::GetCdKey,
+                    error: RsPlayerSaveError::Database(error.into()),
+                });
+                return Vec::new();
+            }
+        };
+        let Some(account_row) = account_row else {
+            return Vec::new();
+        };
+        match account_row.try_get::<&str, _>("Account") {
+            Ok(Some(account)) => {
+                let (account, _, _) = WINDOWS_1251.encode(account);
+                visible_c_string(account.as_ref()).to_vec()
+            }
+            Ok(None) => Vec::new(),
+            Err(error) => {
+                self.notices.push_back(RsPlayerNotice {
+                    operation: RsPlayerOperation::GetCdKey,
+                    error: RsPlayerSaveError::Database(error.into()),
+                });
+                Vec::new()
+            }
+        }
+    }
+
     async fn stat_ranks(
         &mut self,
         ranks: &mut CPlayerRanks,
@@ -3207,7 +3322,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::GetPlayerID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:797
@@ -3515,7 +3630,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::GetCDKey
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:837

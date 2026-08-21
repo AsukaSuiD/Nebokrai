@@ -1,6 +1,6 @@
 //! WorldServer dispatcher-owner `OnGMMessage`.
 //!
-//! Статус `IMPLEMENTED_PARTIAL`: exact ветви `0x5FF01` RVA
+//! Статус `IMPLEMENTED`: exact ветви `0x5FF01` RVA
 //! `0x000AB3C8..0x000AB425` и `0x5FF05` RVA `0x000AB98C..0x000ABA09`
 //! материализуют online-count и online-player-ID queries. Общий owner до
 //! switch сначала читает request/player ID. Первая ветвь затем читает script
@@ -26,15 +26,23 @@
 //! Silence `0x5FF0C` сначала меняет World `m_lSilienceTime`, затем маршрутизует
 //! `0x7FC0B`; отсутствие online-цели возвращает requester-у `0x7FC0C` с
 //! исходным string-table ключом `WS0114`.
+//! Ban `0x5FF12` сначала ищет account в полном player-map без online-gate,
+//! при пустом значении вызывает достигнутый `CRsPlayer::GetCDKey`, а затем
+//! только для непустого account отправляет `0x20001 + account + minutes`
+//! неприоритетному LoginServer client. Requester ID намеренно лишь считывается:
+//! EXE не проверял права и не строил ответ. Две последовательные ADO-операции
+//! заменены параметризованным Tiberius-owner-ом без изменения wire/order.
 //!
 //! Rust `VecDeque::len` шире старого 32-битного `_Mysize`; значение вне
 //! legacy-range безопасно блокируется typed-исходом, а не молча обрезается.
-//! Остальные GM opcodes остаются `UNKNOWN` (исследовательский декомпилят хранится локально) ниже. Точная пара:
+//! Raw ниже сохранён как provenance уже достигнутого owner-а. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\gmmessage.cpp`.
 
 use std::ffi::CString;
 
+use crate::dbaccess::worlddb::rsplayer::{RsPlayerOwner, TiberiusRsPlayer};
+use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::worldserver::game::{
     CGame, WorldNamedRegionLookup, WorldRegionIdRouteScan, WorldReloadBlock, WorldReloadContext,
@@ -213,7 +221,27 @@ pub(crate) enum WorldGmMessageOutcome {
         online_player_id: u32,
         disposition: WorldGmSilienceDisposition,
     },
+    Ban {
+        request_id: i32,
+        player_name: Vec<u8>,
+        minutes: i32,
+        payload_complete: [bool; 2],
+        map_player_id: u32,
+        map_player_found: bool,
+        account_source: WorldGmBanAccountSource,
+        account: Vec<u8>,
+        response_type: i32,
+        wire: Option<Vec<u8>>,
+        delivery: Option<Result<i32, SendMessageError>>,
+    },
     Transport(WorldGmTransportOutcome),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldGmBanAccountSource {
+    MapPlayer,
+    Database,
+    Missing,
 }
 
 pub(crate) enum WorldGmMessageDispatch {
@@ -221,9 +249,11 @@ pub(crate) enum WorldGmMessageDispatch {
     Pending(CMessage),
 }
 
-/// Исполняет достигнутые query-ветви частичного GM-owner-а.
-pub(crate) fn on_gm_message(
+/// Исполняет полный достигнутый GM-owner в exact FIFO-порядке.
+pub(crate) async fn on_gm_message(
     game: &mut CGame,
+    rs_player: &mut TiberiusRsPlayer,
+    player_database: Option<&mut WorldTdsClient>,
     reload_context: &mut dyn WorldReloadContext,
     world_string_by_id: &mut dyn FnMut(&[u8]) -> Vec<u8>,
     mut message: CMessage,
@@ -628,6 +658,60 @@ pub(crate) fn on_gm_message(
             decoded_request_id.is_some(),
         ),
         0x0005_FF11 => handled_rewritten_broadcast(game, message, 0x0005_FF11, 0x0007_FC10),
+        0x0005_FF12 => {
+            let player_name = message
+                .base_mut()
+                .get_str_bytes(0x100)
+                .expect("literal 0x100 исключает zero-capacity GetStr");
+            let decoded_minutes = message.base_mut().get_long();
+            let minutes = decoded_minutes.unwrap_or(0);
+            let map_player_id = game.map_player_id_by_name(&player_name);
+            let map_player = game.map_player(map_player_id);
+            let map_player_found = map_player.is_some();
+            let mut account = map_player
+                .map(|player| legacy_c_string_prefix(player.get_account()).to_vec())
+                .unwrap_or_default();
+            let mut account_source = if account.is_empty() {
+                WorldGmBanAccountSource::Missing
+            } else {
+                WorldGmBanAccountSource::MapPlayer
+            };
+            if account.is_empty() {
+                account = rs_player
+                    .get_cd_key(&player_name, player_database)
+                    .await;
+                if !account.is_empty() {
+                    account_source = WorldGmBanAccountSource::Database;
+                }
+            }
+
+            let (wire, delivery) = if account.is_empty() {
+                (None, None)
+            } else {
+                let mut response = CMessage::new(0x0002_0001);
+                add_c_string(&mut response, &account);
+                response.base_mut().add_long(minutes);
+                let wire = response.as_wire_bytes().to_vec();
+                let delivery = response.send(
+                    game.current_login_client().map(|client| client.send_queue()),
+                    false,
+                );
+                (Some(wire), Some(delivery))
+            };
+            WorldGmMessageDispatch::Handled(WorldGmMessageOutcome::Ban {
+                request_id,
+                player_name,
+                minutes,
+                payload_complete: [decoded_request_id.is_some(), decoded_minutes.is_some()],
+                map_player_id,
+                map_player_found,
+                account_source,
+                account,
+                response_type: 0x0002_0001,
+                wire,
+                delivery,
+            })
+        }
         0x0005_FF13 => handled_broadcast(
             game,
             CMessage::new(0x0007_F803),
@@ -762,6 +846,14 @@ fn add_c_string(message: &mut CMessage, bytes: &[u8]) {
     message.base_mut().add_str(Some(&value));
 }
 
+fn legacy_c_string_prefix(bytes: &[u8]) -> &[u8] {
+    let length = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    &bytes[..length]
+}
+
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
@@ -770,7 +862,7 @@ fn add_c_string(message: &mut CMessage, bytes: &[u8]) {
 
 // ============================================================================
 // FUNCTION: OnGMMessage
-// STATUS: IMPLEMENTED_PARTIAL
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\gmmessage.cpp:19
