@@ -9,6 +9,7 @@
 //! `GetMembers/GetMemberNum` RVA `0x000BD7C0/0x000BD830` и
 //! `CFaction::IsMember` RVA `0x000BD840` и
 //! `UpdateMemberInfoToClient` RVA `0x000BA7C0`, а также
+//! оба `CheckOperValidate` RVA `0x000B4CE0/0x000C17F0`,
 //! `OnMemberExitGame` RVA `0x000B64D0`,
 //! `InitialPropertyByLvl` RVA `0x000B4BA0`,
 //! `IsHaveEnymyFaction/IsHaveCityEnemyFaction` RVA `0x000B50F0/0x000B5100`,
@@ -64,6 +65,9 @@
 //! индекс. `SetMemPV` в EXE единственный не проверял индекс и мог писать за
 //! `listPV`; safe Rust явно отклоняет недопустимое значение. Это исправление
 //! внутреннего memory bug, а не новая Miracle-семантика допустимых прав.
+//! Трёхаргументный `CheckOperValidate` проверяет право requester и запрещает
+//! ему управлять target с тем же правом, кроме случая requester-master; exact
+//! ASM подтверждает, что финальный `IsMaster` получает requester.
 //! Достигнутый `SetPlayerOrganizing` дополнительно читает `m_strName`,
 //! `m_lMastterID`, `m_Property.lLvl/lExp`, `m_OwnedCities` и два enemy-set.
 //! Коллекции, которые constructor действительно создавал пустыми, хранятся
@@ -344,6 +348,9 @@ pub(crate) enum MemberPurviewMutation {
     Unchanged,
     Changed,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FactionOperatorValidationBlock;
 
 /// Результат одной исходно игнорировавшейся отправки полного property.
 #[derive(Debug, Eq, PartialEq)]
@@ -917,6 +924,33 @@ impl CFaction {
         MemberPurviewMutation::Changed
     }
 
+    /// Проверяет членство и одно право requester-а.
+    pub(crate) fn check_operator_validate(&self, requester_id: i32, purview: i32) -> bool {
+        self.is_member(requester_id) != 0 && self.is_using_purview(requester_id, purview)
+    }
+
+    /// Проверяет операцию requester над другим faction-member.
+    pub(crate) fn check_operator_validate_target(
+        &self,
+        requester_id: i32,
+        target_id: i32,
+        purview: i32,
+    ) -> Result<bool, FactionOperatorValidationBlock> {
+        let master_id = self.master_id.ok_or(FactionOperatorValidationBlock)?;
+        if requester_id == target_id
+            || target_id == master_id
+            || self.is_member(requester_id) == 0
+            || self.is_member(target_id) == 0
+            || !self.is_using_purview(requester_id, purview)
+        {
+            return Ok(false);
+        }
+        if self.is_using_purview(target_id, purview) && requester_id != master_id {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
     /// Возвращает один снимок исходной signed dirty-bit mask.
     pub(crate) const fn change_data_type(&self) -> i32 {
         self.change_data_type
@@ -1371,7 +1405,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::CheckOperValidate
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:731
@@ -2985,7 +3019,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::CheckOperValidate
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:749
