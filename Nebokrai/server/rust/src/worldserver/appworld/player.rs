@@ -49,7 +49,9 @@
 //! `false`. `UpdateFactionInfo` сбрасывает его при faction ID `0`, offline-load
 //! также сбрасывает, а organizing callbacks выставляют `true` только после
 //! отправки полного faction snapshot и снова снимают при выходе. Partial Rust
-//! owner хранит этот reached-state как обычный `bool`; методы чтения/записи
+//! owner хранит этот reached-state как `Cell<bool>`: это позволяет concrete
+//! faction snapshot owner-у выставить флаг через общий read-only `CGame`
+//! borrow ровно после отправки, не создавая raw alias. Методы чтения/записи
 //! заменяют прямой доступ к полю, не объявляя Rust layout старым ABI и не
 //! придумывая узкий constructor в обход остальных полей. Exact consumer
 //! `CFaction::UpdateMemberInfoToClient` проверяет `byte ptr [player+0x868]` в
@@ -282,6 +284,7 @@
 //! без `unsafe` и без недостаточного промежуточного `f64`. Остальные байты
 //! `tagProperty[0x9c]` не меняются.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::ffi::CStr;
@@ -946,7 +949,7 @@ pub(crate) struct CPlayer {
     jjc_pk_state: bool,
     session_id: Vec<u8>,
     organizing: PlayerOrganizingState,
-    faction_data_received: bool,
+    faction_data_received: Cell<bool>,
     faction_war_operator: bool,
 }
 
@@ -1274,7 +1277,7 @@ impl CPlayer {
                 city_war_enemy_factions: BTreeSet::new(),
                 owned_regions: VecDeque::new(),
             },
-            faction_data_received: false,
+            faction_data_received: Cell::new(false),
             faction_war_operator: false,
         }
     }
@@ -1365,13 +1368,13 @@ impl CPlayer {
     }
 
     /// Сообщает, был ли игроку уже отправлен полный faction snapshot.
-    pub(crate) const fn faction_data_received(&self) -> bool {
-        self.faction_data_received
+    pub(crate) fn faction_data_received(&self) -> bool {
+        self.faction_data_received.get()
     }
 
     /// Сохраняет доказанную прямую мутацию `m_bGetFactionData`.
-    pub(crate) const fn set_faction_data_received(&mut self, received: bool) {
-        self.faction_data_received = received;
+    pub(crate) fn set_faction_data_received(&self, received: bool) {
+        self.faction_data_received.set(received);
     }
 
     /// Возвращает exact transient-флаг, блокирующий смену главы faction.

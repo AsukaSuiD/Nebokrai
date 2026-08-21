@@ -22,6 +22,7 @@
 //! feature-setter-ы `SetLWFunction/SetPronounceFun/SetEndueRightFun/
 //! SetJoinVillageWarFun/SetJoinCityWarFun/SetCreateUnionFun` RVA
 //! `0x000B7030/0x000B7400/0x000B77D0/0x000B7BA0/0x000B7F70/0x000B8340`,
+//! полный `AddToByteArray` RVA `0x000C10B0`,
 //! `AddMembersToByteArray` RVA `0x000B53D0`, PDB-inline
 //! `AddApplyPersonsToByteArray/AddLeaveWordsToByteArray` RVA
 //! `0x000B5D30/0x000B5DD0`,
@@ -267,6 +268,19 @@
 //! только map-key и при наличии возвращает faction ID, иначе `0`. Exact EXE
 //! `0x004BD840..0x004BD865` подтверждает, что ключом служит входной signed
 //! player ID; подстановка this в декомпиляте является ошибкой восстановления stack-slot.
+//!
+//! Полный `AddToByteArray` публикует ID/name/master ID/master title,
+//! established-time, все `0x38` property bytes, pronounce в порядке
+//! `player/time/content/name`, затем leave-word/member/apply/owned-city и оба
+//! enemy snapshot-а. Exact ASM `0x004C10B0..0x004C1206` подтверждает порядок
+//! и literal `true`. Exact machine перед tree lookup использует
+//! неинициализированный stack-key; ближайший `GetMasterID` и практический C++
+//! donor подтверждают предназначенный master key. Rust исправляет этот
+//! внутренний UB и детерминированно ищет master ID. Его title копируется только
+//! при visible длине `<=20`; более длинный или отсутствующий title остаётся
+//! пустой C-строкой. Остальные serializers переиспользуются напрямую, а
+//! отсутствующий reached scalar либо невалидная fixed C-строка дают локальную
+//! typed-границу после записанного prefix вместо чтения за памятью.
 //!
 //! `AddMembersToByteArray` первым дописывает 32-битный count и затем проходит
 //! map в signed-key порядке. Каждое полное `tagMemInfo` публикуется как
@@ -941,6 +955,8 @@ pub(crate) enum FactionDoJoinOutcome {
 pub(crate) enum FactionDoJoinContextOperation {
     RemovePreviousApplications,
     ApplicantMembershipLookup,
+    AddFactionToClient,
+    AddAllFactionInfoToClient,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -960,6 +976,7 @@ pub(crate) enum FactionDoJoinBlock<ContextBlock> {
         operation: FactionDoJoinContextOperation,
         source: ContextBlock,
         application_removed: bool,
+        member_inserted: bool,
     },
     MissingBaseProperty {
         application_removed: bool,
@@ -1803,31 +1820,17 @@ pub(crate) trait FactionApplyForJoinContext: FactionApplyForJoinEffects {
     ) -> Result<(), Self::Block>;
 }
 
-/// Узкая граница внешних систем полного approve/reject join-пути.
-pub(crate) trait FactionDoJoinContext: FactionOrganizingInfoContext {
-    type Block;
-
+/// Внешние war/goods/string/player/log эффекты полного join-пути.
+pub(crate) trait FactionDoJoinEffects: FactionOrganizingInfoContext {
     fn already_declared_for_village_war(&self, faction_id: i32) -> bool;
 
     fn already_declared_for_city_war(&self, faction_id: i32) -> bool;
 
     fn goods_war_blocks_join(&self, faction_id: i32, manager_id: i32) -> bool;
 
-    fn remove_previous_faction_applications(
-        &mut self,
-        game: &CGame,
-        player_id: i32,
-    ) -> Result<(), Self::Block>;
-
-    fn applicant_already_in_faction(&self, player_id: i32) -> Result<bool, Self::Block>;
-
     fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8>;
 
     fn update_player_faction_info(&mut self, player_id: i32);
-
-    fn add_faction_to_client_by_player_id(&mut self, player_id: i32) -> bool;
-
-    fn add_all_faction_info_to_client_by_player_id(&mut self, player_id: i32) -> bool;
 
     fn faction_join_log_enabled(&self) -> bool;
 
@@ -1842,6 +1845,37 @@ pub(crate) trait FactionDoJoinContext: FactionOrganizingInfoContext {
         faction_name: &[u8],
         log_type: i32,
     );
+}
+
+/// Safe reentrant-граница target faction и полного organizing-controller.
+pub(crate) trait FactionDoJoinContext: FactionDoJoinEffects {
+    type Block;
+
+    fn remove_previous_faction_applications(
+        &mut self,
+        game: &CGame,
+        current_faction: &mut CFaction,
+        player_id: i32,
+    ) -> Result<(), Self::Block>;
+
+    fn applicant_already_in_faction(
+        &self,
+        current_faction: &CFaction,
+        player_id: i32,
+    ) -> Result<bool, Self::Block>;
+
+    fn add_faction_to_client_by_player_id(
+        &mut self,
+        current_faction: &CFaction,
+        player_id: i32,
+    ) -> Result<bool, Self::Block>;
+
+    fn add_all_faction_info_to_client_by_player_id(
+        &mut self,
+        current_faction: &CFaction,
+        player_id: i32,
+    ) -> Result<bool, Self::Block>;
+
 }
 
 /// Узкая граница war-system, player-owner, quit-log и Goods War для `Exit`.
@@ -2403,6 +2437,20 @@ impl fmt::Display for UnterminatedApplyPersonName {
 }
 
 impl Error for UnterminatedApplyPersonName {}
+
+/// Локальные safe-границы полного wire-snapshot `CFaction::AddToByteArray`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionFullSnapshotBlock {
+    MasterIdMissing,
+    MasterTitle(UnterminatedMemberField),
+    EstablishedTimeUnknown,
+    MissingBaseProperty,
+    Pronounce(UnterminatedPronounceField),
+    LeaveWords(UnterminatedLeaveWordField),
+    Members(UnterminatedMemberField),
+    ApplyPersons(UnterminatedApplyPersonName),
+    OwnedCities(OwnedCitiesWireBuildError),
+}
 
 /// Полное доказанное value исходного `m_ApplyPersons`.
 #[derive(Clone, Copy)]
@@ -5151,18 +5199,20 @@ impl CFaction {
         }
 
         context
-            .remove_previous_faction_applications(game, applicant_id)
+            .remove_previous_faction_applications(game, self, applicant_id)
             .map_err(|source| FactionDoJoinBlock::Context {
                 operation: FactionDoJoinContextOperation::RemovePreviousApplications,
                 source,
                 application_removed: true,
+                member_inserted: false,
             })?;
         if context
-            .applicant_already_in_faction(applicant_id)
+            .applicant_already_in_faction(self, applicant_id)
             .map_err(|source| FactionDoJoinBlock::Context {
                 operation: FactionDoJoinContextOperation::ApplicantMembershipLookup,
                 source,
                 application_removed: true,
+                member_inserted: false,
             })?
         {
             return Ok(FactionDoJoinOutcome::Rejected {
@@ -5277,9 +5327,22 @@ impl CFaction {
             self.update_player_faction_info(game, applicant_id, |player_id| {
                 context.update_player_faction_info(player_id);
             });
-        let add_faction_to_client_result = context.add_faction_to_client_by_player_id(applicant_id);
-        let add_all_faction_info_result =
-            context.add_all_faction_info_to_client_by_player_id(applicant_id);
+        let add_faction_to_client_result = context
+            .add_faction_to_client_by_player_id(self, applicant_id)
+            .map_err(|source| FactionDoJoinBlock::Context {
+                operation: FactionDoJoinContextOperation::AddFactionToClient,
+                source,
+                application_removed: true,
+                member_inserted: true,
+            })?;
+        let add_all_faction_info_result = context
+            .add_all_faction_info_to_client_by_player_id(self, applicant_id)
+            .map_err(|source| FactionDoJoinBlock::Context {
+                operation: FactionDoJoinContextOperation::AddAllFactionInfoToClient,
+                source,
+                application_removed: true,
+                member_inserted: true,
+            })?;
         let member_update = self.update_member_info_to_client(game, applicant_id, EOperator::Add);
         self.set_change_data(2);
 
@@ -6975,6 +7038,67 @@ impl CFaction {
         } else {
             0
         }
+    }
+
+    /// Дописывает точный полный faction snapshot virtual slot `+0x0C`.
+    ///
+    /// Title master-а исходник копировал только при visible длине не более
+    /// двадцати байт; более длинный title оставлял уже обнулённый `char[256]`.
+    pub(crate) fn add_full_snapshot_to_byte_array(
+        &self,
+        game: &CGame,
+        output: &mut Vec<u8>,
+    ) -> Result<bool, FactionFullSnapshotBlock> {
+        append_i32(output, self.faction_id);
+        output.extend_from_slice(&legacy_c_string_wire_bytes(&self.name));
+
+        let master_id = self
+            .master_id
+            .ok_or(FactionFullSnapshotBlock::MasterIdMissing)?;
+        append_i32(output, master_id);
+        let master_title = if let Some(master) = self.members.get(&master_id) {
+            let wire = master
+                .title_wire_bytes()
+                .map_err(FactionFullSnapshotBlock::MasterTitle)?;
+            (wire.len() - 1 <= 20).then_some(wire)
+        } else {
+            None
+        };
+        output.extend_from_slice(master_title.unwrap_or(&[0]));
+
+        let established_time = self
+            .established_time
+            .ok_or(FactionFullSnapshotBlock::EstablishedTimeUnknown)?;
+        output.extend_from_slice(&established_time.wire_bytes());
+        let property = self
+            .base_property
+            .as_ref()
+            .ok_or(FactionFullSnapshotBlock::MissingBaseProperty)?;
+        output.extend_from_slice(property.wire_bytes());
+
+        append_i32(output, self.pronounce.player_id);
+        output.extend_from_slice(&self.pronounce.time.wire_bytes());
+        output.extend_from_slice(
+            self.pronounce
+                .content_wire_bytes()
+                .map_err(FactionFullSnapshotBlock::Pronounce)?,
+        );
+        output.extend_from_slice(
+            self.pronounce
+                .name_wire_bytes()
+                .map_err(FactionFullSnapshotBlock::Pronounce)?,
+        );
+        self.add_leave_words_to_byte_array(output)
+            .map_err(FactionFullSnapshotBlock::LeaveWords)?;
+        self.add_members_to_byte_array(output)
+            .map_err(FactionFullSnapshotBlock::Members)?;
+        self.add_apply_persons_to_byte_array(output)
+            .map_err(FactionFullSnapshotBlock::ApplyPersons)?;
+        self.add_owned_cities_to_byte_array(game, output)
+            .map_err(FactionFullSnapshotBlock::OwnedCities)?;
+        self.add_enemy_factions_to_byte_array(output);
+        self.add_city_war_enemy_factions_to_byte_array(output);
+        Ok(true)
     }
 
     /// Дописывает полный ordered member snapshot в исходном byte-array формате.
@@ -9183,7 +9307,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:293
@@ -9191,9 +9315,13 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 // ADDRESS: 004c10b0
 // PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
 //
+// IMPLEMENTED_OWNER: `CFaction::add_full_snapshot_to_byte_array` выше.
+// RAW_REFERENCE_BEGIN: сохранённая декомпиляция реализованной функции.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
+
+// RAW_REFERENCE_END
 
 // IMPLEMENTED выше: CFaction::CloneSaveData RVA 0x000C1210.
 

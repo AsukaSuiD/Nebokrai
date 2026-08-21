@@ -1,6 +1,7 @@
 //! Статус корпуса: `IMPLEMENTED_PARTIAL` для достигнутых organizing opcode,
 //! включая список фракций страны `0x60107`, подачу заявки `0x60108`, отмену
-//! заявки `0x60109`, заявку союза `0x60118`, общий session-result dispatch, billboard
+//! заявки `0x60109`, решение по заявке `0x6010A`, заявку союза `0x60118`,
+//! общий session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
 //! `0x6012A`, парные city-tax gate `0x6012B/0x6012C` и region-param update
@@ -37,6 +38,14 @@
 //! запоминает первую apply-faction, удаляет player из apply-list всех faction
 //! в signed map-order и лишь при переходе `positive -> non-positive` отправляет
 //! `WS0125/WS0119`. Online/route/tail gates и wire-ответ отсутствуют.
+//! Exact `0x004A70E6..0x004A717B` для `0x6010A` читает три полных `Long` как
+//! `(manager ID, applicant ID, approve flag)`, разрешает faction manager-а
+//! через `IsFreePlayer` и `GetFactionOrganizing`, снимает один local-time,
+//! повторяет тот же faction lookup и вызывает virtual
+//! `DoJoin(manager, applicant, approve, time)` в slot `+0x18`. Online-manager,
+//! route/tail gates и прямой wire-ответ отсутствуют; добавленные Linux-донором
+//! проверки не перенесены. Побочные сообщения, member mutations и join-log
+//! остаются внутри уже восстановленного concrete `CFaction::DoJoin`.
 //! Exact диапазоны
 //! `0x004A74C6..0x004A7509` и `0x004A7511..0x004A7543` исправляют повреждённый
 //! RAW. Общий branch читает
@@ -294,6 +303,7 @@ use crate::worldserver::appworld::goodswarmember::{
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
     FactionApplyForJoinEffects, FactionApplyForJoinOutcome, FactionContributorContext,
+    FactionDoJoinEffects, current_local_member_time, goods_war_check_for_faction_id,
     FactionEnemyMutationBlock, FactionEnemyMutationContext,
     FactionEnemyWarLogArgument, FactionExperienceBlock, FactionExperienceUpdate,
     FactionLevelContext, FactionMemberInfoRequest, FactionOrganizingInfoContext,
@@ -334,7 +344,8 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingPronounceOutcome, OrganizingUnionApplyForJoinDispatchBlock,
     OrganizingUnionApplyForJoinOutcome, OrganizingFactionApplicationBlock,
     OrganizingNameCountryBlock, OrganizingNameKind, OrganizingNameLookupBlock,
-    OrganizingNameMatch, OrganizingNamedUnionApplicationBlock, begin_city_transfer_session,
+    OrganizingNameMatch, OrganizingNamedUnionApplicationBlock,
+    OrganizingFactionDoJoinBlock, OrganizingFactionDoJoinOutcome, begin_city_transfer_session,
 };
 use crate::worldserver::appworld::organizingsystem::organizing::{
     ECityState, EOperator, TagTimeValue,
@@ -364,6 +375,7 @@ const FACTION_LIST_MESSAGE_TYPE: i32 = 0x60107;
 const FACTION_LIST_RESPONSE_TYPE: i32 = 0x7FE07;
 const FACTION_APPLICATION_MESSAGE_TYPE: i32 = 0x60108;
 const CANCEL_FACTION_APPLICATION_MESSAGE_TYPE: i32 = 0x60109;
+const FACTION_APPLICATION_DECISION_MESSAGE_TYPE: i32 = 0x6010A;
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
@@ -848,6 +860,83 @@ impl FactionApplyForJoinEffects for WorldFactionApplicationEffects<'_, '_> {
             faction_name,
             player_id,
             player_name,
+            log_type,
+        );
+    }
+}
+
+/// Concrete war/goods/string/player/log adapter faction `DoJoin` ветви.
+struct WorldFactionDoJoinEffects<'game, 'callbacks, 'effects, 'update, 'log> {
+    game: &'game CGame,
+    village_war: &'game CVillageWarSys,
+    attack_city: &'game CAttackCitySys,
+    goods_war: &'game CGoodsWarMember,
+    use_log_system: bool,
+    faction_join_log_enabled: bool,
+    callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
+    update_player: &'update mut dyn FnMut(i32),
+    write_faction_join_log:
+        &'log mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
+}
+
+impl FactionOrganizingInfoContext for WorldFactionDoJoinEffects<'_, '_, '_, '_, '_> {
+    fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
+        Some((self.callbacks.world_string)(string_id))
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+impl FactionDoJoinEffects for WorldFactionDoJoinEffects<'_, '_, '_, '_, '_> {
+    fn already_declared_for_village_war(&self, faction_id: i32) -> bool {
+        self.village_war.is_already_declared_for_war(faction_id)
+    }
+
+    fn already_declared_for_city_war(&self, faction_id: i32) -> bool {
+        self.attack_city.is_already_declared_for_war(faction_id)
+    }
+
+    fn goods_war_blocks_join(&self, faction_id: i32, _manager_id: i32) -> bool {
+        goods_war_check_for_faction_id(faction_id, |candidate| {
+            self.goods_war.contains_faction_id(candidate)
+        })
+    }
+
+    fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| UnionFormatArgument::Text(*argument))
+            .collect::<Vec<_>>();
+        (self.callbacks.format_world_string)(string_id, &arguments)
+    }
+
+    fn update_player_faction_info(&mut self, player_id: i32) {
+        (self.update_player)(player_id);
+    }
+
+    fn faction_join_log_enabled(&self) -> bool {
+        self.use_log_system && self.faction_join_log_enabled
+    }
+
+    fn write_faction_join_log(
+        &mut self,
+        member_id: i32,
+        member_name: &[u8],
+        manager_id: i32,
+        manager_name: &[u8],
+        faction_id: i32,
+        faction_name: &[u8],
+        log_type: i32,
+    ) {
+        (self.write_faction_join_log)(
+            member_id,
+            member_name,
+            manager_id,
+            manager_name,
+            faction_id,
+            faction_name,
             log_type,
         );
     }
@@ -1697,6 +1786,72 @@ where
         remaining_faction_id,
         removal,
         notice_sent,
+    }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionApplicationDecisionDispatch {
+    pub(crate) manager_id: i32,
+    pub(crate) applicant_id: i32,
+    pub(crate) approve_flag: i32,
+    pub(crate) outcome: OrganizingFactionDoJoinOutcome,
+}
+
+/// Выполняет exact `0x6010A`: три `Long`, manager-faction lookup, один local
+/// time snapshot и virtual `CFaction::DoJoin` без route/tail/wire ingress-а.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn dispatch_faction_application_decision(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    parameters: &COrganizingParam,
+    village_war: &CVillageWarSys,
+    attack_city: &CAttackCitySys,
+    goods_war: &CGoodsWarMember,
+    use_log_system: bool,
+    faction_join_log_enabled: bool,
+    write_faction_join_log:
+        &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    update_player: &mut dyn FnMut(i32),
+) -> Option<
+    Result<OrganizingFactionApplicationDecisionDispatch, OrganizingFactionDoJoinBlock>,
+> {
+    if message.message_type() != FACTION_APPLICATION_DECISION_MESSAGE_TYPE {
+        return None;
+    }
+
+    let manager_id = message.base_mut().get_long().unwrap_or(0);
+    let applicant_id = message.base_mut().get_long().unwrap_or(0);
+    let approve_flag = message.base_mut().get_long().unwrap_or(0);
+    let mut effects = WorldFactionDoJoinEffects {
+        game,
+        village_war,
+        attack_city,
+        goods_war,
+        use_log_system,
+        faction_join_log_enabled,
+        callbacks,
+        update_player,
+        write_faction_join_log,
+    };
+    let outcome = match organizing.do_faction_join_by_manager(
+        game,
+        parameters,
+        manager_id,
+        applicant_id,
+        approve_flag,
+        current_local_member_time,
+        &mut effects,
+    ) {
+        Ok(outcome) => outcome,
+        Err(source) => return Some(Err(source)),
+    };
+    Some(Ok(OrganizingFactionApplicationDecisionDispatch {
+        manager_id,
+        applicant_id,
+        approve_flag,
+        outcome,
     }))
 }
 

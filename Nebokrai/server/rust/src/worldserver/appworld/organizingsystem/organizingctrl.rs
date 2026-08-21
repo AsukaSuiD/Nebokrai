@@ -21,6 +21,8 @@
 //! country-specific `GetFactionNumber` RVA `0x00033D10` и
 //! `AddFactionListToByteArray` RVA `0x00033D90`,
 //! `FindOrgaByName` RVA `0x000345A0`,
+//! `AddAllFactinInfoToClientByPlayerID/AddFactionToClientByPlayerID` RVA
+//! `0x00034D00/0x00037380`,
 //! `IsFactionMaster` RVA `0x000344A0`, `ReInitialFacFactionByLvl` RVA
 //! `0x00034C80` и `AddUnionToClientByFactionID` RVA `0x00038010` —
 //! `IMPLEMENTED`; `PushToEstaList` RVA `0x000367C0` и оба overload-а
@@ -98,6 +100,17 @@
 //! concrete вызова. Это safe ownership-замена raw-pointer aliasing; машинный
 //! `CUnion::GetCountry` `0x004C1F10..0x004C1F12` возвращает literal `0`, что
 //! намеренно важнее противоречащего Linux-донора.
+//! `AddFactionToClientByPlayerID` повторно разрешает faction игрока, требует
+//! online owner, строит `0x7FE02(player, full faction snapshot)`, явно делает
+//! `Update`, отправляет по текущему GameServer route и только затем ставит
+//! `m_bGetFactionData=true`, игнорируя send-result. Exact
+//! `0x00437380..0x004374AB` подтверждает оба false-gate и этот порядок.
+//! Misspelled `AddAllFactinInfoToClientByPlayerID` exact
+//! `0x00434D00..0x00434E8C` после тех же membership/online gates строит
+//! `0x7FE08(player, map size, ID/country/name всех faction)` в signed order и
+//! отправляет его, не меняя player flag. Detached adapter `DoJoin` подставляет
+//! живую target faction в обоих проходах на прежний map-key; `Cell<bool>` у
+//! player-а заменяет только raw aliasing, сохраняя момент мутации флага.
 //! Через read-only `FactionOperationAuthorityContext` этот lookup и уже
 //! материализованный `IsFreeFaction` обслуживают faction tax/city-gate owner-ы;
 //! null во время membership scan остаётся typed-границей старого UB.
@@ -366,14 +379,15 @@ use super::attackcitysys::CAttackCitySys;
 use super::faction::{
     CFaction, CityWarEnemyRefreshOutcome, FactionCloneSaveBlock, FactionContributorBlock,
     FactionApplyForJoinBlock, FactionApplyForJoinContext, FactionApplyForJoinEffects,
-    FactionApplyForJoinOutcome, FactionContributorContext,
+    FactionApplyForJoinOutcome, FactionContributorContext, FactionDoJoinBlock,
+    FactionDoJoinContext, FactionDoJoinEffects, FactionDoJoinOutcome,
     FactionContributorOutcome, FactionDeleteOrganizingBuildError,
     FactionDeleteOrganizingOutcome, FactionDisbandBlock, FactionDisbandContext,
     FactionDisbandOutcome, FactionDisbandProgress, FactionDisbandRejection,
     FactionExperienceBlock, FactionExperienceUpdate,
     FactionEditLeaveWordOutcome, FactionEnemyDelivery, FactionEnemyMutationBlock,
     FactionEnemyMutationContext, FactionEnemyWarLogArgument, FactionFeatureFunctionUpdate,
-    FactionInitialPropertyBlock,
+    FactionFullSnapshotBlock, FactionInitialPropertyBlock,
     FactionLeaveWordBlock, FactionLeaveWordOutcome, FactionMemberInfoReport,
     FactionMemberInfoRequest,
     FactionOperationAuthorityContext, FactionOperationBlock, FactionOperationOutcome,
@@ -1088,6 +1102,75 @@ pub(crate) enum OrganizingFactionApplicationBlock {
     Apply {
         map_key: i32,
         source: FactionApplyForJoinBlock<DetachedFactionApplicationContextBlock>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionClientSnapshotBlock {
+    MembershipNullFaction {
+        map_key: i32,
+    },
+    FullSnapshot {
+        faction_id: i32,
+        source: FactionFullSnapshotBlock,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AllFactionInfoClientBlock {
+    MembershipNullFaction {
+        map_key: i32,
+    },
+    NullFaction {
+        map_key: i32,
+        completed_factions: usize,
+    },
+    MissingCountry {
+        map_key: i32,
+        faction_id: i32,
+        completed_factions: usize,
+    },
+    NameWouldOverflow {
+        map_key: i32,
+        faction_id: i32,
+        visible_len: usize,
+        completed_factions: usize,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum DetachedFactionDoJoinContextBlock {
+    RemovalNullFaction {
+        map_key: i32,
+        completed_removals: Vec<ApplyFactionRemoval>,
+    },
+    MembershipNullFaction {
+        map_key: i32,
+    },
+    FactionSnapshot(FactionClientSnapshotBlock),
+    AllFactionInfo(AllFactionInfoClientBlock),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionDoJoinOutcome {
+    FactionNotFound {
+        faction_id: i32,
+    },
+    Applied {
+        faction_id: i32,
+        join_time: TagTimeValue,
+        outcome: FactionDoJoinOutcome,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionDoJoinBlock {
+    ManagerMembership {
+        map_key: i32,
+    },
+    DoJoin {
+        faction_id: i32,
+        source: FactionDoJoinBlock<DetachedFactionDoJoinContextBlock>,
     },
 }
 
@@ -1958,6 +2041,151 @@ where
             completed_removals.push(ApplyFactionRemoval { map_key, outcome });
         }
         Ok(())
+    }
+}
+
+/// Соединяет detached target faction с controller-map на полном `DoJoin`.
+struct DetachedFactionDoJoinContext<'a, Effects> {
+    controller: &'a mut COrganizingCtrl,
+    game: &'a CGame,
+    target_map_key: i32,
+    effects: &'a mut Effects,
+}
+
+impl<Effects> FactionOrganizingInfoContext for DetachedFactionDoJoinContext<'_, Effects>
+where
+    Effects: FactionDoJoinEffects,
+{
+    fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
+        self.effects.world_string(string_id)
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        self.effects.send_organizing_info(request);
+    }
+}
+
+impl<Effects> FactionDoJoinEffects for DetachedFactionDoJoinContext<'_, Effects>
+where
+    Effects: FactionDoJoinEffects,
+{
+    fn already_declared_for_village_war(&self, faction_id: i32) -> bool {
+        self.effects.already_declared_for_village_war(faction_id)
+    }
+
+    fn already_declared_for_city_war(&self, faction_id: i32) -> bool {
+        self.effects.already_declared_for_city_war(faction_id)
+    }
+
+    fn goods_war_blocks_join(&self, faction_id: i32, manager_id: i32) -> bool {
+        self.effects.goods_war_blocks_join(faction_id, manager_id)
+    }
+
+    fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8> {
+        self.effects.format_world_string(string_id, arguments)
+    }
+
+    fn update_player_faction_info(&mut self, player_id: i32) {
+        self.effects.update_player_faction_info(player_id);
+    }
+
+    fn faction_join_log_enabled(&self) -> bool {
+        self.effects.faction_join_log_enabled()
+    }
+
+    fn write_faction_join_log(
+        &mut self,
+        member_id: i32,
+        member_name: &[u8],
+        manager_id: i32,
+        manager_name: &[u8],
+        faction_id: i32,
+        faction_name: &[u8],
+        log_type: i32,
+    ) {
+        self.effects.write_faction_join_log(
+            member_id,
+            member_name,
+            manager_id,
+            manager_name,
+            faction_id,
+            faction_name,
+            log_type,
+        );
+    }
+}
+
+impl<Effects> FactionDoJoinContext for DetachedFactionDoJoinContext<'_, Effects>
+where
+    Effects: FactionDoJoinEffects,
+{
+    type Block = DetachedFactionDoJoinContextBlock;
+
+    fn remove_previous_faction_applications(
+        &mut self,
+        game: &CGame,
+        current_faction: &mut CFaction,
+        player_id: i32,
+    ) -> Result<(), Self::Block> {
+        let mut completed_removals = Vec::with_capacity(self.controller.factions.len());
+        for (&map_key, faction) in &mut self.controller.factions {
+            let outcome = if map_key == self.target_map_key {
+                current_faction.remove_apply_member(game, player_id)
+            } else {
+                let Some(faction) = faction.as_deref_mut() else {
+                    return Err(DetachedFactionDoJoinContextBlock::RemovalNullFaction {
+                        map_key,
+                        completed_removals,
+                    });
+                };
+                faction.remove_apply_member(game, player_id)
+            };
+            completed_removals.push(ApplyFactionRemoval { map_key, outcome });
+        }
+        Ok(())
+    }
+
+    fn applicant_already_in_faction(
+        &self,
+        current_faction: &CFaction,
+        player_id: i32,
+    ) -> Result<bool, Self::Block> {
+        self.controller
+            .player_faction_with_detached(self.target_map_key, current_faction, player_id)
+            .map(|faction_id| faction_id > 0)
+            .map_err(|map_key| {
+                DetachedFactionDoJoinContextBlock::MembershipNullFaction { map_key }
+            })
+    }
+
+    fn add_faction_to_client_by_player_id(
+        &mut self,
+        current_faction: &CFaction,
+        player_id: i32,
+    ) -> Result<bool, Self::Block> {
+        self.controller
+            .add_faction_to_client_with_detached(
+                self.game,
+                self.target_map_key,
+                current_faction,
+                player_id,
+            )
+            .map_err(DetachedFactionDoJoinContextBlock::FactionSnapshot)
+    }
+
+    fn add_all_faction_info_to_client_by_player_id(
+        &mut self,
+        current_faction: &CFaction,
+        player_id: i32,
+    ) -> Result<bool, Self::Block> {
+        self.controller
+            .add_all_faction_info_to_client_with_detached(
+                self.game,
+                self.target_map_key,
+                current_faction,
+                player_id,
+            )
+            .map_err(DetachedFactionDoJoinContextBlock::AllFactionInfo)
     }
 }
 
@@ -2928,6 +3156,206 @@ impl COrganizingCtrl {
             .get_mut(&map_key)
             .expect("detached faction slot не удаляется") = Some(faction);
         result.map_err(|source| OrganizingFactionApplicationBlock::Apply { map_key, source })
+    }
+
+    /// Выполняет точную controller-цепочку `0x6010A`: первый lookup faction,
+    /// один local-time snapshot, повторный lookup и virtual `DoJoin`.
+    pub(crate) fn do_faction_join_by_manager<Effects, GetLocalTime>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        manager_id: i32,
+        applicant_id: i32,
+        approve_flag: i32,
+        get_local_time: GetLocalTime,
+        effects: &mut Effects,
+    ) -> Result<OrganizingFactionDoJoinOutcome, OrganizingFactionDoJoinBlock>
+    where
+        Effects: FactionDoJoinEffects,
+        GetLocalTime: FnOnce() -> TagTimeValue,
+    {
+        let faction_id = match self.is_free_player(manager_id) {
+            FreePlayerLookup::NoFaction => 0,
+            FreePlayerLookup::Faction(faction_id) => faction_id,
+            FreePlayerLookup::BlockedNullFaction { map_key } => {
+                return Err(OrganizingFactionDoJoinBlock::ManagerMembership { map_key });
+            }
+        };
+        if self.faction_by_id(faction_id).is_none() {
+            return Ok(OrganizingFactionDoJoinOutcome::FactionNotFound { faction_id });
+        }
+
+        let join_time = get_local_time();
+        let mut faction = self
+            .factions
+            .get_mut(&faction_id)
+            .and_then(Option::take)
+            .expect("первый GetFactionOrganizing подтвердил тот же live owner");
+        let result = {
+            let mut context = DetachedFactionDoJoinContext {
+                controller: self,
+                game,
+                target_map_key: faction_id,
+                effects,
+            };
+            faction.do_join(
+                game,
+                parameters,
+                manager_id,
+                applicant_id,
+                approve_flag,
+                join_time,
+                &mut context,
+            )
+        };
+        *self
+            .factions
+            .get_mut(&faction_id)
+            .expect("detached faction slot не удаляется") = Some(faction);
+        result
+            .map(|outcome| OrganizingFactionDoJoinOutcome::Applied {
+                faction_id,
+                join_time,
+                outcome,
+            })
+            .map_err(|source| OrganizingFactionDoJoinBlock::DoJoin {
+                faction_id,
+                source,
+            })
+    }
+
+    fn player_faction_with_detached(
+        &self,
+        target_map_key: i32,
+        current_faction: &CFaction,
+        player_id: i32,
+    ) -> Result<i32, i32> {
+        for (&map_key, faction) in &self.factions {
+            let faction = if map_key == target_map_key {
+                current_faction
+            } else {
+                faction.as_deref().ok_or(map_key)?
+            };
+            let faction_id = faction.is_member(player_id);
+            if faction_id > 0 {
+                return Ok(faction_id);
+            }
+        }
+        Ok(0)
+    }
+
+    fn faction_with_detached<'a>(
+        &'a self,
+        target_map_key: i32,
+        current_faction: &'a CFaction,
+        map_key: i32,
+    ) -> Option<&'a CFaction> {
+        if map_key == target_map_key {
+            return Some(current_faction);
+        }
+        self.factions.get(&map_key).and_then(Option::as_deref)
+    }
+
+    /// Выполняет exact `AddFactionToClientByPlayerID` с временно detached
+    /// target faction на её исходной позиции controller-map.
+    fn add_faction_to_client_with_detached(
+        &self,
+        game: &CGame,
+        target_map_key: i32,
+        current_faction: &CFaction,
+        player_id: i32,
+    ) -> Result<bool, FactionClientSnapshotBlock> {
+        let faction_id = self
+            .player_faction_with_detached(target_map_key, current_faction, player_id)
+            .map_err(|map_key| FactionClientSnapshotBlock::MembershipNullFaction { map_key })?;
+        if faction_id <= 0 {
+            return Ok(false);
+        }
+        let Some(faction) = self.faction_with_detached(
+            target_map_key,
+            current_faction,
+            faction_id,
+        ) else {
+            return Ok(false);
+        };
+        let Some(player) = game.online_player_by_id(player_id as u32) else {
+            return Ok(false);
+        };
+        let game_server_id = game.game_server_number_by_player_id(player_id);
+        let mut snapshot = Vec::new();
+        faction
+            .add_full_snapshot_to_byte_array(game, &mut snapshot)
+            .map_err(|source| FactionClientSnapshotBlock::FullSnapshot {
+                faction_id,
+                source,
+            })?;
+        let mut message = CMessage::new(0x7FE02);
+        message.base_mut().add_long(player_id);
+        message.base_mut().add(&snapshot);
+        // Snapshot дописан непосредственно в vector и потому требует exact
+        // `CBaseMessage::Update` перед `SendToMapID`.
+        message.base_mut().update();
+        let _ = game.send_msg_to_game_server(game_server_id, &message);
+        player.set_faction_data_received(true);
+        Ok(true)
+    }
+
+    /// Выполняет exact misspelled `AddAllFactinInfoToClientByPlayerID`.
+    fn add_all_faction_info_to_client_with_detached(
+        &self,
+        game: &CGame,
+        target_map_key: i32,
+        current_faction: &CFaction,
+        player_id: i32,
+    ) -> Result<bool, AllFactionInfoClientBlock> {
+        let faction_id = self
+            .player_faction_with_detached(target_map_key, current_faction, player_id)
+            .map_err(|map_key| AllFactionInfoClientBlock::MembershipNullFaction { map_key })?;
+        if faction_id <= 0 || game.online_player_by_id(player_id as u32).is_none() {
+            return Ok(false);
+        }
+
+        let game_server_id = game.game_server_number_by_player_id(player_id);
+        let mut message = CMessage::new(0x7FE08);
+        message.base_mut().add_long(player_id);
+        message
+            .base_mut()
+            .add_long(self.factions.len() as u32 as i32);
+        let mut completed_factions = 0usize;
+        for (&map_key, faction) in &self.factions {
+            let faction = if map_key == target_map_key {
+                current_faction
+            } else {
+                faction.as_deref().ok_or(AllFactionInfoClientBlock::NullFaction {
+                    map_key,
+                    completed_factions,
+                })?
+            };
+            let faction_id = faction.faction_id();
+            message.base_mut().add_long(faction_id);
+            let country = faction
+                .country()
+                .ok_or(AllFactionInfoClientBlock::MissingCountry {
+                    map_key,
+                    faction_id,
+                    completed_factions,
+                })?;
+            message.base_mut().add_byte(country);
+            let name = legacy_c_string_prefix(faction.name());
+            if name.len() >= 256 {
+                return Err(AllFactionInfoClientBlock::NameWouldOverflow {
+                    map_key,
+                    faction_id,
+                    visible_len: name.len(),
+                    completed_factions,
+                });
+            }
+            message.base_mut().add(name);
+            message.base_mut().add_byte(0);
+            completed_factions += 1;
+        }
+        let _ = game.send_msg_to_game_server(game_server_id, &message);
+        Ok(true)
     }
 
     /// Строит payload одной 11-элементной страницы целей объявления войны.
@@ -5625,7 +6053,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::AddAllFactinInfoToClientByPlayerID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:405
@@ -5633,9 +6061,13 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00434d00
 // PROTOTYPE: bool __thiscall AddAllFactinInfoToClientByPlayerID(long param_1)
 //
+// IMPLEMENTED_OWNER: `add_all_faction_info_to_client_with_detached` выше.
+// RAW_REFERENCE_BEGIN: сохранённая декомпиляция реализованной функции.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
+
+// RAW_REFERENCE_END
 
 // ============================================================================
 // FUNCTION: `public:_enum_eCrOrgResult___thiscall_COrganizingCtrl::CreateConfederation(long,long,std::basic_string<char,std::char_traits<char>,std::allocator<char>_>&)'::__l28::CreateUnion::CreateUnion
@@ -5777,7 +6209,7 @@ fn legacy_tick_ms() -> u32 {
 //
 // ============================================================================
 // FUNCTION: COrganizingCtrl::AddFactionToClientByPlayerID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:379
@@ -5785,9 +6217,13 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00437380
 // PROTOTYPE: bool __thiscall AddFactionToClientByPlayerID(long param_1)
 //
+// IMPLEMENTED_OWNER: `add_faction_to_client_with_detached` выше.
+// RAW_REFERENCE_BEGIN: сохранённая декомпиляция реализованной функции.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
+
+// RAW_REFERENCE_END
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::AddDeclareWarFactionInfoToByteArray

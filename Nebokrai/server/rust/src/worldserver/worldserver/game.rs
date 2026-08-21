@@ -1085,6 +1085,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingDeclareWarFactionListDispatch, OrganizingFactionBillboardBlock,
     OrganizingFactionApplicationCancelBlock, OrganizingFactionApplicationCancelDispatch,
     OrganizingFactionApplicationDispatch, OrganizingFactionApplicationDispatchBlock,
+    OrganizingFactionApplicationDecisionDispatch,
     OrganizingFactionListBlock, OrganizingFactionListDispatch,
     OrganizingFactionBillboardOutcome, OrganizingFactionContributorDispatch,
     OrganizingFactionExperienceDispatch, OrganizingFactionMemberStateDispatch,
@@ -1111,6 +1112,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     dispatch_change_region_router, dispatch_city_war_result,
     dispatch_consumed_long, dispatch_declare_faction_war,
     dispatch_declare_war_faction_list, dispatch_faction_application,
+    dispatch_faction_application_decision,
     dispatch_faction_billboard, dispatch_faction_list,
     dispatch_faction_application_cancel,
     dispatch_faction_upgrade,
@@ -1146,6 +1148,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     CityTransferStartBlock, OrganizingContributorBlock, OrganizingDisbandOutcome,
     OrganizingDisbandPlayer, OrganizingRunBlock, OrganizingRunReport, OrganizingSaveDataBlock,
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock, OrganizingLeaveWordEnableBlock,
+    OrganizingFactionDoJoinBlock,
     OrganizingPronounceBlock, OrganizingSaveDataReport, OrganizingUnionApplicationCallbackBlock,
     OrganizingUnionApplicationCallbackReport, OrganizingUnionApplyForJoinDispatchBlock,
     FreeFactionLookup, FreePlayerLookup, PlayerEnterGameOutcome, PlayerExitGameOutcome,
@@ -2159,6 +2162,15 @@ pub(crate) enum ProcessedWorldEvent {
         >,
         runtime: WorldUnionApplicationRuntimeReport,
     },
+    OrganizingFactionApplicationDecision {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<
+            OrganizingFactionApplicationDecisionDispatch,
+            OrganizingFactionDoJoinBlock,
+        >,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
     OrganizingDeclareFactionWar {
         source: WorldMessageSource,
         legacy_run_result: i32,
@@ -3118,6 +3130,10 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     pub(crate) faction_apply_log_enabled: bool,
     pub(crate) write_faction_apply_log:
         &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
+    /// Внешний feature-gate `CLogSystem::FactionJoinEnabled`.
+    pub(crate) faction_join_log_enabled: bool,
+    pub(crate) write_faction_join_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
     /// Внешний feature-gate `CLogSystem::FactionMasterChangedEnabled`.
     pub(crate) faction_master_log_enabled: bool,
     pub(crate) write_faction_master_log:
@@ -8921,8 +8937,8 @@ impl CGame {
     /// `0x5FD0C/0x5FD0D`, server `0x5FA01..=0x5FA07/0x5FA09/0x5FA0F/0x5FA10`,
     /// organizing session
     /// result, список faction страны `0x60107`, подача заявки `0x60108`,
-    /// отмена заявки `0x60109`, union application `0x60118`, leave-word enable
-    /// `0x6011A`, запись
+    /// отмена заявки `0x60109`, решение по ней `0x6010A`, union application
+    /// `0x60118`, leave-word enable `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
     /// войны `0x6011E`, само объявление `0x6011F`, общий leaf
     /// `0x60121/0x60123`, передача города `0x60130`, admission permit
@@ -8962,6 +8978,9 @@ impl CGame {
         faction_apply_log_enabled: bool,
         write_faction_apply_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
+        faction_join_log_enabled: bool,
+        write_faction_join_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
         faction_master_log_enabled: bool,
         write_faction_master_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
@@ -9030,6 +9049,8 @@ impl CGame {
                             application_callbacks,
                             faction_apply_log_enabled,
                             &mut *write_faction_apply_log,
+                            faction_join_log_enabled,
+                            &mut *write_faction_join_log,
                             faction_master_log_enabled,
                             &mut *write_faction_master_log,
                             &mut *rs_player,
@@ -9100,6 +9121,8 @@ impl CGame {
                     application_callbacks,
                     faction_apply_log_enabled,
                     &mut *write_faction_apply_log,
+                    faction_join_log_enabled,
+                    &mut *write_faction_join_log,
                     faction_master_log_enabled,
                     &mut *write_faction_master_log,
                     &mut *rs_player,
@@ -9170,6 +9193,9 @@ impl CGame {
         faction_apply_log_enabled: bool,
         write_faction_apply_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
+        faction_join_log_enabled: bool,
+        write_faction_join_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
         faction_master_log_enabled: bool,
         write_faction_master_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
@@ -9235,6 +9261,8 @@ impl CGame {
             application_callbacks,
             faction_apply_log_enabled,
             write_faction_apply_log,
+            faction_join_log_enabled,
+            write_faction_join_log,
             faction_master_log_enabled,
             write_faction_master_log,
             rs_player,
@@ -10433,6 +10461,8 @@ impl CGame {
             &mut union_application_callbacks,
             callbacks.faction_apply_log_enabled,
             &mut *callbacks.write_faction_apply_log,
+            callbacks.faction_join_log_enabled,
+            &mut *callbacks.write_faction_join_log,
             callbacks.faction_master_log_enabled,
             &mut *callbacks.write_faction_master_log,
             owners.rs_player,
@@ -13651,6 +13681,9 @@ async fn process_world_message<TimerCallback, TeamOwner>(
     faction_apply_log_enabled: bool,
     write_faction_apply_log:
         &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
+    faction_join_log_enabled: bool,
+    write_faction_join_log:
+        &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
     faction_master_log_enabled: bool,
     write_faction_master_log:
         &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
@@ -15076,6 +15109,54 @@ where
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingCityWarResult {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        if let Some(outcome) = dispatch_faction_application_decision(
+            &mut message,
+            game,
+            organizing,
+            organizing_parameters,
+            village_war,
+            attack_city,
+            goods_war,
+            game.setup.use_log_system,
+            faction_join_log_enabled,
+            write_faction_join_log,
+            application_callbacks,
+            update_player,
+        ) {
+            let callbacks = WorldUnionApplicationEffectCallbacks {
+                random: &mut *application_callbacks.random,
+                world_string: &mut *application_callbacks.world_string,
+                format_world_string: &mut *application_callbacks.format_world_string,
+                put_war_log: &mut *application_callbacks.put_war_log,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
+            };
+            let mut effects = WorldUnionApplicationEffects::new(
+                game,
+                net_sessions,
+                application_runtime,
+                callbacks,
+            );
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingFactionApplicationDecision {
                 source,
                 legacy_run_result,
                 outcome,
