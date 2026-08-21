@@ -11,6 +11,9 @@
 //! `Talk` RVA `0x000B5A50`,
 //! `DeleteOrgaToClient` RVA `0x000B8A20`,
 //! `Pronounce` RVA `0x000B8DC0`,
+//! feature-setter-ы `SetLWFunction/SetPronounceFun/SetEndueRightFun/
+//! SetJoinVillageWarFun/SetJoinCityWarFun/SetCreateUnionFun` RVA
+//! `0x000B7030/0x000B7400/0x000B77D0/0x000B7BA0/0x000B7F70/0x000B8340`,
 //! `AddMembersToByteArray` RVA `0x000B53D0`, PDB-inline
 //! `AddApplyPersonsToByteArray/AddLeaveWordsToByteArray` RVA
 //! `0x000B5D30/0x000B5DD0`,
@@ -356,6 +359,13 @@
 //! OP_Update)` всегда ставится dirty-бит `8`. Exact ASM
 //! `0x004B8DC0..0x004B8F1E` подтверждает порядок, размер глобала и обе ветки;
 //! две старые `strcpy`-границы заменены typed-блокировкой до изменения state.
+//! Шесть feature-setter-ов при неизменном флаге являются no-op. Иначе флаг
+//! меняется до локализации, затем `WS0119` и feature-specific `WS0172..WS0185`
+//! разрешаются с fallback `""`, после чего всем member key без online-фильтра
+//! передаётся `SendInfoToAllMember(feature, WS0119, -1, 0x87A238)`. Последний
+//! аргумент тот owner не использует: фактический цвет остаётся `0xFFDAEDFE`.
+//! Exact ASM `0x004B7030..0x004B86C8` подтверждает offsets, пары ID и порядок;
+//! общая Rust-реализация заменяет шесть копий одной технической процедуры.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -503,6 +513,14 @@ impl FactionBaseProperty {
         self.bytes[0x2B] = u8::from(permit);
     }
 
+    fn feature_function(&self, feature: FactionFeatureFunction) -> bool {
+        self.bytes[feature.property_offset()] != 0
+    }
+
+    fn set_feature_function(&mut self, feature: FactionFeatureFunction, enabled: bool) {
+        self.bytes[feature.property_offset()] = u8::from(enabled);
+    }
+
     fn set_initial_level_permissions(&mut self, parameters: &COrganizingParam) {
         let level = self.level();
         self.bytes[0x24] = u8::from(parameters.pronounce_minimum_level() <= level);
@@ -625,6 +643,46 @@ pub(crate) enum FactionPronounceOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FactionFeatureFunction {
+    LeaveWord,
+    Pronounce,
+    EndueRight,
+    JoinVillageWar,
+    JoinCityWar,
+    CreateUnion,
+}
+
+impl FactionFeatureFunction {
+    const fn property_offset(self) -> usize {
+        match self {
+            Self::Pronounce => 0x24,
+            Self::LeaveWord => 0x25,
+            Self::EndueRight => 0x26,
+            Self::JoinVillageWar => 0x28,
+            Self::JoinCityWar => 0x29,
+            Self::CreateUnion => 0x2A,
+        }
+    }
+
+    const fn notification_string_id(self, enabled: bool) -> &'static [u8] {
+        match (self, enabled) {
+            (Self::LeaveWord, true) => b"WS0172",
+            (Self::LeaveWord, false) => b"WS0173",
+            (Self::Pronounce, true) => b"WS0174",
+            (Self::Pronounce, false) => b"WS0175",
+            (Self::EndueRight, true) => b"WS0176",
+            (Self::EndueRight, false) => b"WS0177",
+            (Self::JoinVillageWar, true) => b"WS0180",
+            (Self::JoinVillageWar, false) => b"WS0181",
+            (Self::JoinCityWar, true) => b"WS0182",
+            (Self::JoinCityWar, false) => b"WS0183",
+            (Self::CreateUnion, true) => b"WS0184",
+            (Self::CreateUnion, false) => b"WS0185",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FactionMemberInfoRequest<'a> {
     pub(crate) recipient_player_id: i32,
     pub(crate) first_text: &'a [u8],
@@ -637,6 +695,12 @@ pub(crate) struct FactionMemberInfoRequest<'a> {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct FactionMemberInfoReport {
     pub(crate) recipient_player_ids: Vec<i32>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionFeatureFunctionUpdate {
+    Unchanged,
+    Updated(FactionMemberInfoReport),
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -658,8 +722,8 @@ pub(crate) struct FactionTalkDelivery {
     pub(crate) result: Result<i32, SendMessageError>,
 }
 
-/// Узкая граница исходных StringTable и COrganizingCtrl для удаления фракции.
-pub(crate) trait FactionDeleteOrganizingContext {
+/// Узкая граница исходных StringTable и organizing-info controller-а.
+pub(crate) trait FactionOrganizingInfoContext {
     /// Возвращает независимую копию результата `StringTable::getStringByID`.
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>>;
 
@@ -2269,6 +2333,103 @@ impl CFaction {
         }
     }
 
+    pub(crate) fn set_leave_word_function<Context>(
+        &mut self,
+        enabled: bool,
+        context: &mut Context,
+    ) -> Result<FactionFeatureFunctionUpdate, FactionInitialPropertyBlock>
+    where
+        Context: FactionOrganizingInfoContext,
+    {
+        self.set_feature_function(FactionFeatureFunction::LeaveWord, enabled, context)
+    }
+
+    pub(crate) fn set_pronounce_function<Context>(
+        &mut self,
+        enabled: bool,
+        context: &mut Context,
+    ) -> Result<FactionFeatureFunctionUpdate, FactionInitialPropertyBlock>
+    where
+        Context: FactionOrganizingInfoContext,
+    {
+        self.set_feature_function(FactionFeatureFunction::Pronounce, enabled, context)
+    }
+
+    pub(crate) fn set_endue_right_function<Context>(
+        &mut self,
+        enabled: bool,
+        context: &mut Context,
+    ) -> Result<FactionFeatureFunctionUpdate, FactionInitialPropertyBlock>
+    where
+        Context: FactionOrganizingInfoContext,
+    {
+        self.set_feature_function(FactionFeatureFunction::EndueRight, enabled, context)
+    }
+
+    pub(crate) fn set_join_village_war_function<Context>(
+        &mut self,
+        enabled: bool,
+        context: &mut Context,
+    ) -> Result<FactionFeatureFunctionUpdate, FactionInitialPropertyBlock>
+    where
+        Context: FactionOrganizingInfoContext,
+    {
+        self.set_feature_function(FactionFeatureFunction::JoinVillageWar, enabled, context)
+    }
+
+    pub(crate) fn set_join_city_war_function<Context>(
+        &mut self,
+        enabled: bool,
+        context: &mut Context,
+    ) -> Result<FactionFeatureFunctionUpdate, FactionInitialPropertyBlock>
+    where
+        Context: FactionOrganizingInfoContext,
+    {
+        self.set_feature_function(FactionFeatureFunction::JoinCityWar, enabled, context)
+    }
+
+    pub(crate) fn set_create_union_function<Context>(
+        &mut self,
+        enabled: bool,
+        context: &mut Context,
+    ) -> Result<FactionFeatureFunctionUpdate, FactionInitialPropertyBlock>
+    where
+        Context: FactionOrganizingInfoContext,
+    {
+        self.set_feature_function(FactionFeatureFunction::CreateUnion, enabled, context)
+    }
+
+    fn set_feature_function<Context>(
+        &mut self,
+        feature: FactionFeatureFunction,
+        enabled: bool,
+        context: &mut Context,
+    ) -> Result<FactionFeatureFunctionUpdate, FactionInitialPropertyBlock>
+    where
+        Context: FactionOrganizingInfoContext,
+    {
+        let property = self.base_property.ok_or(FactionInitialPropertyBlock)?;
+        if property.feature_function(feature) == enabled {
+            return Ok(FactionFeatureFunctionUpdate::Unchanged);
+        }
+        self.base_property
+            .as_mut()
+            .ok_or(FactionInitialPropertyBlock)?
+            .set_feature_function(feature, enabled);
+
+        let second_text = context.world_string(b"WS0119").unwrap_or_default();
+        let first_text = context
+            .world_string(feature.notification_string_id(enabled))
+            .unwrap_or_default();
+        let report = self.send_info_to_all_members(
+            legacy_c_string_visible_bytes(&first_text),
+            legacy_c_string_visible_bytes(&second_text),
+            -1,
+            |request| context.send_organizing_info(request),
+        );
+        Ok(FactionFeatureFunctionUpdate::Updated(report))
+    }
+
     /// Публикует имя другой фракции всем готовым member recipient-ам.
     pub(crate) fn update_other_faction_info_to_client(
         &self,
@@ -2347,7 +2508,7 @@ impl CFaction {
         context: &mut Context,
     ) -> Result<FactionDeleteOrganizingOutcome, FactionDeleteOrganizingBuildError>
     where
-        Context: FactionDeleteOrganizingContext,
+        Context: FactionOrganizingInfoContext,
     {
         if target_player_id > 0 {
             let player = game.online_player_by_id(target_player_id as u32);
@@ -3773,7 +3934,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetLWFunction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1101
@@ -3787,7 +3948,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetPronounceFun
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1117
@@ -3801,7 +3962,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetEndueRightFun
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1131
@@ -3815,7 +3976,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetJoinVillageWarFun
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1159
@@ -3829,7 +3990,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetJoinCityWarFun
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1173
@@ -3843,7 +4004,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetCreateUnionFun
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1187
