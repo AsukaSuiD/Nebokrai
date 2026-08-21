@@ -1,6 +1,6 @@
 //! Статус корпуса: `IMPLEMENTED_PARTIAL` для достигнутых organizing opcode,
-//! включая список фракций страны `0x60107`, заявку союза `0x60118`, общий
-//! session-result dispatch, billboard
+//! включая список фракций страны `0x60107`, отмену заявки `0x60109`, заявку
+//! союза `0x60118`, общий session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
 //! `0x6012A`, парные city-tax gate `0x6012B/0x6012C` и region-param update
@@ -24,6 +24,10 @@
 //! текущую apply-faction игрока и exact payload `AddFactionListToByteArray`.
 //! Страница вне signed wrapping-границы ответа не получает. Проверки route,
 //! exact-tail и batch-map отправка старого Linux-донора в EXE отсутствуют.
+//! Exact `0x004A6FAC..0x004A70E1` для `0x60109` читает только player ID,
+//! запоминает первую apply-faction, удаляет player из apply-list всех faction
+//! в signed map-order и лишь при переходе `positive -> non-positive` отправляет
+//! `WS0125/WS0119`. Online/route/tail gates и wire-ответ отсутствуют.
 //! Exact диапазоны
 //! `0x004A74C6..0x004A7509` и `0x004A7511..0x004A7543` исправляют повреждённый
 //! RAW. Общий branch читает
@@ -307,6 +311,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     CityTransferSessionRuntime, CityTransferStartBlock, CityTransferStartOutcome,
     CityTransferTerminal, DeclareWarFactionPage, DeclareWarFactionPageBlock,
     ApplyFactionLookup, FactionCountryCountBlock, FactionListPage, FactionListPageBlock,
+    RemovePersonFromApplyFactionListOutcome,
     FactionMasterLookupBlock, FreeFactionLookup, FreePlayerLookup,
     FactionBillboardStatBlock,
     OrganizingContributorBlock, OrganizingContributorOutcome,
@@ -344,6 +349,7 @@ const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
     [0x60117, 0x60119, 0x60120, 0x60122, 0x60124, 0x60131];
 const FACTION_LIST_MESSAGE_TYPE: i32 = 0x60107;
 const FACTION_LIST_RESPONSE_TYPE: i32 = 0x7FE07;
+const CANCEL_FACTION_APPLICATION_MESSAGE_TYPE: i32 = 0x60109;
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
@@ -1349,6 +1355,101 @@ where
         player_id,
         page,
         outcome,
+    }))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionApplicationCancelLookupPhase {
+    BeforeRemoval,
+    AfterRemoval,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionApplicationCancelBlock {
+    Lookup {
+        phase: FactionApplicationCancelLookupPhase,
+        map_key: i32,
+    },
+    Removal {
+        previous_faction_id: i32,
+        outcome: RemovePersonFromApplyFactionListOutcome,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionApplicationCancelDispatch {
+    pub(crate) player_id: i32,
+    pub(crate) previous_faction_id: i32,
+    pub(crate) remaining_faction_id: Option<i32>,
+    pub(crate) removal: RemovePersonFromApplyFactionListOutcome,
+    pub(crate) notice_sent: bool,
+}
+
+/// Выполняет exact `0x60109`: очищает все faction apply-list и уведомляет
+/// только о подтверждённом переходе из положительной apply-faction в пустую.
+pub(crate) fn dispatch_faction_application_cancel<Context>(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    context: &mut Context,
+) -> Option<
+    Result<OrganizingFactionApplicationCancelDispatch, OrganizingFactionApplicationCancelBlock>,
+>
+where
+    Context: FactionOrganizingInfoContext,
+{
+    if message.message_type() != CANCEL_FACTION_APPLICATION_MESSAGE_TYPE {
+        return None;
+    }
+
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let previous_faction_id = match organizing.faction_by_player_in_apply_list(player_id) {
+        ApplyFactionLookup::NoFaction => 0,
+        ApplyFactionLookup::Faction(faction_id) => faction_id,
+        ApplyFactionLookup::BlockedNullFaction { map_key } => {
+            return Some(Err(OrganizingFactionApplicationCancelBlock::Lookup {
+                phase: FactionApplicationCancelLookupPhase::BeforeRemoval,
+                map_key,
+            }));
+        }
+    };
+    let removal = organizing.remove_person_from_apply_faction_list(game, player_id);
+    if matches!(
+        &removal,
+        RemovePersonFromApplyFactionListOutcome::BlockedNullFaction { .. }
+    ) {
+        return Some(Err(OrganizingFactionApplicationCancelBlock::Removal {
+            previous_faction_id,
+            outcome: removal,
+        }));
+    }
+
+    let mut remaining_faction_id = None;
+    let mut notice_sent = false;
+    if previous_faction_id > 0 {
+        let remaining = match organizing.faction_by_player_in_apply_list(player_id) {
+            ApplyFactionLookup::NoFaction => 0,
+            ApplyFactionLookup::Faction(faction_id) => faction_id,
+            ApplyFactionLookup::BlockedNullFaction { map_key } => {
+                return Some(Err(OrganizingFactionApplicationCancelBlock::Lookup {
+                    phase: FactionApplicationCancelLookupPhase::AfterRemoval,
+                    map_key,
+                }));
+            }
+        };
+        remaining_faction_id = Some(remaining);
+        if remaining <= 0 {
+            send_faction_application_cancel_notice(context, player_id);
+            notice_sent = true;
+        }
+    }
+
+    Some(Ok(OrganizingFactionApplicationCancelDispatch {
+        player_id,
+        previous_faction_id,
+        remaining_faction_id,
+        removal,
+        notice_sent,
     }))
 }
 
@@ -4582,6 +4683,22 @@ where
     Context: FactionOrganizingInfoContext,
 {
     let first_text = context.world_string(b"WS0120").unwrap_or_default();
+    let second_text = context.world_string(b"WS0119").unwrap_or_default();
+    context.send_organizing_info(FactionMemberInfoRequest {
+        recipient_player_id: player_id,
+        first_text: legacy_c_string_prefix(&first_text),
+        second_text: legacy_c_string_prefix(&second_text),
+        information_type: -1,
+        color: 0xFFDA_EDFE,
+        trailing_value: 0,
+    });
+}
+
+fn send_faction_application_cancel_notice<Context>(context: &mut Context, player_id: i32)
+where
+    Context: FactionOrganizingInfoContext,
+{
+    let first_text = context.world_string(b"WS0125").unwrap_or_default();
     let second_text = context.world_string(b"WS0119").unwrap_or_default();
     context.send_organizing_info(FactionMemberInfoRequest {
         recipient_player_id: player_id,

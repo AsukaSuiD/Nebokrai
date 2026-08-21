@@ -1083,6 +1083,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingDeclareFactionWarBlock,
     OrganizingDeclareFactionWarDispatch, OrganizingDeclareWarFactionListBlock,
     OrganizingDeclareWarFactionListDispatch, OrganizingFactionBillboardBlock,
+    OrganizingFactionApplicationCancelBlock, OrganizingFactionApplicationCancelDispatch,
     OrganizingFactionListBlock, OrganizingFactionListDispatch,
     OrganizingFactionBillboardOutcome, OrganizingFactionContributorDispatch,
     OrganizingFactionExperienceDispatch, OrganizingFactionMemberStateDispatch,
@@ -1109,6 +1110,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     dispatch_change_region_router, dispatch_city_war_result,
     dispatch_consumed_long, dispatch_declare_faction_war,
     dispatch_declare_war_faction_list, dispatch_faction_billboard, dispatch_faction_list,
+    dispatch_faction_application_cancel,
     dispatch_faction_upgrade,
     dispatch_faction_contributor, dispatch_faction_experience, dispatch_faction_member_state,
     dispatch_faction_tax, dispatch_faction_upload_icon,
@@ -2135,6 +2137,15 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: Result<OrganizingFactionListDispatch, OrganizingFactionListBlock>,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingFactionApplicationCancel {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<
+            OrganizingFactionApplicationCancelDispatch,
+            OrganizingFactionApplicationCancelBlock,
+        >,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingDeclareFactionWar {
@@ -8894,8 +8905,8 @@ impl CGame {
     /// `0x5FD0B`, LeiTing update `0x5FD10`, honor
     /// `0x5FD0C/0x5FD0D`, server `0x5FA01..=0x5FA07/0x5FA09/0x5FA0F/0x5FA10`,
     /// organizing session
-    /// result, список faction страны `0x60107`, union application `0x60118`,
-    /// leave-word enable `0x6011A`, запись
+    /// result, список faction страны `0x60107`, отмена заявки `0x60109`, union
+    /// application `0x60118`, leave-word enable `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
     /// войны `0x6011E`, само объявление `0x6011F`, общий leaf
     /// `0x60121/0x60123`, передача города `0x60130`, admission permit
@@ -15189,6 +15200,27 @@ where
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingFactionList {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        if let Some(outcome) = dispatch_faction_application_cancel(
+            &mut message,
+            game,
+            organizing,
+            &mut effects,
+        ) {
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingFactionApplicationCancel {
                 source,
                 legacy_run_result,
                 outcome,
