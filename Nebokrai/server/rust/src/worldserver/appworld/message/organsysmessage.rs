@@ -459,9 +459,10 @@ use crate::worldserver::appworld::organizingsystem::union::{
     UnionAddFactionEffects, UnionApplicationEndpointBlock, UnionApplicationSessionBlock,
     UnionApplicationSessionReport, UnionApplicationSessionRequest, UnionApplicationSessionRuntime,
     UnionApplicationTerminal, UnionApplyForJoinEffects, UnionApplyForJoinOutcome,
+    UnionInvitationSessionRequest, UnionInvitationSessionRuntime, UnionInviteEffects,
     UnionFactionStateMutationContext, UnionFireOutEffects,
     UnionFormatArgument, UnionOwnedCityMutationContext,
-    begin_union_application_session,
+    begin_union_application_session, begin_union_invitation_session,
 };
 use crate::worldserver::appworld::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarApplicationContext, VillageWarApplicationReport,
@@ -552,6 +553,14 @@ pub(crate) struct QueuedUnionApplicationTerminal {
     pub(crate) terminal: UnionApplicationTerminal,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct QueuedUnionInvitationTerminal {
+    pub(crate) union_id: i32,
+    pub(crate) inviter_faction_id: i32,
+    pub(crate) invited_faction_id: i32,
+    pub(crate) terminal: UnionApplicationTerminal,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct UnionApplicationConfirmationDelivery {
     pub(crate) recipient_player_id: i32,
@@ -581,6 +590,7 @@ pub(crate) struct QueuedConfederationCreationTerminal {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum QueuedOrganizingSessionTerminal {
     Union(QueuedUnionApplicationTerminal),
+    UnionInvitation(QueuedUnionInvitationTerminal),
     ConfederationCreation(QueuedConfederationCreationTerminal),
     CityTransfer(QueuedCityTransferTerminal),
 }
@@ -624,6 +634,18 @@ impl WorldUnionApplicationRuntimeOwner {
         game_server_id: i32,
     ) -> Arc<dyn UnionApplicationSessionRuntime> {
         Arc::new(WorldUnionApplicationEndpointRuntime {
+            state: Arc::clone(&self.state),
+            sender,
+            game_server_id,
+        })
+    }
+
+    fn invitation_endpoint(
+        &self,
+        sender: Option<ServerCommandHandle>,
+        game_server_id: i32,
+    ) -> Arc<dyn UnionInvitationSessionRuntime> {
+        Arc::new(WorldUnionInvitationEndpointRuntime {
             state: Arc::clone(&self.state),
             sender,
             game_server_id,
@@ -737,6 +759,53 @@ impl UnionApplicationSessionRuntime for WorldUnionApplicationEndpointRuntime {
     }
 
     fn block_union_application_endpoint(&self, block: UnionApplicationEndpointBlock) {
+        self.state.blocks.lock().push_back(block);
+    }
+}
+
+struct WorldUnionInvitationEndpointRuntime {
+    state: Arc<WorldUnionApplicationRuntimeState>,
+    sender: Option<ServerCommandHandle>,
+    game_server_id: i32,
+}
+
+impl UnionInvitationSessionRuntime for WorldUnionInvitationEndpointRuntime {
+    fn send_union_invitation_confirmation(
+        &self,
+        recipient_player_id: i32,
+        message: &CMessage,
+    ) {
+        let result = message.send_to_map_id(self.sender.as_ref(), self.game_server_id);
+        self.state
+            .confirmations
+            .lock()
+            .push_back(UnionApplicationConfirmationDelivery {
+                recipient_player_id,
+                game_server_id: self.game_server_id,
+                result,
+            });
+    }
+
+    fn finish_union_invitation(
+        &self,
+        union_id: i32,
+        inviter_faction_id: i32,
+        invited_faction_id: i32,
+        terminal: UnionApplicationTerminal,
+    ) {
+        self.state.terminals.lock().push_back(
+            QueuedOrganizingSessionTerminal::UnionInvitation(
+                QueuedUnionInvitationTerminal {
+                    union_id,
+                    inviter_faction_id,
+                    invited_faction_id,
+                    terminal,
+                },
+            ),
+        );
+    }
+
+    fn block_union_invitation_endpoint(&self, block: UnionApplicationEndpointBlock) {
         self.state.blocks.lock().push_back(block);
     }
 }
@@ -909,6 +978,34 @@ impl UnionApplyForJoinEffects for WorldUnionApplicationEffects<'_> {
             .runtime
             .endpoint(self.game.current_game_server_sender(), game_server_id);
         begin_union_application_session(self.manager, request, endpoint, |upper_bound| {
+            (self.callbacks.random)(upper_bound)
+        })
+    }
+}
+
+impl UnionInviteEffects for WorldUnionApplicationEffects<'_> {
+    type SessionReport = UnionApplicationSessionReport;
+    type SessionBlock = UnionApplicationSessionBlock;
+
+    fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
+        (self.callbacks.world_string)(string_id)
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+
+    fn begin_union_invitation_session(
+        &mut self,
+        request: UnionInvitationSessionRequest,
+    ) -> Result<Self::SessionReport, Self::SessionBlock> {
+        let game_server_id = self
+            .game
+            .game_server_number_by_player_id(request.recipient_player_id);
+        let endpoint = self
+            .runtime
+            .invitation_endpoint(self.game.current_game_server_sender(), game_server_id);
+        begin_union_invitation_session(self.manager, request, endpoint, |upper_bound| {
             (self.callbacks.random)(upper_bound)
         })
     }

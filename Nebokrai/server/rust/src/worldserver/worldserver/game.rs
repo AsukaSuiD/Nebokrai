@@ -1120,7 +1120,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingUnionApplicationDispatch,
     QueuedCityTransferTerminal, QueuedConfederationCreationTerminal,
     QueuedOrganizingSessionTerminal,
-    QueuedUnionApplicationTerminal,
+    QueuedUnionApplicationTerminal, QueuedUnionInvitationTerminal,
     UnionApplicationConfirmationDelivery,
     WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects,
     WorldUnionApplicationRuntimeOwner, dispatch_admission_permit, dispatch_attack_city_end,
@@ -1181,6 +1181,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingUnionDemiseBlock, OrganizingUnionExitBlock, OrganizingUnionFireOutBlock,
     OrganizingPronounceBlock, OrganizingSaveDataReport, OrganizingUnionApplicationCallbackBlock,
     OrganizingUnionApplicationCallbackReport, OrganizingUnionApplyForJoinDispatchBlock,
+    OrganizingUnionInvitationCallbackBlock, OrganizingUnionInvitationCallbackReport,
     FreeFactionLookup, FreePlayerLookup, PlayerEnterGameOutcome, PlayerExitGameOutcome,
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::{
@@ -2098,6 +2099,15 @@ pub(crate) struct WorldUnionApplicationTerminalDispatch {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldUnionInvitationTerminalDispatch {
+    pub(crate) request: QueuedUnionInvitationTerminal,
+    pub(crate) outcome: Result<
+        OrganizingUnionInvitationCallbackReport,
+        OrganizingUnionInvitationCallbackBlock,
+    >,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldCityTransferTerminalDispatch {
     pub(crate) request: QueuedCityTransferTerminal,
     pub(crate) outcome: Result<CityTransferFinishReport, CityTransferFinishBlock>,
@@ -2115,6 +2125,7 @@ pub(crate) struct WorldConfederationCreationTerminalDispatch {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldUnionApplicationRuntimeReport {
     pub(crate) terminals: Vec<WorldUnionApplicationTerminalDispatch>,
+    pub(crate) invitation_terminals: Vec<WorldUnionInvitationTerminalDispatch>,
     pub(crate) confirmations: Vec<UnionApplicationConfirmationDelivery>,
     pub(crate) endpoint_blocks: Vec<UnionApplicationEndpointBlock>,
     pub(crate) city_terminals: Vec<WorldCityTransferTerminalDispatch>,
@@ -16163,6 +16174,7 @@ fn drain_union_application_runtime(
     update_player: &mut dyn FnMut(i32),
 ) -> WorldUnionApplicationRuntimeReport {
     let mut terminals = Vec::new();
+    let mut invitation_terminals = Vec::new();
     let mut city_terminals = Vec::new();
     let mut confederation_creation_terminals = Vec::new();
     while let Some(request) = runtime.pop_terminal() {
@@ -16178,6 +16190,22 @@ fn drain_union_application_runtime(
                     update_player,
                 );
                 terminals.push(WorldUnionApplicationTerminalDispatch { request, outcome });
+            }
+            QueuedOrganizingSessionTerminal::UnionInvitation(request) => {
+                let outcome = organizing.finish_union_invitation(
+                    game,
+                    organizing_parameters,
+                    request.union_id,
+                    request.inviter_faction_id,
+                    request.invited_faction_id,
+                    request.terminal,
+                    effects,
+                    update_player,
+                );
+                invitation_terminals.push(WorldUnionInvitationTerminalDispatch {
+                    request,
+                    outcome,
+                });
             }
             QueuedOrganizingSessionTerminal::ConfederationCreation(request) => {
                 let outcome = organizing.finish_confederation_creation(
@@ -16213,6 +16241,7 @@ fn drain_union_application_runtime(
     }
     WorldUnionApplicationRuntimeReport {
         terminals,
+        invitation_terminals,
         confirmations: runtime.take_confirmations(),
         endpoint_blocks: runtime.take_blocks(),
         city_terminals,
