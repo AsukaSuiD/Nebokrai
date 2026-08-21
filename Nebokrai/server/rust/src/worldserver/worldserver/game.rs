@@ -979,7 +979,7 @@ use crate::setup::regionrouter::RegionRouter;
 use crate::public::tools::{ini_decode, put_string_to_file};
 use crate::transport::bind_tcp_ipv4;
 use crate::worldserver::appworld::country::country::{
-    CCountry, CountryExileMessageDelivery, CountryExileResultContext,
+    CCountry, CountryAbsolveCounterReset, CountryExileMessageDelivery, CountryExileResultContext,
     CountryExileTarget, CountryExileTextArgument, CountryKingSaveLimits,
 };
 use crate::worldserver::appworld::country::countryhandler::{
@@ -1011,6 +1011,7 @@ use crate::worldserver::appworld::message::countrymessage::{
     WorldCountryMessageDispatch, WorldCountryMessageOutcome,
     WorldFourNationExploitDatabaseDisposition, WorldFourNationExploitSync,
     decode_four_nation_exploit_message,
+    dispatch_country_absolve_request_message,
     dispatch_country_exile_result_message,
     dispatch_country_exile_request_message,
     dispatch_country_silence_request_message,
@@ -1108,8 +1109,8 @@ use crate::worldserver::appworld::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarCallbacks,
 };
 use crate::worldserver::appworld::player::{
-    CPlayer, PlayerCodecError, PlayerExploitUpdate, PlayerMurderCounterUpdate,
-    PlayerOrganizingUpdateError, PlayerPropertyCoefficients,
+    CPlayer, PlayerCodecError, PlayerExploitUpdate, PlayerMurderCounterReset,
+    PlayerMurderCounterUpdate, PlayerOrganizingUpdateError, PlayerPropertyCoefficients,
 };
 use crate::worldserver::appworld::region::RegionSerializationBlock;
 use crate::worldserver::appworld::script::variablelist::{
@@ -10940,6 +10941,18 @@ impl CGame {
             .map(|player| player.increment_murder_counters())
     }
 
+    pub(crate) fn reset_online_player_murder_counters(
+        &mut self,
+        player_id: u32,
+    ) -> Option<PlayerMurderCounterReset> {
+        if !self.online_players.iter().any(|&online_id| online_id == player_id) {
+            return None;
+        }
+        self.players
+            .get_mut(&player_id)
+            .map(|player| player.reset_murder_counters())
+    }
+
     /// Декодирует player snapshot только после exact online-list lookup.
     pub(crate) fn decord_online_player_by_id(
         &mut self,
@@ -12038,7 +12051,7 @@ struct WorldCountryWarEffects<'a> {
 }
 
 struct WorldCountryExileResultEffects<'a> {
-    game: &'a CGame,
+    game: &'a mut CGame,
     globe_setup: &'a GlobeSetupSnapshot,
     format_world_string:
         &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
@@ -12089,6 +12102,18 @@ impl CountryExileResultContext for WorldCountryExileResultEffects<'_> {
                 country: player.country(),
                 pk_count: player.pk_count(),
                 is_god: player.is_god(),
+            })
+    }
+
+    fn reset_online_player_murder_counters(
+        &mut self,
+        player_id: i32,
+    ) -> Option<CountryAbsolveCounterReset> {
+        self.game
+            .reset_online_player_murder_counters(player_id as u32)
+            .map(|reset| CountryAbsolveCounterReset {
+                previous_kill_count: reset.previous_kill_count,
+                previous_pk_count: reset.previous_pk_count,
             })
     }
 
@@ -12681,6 +12706,26 @@ where
                 source,
                 legacy_run_result,
                 outcome: WorldCountryMessageOutcome::SilenceRequested(sync),
+            };
+        }
+        let absolve_request = {
+            let mut effects = WorldCountryExileResultEffects {
+                game,
+                globe_setup,
+                format_world_string: &mut *application_callbacks.format_world_string,
+            };
+            dispatch_country_absolve_request_message(
+                &mut message,
+                country_handler,
+                country_parameters,
+                &mut effects,
+            )
+        };
+        if let Some(sync) = absolve_request {
+            return ProcessedWorldEvent::CountryMessage {
+                source,
+                legacy_run_result,
+                outcome: WorldCountryMessageOutcome::AbsolveRequested(sync),
             };
         }
         let exile_request = {

@@ -52,6 +52,7 @@ const MAX_KING_CONTROL_POINT: usize = 10;
 const MIN_KING_CONTROL_POINT: usize = 11;
 const DEC_KING_CONTROL_POINT_SILENCE: usize = 18;
 const DEC_KING_CONTROL_POINT_EXILE: usize = 20;
+const DEC_KING_CONTROL_POINT_ABSOLVE: usize = 21;
 const MAX_KING_MATERIAL_POINT: usize = 26;
 const MAX_KING_WAR_POINT: usize = 28;
 const MAX_SILENCE_NUM: usize = 29;
@@ -59,6 +60,7 @@ const SILENCE_TIME: usize = 30;
 const EXILE_TIME: usize = 32;
 const MAX_EXILE_NUM: usize = 31;
 const MAX_EXILE_PK: usize = 33;
+const MAX_ABSOLVE_NUM: usize = 35;
 
 const COUNTRY_PARAMETER_FIELDS: [&str; COUNTRY_PARAMETER_COUNT] = [
     "m_lMaxCountyrs",
@@ -308,6 +310,14 @@ impl CCountryParam {
     /// Возвращает exact `_dec_king_control_point_exile` без default-подстановки.
     pub(crate) const fn exile_control_point_cost(&self) -> Option<i32> {
         self.parameters[DEC_KING_CONTROL_POINT_EXILE]
+    }
+
+    pub(crate) const fn absolve_control_point_cost(&self) -> Option<i32> {
+        self.parameters[DEC_KING_CONTROL_POINT_ABSOLVE]
+    }
+
+    pub(crate) const fn max_absolve_count(&self) -> Option<i32> {
+        self.parameters[MAX_ABSOLVE_NUM]
     }
 
     /// Возвращает достигнутый максимум king material point без default-подстановки.

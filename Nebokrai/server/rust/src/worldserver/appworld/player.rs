@@ -596,6 +596,12 @@ pub(crate) struct PlayerMurderCounterUpdate {
     pub(crate) pk_count: u16,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerMurderCounterReset {
+    pub(crate) previous_kill_count: u32,
+    pub(crate) previous_pk_count: u16,
+}
+
 /// Результат native-width прибавления к `tagBaseProperty::dwExploit`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerExploitUpdate {
@@ -1298,6 +1304,15 @@ impl CPlayer {
             previous_pk_count,
             pk_count,
         }
+    }
+
+    /// Обнуляет exact `wPkCount/dwKillCount` в порядке исходного `Absolve`.
+    pub(crate) fn reset_murder_counters(&mut self) -> PlayerMurderCounterReset {
+        let previous_pk_count = self.base_property.read_u16(BASE_PROPERTY_PK_COUNT_OFFSET);
+        self.base_property.write_u16(BASE_PROPERTY_PK_COUNT_OFFSET, 0);
+        let previous_kill_count = self.base_property.read_u32(BASE_PROPERTY_KILL_COUNT_OFFSET);
+        self.base_property.write_u32(BASE_PROPERTY_KILL_COUNT_OFFSET, 0);
+        PlayerMurderCounterReset { previous_kill_count, previous_pk_count }
     }
 
     /// Возвращает exact unsigned `m_BaseProperty.wPkCount`.

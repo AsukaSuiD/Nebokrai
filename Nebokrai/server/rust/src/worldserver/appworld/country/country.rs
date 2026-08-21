@@ -2,8 +2,8 @@
 //!
 //! Статус `CCountry::SetCountryPower/SetCountryTreasury/SetCountryTech` RVA
 //! `0x000A4750/0x000A4790/0x000A47D0`, `CCountry::AddToByteArray` RVA `0x000C6E30`,
-//! `CCountry::IsKing/CanOperate/Exile/SuccessExiled/Silence` RVA
-//! `0x000C7160/0x000C7520/0x000C7AD0/0x000C7EE0/0x000C81D0`,
+//! `CCountry::IsKing/CanOperate/Exile/SuccessExiled/Silence/Absolve` RVA
+//! `0x000C7160/0x000C7520/0x000C7AD0/0x000C7EE0/0x000C81D0/0x000C8570`,
 //! `CCountry::CloneCountryData` RVA `0x000C9CE0` и
 //! `CCountry::CloneSaveData` RVA `0x000CC470` — `IMPLEMENTED`; остальной корпус
 //! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
@@ -51,6 +51,12 @@
 //! `0x7FF0D { country:u8, player:i32, silence_count:i32 }` на маршрут цели и
 //! `0x7FF11` всем connected GameServer. Exact `0x004C853E` возвращает ID цели;
 //! все отказы возвращают ноль. Linux-донор здесь не добавляет контрактов.
+//! `0x6030B -> CanOperate(3) -> Absolve` сначала обнуляет у online-player
+//! `wPkCount`, затем `dwKillCount`, и лишь после этого читает цену операции.
+//! Успех списывает control point, публикует `0x7FF10`, wrapping увеличивает
+//! `m_lAbsolveNum`, пишет `WS0086`, рассылает `0x7FF0C {country, player}` через
+//! `SendAll` и затем `0x7FF11`. `0x004C87EE` возвращает ID цели; `WS0084/85`
+//! дают log и private, а все отказы возвращают ноль.
 //! Clone копирует country ID, treasury, power,
 //! current/level-up tech exp, tech level, king identity/flags и war-result.
 //! Три king-point ограничиваются соответствующими максимумами `CCountryParam`.
@@ -131,6 +137,7 @@ pub(crate) struct CCountry {
     pub(crate) is_warring: bool,
     pub(crate) silence_count: i32,
     pub(crate) exile_count: i32,
+    pub(crate) absolve_count: i32,
     pub(crate) exile_started_at_ms: BTreeMap<i32, i32>,
 }
 
@@ -202,10 +209,20 @@ pub(crate) struct CountryExileTarget {
     pub(crate) is_god: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryAbsolveCounterReset {
+    pub(crate) previous_kill_count: u32,
+    pub(crate) previous_pk_count: u16,
+}
+
 /// Узкая граница player/localization/network/log эффектов исходного owner-а.
 pub(crate) trait CountryExileResultContext {
     fn map_player_name(&mut self, player_id: i32) -> Option<Vec<u8>>;
     fn online_player(&mut self, player_id: i32) -> Option<CountryExileTarget>;
+    fn reset_online_player_murder_counters(
+        &mut self,
+        player_id: i32,
+    ) -> Option<CountryAbsolveCounterReset>;
     fn country_name(&mut self, country_id: u8) -> Vec<u8>;
     fn format_world_string(
         &mut self,
@@ -351,6 +368,59 @@ pub(crate) struct CountrySilenceReport {
     pub(crate) disposition: CountrySilenceDisposition,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryAbsolveRejection {
+    CountryAtWar,
+    InsufficientControlPoint,
+    DailyLimitReached,
+    TargetMissing,
+    TargetCountryUnavailable,
+    TargetFromAnotherCountry,
+    TargetMutationUnavailable,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountryCanAbsolveDisposition {
+    Allowed,
+    ParameterUnavailable(CountryParameterUnavailable),
+    Rejected {
+        reason: CountryAbsolveRejection,
+        text: Vec<u8>,
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountryAbsolveDisposition {
+    Rejected {
+        reason: CountryAbsolveRejection,
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+    ParameterUnavailable {
+        block: CountryParameterUnavailable,
+        counter_reset: CountryAbsolveCounterReset,
+        control_point_update: Option<KingPointUpdate>,
+    },
+    Applied {
+        counter_reset: CountryAbsolveCounterReset,
+        control_point_update: KingPointUpdate,
+        control_point_delivery: CountryExileMessageDelivery,
+        previous_absolve_count: i32,
+        applied_absolve_count: i32,
+        broadcast_wire: Vec<u8>,
+        broadcast_delivery: Result<i32, SendMessageError>,
+        country_deliveries: Vec<CountryExileMessageDelivery>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountryAbsolveReport {
+    pub(crate) player_id: i32,
+    pub(crate) legacy_result: i32,
+    pub(crate) text: Vec<u8>,
+    pub(crate) disposition: CountryAbsolveDisposition,
+}
+
 impl CCountry {
     /// Exact `IsKing`: нулевой candidate всегда отклоняется с `WS0033`.
     pub(crate) fn authorize_king<Context: CountryExileResultContext + ?Sized>(
@@ -369,6 +439,206 @@ impl CCountry {
         ));
         context.put_king_log(&text);
         false
+    }
+
+    /// Exact `CanOperate(3)` с исходным порядком warring/points/daily-limit.
+    pub(crate) fn can_absolve<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> CountryCanAbsolveDisposition {
+        let Some(minimum) = parameters.min_king_control_point() else {
+            return CountryCanAbsolveDisposition::ParameterUnavailable(
+                CountryParameterUnavailable { field: "_min_king_control_point" },
+            );
+        };
+        let rejection = if self.is_warring {
+            Some((CountryAbsolveRejection::CountryAtWar, b"WS0044" as &'static [u8], None))
+        } else if self.king.control_point < minimum {
+            Some((
+                CountryAbsolveRejection::InsufficientControlPoint,
+                b"WS0045" as &'static [u8],
+                Some(minimum),
+            ))
+        } else {
+            let Some(maximum) = parameters.max_absolve_count() else {
+                return CountryCanAbsolveDisposition::ParameterUnavailable(
+                    CountryParameterUnavailable { field: "_max_absolve_num" },
+                );
+            };
+            if self.absolve_count <= maximum.wrapping_sub(1) {
+                None
+            } else {
+                Some((
+                    CountryAbsolveRejection::DailyLimitReached,
+                    b"WS0046" as &'static [u8],
+                    Some(maximum),
+                ))
+            }
+        };
+        let Some((reason, string_id, argument)) = rejection else {
+            return CountryCanAbsolveDisposition::Allowed;
+        };
+        let arguments = argument
+            .as_ref()
+            .map(|value| [CountryExileTextArgument::Signed(*value)]);
+        let text = legacy_country_text(context.format_world_string(
+            string_id,
+            arguments.as_ref().map_or(&[], |arguments| arguments.as_slice()),
+        ));
+        let private_delivery = self.send_private_message(&text, 0, context);
+        CountryCanAbsolveDisposition::Rejected { reason, text, private_delivery }
+    }
+
+    /// Exact `CCountry::Absolve`: сбрасывает crime counters и публикует `0x7FF0C`.
+    pub(crate) fn absolve<Context: CountryExileResultContext + ?Sized>(
+        &mut self,
+        player_id: i32,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> CountryAbsolveReport {
+        let Some(player) = context.online_player(player_id) else {
+            return self.reject_absolve(
+                player_id,
+                CountryAbsolveRejection::TargetMissing,
+                b"WS0084",
+                context,
+            );
+        };
+        let Some(player_country) = player.country else {
+            return CountryAbsolveReport {
+                player_id,
+                legacy_result: 0,
+                text: Vec::new(),
+                disposition: CountryAbsolveDisposition::Rejected {
+                    reason: CountryAbsolveRejection::TargetCountryUnavailable,
+                    private_delivery: None,
+                },
+            };
+        };
+        if player_country != self.country_id {
+            return self.reject_absolve(
+                player_id,
+                CountryAbsolveRejection::TargetFromAnotherCountry,
+                b"WS0085",
+                context,
+            );
+        }
+        let Some(counter_reset) = context.reset_online_player_murder_counters(player_id) else {
+            return CountryAbsolveReport {
+                player_id,
+                legacy_result: 0,
+                text: Vec::new(),
+                disposition: CountryAbsolveDisposition::Rejected {
+                    reason: CountryAbsolveRejection::TargetMutationUnavailable,
+                    private_delivery: None,
+                },
+            };
+        };
+        let Some(control_point_cost) = parameters.absolve_control_point_cost() else {
+            return self.absolve_parameter_unavailable(
+                player_id,
+                counter_reset,
+                CountryParameterUnavailable { field: "_dec_king_control_point_absolve" },
+                None,
+            );
+        };
+        let requested_control_point = self.king.control_point.wrapping_sub(control_point_cost);
+        let control_point_update = match set_control_point(
+            &mut self.king,
+            requested_control_point,
+            parameters,
+        ) {
+            Ok(update) => update,
+            Err(block) => {
+                return self.absolve_parameter_unavailable(
+                    player_id,
+                    counter_reset,
+                    block,
+                    None,
+                );
+            }
+        };
+
+        let king_map_id = context.game_server_number_by_player_id(self.king.id);
+        let mut control_point_message = CMessage::new(0x0007_FF10);
+        control_point_message.base_mut().add_long(self.king.id);
+        control_point_message.base_mut().add_byte(self.country_id);
+        control_point_message.base_mut().add_long(self.king.control_point);
+        let control_point_delivery = CountryExileMessageDelivery {
+            map_id: king_map_id,
+            delivery: context.send_to_map_id(&control_point_message, king_map_id),
+        };
+
+        let previous_absolve_count = self.absolve_count;
+        self.absolve_count = self.absolve_count.wrapping_add(1);
+        let country_name = context.country_name(self.country_id);
+        let text = legacy_country_text(context.format_world_string(
+            b"WS0086",
+            &[
+                CountryExileTextArgument::Text(&country_name),
+                CountryExileTextArgument::Text(&player.name),
+            ],
+        ));
+        context.put_king_log(&text);
+        let mut broadcast = CMessage::new(0x0007_FF0C);
+        broadcast.base_mut().add_byte(self.country_id);
+        broadcast.base_mut().add_long(player_id);
+        let broadcast_wire = broadcast.as_wire_bytes().to_vec();
+        let broadcast_delivery = context.send_all(&broadcast);
+        let country_deliveries = self.send_country_message(&text, context);
+        CountryAbsolveReport {
+            player_id,
+            legacy_result: player_id,
+            text,
+            disposition: CountryAbsolveDisposition::Applied {
+                counter_reset,
+                control_point_update,
+                control_point_delivery,
+                previous_absolve_count,
+                applied_absolve_count: self.absolve_count,
+                broadcast_wire,
+                broadcast_delivery,
+                country_deliveries,
+            },
+        }
+    }
+
+    fn reject_absolve<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        player_id: i32,
+        reason: CountryAbsolveRejection,
+        string_id: &'static [u8],
+        context: &mut Context,
+    ) -> CountryAbsolveReport {
+        let text = legacy_country_text(context.format_world_string(string_id, &[]));
+        context.put_king_log(&text);
+        let private_delivery = self.send_private_message(&text, 0, context);
+        CountryAbsolveReport {
+            player_id,
+            legacy_result: 0,
+            text,
+            disposition: CountryAbsolveDisposition::Rejected { reason, private_delivery },
+        }
+    }
+
+    fn absolve_parameter_unavailable(
+        &self,
+        player_id: i32,
+        counter_reset: CountryAbsolveCounterReset,
+        block: CountryParameterUnavailable,
+        control_point_update: Option<KingPointUpdate>,
+    ) -> CountryAbsolveReport {
+        CountryAbsolveReport {
+            player_id,
+            legacy_result: 0,
+            text: Vec::new(),
+            disposition: CountryAbsolveDisposition::ParameterUnavailable {
+                block,
+                counter_reset,
+                control_point_update,
+            },
+        }
     }
 
     /// Exact `CanOperate(5)` с исходным порядком warring/points/daily-limit.
@@ -1437,8 +1707,8 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 // ADDRESS: 004c7520
 // PROTOTYPE: bool __thiscall CanOperate(uchar param_1)
 //
-// Ветки operation `4/5` реализованы выше как `can_exile/can_silence`; остальные
-// selectors остаются source-reference.
+// Ветки operation `3/4/5` реализованы выше как `can_absolve/can_exile/`
+// `can_silence`; остальные selectors остаются source-reference.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1491,7 +1761,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::Absolve
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1411
@@ -1499,6 +1769,8 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 // ADDRESS: 004c8570
 // PROTOTYPE: long __thiscall Absolve(long param_1)
 //
+// Реализация выше сохраняет exact player mutations, side-effect order и wire;
+// raw оставлен только как локальная документация исходного owner-а.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

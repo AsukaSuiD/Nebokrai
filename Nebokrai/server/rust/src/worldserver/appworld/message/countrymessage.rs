@@ -2,7 +2,8 @@
 //!
 //! Dispatcher RVA `0x000A47F0` остаётся `IMPLEMENTED_PARTIAL`: country relays
 //! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, а также вход country victory
-//! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, silence
+//! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, absolve
+//! `0x6030B -> 0x7FF10/0x7FF0C/0x7FF11`, silence
 //! `0x6030C -> 0x7FF10/0x7FF0D/0x7FF11`, exile
 //! `0x6030D -> 0x7FF0E`, `0x6030E -> 0x7FF15`, `0x60316 -> 0x7FF15`, war-declare
 //! `0x60317 -> 0x7FF16` и four-nation result
@@ -53,6 +54,8 @@
 //! `0x6030C` имеет тот же wire target/king/country, но selector `5` и вызов
 //! `Silence`; exact owner возвращает target ID только после всех трёх success-
 //! рассылок. Source metadata и хвост также не проверяются.
+//! `0x6030B` декодирует тот же target/king/country wire, вызывает selector `3`
+//! и `Absolve`; donor payload/ownership gates в exact dispatcher отсутствуют.
 //! Exact `0x004A4FC9..0x004A5049` задаёт `0x60317`: два signed long,
 //! синхронный `player_declare`, затем ответ `char accepted, player, target` в
 //! исходный `m_lMapID`. Проверок socket-owner и полного tail здесь нет; они
@@ -83,7 +86,8 @@ use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::tools::put_string_to_file;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::worldserver::appworld::country::country::{
-    CountryCanExileDisposition, CountryCanSilenceDisposition, CountryExileRequestDisposition,
+    CountryAbsolveReport, CountryCanAbsolveDisposition, CountryCanExileDisposition,
+    CountryCanSilenceDisposition, CountryExileRequestDisposition,
     CountryExileResultContext, CountryExileTimeLookup, CountryQuestSwitchUpdate,
     CountryScalarUpdate, CountrySilenceReport, CountrySuccessExiledReport,
 };
@@ -265,6 +269,30 @@ pub(crate) struct WorldCountrySilenceRequestSync {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldCountryAbsolveRequestDisposition {
+    CountryMissing,
+    KingRejected,
+    OperationRejected(CountryCanAbsolveDisposition),
+    Applied {
+        operation: CountryCanAbsolveDisposition,
+        report: CountryAbsolveReport,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldCountryAbsolveRequestSync {
+    pub(crate) source_map_id: i32,
+    pub(crate) source_socket_id: i32,
+    pub(crate) target_player_id: i32,
+    pub(crate) target_complete: bool,
+    pub(crate) king_player_id: i32,
+    pub(crate) king_complete: bool,
+    pub(crate) country_id: u8,
+    pub(crate) country_complete: bool,
+    pub(crate) disposition: WorldCountryAbsolveRequestDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldCountryWarDeclarationSync {
     pub(crate) player_id: i32,
     pub(crate) player_id_complete: bool,
@@ -343,6 +371,7 @@ pub(crate) enum WorldCountryMessageOutcome {
     ExileRequested(WorldCountryExileRequestSync),
     ExileResultSynchronized(WorldCountryExileResultSync),
     SilenceRequested(WorldCountrySilenceRequestSync),
+    AbsolveRequested(WorldCountryAbsolveRequestSync),
     CountryWarDeclared(WorldCountryWarDeclarationSync),
     CountryWarVictory(WorldCountryWarVictorySync),
     FourNationWarResult(WorldFourNationWarResultSync),
@@ -762,6 +791,54 @@ pub(crate) fn dispatch_country_silence_request_message<
         }
     };
     Some(WorldCountrySilenceRequestSync {
+        source_map_id,
+        source_socket_id,
+        target_player_id,
+        target_complete: decoded_target.is_some(),
+        king_player_id,
+        king_complete: decoded_king.is_some(),
+        country_id,
+        country_complete: decoded_country.is_some(),
+        disposition,
+    })
+}
+
+pub(crate) fn dispatch_country_absolve_request_message<
+    Context: CountryExileResultContext + ?Sized,
+>(
+    message: &mut CMessage,
+    country_handler: &mut CCountryHandler,
+    country_parameters: &CCountryParam,
+    context: &mut Context,
+) -> Option<WorldCountryAbsolveRequestSync> {
+    if message.message_type() != 0x6030b {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_target = message.base_mut().get_long();
+    let target_player_id = decoded_target.unwrap_or(0);
+    let decoded_king = message.base_mut().get_long();
+    let king_player_id = decoded_king.unwrap_or(0);
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+
+    let disposition = match country_handler.get_country_mut(country_id) {
+        None => WorldCountryAbsolveRequestDisposition::CountryMissing,
+        Some(country) if !country.authorize_king(king_player_id, context) => {
+            WorldCountryAbsolveRequestDisposition::KingRejected
+        }
+        Some(country) => {
+            let operation = country.can_absolve(country_parameters, context);
+            if !matches!(operation, CountryCanAbsolveDisposition::Allowed) {
+                WorldCountryAbsolveRequestDisposition::OperationRejected(operation)
+            } else {
+                let report = country.absolve(target_player_id, country_parameters, context);
+                WorldCountryAbsolveRequestDisposition::Applied { operation, report }
+            }
+        }
+    };
+    Some(WorldCountryAbsolveRequestSync {
         source_map_id,
         source_socket_id,
         target_player_id,
