@@ -13,6 +13,7 @@
 //! `OnPlayerEnterGame/OnPlayerExitGame` RVA `0x00037B70/0x00037BD0` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`; `GenerateSaveData` RVA `0x00034A10` —
 //! `IMPLEMENTED`, `GetpFactionById` RVA `0x00034080` и
+//! `GetConfederationOrganizing` RVA `0x00036BF0`,
 //! `ReInitialFacFactionByLvl` RVA `0x00034C80` — `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -40,6 +41,13 @@
 //! переносит его в save-копию. `BTreeMap::get`, `Option` и borrow заменяют
 //! только MSVC iterator и nullable pointer; raw owner-блок после реализации
 //! удалён.
+//! `GetConfederationOrganizing` принимает только положительный signed ID,
+//! ищет его в `m_ConfedeOrganizings` и возвращает сохранённый pointer либо
+//! null при miss/null value. Exact ASM `0x00436BF0..0x00436C37` исправляет
+//! повреждённое raw-имя key; Rust `confederation_by_id` сохраняет контракт.
+//! Через read-only `FactionOperationAuthorityContext` этот lookup и уже
+//! материализованный `IsFreeFaction` обслуживают faction tax/city-gate owner-ы;
+//! null во время membership scan остаётся typed-границей старого UB.
 //!
 //! `IsFreePlayer` проходит `m_FacOrg` в порядке исходного ordered map и для
 //! каждого `COrganizing*` вызывает virtual slot `+0xDC`. Точный PDB
@@ -192,9 +200,9 @@ use super::faction::{
     CFaction, FactionCloneSaveBlock, FactionDeleteOrganizingBuildError,
     FactionDeleteOrganizingOutcome, FactionDisbandBlock, FactionDisbandContext,
     FactionDisbandOutcome, FactionDisbandProgress, FactionDisbandRejection,
-    FactionInitialPropertyBlock, FactionMemberInfoRequest, FactionOrganizingInfoContext,
-    FactionOtherInfoBuildError, FactionOtherInfoDelivery, FactionPropertyDelivery,
-    FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome,
+    FactionInitialPropertyBlock, FactionMemberInfoRequest, FactionOperationAuthorityContext,
+    FactionOrganizingInfoContext, FactionOtherInfoBuildError, FactionOtherInfoDelivery,
+    FactionPropertyDelivery, FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome,
     FactionSuperiorOrganizingBlock, MemberEnterOutcome, MemberExitOutcome,
 };
 use super::organizing::EOperator;
@@ -250,6 +258,12 @@ pub(crate) enum FreeFactionLookup {
     NoUnion,
     Union(i32),
     BlockedNullConfederation { map_key: i32 },
+}
+
+/// Safe-граница исходного null-dereference внутри `IsFreeFaction` scan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FactionUnionMembershipLookupBlock {
+    pub(crate) map_key: i32,
 }
 
 /// Результат одного вызова `CFaction::RemoveApplyMember` в map-order.
@@ -617,6 +631,16 @@ impl COrganizingCtrl {
     /// `nullptr`; caller сам сохраняет последующую pointer-семантику.
     pub(crate) fn faction_by_id(&self, faction_id: i32) -> Option<&CFaction> {
         self.factions.get(&faction_id).and_then(Option::as_deref)
+    }
+
+    /// Повторяет nullable `GetConfederationOrganizing` для положительного ID.
+    pub(crate) fn confederation_by_id(&self, union_id: i32) -> Option<&CUnion> {
+        if union_id < 1 {
+            return None;
+        }
+        self.confederations
+            .get(&union_id)
+            .and_then(Option::as_deref)
     }
 
     /// Публикует одно other-faction изменение всем concrete faction-owner-ам.
@@ -1132,6 +1156,24 @@ impl COrganizingCtrl {
             skipped_expired,
             deliveries,
         }
+    }
+}
+
+impl FactionOperationAuthorityContext for COrganizingCtrl {
+    type Block = FactionUnionMembershipLookupBlock;
+
+    fn union_id_for_faction(&self, faction_id: i32) -> Result<i32, Self::Block> {
+        match self.is_free_faction(faction_id) {
+            FreeFactionLookup::NoUnion => Ok(0),
+            FreeFactionLookup::Union(union_id) => Ok(union_id),
+            FreeFactionLookup::BlockedNullConfederation { map_key } => {
+                Err(FactionUnionMembershipLookupBlock { map_key })
+            }
+        }
+    }
+
+    fn union_master_faction_id(&self, union_id: i32) -> Option<i32> {
+        self.confederation_by_id(union_id).map(CUnion::master_id)
     }
 }
 
@@ -1736,7 +1778,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::GetConfederationOrganizing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.h:132

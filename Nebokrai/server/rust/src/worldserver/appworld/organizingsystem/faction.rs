@@ -536,6 +536,15 @@
 //! неинициализированного stack-value; corrupted invariant теперь даёт typed
 //! block без UB. Fixed title/name/format overflows также остаются локальными
 //! typed-границами, country/war/log plumbing — узким контекстом.
+//! `OperatorTax` и `OperatorCityGate` одинаково требуют owned region и
+//! `CheckOperValidate(player, PV_ObtainTax/PV_OperCityGate)`, но намеренно
+//! получают union authority разными путями: tax через controller-wide
+//! `IsFreeFaction(GetID())`, gate через собственный
+//! `m_Property.lConfederationID`. Для найденного non-null union только master
+//! faction проходит дальше; отсутствующий/null union не блокирует. Exact ASM
+//! `0x004C0880..0x004C0925/0x004C0930..0x004C0991` подтверждает аргументы
+//! `playerID, regionID`, порядок и отсутствие side effects. Null pointer в
+//! `IsFreeFaction` scan и partial property остаются typed-границами.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -1491,6 +1500,33 @@ pub(crate) enum FactionDemiseBlock {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionOperationRejection {
+    UnionMasterMismatch {
+        union_id: i32,
+        master_faction_id: i32,
+    },
+    RegionNotOwned {
+        region_id: i32,
+    },
+    PlayerNotPermitted {
+        player_id: i32,
+        purview: EPurview,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionOperationOutcome {
+    Rejected(FactionOperationRejection),
+    Authorized,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionOperationBlock<ContextBlock> {
+    MissingBaseProperty,
+    UnionMembershipLookup(ContextBlock),
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FactionLeaveWordUpdateBuildError {
     MissingLastLeaveWord,
@@ -1944,6 +1980,17 @@ pub(crate) trait FactionDemiseContext: FactionOrganizingInfoContext {
         faction_id: i32,
         faction_name: &[u8],
     );
+}
+
+/// Read-only union authority, отдельно сохраняющий два исходных lookup-пути.
+pub(crate) trait FactionOperationAuthorityContext {
+    type Block;
+
+    /// Повторяет controller-wide `IsFreeFaction` и возвращает signed union ID.
+    fn union_id_for_faction(&self, faction_id: i32) -> Result<i32, Self::Block>;
+
+    /// Повторяет nullable `GetConfederationOrganizing(...)->GetMasterID()`.
+    fn union_master_faction_id(&self, union_id: i32) -> Option<i32>;
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -5804,6 +5851,79 @@ impl CFaction {
         Ok(FactionDemiseOutcome::Transferred(progress))
     }
 
+    /// Проверяет authority на сбор налога в принадлежащем faction городе.
+    pub(crate) fn operator_tax<Context>(
+        &self,
+        player_id: i32,
+        region_id: i32,
+        context: &Context,
+    ) -> Result<FactionOperationOutcome, FactionOperationBlock<Context::Block>>
+    where
+        Context: FactionOperationAuthorityContext,
+    {
+        let union_id = context
+            .union_id_for_faction(self.faction_id)
+            .map_err(FactionOperationBlock::UnionMembershipLookup)?;
+        if union_id > 0
+            && let Some(master_faction_id) = context.union_master_faction_id(union_id)
+            && master_faction_id != self.faction_id
+        {
+            return Ok(FactionOperationOutcome::Rejected(
+                FactionOperationRejection::UnionMasterMismatch {
+                    union_id,
+                    master_faction_id,
+                },
+            ));
+        }
+        self.authorize_owned_city_operation(player_id, region_id, EPurview::ObtainTax)
+    }
+
+    /// Проверяет authority на управление воротами принадлежащего faction города.
+    pub(crate) fn operator_city_gate<Context>(
+        &self,
+        player_id: i32,
+        region_id: i32,
+        context: &Context,
+    ) -> Result<FactionOperationOutcome, FactionOperationBlock<Context::Block>>
+    where
+        Context: FactionOperationAuthorityContext,
+    {
+        let union_id = self
+            .superior_organizing()
+            .ok_or(FactionOperationBlock::MissingBaseProperty)?;
+        if union_id > 0
+            && let Some(master_faction_id) = context.union_master_faction_id(union_id)
+            && master_faction_id != self.faction_id
+        {
+            return Ok(FactionOperationOutcome::Rejected(
+                FactionOperationRejection::UnionMasterMismatch {
+                    union_id,
+                    master_faction_id,
+                },
+            ));
+        }
+        self.authorize_owned_city_operation(player_id, region_id, EPurview::OperCityGate)
+    }
+
+    fn authorize_owned_city_operation<ContextBlock>(
+        &self,
+        player_id: i32,
+        region_id: i32,
+        purview: EPurview,
+    ) -> Result<FactionOperationOutcome, FactionOperationBlock<ContextBlock>> {
+        if self.is_owned_city(region_id) == 0 {
+            return Ok(FactionOperationOutcome::Rejected(
+                FactionOperationRejection::RegionNotOwned { region_id },
+            ));
+        }
+        if !self.check_operator_validate(player_id, purview as i32) {
+            return Ok(FactionOperationOutcome::Rejected(
+                FactionOperationRejection::PlayerNotPermitted { player_id, purview },
+            ));
+        }
+        Ok(FactionOperationOutcome::Authorized)
+    }
+
     /// Передаёт organizing-info каждому member без online-фильтра этого owner-а.
     pub(crate) fn send_info_to_all_members<'a, F>(
         &self,
@@ -8709,7 +8829,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::OperatorTax
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2253
@@ -8723,7 +8843,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::OperatorCityGate
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2268
