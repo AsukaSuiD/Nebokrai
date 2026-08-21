@@ -904,10 +904,11 @@ use crate::dbaccess::worlddb::rsgodsbattle::{
     GodsBattleFactionXydSnapshot, GodsBattleNpcFactionSnapshot, RsGodsBattleOwner,
 };
 use crate::dbaccess::worlddb::rsjjcsys::RsJjcSysOwner;
-use crate::dbaccess::worlddb::rsplayer::RsPlayerOwner;
+use crate::dbaccess::worlddb::rsplayer::{HonorRanksLoadOutcome, RsPlayerOwner};
 use crate::dbaccess::worlddb::rsregion::{RegionSaveSnapshot, RsRegionOwner};
 use crate::dbaccess::worlddb::rssetup::{
     LoadedSetupIds, RsSetupOwner, WorldDatabaseSettings, WorldDatabaseSettingsParts,
+    WorldTdsClient,
 };
 use crate::dbaccess::worlddb::rsunion::RsUnionOwner;
 use crate::nets::clients::ClientConnectError;
@@ -1266,6 +1267,7 @@ pub(crate) enum WorldGameInitEvent {
         started_at_ms: u32,
         finished_at_ms: u32,
         elapsed_ms: u32,
+        outcome: HonorRanksLoadOutcome,
     },
     Log {
         payload: Vec<u8>,
@@ -1320,6 +1322,7 @@ pub(crate) type WorldGameInitResult<ContextBlock> =
 /// Прямые ещё сырые owners, достигнутые полным `CGame::Init`.
 pub(crate) trait WorldGameInitContext: WorldReloadContext {
     type Block;
+    type PlayerDatabase: RsPlayerOwner;
 
     fn install_crash_reporter(&mut self);
     fn current_time_seconds(&mut self) -> i64;
@@ -1354,8 +1357,10 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn initialize_region_owner_relation(&mut self, region_id: i32, region: &mut CWorldRegion);
 
     fn use_appellation_function(&mut self) -> bool;
-    fn honor_ranks_available(&mut self) -> bool;
-    fn load_honor_ranks(&mut self);
+    /// Возвращает достигнутый player DB-owner и его текущий caller-connection.
+    fn honor_ranks_database(
+        &mut self,
+    ) -> (&mut Self::PlayerDatabase, Option<&mut WorldTdsClient>);
     fn world_string_by_id(&mut self, string_id: &[u8]) -> Vec<u8>;
 
     /// Для write-worker сохраняет единственный handle, для load-worker
@@ -6549,6 +6554,7 @@ impl CGame {
         &mut self,
         runtime_directory: &Path,
         context: &mut Context,
+        honor_ranks: &mut CHonorRanks,
         log: &mut WorldLogTextOwner,
         callbacks: &mut WorldGameInitCallbacks<'_>,
     ) -> WorldGameInitResult<Context::Block> {
@@ -6906,24 +6912,28 @@ impl CGame {
 
         if context.use_appellation_function() {
             let _unused_system_time = (callbacks.get_log_local_time)();
-            if context.honor_ranks_available() {
-                let started_at_ms = (callbacks.get_tick)();
-                self.record_game_init_log(&mut events, log, callbacks, b"Start total HonorRankks!");
-                context.load_honor_ranks();
-                let finished_at_ms = (callbacks.get_tick)();
-                let elapsed_ms = finished_at_ms.wrapping_sub(started_at_ms);
-                let complete = format!(
-                    "Total today HonorRankks complete,consume time {} millisecond!",
-                    elapsed_ms as i32,
-                )
-                .into_bytes();
-                self.record_game_init_log(&mut events, log, callbacks, &complete);
-                events.push(WorldGameInitEvent::HonorRanksLoaded {
-                    started_at_ms,
-                    finished_at_ms,
-                    elapsed_ms,
-                });
-            }
+            let started_at_ms = (callbacks.get_tick)();
+            self.record_game_init_log(&mut events, log, callbacks, b"Start total HonorRankks!");
+            let outcome = {
+                let (database, active_transaction) = context.honor_ranks_database();
+                honor_ranks
+                    .load_honor_ranks(database, active_transaction)
+                    .await
+            };
+            let finished_at_ms = (callbacks.get_tick)();
+            let elapsed_ms = finished_at_ms.wrapping_sub(started_at_ms);
+            let complete = format!(
+                "Total today HonorRankks complete,consume time {} millisecond!",
+                elapsed_ms as i32,
+            )
+            .into_bytes();
+            self.record_game_init_log(&mut events, log, callbacks, &complete);
+            events.push(WorldGameInitEvent::HonorRanksLoaded {
+                started_at_ms,
+                finished_at_ms,
+                elapsed_ms,
+                outcome,
+            });
         }
 
         let owner = WorldGameInitBooleanOwner::InitializeCountryHandler;

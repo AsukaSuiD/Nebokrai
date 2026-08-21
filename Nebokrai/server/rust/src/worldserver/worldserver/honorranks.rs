@@ -1,7 +1,8 @@
 //! Владелец таблиц почётных рангов исторического `WorldServer`.
 //!
 //! Статус `CHonorRanks::GenerateSaveData` RVA `0x0001B090` —
-//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`; `AddToByteArray` RVA `0x0001A6F0`,
+//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`; `LoadHonorRanks` RVA `0x0001A5A0`,
+//! `AddToByteArray` RVA `0x0001A6F0`,
 //! accessors/clear RVA `0x0001A540..0x0001A890`, `UpdateRanksOnWorldServer`
 //! RVA `0x0001A4C0`, `UpdateRanksOnGameServer` RVA `0x0001ABD0`,
 //! `CopyHonorRanks` RVA `0x0001AE20` и `OnNewDay` RVA `0x0001B280` —
@@ -84,8 +85,9 @@ use chrono::{Datelike, Local, Timelike};
 
 use crate::dbaccess::worlddb::rsplayer::{
     HonorRankDbEntry, HonorRankDbLists, HonorRanksCopyTimeSnapshot, HonorRanksDbDataSnapshot,
-    HonorRanksType,
+    HonorRanksLoadOutcome, HonorRanksLoadSink, HonorRanksSavePeriod, HonorRanksType, RsPlayerOwner,
 };
+use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::appworld::player::CPlayer;
 use crate::worldserver::worldserver::game::{CGame, WorldLocalMessageQueueBlock};
@@ -181,6 +183,17 @@ impl CHonorRanks {
     /// Возвращает exact process-static `m_nSortDate`.
     pub(crate) const fn sort_day(&self) -> u32 {
         self.sort_day
+    }
+
+    /// Делегирует exact DB-проход `CRsPlayer`, сохраняя последовательную публикацию.
+    pub(crate) async fn load_honor_ranks<R: RsPlayerOwner>(
+        &mut self,
+        database: &mut R,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> HonorRanksLoadOutcome {
+        database
+            .load_honor_ranks(self, active_transaction)
+            .await
     }
 
     /// Заменяет все 32 DB-list полными ordered-копиями и затем снимает время.
@@ -616,6 +629,27 @@ impl fmt::Display for HonorRankPushBlock {
 }
 
 impl Error for HonorRankPushBlock {}
+
+impl HonorRanksLoadSink for CHonorRanks {
+    fn clear_honor_ranks_period(&mut self, period: HonorRanksSavePeriod) {
+        match period {
+            HonorRanksSavePeriod::History => self.clear_history_honor_ranks(),
+            HonorRanksSavePeriod::Current => self.clear_current_honor_ranks(),
+        }
+    }
+
+    fn replace_honor_ranks_type(
+        &mut self,
+        period: HonorRanksSavePeriod,
+        rank_type: HonorRanksType,
+        lists: [Vec<HonorRankDbEntry>; 4],
+    ) {
+        match period {
+            HonorRanksSavePeriod::History => self.history[rank_type as usize] = lists,
+            HonorRanksSavePeriod::Current => self.current[rank_type as usize] = lists,
+        }
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
@@ -1253,7 +1287,7 @@ impl Error for HonorRankPushBlock {}
 
 // ============================================================================
 // FUNCTION: CHonorRanks::LoadHonorRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp:72
@@ -1261,6 +1295,7 @@ impl Error for HonorRankPushBlock {}
 // ADDRESS: 0041a5a0
 // PROTOTYPE: bool __cdecl LoadHonorRanks(void)
 //
+// Реализовано выше как тонкая делегация достигнутому `RsPlayerOwner`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

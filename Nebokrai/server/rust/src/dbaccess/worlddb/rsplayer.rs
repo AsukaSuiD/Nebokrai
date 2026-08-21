@@ -9,8 +9,9 @@
 //! `CreatePlayerAbilities` RVA `0x00106CE0`, внешний
 //! `CreatePlayer` RVA `0x0010ED40`, внешний `SavePlayer` RVA `0x0010EE70`,
 //! `RestorePlayer` RVA `0x00101260` и
-//! `DeletePlayer` RVA `0x00101A60`, а также `InsertHonorRanks` RVA
-//! `0x00101680`, `SaveHonorRanksByType` RVA `0x00105080` и внешний
+//! `DeletePlayer` RVA `0x00101A60`, а также `LoadHonorRanksByType` RVA
+//! `0x0010FB90`, внешний `LoadHonorRanks` RVA `0x001113B0`, `InsertHonorRanks`
+//! RVA `0x00101680`, `SaveHonorRanksByType` RVA `0x00105080` и внешний
 //! `SaveHonorRanks` RVA `0x00105E20` — `IMPLEMENTED`; constructor, destructor
 //! и остальные функции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -383,6 +384,27 @@
 //! до этого вызова; при DB-ошибке все четыре списка данного периода уже
 //! очищены, как в исходнике. Следующий период не начинается после обычного
 //! отказа либо локального `BLOCKED_MISSING_FACT` размера.
+//!
+//! `LoadHonorRanks` снимает local SYSTEMTIME, выбирает history-строку текущей
+//! даты и только после подтверждённого non-EOF очищает все history-list. Затем
+//! четыре поля загружаются по порядку day/week/month/total. После успешного
+//! history прохода `tagTime::AddDay(1)` выбирает current-строку следующего дня;
+//! её отсутствие возвращает `false`, сохраняя уже заменённый history и прежний
+//! current. Current очищается только после найденной второй строки. Старый
+//! Linux C++ staging/swap делал загрузку атомарной и тем самым менял этот
+//! порядок; Rust его не переносит.
+//! Исходная null-ветвь создавала ADO connection внутри функции. Tiberius-owner
+//! не владеет DB settings/runtime, поэтому внешний init-адаптер передаёт ему
+//! уже открытый connection; его отсутствие является достигнутым техническим
+//! `false`, а не поводом встраивать второй неявный connection-owner.
+//!
+//! Каждый непустой field состоит из четырёх последовательных секций
+//! `[u32 count][count * tagHorRank(0x24)]`; пустой/NULL field означает четыре
+//! пустых списка. Exact decoder не сверял `ActualSize` с count и отпускал
+//! SAFEARRAY до чтения сохранённого pointer-а. Эти внутренние lifetime/OOB
+//! дефекты заменены bounds-checked slice decoder-ом: корректные bytes и
+//! insertion order остаются прежними, malformed blob возвращает typed block.
+//! Лишний хвост после четвёртой секции намеренно игнорируется, как exact owner.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::Infallible;
@@ -415,7 +437,7 @@ const HONOR_RANK_ENTRY_SIZE: usize = 0x24;
 const HONOR_RANK_BLOB_HEADER_SIZE: usize = HONOR_RANK_CATEGORY_COUNT * size_of::<u32>();
 
 /// Полный byte-наблюдаемый layout одного исходного `tagHorRank`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub(crate) struct HonorRankDbEntry {
     pub(crate) player_id: i32,
@@ -448,6 +470,22 @@ impl HonorRankDbEntry {
         bytes[0x1c..0x20].copy_from_slice(&self.appellation_id.to_le_bytes());
         bytes[0x20..0x24].copy_from_slice(&self.eliminate_num.to_le_bytes());
         bytes
+    }
+
+    fn from_legacy_bytes(bytes: &[u8; HONOR_RANK_ENTRY_SIZE]) -> Self {
+        Self {
+            player_id: i32::from_le_bytes(bytes[0x00..0x04].try_into().expect("fixed entry")),
+            level: bytes[0x04],
+            name: bytes[0x05..0x19].try_into().expect("fixed entry"),
+            occupation_id: bytes[0x19],
+            legacy_padding: bytes[0x1a..0x1c].try_into().expect("fixed entry"),
+            appellation_id: u32::from_le_bytes(
+                bytes[0x1c..0x20].try_into().expect("fixed entry"),
+            ),
+            eliminate_num: u32::from_le_bytes(
+                bytes[0x20..0x24].try_into().expect("fixed entry"),
+            ),
+        }
     }
 }
 
@@ -506,10 +544,54 @@ impl HonorRanksDbDataSnapshot {
 }
 
 /// Исходный bool-параметр выбора массива `m_stDBData`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HonorRanksSavePeriod {
     Current,
     History,
+}
+
+/// Owner-граница последовательной публикации загруженных DB-полей.
+pub(crate) trait HonorRanksLoadSink {
+    fn clear_honor_ranks_period(&mut self, period: HonorRanksSavePeriod);
+    fn replace_honor_ranks_type(
+        &mut self,
+        period: HonorRanksSavePeriod,
+        rank_type: HonorRanksType,
+        lists: [Vec<HonorRankDbEntry>; HONOR_RANK_CATEGORY_COUNT],
+    );
+}
+
+/// Malformed-граница старого unchecked blob traversal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HonorRanksBlobDecodeBlock {
+    pub(crate) rank_type: HonorRanksType,
+    pub(crate) country: u8,
+    pub(crate) offset: usize,
+    pub(crate) required_bytes: usize,
+    pub(crate) available_bytes: usize,
+}
+
+/// Стадия, на которой внешний loader вернул исходный `false`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HonorRanksLoadFailure {
+    MissingConnection,
+    Database { period: HonorRanksSavePeriod },
+    MissingRow { period: HonorRanksSavePeriod },
+}
+
+/// Уже достигнутая malformed-граница после прежних последовательных эффектов.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HonorRanksLoadBlock {
+    pub(crate) period: HonorRanksSavePeriod,
+    pub(crate) source: HonorRanksBlobDecodeBlock,
+}
+
+/// Доказанный итог полного `CRsPlayer::LoadHonorRanks`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum HonorRanksLoadOutcome {
+    ReturnedTrue,
+    ReturnedFalse(HonorRanksLoadFailure),
+    BlockedMissingFact(HonorRanksLoadBlock),
 }
 
 /// Допустимые значения исходного `int type` и связанные DB-поля.
@@ -534,6 +616,77 @@ impl HonorRanksType {
         }
     }
 }
+
+/// Декодирует один exact DB-field без старого SAFEARRAY lifetime/OOB дефекта.
+pub(crate) fn decode_honor_ranks_blob(
+    rank_type: HonorRanksType,
+    blob: Option<&[u8]>,
+) -> Result<[Vec<HonorRankDbEntry>; HONOR_RANK_CATEGORY_COUNT], HonorRanksBlobDecodeBlock> {
+    let mut lists: [Vec<HonorRankDbEntry>; HONOR_RANK_CATEGORY_COUNT] =
+        std::array::from_fn(|_| Vec::new());
+    let Some(blob) = blob.filter(|blob| !blob.is_empty()) else {
+        return Ok(lists);
+    };
+
+    let mut cursor = 0usize;
+    for (country, list) in lists.iter_mut().enumerate() {
+        let available_bytes = blob.len().saturating_sub(cursor);
+        let Some(count_bytes) = blob.get(cursor..cursor + size_of::<u32>()) else {
+            return Err(HonorRanksBlobDecodeBlock {
+                rank_type,
+                country: country as u8,
+                offset: cursor,
+                required_bytes: size_of::<u32>(),
+                available_bytes,
+            });
+        };
+        let count = u32::from_le_bytes(count_bytes.try_into().expect("проверены четыре байта"));
+        cursor += size_of::<u32>();
+
+        let required_bytes = usize::try_from(count)
+            .ok()
+            .and_then(|count| count.checked_mul(HONOR_RANK_ENTRY_SIZE))
+            .unwrap_or(usize::MAX);
+        let available_bytes = blob.len().saturating_sub(cursor);
+        let Some(entries) = cursor
+            .checked_add(required_bytes)
+            .and_then(|end| blob.get(cursor..end))
+        else {
+            return Err(HonorRanksBlobDecodeBlock {
+                rank_type,
+                country: country as u8,
+                offset: cursor,
+                required_bytes,
+                available_bytes,
+            });
+        };
+        list.reserve_exact(count as usize);
+        for entry in entries.chunks_exact(HONOR_RANK_ENTRY_SIZE) {
+            let entry: &[u8; HONOR_RANK_ENTRY_SIZE] =
+                entry.try_into().expect("chunk имеет exact tagHorRank size");
+            list.push(HonorRankDbEntry::from_legacy_bytes(entry));
+        }
+        cursor += required_bytes;
+    }
+
+    Ok(lists)
+}
+
+impl fmt::Display for HonorRanksBlobDecodeBlock {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "honor blob {:?}, страна {}, offset {}: требуется {} байт, доступно {}",
+            self.rank_type,
+            self.country,
+            self.offset,
+            self.required_bytes,
+            self.available_bytes
+        )
+    }
+}
+
+impl Error for HonorRanksBlobDecodeBlock {}
 
 /// Typed-замена записи SAFEARRAY в одно поле updateable recordset.
 pub(crate) trait HonorRanksFieldSink {
@@ -759,6 +912,7 @@ pub(crate) enum RsPlayerOperation {
     SaveQuestData,
     Restore,
     Delete,
+    HonorRanksLoad,
     HonorRanksInsert,
     HonorRanksSave,
 }
@@ -770,6 +924,7 @@ pub(crate) enum RsPlayerSaveError {
     MissingConnection,
     MissingBaseRow,
     MissingAbilityRow,
+    MissingHonorRanksRow { period: HonorRanksSavePeriod },
     JjcSaveFailed,
 }
 
@@ -780,6 +935,10 @@ impl fmt::Display for RsPlayerSaveError {
             Self::MissingConnection => write!(formatter, "не передано соединение World player DB"),
             Self::MissingBaseRow => write!(formatter, "не найдена строка CSL_PLAYER_BASE"),
             Self::MissingAbilityRow => write!(formatter, "не найдена строка CSL_PLAYER_ABILITY"),
+            Self::MissingHonorRanksRow { period } => write!(
+                formatter,
+                "не найдена строка CSL_HonorRanks для {period:?}"
+            ),
             Self::JjcSaveFailed => {
                 write!(formatter, "отдельное сохранение JJc завершилось ошибкой")
             }
@@ -794,6 +953,7 @@ impl Error for RsPlayerSaveError {
             Self::MissingConnection
             | Self::MissingBaseRow
             | Self::MissingAbilityRow
+            | Self::MissingHonorRanksRow { .. }
             | Self::JjcSaveFailed => None,
         }
     }
@@ -892,6 +1052,13 @@ pub(crate) trait RsPlayerOwner {
         deletion_time: i32,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> PlayerDeleteOutcome;
+
+    /// Загружает history текущей даты и current следующей, сохраняя side effects.
+    async fn load_honor_ranks<S: HonorRanksLoadSink>(
+        &mut self,
+        sink: &mut S,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> HonorRanksLoadOutcome;
 
     /// Обеспечивает строки honor-ranks для дня копии и следующего дня.
     async fn insert_honor_ranks(
@@ -2040,6 +2207,92 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         }
     }
 
+    async fn load_honor_ranks<S: HonorRanksLoadSink>(
+        &mut self,
+        sink: &mut S,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> HonorRanksLoadOutcome {
+        let Some(active_transaction) = active_transaction else {
+            self.notices.push_back(RsPlayerNotice {
+                operation: RsPlayerOperation::HonorRanksLoad,
+                error: RsPlayerSaveError::MissingConnection,
+            });
+            return HonorRanksLoadOutcome::ReturnedFalse(
+                HonorRanksLoadFailure::MissingConnection,
+            );
+        };
+
+        let now = Local::now();
+        let history_date = HonorRanksCopyTimeSnapshot::from_legacy_fields([
+            u16::try_from(now.year()).expect("год SYSTEMTIME помещается в u16"),
+            u16::try_from(now.month()).expect("месяц помещается в u16"),
+            u16::try_from(now.weekday().num_days_from_sunday())
+                .expect("день недели помещается в u16"),
+            u16::try_from(now.day()).expect("день помещается в u16"),
+            u16::try_from(now.hour()).expect("час помещается в u16"),
+            u16::try_from(now.minute()).expect("минута помещается в u16"),
+            u16::try_from(now.second()).expect("секунда помещается в u16"),
+            u16::try_from(now.timestamp_subsec_millis()).expect("миллисекунды помещаются в u16"),
+        ])
+        .expect("chrono::Local возвращает календарно валидный SYSTEMTIME");
+        let current_date = history_date.next_day();
+
+        for (period, date) in [
+            (HonorRanksSavePeriod::History, history_date),
+            (HonorRanksSavePeriod::Current, current_date),
+        ] {
+            let row = match query_honor_ranks_row(active_transaction, date).await {
+                Ok(Some(row)) => row,
+                Ok(None) => {
+                    self.notices.push_back(RsPlayerNotice {
+                        operation: RsPlayerOperation::HonorRanksLoad,
+                        error: RsPlayerSaveError::MissingHonorRanksRow { period },
+                    });
+                    return HonorRanksLoadOutcome::ReturnedFalse(
+                        HonorRanksLoadFailure::MissingRow { period },
+                    );
+                }
+                Err(error) => {
+                    self.notices.push_back(RsPlayerNotice {
+                        operation: RsPlayerOperation::HonorRanksLoad,
+                        error: RsPlayerSaveError::Database(error.into()),
+                    });
+                    return HonorRanksLoadOutcome::ReturnedFalse(
+                        HonorRanksLoadFailure::Database { period },
+                    );
+                }
+            };
+
+            sink.clear_honor_ranks_period(period);
+            for rank_type in HonorRanksType::ALL {
+                let blob = match row.try_get::<&[u8], _>(rank_type.column_name()) {
+                    Ok(blob) => blob,
+                    Err(error) => {
+                        self.notices.push_back(RsPlayerNotice {
+                            operation: RsPlayerOperation::HonorRanksLoad,
+                            error: RsPlayerSaveError::Database(error.into()),
+                        });
+                        return HonorRanksLoadOutcome::ReturnedFalse(
+                            HonorRanksLoadFailure::Database { period },
+                        );
+                    }
+                };
+                let lists = match decode_honor_ranks_blob(rank_type, blob) {
+                    Ok(lists) => lists,
+                    Err(source) => {
+                        return HonorRanksLoadOutcome::BlockedMissingFact(HonorRanksLoadBlock {
+                            period,
+                            source,
+                        });
+                    }
+                };
+                sink.replace_honor_ranks_type(period, rank_type, lists);
+            }
+        }
+
+        HonorRanksLoadOutcome::ReturnedTrue
+    }
+
     async fn insert_honor_ranks(
         &mut self,
         snapshot: &HonorRanksDbDataSnapshot,
@@ -2168,6 +2421,22 @@ impl RsPlayerOwner for TiberiusRsPlayer {
     fn pop_notice(&mut self) -> Option<RsPlayerNotice> {
         self.notices.pop_front()
     }
+}
+
+async fn query_honor_ranks_row(
+    active_transaction: &mut WorldTdsClient,
+    date: HonorRanksCopyTimeSnapshot,
+) -> Result<Option<tiberius::Row>, tiberius::error::Error> {
+    let date = date.legacy_sql_date();
+    let mut select_sql = String::with_capacity(HONOR_RANKS_SELECT_PREFIX.len() + date.len() + 1);
+    select_sql.push_str(HONOR_RANKS_SELECT_PREFIX);
+    select_sql.push_str(&date);
+    select_sql.push('\'');
+    active_transaction
+        .simple_query(select_sql)
+        .await?
+        .into_row()
+        .await
 }
 
 async fn ensure_honor_ranks_row(
@@ -3118,7 +3387,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadHonorRanksByType
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2963
@@ -3126,6 +3395,7 @@ async fn execute_batch(
 // ADDRESS: 0050fb90
 // PROTOTYPE: bool __thiscall LoadHonorRanksByType(bool param_1, int param_2, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_3)
 //
+// Реализовано выше как bounds-checked decoder одного typed DB-field.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -3272,7 +3542,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadHonorRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2870
@@ -3280,6 +3550,9 @@ async fn execute_batch(
 // ADDRESS: 005113b0
 // PROTOTYPE: bool __thiscall LoadHonorRanks(_com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_1)
 //
+// Реализовано выше с exact today/tomorrow и последовательной публикацией.
+// Exact `0x005116FA` возвращает true только после второго полного прохода;
+// error/catch хвост `0x005117D0` возвращает false.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
