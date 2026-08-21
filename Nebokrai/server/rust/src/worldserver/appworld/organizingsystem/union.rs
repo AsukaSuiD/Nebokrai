@@ -2,7 +2,7 @@
 //!
 //! Статус достигнутой save-части `CUnion`, `CUnion::CloneSaveData` RVA
 //! `0x000C6380`, `SetChangeData` RVA `0x000C17D0` и `CUnion::IsMember` RVA
-//! `0x000BD840` — `IMPLEMENTED`;
+//! `0x000BD840`, а также `CUnion::DelMember` RVA `0x000C2B30` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -29,6 +29,13 @@
 //! faction-вариант: identical-code folding допустим, потому что `m_lID` и
 //! `m_Members` у обоих concrete owners имеют одинаковые offsets `+0x4/+0x28`.
 //! Exact EXE ищет входной signed ID и возвращает собственный ID либо `0`.
+//!
+//! `DelMember` не читает union receiver. Машинный проход
+//! `0x004C2B30..0x004C2B8B` подтверждает единый входной faction ID для `find`
+//! и `operator[]`, вопреки повреждённому RAW имени stack-slot. Поэтому lookup
+//! и два faction-callback-а материализованы у владельца map как
+//! `COrganizingCtrl::detach_union_member`; это технический перенос singleton-
+//! доступа, а не изменение контракта `CUnion`.
 
 use std::collections::BTreeMap;
 
@@ -813,7 +820,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::DelMember
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:536

@@ -86,6 +86,13 @@
 //! Результаты уже выполненных property-send не откатываются при safe-границе
 //! неполного Rust-owner-а.
 //!
+//! Exact `CUnion::DelMember` `0x004C2B30..0x004C2B8B` не читает union receiver:
+//! для положительного входного ID он дважды использует один stack-slot как key
+//! faction-map, затем вызывает `SetSuperiorOrganizing(0)` и
+//! `UpdatePropertyToClient`; miss/null и неположительный ID пропускаются, а
+//! возврат всегда `true`. Singleton lookup перенесён к фактическому map-owner-у
+//! `COrganizingCtrl::detach_union_member`, без изменения порядка эффектов.
+//!
 //! Оба callback-а сначала сохраняют исходный player ID, вызывают
 //! `IsFreePlayer`, а при положительном результате ищут именно этот faction ID
 //! в `m_FacOrg`. Декомпилят ошибочно подставил this вместо ключа поиска find:
@@ -156,7 +163,8 @@ use rustix::time::{ClockId, clock_gettime};
 
 use super::faction::{
     CFaction, FactionCloneSaveBlock, FactionInitialPropertyBlock,
-    FactionPropertyReinitialization, MemberEnterOutcome, MemberExitOutcome,
+    FactionPropertyDelivery, FactionPropertyReinitialization,
+    FactionSuperiorOrganizingBlock, MemberEnterOutcome, MemberExitOutcome,
 };
 use super::organizingparam::COrganizingParam;
 use super::union::CUnion;
@@ -337,6 +345,30 @@ pub(crate) struct FactionReinitializationBlock {
     pub(crate) completed: Vec<FactionReinitializationEntry>,
 }
 
+/// Нормальный результат исходного `CUnion::DelMember`, всегда возвращавшего true.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionMemberDetachOutcome {
+    NonPositiveFactionId,
+    FactionEntryMissing,
+    NullFactionPointer,
+    Detached {
+        deliveries: Vec<FactionPropertyDelivery>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UnionMemberDetachBlockSource {
+    SuperiorOrganizing(FactionSuperiorOrganizingBlock),
+    Property(FactionInitialPropertyBlock),
+}
+
+/// Safe-граница частично материализованного faction-owner-а.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UnionMemberDetachBlock {
+    pub(crate) faction_id: i32,
+    pub(crate) source: UnionMemberDetachBlockSource,
+}
+
 /// Достигнутые faction-callback и top-info части исходного singleton owner-а.
 pub(crate) struct COrganizingCtrl {
     factions: BTreeMap<i32, Option<Box<CFaction>>>,
@@ -465,6 +497,38 @@ impl COrganizingCtrl {
             completed.push(FactionReinitializationEntry { map_key, result });
         }
         Ok(completed)
+    }
+
+    /// Отвязывает faction от union в точном порядке `CUnion::DelMember`.
+    pub(crate) fn detach_union_member(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        faction_id: i32,
+    ) -> Result<UnionMemberDetachOutcome, UnionMemberDetachBlock> {
+        if faction_id <= 0 {
+            return Ok(UnionMemberDetachOutcome::NonPositiveFactionId);
+        }
+        let Some(faction) = self.factions.get_mut(&faction_id) else {
+            return Ok(UnionMemberDetachOutcome::FactionEntryMissing);
+        };
+        let Some(faction) = faction.as_deref_mut() else {
+            return Ok(UnionMemberDetachOutcome::NullFactionPointer);
+        };
+
+        faction
+            .set_superior_organizing(0, parameters)
+            .map_err(|source| UnionMemberDetachBlock {
+                faction_id,
+                source: UnionMemberDetachBlockSource::SuperiorOrganizing(source),
+            })?;
+        let deliveries = faction.update_property_to_client(game).map_err(|source| {
+            UnionMemberDetachBlock {
+                faction_id,
+                source: UnionMemberDetachBlockSource::Property(source),
+            }
+        })?;
+        Ok(UnionMemberDetachOutcome::Detached { deliveries })
     }
 
     /// Ищет первый положительный faction ID в signed map-порядке.
