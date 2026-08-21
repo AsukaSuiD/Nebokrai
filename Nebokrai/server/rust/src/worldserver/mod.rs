@@ -140,6 +140,11 @@ pub(crate) mod appworld {
         pub(crate) mod factionwarsys;
         #[allow(
             dead_code,
+            reason = "FourNationWar serializer подключён к initial-config до loader/timer lifecycle"
+        )]
+        pub(crate) mod fournationwarsys;
+        #[allow(
+            dead_code,
             reason = "общие organizing DTO и eOperator подключены перед callback-ами"
         )]
         pub(crate) mod organizing;

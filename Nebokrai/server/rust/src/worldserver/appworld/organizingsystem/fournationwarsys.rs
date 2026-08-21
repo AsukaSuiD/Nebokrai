@@ -1,6 +1,176 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Система войны четырёх стран исторического WorldServer.
+//!
+//! Статус `CFourNationWarSys::AddToByteArray` RVA `0x00094250`:
+//! `IMPLEMENTED`; loader, timers, результаты войны и Game runtime ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
+//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
+//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Исходные owner-ы PDB:
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:721`
+//! и соседний `fournationwarsys.h`.
+//!
+//! Exact World serializer и Game decoder подтверждают wire: signed setup count,
+//! insertion-order 196-byte setup records, затем signed rect count `5` и пять
+//! 16-byte `tagRECT`. Setup record — два `i32`, девять пар `u32 event_id +
+//! tagTime`, затем `i32 region_state + i32 is_every_week`; `tagTime` содержит
+//! восемь последовательных `u16`. Старый Linux C++ использован только для имён
+//! полей; размеры и порядок подтверждены поздними EXE/PDB и обоими концами
+//! wire. Rust пишет поля явно little-endian вместо копирования ABI-memory:
+//! padding/host ABI устранены, но все 196 наблюдаемых bytes сохраняются.
+//! `Vec` заменяет `std::vector`, фиксированный массив — process-global RECT[5].
+//! Невозможный signed count блокирует append до изменения destination. Точная
+//! parser/timer-семантика `FourNationWarSys.ini` остаётся отдельным проходом.
+
+use std::error::Error;
+use std::fmt;
+
+use crate::public::date::TagTime;
+
+const FOUR_NATION_SETUP_WIRE_SIZE: usize = 196;
+const FOUR_NATION_RECT_COUNT: i32 = 5;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct FourNationWarSetup {
+    pub(crate) time_index: i32,
+    pub(crate) region_id: i32,
+    pub(crate) sign_up_start_event_id: u32,
+    pub(crate) sign_up_start_time: TagTime,
+    pub(crate) sign_up_end_event_id: u32,
+    pub(crate) sign_up_end_time: TagTime,
+    pub(crate) start_event_id: u32,
+    pub(crate) start_time: TagTime,
+    pub(crate) end_event_id: u32,
+    pub(crate) end_time: TagTime,
+    pub(crate) end_info_event_id: u32,
+    pub(crate) end_info_time: TagTime,
+    pub(crate) enter_start_event_id: u32,
+    pub(crate) enter_start_time: TagTime,
+    pub(crate) enter_end_event_id: u32,
+    pub(crate) enter_end_time: TagTime,
+    pub(crate) refresh_event_id: u32,
+    pub(crate) refresh_region_time: TagTime,
+    pub(crate) clear_war_event_id: u32,
+    pub(crate) clear_war_time: TagTime,
+    pub(crate) region_state: i32,
+    pub(crate) is_every_week: i32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct FourNationRect {
+    pub(crate) left: i32,
+    pub(crate) top: i32,
+    pub(crate) right: i32,
+    pub(crate) bottom: i32,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CFourNationWarSys {
+    setups: Vec<FourNationWarSetup>,
+    rects: [FourNationRect; FOUR_NATION_RECT_COUNT as usize],
+}
+
+impl CFourNationWarSys {
+    pub(crate) fn push_setup(&mut self, setup: FourNationWarSetup) {
+        self.setups.push(setup);
+    }
+
+    pub(crate) fn setups(&self) -> &[FourNationWarSetup] {
+        &self.setups
+    }
+
+    pub(crate) fn rects(&self) -> &[FourNationRect; FOUR_NATION_RECT_COUNT as usize] {
+        &self.rects
+    }
+
+    pub(crate) fn set_rect(&mut self, country: usize, rect: FourNationRect) -> bool {
+        let Some(slot) = self.rects.get_mut(country) else {
+            return false;
+        };
+        *slot = rect;
+        true
+    }
+
+    pub(crate) fn add_to_byte_array(
+        &self,
+        destination: &mut Vec<u8>,
+    ) -> Result<(), FourNationWarSerializationBlock> {
+        let count = i32::try_from(self.setups.len()).map_err(|_| {
+            FourNationWarSerializationBlock::SetupCountOutOfRange {
+                count: self.setups.len(),
+            }
+        })?;
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&count.to_le_bytes());
+        for setup in &self.setups {
+            let record_start = payload.len();
+            write_four_nation_setup(&mut payload, setup);
+            debug_assert_eq!(payload.len() - record_start, FOUR_NATION_SETUP_WIRE_SIZE);
+        }
+        payload.extend_from_slice(&FOUR_NATION_RECT_COUNT.to_le_bytes());
+        for rect in &self.rects {
+            for value in [rect.left, rect.top, rect.right, rect.bottom] {
+                payload.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        destination.extend_from_slice(&payload);
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FourNationWarSerializationBlock {
+    SetupCountOutOfRange { count: usize },
+}
+
+impl fmt::Display for FourNationWarSerializationBlock {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SetupCountOutOfRange { count } => write!(
+                formatter,
+                "CFourNationWarSys содержит {count} setup-записей вне signed 32-битного диапазона"
+            ),
+        }
+    }
+}
+
+impl Error for FourNationWarSerializationBlock {}
+
+fn write_four_nation_setup(destination: &mut Vec<u8>, setup: &FourNationWarSetup) {
+    destination.extend_from_slice(&setup.time_index.to_le_bytes());
+    destination.extend_from_slice(&setup.region_id.to_le_bytes());
+    for (event_id, time) in [
+        (setup.sign_up_start_event_id, setup.sign_up_start_time),
+        (setup.sign_up_end_event_id, setup.sign_up_end_time),
+        (setup.start_event_id, setup.start_time),
+        (setup.end_event_id, setup.end_time),
+        (setup.end_info_event_id, setup.end_info_time),
+        (setup.enter_start_event_id, setup.enter_start_time),
+        (setup.enter_end_event_id, setup.enter_end_time),
+        (setup.refresh_event_id, setup.refresh_region_time),
+        (setup.clear_war_event_id, setup.clear_war_time),
+    ] {
+        destination.extend_from_slice(&event_id.to_le_bytes());
+        write_tag_time(destination, time);
+    }
+    destination.extend_from_slice(&setup.region_state.to_le_bytes());
+    destination.extend_from_slice(&setup.is_every_week.to_le_bytes());
+}
+
+fn write_tag_time(destination: &mut Vec<u8>, time: TagTime) {
+    for value in [
+        time.year,
+        time.month,
+        time.day_of_week,
+        time.day,
+        time.hour,
+        time.minute,
+        time.second,
+        time.milliseconds,
+    ] {
+        destination.extend_from_slice(&value.to_le_bytes());
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb

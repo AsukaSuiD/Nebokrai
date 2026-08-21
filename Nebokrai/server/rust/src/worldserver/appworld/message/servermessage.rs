@@ -120,8 +120,9 @@
 //! subtype `0x17`. `CGMList` затем передаёт два ordered name/level map-а и god
 //! passport subtype `9`. GameServer index следом передаётся subtype `0x12` как
 //! точный narrowing cast `u32 -> u8`; старшее содержимое исходного `dwIndex`
-//! отбрасывается, как в EXE. Следующая граница — `CFourNationWarSys` subtype
-//! `0x25`.
+//! отбрасывается, как в EXE. `CFourNationWarSys` следом передаёт ABI-точную
+//! setup/RECT конфигурацию subtype `0x25`. Следующая граница — повторная
+//! battle-fairy-exp конфигурация subtype `0x2C`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -223,6 +224,9 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsRegistrySerializeError, serialize_goods_registry,
 };
 use crate::worldserver::appworld::organizingsystem::factionwarsys::CFactionWarSys;
+use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
+    CFourNationWarSys, FourNationWarSerializationBlock,
+};
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
 use crate::worldserver::appworld::player::{PlayerCodecError, PlayerPropertyCoefficients};
 use crate::worldserver::appworld::script::variablelist::{
@@ -860,6 +864,18 @@ pub(crate) enum WorldGameServerIndexConfigurationCompletion {
 pub(crate) struct WorldGameServerIndexConfigurationReport {
     pub(crate) delivery: WorldInitialConfigurationDelivery,
     pub(crate) completion: WorldGameServerIndexConfigurationCompletion,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldFourNationWarConfigurationCompletion {
+    FourNationWar(FourNationWarSerializationBlock),
+    BattleFairyExpConfigurationPending { socket_id: i32 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldFourNationWarConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldFourNationWarConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -2425,6 +2441,34 @@ pub(crate) fn continue_game_server_index_configuration(
         completion: WorldGameServerIndexConfigurationCompletion::FourNationWarPending {
             socket_id,
         },
+    }
+}
+
+/// Кодирует и отправляет точный `CFourNationWarSys` subtype `0x25`.
+pub(crate) fn continue_game_server_four_nation_war_configuration(
+    game: &CGame,
+    socket_id: i32,
+    four_nation_war: &CFourNationWarSys,
+) -> WorldFourNationWarConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = four_nation_war.add_to_byte_array(&mut payload) {
+        return WorldFourNationWarConfigurationReport {
+            delivery: None,
+            completion: WorldFourNationWarConfigurationCompletion::FourNationWar(error),
+        };
+    }
+    let sender = game.current_game_server_sender();
+    WorldFourNationWarConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x25,
+            &payload,
+        )),
+        completion:
+            WorldFourNationWarConfigurationCompletion::BattleFairyExpConfigurationPending {
+                socket_id,
+            },
     }
 }
 
