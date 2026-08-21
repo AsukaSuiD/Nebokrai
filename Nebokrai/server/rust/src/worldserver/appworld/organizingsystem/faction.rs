@@ -10,7 +10,7 @@
 //! `LeaveWord/LoadLeavewords` RVA `0x000BCA40/0x000BD3F0`,
 //! `UpdateAllApplyMemberToClient/UpdateApplyMemberToClient/RemoveApplyMember`
 //! RVA `0x000B60D0/0x000BEC80/0x000B9F50`,
-//! `ApplyForJoin/DoJoin` RVA `0x000BE520/0x000BEE40`,
+//! `ApplyForJoin/DoJoin/Exit` RVA `0x000BE520/0x000BEE40/0x000BAAB0`,
 //! `SendInfoToAllMember/UpdateOtherFacInfoToClient` RVA
 //! `0x000B5890/0x000B58F0`,
 //! `Talk` RVA `0x000B5A50`,
@@ -433,6 +433,16 @@
 //! и игнорирование их bool-return. Fixed C-буферы и старые `_sprintf/strcpy`
 //! заменены bounded массивами и typed-границами; controller/war/log plumbing
 //! остаётся явным тонким контекстом.
+//! `Exit` использует те же standard/village и city-war gates. В отличие от
+//! Linux-донора, Goods War после `WS0162/WS0121` не завершает функцию: exact
+//! ASM продолжает к `PV_Exit`. После уведомления `WS0187(name)/WS0188` старым
+//! членам идут `DelMember`, delete faction-state вышедшему, player refresh,
+//! member `OP_Delete`, dirty `2`, опциональный quit-log type `3` и безусловное
+//! удаление из Goods War. Диапазон `0x004BAAB0..0x004BB131` подтверждает этот
+//! порядок и старый `true` только после полного success-prefix. Linux-донор
+//! переставлял player/member update и ошибочно возвращал `false` после Goods
+//! War. Форматирование, лог и Goods War plumbing выражены bounded данными и
+//! узким контекстом; старые `_sprintf/strcpy` не переносятся.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -471,6 +481,7 @@ const LEAVE_WORD_LIMIT: usize = 60;
 const APPLY_PERSON_NAME_CAPACITY: usize = 20;
 const FACTION_MEMBER_NAME_CAPACITY: usize = 32;
 const FACTION_MEMBER_TEXT_CAPACITY: usize = 64;
+const FACTION_EXIT_NOTICE_CAPACITY: usize = 260;
 const PRONOUNCE_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_CONTENT_CAPACITY: usize = 2048;
 const OTHER_FACTION_NAME_CAPACITY: usize = 20;
@@ -840,6 +851,55 @@ pub(crate) enum FactionDoJoinBlock<ContextBlock> {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionExitRejection {
+    StandardOrVillageWar,
+    CityWar,
+    PermissionDenied,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionExitOutcome {
+    Rejected {
+        reason: FactionExitRejection,
+        goods_war_notice_sent: bool,
+    },
+    Exited {
+        goods_war_notice_sent: bool,
+        member_information: FactionMemberInfoReport,
+        member_removal: Option<FactionDelMemberReport>,
+        delete_organizing: FactionDeleteOrganizingOutcome,
+        refreshed_player_ids: Vec<i32>,
+        member_update: Result<MemberUpdateReport, MemberUpdateBuildError>,
+        log_written: bool,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionExitBlock {
+    UnterminatedMemberName {
+        player_id: i32,
+        goods_war_notice_sent: bool,
+    },
+    NoticeWouldOverflow {
+        player_id: i32,
+        formatted_len: usize,
+        goods_war_notice_sent: bool,
+    },
+    DelMember {
+        source: FactionDelMemberBlock,
+        goods_war_notice_sent: bool,
+        member_information: FactionMemberInfoReport,
+        member_removed: bool,
+    },
+    DeleteOrganizing {
+        source: FactionDeleteOrganizingBuildError,
+        goods_war_notice_sent: bool,
+        member_information: FactionMemberInfoReport,
+        member_removal: Option<FactionDelMemberReport>,
+    },
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FactionLeaveWordUpdateBuildError {
     MissingLastLeaveWord,
@@ -1085,6 +1145,32 @@ pub(crate) trait FactionDoJoinContext: FactionOrganizingInfoContext {
         faction_name: &[u8],
         log_type: i32,
     );
+}
+
+/// Узкая граница war-system, player-owner, quit-log и Goods War для `Exit`.
+pub(crate) trait FactionExitContext: FactionOrganizingInfoContext {
+    fn already_declared_for_village_war(&self, faction_id: i32) -> bool;
+
+    fn already_declared_for_city_war(&self, faction_id: i32) -> bool;
+
+    fn goods_war_blocks_exit(&self, faction_id: i32, player_id: i32) -> bool;
+
+    fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8>;
+
+    fn update_player_faction_info(&mut self, player_id: i32);
+
+    fn faction_quit_log_enabled(&self) -> bool;
+
+    fn write_faction_quit_log(
+        &mut self,
+        faction_id: i32,
+        faction_name: &[u8],
+        player_id: i32,
+        player_name: &[u8],
+        log_type: i32,
+    );
+
+    fn delete_goods_war_member(&mut self, player_id: i32);
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -2840,6 +2926,126 @@ impl CFaction {
         }
         Ok(FactionApplyForJoinOutcome::Applied {
             deliveries,
+            log_written,
+        })
+    }
+
+    /// Выпускает участника из faction с исходным порядком внешних эффектов.
+    pub(crate) fn exit<Context>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Result<FactionExitOutcome, FactionExitBlock>
+    where
+        Context: FactionExitContext,
+    {
+        if self.has_enemy_faction() || context.already_declared_for_village_war(self.faction_id) {
+            send_apply_join_information(context, player_id, b"WS0162", b"WS0121");
+            return Ok(FactionExitOutcome::Rejected {
+                reason: FactionExitRejection::StandardOrVillageWar,
+                goods_war_notice_sent: false,
+            });
+        }
+        if self.has_city_war_enemy_faction()
+            || context.already_declared_for_city_war(self.faction_id)
+        {
+            send_apply_join_information(context, player_id, b"WS0163", b"WS0121");
+            return Ok(FactionExitOutcome::Rejected {
+                reason: FactionExitRejection::CityWar,
+                goods_war_notice_sent: false,
+            });
+        }
+
+        let goods_war_notice_sent = context.goods_war_blocks_exit(self.faction_id, player_id);
+        if goods_war_notice_sent {
+            send_apply_join_information(context, player_id, b"WS0162", b"WS0121");
+        }
+
+        if !self.is_using_purview(player_id, EPurview::Exit as i32) {
+            return Ok(FactionExitOutcome::Rejected {
+                reason: FactionExitRejection::PermissionDenied,
+                goods_war_notice_sent,
+            });
+        }
+
+        let member = self
+            .members
+            .get(&player_id)
+            .expect("PV_Exit может принадлежать только существующему member");
+        let player_name_wire = member.name_wire_bytes().map_err(|_| {
+            FactionExitBlock::UnterminatedMemberName {
+                player_id,
+                goods_war_notice_sent,
+            }
+        })?;
+        let player_name = player_name_wire[..player_name_wire.len() - 1].to_vec();
+        let notice = context.format_world_string(b"WS0187", &[&player_name]);
+        let notice = legacy_c_string_visible_bytes(&notice);
+        if notice.len() >= FACTION_EXIT_NOTICE_CAPACITY {
+            return Err(FactionExitBlock::NoticeWouldOverflow {
+                player_id,
+                formatted_len: notice.len(),
+                goods_war_notice_sent,
+            });
+        }
+        let second_text = context.world_string(b"WS0188").unwrap_or_default();
+        let member_information = self.send_info_to_all_members(
+            notice,
+            legacy_c_string_visible_bytes(&second_text),
+            -1,
+            |request| context.send_organizing_info(request),
+        );
+
+        let member_removal = match self.del_member(player_id, parameters) {
+            Ok(report) => report,
+            Err(source) => {
+                return Err(FactionExitBlock::DelMember {
+                    source,
+                    goods_war_notice_sent,
+                    member_information,
+                    member_removed: !self.members.contains_key(&player_id),
+                });
+            }
+        };
+        let delete_organizing = match self.delete_organizing_to_client(game, player_id, context) {
+            Ok(outcome) => outcome,
+            Err(source) => {
+                return Err(FactionExitBlock::DeleteOrganizing {
+                    source,
+                    goods_war_notice_sent,
+                    member_information,
+                    member_removal,
+                });
+            }
+        };
+        let refreshed_player_ids =
+            self.update_player_faction_info(game, player_id, |player_id| {
+                context.update_player_faction_info(player_id);
+            });
+        let member_update = self.update_member_info_to_client(game, player_id, EOperator::Delete);
+        self.set_change_data(2);
+
+        let log_written = context.faction_quit_log_enabled();
+        if log_written {
+            context.write_faction_quit_log(
+                self.faction_id,
+                legacy_c_string_visible_bytes(&self.name),
+                player_id,
+                &player_name,
+                3,
+            );
+        }
+        context.delete_goods_war_member(player_id);
+
+        Ok(FactionExitOutcome::Exited {
+            goods_war_notice_sent,
+            member_information,
+            member_removal,
+            delete_organizing,
+            refreshed_player_ids,
+            member_update,
             log_written,
         })
     }
@@ -5469,7 +5675,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::Exit
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1535
