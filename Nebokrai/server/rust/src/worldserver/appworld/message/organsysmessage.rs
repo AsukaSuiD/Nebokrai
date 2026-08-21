@@ -1,7 +1,8 @@
 //! Статус корпуса: `IMPLEMENTED_PARTIAL` для достигнутых organizing opcode,
 //! включая список фракций страны `0x60107`, подачу заявки `0x60108`, отмену
 //! заявки `0x60109`, решение по заявке `0x6010A`, исключение участника
-//! `0x6010B`, исключение фракции из союза `0x6010C`, заявку союза `0x60118`,
+//! `0x6010B`, исключение фракции из союза `0x6010C`, выход из фракции
+//! `0x6010D`, заявку союза `0x60118`,
 //! общий session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
@@ -63,6 +64,12 @@
 //! и при `<= 1` вызывается `DisbandConferation(manager, union ID)`, даже если
 //! `FireOut` отказал. Online/route/tail gates и wire-ответ отсутствуют; старый
 //! Linux-донор добавлял ingress-проверки, которых нет в EXE.
+//! Exact `0x004A754A..0x004A757B` для `0x6010D` читает один полный `Long` как
+//! player ID, разрешает его faction через ordered `IsFreePlayer`, один раз
+//! выполняет nullable `GetFactionOrganizing` и вызывает virtual
+//! `CFaction::Exit(player ID)` в slot `+0x20`. `char` в RAW-прототипе является
+//! артефактом: ASM передаёт исходный 32-битный ID. Online/route/tail gates и
+//! прямой wire-ответ отсутствуют; проверки Linux-донора не перенесены.
 //! Exact диапазоны
 //! `0x004A74C6..0x004A7509` и `0x004A7511..0x004A7543` исправляют повреждённый
 //! RAW. Общий branch читает
@@ -320,7 +327,8 @@ use crate::worldserver::appworld::goodswarmember::{
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
     FactionApplyForJoinEffects, FactionApplyForJoinOutcome, FactionContributorContext,
-    FactionDoJoinEffects, FactionFireOutBlock, FactionFireOutContext, FactionFireOutOutcome,
+    FactionDoJoinEffects, FactionExitBlock, FactionExitContext, FactionExitOutcome,
+    FactionFireOutBlock, FactionFireOutContext, FactionFireOutOutcome,
     current_local_member_time, goods_war_check_for_faction_id,
     FactionEnemyMutationBlock, FactionEnemyMutationContext,
     FactionEnemyWarLogArgument, FactionExperienceBlock, FactionExperienceUpdate,
@@ -397,6 +405,7 @@ const CANCEL_FACTION_APPLICATION_MESSAGE_TYPE: i32 = 0x60109;
 const FACTION_APPLICATION_DECISION_MESSAGE_TYPE: i32 = 0x6010A;
 const FACTION_FIRE_OUT_MESSAGE_TYPE: i32 = 0x6010B;
 const UNION_FIRE_OUT_MESSAGE_TYPE: i32 = 0x6010C;
+const FACTION_EXIT_MESSAGE_TYPE: i32 = 0x6010D;
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
@@ -991,6 +1000,83 @@ impl FactionDoJoinEffects for WorldFactionDoJoinEffects<'_, '_, '_, '_, '_> {
             faction_name,
             log_type,
         );
+    }
+}
+
+/// Concrete war/goods/string/player/log adapter faction `Exit` ветви.
+struct WorldFactionExitEffects<'game, 'callbacks, 'effects, 'update, 'log> {
+    game: &'game CGame,
+    village_war: &'game CVillageWarSys,
+    attack_city: &'game CAttackCitySys,
+    goods_war: &'game mut CGoodsWarMember,
+    use_log_system: bool,
+    faction_quit_log_enabled: bool,
+    callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
+    update_player: &'update mut dyn FnMut(i32),
+    write_faction_quit_log: &'log mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
+}
+
+impl FactionOrganizingInfoContext for WorldFactionExitEffects<'_, '_, '_, '_, '_> {
+    fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
+        Some((self.callbacks.world_string)(string_id))
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+impl FactionExitContext for WorldFactionExitEffects<'_, '_, '_, '_, '_> {
+    fn already_declared_for_village_war(&self, faction_id: i32) -> bool {
+        self.village_war.is_already_declared_for_war(faction_id)
+    }
+
+    fn already_declared_for_city_war(&self, faction_id: i32) -> bool {
+        self.attack_city.is_already_declared_for_war(faction_id)
+    }
+
+    fn goods_war_blocks_exit(&self, faction_id: i32, _player_id: i32) -> bool {
+        goods_war_check_for_faction_id(faction_id, |candidate| {
+            self.goods_war.contains_faction_id(candidate)
+        })
+    }
+
+    fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| UnionFormatArgument::Text(*argument))
+            .collect::<Vec<_>>();
+        (self.callbacks.format_world_string)(string_id, &arguments)
+    }
+
+    fn update_player_faction_info(&mut self, player_id: i32) {
+        (self.update_player)(player_id);
+    }
+
+    fn faction_quit_log_enabled(&self) -> bool {
+        self.use_log_system && self.faction_quit_log_enabled
+    }
+
+    fn write_faction_quit_log(
+        &mut self,
+        faction_id: i32,
+        faction_name: &[u8],
+        player_id: i32,
+        player_name: &[u8],
+        log_type: i32,
+    ) {
+        (self.write_faction_quit_log)(
+            faction_id,
+            faction_name,
+            player_id,
+            player_name,
+            log_type,
+        );
+    }
+
+    fn delete_goods_war_member(&mut self, player_id: i32) {
+        let mut delivery = WorldFactionFireOutGoodsWarDelivery { game: self.game };
+        let _ = self.goods_war.delete_one_member(player_id, &mut delivery);
     }
 }
 
@@ -2136,6 +2222,91 @@ pub(crate) fn dispatch_union_fire_out(
         target_faction_id,
         outcome,
     }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionExitOutcome {
+    FactionNotFound { faction_id: i32 },
+    Applied {
+        faction_id: i32,
+        outcome: FactionExitOutcome,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionExitBlock {
+    Membership { map_key: i32 },
+    Exit {
+        faction_id: i32,
+        source: FactionExitBlock,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionExitDispatch {
+    pub(crate) player_id: i32,
+    pub(crate) outcome: OrganizingFactionExitOutcome,
+}
+
+/// Выполняет exact `0x6010D`: один `Long`, faction lookup и virtual
+/// `CFaction::Exit` без route/tail/wire ingress-а.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn dispatch_faction_exit(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    parameters: &COrganizingParam,
+    village_war: &CVillageWarSys,
+    attack_city: &CAttackCitySys,
+    goods_war: &mut CGoodsWarMember,
+    use_log_system: bool,
+    faction_quit_log_enabled: bool,
+    write_faction_quit_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    update_player: &mut dyn FnMut(i32),
+) -> Option<Result<OrganizingFactionExitDispatch, OrganizingFactionExitBlock>> {
+    if message.message_type() != FACTION_EXIT_MESSAGE_TYPE {
+        return None;
+    }
+
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let faction_id = match organizing.is_free_player(player_id) {
+        FreePlayerLookup::NoFaction => 0,
+        FreePlayerLookup::Faction(faction_id) => faction_id,
+        FreePlayerLookup::BlockedNullFaction { map_key } => {
+            return Some(Err(OrganizingFactionExitBlock::Membership { map_key }));
+        }
+    };
+    let Some(faction) = organizing.faction_by_id_mut(faction_id) else {
+        return Some(Ok(OrganizingFactionExitDispatch {
+            player_id,
+            outcome: OrganizingFactionExitOutcome::FactionNotFound { faction_id },
+        }));
+    };
+    let mut effects = WorldFactionExitEffects {
+        game,
+        village_war,
+        attack_city,
+        goods_war,
+        use_log_system,
+        faction_quit_log_enabled,
+        callbacks,
+        update_player,
+        write_faction_quit_log,
+    };
+    let outcome = match faction.exit(game, parameters, player_id, &mut effects) {
+        Ok(outcome) => OrganizingFactionExitOutcome::Applied {
+            faction_id,
+            outcome,
+        },
+        Err(source) => {
+            return Some(Err(OrganizingFactionExitBlock::Exit {
+                faction_id,
+                source,
+            }));
+        }
+    };
+    Some(Ok(OrganizingFactionExitDispatch { player_id, outcome }))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
