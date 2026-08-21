@@ -257,6 +257,14 @@ impl COrganizingParam {
         self.create_faction_player_level
     }
 
+    pub(crate) fn create_faction_goods(&self) -> &[u8] {
+        &self.create_faction_goods
+    }
+
+    pub(crate) const fn create_faction_money(&self) -> i32 {
+        self.create_faction_money
+    }
+
     pub(crate) const fn latest_tax_event_id(&self) -> Option<TimerId> {
         self.latest_tax_event_id
     }

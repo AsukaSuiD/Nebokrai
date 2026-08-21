@@ -926,6 +926,7 @@ pub(crate) struct RsPlayerNotice {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum RsPlayerOperation {
+    IsNameExist,
     GetPlayerId,
     GetCdKey,
     StatRanks,
@@ -1067,6 +1068,13 @@ fn read_ado_integer(
 
 /// Узкая объектная граница достигнутой стадии исходного `CRsPlayer`.
 pub(crate) trait RsPlayerOwner {
+    /// Проверяет case-insensitive player-name через parameterized TDS query.
+    async fn is_name_exist(
+        &mut self,
+        player_name: &[u8],
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> bool;
+
     /// Возвращает account по имени либо исходную пустую строку при любом отказе.
     async fn get_cd_key(
         &mut self,
@@ -1949,6 +1957,49 @@ pub(crate) fn save_thing_field<S: PlayerAbilityFieldSink>(
 }
 
 impl RsPlayerOwner for TiberiusRsPlayer {
+    async fn is_name_exist(
+        &mut self,
+        player_name: &[u8],
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> bool {
+        let player_name = visible_c_string(player_name);
+        if player_name.contains(&b'\'') {
+            return false;
+        }
+        let Some(active_transaction) = active_transaction else {
+            self.notices.push_back(RsPlayerNotice {
+                operation: RsPlayerOperation::IsNameExist,
+                error: RsPlayerSaveError::MissingConnection,
+            });
+            return false;
+        };
+
+        let (player_name, _, _) = WINDOWS_1251.decode(player_name);
+        let mut query = Query::new(
+            "SELECT TOP (1) 1 AS Present FROM CSL_PLAYER_BASE WHERE LOWER(Name)=LOWER(@P1)",
+        );
+        query.bind(player_name.into_owned());
+        match query.query(active_transaction).await {
+            Ok(stream) => match stream.into_row().await {
+                Ok(row) => row.is_some(),
+                Err(error) => {
+                    self.notices.push_back(RsPlayerNotice {
+                        operation: RsPlayerOperation::IsNameExist,
+                        error: RsPlayerSaveError::Database(error.into()),
+                    });
+                    false
+                }
+            },
+            Err(error) => {
+                self.notices.push_back(RsPlayerNotice {
+                    operation: RsPlayerOperation::IsNameExist,
+                    error: RsPlayerSaveError::Database(error.into()),
+                });
+                false
+            }
+        }
+    }
+
     async fn get_cd_key(
         &mut self,
         player_name: &[u8],
@@ -3238,7 +3289,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::IsNameExist
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:641
@@ -3246,6 +3297,9 @@ async fn execute_batch(
 // ADDRESS: 00501b70
 // PROTOTYPE: bool __thiscall IsNameExist(char * param_1)
 //
+// IMPLEMENTED_OWNER: `RsPlayerOwner::is_name_exist` использует parameterized
+// TDS query, сохраняя case-insensitive lookup и false при quote/DB failure без
+// исходных SQL injection, stack buffers и COM plumbing.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

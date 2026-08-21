@@ -1975,8 +1975,6 @@ pub(crate) fn begin_confederation_creation_session(
 /// Внешние name-index, localization и structured-log границы CreateFaction.
 pub(crate) trait FactionCreationEffects {
     fn check_invalid_organizing_string(&mut self, name: &mut Vec<u8>, strict: bool) -> bool;
-    fn db_creation_name_exists(&mut self, name: &[u8]) -> bool;
-    fn db_data_name_exists(&mut self, name: &[u8]) -> bool;
     fn persistent_player_name_exists(&mut self, name: &[u8]) -> bool;
     fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8>;
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>);
@@ -2016,6 +2014,8 @@ pub(crate) enum FactionCreationBlock {
     PlayerMembership { map_key: i32 },
     CreationPlayerName(WorldPlayerNameLookupError),
     MapPlayerName(WorldPlayerNameLookupError),
+    DbCreationPlayerName(WorldPlayerNameLookupError),
+    DbDataPlayerName(WorldPlayerNameLookupError),
     OrganizingName(OrganizingNameLookupBlock),
     ApplicationRemoval {
         map_key: i32,
@@ -5536,8 +5536,12 @@ impl COrganizingCtrl {
             || game
                 .is_name_exist_in_map_player(name)
                 .map_err(FactionCreationBlock::MapPlayerName)?
-            || effects.db_creation_name_exists(name)
-            || effects.db_data_name_exists(name)
+            || game
+                .is_name_exist_in_db_creation(name)
+                .map_err(FactionCreationBlock::DbCreationPlayerName)?
+            || game
+                .is_name_exist_in_db_data(name)
+                .map_err(FactionCreationBlock::DbDataPlayerName)?
             || effects.persistent_player_name_exists(name)
             || self
                 .organizing_by_name(name)

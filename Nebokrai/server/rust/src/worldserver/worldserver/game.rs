@@ -12111,6 +12111,52 @@ impl CGame {
         Ok(None)
     }
 
+    /// Ищет имя в frozen DB-creation list под Rust mutex вместо Win32 CS.
+    pub(crate) fn is_name_exist_in_db_creation(
+        &self,
+        name: &[u8],
+    ) -> Result<bool, WorldPlayerNameLookupError> {
+        let requested_name = copy_name_for_legacy_lowercase(name).map_err(|length| {
+            WorldPlayerNameLookupError::RequestedNameTooLongForLegacyBuffer { length }
+        })?;
+        let db_data = self.db_data.lock();
+        for player in &db_data.creation_players {
+            let player_name = copy_name_for_legacy_lowercase(player.get_name()).map_err(
+                |length| WorldPlayerNameLookupError::PlayerNameTooLongForLegacyBuffer {
+                    player_id: player.get_id() as u32,
+                    length,
+                },
+            )?;
+            if player_name == requested_name {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Ищет имя в frozen DB-player map в исходном unsigned key-order.
+    pub(crate) fn is_name_exist_in_db_data(
+        &self,
+        name: &[u8],
+    ) -> Result<bool, WorldPlayerNameLookupError> {
+        let requested_name = copy_name_for_legacy_lowercase(name).map_err(|length| {
+            WorldPlayerNameLookupError::RequestedNameTooLongForLegacyBuffer { length }
+        })?;
+        let db_data = self.db_data.lock();
+        for (&player_id, player) in &db_data.players {
+            let player_name = copy_name_for_legacy_lowercase(player.get_name()).map_err(
+                |length| WorldPlayerNameLookupError::PlayerNameTooLongForLegacyBuffer {
+                    player_id,
+                    length,
+                },
+            )?;
+            if player_name == requested_name {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Полностью очищает creation-list, не меняя владеющий player-map.
     pub(crate) fn clear_creation_player(&mut self) {
         self.creation_players.clear();
@@ -17318,7 +17364,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::IsNameExistInDBCreation
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4101
@@ -17326,13 +17372,15 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 00405790
 // PROTOTYPE: bool __thiscall IsNameExistInDBCreation(char * param_1)
 //
+// IMPLEMENTED_OWNER: `CGame::is_name_exist_in_db_creation` выше сохраняет
+// list-order и legacy lowercase поверх Rust mutex.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGame::IsNameExistInDBData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4131
@@ -17340,6 +17388,8 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 004058d0
 // PROTOTYPE: bool __thiscall IsNameExistInDBData(char * param_1)
 //
+// IMPLEMENTED_OWNER: `CGame::is_name_exist_in_db_data` выше сохраняет
+// unsigned map-order и legacy lowercase поверх Rust mutex.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
