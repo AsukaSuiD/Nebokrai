@@ -23,7 +23,8 @@
 //! UpdateCityWarEnemyFactionToClient/UpdateOwnedCityToClient` RVA
 //! `0x000C5FF0/0x000C60D0/0x000C61B0` и `SendInfoToAllMember` RVA
 //! `0x000C6290`, `DeleteOrgaToClient` RVA `0x000C5D20` и
-//! `UpdateMemberInfoToClient` RVA `0x000C5840` — `IMPLEMENTED`;
+//! `UpdateMemberInfoToClient` RVA `0x000C5840`, `AddMembersToByteArray` RVA
+//! `0x000C21D0` и `AddToByteArray` RVA `0x000C6590` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -136,6 +137,15 @@
 //! как `recipient/operator/target/name/level/occupation/job/title/0x2C PV/`
 //! пустая region C-строка/тот же `0x10` time. Stored region, contribute и
 //! LastOnlineTime этот union-owner не отправляет.
+//! Оба snapshot-сериализатора машинно возвращают literal `true` и используют
+//! `Vec<u8>` только как безопасную замену MSVC vector. Полный union snapshot
+//! пишет `id/name/master id/master faction name`, затем member snapshot.
+//! Member map идёт в signed key-order; каждый record пишет `id/job/title/PV`,
+//! обновляет cached faction name/level через именно `tagMemInfo::lID`, затем
+//! пишет `level/occupation/name/contribute`, пустую region C-строку и сохранённое
+//! `LastOnlineTime`. Исходный безграничный `strcpy` в 32-байтовое member name
+//! заменён typed-остановкой только для недопустимого переполнения; временный
+//! 256-байтовый master-name buffer устранён прямой C-string сериализацией.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -372,6 +382,8 @@ pub(crate) struct UnionInfoFanoutReport {
 pub(crate) trait UnionFactionMemberContext {
     fn faction_member_player_ids(&self, faction_id: i32) -> Option<Vec<i32>>;
 
+    fn faction_name(&self, faction_id: i32) -> Option<Vec<u8>>;
+
     fn faction_level(
         &self,
         faction_id: i32,
@@ -381,6 +393,25 @@ pub(crate) trait UnionFactionMemberContext {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct UnionFactionLevelBlock {
     pub(crate) faction_id: i32,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionMemberSnapshotBlock {
+    UnterminatedMemberField {
+        member_id: i32,
+        field: UnterminatedMemberField,
+        completed_members: usize,
+    },
+    FactionNameWouldOverflow {
+        faction_id: i32,
+        visible_length: usize,
+        capacity: usize,
+        completed_members: usize,
+    },
+    MissingFactionLevel {
+        source: UnionFactionLevelBlock,
+        completed_members: usize,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -557,6 +588,97 @@ impl CUnion {
     /// Возвращает новый снимок member-ID в исходном signed map-order.
     pub(crate) fn member_ids_snapshot(&self) -> Vec<i32> {
         self.members.keys().copied().collect()
+    }
+
+    /// Дописывает ordered union-member snapshot в точном клиентском формате.
+    pub(crate) fn add_members_to_byte_array<Context>(
+        &mut self,
+        output: &mut Vec<u8>,
+        context: &Context,
+    ) -> Result<bool, UnionMemberSnapshotBlock>
+    where
+        Context: UnionFactionMemberContext,
+    {
+        output.extend_from_slice(&(self.members.len() as u32).to_le_bytes());
+        for (completed_members, member) in self.members.values_mut().enumerate() {
+            append_i32(output, member.id);
+            append_i32(output, member.job_level);
+            let title = member.title_wire_bytes().map_err(|field| {
+                UnionMemberSnapshotBlock::UnterminatedMemberField {
+                    member_id: member.id,
+                    field,
+                    completed_members,
+                }
+            })?;
+            output.extend_from_slice(title);
+            output.extend_from_slice(&member.purview_wire_bytes());
+
+            if member.id > 0 {
+                if let Some(faction_name) = context.faction_name(member.id) {
+                    let visible_name = legacy_c_string_visible_bytes(&faction_name);
+                    if visible_name.len() >= member.name.len() {
+                        return Err(UnionMemberSnapshotBlock::FactionNameWouldOverflow {
+                            faction_id: member.id,
+                            visible_length: visible_name.len(),
+                            capacity: member.name.len(),
+                            completed_members,
+                        });
+                    }
+                    member.name[..visible_name.len()].copy_from_slice(visible_name);
+                    member.name[visible_name.len()] = 0;
+                    match context.faction_level(member.id) {
+                        Ok(Some(level)) => member.level = level,
+                        Ok(None) => {}
+                        Err(source) => {
+                            return Err(UnionMemberSnapshotBlock::MissingFactionLevel {
+                                source,
+                                completed_members,
+                            });
+                        }
+                    }
+                }
+            }
+
+            append_i32(output, member.level);
+            append_i32(output, member.occupation);
+            let name = member.name_wire_bytes().map_err(|field| {
+                UnionMemberSnapshotBlock::UnterminatedMemberField {
+                    member_id: member.id,
+                    field,
+                    completed_members,
+                }
+            })?;
+            output.extend_from_slice(name);
+            output.extend_from_slice(&u32::from(member.contribute).to_le_bytes());
+            output.push(0);
+            output.extend_from_slice(&member.last_online_wire_bytes());
+        }
+        Ok(true)
+    }
+
+    /// Дописывает полный union snapshot и его member records.
+    pub(crate) fn add_to_byte_array<Context>(
+        &mut self,
+        output: &mut Vec<u8>,
+        context: &Context,
+    ) -> Result<bool, UnionMemberSnapshotBlock>
+    where
+        Context: UnionFactionMemberContext,
+    {
+        append_i32(output, self.union_id);
+        append_legacy_c_string(output, &self.name);
+        append_i32(output, self.master_id);
+        if self.master_id > 0 {
+            if let Some(master_name) = context.faction_name(self.master_id) {
+                append_legacy_c_string(output, &master_name);
+            } else {
+                output.push(0);
+            }
+        } else {
+            output.push(0);
+        }
+        self.add_members_to_byte_array(output, context)?;
+        Ok(true)
     }
 
     /// Union не хранит отдельный standard enemy-set и всегда возвращал пустой.
@@ -1392,6 +1514,22 @@ fn append_union_member_update_fields(
     Ok(())
 }
 
+fn append_i32(output: &mut Vec<u8>, value: i32) {
+    output.extend_from_slice(&value.to_le_bytes());
+}
+
+fn legacy_c_string_visible_bytes(value: &[u8]) -> &[u8] {
+    match value.iter().position(|byte| *byte == 0) {
+        Some(terminator) => &value[..terminator],
+        None => value,
+    }
+}
+
+fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
+    output.extend_from_slice(legacy_c_string_visible_bytes(value));
+    output.push(0);
+}
+
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
@@ -1852,7 +1990,7 @@ fn append_union_member_update_fields(
 
 // ============================================================================
 // FUNCTION: CUnion::AddMembersToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:154
@@ -2372,7 +2510,7 @@ fn append_union_member_update_fields(
 
 // ============================================================================
 // FUNCTION: CUnion::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:135

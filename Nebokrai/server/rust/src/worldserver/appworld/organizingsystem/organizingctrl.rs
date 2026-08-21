@@ -1471,6 +1471,11 @@ impl UnionFactionMemberContext for COrganizingCtrl {
             .map(|faction| faction.get_members().keys().copied().collect())
     }
 
+    fn faction_name(&self, faction_id: i32) -> Option<Vec<u8>> {
+        self.faction_by_id(faction_id)
+            .map(|faction| faction.name().to_vec())
+    }
+
     fn faction_level(
         &self,
         faction_id: i32,
