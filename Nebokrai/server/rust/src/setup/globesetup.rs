@@ -1,6 +1,62 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Глобальный gameplay snapshot исторического Miracle.
+//!
+//! Статус World `CGlobeSetup::AddToByteArray` RVA `0x00033470`:
+//! `IMPLEMENTED`; loaders, accessors и Game decoder side effects ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
+//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
+//! SHA-256 PDB
+//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Исходный владелец PDB:
+//! `e:\svn\fengyun_russia_dev\server\setup\globesetup.cpp:836`.
+//!
+//! Наблюдаемый протокол здесь намеренно является raw ABI snapshot: EXE сначала
+//! копирует ровно `0x1114` байт static `m_stSetup`, затем дописывает полный
+//! `CRegionRouter` wire с legacy `sendSelf=true` (параметр router serializer не
+//! читает). Game decoder забирает те же `0x1114` байт без field conversion.
+//! Поэтому fixed byte array — точная модель wire, а не перенос C++ ownership;
+//! typed loaders/accessors могут безопасно накладывать подтверждённые offsets
+//! поверх него. Static storage оригинала было zero-initialized, что Rust
+//! сохраняет через `Default` без утечки padding/heap-мусора.
+
+use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
+
+pub(crate) const GLOBE_SETUP_BLOB_LENGTH: usize = 0x1114;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GlobeSetupSnapshot {
+    bytes: [u8; GLOBE_SETUP_BLOB_LENGTH],
+}
+
+impl Default for GlobeSetupSnapshot {
+    fn default() -> Self {
+        Self {
+            bytes: [0; GLOBE_SETUP_BLOB_LENGTH],
+        }
+    }
+}
+
+impl GlobeSetupSnapshot {
+    pub(crate) fn from_bytes(bytes: [u8; GLOBE_SETUP_BLOB_LENGTH]) -> Self {
+        Self { bytes }
+    }
+
+    pub(crate) fn bytes_mut(&mut self) -> &mut [u8; GLOBE_SETUP_BLOB_LENGTH] {
+        &mut self.bytes
+    }
+
+    pub(crate) fn add_to_byte_array(
+        &self,
+        router: &RegionRouter,
+        destination: &mut Vec<u8>,
+    ) -> Result<(), RegionRouterSerializeError> {
+        destination.extend_from_slice(&self.bytes);
+        router.add_to_byte_array(destination)
+    }
+}
+
+// Сырой C++ ниже сохранён как локальная документация loaders, accessors и
+// Game decoder side effects, а не как Rust-реализация.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

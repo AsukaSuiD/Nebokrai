@@ -16,6 +16,11 @@ pub(crate) mod emotion;
     reason = "goods-destroy serializer подключён к initial-config до text loader-а"
 )]
 pub(crate) mod goodsdestructionconfig;
+#[allow(
+    dead_code,
+    reason = "globe snapshot подключён к initial-config до typed loaders/accessors"
+)]
+pub(crate) mod globesetup;
 pub(crate) mod hitlevelsetup;
 #[allow(
     dead_code,
@@ -39,6 +44,11 @@ pub(crate) mod preciousboxconf;
     reason = "PrisonConf подключён к initial-config до общего setup lifecycle"
 )]
 pub(crate) mod prisonconf;
+#[allow(
+    dead_code,
+    reason = "region-router serializer подключён через globe initial-config до loader-а"
+)]
+pub(crate) mod regionrouter;
 #[allow(
     dead_code,
     reason = "synthesis serializer подключён к initial-config до точного XML loader-а"

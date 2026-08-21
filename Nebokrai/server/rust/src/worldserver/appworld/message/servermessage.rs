@@ -159,6 +159,7 @@ use crate::setup::cbattlefairyexpconfig::{
 use crate::setup::contributesetup::{CContributeSetup, ContributeSetupSerializeError};
 use crate::setup::emotion::{CEmotion, EmotionSerializeError};
 use crate::setup::goodsdestructionconfig::{GoodsDestroySerializeError, GoodsDestroySetup};
+use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelSerializeError};
 use crate::setup::incrementshoplist::{CIncrementShopList, IncrementShopSerializeError};
 use crate::setup::monsterlist::{
@@ -170,6 +171,7 @@ use crate::setup::newskillmonsterlist::{
 use crate::setup::playerlist::{CPlayerList, PlayerListSerializeError};
 use crate::setup::preciousboxconf::{PreciousBoxConf, PreciousBoxSerializeError};
 use crate::setup::prisonconf::{PrisonConf, PrisonConfSerializeError};
+use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};
 use crate::setup::tradelist::{CTradeList, TradeListSerializeError};
 use crate::worldserver::appworld::country::country::CountryKingSaveLimits;
@@ -529,6 +531,20 @@ pub(crate) enum WorldGoodsDestroyConfigurationCompletion {
 pub(crate) struct WorldGoodsDestroyConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldGoodsDestroyConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после общего `CGlobeSetup + CRegionRouter` payload.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldGlobeSetupConfigurationCompletion {
+    RegionRouter(RegionRouterSerializeError),
+    LogSystemConfigurationPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/7` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldGlobeSetupConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldGlobeSetupConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1520,6 +1536,35 @@ pub(crate) fn continue_game_server_goods_destroy_configuration(
             &payload,
         )),
         completion: WorldGoodsDestroyConfigurationCompletion::GlobeSetupConfigurationPending {
+            socket_id,
+        },
+    }
+}
+
+/// Кодирует единый `CGlobeSetup + CRegionRouter` payload и отправляет packet.
+pub(crate) fn continue_game_server_globe_setup_configuration(
+    game: &CGame,
+    socket_id: i32,
+    globe_setup: &GlobeSetupSnapshot,
+    region_router: &RegionRouter,
+) -> WorldGlobeSetupConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = globe_setup.add_to_byte_array(region_router, &mut payload) {
+        return WorldGlobeSetupConfigurationReport {
+            delivery: None,
+            completion: WorldGlobeSetupConfigurationCompletion::RegionRouter(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldGlobeSetupConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            7,
+            &payload,
+        )),
+        completion: WorldGlobeSetupConfigurationCompletion::LogSystemConfigurationPending {
             socket_id,
         },
     }
