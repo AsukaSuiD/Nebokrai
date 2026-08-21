@@ -977,16 +977,16 @@ use crate::worldserver::appworld::message::othermessage::{
     WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
 };
 use crate::worldserver::appworld::message::organsysmessage::{
-    OrganizingLeaveWordDispatch, OrganizingLeaveWordEditDispatch,
+    OrganizingConsumedLongDispatch, OrganizingLeaveWordDispatch, OrganizingLeaveWordEditDispatch,
     OrganizingLeaveWordEnableDispatch,
     OrganizingPronounceDispatch, OrganizingSessionResultDispatch,
     OrganizingUnionApplicationDispatch,
     QueuedUnionApplicationTerminal,
     UnionApplicationConfirmationDelivery,
     WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects,
-    WorldUnionApplicationRuntimeOwner, dispatch_leave_word, dispatch_leave_word_edit,
-    dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_pronounce,
-    dispatch_union_application,
+    WorldUnionApplicationRuntimeOwner, dispatch_consumed_long, dispatch_leave_word,
+    dispatch_leave_word_edit, dispatch_leave_word_enable, dispatch_organizing_session_result,
+    dispatch_pronounce, dispatch_union_application,
 };
 use crate::worldserver::appworld::message::servermessage::{
     WorldLoginClientReplacement, WorldServerMessageDispatch, WorldServerMessageError,
@@ -1875,6 +1875,12 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: OrganizingSessionResultDispatch,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingConsumedLong {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: OrganizingConsumedLongDispatch,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingUnionApplication {
@@ -8096,9 +8102,9 @@ impl CGame {
     /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
     /// ветви server-owner-а, honor `0x5FD0C/0x5FD0D`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
-    /// `0x6011B`, её удаление `0x6011C` и объявление `0x6011D` исполняются,
-    /// остальные остаются owned pending. Terminal session actions применяются
-    /// FIFO до следующего сообщения.
+    /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D` и общий leaf
+    /// `0x60121/0x60123` исполняются; остальные остаются owned pending. Terminal
+    /// session actions применяются FIFO до следующего сообщения.
     pub(crate) fn process_message(
         &mut self,
         honor_ranks: &mut CHonorRanks,
@@ -11049,6 +11055,22 @@ fn process_world_message(
             application_runtime,
             callbacks,
         );
+        if let Some(outcome) = dispatch_consumed_long(&mut message) {
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingConsumedLong {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
         match dispatch_organizing_session_result(&mut message, net_sessions) {
             OrganizingSessionResultDispatch::NotHandled => {}
             outcome => {

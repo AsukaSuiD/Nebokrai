@@ -31,6 +31,8 @@
 //! вызывает `GetStr(..., 0x5000)`, читает player ID, разрешает faction через
 //! `IsFreePlayer`, снимает один local `tagTime` и вызывает virtual
 //! `CFaction::Pronounce` в slot `+0x34`.
+//! Exact shared leaf `0x004A796A..0x004A7971` для `0x60121/0x60123` вызывает
+//! один `GetLong` и не использует возвращённое значение.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -83,6 +85,7 @@ const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
 const EDIT_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011C;
 const PRONOUNCE_MESSAGE_TYPE: i32 = 0x6011D;
+const CONSUMED_LONG_MESSAGE_TYPES: [i32; 2] = [0x60121, 0x60123];
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -517,6 +520,27 @@ pub(crate) fn dispatch_pronounce(
                 outcome,
             }),
     )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingConsumedLongDispatch {
+    pub(crate) message_type: i32,
+    pub(crate) value: i32,
+}
+
+/// Выполняет общий leaf `0x60121/0x60123`: читает и отбрасывает один `Long`.
+pub(crate) fn dispatch_consumed_long(
+    message: &mut CMessage,
+) -> Option<OrganizingConsumedLongDispatch> {
+    let message_type = message.message_type();
+    if !CONSUMED_LONG_MESSAGE_TYPES.contains(&message_type) {
+        return None;
+    }
+    let value = message.base_mut().get_long().unwrap_or(0);
+    Some(OrganizingConsumedLongDispatch {
+        message_type,
+        value,
+    })
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
