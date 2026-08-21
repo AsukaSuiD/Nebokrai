@@ -96,6 +96,16 @@
 //! `0x004CC416/0x004CC44B` подтверждает отдельный ноль для self-target и этот
 //! необычный return. Linux-донор ошибочно возвращал target для self-target и
 //! опускал часть `0x7FE27`/вложенных side effect; Rust следует EXE/PDB.
+//! `InitialOLPlayersList/Sort/GetPlayersList` RVA
+//! `0x000CA360/0x000CA6E0/0x000CAD90` каждый раз пересобирают
+//! online-player срез: только своя страна, level `>= 10` и
+//! `m_bIsGod == false`. Exact multimap с level-key и обратным обходом
+//! даёт убывание level и обратный online-order для равных level;
+//! owned `Vec` и standard sort заменяют только MSVC STL/allocation.
+//! Page-start сохраняет wrapping формулу `(page * 3 - 3) * 4`, а
+//! `0x7FF08` несёт не более 12 записей. Exact `0x004CAFF0..0x004CB004`
+//! возвращает king ID, а не count, как Linux-донор; donor также
+//! опускал GM-фильтр.
 //! Clone копирует country ID, treasury, power,
 //! current/level-up tech exp, tech level, king identity/flags и war-result.
 //! Три king-point ограничиваются соответствующими максимумами `CCountryParam`.
@@ -254,6 +264,48 @@ pub(crate) struct CountryExileTarget {
     pub(crate) is_god: bool,
 }
 
+/// Достигнутый online-player до фильтрации `InitialOLPlayersList`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CountryOnlinePlayer {
+    pub(crate) id: i32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) country: Option<u8>,
+    pub(crate) occupation: u8,
+    pub(crate) level: u8,
+    pub(crate) is_god: bool,
+}
+
+/// Одна wire-запись exact `tagPlayerInfo` без MSVC string/pointer layout.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CountryPlayerInfo {
+    pub(crate) id: i32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) occupation: u8,
+    pub(crate) level: u8,
+    pub(crate) faction_name: Vec<u8>,
+    pub(crate) is_faction_master: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryPlayersListContextBlock {
+    PlayerFactionLookup,
+    FactionMasterLookup,
+}
+
+/// Полный наблюдаемый результат `GetPlayersList`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountryPlayersListReport {
+    pub(crate) page: i32,
+    pub(crate) start_index: u32,
+    pub(crate) total: u32,
+    pub(crate) entries: Vec<CountryPlayerInfo>,
+    pub(crate) map_id: i32,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+    pub(crate) logs: Vec<Vec<u8>>,
+    pub(crate) legacy_result: i32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CountryFactionSnapshot {
     pub(crate) faction_id: i32,
@@ -351,6 +403,28 @@ pub(crate) trait CountryExileResultContext {
         message: &CMessage,
     ) -> Vec<CountryExileMessageDelivery>;
     fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError>;
+    fn put_king_log(&mut self, text: &[u8]);
+}
+
+/// Узкая граница online/organizing/network эффектов player-list owner-а.
+pub(crate) trait CountryPlayersListContext {
+    fn online_players(&mut self) -> Vec<CountryOnlinePlayer>;
+    fn player_faction(
+        &mut self,
+        player_id: i32,
+    ) -> Result<(Vec<u8>, bool), CountryPlayersListContextBlock>;
+    fn country_name(&mut self, country_id: u8) -> Vec<u8>;
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8>;
+    fn game_server_number_by_player_id(&mut self, player_id: i32) -> i32;
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError>;
     fn put_king_log(&mut self, text: &[u8]);
 }
 
@@ -741,6 +815,130 @@ pub(crate) struct CountryAppointMinisterReport {
 }
 
 impl CCountry {
+    /// Exact `IsKing` для player-list owner-а с тем же `WS0033/WS0034`.
+    pub(crate) fn authorize_king_for_players<Context: CountryPlayersListContext + ?Sized>(
+        &self,
+        candidate: i32,
+        context: &mut Context,
+    ) -> bool {
+        if candidate != 0 && self.king.id == candidate {
+            return true;
+        }
+        let country_name = context.country_name(self.country_id);
+        let string_id = if candidate == 0 { b"WS0033" } else { b"WS0034" };
+        let text = legacy_country_text(context.format_world_string(
+            string_id,
+            &[CountryExileTextArgument::Text(&country_name)],
+        ));
+        context.put_king_log(&text);
+        false
+    }
+
+    /// Exact `InitialOLPlayersList -> Sort -> GetPlayersList` без MSVC owner-указателей.
+    pub(crate) fn get_players_list<Context: CountryPlayersListContext + ?Sized>(
+        &self,
+        page: i32,
+        context: &mut Context,
+    ) -> Result<CountryPlayersListReport, CountryPlayersListContextBlock> {
+        let mut sorted_players = Vec::new();
+        for (online_index, player) in context.online_players().into_iter().enumerate() {
+            if player.country != Some(self.country_id) || player.level < 10 || player.is_god {
+                continue;
+            }
+            let (faction_name, is_faction_master) = context.player_faction(player.id)?;
+            sorted_players.push((
+                online_index,
+                CountryPlayerInfo {
+                    id: player.id,
+                    name: player.name,
+                    occupation: player.occupation,
+                    level: player.level,
+                    faction_name,
+                    is_faction_master,
+                },
+            ));
+        }
+
+        let country_name = context.country_name(self.country_id);
+        let mut initial_log = country_name.clone();
+        initial_log.extend_from_slice(b" : Successfully InitialOLPlayersList!");
+        let initial_log = legacy_country_text(initial_log);
+        context.put_king_log(&initial_log);
+
+        // Reverse multimap traversal: level по убыванию, равные ключи в
+        // обратном порядке исходного online-list.
+        sorted_players.sort_by(|(left_index, left), (right_index, right)| {
+            right
+                .level
+                .cmp(&left.level)
+                .then_with(|| right_index.cmp(left_index))
+        });
+        let mut sort_log = country_name.clone();
+        sort_log.extend_from_slice(b" : Successfully Sort!");
+        let sort_log = legacy_country_text(sort_log);
+        context.put_king_log(&sort_log);
+
+        let total = sorted_players.len() as u32;
+        let total_signed = total as i32;
+        let list_log = legacy_country_text(context.format_world_string(
+            b"WS0021",
+            &[
+                CountryExileTextArgument::Text(&country_name),
+                CountryExileTextArgument::Signed(total_signed),
+            ],
+        ));
+        context.put_king_log(&list_log);
+
+        let start_index = page
+            .wrapping_mul(3)
+            .wrapping_sub(3)
+            .wrapping_mul(4) as u32;
+        let (end_index, entries) = if start_index < total {
+            let end_index = start_index.wrapping_add(12).min(total);
+            let entries = sorted_players[start_index as usize..end_index as usize]
+                .iter()
+                .map(|(_, player)| player.clone())
+                .collect::<Vec<_>>();
+            (end_index, entries)
+        } else {
+            (start_index, Vec::new())
+        };
+        let count = end_index.wrapping_sub(start_index) as i32;
+
+        let mut message = CMessage::new(0x0007_FF08);
+        message.base_mut().add_long(self.king.id);
+        message.base_mut().add_long(count);
+        message.base_mut().add_long(total_signed);
+        for player in &entries {
+            let name = CString::new(legacy_c_string_prefix(&player.name))
+                .expect("player-name C-string prefix не содержит NUL");
+            let faction_name = CString::new(legacy_c_string_prefix(&player.faction_name))
+                .expect("faction-name C-string prefix не содержит NUL");
+            message.base_mut().add_long(player.id);
+            message.base_mut().add_str(Some(&name));
+            message.base_mut().add_byte(player.occupation);
+            message.base_mut().add_byte(player.level);
+            message.base_mut().add_str(Some(&faction_name));
+            message
+                .base_mut()
+                .add_byte(u8::from(player.is_faction_master));
+        }
+        let map_id = context.game_server_number_by_player_id(self.king.id);
+        let wire = message.as_wire_bytes().to_vec();
+        let delivery = context.send_to_map_id(&message, map_id);
+        Ok(CountryPlayersListReport {
+            page,
+            start_index,
+            total,
+            entries,
+            map_id,
+            wire,
+            delivery,
+            logs: vec![initial_log, sort_log, list_log],
+            legacy_result: self.king.id,
+        })
+    }
+
     /// Exact `IsKing`: нулевой candidate всегда отклоняется с `WS0033`.
     pub(crate) fn authorize_king<Context: CountryExileResultContext + ?Sized>(
         &self,
@@ -2950,6 +3148,13 @@ impl fmt::Display for CountrySerializeError {
 
 impl Error for CountrySerializeError {}
 
+fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
+    value
+        .split(|byte| *byte == 0)
+        .next()
+        .unwrap_or_default()
+}
+
 fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
     if let Some(terminator) = text.iter().position(|byte| *byte == 0) {
         text.truncate(terminator);
@@ -3369,7 +3574,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::InitialOLPlayersList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:114
@@ -3383,7 +3588,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::Sort
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:174
@@ -3425,7 +3630,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::GetPlayersList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:345

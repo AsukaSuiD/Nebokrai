@@ -3,6 +3,7 @@
 //! Dispatcher RVA `0x000A47F0` остаётся `IMPLEMENTED_PARTIAL`: country relays
 //! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, а также вход country victory
 //! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, appoint-minister
+//! `0x60307 -> InitialOLPlayersList/Sort/0x7FF08`,
 //! `0x60309 -> 0x7FF04/0x7FF10/0x7FF07`, depose-minister
 //! `0x6030A -> 0x7FF04/0x7FF10/0x7FF07`, absolve
 //! `0x60308 -> CanDemise/RegisterKing/DeposeKing/0x7FE27/0x7FF04/0x7FF10/0x7FF12`,
@@ -69,6 +70,11 @@
 //! source/tail gate. Точный EXE подтверждает, что return вложенного
 //! `RegisterKing` игнорируется, а финальный `0x7FF10` строится уже по текущему
 //! king state; Linux-донор для self-target возвращал неверный ID.
+//! `0x60307` декодирует `page:i32, king:i32, country:i8 -> u8`,
+//! затем строго `GetCountry -> IsKing -> GetPlayersList`; source/tail/page gates
+//! отсутствуют. Exact owner сохраняет wrapping page arithmetic,
+//! GM-фильтр и return king ID; добавленные donor-ом валидации и
+//! return count не переносятся.
 //! Exact `0x004A4FC9..0x004A5049` задаёт `0x60317`: два signed long,
 //! синхронный `player_declare`, затем ответ `char accepted, player, target` в
 //! исходный `m_lMapID`. Проверок socket-owner и полного tail здесь нет; они
@@ -105,6 +111,7 @@ use crate::worldserver::appworld::country::country::{
     CountryDemiseReport,
     CountryDeposeMinisterReport, CountryExileRequestDisposition,
     CountryExileResultContext, CountryExileTimeLookup, CountryQuestSwitchUpdate,
+    CountryPlayersListContext, CountryPlayersListContextBlock, CountryPlayersListReport,
     CountryScalarUpdate, CountrySilenceReport, CountrySuccessExiledReport,
 };
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
@@ -386,6 +393,27 @@ pub(crate) struct WorldCountryDemiseSync {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldCountryPlayersListDisposition {
+    CountryMissing,
+    KingRejected,
+    ContextBlocked(CountryPlayersListContextBlock),
+    Sent(CountryPlayersListReport),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldCountryPlayersListSync {
+    pub(crate) source_map_id: i32,
+    pub(crate) source_socket_id: i32,
+    pub(crate) page: i32,
+    pub(crate) page_complete: bool,
+    pub(crate) king_player_id: i32,
+    pub(crate) king_complete: bool,
+    pub(crate) country_id: u8,
+    pub(crate) country_complete: bool,
+    pub(crate) disposition: WorldCountryPlayersListDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldCountryWarDeclarationSync {
     pub(crate) player_id: i32,
     pub(crate) player_id_complete: bool,
@@ -468,6 +496,7 @@ pub(crate) enum WorldCountryMessageOutcome {
     MinisterDeposed(WorldCountryDeposeMinisterSync),
     MinisterAppointed(WorldCountryAppointMinisterSync),
     KingDemised(WorldCountryDemiseSync),
+    CountryPlayersListed(WorldCountryPlayersListSync),
     CountryWarDeclared(WorldCountryWarDeclarationSync),
     CountryWarVictory(WorldCountryWarVictorySync),
     FourNationWarResult(WorldFourNationWarResultSync),
@@ -1049,6 +1078,47 @@ pub(crate) fn dispatch_country_appoint_minister_message<
         target_complete: decoded_target.is_some(),
         job,
         job_complete: decoded_job.is_some(),
+        king_player_id,
+        king_complete: decoded_king.is_some(),
+        country_id,
+        country_complete: decoded_country.is_some(),
+        disposition,
+    })
+}
+
+pub(crate) fn dispatch_country_players_list_message<
+    Context: CountryPlayersListContext + ?Sized,
+>(
+    message: &mut CMessage,
+    country_handler: &CCountryHandler,
+    context: &mut Context,
+) -> Option<WorldCountryPlayersListSync> {
+    if message.message_type() != 0x60307 {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_page = message.base_mut().get_long();
+    let page = decoded_page.unwrap_or(0);
+    let decoded_king = message.base_mut().get_long();
+    let king_player_id = decoded_king.unwrap_or(0);
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+    let disposition = match country_handler.get_country(country_id) {
+        None => WorldCountryPlayersListDisposition::CountryMissing,
+        Some(country) if !country.authorize_king_for_players(king_player_id, context) => {
+            WorldCountryPlayersListDisposition::KingRejected
+        }
+        Some(country) => match country.get_players_list(page, context) {
+            Ok(report) => WorldCountryPlayersListDisposition::Sent(report),
+            Err(block) => WorldCountryPlayersListDisposition::ContextBlocked(block),
+        },
+    };
+    Some(WorldCountryPlayersListSync {
+        source_map_id,
+        source_socket_id,
+        page,
+        page_complete: decoded_page.is_some(),
         king_player_id,
         king_complete: decoded_king.is_some(),
         country_id,

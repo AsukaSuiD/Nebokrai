@@ -981,7 +981,8 @@ use crate::transport::bind_tcp_ipv4;
 use crate::worldserver::appworld::country::country::{
     CCountry, CountryAbsolveCounterReset, CountryExileMessageDelivery, CountryExileResultContext,
     CountryExileTarget, CountryExileTextArgument, CountryFactionSnapshot,
-    CountryGovernanceContextBlock, CountryKingSaveLimits,
+    CountryGovernanceContextBlock, CountryKingSaveLimits, CountryOnlinePlayer,
+    CountryPlayersListContext, CountryPlayersListContextBlock,
 };
 use crate::worldserver::appworld::country::countryhandler::{
     CCountryHandler, CountryInfoDeliveryContext, CountryRunBlock, CountryRunReport,
@@ -1018,6 +1019,7 @@ use crate::worldserver::appworld::message::countrymessage::{
     dispatch_country_depose_minister_message,
     dispatch_country_exile_result_message,
     dispatch_country_exile_request_message,
+    dispatch_country_players_list_message,
     dispatch_country_silence_request_message,
     dispatch_country_war_declaration_message, dispatch_country_war_victory_message,
     dispatch_four_nation_country_fail_message, dispatch_four_nation_war_result_message,
@@ -12081,6 +12083,14 @@ struct WorldCountryExileResultEffects<'a> {
         &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
 }
 
+struct WorldCountryPlayersListEffects<'a> {
+    game: &'a CGame,
+    organizing: &'a COrganizingCtrl,
+    globe_setup: &'a GlobeSetupSnapshot,
+    format_world_string:
+        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+}
+
 struct WorldCountryDemiseEffects<'a> {
     base: WorldCountryExileResultEffects<'a>,
     organizing: &'a mut COrganizingCtrl,
@@ -12230,6 +12240,89 @@ impl CountryExileResultContext for WorldCountryExileResultEffects<'_> {
 
     fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError> {
         message.send_all(self.game.current_game_server_sender().as_ref())
+    }
+
+    fn put_king_log(&mut self, text: &[u8]) {
+        put_string_to_file("king", text);
+    }
+}
+
+impl CountryPlayersListContext for WorldCountryPlayersListEffects<'_> {
+    fn online_players(&mut self) -> Vec<CountryOnlinePlayer> {
+        self.game
+            .online_players
+            .iter()
+            .filter_map(|&player_id| self.game.map_player(player_id))
+            .map(|player| CountryOnlinePlayer {
+                id: player.get_id(),
+                name: legacy_c_string_prefix(player.get_name()).to_vec(),
+                country: player.country(),
+                occupation: player.get_occupation(),
+                level: player.get_level(),
+                is_god: player.is_god(),
+            })
+            .collect()
+    }
+
+    fn player_faction(
+        &mut self,
+        player_id: i32,
+    ) -> Result<(Vec<u8>, bool), CountryPlayersListContextBlock> {
+        let faction_id = match self.organizing.is_free_player(player_id) {
+            FreePlayerLookup::NoFaction => 0,
+            FreePlayerLookup::Faction(faction_id) => faction_id,
+            FreePlayerLookup::BlockedNullFaction { .. } => {
+                return Err(CountryPlayersListContextBlock::PlayerFactionLookup);
+            }
+        };
+        let faction_name = if faction_id > 0 {
+            self.organizing
+                .faction_by_id(faction_id)
+                .map(|faction| faction.name().to_vec())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let is_faction_master = self
+            .organizing
+            .faction_id_by_master_player(player_id)
+            .map_err(|_| CountryPlayersListContextBlock::FactionMasterLookup)?
+            != 0;
+        Ok((faction_name, is_faction_master))
+    }
+
+    fn country_name(&mut self, country_id: u8) -> Vec<u8> {
+        self.globe_setup
+            .country_name(country_id)
+            .unwrap_or_default()
+            .to_vec()
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| match argument {
+                CountryExileTextArgument::Text(text) => UnionFormatArgument::Text(text),
+                CountryExileTextArgument::Signed(value) => UnionFormatArgument::Signed(*value),
+            })
+            .collect::<Vec<_>>();
+        (self.format_world_string)(string_id, &arguments)
+    }
+
+    fn game_server_number_by_player_id(&mut self, player_id: i32) -> i32 {
+        self.game.game_server_number_by_player_id(player_id)
+    }
+
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError> {
+        message.send_to_map_id(self.game.current_game_server_sender().as_ref(), map_id)
     }
 
     fn put_king_log(&mut self, text: &[u8]) {
@@ -12983,6 +13076,26 @@ where
                         after_database,
                     },
                 ),
+            };
+        }
+        let players_list = {
+            let mut effects = WorldCountryPlayersListEffects {
+                game: &*game,
+                organizing: &*organizing,
+                globe_setup,
+                format_world_string: &mut *application_callbacks.format_world_string,
+            };
+            dispatch_country_players_list_message(
+                &mut message,
+                &*country_handler,
+                &mut effects,
+            )
+        };
+        if let Some(sync) = players_list {
+            return ProcessedWorldEvent::CountryMessage {
+                source,
+                legacy_run_result,
+                outcome: WorldCountryMessageOutcome::CountryPlayersListed(sync),
             };
         }
         let exile_result = {
