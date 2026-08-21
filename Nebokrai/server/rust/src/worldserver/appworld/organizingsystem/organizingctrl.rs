@@ -18,6 +18,8 @@
 //! `GetConfederationOrganizing` RVA `0x00036BF0`,
 //! `GetCountryByFaction` RVA `0x00037B20` и
 //! `AddOwnedCityToFaction` RVA `0x00037C20`,
+//! country-specific `GetFactionNumber` RVA `0x00033D10` и
+//! `AddFactionListToByteArray` RVA `0x00033D90`,
 //! `IsFactionMaster` RVA `0x000344A0`, `ReInitialFacFactionByLvl` RVA
 //! `0x00034C80` и `AddUnionToClientByFactionID` RVA `0x00038010` —
 //! `IMPLEMENTED`; `PushToEstaList` RVA `0x000367C0` и оба overload-а
@@ -69,6 +71,15 @@
 //! иных эффектов controller-а. Concrete `CFaction::add_owned_city` уже
 //! сохраняет list/duplicate/wire/player семантику; controller возвращает её
 //! typed report только для Rust caller-а, не добавляя legacy return value.
+//! Country-specific faction list проходит map в signed order, пропускает null
+//! owners и сравнивает exact virtual country byte. Страница нормализует только
+//! значения `<1`, сохраняет 32-битную wrapping формулу `page*11-11`, пишет
+//! signed count и пары `faction ID + name\0`. Exact ASM
+//! `0x00433D10..0x00433D8D/0x00433D90..0x00433F31` подтверждает повторный
+//! count-вызов на короткой последней странице и increment только для faction
+//! выбранной страны. Небезопасный `strcpy` в `char[256]` заменён локальной
+//! typed safe-границей только для имени, которое вместе с NUL не помещается;
+//! уже записанные count/ID/предыдущие записи сохраняются в progress.
 //! Через read-only `FactionOperationAuthorityContext` этот lookup и уже
 //! материализованный `IsFreeFaction` обслуживают faction tax/city-gate owner-ы;
 //! null во время membership scan остаётся typed-границей старого UB.
@@ -933,6 +944,58 @@ pub(crate) enum DeclareWarFactionPageBlock {
     NullFaction { map_key: i32 },
     MissingCountry { faction_id: i32 },
     UnionMembership { faction_id: i32, map_key: i32 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FactionCountryCountBlock {
+    pub(crate) map_key: i32,
+    pub(crate) matched_before_block: i32,
+    pub(crate) source: FactionInitialPropertyBlock,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionListEntry {
+    pub(crate) faction_id: i32,
+    pub(crate) name: Vec<u8>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionListPage {
+    pub(crate) requested_page: i32,
+    pub(crate) normalized_page: i32,
+    pub(crate) country: u8,
+    pub(crate) start_index: i32,
+    pub(crate) total_factions: i32,
+    pub(crate) entry_count: i32,
+    pub(crate) entries: Vec<FactionListEntry>,
+    pub(crate) payload: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionListCountPhase {
+    Initial,
+    LastPageRecount,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionListPageBlock {
+    Count {
+        requested_page: i32,
+        normalized_page: i32,
+        country: u8,
+        phase: FactionListCountPhase,
+        source: FactionCountryCountBlock,
+    },
+    Country {
+        page: FactionListPage,
+        map_key: i32,
+        source: FactionInitialPropertyBlock,
+    },
+    NameWouldOverflow {
+        page: FactionListPage,
+        map_key: i32,
+        required_bytes_with_nul: usize,
+    },
 }
 
 /// Safe-границы точной цепочки `GetUnion(player ID)`.
@@ -2357,6 +2420,122 @@ impl COrganizingCtrl {
                 count: self.factions.len(),
             }
         })
+    }
+
+    /// Считает concrete faction owner-ы одной страны в signed map-order.
+    pub(crate) fn faction_count_by_country(
+        &self,
+        country: u8,
+    ) -> Result<i32, FactionCountryCountBlock> {
+        let mut count = 0_i32;
+        for (&map_key, faction) in &self.factions {
+            let Some(faction) = faction.as_deref() else {
+                continue;
+            };
+            let faction_country = faction.country().ok_or(FactionCountryCountBlock {
+                map_key,
+                matched_before_block: count,
+                source: FactionInitialPropertyBlock,
+            })?;
+            if faction_country == country {
+                count = count.wrapping_add(1);
+            }
+        }
+        Ok(count)
+    }
+
+    /// Строит exact 11-элементную страницу faction ID/name одной страны.
+    pub(crate) fn faction_list_page(
+        &self,
+        requested_page: i32,
+        country: u8,
+    ) -> Result<FactionListPage, FactionListPageBlock> {
+        const PAGE_SIZE: i32 = 11;
+
+        let normalized_page = requested_page.max(1);
+        let start_index = normalized_page
+            .wrapping_mul(PAGE_SIZE)
+            .wrapping_sub(PAGE_SIZE);
+        let total_factions = self.faction_count_by_country(country).map_err(|source| {
+            FactionListPageBlock::Count {
+                requested_page,
+                normalized_page,
+                country,
+                phase: FactionListCountPhase::Initial,
+                source,
+            }
+        })?;
+        let remaining = total_factions.wrapping_sub(start_index);
+        let entry_count = if remaining <= PAGE_SIZE {
+            self.faction_count_by_country(country)
+                .map_err(|source| FactionListPageBlock::Count {
+                    requested_page,
+                    normalized_page,
+                    country,
+                    phase: FactionListCountPhase::LastPageRecount,
+                    source,
+                })?
+                .wrapping_sub(start_index)
+                .max(0)
+        } else {
+            PAGE_SIZE
+        };
+        let mut page = FactionListPage {
+            requested_page,
+            normalized_page,
+            country,
+            start_index,
+            total_factions,
+            entry_count,
+            entries: Vec::with_capacity(entry_count as usize),
+            payload: Vec::new(),
+        };
+        append_i32(&mut page.payload, entry_count);
+
+        let end_index = start_index.wrapping_add(entry_count);
+        let mut country_index = 0_i32;
+        for (&map_key, faction) in &self.factions {
+            let Some(faction) = faction.as_deref() else {
+                continue;
+            };
+            let faction_country = match faction.country() {
+                Some(country) => country,
+                None => {
+                    return Err(FactionListPageBlock::Country {
+                        page,
+                        map_key,
+                        source: FactionInitialPropertyBlock,
+                    });
+                }
+            };
+            if faction_country != country {
+                continue;
+            }
+
+            if country_index >= start_index && country_index < end_index {
+                append_i32(&mut page.payload, faction.faction_id());
+                let name = legacy_c_string_prefix(faction.name());
+                let required_bytes_with_nul = name.len().saturating_add(1);
+                if required_bytes_with_nul > 256 {
+                    return Err(FactionListPageBlock::NameWouldOverflow {
+                        page,
+                        map_key,
+                        required_bytes_with_nul,
+                    });
+                }
+                page.payload.extend_from_slice(name);
+                page.payload.push(0);
+                page.entries.push(FactionListEntry {
+                    faction_id: faction.faction_id(),
+                    name: name.to_vec(),
+                });
+            }
+            country_index = country_index.wrapping_add(1);
+            if country_index >= end_index {
+                break;
+            }
+        }
+        Ok(page)
     }
 
     /// Строит payload одной 11-элементной страницы целей объявления войны.
@@ -4826,7 +5005,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::GetFactionNumber
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:451
@@ -4834,13 +5013,13 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00433d10
 // PROTOTYPE: long __thiscall GetFactionNumber(uchar param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// Реализовано выше как `faction_count_by_country`; exact null-skip, virtual
+// country slot `+0x190`, signed map-order и wrapping count сохранены.
 //
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::AddFactionListToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:492
@@ -4848,8 +5027,8 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00433d90
 // PROTOTYPE: void __thiscall AddFactionListToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, long param_2, uchar param_3)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// Реализовано выше как `faction_list_page`; exact pagination/wire/map-order
+// сохранены, старый `char[256]` overflow локализован typed block-ом.
 //
 
 // ============================================================================
