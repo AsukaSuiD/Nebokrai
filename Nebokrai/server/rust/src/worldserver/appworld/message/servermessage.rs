@@ -128,7 +128,9 @@
 //! MSVC-SSO serializer. Следующая граница — объединённые `CCiQingSetup +
 //! CLingBaoSetup` subtype `0x35`: два positional serializer-а дописывают один
 //! payload без дополнительного framing между ними. Следующая граница —
-//! `CTaoZhuangSetup` subtype `0x34`.
+//! `CTaoZhuangSetup` subtype `0x34`, который сохраняет различие declared и
+//! фактических nested count-ов. Следующая граница — `CAttackCitySys` subtype
+//! `0x1B`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -193,6 +195,7 @@ use crate::public::equipmentcomposelist::{
     EquipmentComposeList, EquipmentComposeSerializeError,
 };
 use crate::public::ciqing::{CCiQingSetup, CiQingSerializationBlock};
+use crate::public::taozhuangsetup::{CTaoZhuangSetup, TaoZhuangSerializationBlock};
 use crate::setup::cbattlefairyexpconfig::{
     BattleFairyExpSerializeError, CBattleFairyExpConfig,
 };
@@ -924,6 +927,18 @@ pub(crate) enum WorldCiQingLingBaoConfigurationCompletion {
 pub(crate) struct WorldCiQingLingBaoConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldCiQingLingBaoConfigurationCompletion,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldTaoZhuangConfigurationCompletion {
+    TaoZhuang(TaoZhuangSerializationBlock),
+    AttackCityConfigurationPending { socket_id: i32 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldTaoZhuangConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldTaoZhuangConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -2605,6 +2620,33 @@ pub(crate) fn continue_game_server_ciqing_ling_bao_configuration(
             &payload,
         )),
         completion: WorldCiQingLingBaoConfigurationCompletion::TaoZhuangConfigurationPending {
+            socket_id,
+        },
+    }
+}
+
+/// Кодирует и отправляет exact `CTaoZhuangSetup` subtype `0x34`.
+pub(crate) fn continue_game_server_tao_zhuang_configuration(
+    game: &CGame,
+    socket_id: i32,
+    tao_zhuang: &CTaoZhuangSetup,
+) -> WorldTaoZhuangConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = tao_zhuang.add_byte_to_array(&mut payload) {
+        return WorldTaoZhuangConfigurationReport {
+            delivery: None,
+            completion: WorldTaoZhuangConfigurationCompletion::TaoZhuang(error),
+        };
+    }
+    let sender = game.current_game_server_sender();
+    WorldTaoZhuangConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x34,
+            &payload,
+        )),
+        completion: WorldTaoZhuangConfigurationCompletion::AttackCityConfigurationPending {
             socket_id,
         },
     }
