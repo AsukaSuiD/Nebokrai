@@ -4,7 +4,8 @@
 //! `0x6010B`, исключение фракции из союза `0x6010C`, выход из фракции
 //! `0x6010D`, выход фракции из союза `0x6010E`, передачу главы фракции
 //! `0x6010F`, передачу главы союза `0x60110`, роспуск фракции `0x60111`,
-//! роспуск союза `0x60112`, назначение title/job-level `0x60113`,
+//! роспуск союза `0x60112`, назначение title/job-level `0x60113`, выдачу и
+//! отзыв права `0x60114/0x60115`,
 //! заявку союза `0x60118`,
 //! общий session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
@@ -122,6 +123,14 @@
 //! прямой wire-ответ отсутствуют; Linux-донорские ingress-rejects не
 //! перенесены. Invalid-string filter и optional title-log остаются внешними
 //! техническими владельцами готового concrete faction owner-а.
+//! Exact `0x004A73E1..0x004A743D` и `0x004A7442..0x004A749E` для
+//! `0x60114/0x60115` симметрично читают `(target ID, purview, manager ID)`,
+//! разрешают faction через ordered `IsFreePlayer(manager)`, дважды выполняют
+//! nullable `GetFactionOrganizing` и вызывают virtual slots `+0x2C/+0x30`.
+//! Все три аргумента остаются полными 32-битными значениями; `char` purview в
+//! RAW — артефакт. Online/route/tail gates и прямой wire-ответ отсутствуют;
+//! Linux-донорские ingress-rejects не перенесены. Optional purview-log остаётся
+//! внешним техническим владельцем concrete faction owner-а.
 //! Exact диапазоны
 //! `0x004A74C6..0x004A7509` и `0x004A7511..0x004A7543` исправляют повреждённый
 //! RAW. Общий branch читает
@@ -388,6 +397,8 @@ use crate::worldserver::appworld::organizingsystem::faction::{
     FactionEnemyMutationBlock, FactionEnemyMutationContext,
     FactionEnemyWarLogArgument, FactionExperienceBlock, FactionExperienceUpdate,
     FactionLevelContext, FactionMemberInfoRequest, FactionOrganizingInfoContext,
+    FactionPurviewChange, FactionPurviewChangeBlock, FactionPurviewChangeContext,
+    FactionPurviewChangeOutcome,
     FactionInitialPropertyBlock, FactionOperationBlock, FactionOperationOutcome,
     FactionOperationRejection, OwnedCityMutationBuildError,
     FactionPermitBlock, FactionPermitUpdate,
@@ -473,6 +484,8 @@ const UNION_DEMISE_MESSAGE_TYPE: i32 = 0x60110;
 const FACTION_DISBAND_MESSAGE_TYPE: i32 = 0x60111;
 const UNION_DISBAND_MESSAGE_TYPE: i32 = 0x60112;
 const FACTION_DUB_MESSAGE_TYPE: i32 = 0x60113;
+const GRANT_FACTION_PURVIEW_MESSAGE_TYPE: i32 = 0x60114;
+const REVOKE_FACTION_PURVIEW_MESSAGE_TYPE: i32 = 0x60115;
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
@@ -913,6 +926,66 @@ impl FactionDubContext for WorldFactionDubEffects<'_, '_, '_, '_, '_, '_> {
             manager_name,
             faction_id,
             faction_name,
+        );
+    }
+}
+
+/// Тонкий string/log adapter парных faction permission owner-ов.
+struct WorldFactionPurviewEffects<'game, 'callbacks, 'effects, 'log> {
+    game: &'game CGame,
+    callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
+    use_log_system: bool,
+    add_log_enabled: bool,
+    revoke_log_enabled: bool,
+    write_log: &'log mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
+}
+
+impl FactionOrganizingInfoContext for WorldFactionPurviewEffects<'_, '_, '_, '_> {
+    fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
+        Some((self.callbacks.world_string)(string_id))
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+impl FactionPurviewChangeContext for WorldFactionPurviewEffects<'_, '_, '_, '_> {
+    fn format_world_string(&mut self, string_id: &'static [u8], member_name: &[u8]) -> Vec<u8> {
+        (self.callbacks.format_world_string)(
+            string_id,
+            &[UnionFormatArgument::Text(member_name)],
+        )
+    }
+
+    fn faction_purview_log_enabled(&self, change: FactionPurviewChange) -> bool {
+        self.use_log_system
+            && match change {
+                FactionPurviewChange::Grant => self.add_log_enabled,
+                FactionPurviewChange::Revoke => self.revoke_log_enabled,
+            }
+    }
+
+    fn write_faction_purview_log(
+        &mut self,
+        member_id: i32,
+        member_name: &[u8],
+        purview: i32,
+        manager_id: i32,
+        manager_name: &[u8],
+        faction_id: i32,
+        faction_name: &[u8],
+        log_type: i32,
+    ) {
+        (self.write_log)(
+            member_id,
+            member_name,
+            purview,
+            manager_id,
+            manager_name,
+            faction_id,
+            faction_name,
+            log_type,
         );
     }
 }
@@ -3022,6 +3095,115 @@ pub(crate) fn dispatch_faction_dub(
         target_id,
         job_level,
         title,
+        manager_id,
+        outcome,
+    }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionPurviewOutcome {
+    FactionNotFound { faction_id: i32 },
+    Applied {
+        faction_id: i32,
+        outcome: FactionPurviewChangeOutcome,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionPurviewBlock {
+    Membership { map_key: i32 },
+    Change {
+        faction_id: i32,
+        source: FactionPurviewChangeBlock,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionPurviewDispatch {
+    pub(crate) change: FactionPurviewChange,
+    pub(crate) target_id: i32,
+    pub(crate) purview: i32,
+    pub(crate) manager_id: i32,
+    pub(crate) outcome: OrganizingFactionPurviewOutcome,
+}
+
+/// Выполняет exact парные `0x60114/0x60115`: три `Long`, faction lookup по
+/// manager и virtual grant/revoke owner без ingress-gates.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn dispatch_faction_purview(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    use_log_system: bool,
+    add_log_enabled: bool,
+    revoke_log_enabled: bool,
+    write_log: &mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
+) -> Option<Result<OrganizingFactionPurviewDispatch, OrganizingFactionPurviewBlock>> {
+    let change = match message.message_type() {
+        GRANT_FACTION_PURVIEW_MESSAGE_TYPE => FactionPurviewChange::Grant,
+        REVOKE_FACTION_PURVIEW_MESSAGE_TYPE => FactionPurviewChange::Revoke,
+        _ => return None,
+    };
+    let target_id = message.base_mut().get_long().unwrap_or(0);
+    let purview = message.base_mut().get_long().unwrap_or(0);
+    let manager_id = message.base_mut().get_long().unwrap_or(0);
+    let faction_id = match organizing.is_free_player(manager_id) {
+        FreePlayerLookup::NoFaction => 0,
+        FreePlayerLookup::Faction(faction_id) => faction_id,
+        FreePlayerLookup::BlockedNullFaction { map_key } => {
+            return Some(Err(OrganizingFactionPurviewBlock::Membership { map_key }));
+        }
+    };
+    let Some(faction) = organizing.faction_by_id_mut(faction_id) else {
+        return Some(Ok(OrganizingFactionPurviewDispatch {
+            change,
+            target_id,
+            purview,
+            manager_id,
+            outcome: OrganizingFactionPurviewOutcome::FactionNotFound { faction_id },
+        }));
+    };
+    let mut effects = WorldFactionPurviewEffects {
+        game,
+        callbacks,
+        use_log_system,
+        add_log_enabled,
+        revoke_log_enabled,
+        write_log,
+    };
+    let changed = match change {
+        FactionPurviewChange::Grant => faction.endue_right_to_member(
+            game,
+            manager_id,
+            target_id,
+            purview,
+            &mut effects,
+        ),
+        FactionPurviewChange::Revoke => faction.abolish_right_to_member(
+            game,
+            manager_id,
+            target_id,
+            purview,
+            &mut effects,
+        ),
+    };
+    let outcome = match changed {
+        Ok(outcome) => OrganizingFactionPurviewOutcome::Applied {
+            faction_id,
+            outcome,
+        },
+        Err(source) => {
+            return Some(Err(OrganizingFactionPurviewBlock::Change {
+                faction_id,
+                source,
+            }));
+        }
+    };
+    Some(Ok(OrganizingFactionPurviewDispatch {
+        change,
+        target_id,
+        purview,
         manager_id,
         outcome,
     }))

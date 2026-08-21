@@ -1094,6 +1094,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingFactionBillboardOutcome, OrganizingFactionContributorDispatch,
     OrganizingFactionExperienceDispatch, OrganizingFactionMemberStateDispatch,
     OrganizingFactionDubBlock, OrganizingFactionDubDispatch,
+    OrganizingFactionPurviewBlock, OrganizingFactionPurviewDispatch,
     OrganizingFactionDemiseBlock, OrganizingFactionDemiseDispatch,
     OrganizingFactionDisbandBlock, OrganizingFactionDisbandDispatch,
     OrganizingFactionFireOutBlock, OrganizingFactionFireOutDispatch,
@@ -1127,6 +1128,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     dispatch_declare_war_faction_list, dispatch_faction_application,
     dispatch_faction_application_decision,
     dispatch_faction_dub,
+    dispatch_faction_purview,
     dispatch_faction_demise,
     dispatch_faction_disband,
     dispatch_faction_fire_out,
@@ -2243,6 +2245,12 @@ pub(crate) enum ProcessedWorldEvent {
         outcome: Result<OrganizingFactionDubDispatch, OrganizingFactionDubBlock>,
         runtime: WorldUnionApplicationRuntimeReport,
     },
+    OrganizingFactionPurview {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<OrganizingFactionPurviewDispatch, OrganizingFactionPurviewBlock>,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
     OrganizingUnionFireOut {
         source: WorldMessageSource,
         legacy_run_result: i32,
@@ -3204,6 +3212,10 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     pub(crate) faction_title_log_enabled: bool,
     pub(crate) write_faction_title_log:
         &'a mut dyn FnMut(i32, &[u8], &[u8], &[u8], i32, &[u8], i32, &[u8]),
+    pub(crate) faction_purview_add_log_enabled: bool,
+    pub(crate) faction_purview_revoke_log_enabled: bool,
+    pub(crate) write_faction_purview_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
     pub(crate) faction_level_log_enabled: bool,
     pub(crate) write_faction_level_log:
         &'a mut dyn FnMut(i32, &[u8], i32, i32, &[u8]),
@@ -9072,6 +9084,10 @@ impl CGame {
         faction_title_log_enabled: bool,
         write_faction_title_log:
             &mut dyn FnMut(i32, &[u8], &[u8], &[u8], i32, &[u8], i32, &[u8]),
+        faction_purview_add_log_enabled: bool,
+        faction_purview_revoke_log_enabled: bool,
+        write_faction_purview_log:
+            &mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
         faction_apply_log_enabled: bool,
         write_faction_apply_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
@@ -9155,6 +9171,9 @@ impl CGame {
                             &mut *check_invalid_organizing_string,
                             faction_title_log_enabled,
                             &mut *write_faction_title_log,
+                            faction_purview_add_log_enabled,
+                            faction_purview_revoke_log_enabled,
+                            &mut *write_faction_purview_log,
                             faction_apply_log_enabled,
                             &mut *write_faction_apply_log,
                             faction_join_log_enabled,
@@ -9236,6 +9255,9 @@ impl CGame {
                     &mut *check_invalid_organizing_string,
                     faction_title_log_enabled,
                     &mut *write_faction_title_log,
+                    faction_purview_add_log_enabled,
+                    faction_purview_revoke_log_enabled,
+                    &mut *write_faction_purview_log,
                     faction_apply_log_enabled,
                     &mut *write_faction_apply_log,
                     faction_join_log_enabled,
@@ -9317,6 +9339,10 @@ impl CGame {
         faction_title_log_enabled: bool,
         write_faction_title_log:
             &mut dyn FnMut(i32, &[u8], &[u8], &[u8], i32, &[u8], i32, &[u8]),
+        faction_purview_add_log_enabled: bool,
+        faction_purview_revoke_log_enabled: bool,
+        write_faction_purview_log:
+            &mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
         faction_apply_log_enabled: bool,
         write_faction_apply_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
@@ -9397,6 +9423,9 @@ impl CGame {
             check_invalid_organizing_string,
             faction_title_log_enabled,
             write_faction_title_log,
+            faction_purview_add_log_enabled,
+            faction_purview_revoke_log_enabled,
+            write_faction_purview_log,
             faction_apply_log_enabled,
             write_faction_apply_log,
             faction_join_log_enabled,
@@ -10606,6 +10635,9 @@ impl CGame {
             &mut *callbacks.check_invalid_organizing_string,
             callbacks.faction_title_log_enabled,
             &mut *callbacks.write_faction_title_log,
+            callbacks.faction_purview_add_log_enabled,
+            callbacks.faction_purview_revoke_log_enabled,
+            &mut *callbacks.write_faction_purview_log,
             callbacks.faction_apply_log_enabled,
             &mut *callbacks.write_faction_apply_log,
             callbacks.faction_join_log_enabled,
@@ -13835,6 +13867,10 @@ async fn process_world_message<TimerCallback, TeamOwner>(
     faction_title_log_enabled: bool,
     write_faction_title_log:
         &mut dyn FnMut(i32, &[u8], &[u8], &[u8], i32, &[u8], i32, &[u8]),
+    faction_purview_add_log_enabled: bool,
+    faction_purview_revoke_log_enabled: bool,
+    write_faction_purview_log:
+        &mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
     faction_apply_log_enabled: bool,
     write_faction_apply_log:
         &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
@@ -15698,6 +15734,50 @@ where
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingFactionDub {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        if let Some(outcome) = dispatch_faction_purview(
+            &mut message,
+            game,
+            organizing,
+            application_callbacks,
+            game.setup.use_log_system,
+            faction_purview_add_log_enabled,
+            faction_purview_revoke_log_enabled,
+            write_faction_purview_log,
+        ) {
+            let callbacks = WorldUnionApplicationEffectCallbacks {
+                random: &mut *application_callbacks.random,
+                world_string: &mut *application_callbacks.world_string,
+                format_world_string: &mut *application_callbacks.format_world_string,
+                put_war_log: &mut *application_callbacks.put_war_log,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
+            };
+            let mut effects = WorldUnionApplicationEffects::new(
+                game,
+                net_sessions,
+                application_runtime,
+                callbacks,
+            );
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingFactionPurview {
                 source,
                 legacy_run_result,
                 outcome,
