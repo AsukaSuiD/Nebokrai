@@ -18,6 +18,7 @@
 //! `SetSuperiorOrganizing` RVA `0x000B5110`,
 //! `IsOwnedCity` RVA `0x000B5490`, `GetOwnedCities` RVA `0x000BD7D0`,
 //! `UpdateExpToClient/SetExp` RVA `0x000B55B0/0x000B61F0`,
+//! `OnMemberLvlChange` RVA `0x000B6590`,
 //! `DelMember` RVA `0x000B9EF0`,
 //! `UpdatePropertyToClient` RVA `0x000B9FB0`,
 //! `UpdateEnemyFactionToClient/UpdateCityWarEnemyFactionToClient` RVA
@@ -511,6 +512,13 @@ pub(crate) enum MemberEnterOutcome {
 pub(crate) enum MemberExitOutcome {
     MemberNotFound,
     RegionAlreadyEmpty,
+    Published(Result<MemberUpdateReport, MemberUpdateBuildError>),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum MemberLevelChangeOutcome {
+    MemberNotFound,
+    Unchanged,
     Published(Result<MemberUpdateReport, MemberUpdateBuildError>),
 }
 
@@ -1404,6 +1412,27 @@ impl CFaction {
         })
     }
 
+    /// Обновляет `tagMemInfo::lLvl` и публикует operator `Update`.
+    pub(crate) fn on_member_level_change(
+        &mut self,
+        game: &CGame,
+        player_id: i32,
+        level: i32,
+    ) -> MemberLevelChangeOutcome {
+        let Some(member) = self.members.get_mut(&player_id) else {
+            return MemberLevelChangeOutcome::MemberNotFound;
+        };
+        if member.level == level {
+            return MemberLevelChangeOutcome::Unchanged;
+        }
+        member.level = level;
+        MemberLevelChangeOutcome::Published(self.update_member_info_to_client(
+            game,
+            player_id,
+            EOperator::Update,
+        ))
+    }
+
     /// Обновляет byte-exact online-регион участника и публикует изменение.
     pub(crate) fn on_member_enter_game(
         &mut self,
@@ -2048,7 +2077,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::OnMemberLvlChange
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2583
