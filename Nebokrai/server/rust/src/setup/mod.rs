@@ -27,6 +27,11 @@ pub(crate) mod hitlevelsetup;
     reason = "increment-shop serializer подключён к initial-config до LoadItems"
 )]
 pub(crate) mod incrementshoplist;
+#[allow(
+    dead_code,
+    reason = "log-system serializer подключён к initial-config до text loader-а"
+)]
+pub(crate) mod logsystem;
 pub(crate) mod monsterlist;
 #[allow(
     dead_code,

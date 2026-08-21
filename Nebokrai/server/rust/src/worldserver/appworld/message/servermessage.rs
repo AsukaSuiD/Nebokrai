@@ -91,7 +91,11 @@
 //! 24-байтные item-prefix-ы и affiche как subtype `4`. `CContributeSetup`
 //! затем передаёт одиннадцать positional scalars и contribution items subtype
 //! `5`. `PrisonConf` сохраняет signed-char key order и компактные десятибайтные
-//! записи как subtype `0x1D`; следующая граница — `PreciousBoxConf`.
+//! записи как subtype `0x1D`. Следующие восстановленные owner-ы доводят цепочку
+//! через `PreciousBoxConf`, fairy exp, synthesis, equipment compose, new-skill
+//! monsters и goods-destroy до общего `CGlobeSetup + CRegionRouter` subtype
+//! `7`. `CLogSystem` затем сохраняет 64-байтный ABI snapshot и ordered signed
+//! item set в subtype `8`; следующая точная граница — `CCountryParam`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -162,6 +166,7 @@ use crate::setup::goodsdestructionconfig::{GoodsDestroySerializeError, GoodsDest
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelSerializeError};
 use crate::setup::incrementshoplist::{CIncrementShopList, IncrementShopSerializeError};
+use crate::setup::logsystem::{CLogSystem, LogSystemSerializeError};
 use crate::setup::monsterlist::{
     MonsterDropRegistry, MonsterListSerializeError, MonsterRegistry, serialize_monster_list,
 };
@@ -545,6 +550,20 @@ pub(crate) enum WorldGlobeSetupConfigurationCompletion {
 pub(crate) struct WorldGlobeSetupConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldGlobeSetupConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после `CLogSystem`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldLogSystemConfigurationCompletion {
+    LogSystem(LogSystemSerializeError),
+    CountryParamConfigurationPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/8` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldLogSystemConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldLogSystemConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1565,6 +1584,34 @@ pub(crate) fn continue_game_server_globe_setup_configuration(
             &payload,
         )),
         completion: WorldGlobeSetupConfigurationCompletion::LogSystemConfigurationPending {
+            socket_id,
+        },
+    }
+}
+
+/// Кодирует и отправляет точный `CLogSystem` initial-config packet.
+pub(crate) fn continue_game_server_log_system_configuration(
+    game: &CGame,
+    socket_id: i32,
+    log_system: &CLogSystem,
+) -> WorldLogSystemConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = log_system.add_to_byte_array(&mut payload) {
+        return WorldLogSystemConfigurationReport {
+            delivery: None,
+            completion: WorldLogSystemConfigurationCompletion::LogSystem(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldLogSystemConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            8,
+            &payload,
+        )),
+        completion: WorldLogSystemConfigurationCompletion::CountryParamConfigurationPending {
             socket_id,
         },
     }

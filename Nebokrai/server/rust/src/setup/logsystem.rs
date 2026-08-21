@@ -1,6 +1,103 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Настройки журналирования исторического Miracle.
+//!
+//! Статус World `CLogSystem::AddToByteArray` RVA `0x00099B60`:
+//! `IMPLEMENTED`; text loader, accessors и Game decoder ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
+//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
+//! SHA-256 PDB
+//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Исходный владелец PDB:
+//! `e:\svn\fengyun_russia_dev\server\setup\logsystem.cpp:164`.
+//!
+//! Wire состоит из точного 64-байтного `tagLogSystem`, signed количества и
+//! ordered `long`-ключей предметов. GameServer читает структуру целиком и
+//! использует её поля по ABI offsets, поэтому fixed byte snapshot здесь
+//! сохраняет подтверждённый контракт без выдуманной раскладки. Windows
+//! `long` моделируется `i32`, а `BTreeSet` стандартной библиотеки заменяет
+//! `std::set` и сохраняет его signed-порядок и уникальность. Static storage
+//! оригинала было нулевым до loader-а; `Default` воспроизводит это без
+//! C++ singleton/lifetime plumbing. Typed overlay полей будет уместен вместе
+//! с восстановлением loader-а; неизвестные offsets сейчас не именуются.
+
+use std::collections::BTreeSet;
+use std::error::Error;
+use std::fmt;
+
+pub(crate) const LOG_SETTINGS_LENGTH: usize = 0x40;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CLogSystem {
+    settings: [u8; LOG_SETTINGS_LENGTH],
+    items: BTreeSet<i32>,
+}
+
+impl Default for CLogSystem {
+    fn default() -> Self {
+        Self {
+            settings: [0; LOG_SETTINGS_LENGTH],
+            items: BTreeSet::new(),
+        }
+    }
+}
+
+impl CLogSystem {
+    pub(crate) fn from_settings(settings: [u8; LOG_SETTINGS_LENGTH]) -> Self {
+        Self {
+            settings,
+            items: BTreeSet::new(),
+        }
+    }
+
+    pub(crate) fn settings_mut(&mut self) -> &mut [u8; LOG_SETTINGS_LENGTH] {
+        &mut self.settings
+    }
+
+    pub(crate) fn insert_item(&mut self, goods_id: i32) -> bool {
+        self.items.insert(goods_id)
+    }
+
+    pub(crate) fn clear_items(&mut self) {
+        self.items.clear();
+    }
+
+    pub(crate) fn add_to_byte_array(
+        &self,
+        destination: &mut Vec<u8>,
+    ) -> Result<(), LogSystemSerializeError> {
+        let count = self.items.len();
+        let count_i32 = i32::try_from(count)
+            .map_err(|_| LogSystemSerializeError::ItemCountOutOfRange { count })?;
+
+        destination.extend_from_slice(&self.settings);
+        destination.extend_from_slice(&count_i32.to_le_bytes());
+        for &goods_id in &self.items {
+            destination.extend_from_slice(&goods_id.to_le_bytes());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LogSystemSerializeError {
+    ItemCountOutOfRange { count: usize },
+}
+
+impl fmt::Display for LogSystemSerializeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ItemCountOutOfRange { count } => write!(
+                formatter,
+                "CLogSystem содержит {count} предметов вне signed 32-битного диапазона"
+            ),
+        }
+    }
+}
+
+impl Error for LogSystemSerializeError {}
+
+// Сырой C++ ниже сохранён как локальная документация loader-а, accessors и
+// Game decoder side effects, а не как Rust-реализация.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
