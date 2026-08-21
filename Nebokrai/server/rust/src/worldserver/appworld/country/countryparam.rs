@@ -48,6 +48,7 @@ use crate::public::readwrite::read_to;
 const COUNTRY_PARAMETER_COUNT: usize = 39;
 const MAX_COUNTRY_POWER: usize = 2;
 const MAX_COUNTRY_TREASURY: usize = 4;
+const DAILY_COUNTRY_TREASURY: usize = 5;
 const KING_NEED_LEVEL: usize = 7;
 const KING_NEED_CREDIT: usize = 8;
 const DEFAULT_KING_CONTROL_POINT: usize = 9;
@@ -289,6 +290,10 @@ impl CCountryParam {
 
     pub(crate) const fn max_country_treasury(&self) -> Option<i32> {
         self.parameters[MAX_COUNTRY_TREASURY]
+    }
+
+    pub(crate) const fn daily_country_treasury(&self) -> Option<i32> {
+        self.parameters[DAILY_COUNTRY_TREASURY]
     }
 
     /// Возвращает достигнутый максимум king control point без default-подстановки.

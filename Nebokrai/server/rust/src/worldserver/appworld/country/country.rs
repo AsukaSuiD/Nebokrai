@@ -71,6 +71,13 @@
 //! `CCountry::NewTerm` RVA `0x000C6F40` — `IMPLEMENTED`: он очищает DB/live
 //! appointed/salary flags короля и всех non-null minister owner-ов, рассылает
 //! пустой `0x7FF14`, затем обнуляет четыре дневных счётчика.
+//! `AddVilTax2Treasure` exact `0x004C88C3..0x004C8A70` проходит signed-key
+//! `CGame::s_mapRegionList`, выбирает только `REGION_TYPE == 1`, non-null
+//! owner и совпадающий country byte. Для каждой записи он отдельно выполняет
+//! wrapping add дневной казны, заменяет отрицательный signed результат нулём,
+//! затем ограничивает сверху `_max_country_treasury` и пишет `WS0091` в
+//! `king`. Rust `BTreeMap`-проекция и форматтер заменяют только STL/singleton/
+//! `_sprintf`; donor source/tail/ownership gates сюда не относятся.
 //! Последующий original clone разыменовывал null slot; безопасный save-clone
 //! его пропускает как внутренний UB, но два наблюдаемых wire-count сохраняет.
 //! `0x60309` использует тот же target/job/king/country wire и selector `1`.
@@ -248,6 +255,53 @@ pub(crate) struct CountryNewTermReport {
     pub(crate) previous_absolve_count: i32,
     pub(crate) wire: Vec<u8>,
     pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CountryVillageTaxRegion {
+    pub(crate) map_key: i32,
+    pub(crate) name: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryVillageTaxContextBlock {
+    UninitializedRegionType { map_key: i32 },
+    UninitializedRegionCountry { map_key: i32 },
+}
+
+pub(crate) trait CountryVillageTaxContext {
+    fn village_regions(
+        &mut self,
+        country_id: u8,
+    ) -> Result<Vec<CountryVillageTaxRegion>, CountryVillageTaxContextBlock>;
+    fn country_name(&mut self, country_id: u8) -> Vec<u8>;
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8>;
+    fn put_king_log(&mut self, text: &[u8]);
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CountryVillageTaxUpdate {
+    pub(crate) map_key: i32,
+    pub(crate) region_name: Vec<u8>,
+    pub(crate) previous_treasury: i32,
+    pub(crate) daily_treasury: i32,
+    pub(crate) applied_treasury: i32,
+    pub(crate) log: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CountryVillageTaxReport {
+    pub(crate) updates: Vec<CountryVillageTaxUpdate>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryVillageTaxBlock {
+    Parameter(CountryParameterUnavailable),
+    Context(CountryVillageTaxContextBlock),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -893,6 +947,61 @@ pub(crate) struct CountryAppointMinisterReport {
 }
 
 impl CCountry {
+    /// Повторяет exact начисление дневной казны за каждую village-запись.
+    pub(crate) fn add_village_tax_to_treasury<Context: CountryVillageTaxContext + ?Sized>(
+        &mut self,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> Result<CountryVillageTaxReport, CountryVillageTaxBlock> {
+        let regions = context
+            .village_regions(self.country_id)
+            .map_err(CountryVillageTaxBlock::Context)?;
+        if regions.is_empty() {
+            return Ok(CountryVillageTaxReport { updates: Vec::new() });
+        }
+        let daily_treasury = parameters.daily_country_treasury().ok_or(
+            CountryVillageTaxBlock::Parameter(CountryParameterUnavailable {
+                field: "_daily_country_treasury",
+            }),
+        )?;
+        let maximum_treasury = parameters.max_country_treasury().ok_or(
+            CountryVillageTaxBlock::Parameter(CountryParameterUnavailable {
+                field: "_max_country_treasury",
+            }),
+        )?;
+        let mut updates = Vec::with_capacity(regions.len());
+        for region in regions {
+            let previous_treasury = self.treasury;
+            let wrapping_sum = previous_treasury.wrapping_add(daily_treasury);
+            let non_negative_sum = if wrapping_sum < 0 { 0 } else { wrapping_sum };
+            self.treasury = if non_negative_sum < maximum_treasury {
+                non_negative_sum
+            } else {
+                maximum_treasury
+            };
+            let country_name = context.country_name(self.country_id);
+            let log = context.format_world_string(
+                b"WS0091",
+                &[
+                    CountryExileTextArgument::Text(&country_name),
+                    CountryExileTextArgument::Text(&region.name),
+                    CountryExileTextArgument::Signed(daily_treasury),
+                    CountryExileTextArgument::Signed(self.treasury),
+                ],
+            );
+            context.put_king_log(&log);
+            updates.push(CountryVillageTaxUpdate {
+                map_key: region.map_key,
+                region_name: region.name,
+                previous_treasury,
+                daily_treasury,
+                applied_treasury: self.treasury,
+                log,
+            });
+        }
+        Ok(CountryVillageTaxReport { updates })
+    }
+
     /// Повторяет exact `CCountry::NewTerm` без MSVC map/message plumbing.
     pub(crate) fn new_term<Context: CountryNewTermContext + ?Sized>(
         &mut self,
@@ -3817,7 +3926,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::AddVilTax2Treasure
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1810

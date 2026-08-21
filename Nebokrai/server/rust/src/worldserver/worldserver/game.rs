@@ -983,6 +983,7 @@ use crate::worldserver::appworld::country::country::{
     CountryExileTarget, CountryExileTextArgument, CountryFactionSnapshot, CountryNewTermContext,
     CountryGovernanceContextBlock, CountryKingSaveLimits, CountryOnlinePlayer,
     CountryPlayersListContext, CountryPlayersListContextBlock,
+    CountryVillageTaxContext, CountryVillageTaxContextBlock, CountryVillageTaxRegion,
 };
 use crate::worldserver::appworld::country::countryhandler::{
     CCountryHandler, CountryInfoDeliveryContext, CountryRunBlock, CountryRunReport,
@@ -12166,6 +12167,62 @@ impl CountryNewTermContext for WorldCountryExileResultEffects<'_> {
     }
 }
 
+impl CountryVillageTaxContext for WorldCountryExileResultEffects<'_> {
+    fn village_regions(
+        &mut self,
+        country_id: u8,
+    ) -> Result<Vec<CountryVillageTaxRegion>, CountryVillageTaxContextBlock> {
+        let mut regions = Vec::new();
+        for (&map_key, assignment) in &self.game.regions {
+            let Some(region_type) = assignment.region_type else {
+                return Err(CountryVillageTaxContextBlock::UninitializedRegionType { map_key });
+            };
+            if region_type != 1 {
+                continue;
+            }
+            let Some(owner) = assignment.region.as_ref() else {
+                continue;
+            };
+            let Some(region_country) = owner.base().region_base().country() else {
+                return Err(CountryVillageTaxContextBlock::UninitializedRegionCountry { map_key });
+            };
+            if region_country == country_id {
+                regions.push(CountryVillageTaxRegion {
+                    map_key,
+                    name: legacy_c_string_prefix(owner.base().get_name()).to_vec(),
+                });
+            }
+        }
+        Ok(regions)
+    }
+
+    fn country_name(&mut self, country_id: u8) -> Vec<u8> {
+        self.globe_setup
+            .country_name(country_id)
+            .unwrap_or_default()
+            .to_vec()
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| match argument {
+                CountryExileTextArgument::Text(text) => UnionFormatArgument::Text(text),
+                CountryExileTextArgument::Signed(value) => UnionFormatArgument::Signed(*value),
+            })
+            .collect::<Vec<_>>();
+        (self.format_world_string)(string_id, &arguments)
+    }
+
+    fn put_king_log(&mut self, text: &[u8]) {
+        put_string_to_file("king", text);
+    }
+}
+
 impl FourNationWarResultContext for WorldFourNationWarResultEffects<'_> {
     fn game_server_number_by_region_id(&mut self, region_id: i32) -> i32 {
         self.game.game_server_number_by_region_id(region_id)
@@ -12567,7 +12624,7 @@ impl CountryExileResultContext for WorldCountryDemiseEffects<'_> {
     }
 
     fn country_name(&mut self, country_id: u8) -> Vec<u8> {
-        self.base.country_name(country_id)
+        CountryExileResultContext::country_name(&mut self.base, country_id)
     }
 
     fn country_identity_name(&mut self, identity: u8) -> Vec<u8> {
@@ -12579,7 +12636,11 @@ impl CountryExileResultContext for WorldCountryDemiseEffects<'_> {
         string_id: &'static [u8],
         arguments: &[CountryExileTextArgument<'_>],
     ) -> Vec<u8> {
-        self.base.format_world_string(string_id, arguments)
+        CountryExileResultContext::format_world_string(
+            &mut self.base,
+            string_id,
+            arguments,
+        )
     }
 
     fn game_server_number_by_player_id(&mut self, player_id: i32) -> i32 {
@@ -12606,7 +12667,7 @@ impl CountryExileResultContext for WorldCountryDemiseEffects<'_> {
     }
 
     fn put_king_log(&mut self, text: &[u8]) {
-        self.base.put_king_log(text);
+        CountryExileResultContext::put_king_log(&mut self.base, text);
     }
 }
 
