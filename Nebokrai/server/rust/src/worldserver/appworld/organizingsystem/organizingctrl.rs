@@ -16,7 +16,8 @@
 //! `GetConfederationOrganizing` RVA `0x00036BF0`,
 //! `IsFactionMaster` RVA `0x000344A0`, `ReInitialFacFactionByLvl` RVA
 //! `0x00034C80` и `AddUnionToClientByFactionID` RVA `0x00038010` —
-//! `IMPLEMENTED`; `PushToEstaList` RVA `0x000367C0` — `IMPLEMENTED`. Точная пара:
+//! `IMPLEMENTED`; `PushToEstaList` RVA `0x000367C0` и первый overload
+//! `SendOrgaInfoToClient` RVA `0x00033750` — `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -102,6 +103,12 @@
 //! же union applicant или более ранний null/map match не теряется. Остальные
 //! достигнутые callbacks работают с faction-map либо получают union явно;
 //! ownership-замена не меняет их lookup и порядок эффектов.
+//! `SendOrgaInfoToClient(player, first, second, server, color, trailing)` при
+//! `server == -1` разрешает GameServer через live player; только literal `-1`
+//! после lookup прекращает путь. Exact EXE `0x0043378F..0x0043380B` строит
+//! `0x7F804` в порядке `player, first\0, color, trailing, second\0` и отправляет
+//! по numeric map ID. Нулевой lookup не отбрасывается: готовый `CGame` именно
+//! его возвращает при miss, а исходный caller проверял только `-1`.
 //!
 //! `RemovePersonFromApplyFactionList` вызывает `RemoveApplyMember(player)` у
 //! каждой faction в signed map-order, игнорирует все concrete return values и
@@ -306,6 +313,19 @@ pub(crate) struct TopInfoDeliveryReport {
     pub(crate) game_server_id: Option<i32>,
     pub(crate) skipped_expired: usize,
     pub(crate) deliveries: Vec<TopInfoDelivery>,
+}
+
+/// Наблюдаемая отправка первого overload `SendOrgaInfoToClient`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingInfoDelivery {
+    RouteRejected {
+        recipient_player_id: i32,
+    },
+    Sent {
+        recipient_player_id: i32,
+        game_server_id: i32,
+        result: Result<i32, SendMessageError>,
+    },
 }
 
 /// Typed-результат ordered `m_FacOrg` scan вместо старого null-dereference.
@@ -944,6 +964,42 @@ impl COrganizingCtrl {
                 union_id,
                 source,
             })
+    }
+
+    /// Строит и маршрутизирует точный player-targeted organizing-info wire.
+    pub(crate) fn send_organizing_info_to_client(
+        &self,
+        game: &CGame,
+        request: FactionMemberInfoRequest<'_>,
+    ) -> OrganizingInfoDelivery {
+        let game_server_id = if request.information_type == -1 {
+            game.game_server_number_by_player_id(request.recipient_player_id)
+        } else {
+            request.information_type
+        };
+        if game_server_id == -1 {
+            return OrganizingInfoDelivery::RouteRejected {
+                recipient_player_id: request.recipient_player_id,
+            };
+        }
+
+        let mut message = CMessage::new(0x0007_F804);
+        message.base_mut().add_long(request.recipient_player_id);
+        message
+            .base_mut()
+            .add(legacy_c_string_prefix(request.first_text));
+        message.base_mut().add_byte(0);
+        message.base_mut().add_ulong(request.color);
+        message.base_mut().add_ulong(request.trailing_value);
+        message
+            .base_mut()
+            .add(legacy_c_string_prefix(request.second_text));
+        message.base_mut().add_byte(0);
+        OrganizingInfoDelivery::Sent {
+            recipient_player_id: request.recipient_player_id,
+            game_server_id,
+            result: game.send_msg_to_game_server(game_server_id, &message),
+        }
     }
 
     /// Публикует одно other-faction изменение всем concrete faction-owner-ам.
@@ -2334,17 +2390,15 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::SendOrgaInfoToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1923
 // RVA: 0x00033750
 // ADDRESS: 00433750
 // PROTOTYPE: void __thiscall SendOrgaInfoToClient(long param_1, basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_2, basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_3, long param_4, ulong param_5, ulong param_6)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED_OWNER: `send_organizing_info_to_client` сохраняет route gate,
+// byte-exact `0x7F804` payload и исходно игнорировавшийся send result.
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::SendOrgaInfoToClient
