@@ -483,6 +483,19 @@
 //! 256-байтовый buffer и рассылает его всем member key. Exact ASM
 //! `0x004B8710..0x004B893C` и `0x004B8940..0x004B8A18` подтверждает порядок;
 //! typed block сохраняет уже изменённое поле вместо воспроизведения overflow.
+//! `Upgrade` проверяет membership, level `<12`, current level-record, faction
+//! experience, online-player, unsigned money, master-level и optional goods
+//! именно в этом порядке; отказы `WS0220..WS0223` адресуются инициатору.
+//! Success сначала вызывает полный `SetLvl`, затем `SetExp`, отправляет charge
+//! `0x7FE1E` (`player, signed money, goods\0`) и лишь после этого ищет record
+//! нового level. Поэтому late miss возвращает старый `false`, сохраняя level,
+//! experience side effects и charge. При hit пишется next upgrade-exp, идёт
+//! `WS0224(level)`, property update, dirty `1`, refresh всех online members и
+//! optional level-log. Exact ASM `0x004BCC60..0x004BD3EB` подтверждает порядок,
+//! unsigned money compare и quirk перехода на level 12: уже изменённый level
+//! заставляет `SetExp` вернуть MaximumLevel без списания faction experience.
+//! Goods catalog, inventory/money и DB-log остаются узким контекстом; charge и
+//! wire framing строятся существующим `CMessage`.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -503,6 +516,7 @@ use crate::worldserver::worldserver::game::{
 
 const MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0D;
 const FACTION_MEMBER_REMOVED_LOCAL_MESSAGE_TYPE: i32 = 0x60508;
+const FACTION_UPGRADE_CHARGE_MESSAGE_TYPE: i32 = 0x7FE1E;
 const APPLY_MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0A;
 const MAX_APPLY_PERSON_COUNT: u32 = 40;
 const APPLY_JOIN_NOTICE_CAPACITY: usize = 256;
@@ -527,6 +541,7 @@ const FACTION_DUB_NOTICE_CAPACITY: usize = 100;
 const FACTION_DUB_OLD_TITLE_CAPACITY: usize = 32;
 const FACTION_PURVIEW_NOTICE_CAPACITY: usize = 100;
 const FACTION_MAXIMUM_MEMBERS_NOTICE_CAPACITY: usize = 256;
+const FACTION_UPGRADE_NOTICE_CAPACITY: usize = 256;
 const PRONOUNCE_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_CONTENT_CAPACITY: usize = 2048;
 const OTHER_FACTION_NAME_CAPACITY: usize = 20;
@@ -1150,6 +1165,92 @@ pub(crate) enum FactionLevelBlock {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionUpgradeRejection {
+    PlayerNotMember,
+    MaximumLevel,
+    CurrentLevelParametersMissing,
+    InsufficientExperience,
+    PlayerOffline,
+    InsufficientMoney,
+    MasterLevelTooLow,
+    RequiredGoodsMissing,
+    NextLevelParametersMissing,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionUpgradeNotice {
+    Experience,
+    Money,
+    MasterLevel,
+    Goods,
+    Success,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionUpgradeFormatArgument<'a> {
+    Text(&'a [u8]),
+    Signed(i32),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionUpgradeChargeDelivery {
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionUpgradeProgress {
+    pub(crate) level_update: Option<FactionLevelUpdate>,
+    pub(crate) experience_update: Option<FactionExperienceUpdate>,
+    pub(crate) charge_delivery: Option<FactionUpgradeChargeDelivery>,
+    pub(crate) next_upgrade_experience: Option<i32>,
+    pub(crate) member_information: Option<FactionMemberInfoReport>,
+    pub(crate) property_deliveries: Option<Vec<FactionPropertyDelivery>>,
+    pub(crate) dirty_set: bool,
+    pub(crate) refreshed_player_ids: Vec<i32>,
+    pub(crate) log_written: bool,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionUpgradeOutcome {
+    Rejected {
+        reason: FactionUpgradeRejection,
+        notice_sent: bool,
+        progress: FactionUpgradeProgress,
+    },
+    Upgraded(FactionUpgradeProgress),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionUpgradeBlock {
+    MissingBaseProperty {
+        progress: FactionUpgradeProgress,
+    },
+    MissingPlayerMoney {
+        player_id: i32,
+        progress: FactionUpgradeProgress,
+    },
+    NoticeWouldOverflow {
+        notice: FactionUpgradeNotice,
+        formatted_len: usize,
+        progress: FactionUpgradeProgress,
+    },
+    Level {
+        source: FactionLevelBlock,
+        progress: FactionUpgradeProgress,
+    },
+    Experience {
+        source: FactionExperienceBlock,
+        progress: FactionUpgradeProgress,
+    },
+    UnterminatedMemberName {
+        player_id: i32,
+        source: UnterminatedMemberField,
+        progress: FactionUpgradeProgress,
+    },
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FactionLeaveWordUpdateBuildError {
     MissingLastLeaveWord,
@@ -1503,6 +1604,34 @@ pub(crate) trait FactionPurviewChangeContext: FactionOrganizingInfoContext {
 /// Узкая граница форматирования `WS0186` для level/max-member owner-ов.
 pub(crate) trait FactionLevelContext: FactionOrganizingInfoContext {
     fn format_world_string_signed(&mut self, string_id: &'static [u8], value: i32) -> Vec<u8>;
+}
+
+/// Узкая граница player inventory/money, goods catalog, локализации и level-log.
+pub(crate) trait FactionUpgradeContext: FactionLevelContext {
+    fn player_money(&self, player_id: i32) -> Option<u32>;
+
+    fn goods_in_packet(&self, player_id: i32, original_name: &[u8]) -> i32;
+
+    fn goods_display_name(&self, original_name: &[u8]) -> Option<Vec<u8>>;
+
+    fn format_upgrade_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[FactionUpgradeFormatArgument<'_>],
+    ) -> Vec<u8>;
+
+    fn update_player_faction_info(&mut self, player_id: i32);
+
+    fn faction_level_log_enabled(&self) -> bool;
+
+    fn write_faction_level_log(
+        &mut self,
+        faction_id: i32,
+        faction_name: &[u8],
+        level: i32,
+        master_id: i32,
+        master_name: &[u8],
+    );
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -3934,6 +4063,303 @@ impl CFaction {
         })
     }
 
+    /// Повышает faction-level с исходными проверками и частичными эффектами.
+    pub(crate) fn upgrade<Context>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Result<FactionUpgradeOutcome, FactionUpgradeBlock>
+    where
+        Context: FactionUpgradeContext,
+    {
+        let mut progress = empty_faction_upgrade_progress();
+        if self.is_member(player_id) == 0 {
+            return Ok(FactionUpgradeOutcome::Rejected {
+                reason: FactionUpgradeRejection::PlayerNotMember,
+                notice_sent: false,
+                progress,
+            });
+        }
+        let property = match self.base_property {
+            Some(property) => property,
+            None => return Err(FactionUpgradeBlock::MissingBaseProperty { progress }),
+        };
+        let current_level = property.level();
+        if current_level >= 12 {
+            return Ok(FactionUpgradeOutcome::Rejected {
+                reason: FactionUpgradeRejection::MaximumLevel,
+                notice_sent: false,
+                progress,
+            });
+        }
+        let Some(level_parameters) = parameters.get_level_param(current_level).cloned() else {
+            return Ok(FactionUpgradeOutcome::Rejected {
+                reason: FactionUpgradeRejection::CurrentLevelParametersMissing,
+                notice_sent: false,
+                progress,
+            });
+        };
+        let current_experience = property.experience();
+        if current_experience < level_parameters.experience {
+            let notice = match format_faction_upgrade_notice(
+                context,
+                FactionUpgradeNotice::Experience,
+                &[FactionUpgradeFormatArgument::Signed(
+                    level_parameters.experience,
+                )],
+            ) {
+                Ok(notice) => notice,
+                Err(formatted_len) => {
+                    return Err(FactionUpgradeBlock::NoticeWouldOverflow {
+                        notice: FactionUpgradeNotice::Experience,
+                        formatted_len,
+                        progress,
+                    });
+                }
+            };
+            let second_text = context.world_string(b"WS0119").unwrap_or_default();
+            context.send_organizing_info(FactionMemberInfoRequest {
+                recipient_player_id: player_id,
+                first_text: &notice,
+                second_text: legacy_c_string_visible_bytes(&second_text),
+                information_type: -1,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            });
+            return Ok(FactionUpgradeOutcome::Rejected {
+                reason: FactionUpgradeRejection::InsufficientExperience,
+                notice_sent: true,
+                progress,
+            });
+        }
+
+        let Some(player) = game.online_player_by_id(player_id as u32) else {
+            return Ok(FactionUpgradeOutcome::Rejected {
+                reason: FactionUpgradeRejection::PlayerOffline,
+                notice_sent: false,
+                progress,
+            });
+        };
+        let player_money = match context.player_money(player_id) {
+            Some(money) => money,
+            None => {
+                return Err(FactionUpgradeBlock::MissingPlayerMoney {
+                    player_id,
+                    progress,
+                });
+            }
+        };
+        if player_money < level_parameters.money as u32 {
+            let notice = match format_faction_upgrade_notice(
+                context,
+                FactionUpgradeNotice::Money,
+                &[FactionUpgradeFormatArgument::Signed(level_parameters.money)],
+            ) {
+                Ok(notice) => notice,
+                Err(formatted_len) => {
+                    return Err(FactionUpgradeBlock::NoticeWouldOverflow {
+                        notice: FactionUpgradeNotice::Money,
+                        formatted_len,
+                        progress,
+                    });
+                }
+            };
+            let second_text = context.world_string(b"WS0119").unwrap_or_default();
+            context.send_organizing_info(FactionMemberInfoRequest {
+                recipient_player_id: player_id,
+                first_text: &notice,
+                second_text: legacy_c_string_visible_bytes(&second_text),
+                information_type: -1,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            });
+            return Ok(FactionUpgradeOutcome::Rejected {
+                reason: FactionUpgradeRejection::InsufficientMoney,
+                notice_sent: true,
+                progress,
+            });
+        }
+        if i32::from(player.get_level()) < level_parameters.master_level {
+            let notice = match format_faction_upgrade_notice(
+                context,
+                FactionUpgradeNotice::MasterLevel,
+                &[FactionUpgradeFormatArgument::Signed(
+                    level_parameters.master_level,
+                )],
+            ) {
+                Ok(notice) => notice,
+                Err(formatted_len) => {
+                    return Err(FactionUpgradeBlock::NoticeWouldOverflow {
+                        notice: FactionUpgradeNotice::MasterLevel,
+                        formatted_len,
+                        progress,
+                    });
+                }
+            };
+            let second_text = context.world_string(b"WS0119").unwrap_or_default();
+            context.send_organizing_info(FactionMemberInfoRequest {
+                recipient_player_id: player_id,
+                first_text: &notice,
+                second_text: legacy_c_string_visible_bytes(&second_text),
+                information_type: -1,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            });
+            return Ok(FactionUpgradeOutcome::Rejected {
+                reason: FactionUpgradeRejection::MasterLevelTooLow,
+                notice_sent: true,
+                progress,
+            });
+        }
+
+        let goods_original = legacy_c_string_visible_bytes(&level_parameters.goods);
+        if level_parameters.goods.as_slice() != b"0"
+            && context.goods_in_packet(player_id, goods_original) < 1
+        {
+            let display_name = context
+                .goods_display_name(goods_original)
+                .unwrap_or_else(|| goods_original.to_vec());
+            let notice = match format_faction_upgrade_notice(
+                context,
+                FactionUpgradeNotice::Goods,
+                &[FactionUpgradeFormatArgument::Text(
+                    legacy_c_string_visible_bytes(&display_name),
+                )],
+            ) {
+                Ok(notice) => notice,
+                Err(formatted_len) => {
+                    return Err(FactionUpgradeBlock::NoticeWouldOverflow {
+                        notice: FactionUpgradeNotice::Goods,
+                        formatted_len,
+                        progress,
+                    });
+                }
+            };
+            let second_text = context.world_string(b"WS0119").unwrap_or_default();
+            context.send_organizing_info(FactionMemberInfoRequest {
+                recipient_player_id: player_id,
+                first_text: &notice,
+                second_text: legacy_c_string_visible_bytes(&second_text),
+                information_type: -1,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            });
+            return Ok(FactionUpgradeOutcome::Rejected {
+                reason: FactionUpgradeRejection::RequiredGoodsMissing,
+                notice_sent: true,
+                progress,
+            });
+        }
+
+        let level_update = match self.set_level(current_level.wrapping_add(1), parameters, context) {
+            Ok(update) => update,
+            Err(source) => {
+                return Err(FactionUpgradeBlock::Level { source, progress });
+            }
+        };
+        progress.level_update = Some(level_update);
+        let experience_update = match self.set_experience(
+            game,
+            current_experience.wrapping_sub(level_parameters.experience),
+        ) {
+            Ok(update) => update,
+            Err(source) => {
+                return Err(FactionUpgradeBlock::Experience { source, progress });
+            }
+        };
+        progress.experience_update = Some(experience_update);
+
+        let game_server_id = game.game_server_number_by_player_id(player_id);
+        let mut charge = CMessage::new(FACTION_UPGRADE_CHARGE_MESSAGE_TYPE);
+        charge.base_mut().add_long(player_id);
+        charge.base_mut().add_long(level_parameters.money);
+        charge
+            .base_mut()
+            .add(&legacy_c_string_wire_bytes(&level_parameters.goods));
+        progress.charge_delivery = Some(FactionUpgradeChargeDelivery {
+            game_server_id,
+            result: game.send_msg_to_game_server(game_server_id, &charge),
+        });
+
+        let upgraded_level = match self.level() {
+            Some(level) => level,
+            None => return Err(FactionUpgradeBlock::MissingBaseProperty { progress }),
+        };
+        let Some(next_level_parameters) = parameters.get_level_param(upgraded_level) else {
+            return Ok(FactionUpgradeOutcome::Rejected {
+                reason: FactionUpgradeRejection::NextLevelParametersMissing,
+                notice_sent: false,
+                progress,
+            });
+        };
+        let next_upgrade_experience = next_level_parameters.experience;
+        match self.base_property.as_mut() {
+            Some(property) => property.write_signed(0x20, next_upgrade_experience),
+            None => return Err(FactionUpgradeBlock::MissingBaseProperty { progress }),
+        }
+        progress.next_upgrade_experience = Some(next_upgrade_experience);
+
+        let notice = match format_faction_upgrade_notice(
+            context,
+            FactionUpgradeNotice::Success,
+            &[FactionUpgradeFormatArgument::Signed(upgraded_level)],
+        ) {
+            Ok(notice) => notice,
+            Err(formatted_len) => {
+                return Err(FactionUpgradeBlock::NoticeWouldOverflow {
+                    notice: FactionUpgradeNotice::Success,
+                    formatted_len,
+                    progress,
+                });
+            }
+        };
+        let second_text = context.world_string(b"WS0119").unwrap_or_default();
+        progress.member_information = Some(self.send_info_to_all_members(
+            &notice,
+            legacy_c_string_visible_bytes(&second_text),
+            -1,
+            |request| context.send_organizing_info(request),
+        ));
+        progress.property_deliveries = Some(match self.update_property_to_client(game) {
+            Ok(deliveries) => deliveries,
+            Err(_) => return Err(FactionUpgradeBlock::MissingBaseProperty { progress }),
+        });
+        self.set_change_data(1);
+        progress.dirty_set = true;
+        progress.refreshed_player_ids = self.update_player_faction_info(game, 0, |player_id| {
+            context.update_player_faction_info(player_id);
+        });
+
+        if context.faction_level_log_enabled() {
+            let member = self
+                .members
+                .get(&player_id)
+                .expect("membership gate и Upgrade не удаляют member");
+            let member_name_wire = match member.name_wire_bytes() {
+                Ok(value) => value,
+                Err(source) => {
+                    return Err(FactionUpgradeBlock::UnterminatedMemberName {
+                        player_id,
+                        source,
+                        progress,
+                    });
+                }
+            };
+            context.write_faction_level_log(
+                self.faction_id,
+                legacy_c_string_visible_bytes(&self.name),
+                upgraded_level,
+                member.id,
+                &member_name_wire[..member_name_wire.len() - 1],
+            );
+            progress.log_written = true;
+        }
+
+        Ok(FactionUpgradeOutcome::Upgraded(progress))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn change_member_purview<Context>(
         &mut self,
@@ -5753,6 +6179,49 @@ fn faction_purview_notice_string_id(
     }
 }
 
+fn empty_faction_upgrade_progress() -> FactionUpgradeProgress {
+    FactionUpgradeProgress {
+        level_update: None,
+        experience_update: None,
+        charge_delivery: None,
+        next_upgrade_experience: None,
+        member_information: None,
+        property_deliveries: None,
+        dirty_set: false,
+        refreshed_player_ids: Vec::new(),
+        log_written: false,
+    }
+}
+
+fn faction_upgrade_notice_string_id(notice: FactionUpgradeNotice) -> &'static [u8] {
+    match notice {
+        FactionUpgradeNotice::Experience => b"WS0220",
+        FactionUpgradeNotice::Money => b"WS0221",
+        FactionUpgradeNotice::MasterLevel => b"WS0222",
+        FactionUpgradeNotice::Goods => b"WS0223",
+        FactionUpgradeNotice::Success => b"WS0224",
+    }
+}
+
+fn format_faction_upgrade_notice<Context>(
+    context: &mut Context,
+    notice: FactionUpgradeNotice,
+    arguments: &[FactionUpgradeFormatArgument<'_>],
+) -> Result<Vec<u8>, usize>
+where
+    Context: FactionUpgradeContext,
+{
+    let formatted = context.format_upgrade_string(
+        faction_upgrade_notice_string_id(notice),
+        arguments,
+    );
+    let formatted = legacy_c_string_visible_bytes(&formatted);
+    if formatted.len() >= FACTION_UPGRADE_NOTICE_CAPACITY {
+        return Err(formatted.len());
+    }
+    Ok(formatted.to_vec())
+}
+
 fn fixed_do_join_string<const CAPACITY: usize, ContextBlock>(
     field: FactionDoJoinStringField,
     value: &[u8],
@@ -6798,7 +7267,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::Upgrade
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2288
