@@ -24,7 +24,8 @@
 //! `0x000C5FF0/0x000C60D0/0x000C61B0` и `SendInfoToAllMember` RVA
 //! `0x000C6290`, `DeleteOrgaToClient` RVA `0x000C5D20` и
 //! `UpdateMemberInfoToClient` RVA `0x000C5840`, `AddMembersToByteArray` RVA
-//! `0x000C21D0` и `AddToByteArray` RVA `0x000C6590` — `IMPLEMENTED`;
+//! `0x000C21D0`, `AddToByteArray` RVA `0x000C6590`, public-конструктор RVA
+//! `0x000C64D0` и `Initial` RVA `0x000C1FE0` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -38,14 +39,17 @@
 //! `+0x8`, signed master ID `+0x24`, ordered member-map `+0x28`, `tagTime`
 //! `+0x38` и signed dirty-mask `+0x48`. `CloneSaveData` возвращает null при
 //! нулевой mask; иначе создаёт отдельного `CUnion`, копирует ровно эти поля и
-//! весь member-map в signed key-order. `m_ApplyPerson` и
-//! `m_dwLastDemiseTime` clone не назначает и DB-owner не читает, поэтому они
-//! не получают выдуманного Rust-состояния.
+//! весь member-map в signed key-order. `m_ApplyPerson` clone не назначает:
+//! save-проекция хранит `None`, а live `Initial` — доказанный `Some(0)`.
+//! `m_dwLastDemiseTime` clone не назначает и DB-owner не читает, поэтому это
+//! поле пока не получает выдуманного Rust-состояния.
 //!
 //! `Vec<u8>`, `BTreeMap` и обычный `Clone/Drop` заменяют только MSVC string,
-//! tree и `new/delete`. Rust-layout не выдаётся за старый ABI. Конструктор
-//! live-союза и `Initial` с organizing callbacks остаются raw; узкий
-//! `from_reached_save_state` создаёт только уже доказанную save-проекцию.
+//! tree и `new/delete`. Rust-layout не выдаётся за старый ABI. Узкий
+//! `from_reached_save_state` создаёт save-проекцию, а `from_live_state`
+//! выполняет public-конструктор и `Initial` с явными callbacks. Private default
+//! constructor, который нужен старому allocation/clone plumbing и оставляет
+//! data-поля неназначенными, отдельно не имитируется safe Rust-значением.
 //!
 //! PDB публикует `CUnion::IsMember(long)` на том же RVA `0x000BD840`, что и
 //! faction-вариант: identical-code folding допустим, потому что `m_lID` и
@@ -146,18 +150,29 @@
 //! `LastOnlineTime`. Исходный безграничный `strcpy` в 32-байтовое member name
 //! заменён typed-остановкой только для недопустимого переполнения; временный
 //! 256-байтовый master-name buffer устранён прямой C-string сериализацией.
+//! Public-конструктор назначает ID, входные name/master ID, снимает отдельное
+//! established time и вызывает `Initial`. Тот сбрасывает apply-person, снимает
+//! member time, строит master record с job `1` и правами
+//! `2,0,0,2,2,0,0,0,0,0,0`, а title получает по внешнему StringTable ID
+//! `WS0154`. Найденная master-faction заменяет union name и задаёт level; EXE,
+//! в отличие от Linux-донора, не копирует её name в member record. Старые
+//! неинициализированные name/region bytes заменены нулями без добавления этой
+//! отсутствующей копии. Затем record вставляется под master key, faction
+//! получает union ID, dirty-mask сбрасывается и обновляются её online players.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::faction::{
     current_local_member_time, FactionEnemyDelivery, FactionInitialPropertyBlock,
     FactionMemberInfoReport, FactionMemberInfoRequest, FactionOwnedCityDelivery,
-    FactionOwnedCityUpdateBuildError, FactionPropertyDelivery, OwnedCityMutationBuildError,
+    FactionOwnedCityUpdateBuildError, FactionPropertyDelivery, FactionSuperiorOrganizingBlock,
+    OwnedCityMutationBuildError,
 };
 use super::organizing::{
     EOperator, EPurview, EPurviewOwnState, MemberPurviewMutation, TagMemInfo, TagTimeValue,
     UnterminatedMemberField,
 };
+use super::organizingparam::COrganizingParam;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::worldserver::game::CGame;
 
@@ -293,6 +308,16 @@ pub(crate) trait UnionPlayerRefreshContext {
     ) -> Option<Vec<i32>>;
 }
 
+/// Mutable callback `Initial` для назначения union ID master-faction.
+pub(crate) trait UnionInitialMutationContext {
+    fn faction_set_superior_organizing(
+        &mut self,
+        faction_id: i32,
+        union_id: i32,
+        parameters: &COrganizingParam,
+    ) -> Result<bool, FactionSuperiorOrganizingBlock>;
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct UnionFactionPlayerRefreshReport {
     pub(crate) faction_id: i32,
@@ -302,6 +327,26 @@ pub(crate) struct UnionFactionPlayerRefreshReport {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct UnionPlayerRefreshReport {
     pub(crate) factions: Vec<UnionFactionPlayerRefreshReport>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionInitialReport {
+    pub(crate) master_faction_found: bool,
+    pub(crate) superior_assigned: bool,
+    pub(crate) player_refresh: UnionPlayerRefreshReport,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionInitialBlock {
+    MasterTitleWouldOverflow {
+        visible_length: usize,
+        capacity: usize,
+    },
+    MissingFactionLevel(UnionFactionLevelBlock),
+    SuperiorOrganizing {
+        faction_id: i32,
+        source: FactionSuperiorOrganizingBlock,
+    },
 }
 
 /// Read-only faction callback для полных enemy/owned-city snapshot-ов.
@@ -467,10 +512,44 @@ pub(crate) struct CUnion {
     master_id: i32,
     members: BTreeMap<i32, TagMemInfo>,
     established_time: TagTimeValue,
+    apply_person: Option<i32>,
     change_data_type: i32,
 }
 
 impl CUnion {
+    /// Строит live-union и выполняет доказанный `Initial` с явными callbacks.
+    ///
+    /// При safe-блокировке возвращает сам частично инициализированный owner,
+    /// чтобы caller не терял уже выполненные внешние эффекты.
+    pub(crate) fn from_live_state<Context>(
+        union_id: i32,
+        master_id: i32,
+        name: Vec<u8>,
+        master_title: Option<&[u8]>,
+        context: &mut Context,
+        parameters: &COrganizingParam,
+        game: &CGame,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<(Self, UnionInitialReport), (Self, UnionInitialBlock)>
+    where
+        Context:
+            UnionFactionMemberContext + UnionInitialMutationContext + UnionPlayerRefreshContext,
+    {
+        let mut union = Self {
+            union_id,
+            name,
+            master_id,
+            members: BTreeMap::new(),
+            established_time: current_local_member_time(),
+            apply_person: None,
+            change_data_type: 0,
+        };
+        match union.initial_live(master_title, context, parameters, game, update_player) {
+            Ok(report) => Ok((union, report)),
+            Err(source) => Err((union, source)),
+        }
+    }
+
     /// Создаёт достигнутую save-проекцию, не имитируя live `Initial`.
     pub(crate) fn from_reached_save_state(
         union_id: i32,
@@ -486,8 +565,104 @@ impl CUnion {
             master_id,
             members,
             established_time,
+            apply_person: None,
             change_data_type,
         }
+    }
+
+    /// Выполняет машинный `Initial` поверх уже созданного live-owner-а.
+    pub(crate) fn initial_live<Context>(
+        &mut self,
+        master_title: Option<&[u8]>,
+        context: &mut Context,
+        parameters: &COrganizingParam,
+        game: &CGame,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<UnionInitialReport, UnionInitialBlock>
+    where
+        Context:
+            UnionFactionMemberContext + UnionInitialMutationContext + UnionPlayerRefreshContext,
+    {
+        self.apply_person = Some(0);
+        let member_time = current_local_member_time();
+
+        let visible_title = legacy_c_string_visible_bytes(master_title.unwrap_or_default());
+        let mut title = [0; 64];
+        if visible_title.len() >= title.len() {
+            return Err(UnionInitialBlock::MasterTitleWouldOverflow {
+                visible_length: visible_title.len(),
+                capacity: title.len(),
+            });
+        }
+        title[..visible_title.len()].copy_from_slice(visible_title);
+
+        let master_name = if self.master_id > 0 {
+            context.faction_name(self.master_id)
+        } else {
+            None
+        };
+        let master_faction_found = master_name.is_some();
+        let level = if master_faction_found {
+            match context.faction_level(self.master_id) {
+                Ok(Some(level)) => level,
+                Ok(None) => 0,
+                Err(source) => return Err(UnionInitialBlock::MissingFactionLevel(source)),
+            }
+        } else {
+            0
+        };
+        if let Some(master_name) = master_name {
+            self.name = master_name;
+        }
+
+        let member = TagMemInfo::from_complete_fields(
+            self.master_id,
+            [0; 32],
+            level,
+            0,
+            1,
+            title,
+            [
+                EPurviewOwnState::Permit,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::Permit,
+                EPurviewOwnState::Permit,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+            ],
+            [0; 64],
+            member_time,
+            false,
+        );
+        self.members.insert(self.master_id, member);
+
+        let superior_assigned = if master_faction_found {
+            context
+                .faction_set_superior_organizing(self.master_id, self.union_id, parameters)
+                .map_err(|source| UnionInitialBlock::SuperiorOrganizing {
+                    faction_id: self.master_id,
+                    source,
+                })?
+        } else {
+            false
+        };
+        self.change_data_type = 0;
+        let player_refresh = self.update_player_faction_info(
+            self.master_id,
+            context,
+            game,
+            update_player,
+        );
+        Ok(UnionInitialReport {
+            master_faction_found,
+            superior_assigned,
+            player_refresh,
+        })
     }
 
     /// Воспроизводит nullable результат virtual `CloneSaveData`.
@@ -498,6 +673,7 @@ impl CUnion {
             master_id: self.master_id,
             members: self.members.clone(),
             established_time: self.established_time,
+            apply_person: None,
             change_data_type: self.change_data_type,
         })
     }
@@ -526,6 +702,11 @@ impl CUnion {
     /// Возвращает byte-exact время учреждения; старый const-reference был Copy.
     pub(crate) const fn established_time(&self) -> TagTimeValue {
         self.established_time
+    }
+
+    /// Save-проекция не выдумывает transient apply-person; live `Initial` — 0.
+    pub(crate) const fn apply_person(&self) -> Option<i32> {
+        self.apply_person
     }
 
     /// Legacy union не менял title/job и всегда сообщал успех.
@@ -1976,7 +2157,7 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CUnion::Initial
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:36
@@ -2496,7 +2677,7 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CUnion::CUnion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:26
