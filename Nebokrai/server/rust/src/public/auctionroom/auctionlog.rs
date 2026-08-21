@@ -1,9 +1,8 @@
 //! Журнал аукциона исторического `WorldServer`.
 //!
 //! Статус `CAuctionLog`, destructor, `AddItem`, `ComputePage`,
-//! `AddByteAtCurPage`, `AddByteGoodsLog`, `CollectNoNotice`, `LoadItem` и
-//! `SendAuctionMsg2GS` — `IMPLEMENTED`; `UpdateAuctionBangDB` ниже остаётся
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `AddByteAtCurPage`, `AddByteGoodsLog`, `CollectNoNotice`, `LoadItem`,
+//! `UpdateAuctionBangDB` и `SendAuctionMsg2GS` — `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -59,6 +58,15 @@
 //! придуманный нулевой GUID. Exact create/query/type failures возвращают
 //! `false`; machine-код `0x0044BCBD..0x0044BD72` и catch `0x0044CBB1`
 //! подтверждают эти ветви, обычный полный проход возвращает исходный `true`.
+//!
+//! `UpdateAuctionBangDB` после доступного Log DB connection сразу очищает
+//! live ranking, читает только первую строку каждого из двух exact query и
+//! публикует соответствующий узел до связанного `UPDATE AuctionMostGoods`.
+//! Транзакции нет: ошибка сохраняет уже опубликованный prefix и уже выполненный
+//! первый update. Linux C++ заменял это staging-вектором, транзакцией, `TOP 1`,
+//! tie-breaker-ами и retry-worker-ом; это более надёжная, но другая семантика.
+//! Tiberius используется как зрелая транспортная реализация, не меняя порядок
+//! запросов, state mutation либо исходный boolean-результат.
 
 use std::collections::BTreeMap;
 
@@ -314,6 +322,41 @@ pub(crate) enum AuctionLogLoadOutcome {
     BlockedMissingFact(AuctionLogLoadBlock),
 }
 
+/// Этап exact неатомарного `CAuctionLog::UpdateAuctionBangDB`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AuctionBangUpdateStage {
+    MostMoneyQuery,
+    MostMoneyRow,
+    MostMoneyUpdate,
+    MostCountQuery,
+    MostCountRow,
+    MostCountUpdate,
+}
+
+/// Причина исходного `false` ежедневного обновления ranking-а.
+#[derive(Debug)]
+pub(crate) enum AuctionBangUpdateFailure {
+    MissingConnection,
+    Database {
+        stage: AuctionBangUpdateStage,
+        source: tiberius::error::Error,
+    },
+    MissingRow {
+        stage: AuctionBangUpdateStage,
+    },
+    MissingRequiredValue {
+        stage: AuctionBangUpdateStage,
+        column: &'static str,
+    },
+}
+
+/// Полный доказанный boolean-итог `UpdateAuctionBangDB`.
+#[derive(Debug)]
+pub(crate) enum AuctionBangUpdateOutcome {
+    ReturnedTrue,
+    ReturnedFalse(AuctionBangUpdateFailure),
+}
+
 enum AuctionHistoryRowDecode {
     Database(tiberius::error::Error),
     MissingRequiredValue(&'static str),
@@ -502,6 +545,86 @@ impl CAuctionLog {
         }
 
         AuctionLogLoadOutcome::ReturnedTrue
+    }
+
+    /// Неатомарно пересчитывает две exact строки `AuctionMostGoods`.
+    pub(crate) async fn update_auction_bang_db(
+        &mut self,
+        active_connection: Option<&mut WorldTdsClient>,
+    ) -> AuctionBangUpdateOutcome {
+        let Some(active_connection) = active_connection else {
+            return AuctionBangUpdateOutcome::ReturnedFalse(
+                AuctionBangUpdateFailure::MissingConnection,
+            );
+        };
+
+        self.goods_list.clear();
+
+        let most_money = match query_first_auction_bang(
+            active_connection,
+            "select dwbaseid,Moneynum from Auctionlog where MoneyNum=(select max(moneynum)from auctionlog where moneytype = 1 and opttype = -1 and DateDiff(day, log_time, getdate())< 30) ",
+            "moneynum",
+            2,
+            AuctionBangUpdateStage::MostMoneyQuery,
+            AuctionBangUpdateStage::MostMoneyRow,
+        )
+        .await
+        {
+            Ok(node) => node,
+            Err(failure) => {
+                return AuctionBangUpdateOutcome::ReturnedFalse(failure);
+            }
+        };
+        self.goods_list.push(most_money);
+        let most_money_update = format!(
+            "update AuctionMostGoods SET dwbaseid = {},dwNum = {} where dwOpt = 2",
+            most_money.base_id as i32, most_money.count as i32,
+        );
+        if let Err(source) = active_connection
+            .execute(most_money_update.as_str(), &[])
+            .await
+        {
+            return AuctionBangUpdateOutcome::ReturnedFalse(
+                AuctionBangUpdateFailure::Database {
+                    stage: AuctionBangUpdateStage::MostMoneyUpdate,
+                    source,
+                },
+            );
+        }
+
+        let most_count = match query_first_auction_bang(
+            active_connection,
+            "SELECT dwbaseid,SUM(Amount) as dwCount FROM AuctionLog where opttype = -1 AND DateDiff(day, log_time, getdate())< 30 GROUP BY dwbaseid ORDER BY dwCount DESC",
+            "dwCount",
+            1,
+            AuctionBangUpdateStage::MostCountQuery,
+            AuctionBangUpdateStage::MostCountRow,
+        )
+        .await
+        {
+            Ok(node) => node,
+            Err(failure) => {
+                return AuctionBangUpdateOutcome::ReturnedFalse(failure);
+            }
+        };
+        self.goods_list.push(most_count);
+        let most_count_update = format!(
+            "update AuctionMostGoods SET dwbaseid = {},dwNum = {} where dwOpt = 1",
+            most_count.base_id as i32, most_count.count as i32,
+        );
+        if let Err(source) = active_connection
+            .execute(most_count_update.as_str(), &[])
+            .await
+        {
+            return AuctionBangUpdateOutcome::ReturnedFalse(
+                AuctionBangUpdateFailure::Database {
+                    stage: AuctionBangUpdateStage::MostCountUpdate,
+                    source,
+                },
+            );
+        }
+
+        AuctionBangUpdateOutcome::ReturnedTrue
     }
 
     /// Сохраняет exact переход page и исторически странный bool результата.
@@ -777,6 +900,61 @@ fn decode_auction_bang_row(row: &Row) -> Result<AuctionBangNode, AuctionHistoryR
     })
 }
 
+async fn query_first_auction_bang(
+    active_connection: &mut WorldTdsClient,
+    sql: &'static str,
+    count_column: &'static str,
+    operation: u32,
+    query_stage: AuctionBangUpdateStage,
+    row_stage: AuctionBangUpdateStage,
+) -> Result<AuctionBangNode, AuctionBangUpdateFailure> {
+    let mut rows = active_connection.simple_query(sql).await.map_err(|source| {
+        AuctionBangUpdateFailure::Database {
+            stage: query_stage,
+            source,
+        }
+    })?;
+    loop {
+        let item = rows.try_next().await.map_err(|source| {
+            AuctionBangUpdateFailure::Database {
+                stage: row_stage,
+                source,
+            }
+        })?;
+        let Some(item) = item else {
+            return Err(AuctionBangUpdateFailure::MissingRow { stage: row_stage });
+        };
+        let Some(row) = item.into_row() else {
+            continue;
+        };
+        let base_id = row
+            .try_get::<i32, _>("dwbaseid")
+            .map_err(|source| AuctionBangUpdateFailure::Database {
+                stage: row_stage,
+                source,
+            })?
+            .ok_or(AuctionBangUpdateFailure::MissingRequiredValue {
+                stage: row_stage,
+                column: "dwbaseid",
+            })? as u32;
+        let count = row
+            .try_get::<i32, _>(count_column)
+            .map_err(|source| AuctionBangUpdateFailure::Database {
+                stage: row_stage,
+                source,
+            })?
+            .ok_or(AuctionBangUpdateFailure::MissingRequiredValue {
+                stage: row_stage,
+                column: count_column,
+            })? as u32;
+        return Ok(AuctionBangNode {
+            base_id,
+            count,
+            operation,
+        });
+    }
+}
+
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
@@ -951,7 +1129,7 @@ fn decode_auction_bang_row(row: &Row) -> Result<AuctionBangNode, AuctionHistoryR
 
 // ============================================================================
 // FUNCTION: CAuctionLog::UpdateAuctionBangDB
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp:129
@@ -959,6 +1137,8 @@ fn decode_auction_bang_row(row: &Row) -> Result<AuctionBangNode, AuctionHistoryR
 // ADDRESS: 0044cbf0
 // PROTOTYPE: bool __thiscall UpdateAuctionBangDB(void)
 //
+// Реализовано выше. Machine-код подтверждает clear до первого query, push до
+// каждого UPDATE, отсутствие transaction и false на create/catch путях.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

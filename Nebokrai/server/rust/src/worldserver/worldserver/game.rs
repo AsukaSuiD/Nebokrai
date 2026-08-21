@@ -280,10 +280,13 @@
 //! отдельных singleton-вызовов, сохраняет Appellation guard, nullable
 //! HonorRanks instance, strict day mismatch, точный tick/log/OnNewDay/log
 //! порядок и затем безусловно достигает AuctionBang daily gate. Сырые
-//! PlayerRanks/AuctionBang DB-вызовы не притворяются готовыми и остаются
-//! локальным trait-контрактом своих owners; достигнутый `CHonorRanks` уже
-//! исполняется напрямую. Отдельный init-проход теперь так же напрямую вызывает
-//! потоковый `CAuctionLog::LoadItem`, сохраняет его partial publication и
+//! PlayerRanks DB-вызовы остаются локальным trait-контрактом своего owner-а;
+//! достигнутые `CHonorRanks` и `CAuctionLog` исполняются напрямую. Суточная
+//! AuctionBang-ветвь передаёт реальный Log DB connection, присваивает день до
+//! update и сохраняет его неатомарный outcome. Неинициализированный исходным
+//! constructor-ом `m_lAucOldDay` остаётся typed `BLOCKED_MISSING_FACT`, а не
+//! получает придуманное стартовое значение. Отдельный init-проход напрямую
+//! вызывает потоковый `CAuctionLog::LoadItem`, сохраняет partial publication и
 //! исходно продолжает инициализацию после `false`, меняя только текст лога.
 //! `AtomicBool` использует отдельные relaxed load/store, а не `swap`, сохраняя
 //! исходную границу между проверкой producer-флага и его очисткой.
@@ -920,7 +923,9 @@ use crate::nets::networld::message::{CMessage, SendMessageError, WorldMessageHan
 use crate::nets::networld::mynetclient::CMyNetClient;
 use crate::nets::networld::mynetserver::{CMyNetServer, WorldServerEvent};
 use crate::nets::servers::{ServerCommandHandle, ServerHostError};
-use crate::public::auctionlog::{AuctionLogLoadOutcome, CAuctionLog};
+use crate::public::auctionlog::{
+    AuctionBangUpdateOutcome, AuctionLogLoadOutcome, CAuctionLog,
+};
 use crate::public::date::TagTime;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
 use crate::public::readwrite::read_to;
@@ -2189,6 +2194,8 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) organizing: &'a mut COrganizingCtrl,
     pub(crate) country: &'a mut CCountryHandler,
     pub(crate) honor_ranks: &'a mut CHonorRanks,
+    pub(crate) auction_log: &'a mut CAuctionLog,
+    pub(crate) auction_log_database: Option<&'a mut WorldTdsClient>,
     pub(crate) session_factory: &'a mut CSessionFactory,
     pub(crate) timer: &'a mut CTimer<TimerCallback>,
     pub(crate) faction_war: &'a mut CFactionWarSys,
@@ -2233,7 +2240,7 @@ pub(crate) enum WorldMainLoopBlock<FactionContextBlock, LeiTingContextBlock> {
     Largess(WorldMainLoopLargessGateReport),
     Refresh(WorldMainLoopRefreshStageReport),
     Reload(WorldReloadProfilesReport),
-    Maintenance(WorldHonorRanksMaintenanceBlock),
+    Maintenance(WorldMainLoopMaintenanceBlock),
     SaveAllOrganizations {
         block: OrganizingSaveDataBlock,
     },
@@ -2946,18 +2953,12 @@ impl WorldPlayerRanksRequestState {
     }
 }
 
-/// Операции соседних PlayerRanks/AuctionBang owners в порядке MainLoop.
+/// Операции соседнего ещё не достигнутого PlayerRanks owner-а.
 pub(crate) trait WorldMainLoopMaintenanceOwners {
     /// Пересчитывает PlayerRanks.
     fn stat_player_ranks(&mut self);
     /// Публикует PlayerRanks подключённым GameServer.
     fn update_player_ranks_to_game_server(&mut self);
-    /// Возвращает сохранённый день месяца AuctionBang.
-    fn auction_old_day(&mut self) -> i32;
-    /// Присваивает сохранённый день месяца AuctionBang.
-    fn set_auction_old_day(&mut self, month_day: i32);
-    /// Обновляет AuctionBang DB и сообщает исходный boolean-результат.
-    fn update_auction_bang_db(&mut self) -> bool;
 }
 
 /// Итог ручной PlayerRanks-ветви одного MainLoop turn.
@@ -2998,7 +2999,7 @@ pub(crate) struct WorldHonorRanksMaintenanceBlock {
 }
 
 /// Итог безусловно достигнутого AuctionBang day gate.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) enum WorldAuctionBangMaintenanceDisposition {
     AlreadyCurrent {
         current_month_day: i32,
@@ -3008,13 +3009,21 @@ pub(crate) enum WorldAuctionBangMaintenanceDisposition {
         current_month_day: i32,
         previous_old_month_day: i32,
         update_succeeded: bool,
+        outcome: AuctionBangUpdateOutcome,
         start_log: AddLogTextDisposition,
         result_log: AddLogTextDisposition,
     },
 }
 
+/// Первая безопасно неразрешимая граница maintenance-блока.
+#[derive(Debug)]
+pub(crate) enum WorldMainLoopMaintenanceBlock {
+    HonorRanks(WorldHonorRanksMaintenanceBlock),
+    AuctionOldDayUnknown { current_month_day: i32 },
+}
+
 /// Полный maintenance-сегмент между reload и collect-player-data.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct WorldMainLoopMaintenanceReport {
     pub(crate) player_ranks: WorldPlayerRanksMaintenanceDisposition,
     pub(crate) honor_ranks: WorldHonorRanksMaintenanceDisposition,
@@ -8560,7 +8569,7 @@ impl CGame {
         clippy::too_many_arguments,
         reason = "явные state/domain/platform owners сохраняют исходные границы процесса"
     )]
-    pub(crate) fn main_loop<
+    pub(crate) async fn main_loop<
         TimerCallback,
         Maintenance,
         FactionContext,
@@ -8661,12 +8670,15 @@ impl CGame {
             configuration.use_appellation_function,
             owners.maintenance,
             owners.honor_ranks,
+            owners.auction_log,
+            owners.auction_log_database.as_deref_mut(),
             owners.log,
             &mut callbacks.get_tick,
             &mut callbacks.get_log_local_time,
             &mut callbacks.get_auction_month_day,
             &mut callbacks.put_log_info,
-        );
+        )
+        .await;
         let maintenance = match maintenance {
             Ok(maintenance) => maintenance,
             Err(block) => return Err(Box::new(WorldMainLoopBlock::Maintenance(block))),
@@ -9037,9 +9049,9 @@ impl CGame {
     /// Выполняет цельный PlayerRanks/HonorRanks/AuctionBang maintenance-блок.
     #[allow(
         clippy::too_many_arguments,
-        reason = "caller сохраняет три clock/log callbacks и явные границы трёх сырых singleton owners"
+        reason = "caller сохраняет clock/log callbacks и явные границы доменных owners"
     )]
-    pub(crate) fn run_main_loop_maintenance_stage<
+    pub(crate) async fn run_main_loop_maintenance_stage<
         Owners,
         GetTick,
         GetLocalTime,
@@ -9051,12 +9063,14 @@ impl CGame {
         use_appellation_function: bool,
         owners: &mut Owners,
         honor_ranks_owner: &mut CHonorRanks,
+        auction_log: &mut CAuctionLog,
+        auction_log_database: Option<&mut WorldTdsClient>,
         log: &mut WorldLogTextOwner,
         get_tick: &mut GetTick,
         get_local_time: &mut GetLocalTime,
         get_auction_month_day: &mut GetAuctionMonthDay,
         put_log_info: &mut PutLogInfo,
-    ) -> Result<WorldMainLoopMaintenanceReport, WorldHonorRanksMaintenanceBlock>
+    ) -> Result<WorldMainLoopMaintenanceReport, WorldMainLoopMaintenanceBlock>
     where
         Owners: WorldMainLoopMaintenanceOwners,
         GetTick: FnMut() -> u32,
@@ -9093,13 +9107,15 @@ impl CGame {
                         &mut *put_log_info,
                     );
                     let rollover = honor_ranks_owner.on_new_day(self, false).map_err(|source| {
-                        WorldHonorRanksMaintenanceBlock {
-                            current_day,
-                            previous_sort_day,
-                            started_at_ms,
-                            start_log: start_log.clone(),
-                            source,
-                        }
+                        WorldMainLoopMaintenanceBlock::HonorRanks(
+                            WorldHonorRanksMaintenanceBlock {
+                                current_day,
+                                previous_sort_day,
+                                started_at_ms,
+                                start_log: start_log.clone(),
+                                source,
+                            },
+                        )
                     })?;
                     let finished_at_ms = get_tick();
                     let elapsed_ms = finished_at_ms.wrapping_sub(started_at_ms);
@@ -9130,7 +9146,11 @@ impl CGame {
         };
 
         let current_month_day = get_auction_month_day();
-        let old_month_day = owners.auction_old_day();
+        let Some(old_month_day) = auction_log.old_auction_day() else {
+            return Err(WorldMainLoopMaintenanceBlock::AuctionOldDayUnknown {
+                current_month_day,
+            });
+        };
         let auction_bang = if current_month_day == old_month_day {
             WorldAuctionBangMaintenanceDisposition::AlreadyCurrent {
                 current_month_day,
@@ -9144,8 +9164,11 @@ impl CGame {
                 &mut *get_local_time,
                 &mut *put_log_info,
             );
-            owners.set_auction_old_day(current_month_day);
-            let update_succeeded = owners.update_auction_bang_db();
+            auction_log.set_old_auction_day(current_month_day);
+            let outcome = auction_log
+                .update_auction_bang_db(auction_log_database)
+                .await;
+            let update_succeeded = matches!(&outcome, AuctionBangUpdateOutcome::ReturnedTrue);
             let result_text = if update_succeeded {
                 b"AuctionBang Update Success!".as_slice()
             } else {
@@ -9162,6 +9185,7 @@ impl CGame {
                 current_month_day,
                 previous_old_month_day: old_month_day,
                 update_succeeded,
+                outcome,
                 start_log,
                 result_log,
             }
