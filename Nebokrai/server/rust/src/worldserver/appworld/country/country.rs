@@ -4,6 +4,8 @@
 //! `0x000A4750/0x000A4790/0x000A47D0`, `CCountry::AddToByteArray` RVA `0x000C6E30`,
 //! `CCountry::IsKing/CanOperate/Exile/SuccessExiled/Silence/Absolve` RVA
 //! `0x000C7160/0x000C7520/0x000C7AD0/0x000C7EE0/0x000C81D0/0x000C8570`,
+//! governance-цепочка `CanAscend/CanDemise/DeposeKing/RegisterKing/Demise`
+//! RVA `0x000CA830/0x000CAC30/0x000CB030/0x000CB8F0/0x000CC320`,
 //! `CCountry::CloneCountryData` RVA `0x000C9CE0` и
 //! `CCountry::CloneSaveData` RVA `0x000CC470` — `IMPLEMENTED`; остальной корпус
 //! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
@@ -76,6 +78,24 @@
 //! `0x7FF10` и `0x7FF07`. Exact disassembly `0x004C6B5B/0x004C6BDA/0x004C6BF3`
 //! подтвердил, что base-info wire несёт quest-switch короля и пары
 //! quest-switch/appointed министров, а не DB salary flags.
+//! `0x60308` читает `target:i32, king:i32, country:i8` и строго идёт через
+//! `IsKing -> CanOperate(0) -> Demise`. Selector `0` после безусловного чтения
+//! общего minimum проверяет войну, `_def_king_control_point_demise_need` и
+//! именно DB/live appointed-флаг короля по `+0x4A`. `CanDemise` требует обоих
+//! online-player и сохраняет `m_bDemiseFaction=true`, если кандидат не master;
+//! этот флаг не откатывается при последующем отказе `CanAscend`. Последний
+//! сохраняет машинную ошибку `IsFreeFaction(king_player_id)` вместо faction ID.
+//! `RegisterKing(1)` либо запоминает первый город, очищает весь city-list старой
+//! faction virtual-вызовом `+0x88`, отдаёт новой только запомненный город и
+//! публикует `0x7FE27`,
+//! либо вызывает полный уже восстановленный `CFaction::demise`; затем
+//! `DeposeKing(2)` снимает министров в unsigned job-order, назначает нового
+//! короля, списывает demise-cost и публикует `0x7FF04/0x7FF12`. Внешний
+//! `Demise` не проверяет результат регистрации: всегда отправляет `0x7FF10`
+//! текущему королю и при пройденном `CanDemise` возвращает ID прежнего. Exact
+//! `0x004CC416/0x004CC44B` подтверждает отдельный ноль для self-target и этот
+//! необычный return. Linux-донор ошибочно возвращал target для self-target и
+//! опускал часть `0x7FE27`/вложенных side effect; Rust следует EXE/PDB.
 //! Clone копирует country ID, treasury, power,
 //! current/level-up tech exp, tech level, king identity/flags и war-result.
 //! Три king-point ограничиваются соответствующими максимумами `CCountryParam`.
@@ -154,6 +174,9 @@ pub(crate) struct CCountry {
     pub(crate) country_war_result: i32,
     pub(crate) ministers: BTreeMap<u8, CountryMinisterState>,
     pub(crate) null_minister_slots: BTreeSet<u8>,
+    pub(crate) city_id: i32,
+    pub(crate) demise_faction: bool,
+    pub(crate) king_timestamp_ms: u32,
     pub(crate) is_warring: bool,
     pub(crate) silence_count: i32,
     pub(crate) exile_count: i32,
@@ -225,8 +248,26 @@ pub(crate) struct CountryExileMessageDelivery {
 pub(crate) struct CountryExileTarget {
     pub(crate) name: Vec<u8>,
     pub(crate) country: Option<u8>,
+    pub(crate) level: u8,
+    pub(crate) credit: u32,
     pub(crate) pk_count: u16,
     pub(crate) is_god: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CountryFactionSnapshot {
+    pub(crate) faction_id: i32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) owned_cities: Vec<i32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryGovernanceContextBlock {
+    FactionMasterLookup,
+    PlayerFactionLookup,
+    UnionLookup,
+    OwnedCityMutation,
+    FactionDemise,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -243,6 +284,55 @@ pub(crate) trait CountryExileResultContext {
         &mut self,
         player_id: i32,
     ) -> Option<CountryAbsolveCounterReset>;
+    fn faction_id_by_master_player(
+        &mut self,
+        _player_id: i32,
+    ) -> Result<i32, CountryGovernanceContextBlock> {
+        Err(CountryGovernanceContextBlock::FactionMasterLookup)
+    }
+    fn faction_id_by_player(
+        &mut self,
+        _player_id: i32,
+    ) -> Result<i32, CountryGovernanceContextBlock> {
+        Err(CountryGovernanceContextBlock::PlayerFactionLookup)
+    }
+    fn faction_snapshot(&mut self, _faction_id: i32) -> Option<CountryFactionSnapshot> {
+        None
+    }
+    fn union_id_for_faction(
+        &mut self,
+        _faction_id: i32,
+    ) -> Result<i32, CountryGovernanceContextBlock> {
+        Err(CountryGovernanceContextBlock::UnionLookup)
+    }
+    fn clear_faction_owned_cities(
+        &mut self,
+        _faction_id: i32,
+    ) -> Result<(), CountryGovernanceContextBlock> {
+        Err(CountryGovernanceContextBlock::OwnedCityMutation)
+    }
+    fn add_faction_owned_city(
+        &mut self,
+        _faction_id: i32,
+        _city_id: i32,
+    ) -> Result<(), CountryGovernanceContextBlock> {
+        Err(CountryGovernanceContextBlock::OwnedCityMutation)
+    }
+    fn refresh_owned_city(&mut self, _city_id: i32, _faction_id: i32, _union_id: i32) {}
+    fn demise_faction(
+        &mut self,
+        _faction_id: i32,
+        _old_master_id: i32,
+        _new_master_id: i32,
+        _country_id: u8,
+        _king_id: i32,
+        _demise_faction: bool,
+    ) -> Result<bool, CountryGovernanceContextBlock> {
+        Err(CountryGovernanceContextBlock::FactionDemise)
+    }
+    fn current_tick_ms(&mut self) -> u32 {
+        0
+    }
     fn country_name(&mut self, country_id: u8) -> Vec<u8>;
     fn country_identity_name(&mut self, identity: u8) -> Vec<u8>;
     fn format_world_string(
@@ -262,6 +352,112 @@ pub(crate) trait CountryExileResultContext {
     ) -> Vec<CountryExileMessageDelivery>;
     fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError>;
     fn put_king_log(&mut self, text: &[u8]);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryDemiseRejection {
+    CountryAtWar,
+    InsufficientControlPoint,
+    AppointmentPending,
+    SamePlayer,
+    PlayerMissing,
+    KingMissing,
+    InsufficientCredit,
+    InsufficientLevel,
+    FactionMissing,
+    OwnedCityConflict,
+    TargetCountryUnavailable,
+    TargetFromAnotherCountry,
+    OldKingNameMissing,
+    OldKingNotFactionMaster,
+    OldFactionMissing,
+    OldFactionCityMissing,
+    FactionTransferRejected,
+    OldKingDeposeFailed,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountryCanDemiseDisposition {
+    Allowed,
+    ParameterUnavailable(CountryParameterUnavailable),
+    Rejected {
+        reason: CountryDemiseRejection,
+        text: Vec<u8>,
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountryCityTransferReport {
+    pub(crate) city_id: i32,
+    pub(crate) old_faction_id: i32,
+    pub(crate) cleared_old_cities: Vec<i32>,
+    pub(crate) new_faction_id: i32,
+    pub(crate) new_union_id: i32,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountryDeposeKingReport {
+    pub(crate) old_king_id: i32,
+    pub(crate) legacy_result: i32,
+    pub(crate) mode: u8,
+    pub(crate) minister_reports: Vec<CountryDeposeMinisterReport>,
+    pub(crate) appointment_wire: Option<Vec<u8>>,
+    pub(crate) appointment_delivery: Option<Result<i32, SendMessageError>>,
+    pub(crate) world_wire: Option<Vec<u8>>,
+    pub(crate) world_delivery: Option<Result<i32, SendMessageError>>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountryRegisterKingDisposition {
+    Rejected(CountryDemiseRejection),
+    ParameterUnavailable(CountryParameterUnavailable),
+    ContextBlocked(CountryGovernanceContextBlock),
+    Applied {
+        city_transfer: Option<CountryCityTransferReport>,
+        faction_transferred: bool,
+        depose: CountryDeposeKingReport,
+        control_point_update: KingPointUpdate,
+        appointment_wire: Vec<u8>,
+        appointment_delivery: Result<i32, SendMessageError>,
+        world_wire: Option<Vec<u8>>,
+        world_delivery: Option<Result<i32, SendMessageError>>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountryRegisterKingReport {
+    pub(crate) player_id: i32,
+    pub(crate) text: Vec<u8>,
+    pub(crate) disposition: CountryRegisterKingDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountryDemiseDisposition {
+    Rejected(CountryDemiseRejection),
+    ParameterUnavailable(CountryParameterUnavailable),
+    ContextBlocked(CountryGovernanceContextBlock),
+    Applied {
+        old_king_id: i32,
+        register: CountryRegisterKingReport,
+        control_point_delivery: CountryExileMessageDelivery,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountryDemiseReport {
+    pub(crate) target_player_id: i32,
+    pub(crate) legacy_result: i32,
+    pub(crate) text: Vec<u8>,
+    pub(crate) disposition: CountryDemiseDisposition,
+}
+
+enum DemiseTargetBlock {
+    Rejected(CountryDemiseRejection, Vec<u8>),
+    Parameter(CountryParameterUnavailable),
+    Context(CountryGovernanceContextBlock),
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -586,6 +782,652 @@ impl CCountry {
         ));
         context.put_king_log(&text);
         false
+    }
+
+    /// Exact selector `CanOperate(0)` перед передачей престола.
+    pub(crate) fn can_demise<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> CountryCanDemiseDisposition {
+        if parameters.min_king_control_point().is_none() {
+            return CountryCanDemiseDisposition::ParameterUnavailable(
+                CountryParameterUnavailable { field: "_min_king_control_point" },
+            );
+        }
+        let Some(required) = parameters.demise_required_control_point() else {
+            return CountryCanDemiseDisposition::ParameterUnavailable(
+                CountryParameterUnavailable { field: "_def_king_control_point_demise_need" },
+            );
+        };
+        let rejection = if self.is_warring {
+            Some((CountryDemiseRejection::CountryAtWar, b"WS0038" as &'static [u8], None))
+        } else if self.king.control_point < required {
+            Some((
+                CountryDemiseRejection::InsufficientControlPoint,
+                b"WS0039" as &'static [u8],
+                Some(required),
+            ))
+        } else if self.king.appointed {
+            Some((CountryDemiseRejection::AppointmentPending, b"WS0040" as &'static [u8], None))
+        } else {
+            None
+        };
+        let Some((reason, string_id, argument)) = rejection else {
+            return CountryCanDemiseDisposition::Allowed;
+        };
+        let arguments = argument
+            .as_ref()
+            .map(|value| [CountryExileTextArgument::Signed(*value)]);
+        let text = legacy_country_text(context.format_world_string(
+            string_id,
+            arguments.as_ref().map_or(&[], |arguments| arguments.as_slice()),
+        ));
+        let private_delivery = self.send_private_message(&text, 0, context);
+        CountryCanDemiseDisposition::Rejected { reason, text, private_delivery }
+    }
+
+    /// Exact `0x60308 -> Demise`: возвращает прежнего короля даже если
+    /// вложенный `RegisterKing` отказал, потому что старый caller его результат
+    /// не проверял.
+    pub(crate) fn demise<Context: CountryExileResultContext + ?Sized>(
+        &mut self,
+        player_id: i32,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> CountryDemiseReport {
+        if self.king.id == player_id {
+            let country_name = context.country_name(self.country_id);
+            let text = legacy_country_text(context.format_world_string(
+                b"WS0058",
+                &[CountryExileTextArgument::Text(&country_name)],
+            ));
+            context.put_king_log(&text);
+            return CountryDemiseReport {
+                target_player_id: player_id,
+                legacy_result: 0,
+                text,
+                disposition: CountryDemiseDisposition::Rejected(
+                    CountryDemiseRejection::SamePlayer,
+                ),
+            };
+        }
+
+        if let Err(block) = self.can_demise_target(player_id, parameters, context) {
+            return match block {
+                DemiseTargetBlock::Rejected(reason, text) => CountryDemiseReport {
+                    target_player_id: player_id,
+                    legacy_result: 0,
+                    text,
+                    disposition: CountryDemiseDisposition::Rejected(reason),
+                },
+                DemiseTargetBlock::Parameter(block) => CountryDemiseReport {
+                    target_player_id: player_id,
+                    legacy_result: 0,
+                    text: Vec::new(),
+                    disposition: CountryDemiseDisposition::ParameterUnavailable(block),
+                },
+                DemiseTargetBlock::Context(block) => CountryDemiseReport {
+                    target_player_id: player_id,
+                    legacy_result: 0,
+                    text: Vec::new(),
+                    disposition: CountryDemiseDisposition::ContextBlocked(block),
+                },
+            };
+        }
+
+        let old_king_id = self.king.id;
+        let register = self.register_king_demise(player_id, parameters, context);
+        let map_id = context.game_server_number_by_player_id(self.king.id);
+        let control_point_delivery = self.send_king_control_point(map_id, context);
+        CountryDemiseReport {
+            target_player_id: player_id,
+            legacy_result: old_king_id,
+            text: register.text.clone(),
+            disposition: CountryDemiseDisposition::Applied {
+                old_king_id,
+                register,
+                control_point_delivery,
+            },
+        }
+    }
+
+    fn can_demise_target<Context: CountryExileResultContext + ?Sized>(
+        &mut self,
+        player_id: i32,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> Result<(), DemiseTargetBlock> {
+        let old_king = context.online_player(self.king.id);
+        let candidate = context.online_player(player_id);
+        if old_king.is_none() || candidate.is_none() {
+            let text = legacy_country_text(context.format_world_string(b"WS0016", &[]));
+            context.put_king_log(&text);
+            let _ = self.send_private_message(&text, 0, context);
+            return Err(DemiseTargetBlock::Rejected(
+                CountryDemiseRejection::PlayerMissing,
+                text,
+            ));
+        }
+        let target_master_faction = context
+            .faction_id_by_master_player(player_id)
+            .map_err(DemiseTargetBlock::Context)?;
+        if target_master_faction == 0 {
+            self.demise_faction = true;
+        }
+        self.can_ascend_for_demise(player_id, parameters, context)
+    }
+
+    fn can_ascend_for_demise<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        player_id: i32,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> Result<(), DemiseTargetBlock> {
+        let Some(player) = context.online_player(player_id) else {
+            let text = legacy_country_text(context.format_world_string(b"WS0016", &[]));
+            context.put_king_log(&text);
+            let _ = self.send_private_message(&text, 0, context);
+            return Err(DemiseTargetBlock::Rejected(
+                CountryDemiseRejection::PlayerMissing,
+                text,
+            ));
+        };
+        if self.king.id == 0 {
+            let mut text = context.country_name(self.country_id);
+            text.extend_from_slice(b" : [Fatal ERROR] Ascend. KingID ==0!");
+            let text = legacy_country_text(text);
+            context.put_king_log(&text);
+            return Err(DemiseTargetBlock::Rejected(
+                CountryDemiseRejection::KingMissing,
+                text,
+            ));
+        }
+        let required_credit = parameters
+            .king_need_credit()
+            .ok_or(DemiseTargetBlock::Parameter(CountryParameterUnavailable {
+                field: "_king_need_credit",
+            }))?;
+        if player.credit < required_credit as u32 {
+            let country_name = context.country_name(self.country_id);
+            let text = legacy_country_text(context.format_world_string(
+                b"WS0017",
+                &[CountryExileTextArgument::Text(&country_name)],
+            ));
+            context.put_king_log(&text);
+            let _ = self.send_private_message(&text, 0, context);
+            return Err(DemiseTargetBlock::Rejected(
+                CountryDemiseRejection::InsufficientCredit,
+                text,
+            ));
+        }
+        let required_level = parameters
+            .king_need_level()
+            .ok_or(DemiseTargetBlock::Parameter(CountryParameterUnavailable {
+                field: "_king_need_level",
+            }))?;
+        if i32::from(player.level) < required_level {
+            let text = legacy_country_text(context.format_world_string(
+                b"WS0018",
+                &[CountryExileTextArgument::Signed(required_level)],
+            ));
+            context.put_king_log(&text);
+            let _ = self.send_private_message(&text, 0, context);
+            return Err(DemiseTargetBlock::Rejected(
+                CountryDemiseRejection::InsufficientLevel,
+                text,
+            ));
+        }
+
+        let mut faction_id = context
+            .faction_id_by_master_player(player_id)
+            .map_err(DemiseTargetBlock::Context)?;
+        if faction_id == 0 {
+            faction_id = context
+                .faction_id_by_player(player_id)
+                .map_err(DemiseTargetBlock::Context)?;
+            let king_faction_id = context
+                .faction_id_by_player(self.king.id)
+                .map_err(DemiseTargetBlock::Context)?;
+            if faction_id != king_faction_id {
+                faction_id = 0;
+            }
+        }
+        let Some(faction) = context.faction_snapshot(faction_id).filter(|_| faction_id != 0) else {
+            return Err(DemiseTargetBlock::Rejected(
+                CountryDemiseRejection::FactionMissing,
+                Vec::new(),
+            ));
+        };
+        if !self.demise_faction && !faction.owned_cities.is_empty() {
+            // В EXE сюда ошибочно передаётся player ID короля, а не faction ID.
+            let old_king_union = context
+                .union_id_for_faction(self.king.id)
+                .map_err(DemiseTargetBlock::Context)?;
+            if old_king_union != faction_id {
+                let text = legacy_country_text(context.format_world_string(b"WS0019", &[]));
+                context.put_king_log(&text);
+                let _ = self.send_private_message(&text, 0, context);
+                return Err(DemiseTargetBlock::Rejected(
+                    CountryDemiseRejection::OwnedCityConflict,
+                    text,
+                ));
+            }
+        }
+        let country_name = context.country_name(self.country_id);
+        let text = legacy_country_text(context.format_world_string(
+            b"WS0020",
+            &[
+                CountryExileTextArgument::Text(&country_name),
+                CountryExileTextArgument::Text(&player.name),
+            ],
+        ));
+        context.put_king_log(&text);
+        Ok(())
+    }
+
+    fn register_king_demise<Context: CountryExileResultContext + ?Sized>(
+        &mut self,
+        player_id: i32,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> CountryRegisterKingReport {
+        let Some(player) = context.online_player(player_id) else {
+            return self.reject_register_king(
+                player_id,
+                CountryDemiseRejection::PlayerMissing,
+                b"WS0016",
+                &[],
+                true,
+                context,
+            );
+        };
+        let Some(player_country) = player.country else {
+            return CountryRegisterKingReport {
+                player_id,
+                text: Vec::new(),
+                disposition: CountryRegisterKingDisposition::Rejected(
+                    CountryDemiseRejection::TargetCountryUnavailable,
+                ),
+            };
+        };
+        if player_country != self.country_id {
+            return self.reject_register_king(
+                player_id,
+                CountryDemiseRejection::TargetFromAnotherCountry,
+                b"WS0022",
+                &[],
+                true,
+                context,
+            );
+        }
+        let faction_id = match context.faction_id_by_player(player_id) {
+            Ok(faction_id) => faction_id,
+            Err(block) => {
+                return CountryRegisterKingReport {
+                    player_id,
+                    text: Vec::new(),
+                    disposition: CountryRegisterKingDisposition::ContextBlocked(block),
+                };
+            }
+        };
+        let Some(candidate_faction) = context
+            .faction_snapshot(faction_id)
+            .filter(|_| faction_id != 0)
+        else {
+            let country_name = context.country_name(self.country_id);
+            return self.reject_register_king(
+                player_id,
+                CountryDemiseRejection::FactionMissing,
+                b"WS0023",
+                &[
+                    CountryExileTextArgument::Text(&country_name),
+                    CountryExileTextArgument::Text(&player.name),
+                ],
+                false,
+                context,
+            );
+        };
+
+        let old_king_name = self.king.name.clone();
+        if old_king_name.is_empty() {
+            let country_name = context.country_name(self.country_id);
+            return self.reject_register_king(
+                player_id,
+                CountryDemiseRejection::OldKingNameMissing,
+                b"WS0026",
+                &[CountryExileTextArgument::Text(&country_name)],
+                false,
+                context,
+            );
+        }
+        let old_faction_id = match context.faction_id_by_master_player(self.king.id) {
+            Ok(faction_id) => faction_id,
+            Err(block) => {
+                return CountryRegisterKingReport {
+                    player_id,
+                    text: Vec::new(),
+                    disposition: CountryRegisterKingDisposition::ContextBlocked(block),
+                };
+            }
+        };
+        if old_faction_id == 0 {
+            let country_name = context.country_name(self.country_id);
+            return self.reject_register_king(
+                player_id,
+                CountryDemiseRejection::OldKingNotFactionMaster,
+                b"WS0027",
+                &[
+                    CountryExileTextArgument::Text(&country_name),
+                    CountryExileTextArgument::Text(&old_king_name),
+                ],
+                false,
+                context,
+            );
+        }
+
+        let mut city_transfer = None;
+        let faction_transferred;
+        if !self.demise_faction {
+            faction_transferred = false;
+            let Some(old_faction) = context.faction_snapshot(old_faction_id) else {
+                return CountryRegisterKingReport {
+                    player_id,
+                    text: Vec::new(),
+                    disposition: CountryRegisterKingDisposition::Rejected(
+                        CountryDemiseRejection::OldFactionMissing,
+                    ),
+                };
+            };
+            let city_id = old_faction.owned_cities.first().copied().unwrap_or(0);
+            self.city_id = city_id;
+            if city_id == 0 {
+                let country_name = context.country_name(self.country_id);
+                return self.reject_register_king(
+                    player_id,
+                    CountryDemiseRejection::OldFactionCityMissing,
+                    b"WS0029",
+                    &[
+                        CountryExileTextArgument::Text(&country_name),
+                        CountryExileTextArgument::Text(&old_king_name),
+                    ],
+                    false,
+                    context,
+                );
+            }
+            if let Err(block) = context.clear_faction_owned_cities(old_faction_id) {
+                return CountryRegisterKingReport {
+                    player_id,
+                    text: Vec::new(),
+                    disposition: CountryRegisterKingDisposition::ContextBlocked(block),
+                };
+            }
+            if let Err(block) = context.add_faction_owned_city(faction_id, city_id) {
+                return CountryRegisterKingReport {
+                    player_id,
+                    text: Vec::new(),
+                    disposition: CountryRegisterKingDisposition::ContextBlocked(block),
+                };
+            }
+            let new_union_id = match context.union_id_for_faction(candidate_faction.faction_id) {
+                Ok(union_id) => union_id,
+                Err(block) => {
+                    return CountryRegisterKingReport {
+                        player_id,
+                        text: Vec::new(),
+                        disposition: CountryRegisterKingDisposition::ContextBlocked(block),
+                    };
+                }
+            };
+            context.refresh_owned_city(city_id, faction_id, new_union_id);
+            let mut city_message = CMessage::new(0x0007_FE27);
+            city_message.base_mut().add_long(city_id);
+            city_message.base_mut().add_long(faction_id);
+            city_message.base_mut().add_long(0);
+            city_message.base_mut().add_byte(self.country_id);
+            let wire = city_message.as_wire_bytes().to_vec();
+            let delivery = context.send_all(&city_message);
+            city_transfer = Some(CountryCityTransferReport {
+                city_id,
+                old_faction_id,
+                cleared_old_cities: old_faction.owned_cities,
+                new_faction_id: faction_id,
+                new_union_id,
+                wire,
+                delivery,
+            });
+        } else {
+            faction_transferred = match context.demise_faction(
+                faction_id,
+                self.king.id,
+                player_id,
+                self.country_id,
+                self.king.id,
+                self.demise_faction,
+            ) {
+                Ok(transferred) => transferred,
+                Err(block) => {
+                    return CountryRegisterKingReport {
+                        player_id,
+                        text: Vec::new(),
+                        disposition: CountryRegisterKingDisposition::ContextBlocked(block),
+                    };
+                }
+            };
+            if !faction_transferred {
+                let country_name = context.country_name(self.country_id);
+                return self.reject_register_king(
+                    player_id,
+                    CountryDemiseRejection::FactionTransferRejected,
+                    b"WS0028",
+                    &[
+                        CountryExileTextArgument::Text(&country_name),
+                        CountryExileTextArgument::Text(&player.name),
+                    ],
+                    false,
+                    context,
+                );
+            }
+        }
+
+        let depose = match self.depose_king_for_demise(2, parameters, context) {
+            Ok(report) => report,
+            Err(block) => {
+                return CountryRegisterKingReport {
+                    player_id,
+                    text: Vec::new(),
+                    disposition: CountryRegisterKingDisposition::ContextBlocked(block),
+                };
+            }
+        };
+        if depose.legacy_result == 0 {
+            let country_name = context.country_name(self.country_id);
+            return self.reject_register_king(
+                player_id,
+                CountryDemiseRejection::OldKingDeposeFailed,
+                b"WS0030",
+                &[
+                    CountryExileTextArgument::Text(&country_name),
+                    CountryExileTextArgument::Text(&old_king_name),
+                ],
+                false,
+                context,
+            );
+        }
+
+        self.king.id = player_id;
+        self.king.appointed = true;
+        let Some(cost) = parameters.demise_control_point_cost() else {
+            return CountryRegisterKingReport {
+                player_id,
+                text: Vec::new(),
+                disposition: CountryRegisterKingDisposition::ParameterUnavailable(
+                    CountryParameterUnavailable { field: "_dec_king_control_point_demise" },
+                ),
+            };
+        };
+        let requested = self.king.control_point.wrapping_sub(cost);
+        let control_point_update = match set_control_point(&mut self.king, requested, parameters) {
+            Ok(update) => update,
+            Err(block) => {
+                return CountryRegisterKingReport {
+                    player_id,
+                    text: Vec::new(),
+                    disposition: CountryRegisterKingDisposition::ParameterUnavailable(block),
+                };
+            }
+        };
+        let country_name = context.country_name(self.country_id);
+        let text = legacy_country_text(context.format_world_string(
+            b"WS0031",
+            &[
+                CountryExileTextArgument::Text(&country_name),
+                CountryExileTextArgument::Text(&old_king_name),
+                CountryExileTextArgument::Text(&player.name),
+            ],
+        ));
+        context.put_king_log(&text);
+        self.demise_faction = false;
+        self.king.name = player.name;
+        self.king_timestamp_ms = context.current_tick_ms();
+
+        let mut appointment = CMessage::new(0x0007_FF04);
+        appointment.base_mut().add_byte(self.country_id);
+        appointment.base_mut().add_long(player_id);
+        appointment.base_mut().add_byte(1);
+        appointment.base_mut().add_byte(1);
+        let appointment_wire = appointment.as_wire_bytes().to_vec();
+        let appointment_delivery = context.send_all(&appointment);
+        let world = self.send_world_message(&text, context);
+        CountryRegisterKingReport {
+            player_id,
+            text,
+            disposition: CountryRegisterKingDisposition::Applied {
+                city_transfer,
+                faction_transferred,
+                depose,
+                control_point_update,
+                appointment_wire,
+                appointment_delivery,
+                world_wire: world.as_ref().map(|(wire, _)| wire.clone()),
+                world_delivery: world.map(|(_, delivery)| delivery),
+            },
+        }
+    }
+
+    fn reject_register_king<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        player_id: i32,
+        reason: CountryDemiseRejection,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+        notify_king: bool,
+        context: &mut Context,
+    ) -> CountryRegisterKingReport {
+        let text = legacy_country_text(context.format_world_string(string_id, arguments));
+        context.put_king_log(&text);
+        if notify_king {
+            let _ = self.send_private_message(&text, 0, context);
+        }
+        CountryRegisterKingReport {
+            player_id,
+            text,
+            disposition: CountryRegisterKingDisposition::Rejected(reason),
+        }
+    }
+
+    fn depose_king_for_demise<Context: CountryExileResultContext + ?Sized>(
+        &mut self,
+        mode: u8,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> Result<CountryDeposeKingReport, CountryGovernanceContextBlock> {
+        let old_king_id = self.king.id;
+        if old_king_id == 0 && self.king.name.is_empty() {
+            let country_name = context.country_name(self.country_id);
+            let text = legacy_country_text(context.format_world_string(
+                b"WS0053",
+                &[CountryExileTextArgument::Text(&country_name)],
+            ));
+            context.put_king_log(&text);
+            return Ok(CountryDeposeKingReport {
+                old_king_id,
+                legacy_result: 0,
+                mode,
+                minister_reports: Vec::new(),
+                appointment_wire: None,
+                appointment_delivery: None,
+                world_wire: None,
+                world_delivery: None,
+            });
+        }
+
+        let mut appointment = CMessage::new(0x0007_FF04);
+        appointment.base_mut().add_byte(self.country_id);
+        appointment.base_mut().add_long(old_king_id);
+        appointment.base_mut().add_byte(1);
+        appointment.base_mut().add_byte(2);
+        let appointment_wire = appointment.as_wire_bytes().to_vec();
+        let appointment_delivery = context.send_all(&appointment);
+
+        if !self.demise_faction {
+            let faction_id = context.faction_id_by_player(old_king_id)?;
+            if faction_id == 0 {
+                self.king.id = 0;
+                self.king.name.clear();
+                let country_name = context.country_name(self.country_id);
+                let text = legacy_country_text(context.format_world_string(
+                    b"WS0054",
+                    &[
+                        CountryExileTextArgument::Text(&country_name),
+                        CountryExileTextArgument::Signed(old_king_id),
+                    ],
+                ));
+                context.put_king_log(&text);
+            }
+            if faction_id <= 0 || context.faction_snapshot(faction_id).is_none() {
+                let country_name = context.country_name(self.country_id);
+                let text = legacy_country_text(context.format_world_string(
+                    b"WS0055",
+                    &[CountryExileTextArgument::Text(&country_name)],
+                ));
+                context.put_king_log(&text);
+                return Ok(CountryDeposeKingReport {
+                    old_king_id,
+                    legacy_result: 0,
+                    mode,
+                    minister_reports: Vec::new(),
+                    appointment_wire: Some(appointment_wire),
+                    appointment_delivery: Some(appointment_delivery),
+                    world_wire: None,
+                    world_delivery: None,
+                });
+            }
+        }
+
+        let jobs = self
+            .ministers
+            .iter()
+            .filter_map(|(&job, minister)| (minister.snapshot.id != 0).then_some(job))
+            .collect::<Vec<_>>();
+        let mut minister_reports = Vec::with_capacity(jobs.len());
+        for job in jobs {
+            minister_reports.push(self.depose_minister(job, mode, parameters, context));
+        }
+        context.put_king_log(&[]);
+        let world = self.send_world_message(&[], context);
+        self.king.id = 0;
+        self.king.name.clear();
+        Ok(CountryDeposeKingReport {
+            old_king_id,
+            legacy_result: old_king_id,
+            mode,
+            minister_reports,
+            appointment_wire: Some(appointment_wire),
+            appointment_delivery: Some(appointment_delivery),
+            world_wire: world.as_ref().map(|(wire, _)| wire.clone()),
+            world_delivery: world.map(|(_, delivery)| delivery),
+        })
     }
 
     pub(crate) fn can_depose_minister<Context: CountryExileResultContext + ?Sized>(
@@ -1847,6 +2689,24 @@ impl CCountry {
         context.send_to_connected_game_servers(&message)
     }
 
+    fn send_world_message<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        text: &[u8],
+        context: &mut Context,
+    ) -> Option<(Vec<u8>, Result<i32, SendMessageError>)> {
+        if text.is_empty() {
+            return None;
+        }
+        let text = CString::new(text).expect("legacy country text не содержит NUL");
+        let mut message = CMessage::new(0x0007_FF12);
+        message.base_mut().add_long(-0x1_0000);
+        message.base_mut().add_long(-0x100);
+        message.base_mut().add_str(Some(&text));
+        let wire = message.as_wire_bytes().to_vec();
+        let delivery = context.send_all(&message);
+        Some((wire, delivery))
+    }
+
     /// Повторяет signed 32-битную арифметику `GetExileResTime` после уже
     /// снятого `timeGetTime`; отсутствие записи не требует `_exile_time`.
     pub(crate) fn exile_remaining_time(
@@ -2165,7 +3025,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::ChangeKingControlPoint
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1552
@@ -2179,7 +3039,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::SendWorldMsg
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1670
@@ -2326,7 +3186,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::CanOperate
-// STATUS: IMPLEMENTED_PARTIAL_SOURCE_REFERENCE
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:638
@@ -2537,7 +3397,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::CanAscend
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:204
@@ -2551,7 +3411,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::CanDemise
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:294
@@ -2579,7 +3439,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::DeposeKing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:811
@@ -2621,7 +3481,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::RegisterKing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:395
@@ -2649,7 +3509,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::Demise
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:916

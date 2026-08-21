@@ -2138,7 +2138,7 @@ impl COrganizingCtrl {
     }
 
     /// Mutable-вариант того же nullable faction lookup для virtual dispatch.
-    fn faction_by_id_mut(&mut self, faction_id: i32) -> Option<&mut CFaction> {
+    pub(crate) fn faction_by_id_mut(&mut self, faction_id: i32) -> Option<&mut CFaction> {
         self.factions
             .get_mut(&faction_id)
             .and_then(Option::as_deref_mut)

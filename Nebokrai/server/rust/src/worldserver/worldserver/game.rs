@@ -980,7 +980,8 @@ use crate::public::tools::{ini_decode, put_string_to_file};
 use crate::transport::bind_tcp_ipv4;
 use crate::worldserver::appworld::country::country::{
     CCountry, CountryAbsolveCounterReset, CountryExileMessageDelivery, CountryExileResultContext,
-    CountryExileTarget, CountryExileTextArgument, CountryKingSaveLimits,
+    CountryExileTarget, CountryExileTextArgument, CountryFactionSnapshot,
+    CountryGovernanceContextBlock, CountryKingSaveLimits,
 };
 use crate::worldserver::appworld::country::countryhandler::{
     CCountryHandler, CountryInfoDeliveryContext, CountryRunBlock, CountryRunReport,
@@ -1013,6 +1014,7 @@ use crate::worldserver::appworld::message::countrymessage::{
     decode_four_nation_exploit_message,
     dispatch_country_absolve_request_message,
     dispatch_country_appoint_minister_message,
+    dispatch_country_demise_message,
     dispatch_country_depose_minister_message,
     dispatch_country_exile_result_message,
     dispatch_country_exile_request_message,
@@ -1081,7 +1083,9 @@ use crate::worldserver::appworld::message::servermessage::{
     WorldServerMessageOutcome, on_login_client_reconnected, on_server_message,
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
-    CFaction, FactionExperienceBlock, FactionUploadIconBlock,
+    goods_war_check_for_faction_id, CFaction, FactionDemiseContext, FactionDemiseOutcome,
+    FactionExperienceBlock, FactionMemberInfoRequest, FactionOrganizingInfoContext,
+    FactionUploadIconBlock,
 };
 use crate::worldserver::appworld::organizingsystem::attackcitysys::{
     AttackCityCallbacks, CAttackCitySys,
@@ -1097,7 +1101,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock, OrganizingLeaveWordEnableBlock,
     OrganizingPronounceBlock, OrganizingSaveDataReport, OrganizingUnionApplicationCallbackBlock,
     OrganizingUnionApplicationCallbackReport, OrganizingUnionApplyForJoinDispatchBlock,
-    PlayerEnterGameOutcome, PlayerExitGameOutcome,
+    FreeFactionLookup, FreePlayerLookup, PlayerEnterGameOutcome, PlayerExitGameOutcome,
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::{
     COrganizingParam, OrganizingParamLoadError, OrganizingParamLoadReport,
@@ -2915,6 +2919,10 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     pub(crate) faction_experience_log_enabled: bool,
     pub(crate) write_faction_experience_log:
         &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, i32),
+    /// Внешний feature-gate `CLogSystem::FactionMasterChangedEnabled`.
+    pub(crate) faction_master_log_enabled: bool,
+    pub(crate) write_faction_master_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
     pub(crate) dispatch_timer:
         &'a mut dyn FnMut(&mut CTimer<TimerCallback>, TimerCallbackInvocation<TimerCallback>),
     pub(crate) get_lei_ting_local_time: &'a mut dyn FnMut() -> LeiTingLocalTime,
@@ -8594,6 +8602,9 @@ impl CGame {
         net_sessions: &CNetSessionManager,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+        faction_master_log_enabled: bool,
+        write_faction_master_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
         rs_player: &mut TiberiusRsPlayer,
         mut player_database: Option<&mut WorldTdsClient>,
         save_thread_handle: &mut WorldSaveThreadHandleState,
@@ -8659,6 +8670,8 @@ impl CGame {
                             net_sessions,
                             application_runtime,
                             application_callbacks,
+                            faction_master_log_enabled,
+                            &mut *write_faction_master_log,
                             &mut *rs_player,
                             player_database.as_deref_mut(),
                             &mut *save_thread_handle,
@@ -8725,8 +8738,10 @@ impl CGame {
                     original_name_index,
                     coefficients,
                     net_sessions,
-                    application_runtime,
-                    application_callbacks,
+                            application_runtime,
+                            application_callbacks,
+                            faction_master_log_enabled,
+                            &mut *write_faction_master_log,
                     &mut *rs_player,
                     player_database.as_deref_mut(),
                     &mut *save_thread_handle,
@@ -8794,6 +8809,9 @@ impl CGame {
         net_sessions: &CNetSessionManager,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+        faction_master_log_enabled: bool,
+        write_faction_master_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
         rs_player: &mut TiberiusRsPlayer,
         player_database: Option<&mut WorldTdsClient>,
         save_thread_handle: &mut WorldSaveThreadHandleState,
@@ -8856,6 +8874,8 @@ impl CGame {
             net_sessions,
             application_runtime,
             application_callbacks,
+            faction_master_log_enabled,
+            write_faction_master_log,
             rs_player,
             player_database,
             save_thread_handle,
@@ -9960,6 +9980,8 @@ impl CGame {
             owners.net_sessions,
             owners.union_application_runtime,
             &mut union_application_callbacks,
+            callbacks.faction_master_log_enabled,
+            &mut *callbacks.write_faction_master_log,
             owners.rs_player,
             owners.player_database.as_deref_mut(),
             state.save_thread_handle,
@@ -12059,6 +12081,36 @@ struct WorldCountryExileResultEffects<'a> {
         &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
 }
 
+struct WorldCountryDemiseEffects<'a> {
+    base: WorldCountryExileResultEffects<'a>,
+    organizing: &'a mut COrganizingCtrl,
+    organizing_parameters: &'a COrganizingParam,
+    attack_city: &'a CAttackCitySys,
+    goods_war: &'a CGoodsWarMember,
+    world_string: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
+    refresh_owned_city: &'a mut dyn FnMut(i32, i32, i32),
+    update_player: &'a mut dyn FnMut(i32),
+    faction_master_log_enabled: bool,
+    write_faction_master_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
+}
+
+struct WorldCountryFactionDemiseEffects<'a> {
+    game: &'a CGame,
+    attack_city: &'a CAttackCitySys,
+    goods_war: &'a CGoodsWarMember,
+    world_string: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
+    format_world_string:
+        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+    update_player: &'a mut dyn FnMut(i32),
+    country_id: u8,
+    king_id: i32,
+    demise_faction: bool,
+    faction_master_log_enabled: bool,
+    write_faction_master_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
+}
+
 struct WorldFourNationWarResultEffects<'a> {
     game: &'a CGame,
 }
@@ -12102,6 +12154,8 @@ impl CountryExileResultContext for WorldCountryExileResultEffects<'_> {
             .map(|player| CountryExileTarget {
                 name: legacy_c_string_prefix(player.get_name()).to_vec(),
                 country: player.country(),
+                level: player.get_level(),
+                credit: player.credit(),
                 pk_count: player.pk_count(),
                 is_god: player.is_god(),
             })
@@ -12180,6 +12234,257 @@ impl CountryExileResultContext for WorldCountryExileResultEffects<'_> {
 
     fn put_king_log(&mut self, text: &[u8]) {
         put_string_to_file("king", text);
+    }
+}
+
+impl FactionOrganizingInfoContext for WorldCountryFactionDemiseEffects<'_> {
+    fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
+        Some((self.world_string)(string_id))
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+impl FactionDemiseContext for WorldCountryFactionDemiseEffects<'_> {
+    fn attack_city_system_declared(&self, faction_id: i32) -> bool {
+        self.attack_city.is_already_declared_for_war(faction_id)
+    }
+
+    fn goods_war_blocks_demise(&self, faction_id: i32, _old_master_id: i32) -> bool {
+        goods_war_check_for_faction_id(faction_id, |candidate| {
+            self.goods_war.contains_faction_id(candidate)
+        })
+    }
+
+    fn country_blocks_demise(&self, country: u8, old_master_id: i32) -> bool {
+        country == self.country_id
+            && old_master_id == self.king_id
+            && !self.demise_faction
+    }
+
+    fn format_demise_signed(
+        &mut self,
+        string_id: &'static [u8],
+        value: i32,
+    ) -> Vec<u8> {
+        (self.format_world_string)(string_id, &[UnionFormatArgument::Signed(value)])
+    }
+
+    fn format_demise_change(
+        &mut self,
+        string_id: &'static [u8],
+        old_master_name: &[u8],
+        new_master_name: &[u8],
+    ) -> Vec<u8> {
+        (self.format_world_string)(
+            string_id,
+            &[
+                UnionFormatArgument::Text(old_master_name),
+                UnionFormatArgument::Text(new_master_name),
+            ],
+        )
+    }
+
+    fn update_player_faction_info(&mut self, player_id: i32) {
+        (self.update_player)(player_id);
+    }
+
+    fn faction_master_log_enabled(&self) -> bool {
+        self.faction_master_log_enabled
+    }
+
+    fn write_faction_master_log(
+        &mut self,
+        old_master_id: i32,
+        old_master_name: &[u8],
+        new_master_id: i32,
+        new_master_name: &[u8],
+        faction_id: i32,
+        faction_name: &[u8],
+    ) {
+        (self.write_faction_master_log)(
+            old_master_id,
+            old_master_name,
+            new_master_id,
+            new_master_name,
+            faction_id,
+            faction_name,
+        );
+    }
+}
+
+impl CountryExileResultContext for WorldCountryDemiseEffects<'_> {
+    fn map_player_name(&mut self, player_id: i32) -> Option<Vec<u8>> {
+        self.base.map_player_name(player_id)
+    }
+
+    fn online_player(&mut self, player_id: i32) -> Option<CountryExileTarget> {
+        self.base.online_player(player_id)
+    }
+
+    fn reset_online_player_murder_counters(
+        &mut self,
+        player_id: i32,
+    ) -> Option<CountryAbsolveCounterReset> {
+        self.base.reset_online_player_murder_counters(player_id)
+    }
+
+    fn faction_id_by_master_player(
+        &mut self,
+        player_id: i32,
+    ) -> Result<i32, CountryGovernanceContextBlock> {
+        self.organizing
+            .faction_id_by_master_player(player_id)
+            .map_err(|_| CountryGovernanceContextBlock::FactionMasterLookup)
+    }
+
+    fn faction_id_by_player(
+        &mut self,
+        player_id: i32,
+    ) -> Result<i32, CountryGovernanceContextBlock> {
+        match self.organizing.is_free_player(player_id) {
+            FreePlayerLookup::NoFaction => Ok(0),
+            FreePlayerLookup::Faction(faction_id) => Ok(faction_id),
+            FreePlayerLookup::BlockedNullFaction { .. } => {
+                Err(CountryGovernanceContextBlock::PlayerFactionLookup)
+            }
+        }
+    }
+
+    fn faction_snapshot(&mut self, faction_id: i32) -> Option<CountryFactionSnapshot> {
+        self.organizing.faction_by_id(faction_id).map(|faction| CountryFactionSnapshot {
+            faction_id: faction.faction_id(),
+            name: faction.name().to_vec(),
+            owned_cities: faction.owned_cities().iter().copied().collect(),
+        })
+    }
+
+    fn union_id_for_faction(
+        &mut self,
+        faction_id: i32,
+    ) -> Result<i32, CountryGovernanceContextBlock> {
+        match self.organizing.is_free_faction(faction_id) {
+            FreeFactionLookup::NoUnion => Ok(0),
+            FreeFactionLookup::Union(union_id) => Ok(union_id),
+            FreeFactionLookup::BlockedNullConfederation { .. } => {
+                Err(CountryGovernanceContextBlock::UnionLookup)
+            }
+        }
+    }
+
+    fn clear_faction_owned_cities(
+        &mut self,
+        faction_id: i32,
+    ) -> Result<(), CountryGovernanceContextBlock> {
+        self.organizing
+            .faction_by_id_mut(faction_id)
+            .ok_or(CountryGovernanceContextBlock::OwnedCityMutation)?
+            .clear_owned_cities(&*self.base.game, &mut *self.update_player)
+            .map(|_| ())
+            .map_err(|_| CountryGovernanceContextBlock::OwnedCityMutation)
+    }
+
+    fn add_faction_owned_city(
+        &mut self,
+        faction_id: i32,
+        city_id: i32,
+    ) -> Result<(), CountryGovernanceContextBlock> {
+        self.organizing
+            .faction_by_id_mut(faction_id)
+            .ok_or(CountryGovernanceContextBlock::OwnedCityMutation)?
+            .add_owned_city(&*self.base.game, city_id, &mut *self.update_player)
+            .map(|_| ())
+            .map_err(|_| CountryGovernanceContextBlock::OwnedCityMutation)
+    }
+
+    fn refresh_owned_city(&mut self, city_id: i32, faction_id: i32, union_id: i32) {
+        (self.refresh_owned_city)(city_id, faction_id, union_id);
+    }
+
+    fn demise_faction(
+        &mut self,
+        faction_id: i32,
+        old_master_id: i32,
+        new_master_id: i32,
+        country_id: u8,
+        king_id: i32,
+        demise_faction: bool,
+    ) -> Result<bool, CountryGovernanceContextBlock> {
+        let Some(faction) = self.organizing.faction_by_id_mut(faction_id) else {
+            return Ok(false);
+        };
+        let mut effects = WorldCountryFactionDemiseEffects {
+            game: &*self.base.game,
+            attack_city: self.attack_city,
+            goods_war: self.goods_war,
+            world_string: &mut *self.world_string,
+            format_world_string: &mut *self.base.format_world_string,
+            update_player: &mut *self.update_player,
+            country_id,
+            king_id,
+            demise_faction,
+            faction_master_log_enabled: self.faction_master_log_enabled,
+            write_faction_master_log: &mut *self.write_faction_master_log,
+        };
+        faction
+            .demise(
+                &*self.base.game,
+                self.organizing_parameters,
+                old_master_id,
+                new_master_id,
+                &mut effects,
+            )
+            .map(|outcome| matches!(outcome, FactionDemiseOutcome::Transferred(_)))
+            .map_err(|_| CountryGovernanceContextBlock::FactionDemise)
+    }
+
+    fn current_tick_ms(&mut self) -> u32 {
+        legacy_tick_ms()
+    }
+
+    fn country_name(&mut self, country_id: u8) -> Vec<u8> {
+        self.base.country_name(country_id)
+    }
+
+    fn country_identity_name(&mut self, identity: u8) -> Vec<u8> {
+        self.base.country_identity_name(identity)
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8> {
+        self.base.format_world_string(string_id, arguments)
+    }
+
+    fn game_server_number_by_player_id(&mut self, player_id: i32) -> i32 {
+        self.base.game_server_number_by_player_id(player_id)
+    }
+
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError> {
+        self.base.send_to_map_id(message, map_id)
+    }
+
+    fn send_to_connected_game_servers(
+        &mut self,
+        message: &CMessage,
+    ) -> Vec<CountryExileMessageDelivery> {
+        self.base.send_to_connected_game_servers(message)
+    }
+
+    fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError> {
+        self.base.send_all(message)
+    }
+
+    fn put_king_log(&mut self, text: &[u8]) {
+        self.base.put_king_log(text);
     }
 }
 
@@ -12479,6 +12784,9 @@ async fn process_world_message<TimerCallback, TeamOwner>(
     net_sessions: &CNetSessionManager,
     application_runtime: &WorldUnionApplicationRuntimeOwner,
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    faction_master_log_enabled: bool,
+    write_faction_master_log:
+        &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
     rs_player: &mut TiberiusRsPlayer,
     mut player_database: Option<&mut WorldTdsClient>,
     save_thread_handle: &mut WorldSaveThreadHandleState,
@@ -12735,6 +13043,40 @@ where
                 source,
                 legacy_run_result,
                 outcome: WorldCountryMessageOutcome::AbsolveRequested(sync),
+            };
+        }
+        let demise = {
+            let faction_master_log_enabled =
+                game.setup.use_log_system && faction_master_log_enabled;
+            let base = WorldCountryExileResultEffects {
+                game,
+                globe_setup,
+                format_world_string: &mut *application_callbacks.format_world_string,
+            };
+            let mut effects = WorldCountryDemiseEffects {
+                base,
+                organizing,
+                organizing_parameters,
+                attack_city: &*attack_city,
+                goods_war: &*goods_war,
+                world_string: &mut *application_callbacks.world_string,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                update_player,
+                faction_master_log_enabled,
+                write_faction_master_log: &mut *write_faction_master_log,
+            };
+            dispatch_country_demise_message(
+                &mut message,
+                country_handler,
+                country_parameters,
+                &mut effects,
+            )
+        };
+        if let Some(sync) = demise {
+            return ProcessedWorldEvent::CountryMessage {
+                source,
+                legacy_run_result,
+                outcome: WorldCountryMessageOutcome::KingDemised(sync),
             };
         }
         let depose_minister = {

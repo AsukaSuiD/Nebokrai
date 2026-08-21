@@ -48,6 +48,9 @@ use crate::public::readwrite::read_to;
 const COUNTRY_PARAMETER_COUNT: usize = 39;
 const MAX_COUNTRY_POWER: usize = 2;
 const MAX_COUNTRY_TREASURY: usize = 4;
+const KING_NEED_LEVEL: usize = 7;
+const KING_NEED_CREDIT: usize = 8;
+const DEFAULT_KING_CONTROL_POINT: usize = 9;
 const MAX_KING_CONTROL_POINT: usize = 10;
 const MIN_KING_CONTROL_POINT: usize = 11;
 const DEC_KING_CONTROL_POINT_DEMISE: usize = 17;
@@ -55,6 +58,7 @@ const DEC_KING_CONTROL_POINT_SILENCE: usize = 18;
 const DEC_KING_CONTROL_POINT_EXILE: usize = 20;
 const DEC_KING_CONTROL_POINT_ABSOLVE: usize = 21;
 const DEC_KING_CONTROL_POINT_APPOINT: usize = 22;
+const DEFAULT_KING_CONTROL_POINT_DEMISE_NEED: usize = 24;
 const MAX_KING_MATERIAL_POINT: usize = 26;
 const MAX_KING_WAR_POINT: usize = 28;
 const MAX_SILENCE_NUM: usize = 29;
@@ -294,6 +298,22 @@ impl CCountryParam {
 
     pub(crate) const fn min_king_control_point(&self) -> Option<i32> {
         self.parameters[MIN_KING_CONTROL_POINT]
+    }
+
+    pub(crate) const fn king_need_level(&self) -> Option<i32> {
+        self.parameters[KING_NEED_LEVEL]
+    }
+
+    pub(crate) const fn king_need_credit(&self) -> Option<i32> {
+        self.parameters[KING_NEED_CREDIT]
+    }
+
+    pub(crate) const fn default_king_control_point(&self) -> Option<i32> {
+        self.parameters[DEFAULT_KING_CONTROL_POINT]
+    }
+
+    pub(crate) const fn demise_required_control_point(&self) -> Option<i32> {
+        self.parameters[DEFAULT_KING_CONTROL_POINT_DEMISE_NEED]
     }
 
     /// Возвращает exact `_dec_king_control_point_silence` без default-подстановки.

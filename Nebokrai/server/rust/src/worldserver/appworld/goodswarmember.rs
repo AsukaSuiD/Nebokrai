@@ -173,6 +173,11 @@ impl CGoodsWarMember {
         }
     }
 
+    /// Повторяет `IsInFactionIdList` без изменения ordered set.
+    pub(crate) fn contains_faction_id(&self, faction_id: i32) -> bool {
+        self.faction_ids.contains(&faction_id)
+    }
+
     fn send_members<Context: GoodsWarMemberContext + ?Sized>(
         &self,
         context: &mut Context,

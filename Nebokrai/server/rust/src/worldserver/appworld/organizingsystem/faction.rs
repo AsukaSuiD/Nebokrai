@@ -7278,6 +7278,17 @@ where
     let Some(faction) = faction else {
         return false;
     };
+    goods_war_check_for_faction_id(faction.faction_id(), is_in_faction_id_list)
+}
+
+/// Та же free-owner проверка для caller-а, который уже держит mutable faction.
+pub(crate) fn goods_war_check_for_faction_id<F>(
+    faction_id: i32,
+    is_in_faction_id_list: F,
+) -> bool
+where
+    F: FnOnce(i32) -> bool,
+{
     let now = Local::now();
     if now.weekday().num_days_from_sunday() != 6 {
         return false;
@@ -7288,7 +7299,7 @@ where
         21 => now.minute() <= 10,
         _ => false,
     };
-    inside_time_window && is_in_faction_id_list(faction.faction_id())
+    inside_time_window && is_in_faction_id_list(faction_id)
 }
 
 pub(crate) fn current_local_member_time() -> TagTimeValue {

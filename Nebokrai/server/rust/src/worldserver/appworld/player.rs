@@ -1438,6 +1438,11 @@ impl CPlayer {
         self.base_property.read_u8(BASE_PROPERTY_LEVEL_OFFSET)
     }
 
+    /// Возвращает exact unsigned `m_BaseProperty.dwCredit`.
+    pub(crate) fn credit(&self) -> u32 {
+        self.base_property.read_u32(BASE_PROPERTY_CREDIT_OFFSET)
+    }
+
     /// Возвращает occupation из exact base-property offset `+0x0E`.
     pub(crate) fn get_occupation(&self) -> u8 {
         self.base_property
