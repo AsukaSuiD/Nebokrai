@@ -3,7 +3,7 @@
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
 //! `0x6012A`, парные city-tax gate `0x6012B/0x6012C` и region-param update
-//! `0x6012D`; остальной owner —
+//! `0x6012D`, а также region route `0x6012E`; остальной owner —
 //! `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
@@ -112,6 +112,11 @@
 //! `CWorldRegion::SetParamFromGS(current, today, total)`, меняет type исходного
 //! сообщения на `0x7FE2E` и вызывает общий `SendAll`. Оба miss являются
 //! no-op; исходный payload пересылается целиком, результат send игнорируется.
+//! Exact `0x004A7F8E..0x004A7FB4` для `0x6012E` читает один region ID,
+//! безусловно получает `CGame::GetGameServerNumber_ByRegionID`, меняет type
+//! исходного сообщения на `0x7FE2D` и вызывает `SendToMapID` с результатом
+//! lookup. Miss даёт literal route `0` и не отменяет send; payload остаётся
+//! исходным, дополнительных ownership/tail checks нет.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -205,6 +210,8 @@ const ADJUST_FACTION_TAX_MESSAGE_TYPE: i32 = 0x6012C;
 const ADJUST_FACTION_TAX_RESPONSE_TYPE: i32 = 0x7FE29;
 const UPDATE_REGION_PARAM_MESSAGE_TYPE: i32 = 0x6012D;
 const UPDATE_REGION_PARAM_RESPONSE_TYPE: i32 = 0x7FE2E;
+const ROUTE_REGION_MESSAGE_TYPE: i32 = 0x6012E;
+const ROUTE_REGION_RESPONSE_TYPE: i32 = 0x7FE2D;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -1775,6 +1782,36 @@ pub(crate) fn dispatch_region_param_update(
         current_tax_rate,
         region,
         broadcast,
+    })
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingRegionRouteDispatch {
+    pub(crate) region_id: i32,
+    pub(crate) game_server_number: i32,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+/// Выполняет безусловный in-place route `0x6012E -> 0x7FE2D`.
+pub(crate) fn dispatch_region_route(
+    message: &mut CMessage,
+    game: &CGame,
+) -> Option<OrganizingRegionRouteDispatch> {
+    if message.message_type() != ROUTE_REGION_MESSAGE_TYPE {
+        return None;
+    }
+
+    let region_id = message.base_mut().get_long().unwrap_or(0);
+    let game_server_number = game.game_server_number_by_region_id(region_id);
+    message.set_message_type(ROUTE_REGION_RESPONSE_TYPE);
+    let wire = message.as_wire_bytes().to_vec();
+    let delivery = game.send_msg_to_game_server(game_server_number, message);
+    Some(OrganizingRegionRouteDispatch {
+        region_id,
+        game_server_number,
+        wire,
+        delivery,
     })
 }
 
