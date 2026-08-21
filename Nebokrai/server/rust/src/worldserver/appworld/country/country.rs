@@ -106,6 +106,12 @@
 //! `0x7FF08` несёт не более 12 записей. Exact `0x004CAFF0..0x004CB004`
 //! возвращает king ID, а не count, как Linux-донор; donor также
 //! опускал GM-фильтр.
+//! Административный `0x60304` ведёт короля через `SetKing` RVA
+//! `0x000CC290`: `DeposeKing(3)` возврат игнорируется, ID заменяется
+//! безусловно и публикуется `0x7FF05`, после чего `RegisterKing(0)`
+//! проверяет online/country/faction, выставляет default control point,
+//! имя/timestamp и `0x7FF04/0x7FF12`. Exact failure returns ноль;
+//! Linux-донор ошибочно возвращал player ID и добавлял dispatcher gates.
 //! Clone копирует country ID, treasury, power,
 //! current/level-up tech exp, tech level, king identity/flags и war-result.
 //! Три king-point ограничиваются соответствующими максимумами `CCountryParam`.
@@ -303,6 +309,50 @@ pub(crate) struct CountryPlayersListReport {
     pub(crate) wire: Vec<u8>,
     pub(crate) delivery: Result<i32, SendMessageError>,
     pub(crate) logs: Vec<Vec<u8>>,
+    pub(crate) legacy_result: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryInitialKingRejection {
+    PlayerMissing,
+    TargetCountryUnavailable,
+    TargetFromAnotherCountry,
+    FactionMissing,
+    KingMismatch,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountryInitialKingDisposition {
+    Rejected {
+        reason: CountryInitialKingRejection,
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+    ParameterUnavailable(CountryParameterUnavailable),
+    ContextBlocked(CountryGovernanceContextBlock),
+    Applied {
+        faction_id: i32,
+        control_point_update: KingPointUpdate,
+        appointment_wire: Vec<u8>,
+        appointment_delivery: Result<i32, SendMessageError>,
+        world_wire: Option<Vec<u8>>,
+        world_delivery: Option<Result<i32, SendMessageError>>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountryInitialKingReport {
+    pub(crate) player_id: i32,
+    pub(crate) text: Vec<u8>,
+    pub(crate) legacy_result: i32,
+    pub(crate) disposition: CountryInitialKingDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountrySetKingReport {
+    pub(crate) player_id: i32,
+    pub(crate) depose: CountryDeposeKingReport,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
     pub(crate) legacy_result: i32,
 }
 
@@ -822,6 +872,191 @@ impl CCountry {
         context: &mut Context,
     ) -> CountryBaseInfoDisposition {
         self.send_base_info_to_client(parameters, context)
+    }
+
+    /// Exact `SetKing`: return `DeposeKing(3)` игнорируется перед `0x7FF05`.
+    pub(crate) fn set_king<Context: CountryExileResultContext + ?Sized>(
+        &mut self,
+        player_id: i32,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> Result<CountrySetKingReport, CountryGovernanceContextBlock> {
+        let depose = self.depose_king(3, parameters, context)?;
+        self.king.id = player_id;
+        let mut message = CMessage::new(0x0007_FF05);
+        message.base_mut().add_byte(self.country_id);
+        message.base_mut().add_long(player_id);
+        let wire = message.as_wire_bytes().to_vec();
+        let delivery = context.send_all(&message);
+        Ok(CountrySetKingReport {
+            player_id,
+            depose,
+            wire,
+            delivery,
+            legacy_result: player_id,
+        })
+    }
+
+    /// Exact mode `0` исходного `RegisterKing` после административного `SetKing`.
+    pub(crate) fn register_initial_king<Context: CountryExileResultContext + ?Sized>(
+        &mut self,
+        player_id: i32,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> CountryInitialKingReport {
+        let Some(player) = context.online_player(player_id) else {
+            return self.reject_initial_king(
+                player_id,
+                CountryInitialKingRejection::PlayerMissing,
+                b"WS0016",
+                &[],
+                true,
+                context,
+            );
+        };
+        let Some(player_country) = player.country else {
+            return CountryInitialKingReport {
+                player_id,
+                text: Vec::new(),
+                legacy_result: 0,
+                disposition: CountryInitialKingDisposition::Rejected {
+                    reason: CountryInitialKingRejection::TargetCountryUnavailable,
+                    private_delivery: None,
+                },
+            };
+        };
+        if player_country != self.country_id {
+            return self.reject_initial_king(
+                player_id,
+                CountryInitialKingRejection::TargetFromAnotherCountry,
+                b"WS0022",
+                &[],
+                true,
+                context,
+            );
+        }
+        let faction_id = match context.faction_id_by_player(player_id) {
+            Ok(faction_id) => faction_id,
+            Err(block) => {
+                return CountryInitialKingReport {
+                    player_id,
+                    text: Vec::new(),
+                    legacy_result: 0,
+                    disposition: CountryInitialKingDisposition::ContextBlocked(block),
+                };
+            }
+        };
+        let Some(faction) = context.faction_snapshot(faction_id).filter(|_| faction_id > 0) else {
+            let country_name = context.country_name(self.country_id);
+            return self.reject_initial_king(
+                player_id,
+                CountryInitialKingRejection::FactionMissing,
+                b"WS0023",
+                &[
+                    CountryExileTextArgument::Text(&country_name),
+                    CountryExileTextArgument::Text(&player.name),
+                ],
+                false,
+                context,
+            );
+        };
+        if self.king.id != player_id {
+            let country_name = context.country_name(self.country_id);
+            return self.reject_initial_king(
+                player_id,
+                CountryInitialKingRejection::KingMismatch,
+                b"WS0024",
+                &[
+                    CountryExileTextArgument::Text(&country_name),
+                    CountryExileTextArgument::Text(&player.name),
+                ],
+                false,
+                context,
+            );
+        }
+        let Some(default_control_point) = parameters.default_king_control_point() else {
+            return CountryInitialKingReport {
+                player_id,
+                text: Vec::new(),
+                legacy_result: 0,
+                disposition: CountryInitialKingDisposition::ParameterUnavailable(
+                    CountryParameterUnavailable { field: "_def_king_control_point" },
+                ),
+            };
+        };
+        let control_point_update = match set_control_point(
+            &mut self.king,
+            default_control_point,
+            parameters,
+        ) {
+            Ok(update) => update,
+            Err(block) => {
+                return CountryInitialKingReport {
+                    player_id,
+                    text: Vec::new(),
+                    legacy_result: 0,
+                    disposition: CountryInitialKingDisposition::ParameterUnavailable(block),
+                };
+            }
+        };
+        let country_name = context.country_name(self.country_id);
+        let text = legacy_country_text(context.format_world_string(
+            b"WS0025",
+            &[
+                CountryExileTextArgument::Text(&faction.name),
+                CountryExileTextArgument::Text(&player.name),
+                CountryExileTextArgument::Text(&country_name),
+            ],
+        ));
+        context.put_king_log(&text);
+        self.king.name = player.name;
+        self.king_timestamp_ms = context.current_tick_ms();
+        let mut appointment = CMessage::new(0x0007_FF04);
+        appointment.base_mut().add_byte(self.country_id);
+        appointment.base_mut().add_long(player_id);
+        appointment.base_mut().add_byte(1);
+        appointment.base_mut().add_byte(1);
+        let appointment_wire = appointment.as_wire_bytes().to_vec();
+        let appointment_delivery = context.send_all(&appointment);
+        let world = self.send_world_message(&text, context);
+        CountryInitialKingReport {
+            player_id,
+            text,
+            legacy_result: player_id,
+            disposition: CountryInitialKingDisposition::Applied {
+                faction_id,
+                control_point_update,
+                appointment_wire,
+                appointment_delivery,
+                world_wire: world.as_ref().map(|(wire, _)| wire.clone()),
+                world_delivery: world.map(|(_, delivery)| delivery),
+            },
+        }
+    }
+
+    fn reject_initial_king<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        player_id: i32,
+        reason: CountryInitialKingRejection,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+        notify_king: bool,
+        context: &mut Context,
+    ) -> CountryInitialKingReport {
+        let text = legacy_country_text(context.format_world_string(string_id, arguments));
+        context.put_king_log(&text);
+        let private_delivery = notify_king
+            .then(|| self.send_private_message(&text, 0, context))
+            .flatten();
+        CountryInitialKingReport {
+            player_id,
+            text,
+            legacy_result: 0,
+            disposition: CountryInitialKingDisposition::Rejected {
+                reason,
+                private_delivery,
+            },
+        }
     }
 
     /// Exact `IsKing` для player-list owner-а с тем же `WS0033/WS0034`.
@@ -1437,7 +1672,7 @@ impl CCountry {
             }
         }
 
-        let depose = match self.depose_king_for_demise(2, parameters, context) {
+        let depose = match self.depose_king(2, parameters, context) {
             Ok(report) => report,
             Err(block) => {
                 return CountryRegisterKingReport {
@@ -1543,7 +1778,7 @@ impl CCountry {
         }
     }
 
-    fn depose_king_for_demise<Context: CountryExileResultContext + ?Sized>(
+    fn depose_king<Context: CountryExileResultContext + ?Sized>(
         &mut self,
         mode: u8,
         parameters: &CCountryParam,
@@ -1612,6 +1847,21 @@ impl CCountry {
             }
         }
 
+        let old_king_name = self.king.name.clone();
+        let text = if old_king_name.is_empty() {
+            Vec::new()
+        } else if mode == 3 || mode == 4 {
+            let country_name = context.country_name(self.country_id);
+            legacy_country_text(context.format_world_string(
+                if mode == 3 { b"WS0056" } else { b"WS0057" },
+                &[
+                    CountryExileTextArgument::Text(&country_name),
+                    CountryExileTextArgument::Text(&old_king_name),
+                ],
+            ))
+        } else {
+            Vec::new()
+        };
         let jobs = self
             .ministers
             .iter()
@@ -1621,8 +1871,8 @@ impl CCountry {
         for job in jobs {
             minister_reports.push(self.depose_minister(job, mode, parameters, context));
         }
-        context.put_king_log(&[]);
-        let world = self.send_world_message(&[], context);
+        context.put_king_log(&text);
+        let world = self.send_world_message(&text, context);
         self.king.id = 0;
         self.king.name.clear();
         Ok(CountryDeposeKingReport {
@@ -1930,7 +2180,7 @@ impl CCountry {
         }
     }
 
-    /// Exact `DeposeMinister(job, 7)` и достигнутая ветка `AppointMinister(0, job, 7)`.
+    /// Exact `DeposeMinister(job, mode)` и достигнутая ветка `AppointMinister(0, job, mode)`.
     pub(crate) fn depose_minister<Context: CountryExileResultContext + ?Sized>(
         &mut self,
         job: u8,
@@ -3709,7 +3959,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::SetKing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:796

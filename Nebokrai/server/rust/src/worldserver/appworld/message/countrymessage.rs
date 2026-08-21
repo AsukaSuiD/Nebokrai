@@ -3,6 +3,7 @@
 //! Dispatcher RVA `0x000A47F0` остаётся `IMPLEMENTED_PARTIAL`: country relays
 //! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, а также вход country victory
 //! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, appoint-minister
+//! `0x60304 -> SetKing/RegisterKing(0)` либо minister mode `7/6`,
 //! `0x60306 -> GetInfo/0x7FF07`, `0x60307 -> InitialOLPlayersList/Sort/0x7FF08`,
 //! `0x60309 -> 0x7FF04/0x7FF10/0x7FF07`, depose-minister
 //! `0x6030A -> 0x7FF04/0x7FF10/0x7FF07`, absolve
@@ -79,6 +80,12 @@
 //! `GetCountry -> IsKing -> GetInfo`; последний только вызывает уже
 //! восстановленный `SendBaseInfoToClient -> 0x7FF07`. Source/tail/country-
 //! range gates старого Linux-донора в exact dispatcher отсутствуют.
+//! `0x60304` читает `country:i8 -> u8, player:i32, appoint:i8 -> u8`.
+//! При appoint `1` exact сначала делает upper-clamped control point
+//! `100000`, затем `SetKing -> DeposeKing(3)/0x7FF05` и `RegisterKing(0) ->
+//! 0x7FF04/0x7FF12`; иной raw byte без range-check становится job для
+//! `DeposeMinister(job, 7)` и затем `AppointMinister(player, job, 6)`.
+//! Donor ownership/payload/player/country/job gates в поставочном EXE отсутствуют.
 //! Exact `0x004A4FC9..0x004A5049` задаёт `0x60317`: два signed long,
 //! синхронный `player_declare`, затем ответ `char accepted, player, target` в
 //! исходный `m_lMapID`. Проверок socket-owner и полного tail здесь нет; они
@@ -113,16 +120,18 @@ use crate::worldserver::appworld::country::country::{
     CountryCanAbsolveDisposition,
     CountryCanAppointMinisterDisposition, CountryCanExileDisposition,
     CountryCanDemiseDisposition, CountryCanDeposeMinisterDisposition, CountryCanSilenceDisposition,
-    CountryDemiseReport,
+    CountryDemiseReport, CountryGovernanceContextBlock, CountryInitialKingReport,
     CountryDeposeMinisterReport, CountryExileRequestDisposition,
     CountryExileResultContext, CountryExileTimeLookup, CountryQuestSwitchUpdate,
     CountryPlayersListContext, CountryPlayersListContextBlock, CountryPlayersListReport,
+    CountrySetKingReport,
     CountryScalarUpdate, CountrySilenceReport, CountrySuccessExiledReport,
 };
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::country::countryparam::{
     CCountryParam, CountryParameterUnavailable,
 };
+use crate::worldserver::appworld::country::king::{KingPointUpdate, set_control_point};
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
     CFourNationWarSys, FourNationCountryFailContext, FourNationCountryFailReport,
     FourNationExploitLoadedReport, FourNationSignUpDisposition, FourNationWarResultContext,
@@ -398,6 +407,35 @@ pub(crate) struct WorldCountryDemiseSync {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldCountryDirectAppointmentDisposition {
+    CountryMissing,
+    ParameterUnavailable(CountryParameterUnavailable),
+    ContextBlocked(CountryGovernanceContextBlock),
+    King {
+        initial_control_point: KingPointUpdate,
+        set: CountrySetKingReport,
+        register: CountryInitialKingReport,
+    },
+    Minister {
+        depose: CountryDeposeMinisterReport,
+        appoint: CountryAppointMinisterReport,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldCountryDirectAppointmentSync {
+    pub(crate) source_map_id: i32,
+    pub(crate) source_socket_id: i32,
+    pub(crate) country_id: u8,
+    pub(crate) country_complete: bool,
+    pub(crate) player_id: i32,
+    pub(crate) player_complete: bool,
+    pub(crate) appoint: u8,
+    pub(crate) appoint_complete: bool,
+    pub(crate) disposition: WorldCountryDirectAppointmentDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryInfoDisposition {
     CountryMissing,
     KingRejected,
@@ -519,6 +557,7 @@ pub(crate) enum WorldCountryMessageOutcome {
     MinisterDeposed(WorldCountryDeposeMinisterSync),
     MinisterAppointed(WorldCountryAppointMinisterSync),
     KingDemised(WorldCountryDemiseSync),
+    CountryAppointedDirectly(WorldCountryDirectAppointmentSync),
     CountryInfoSent(WorldCountryInfoSync),
     CountryPlayersListed(WorldCountryPlayersListSync),
     CountryWarDeclared(WorldCountryWarDeclarationSync),
@@ -1147,6 +1186,99 @@ pub(crate) fn dispatch_country_players_list_message<
         king_complete: decoded_king.is_some(),
         country_id,
         country_complete: decoded_country.is_some(),
+        disposition,
+    })
+}
+
+pub(crate) fn dispatch_country_direct_appointment_message<
+    Context: CountryExileResultContext + ?Sized,
+>(
+    message: &mut CMessage,
+    country_handler: &mut CCountryHandler,
+    country_parameters: &CCountryParam,
+    context: &mut Context,
+) -> Option<WorldCountryDirectAppointmentSync> {
+    if message.message_type() != 0x60304 {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+    let decoded_player = message.base_mut().get_long();
+    let player_id = decoded_player.unwrap_or(0);
+    let decoded_appoint = message.base_mut().get_char();
+    let appoint = decoded_appoint.unwrap_or(0) as u8;
+    let disposition = match country_handler.get_country_mut(country_id) {
+        None => WorldCountryDirectAppointmentDisposition::CountryMissing,
+        Some(country) if appoint == 1 => {
+            let initial_control_point = match set_control_point(
+                &mut country.king,
+                100_000,
+                country_parameters,
+            ) {
+                Ok(update) => update,
+                Err(block) => {
+                    return Some(WorldCountryDirectAppointmentSync {
+                        source_map_id,
+                        source_socket_id,
+                        country_id,
+                        country_complete: decoded_country.is_some(),
+                        player_id,
+                        player_complete: decoded_player.is_some(),
+                        appoint,
+                        appoint_complete: decoded_appoint.is_some(),
+                        disposition: WorldCountryDirectAppointmentDisposition::ParameterUnavailable(block),
+                    });
+                }
+            };
+            let set = match country.set_king(player_id, country_parameters, context) {
+                Ok(report) => report,
+                Err(block) => {
+                    return Some(WorldCountryDirectAppointmentSync {
+                        source_map_id,
+                        source_socket_id,
+                        country_id,
+                        country_complete: decoded_country.is_some(),
+                        player_id,
+                        player_complete: decoded_player.is_some(),
+                        appoint,
+                        appoint_complete: decoded_appoint.is_some(),
+                        disposition: WorldCountryDirectAppointmentDisposition::ContextBlocked(block),
+                    });
+                }
+            };
+            let register = country.register_initial_king(player_id, country_parameters, context);
+            WorldCountryDirectAppointmentDisposition::King {
+                initial_control_point,
+                set,
+                register,
+            }
+        }
+        Some(country) => {
+            let depose = country.depose_minister(appoint, 7, country_parameters, context);
+            let appoint_report = country.appoint_minister(
+                player_id,
+                appoint,
+                6,
+                country_parameters,
+                context,
+            );
+            WorldCountryDirectAppointmentDisposition::Minister {
+                depose,
+                appoint: appoint_report,
+            }
+        }
+    };
+    Some(WorldCountryDirectAppointmentSync {
+        source_map_id,
+        source_socket_id,
+        country_id,
+        country_complete: decoded_country.is_some(),
+        player_id,
+        player_complete: decoded_player.is_some(),
+        appoint,
+        appoint_complete: decoded_appoint.is_some(),
         disposition,
     })
 }

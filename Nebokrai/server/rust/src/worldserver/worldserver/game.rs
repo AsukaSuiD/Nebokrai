@@ -1017,6 +1017,7 @@ use crate::worldserver::appworld::message::countrymessage::{
     dispatch_country_appoint_minister_message,
     dispatch_country_demise_message,
     dispatch_country_depose_minister_message,
+    dispatch_country_direct_appointment_message,
     dispatch_country_exile_result_message,
     dispatch_country_exile_request_message,
     dispatch_country_info_message,
@@ -13077,6 +13078,40 @@ where
                         after_database,
                     },
                 ),
+            };
+        }
+        let direct_appointment = {
+            let faction_master_log_enabled =
+                game.setup.use_log_system && faction_master_log_enabled;
+            let base = WorldCountryExileResultEffects {
+                game,
+                globe_setup,
+                format_world_string: &mut *application_callbacks.format_world_string,
+            };
+            let mut effects = WorldCountryDemiseEffects {
+                base,
+                organizing,
+                organizing_parameters,
+                attack_city: &*attack_city,
+                goods_war: &*goods_war,
+                world_string: &mut *application_callbacks.world_string,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                update_player,
+                faction_master_log_enabled,
+                write_faction_master_log: &mut *write_faction_master_log,
+            };
+            dispatch_country_direct_appointment_message(
+                &mut message,
+                country_handler,
+                country_parameters,
+                &mut effects,
+            )
+        };
+        if let Some(sync) = direct_appointment {
+            return ProcessedWorldEvent::CountryMessage {
+                source,
+                legacy_run_result,
+                outcome: WorldCountryMessageOutcome::CountryAppointedDirectly(sync),
             };
         }
         let country_info = {
