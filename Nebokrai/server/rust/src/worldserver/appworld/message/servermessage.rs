@@ -90,7 +90,8 @@
 //! Singleton `CIncrementShopList` следом кодирует ordered multimap, точные
 //! 24-байтные item-prefix-ы и affiche как subtype `4`. `CContributeSetup`
 //! затем передаёт одиннадцать positional scalars и contribution items subtype
-//! `5`; следующая точная граница — singleton `PrisonConf`.
+//! `5`. `PrisonConf` сохраняет signed-char key order и компактные десятибайтные
+//! записи как subtype `0x1D`; следующая граница — `PreciousBoxConf`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -157,6 +158,7 @@ use crate::setup::monsterlist::{
     MonsterDropRegistry, MonsterListSerializeError, MonsterRegistry, serialize_monster_list,
 };
 use crate::setup::playerlist::{CPlayerList, PlayerListSerializeError};
+use crate::setup::prisonconf::{PrisonConf, PrisonConfSerializeError};
 use crate::setup::tradelist::{CTradeList, TradeListSerializeError};
 use crate::worldserver::appworld::country::country::CountryKingSaveLimits;
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
@@ -417,6 +419,20 @@ pub(crate) enum WorldContributeConfigurationCompletion {
 pub(crate) struct WorldContributeConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldContributeConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после `PrisonConf`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldPrisonConfigurationCompletion {
+    PrisonConf(PrisonConfSerializeError),
+    PreciousBoxConfigurationPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/0x1D` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldPrisonConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldPrisonConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1211,6 +1227,34 @@ pub(crate) fn continue_game_server_contribute_configuration(
             &payload,
         )),
         completion: WorldContributeConfigurationCompletion::PrisonConfigurationPending {
+            socket_id,
+        },
+    }
+}
+
+/// Кодирует и отправляет точный `PrisonConf` initial-config packet.
+pub(crate) fn continue_game_server_prison_configuration(
+    game: &CGame,
+    socket_id: i32,
+    prison: &PrisonConf,
+) -> WorldPrisonConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = prison.add_to_byte_array(&mut payload) {
+        return WorldPrisonConfigurationReport {
+            delivery: None,
+            completion: WorldPrisonConfigurationCompletion::PrisonConf(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldPrisonConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x1D,
+            &payload,
+        )),
+        completion: WorldPrisonConfigurationCompletion::PreciousBoxConfigurationPending {
             socket_id,
         },
     }
