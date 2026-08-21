@@ -151,6 +151,15 @@ impl EPurviewOwnState {
     }
 }
 
+/// Общий typed-результат concrete мутации одного `tagMemInfo::listPV`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MemberPurviewMutation {
+    InvalidPurview,
+    MemberNotFound,
+    Unchanged,
+    Changed,
+}
+
 /// Вложенное значение `tagTime`, нужное полному layout `tagMemInfo`.
 #[derive(Clone, Copy)]
 #[repr(C)]

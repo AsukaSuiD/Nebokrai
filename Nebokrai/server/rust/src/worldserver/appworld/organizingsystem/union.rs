@@ -8,7 +8,8 @@
 //! `0x000C18B0/0x000C1EC0/0x000C1ED0/0x000C1F20/0x000C1F30`,
 //! `GetEstablishedTime` RVA `0x000C1F00` и compiler-owned destructor RVA
 //! `0x000C1F40`, обе перегрузки `GetMemberList` RVA
-//! `0x000C1BB0/0x000C2710` — `IMPLEMENTED`;
+//! `0x000C1BB0/0x000C2710`, `IsUsingPV/SetMemPV/AbolishMemPV` RVA
+//! `0x000C1D00/0x000C1D70/0x000C1DD0` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -60,10 +61,16 @@
 //! каждого положительного ключа выполняет nullable faction lookup, пропускает
 //! miss/null и не добавляет один pointer дважды. Свежий `Vec` заменяет только
 //! list clear/nodes, а lookup передаётся явно вместо singleton-а.
+//! Три purview-owner-а проверяют индекс `0..10` до map lookup. Query принимает
+//! только точный `PST_Permit`; grant меняет лишь `PST_No`, revoke — любое
+//! ненулевое состояние. Общий typed-результат перенесён к owner-у
+//! `COrganizing::tagMemInfo`, но concrete map и переходы остаются в `CUnion`.
 
 use std::collections::BTreeMap;
 
-use super::organizing::{EOperator, TagMemInfo, TagTimeValue};
+use super::organizing::{
+    EOperator, EPurview, EPurviewOwnState, MemberPurviewMutation, TagMemInfo, TagTimeValue,
+};
 
 /// Поля `CUnion`, которые буквально копирует и читает save-цепочка.
 pub(crate) struct CUnion {
@@ -227,6 +234,59 @@ impl CUnion {
         } else {
             0
         }
+    }
+
+    /// Проверяет точное состояние `PST_Permit` одного faction-member права.
+    pub(crate) fn is_using_purview(&self, faction_id: i32, purview: i32) -> bool {
+        let Some(purview) = EPurview::from_wire_value(purview) else {
+            return false;
+        };
+        if faction_id == 0 {
+            return false;
+        }
+        self.members
+            .get(&faction_id)
+            .is_some_and(|member| member.purview[purview.index()] == EPurviewOwnState::Permit)
+    }
+
+    /// Переводит только `PST_No` в `PST_Permit`.
+    pub(crate) fn set_member_purview(
+        &mut self,
+        faction_id: i32,
+        purview: i32,
+    ) -> MemberPurviewMutation {
+        let Some(purview) = EPurview::from_wire_value(purview) else {
+            return MemberPurviewMutation::InvalidPurview;
+        };
+        let Some(member) = self.members.get_mut(&faction_id) else {
+            return MemberPurviewMutation::MemberNotFound;
+        };
+        let state = &mut member.purview[purview.index()];
+        if *state != EPurviewOwnState::No {
+            return MemberPurviewMutation::Unchanged;
+        }
+        *state = EPurviewOwnState::Permit;
+        MemberPurviewMutation::Changed
+    }
+
+    /// Переводит любое не-`PST_No` состояние в `PST_No`.
+    pub(crate) fn abolish_member_purview(
+        &mut self,
+        faction_id: i32,
+        purview: i32,
+    ) -> MemberPurviewMutation {
+        let Some(purview) = EPurview::from_wire_value(purview) else {
+            return MemberPurviewMutation::InvalidPurview;
+        };
+        let Some(member) = self.members.get_mut(&faction_id) else {
+            return MemberPurviewMutation::MemberNotFound;
+        };
+        let state = &mut member.purview[purview.index()];
+        if *state == EPurviewOwnState::No {
+            return MemberPurviewMutation::Unchanged;
+        }
+        *state = EPurviewOwnState::No;
+        MemberPurviewMutation::Changed
     }
 
     pub(crate) const fn change_data_type(&self) -> i32 {
@@ -540,7 +600,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::IsUsingPV
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:425
@@ -554,7 +614,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::SetMemPV
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:443

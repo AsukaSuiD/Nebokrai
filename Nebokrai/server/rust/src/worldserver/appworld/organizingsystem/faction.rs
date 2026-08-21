@@ -572,8 +572,8 @@ use std::mem::{offset_of, size_of};
 use chrono::{Datelike, Local, Timelike};
 
 use super::organizing::{
-    EOperator, EPurview, EPurviewOwnState, TagMemInfo, TagTimeValue,
-    UnterminatedMemberField,
+    EOperator, EPurview, EPurviewOwnState, MemberPurviewMutation, TagMemInfo,
+    TagTimeValue, UnterminatedMemberField,
 };
 use super::organizingparam::COrganizingParam;
 use crate::nets::networld::message::{CMessage, SendMessageError};
@@ -784,14 +784,6 @@ pub(crate) enum FactionDelMemberBlock {
 pub(crate) struct FactionDelMemberReport {
     pub(crate) removed: bool,
     pub(crate) disband_countdown_started: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MemberPurviewMutation {
-    InvalidPurview,
-    MemberNotFound,
-    Unchanged,
-    Changed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
