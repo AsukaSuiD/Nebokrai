@@ -30,6 +30,11 @@
 //! `COfficer::_bQuestSwitch` по exact PDB находится отдельно от
 //! `_bAppointed/_bSalary`; поэтому live quest-флаги короля и министров не
 //! смешиваются с их DB save-проекцией.
+//! Для достигнутого `CountryWarSys::player_declare` nonzero-ветки
+//! `IsKing/IsMinister` сведены к typed identity-проверкам; исходные WS0034/
+//! WS0037 log-side-effects остаются у caller-а. Exact `IsMinister(player, 5)`
+//! ищет player среди всех министров и использует job `5` только в fail-log —
+//! Rust намеренно не ужесточает это до проверки конкретной должности.
 //!
 //! Minister-map обходится в unsigned key-order, но ключ источника не копируется:
 //! максимум первые шесть non-null `CMinister` вставляются по собственному
@@ -145,6 +150,19 @@ pub(crate) enum CountryScalarUpdate {
 }
 
 impl CCountry {
+    /// Nonzero-ветка exact `IsKing`; caller отдельно сохраняет исходный log.
+    pub(crate) fn has_king_id(&self, player_id: i32) -> bool {
+        self.king.id == player_id
+    }
+
+    /// Exact `IsMinister` игнорирует входной job при поиске и обходит всех
+    /// живых министров; job используется только в сообщении отрицательного log.
+    pub(crate) fn has_minister_id(&self, player_id: i32) -> bool {
+        self.ministers
+            .values()
+            .any(|minister| minister.snapshot.id == player_id)
+    }
+
     /// Повторяет signed 32-битную арифметику `GetExileResTime` после уже
     /// снятого `timeGetTime`; отсутствие записи не требует `_exile_time`.
     pub(crate) fn exile_remaining_time(

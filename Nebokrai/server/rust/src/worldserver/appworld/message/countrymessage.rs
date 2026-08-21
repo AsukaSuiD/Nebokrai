@@ -2,8 +2,9 @@
 //!
 //! Dispatcher RVA `0x000A47F0` остаётся `IMPLEMENTED_PARTIAL`: country relays
 //! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, а также вход country victory
-//! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315` и exile-time
-//! `0x60316 -> 0x7FF15` имеют статус `IMPLEMENTED`. Victory читает один
+//! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, exile-time
+//! `0x60316 -> 0x7FF15` и war-declare `0x60317 -> 0x7FF16` имеют статус
+//! `IMPLEMENTED`. Victory читает один
 //! unsigned country byte и вызывает исходно
 //! названный `CountryWarSys::on_flag_destory`; соседние opcodes helper не
 //! интерпретирует. Точная пара
@@ -31,6 +32,10 @@
 //! signed 32-bit milliseconds, делит к нулю и зажимает отрицательный результат.
 //! `SuccessExiled` в точном EXE не наполняет map, хотя Linux-донор это исправил;
 //! dispatcher сохраняет машинную ошибку, а не принимает donor fix за контракт.
+//! Exact `0x004A4FC9..0x004A5049` задаёт `0x60317`: два signed long,
+//! синхронный `player_declare`, затем ответ `char accepted, player, target` в
+//! исходный `m_lMapID`. Проверок socket-owner и полного tail здесь нет; они
+//! были добавлены Linux-донором и не являются поведением поставленного EXE.
 //! Exact switch target `0x004A504E..0x004A5065` подтверждает, что `0x60318`
 //! читает один unsigned country byte и сразу передаёт его достигнутому
 //! `CountryWarSys`; конкретный region/country/localization/network context
@@ -49,7 +54,8 @@ use crate::worldserver::appworld::country::countryparam::{
 use crate::worldserver::worldserver::game::{CGame, legacy_tick_ms};
 
 use super::super::country::countrywarsys::{
-    CountryWarSys, CountryWarVictoryContext, CountryWarVictoryReport,
+    CountryWarDeclarationContext, CountryWarDeclarationReport, CountryWarSys,
+    CountryWarVictoryContext, CountryWarVictoryReport,
 };
 
 const COUNTRY_RELAY_FIRST: i32 = 0x0006_0310;
@@ -131,11 +137,24 @@ pub(crate) struct WorldCountryExileTimeSync {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldCountryWarDeclarationSync {
+    pub(crate) player_id: i32,
+    pub(crate) player_id_complete: bool,
+    pub(crate) target_country: i32,
+    pub(crate) target_country_complete: bool,
+    pub(crate) source_map_id: i32,
+    pub(crate) declaration: CountryWarDeclarationReport,
+    pub(crate) response_wire: Vec<u8>,
+    pub(crate) response_delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryMessageOutcome {
     Relay(WorldCountryRelayOutcome),
     ScalarSynchronized(WorldCountryScalarSync),
     QuestSwitchSynchronized(WorldCountryQuestSwitchSync),
     ExileTimeSynchronized(WorldCountryExileTimeSync),
+    CountryWarDeclared(WorldCountryWarDeclarationSync),
     CountryWarVictory(WorldCountryWarVictorySync),
 }
 
@@ -335,6 +354,45 @@ pub(crate) fn dispatch_country_war_victory_message<Context: CountryWarVictoryCon
         country_complete: decoded_country.is_some(),
         report,
     }))
+}
+
+pub(crate) fn dispatch_country_war_declaration_message<
+    Context: CountryWarDeclarationContext + ?Sized,
+>(
+    message: &mut CMessage,
+    country_war_sys: &mut CountryWarSys,
+    context: &mut Context,
+) -> Option<WorldCountryWarDeclarationSync> {
+    if message.message_type() != 0x60317 {
+        return None;
+    }
+
+    let source_map_id = message.map_id();
+    let decoded_player_id = message.base_mut().get_long();
+    let player_id = decoded_player_id.unwrap_or(0);
+    let decoded_target_country = message.base_mut().get_long();
+    let target_country = decoded_target_country.unwrap_or(0);
+    let declaration = country_war_sys.player_declare(player_id, target_country, context);
+
+    let mut response = CMessage::new(0x7ff16);
+    response
+        .base_mut()
+        .add_char(if declaration.accepted() { 1 } else { 0 });
+    response.base_mut().add_long(player_id);
+    response.base_mut().add_long(target_country);
+    let response_wire = response.as_wire_bytes().to_vec();
+    let response_delivery = context.send_to_map_id(&response, source_map_id);
+
+    Some(WorldCountryWarDeclarationSync {
+        player_id,
+        player_id_complete: decoded_player_id.is_some(),
+        target_country,
+        target_country_complete: decoded_target_country.is_some(),
+        source_map_id,
+        declaration,
+        response_wire,
+        response_delivery,
+    })
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer

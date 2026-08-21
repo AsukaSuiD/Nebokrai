@@ -1,7 +1,8 @@
-//! WorldServer-владелец country-war victory state `CountryWarSys`.
+//! WorldServer-владелец country-war state `CountryWarSys`.
 //!
-//! `AddToByteArray` RVA `0x0008F800` и `on_flag_destory` (исходное
-//! PDB-написание) RVA `0x00091E00` имеют статус `IMPLEMENTED`; остальной корпус
+//! `AddToByteArray` RVA `0x0008F800`, `player_declare` RVA `0x00091B00` и
+//! `on_flag_destory` (исходное PDB-написание) RVA `0x00091E00` имеют статус
+//! `IMPLEMENTED`; остальной корпус
 //! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара `WorldServer/Nworldserver.exe +
 //! WorldServer/WorldServer.pdb`, исходник `appworld/country/countrywarsys.cpp`.
 //!
@@ -20,6 +21,15 @@
 //! Переполнение исходного 256-byte `_sprintf` не воспроизводится: нормальный
 //! output сохраняется, oversized localization безопасно ограничивается 255
 //! байтами под C-string NUL как внутренний UB без доказанного gameplay-эффекта.
+//! `player_declare` подтверждён exact `0x00491B00..0x00491DFD`: online-player,
+//! чужая target-country, последовательные `IsKing/IsMinister(5)`, первый
+//! свободный region, живой `pRegion`, затем проверки только defend-country.
+//! При успехе state меняется до `0x7FF1F`, результаты обеих рассылок
+//! игнорируются, лишний lookup `WS0103` перезаписывается `WS0104`, и функция
+//! возвращает true. Linux-донор добавлял source/tail gates, fallback региона и
+//! rollback при отказе очереди; эти полезные, но неоригинальные политики сюда
+//! не перенесены. 512-byte `_sprintf` overflow безопасно ограничен нормальным
+//! C-string payload в 511 байт без изменения штатного результата.
 //!
 //! Snapshot намеренно сохраняет layout World EXE: `state_clear + 3 bytes
 //! padding`, затем defender и attacker. Парный Game EXE RVA `0x000EBD60`
@@ -30,7 +40,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::nets::networld::message::CMessage;
+use crate::nets::networld::message::{CMessage, SendMessageError};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CountryWarRegion {
@@ -87,6 +97,98 @@ pub(crate) struct CountryWarVictoryReport {
     pub(crate) info_deliveries: Vec<i32>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarDeclarationAuthority {
+    CountryMissing,
+    Rejected,
+    Authorized,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarDeclarationPlayer {
+    Missing,
+    CountryUnavailable,
+    Country(u8),
+}
+
+pub(crate) trait CountryWarDeclarationContext {
+    fn online_player_country(&mut self, player_id: i32) -> CountryWarDeclarationPlayer;
+
+    /// Повторяет последовательные `IsKing`, затем `IsMinister(player, 5)`,
+    /// включая их king-log при отрицательных проверках.
+    fn declaration_authority(
+        &mut self,
+        country: u8,
+        player_id: i32,
+    ) -> CountryWarDeclarationAuthority;
+
+    fn region(&mut self, region_id: i32) -> Option<CountryWarVictoryRegion>;
+    fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8>;
+    fn format_declaration_notice(
+        &mut self,
+        attack_country: u8,
+        defend_country: i32,
+        region_name: &[u8],
+    ) -> Vec<u8>;
+    fn send_private_to_country_king(
+        &mut self,
+        country: u8,
+        text: &[u8],
+    ) -> Option<Result<i32, SendMessageError>>;
+    fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError>;
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError>;
+    fn send_country_info(&mut self, text: &[u8], title: u32, color: u32) -> i32;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarDeclarationRejection {
+    PlayerMissing,
+    PlayerCountryUnavailable,
+    OwnCountry,
+    CountryMissing,
+    Unauthorized,
+    NoFreeRegion,
+    RegionMissing,
+    AttackAlreadyDeclared {
+        private_delivery: Option<Result<i32, SendMessageError>>,
+    },
+    TargetAlreadyDeclared {
+        private_delivery: Option<Result<i32, SendMessageError>>,
+    },
+    StateEntryMissing,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarDeclarationDisposition {
+    Rejected(CountryWarDeclarationRejection),
+    Declared {
+        region_id: i32,
+        state_wire: Vec<u8>,
+        state_delivery: Result<i32, SendMessageError>,
+        discarded_ws0103: Vec<u8>,
+        notice: Vec<u8>,
+        info_delivery: i32,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountryWarDeclarationReport {
+    pub(crate) player_id: i32,
+    pub(crate) target_country: i32,
+    pub(crate) attack_country: Option<u8>,
+    pub(crate) disposition: CountryWarDeclarationDisposition,
+}
+
+impl CountryWarDeclarationReport {
+    pub(crate) const fn accepted(&self) -> bool {
+        matches!(self.disposition, CountryWarDeclarationDisposition::Declared { .. })
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CountryWarSys {
     pub(crate) war_regions: BTreeMap<i32, CountryWarRegion>,
@@ -103,6 +205,138 @@ impl CountryWarSys {
             output.extend_from_slice(&state.attack_country.to_le_bytes());
         }
         true
+    }
+
+    fn is_already_declared(&self, country: i32) -> bool {
+        self.war_regions
+            .values()
+            .any(|state| state.defend_country == country)
+    }
+
+    fn free_war_region(&self) -> Option<i32> {
+        self.war_regions
+            .iter()
+            .find(|(_, state)| state.defend_country == 0 && state.attack_country == 0)
+            .map(|(&region_id, _)| region_id)
+    }
+
+    pub(crate) fn player_declare<Context: CountryWarDeclarationContext + ?Sized>(
+        &mut self,
+        player_id: i32,
+        target_country: i32,
+        context: &mut Context,
+    ) -> CountryWarDeclarationReport {
+        let rejected = |attack_country, reason| CountryWarDeclarationReport {
+            player_id,
+            target_country,
+            attack_country,
+            disposition: CountryWarDeclarationDisposition::Rejected(reason),
+        };
+
+        let attack_country = match context.online_player_country(player_id) {
+            CountryWarDeclarationPlayer::Missing => {
+                return rejected(None, CountryWarDeclarationRejection::PlayerMissing);
+            }
+            CountryWarDeclarationPlayer::CountryUnavailable => {
+                return rejected(
+                    None,
+                    CountryWarDeclarationRejection::PlayerCountryUnavailable,
+                );
+            }
+            CountryWarDeclarationPlayer::Country(country) => country,
+        };
+        if i32::from(attack_country) == target_country {
+            return rejected(
+                Some(attack_country),
+                CountryWarDeclarationRejection::OwnCountry,
+            );
+        }
+        match context.declaration_authority(attack_country, player_id) {
+            CountryWarDeclarationAuthority::CountryMissing => {
+                return rejected(
+                    Some(attack_country),
+                    CountryWarDeclarationRejection::CountryMissing,
+                );
+            }
+            CountryWarDeclarationAuthority::Rejected => {
+                return rejected(
+                    Some(attack_country),
+                    CountryWarDeclarationRejection::Unauthorized,
+                );
+            }
+            CountryWarDeclarationAuthority::Authorized => {}
+        }
+
+        let Some(region_id) = self.free_war_region() else {
+            return rejected(
+                Some(attack_country),
+                CountryWarDeclarationRejection::NoFreeRegion,
+            );
+        };
+        let Some(region) = context.region(region_id) else {
+            return rejected(
+                Some(attack_country),
+                CountryWarDeclarationRejection::RegionMissing,
+            );
+        };
+        if self.is_already_declared(i32::from(attack_country)) {
+            let text = context.world_string(b"WS0101");
+            let private_delivery = context.send_private_to_country_king(attack_country, &text);
+            return rejected(
+                Some(attack_country),
+                CountryWarDeclarationRejection::AttackAlreadyDeclared { private_delivery },
+            );
+        }
+        if self.is_already_declared(target_country) {
+            let text = context.world_string(b"WS0102");
+            let private_delivery = context.send_private_to_country_king(attack_country, &text);
+            return rejected(
+                Some(attack_country),
+                CountryWarDeclarationRejection::TargetAlreadyDeclared { private_delivery },
+            );
+        }
+
+        let Some(state) = self.war_regions.get_mut(&region_id) else {
+            return rejected(
+                Some(attack_country),
+                CountryWarDeclarationRejection::StateEntryMissing,
+            );
+        };
+        state.defend_country = target_country;
+        state.attack_country = i32::from(attack_country);
+
+        let mut state_message = CMessage::new(0x7ff1f);
+        state_message.base_mut().add_long(region_id);
+        state_message.base_mut().add_long(target_country);
+        state_message
+            .base_mut()
+            .add_long(i32::from(attack_country));
+        let state_wire = state_message.as_wire_bytes().to_vec();
+        let state_delivery = context.send_all(&state_message);
+
+        // Exact сначала копировал WS0103 в 512-byte buffer, затем полностью
+        // перезаписывал его результатом sprintf(WS0104). Сам lookup сохраняем.
+        let discarded_ws0103 = context.world_string(b"WS0103");
+        let notice = context.format_declaration_notice(
+            attack_country,
+            target_country,
+            &region.name,
+        );
+        let info_delivery = context.send_country_info(&notice, 0xffff_fe92, 0xffff_0000);
+
+        CountryWarDeclarationReport {
+            player_id,
+            target_country,
+            attack_country: Some(attack_country),
+            disposition: CountryWarDeclarationDisposition::Declared {
+                region_id,
+                state_wire,
+                state_delivery,
+                discarded_ws0103,
+                notice,
+                info_delivery,
+            },
+        }
     }
 
     pub(crate) fn on_flag_destory<Context: CountryWarVictoryContext + ?Sized>(
@@ -261,7 +495,7 @@ impl CountryWarSys {
 
 // ============================================================================
 // FUNCTION: CountryWarSys::is_already_declare
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:604
@@ -275,7 +509,7 @@ impl CountryWarSys {
 
 // ============================================================================
 // FUNCTION: CountryWarSys::get_war_region
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:693
@@ -401,7 +635,7 @@ impl CountryWarSys {
 
 // ============================================================================
 // FUNCTION: CountryWarSys::player_declare
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:617

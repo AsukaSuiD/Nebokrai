@@ -975,7 +975,7 @@ use crate::public::timer::{
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::godsbattleconf::CGodsBattleConf;
 use crate::setup::regionrouter::RegionRouter;
-use crate::public::tools::ini_decode;
+use crate::public::tools::{ini_decode, put_string_to_file};
 use crate::transport::bind_tcp_ipv4;
 use crate::worldserver::appworld::country::country::{CCountry, CountryKingSaveLimits};
 use crate::worldserver::appworld::country::countryhandler::{
@@ -983,6 +983,7 @@ use crate::worldserver::appworld::country::countryhandler::{
 };
 use crate::worldserver::appworld::country::countryparam::CCountryParam;
 use crate::worldserver::appworld::country::countrywarsys::{
+    CountryWarDeclarationAuthority, CountryWarDeclarationContext, CountryWarDeclarationPlayer,
     CountryWarSys, CountryWarVictoryContext, CountryWarVictoryRegion,
 };
 use crate::worldserver::appworld::goods::cgoodsfactory::{
@@ -1000,7 +1001,8 @@ use crate::worldserver::appworld::message::othermessage::{
 };
 use crate::worldserver::appworld::message::countrymessage::{
     WorldCountryMessageDispatch, WorldCountryMessageOutcome,
-    dispatch_country_war_victory_message, on_country_message,
+    dispatch_country_war_declaration_message, dispatch_country_war_victory_message,
+    on_country_message,
 };
 use crate::worldserver::appworld::message::gmamessage::{
     WorldGmaMessageDispatch, WorldGmaMessageOutcome, on_gma_message,
@@ -11986,14 +11988,157 @@ impl CountryInfoDeliveryContext for WorldCountryInfoDelivery<'_> {
     }
 }
 
-struct WorldCountryWarVictoryEffects<'a> {
+struct WorldCountryWarEffects<'a> {
     game: &'a CGame,
     country_handler: &'a mut CCountryHandler,
+    globe_setup: &'a GlobeSetupSnapshot,
+    world_string: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
     format_world_string:
         &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
 }
 
-impl CountryWarVictoryContext for WorldCountryWarVictoryEffects<'_> {
+impl CountryWarDeclarationContext for WorldCountryWarEffects<'_> {
+    fn online_player_country(&mut self, player_id: i32) -> CountryWarDeclarationPlayer {
+        let Some(player) = self.game.online_player_by_id(player_id as u32) else {
+            return CountryWarDeclarationPlayer::Missing;
+        };
+        match player.country() {
+            Some(country) => CountryWarDeclarationPlayer::Country(country),
+            None => CountryWarDeclarationPlayer::CountryUnavailable,
+        }
+    }
+
+    fn declaration_authority(
+        &mut self,
+        country: u8,
+        player_id: i32,
+    ) -> CountryWarDeclarationAuthority {
+        let Some(owner) = self.country_handler.get_country(country) else {
+            return CountryWarDeclarationAuthority::CountryMissing;
+        };
+        let is_king = owner.has_king_id(player_id);
+        let is_minister = owner.has_minister_id(player_id);
+        let country_name = self
+            .globe_setup
+            .country_name(country)
+            .unwrap_or_default()
+            .to_vec();
+
+        if is_king {
+            return CountryWarDeclarationAuthority::Authorized;
+        }
+        let king_log = (self.format_world_string)(
+            b"WS0034",
+            &[UnionFormatArgument::Text(&country_name)],
+        );
+        let king_log = legacy_c_string_prefix(&king_log);
+        put_string_to_file("king", &king_log[..king_log.len().min(0x103)]);
+
+        if is_minister {
+            return CountryWarDeclarationAuthority::Authorized;
+        }
+        let identity_name = self
+            .globe_setup
+            .country_identity_name(5)
+            .unwrap_or_default();
+        let minister_log = (self.format_world_string)(
+            b"WS0037",
+            &[
+                UnionFormatArgument::Text(&country_name),
+                UnionFormatArgument::Text(identity_name),
+            ],
+        );
+        let minister_log = legacy_c_string_prefix(&minister_log);
+        put_string_to_file(
+            "king",
+            &minister_log[..minister_log.len().min(0x103)],
+        );
+        CountryWarDeclarationAuthority::Rejected
+    }
+
+    fn region(&mut self, region_id: i32) -> Option<CountryWarVictoryRegion> {
+        match self.game.region_name(region_id) {
+            WorldRegionNameLookup::Name(name) => Some(CountryWarVictoryRegion {
+                name: name.to_vec(),
+            }),
+            WorldRegionNameLookup::RegionNotFound
+            | WorldRegionNameLookup::NullRegionPointer => None,
+        }
+    }
+
+    fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
+        (self.world_string)(string_id)
+    }
+
+    fn format_declaration_notice(
+        &mut self,
+        attack_country: u8,
+        defend_country: i32,
+        region_name: &[u8],
+    ) -> Vec<u8> {
+        let attack_name = self
+            .globe_setup
+            .country_name(attack_country)
+            .unwrap_or_default();
+        let defend_name = u8::try_from(defend_country)
+            .ok()
+            .and_then(|country| self.globe_setup.country_name(country))
+            .unwrap_or_default();
+        let notice = (self.format_world_string)(
+            b"WS0104",
+            &[
+                UnionFormatArgument::Text(attack_name),
+                UnionFormatArgument::Text(defend_name),
+                UnionFormatArgument::Text(region_name),
+            ],
+        );
+        let notice = legacy_c_string_prefix(&notice);
+        notice[..notice.len().min(0x1ff)].to_vec()
+    }
+
+    fn send_private_to_country_king(
+        &mut self,
+        country: u8,
+        text: &[u8],
+    ) -> Option<Result<i32, SendMessageError>> {
+        let text = legacy_c_string_prefix(text);
+        if text.is_empty() {
+            return None;
+        }
+        let king_id = self.country_handler.get_country(country)?.king.id;
+        let map_id = self.game.game_server_number_by_player_id(king_id);
+        if map_id == 0 {
+            return None;
+        }
+        let text = CString::new(text).expect("legacy C-string prefix не содержит NUL");
+        let mut message = CMessage::new(0x7ff13);
+        message.base_mut().add_long(king_id);
+        message.base_mut().add_str(Some(&text));
+        Some(message.send_to_map_id(self.game.current_game_server_sender().as_ref(), map_id))
+    }
+
+    fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError> {
+        message.send_all(self.game.current_game_server_sender().as_ref())
+    }
+
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError> {
+        message.send_to_map_id(self.game.current_game_server_sender().as_ref(), map_id)
+    }
+
+    fn send_country_info(&mut self, text: &[u8], title: u32, color: u32) -> i32 {
+        let text = CString::new(legacy_c_string_prefix(text))
+            .expect("legacy C-string prefix не содержит внутреннего NUL");
+        let mut delivery = WorldCountryInfoDelivery { game: self.game };
+        self.country_handler
+            .send_info_to_client(&text, title, color, &mut delivery)
+    }
+}
+
+impl CountryWarVictoryContext for WorldCountryWarEffects<'_> {
     type Block = Infallible;
 
     fn region(
@@ -12216,10 +12361,29 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::Country) {
-        let victory = {
-            let mut effects = WorldCountryWarVictoryEffects {
+        let declaration = {
+            let mut effects = WorldCountryWarEffects {
                 game,
                 country_handler,
+                globe_setup,
+                world_string: &mut *application_callbacks.world_string,
+                format_world_string: &mut *application_callbacks.format_world_string,
+            };
+            dispatch_country_war_declaration_message(&mut message, country_war, &mut effects)
+        };
+        if let Some(sync) = declaration {
+            return ProcessedWorldEvent::CountryMessage {
+                source,
+                legacy_run_result,
+                outcome: WorldCountryMessageOutcome::CountryWarDeclared(sync),
+            };
+        }
+        let victory = {
+            let mut effects = WorldCountryWarEffects {
+                game,
+                country_handler,
+                globe_setup,
+                world_string: &mut *application_callbacks.world_string,
                 format_world_string: &mut *application_callbacks.format_world_string,
             };
             dispatch_country_war_victory_message(&mut message, country_war, &mut effects)

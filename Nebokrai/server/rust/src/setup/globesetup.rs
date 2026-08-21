@@ -21,6 +21,8 @@
 //! `OnPlayerDeclareWar` exact `0x0046FE62..0x0046FE71` индексирует country
 //! name как `m_stSetup + 0x906 + country * 0x40` только для `0..=4`; typed
 //! accessor ниже накладывает эту подтверждённую границу на тот же raw snapshot.
+//! Country `IsMinister` exact использует соседний `szCountryIdentity` по
+//! `+0xA46`, восемь slots по `0x40`; второй accessor не копирует строки.
 
 use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 
@@ -28,6 +30,8 @@ pub(crate) const GLOBE_SETUP_BLOB_LENGTH: usize = 0x1114;
 const COUNTRY_NAME_OFFSET: usize = 0x906;
 const COUNTRY_NAME_SLOT_LENGTH: usize = 0x40;
 const COUNTRY_NAME_COUNT: usize = 5;
+const COUNTRY_IDENTITY_OFFSET: usize = 0xA46;
+const COUNTRY_IDENTITY_COUNT: usize = 8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -58,6 +62,18 @@ impl GlobeSetupSnapshot {
             return None;
         }
         let start = COUNTRY_NAME_OFFSET + index * COUNTRY_NAME_SLOT_LENGTH;
+        let slot = &self.bytes[start..start + COUNTRY_NAME_SLOT_LENGTH];
+        let visible_len = slot.iter().position(|byte| *byte == 0).unwrap_or(slot.len());
+        Some(&slot[..visible_len])
+    }
+
+    /// Возвращает C-string prefix exact `szCountryIdentity[8][0x40]`.
+    pub(crate) fn country_identity_name(&self, identity: u8) -> Option<&[u8]> {
+        let index = usize::from(identity);
+        if index >= COUNTRY_IDENTITY_COUNT {
+            return None;
+        }
+        let start = COUNTRY_IDENTITY_OFFSET + index * COUNTRY_NAME_SLOT_LENGTH;
         let slot = &self.bytes[start..start + COUNTRY_NAME_SLOT_LENGTH];
         let visible_len = slot.iter().position(|byte| *byte == 0).unwrap_or(slot.len());
         Some(&slot[..visible_len])
