@@ -7,8 +7,8 @@
 //! полного player-save batch `0x5FA03`, обычных opcode `0x4FC01..=0x4FC03`,
 //! `0x5FA04..=0x5FA07`, `0x5FA09`, `0x5FA0A..=0x5FA0D` и
 //! `0x5FA0F..=0x5FA10` из
-//! `OnServerMessage` RVA `0x000ADCF0`;
-//! остальные ветви остаются `UNKNOWN` (исследовательский декомпилят хранится локально) ниже. Точная пара:
+//! `OnServerMessage` RVA `0x000ADCF0`; owner полностью закрыт точными typed-
+//! ветвями, а исходный RAW свёрнут в source-reference ниже. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
 //! SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
@@ -4205,7 +4205,7 @@ fn send_region_change_failure(
 
 // ============================================================================
 // FUNCTION: OnServerMessage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\servermessage.cpp:87
@@ -4213,8 +4213,9 @@ fn send_region_change_failure(
 // ADDRESS: 004adcf0
 // PROTOTYPE: void __cdecl OnServerMessage(CMessage * param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// Полная typed-реализация находится в `on_server_message` выше. Exact switch
+// включает `0x3FC03`, `0x4FC01..=0x4FC03`, `0x5FA01..=0x5FA07`, `0x5FA09`,
+// `0x5FA0A..=0x5FA0D` и `0x5FA0F..=0x5FA10`; opcode `0x5FA08/0x5FA0E`
+// в машинной таблице отсутствуют.
 
 // COMPONENT_VARIANT_END: WorldServer
