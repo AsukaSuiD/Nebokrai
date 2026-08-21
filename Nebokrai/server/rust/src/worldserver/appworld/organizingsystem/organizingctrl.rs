@@ -284,6 +284,25 @@
 //! EXE и не «исправлен» по старому донору. Запрос сериализует сохранённый
 //! snapshot без скрытого пересчёта: его lifecycle остаётся `Initialize` и
 //! явным `StatBillboard` после завершения city-war.
+//!
+//! `OnAttackCityEnd` exact ASM `0x00437C70..0x00438003` сначала разрешает
+//! faction атакующего игрока, затем копирует byte-exact имя региона (miss/null
+//! дают пустую строку) и только после этого применяет zero-faction gate;
+//! далее независимо поднимает attacker/defender до union-owner-а.
+//! Ненулевой defender обязан владеть регионом. При результате `1` порядок
+//! side effects: offense victor атакующему owner-у, `DelOwnedCity` защитнику,
+//! `WS0261`, `AddOwnedCity` атакующему и `RefreshOwnedCityOrg(region,
+//! attacker faction, attacker union)`. При `0`: defence victor защитнику и
+//! `WS0262`; прочие значения ничего не меняют. Union virtual-ы используют уже
+//! подтверждённые fan-out и legacy `DelOwnedCity`, который очищает city-list
+//! master-фракции вместо удаления одного ID.
+//!
+//! В ветви `WS0262` машина берёт имя attacker owner-а, а не defender, и
+//! передаёт 28-байтовый MSVC `std::string` в variadic `sprintf` без `c_str()`.
+//! Выбор attacker-name сохранён как наблюдаемая семантика; UB/зависимость от
+//! SSO исправлены безопасной visible C-string-проекцией. Исходные region
+//! `char[0x100]` и два notice `char[0x400]` заменены явными границами;
+//! уже завершённые счётчики при переполнении notice не откатываются.
 
 use std::any::Any;
 use std::cell::Cell;
@@ -332,9 +351,10 @@ use super::union::{
     UnionClientSnapshotContext, UnionDoJoinBlock, UnionDoJoinContext, UnionDoJoinOutcome,
     UnionFactionJoinContext, UnionFactionLevelBlock, UnionFactionMemberContext,
     UnionFactionStateMutationContext, UnionInitialMutationContext, UnionMasterFactionQueryContext,
-    UnionMemberSnapshotBlock,
-    UnionOperatorValidationContext, UnionOwnedCityMutationContext,
+    UnionMemberSnapshotBlock, UnionOperatorValidationContext, UnionOwnedCityBooleanMutationReport,
+    UnionOwnedCityFanoutReport, UnionOwnedCityMutationBlock, UnionOwnedCityMutationContext,
     UnionFormatArgument, UnionPlayerRefreshContext, UnionSendInfoContext,
+    UnionVictorFanoutReport, UnionVictorMutationBlock,
 };
 use super::villagewarsys::CVillageWarSys;
 use crate::nets::networld::message::{CMessage, SendMessageError};
@@ -1491,6 +1511,133 @@ pub(crate) enum CityTransferFinishBlock {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CityWarOrganizingOwner {
+    Faction(i32),
+    Union(i32),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CityWarVictorMutation {
+    Faction(Vec<FactionPropertyDelivery>),
+    Union(UnionVictorFanoutReport),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CityWarOwnedCityRemoval {
+    Faction(OwnedCityBooleanMutationReport),
+    Union(UnionOwnedCityBooleanMutationReport),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CityWarOwnedCityAddition {
+    Faction(OwnedCityAddOutcome),
+    Union(UnionOwnedCityFanoutReport),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AttackCityEndReport {
+    pub(crate) attacker_faction_id: Option<i32>,
+    pub(crate) attacker_union_id: Option<i32>,
+    pub(crate) attacker_owner: Option<CityWarOrganizingOwner>,
+    pub(crate) defender_union_id: Option<i32>,
+    pub(crate) defender_owner: Option<CityWarOrganizingOwner>,
+    pub(crate) defender_owns_city: Option<bool>,
+    pub(crate) offense_victors: Option<CityWarVictorMutation>,
+    pub(crate) defender_city_removal: Option<CityWarOwnedCityRemoval>,
+    pub(crate) attacker_city_addition: Option<CityWarOwnedCityAddition>,
+    pub(crate) defence_victors: Option<CityWarVictorMutation>,
+    pub(crate) refreshed_owner: Option<(i32, i32, i32)>,
+    pub(crate) broadcast: Option<Result<i32, SendMessageError>>,
+}
+
+impl AttackCityEndReport {
+    const fn pending() -> Self {
+        Self {
+            attacker_faction_id: None,
+            attacker_union_id: None,
+            attacker_owner: None,
+            defender_union_id: None,
+            defender_owner: None,
+            defender_owns_city: None,
+            offense_victors: None,
+            defender_city_removal: None,
+            attacker_city_addition: None,
+            defence_victors: None,
+            refreshed_owner: None,
+            broadcast: None,
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CityWarVictorMutationBlock {
+    Faction(FactionInitialPropertyBlock),
+    Union(UnionVictorMutationBlock),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CityWarOwnedCityMutationBlock {
+    Faction(OwnedCityMutationBuildError),
+    Union(UnionOwnedCityMutationBlock),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum AttackCityEndBlock {
+    RegionNameWouldOverflow {
+        report: AttackCityEndReport,
+        visible_len: usize,
+    },
+    AttackerMembership {
+        report: AttackCityEndReport,
+        map_key: i32,
+    },
+    AttackerUnionMembership {
+        report: AttackCityEndReport,
+        map_key: i32,
+    },
+    DefenderUnionMembership {
+        report: AttackCityEndReport,
+        map_key: i32,
+    },
+    OffenseVictors {
+        report: AttackCityEndReport,
+        source: CityWarVictorMutationBlock,
+    },
+    DefenderCityRemoval {
+        report: AttackCityEndReport,
+        source: CityWarOwnedCityMutationBlock,
+    },
+    AttackerCityAddition {
+        report: AttackCityEndReport,
+        source: CityWarOwnedCityMutationBlock,
+    },
+    DefenceVictors {
+        report: AttackCityEndReport,
+        source: CityWarVictorMutationBlock,
+    },
+    MissingAttackerOwnerForDefenceNotice {
+        report: AttackCityEndReport,
+    },
+    NoticeWouldOverflow {
+        report: AttackCityEndReport,
+        string_id: &'static [u8],
+        formatted_len: usize,
+    },
+}
+
+pub(crate) trait AttackCityEndEffects {
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[UnionFormatArgument<'_>],
+    ) -> Vec<u8>;
+
+    fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32);
+
+    fn broadcast_city_war_result(&mut self, text: &[u8]) -> Result<i32, SendMessageError>;
+}
+
 fn send_city_transfer_notice<Effects>(
     effects: &mut Effects,
     requester_player_id: i32,
@@ -2627,6 +2774,331 @@ impl COrganizingCtrl {
         };
         self.request_establishment_union_players.remove(position);
         true
+    }
+
+    fn city_war_owner_for_faction(
+        &self,
+        faction_id: i32,
+    ) -> Result<(Option<CityWarOrganizingOwner>, i32), i32> {
+        let faction_owner = (faction_id > 0)
+            .then(|| self.faction_by_id(faction_id))
+            .flatten()
+            .map(|_| CityWarOrganizingOwner::Faction(faction_id));
+        match self.is_free_faction(faction_id) {
+            FreeFactionLookup::NoUnion => Ok((faction_owner, 0)),
+            FreeFactionLookup::Union(union_id) => Ok((
+                self.confederation_by_id(union_id)
+                    .map(|_| CityWarOrganizingOwner::Union(union_id)),
+                union_id,
+            )),
+            FreeFactionLookup::BlockedNullConfederation { map_key } => Err(map_key),
+        }
+    }
+
+    fn city_war_owner_name(&self, owner: CityWarOrganizingOwner) -> &[u8] {
+        match owner {
+            CityWarOrganizingOwner::Faction(faction_id) => self
+                .faction_by_id(faction_id)
+                .expect("resolved city-war faction owner не удаляется")
+                .name(),
+            CityWarOrganizingOwner::Union(union_id) => self
+                .confederation_by_id(union_id)
+                .expect("resolved city-war union owner не удаляется")
+                .name(),
+        }
+    }
+
+    fn city_war_owner_has_city(
+        &self,
+        owner: CityWarOrganizingOwner,
+        region_id: i32,
+    ) -> bool {
+        match owner {
+            CityWarOrganizingOwner::Faction(faction_id) => self
+                .faction_by_id(faction_id)
+                .expect("resolved city-war faction owner не удаляется")
+                .is_owned_city(region_id)
+                != 0,
+            CityWarOrganizingOwner::Union(union_id) => self
+                .confederation_by_id(union_id)
+                .expect("resolved city-war union owner не удаляется")
+                .is_owned_city(region_id, self)
+                != 0,
+        }
+    }
+
+    fn add_city_war_victor_counts(
+        &mut self,
+        game: &CGame,
+        owner: CityWarOrganizingOwner,
+        offence: bool,
+    ) -> Result<CityWarVictorMutation, CityWarVictorMutationBlock> {
+        match owner {
+            CityWarOrganizingOwner::Faction(faction_id) => {
+                let faction = self
+                    .faction_by_id_mut(faction_id)
+                    .expect("resolved city-war faction owner не удаляется");
+                let outcome = if offence {
+                    faction.add_offense_victor_count(game)
+                } else {
+                    faction.add_defence_victor_count(game)
+                };
+                outcome
+                    .map(CityWarVictorMutation::Faction)
+                    .map_err(CityWarVictorMutationBlock::Faction)
+            }
+            CityWarOrganizingOwner::Union(union_id) => {
+                let union = self
+                    .confederations
+                    .get_mut(&union_id)
+                    .and_then(Option::take)
+                    .expect("resolved city-war union slot не удаляется");
+                let outcome = if offence {
+                    union.add_offense_victor_counts(self, game)
+                } else {
+                    union.add_defence_victor_counts(self, game)
+                };
+                *self
+                    .confederations
+                    .get_mut(&union_id)
+                    .expect("временный city-war union slot не удаляется") = Some(union);
+                outcome
+                    .map(CityWarVictorMutation::Union)
+                    .map_err(CityWarVictorMutationBlock::Union)
+            }
+        }
+    }
+
+    fn delete_city_war_owner_city(
+        &mut self,
+        game: &CGame,
+        owner: CityWarOrganizingOwner,
+        region_id: i32,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<CityWarOwnedCityRemoval, CityWarOwnedCityMutationBlock> {
+        match owner {
+            CityWarOrganizingOwner::Faction(faction_id) => self
+                .faction_by_id_mut(faction_id)
+                .expect("resolved city-war faction owner не удаляется")
+                .delete_owned_city(game, region_id, update_player)
+                .map(CityWarOwnedCityRemoval::Faction)
+                .map_err(CityWarOwnedCityMutationBlock::Faction),
+            CityWarOrganizingOwner::Union(union_id) => {
+                let union = self
+                    .confederations
+                    .get_mut(&union_id)
+                    .and_then(Option::take)
+                    .expect("resolved city-war union slot не удаляется");
+                let outcome = union.delete_owned_city(self, game, region_id, update_player);
+                *self
+                    .confederations
+                    .get_mut(&union_id)
+                    .expect("временный city-war union slot не удаляется") = Some(union);
+                outcome
+                    .map(CityWarOwnedCityRemoval::Union)
+                    .map_err(CityWarOwnedCityMutationBlock::Union)
+            }
+        }
+    }
+
+    fn add_city_war_owner_city(
+        &mut self,
+        game: &CGame,
+        owner: CityWarOrganizingOwner,
+        region_id: i32,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<CityWarOwnedCityAddition, CityWarOwnedCityMutationBlock> {
+        match owner {
+            CityWarOrganizingOwner::Faction(faction_id) => self
+                .faction_by_id_mut(faction_id)
+                .expect("resolved city-war faction owner не удаляется")
+                .add_owned_city(game, region_id, update_player)
+                .map(CityWarOwnedCityAddition::Faction)
+                .map_err(CityWarOwnedCityMutationBlock::Faction),
+            CityWarOrganizingOwner::Union(union_id) => {
+                let union = self
+                    .confederations
+                    .get_mut(&union_id)
+                    .and_then(Option::take)
+                    .expect("resolved city-war union slot не удаляется");
+                let outcome = union.add_owned_city(self, game, region_id, update_player);
+                *self
+                    .confederations
+                    .get_mut(&union_id)
+                    .expect("временный city-war union slot не удаляется") = Some(union);
+                outcome
+                    .map(CityWarOwnedCityAddition::Union)
+                    .map_err(CityWarOwnedCityMutationBlock::Union)
+            }
+        }
+    }
+
+    /// Применяет полный результат войны за город в exact virtual-порядке.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "аргументы являются четырьмя wire-полями и явными process owners"
+    )]
+    pub(crate) fn on_attack_city_end<Effects>(
+        &mut self,
+        game: &CGame,
+        result: i32,
+        region_id: i32,
+        attacker_player_id: i32,
+        defender_faction_id: i32,
+        effects: &mut Effects,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<AttackCityEndReport, AttackCityEndBlock>
+    where
+        Effects: AttackCityEndEffects,
+    {
+        let mut report = AttackCityEndReport::pending();
+        let attacker_faction_id = match self.is_free_player(attacker_player_id) {
+            FreePlayerLookup::NoFaction => None,
+            FreePlayerLookup::Faction(faction_id) => {
+                report.attacker_faction_id = Some(faction_id);
+                Some(faction_id)
+            }
+            FreePlayerLookup::BlockedNullFaction { map_key } => {
+                return Err(AttackCityEndBlock::AttackerMembership { report, map_key });
+            }
+        };
+        let region_name = match game.region_name(region_id) {
+            WorldRegionNameLookup::RegionNotFound | WorldRegionNameLookup::NullRegionPointer => {
+                Vec::new()
+            }
+            WorldRegionNameLookup::Name(name) => {
+                let name = legacy_c_string_prefix(name);
+                if name.len() >= 0x100 {
+                    return Err(AttackCityEndBlock::RegionNameWouldOverflow {
+                        report,
+                        visible_len: name.len(),
+                    });
+                }
+                name.to_vec()
+            }
+        };
+        let Some(attacker_faction_id) = attacker_faction_id else {
+            return Ok(report);
+        };
+
+        let (attacker_owner, attacker_union_id) =
+            match self.city_war_owner_for_faction(attacker_faction_id) {
+                Ok(owner) => owner,
+                Err(map_key) => {
+                    return Err(AttackCityEndBlock::AttackerUnionMembership { report, map_key });
+                }
+            };
+        report.attacker_union_id = Some(attacker_union_id);
+        report.attacker_owner = attacker_owner;
+
+        let (defender_owner, defender_union_id) =
+            match self.city_war_owner_for_faction(defender_faction_id) {
+                Ok(owner) => owner,
+                Err(map_key) => {
+                    return Err(AttackCityEndBlock::DefenderUnionMembership { report, map_key });
+                }
+            };
+        report.defender_union_id = Some(defender_union_id);
+        report.defender_owner = defender_owner;
+        if let Some(defender_owner) = defender_owner {
+            let owns_city = self.city_war_owner_has_city(defender_owner, region_id);
+            report.defender_owns_city = Some(owns_city);
+            if !owns_city {
+                return Ok(report);
+            }
+        }
+
+        if result == 1 {
+            let Some(attacker_owner) = attacker_owner else {
+                return Ok(report);
+            };
+            if let Some(defender_owner) = defender_owner {
+                let offense = match self.add_city_war_victor_counts(game, attacker_owner, true) {
+                    Ok(outcome) => outcome,
+                    Err(source) => {
+                        return Err(AttackCityEndBlock::OffenseVictors { report, source });
+                    }
+                };
+                report.offense_victors = Some(offense);
+                let removal = match self.delete_city_war_owner_city(
+                    game,
+                    defender_owner,
+                    region_id,
+                    update_player,
+                ) {
+                    Ok(outcome) => outcome,
+                    Err(source) => {
+                        return Err(AttackCityEndBlock::DefenderCityRemoval { report, source });
+                    }
+                };
+                report.defender_city_removal = Some(removal);
+
+                let attacker_name = self.city_war_owner_name(attacker_owner).to_vec();
+                let text = effects.format_world_string(
+                    b"WS0261",
+                    &[
+                        UnionFormatArgument::Text(legacy_c_string_prefix(&attacker_name)),
+                        UnionFormatArgument::Text(&region_name),
+                    ],
+                );
+                let text = legacy_c_string_prefix(&text);
+                if text.len() >= 0x400 {
+                    return Err(AttackCityEndBlock::NoticeWouldOverflow {
+                        report,
+                        string_id: b"WS0261",
+                        formatted_len: text.len(),
+                    });
+                }
+                report.broadcast = Some(effects.broadcast_city_war_result(text));
+            }
+
+            let addition = match self.add_city_war_owner_city(
+                game,
+                attacker_owner,
+                region_id,
+                update_player,
+            ) {
+                Ok(outcome) => outcome,
+                Err(source) => {
+                    return Err(AttackCityEndBlock::AttackerCityAddition { report, source });
+                }
+            };
+            report.attacker_city_addition = Some(addition);
+            effects.refresh_owned_city(region_id, attacker_faction_id, attacker_union_id);
+            report.refreshed_owner = Some((region_id, attacker_faction_id, attacker_union_id));
+        } else if result == 0 {
+            let Some(defender_owner) = defender_owner else {
+                return Ok(report);
+            };
+            let defence = match self.add_city_war_victor_counts(game, defender_owner, false) {
+                Ok(outcome) => outcome,
+                Err(source) => {
+                    return Err(AttackCityEndBlock::DefenceVictors { report, source });
+                }
+            };
+            report.defence_victors = Some(defence);
+            let Some(attacker_owner) = attacker_owner else {
+                return Err(AttackCityEndBlock::MissingAttackerOwnerForDefenceNotice { report });
+            };
+            let attacker_name = self.city_war_owner_name(attacker_owner).to_vec();
+            let text = effects.format_world_string(
+                b"WS0262",
+                &[
+                    UnionFormatArgument::Text(legacy_c_string_prefix(&attacker_name)),
+                    UnionFormatArgument::Text(&region_name),
+                ],
+            );
+            let text = legacy_c_string_prefix(&text);
+            if text.len() >= 0x400 {
+                return Err(AttackCityEndBlock::NoticeWouldOverflow {
+                    report,
+                    string_id: b"WS0262",
+                    formatted_len: text.len(),
+                });
+            }
+            report.broadcast = Some(effects.broadcast_city_war_result(text));
+        }
+        Ok(report)
     }
 
     /// Выполняет preflight и запускает `TransferIOwnerCity` в машинном порядке.
@@ -4700,7 +5172,9 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::OnAttackCityEnd
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
+// IMPLEMENTED_OWNER: `COrganizingCtrl::on_attack_city_end` выше сохраняет
+// virtual owner selection, side effects, union quirks и safe varargs-замену.
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1834

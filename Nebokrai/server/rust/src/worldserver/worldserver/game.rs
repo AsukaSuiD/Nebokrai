@@ -985,8 +985,9 @@ use crate::worldserver::appworld::message::othermessage::{
 };
 use crate::worldserver::appworld::message::organsysmessage::{
     CityTransferConfirmationDelivery, OrganizingAdmissionPermitBlock,
-    OrganizingAdmissionPermitDispatch, OrganizingCityGateBlock, OrganizingCityGateDispatch,
-    OrganizingCityTransferDispatch, OrganizingConsumedLongDispatch,
+    OrganizingAdmissionPermitDispatch, OrganizingAttackCityEndDispatch,
+    OrganizingCityGateBlock, OrganizingCityGateDispatch, OrganizingCityTransferDispatch,
+    OrganizingConsumedLongDispatch,
     OrganizingDeclareFactionWarBlock,
     OrganizingDeclareFactionWarDispatch, OrganizingDeclareWarFactionListBlock,
     OrganizingDeclareWarFactionListDispatch, OrganizingFactionBillboardBlock,
@@ -1003,8 +1004,8 @@ use crate::worldserver::appworld::message::organsysmessage::{
     QueuedUnionApplicationTerminal,
     UnionApplicationConfirmationDelivery,
     WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects,
-    WorldUnionApplicationRuntimeOwner, dispatch_admission_permit, dispatch_city_gate,
-    dispatch_city_transfer,
+    WorldUnionApplicationRuntimeOwner, dispatch_admission_permit, dispatch_attack_city_end,
+    dispatch_city_gate, dispatch_city_transfer,
     dispatch_consumed_long, dispatch_declare_faction_war,
     dispatch_declare_war_faction_list, dispatch_faction_billboard, dispatch_faction_upgrade,
     dispatch_faction_contributor, dispatch_faction_experience, dispatch_faction_member_state,
@@ -1025,7 +1026,7 @@ use crate::worldserver::appworld::organizingsystem::factionwarsys::{
     CFactionWarSys, FactionWarRunReport, FactionWarStopBlock, FactionWarStopContext,
 };
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
-    COrganizingCtrl, CityTransferEndpointBlock, CityTransferFinishBlock,
+    AttackCityEndBlock, COrganizingCtrl, CityTransferEndpointBlock, CityTransferFinishBlock,
     CityTransferFinishReport, CityTransferSessionBlock, CityTransferSessionReport,
     CityTransferStartBlock, OrganizingContributorBlock, OrganizingRunBlock,
     OrganizingRunReport, OrganizingSaveDataBlock,
@@ -2012,6 +2013,12 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: Result<OrganizingAdmissionPermitDispatch, OrganizingAdmissionPermitBlock>,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingAttackCityEnd {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<OrganizingAttackCityEndDispatch, AttackCityEndBlock>,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingUnionApplication {
@@ -8251,8 +8258,8 @@ impl CGame {
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
     /// войны `0x6011E`, само объявление `0x6011F`, общий leaf
-    /// `0x60121/0x60123`, передача города `0x60130` и admission permit
-    /// `0x60132` исполняются; остальные
+    /// `0x60121/0x60123`, передача города `0x60130`, admission permit
+    /// `0x60132` и terminal войны за город `0x60133` исполняются; остальные
     /// остаются owned pending. Terminal actions применяются FIFO до следующего
     /// сообщения.
     pub(crate) fn process_message(
@@ -11740,6 +11747,28 @@ fn process_world_message(
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingAdmissionPermit {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        if let Some(outcome) = dispatch_attack_city_end(
+            &mut message,
+            game,
+            organizing,
+            &mut effects,
+            update_player,
+        ) {
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingAttackCityEnd {
                 source,
                 legacy_run_result,
                 outcome,

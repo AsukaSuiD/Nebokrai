@@ -4,8 +4,8 @@
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
 //! `0x6012A`, парные city-tax gate `0x6012B/0x6012C` и region-param update
 //! `0x6012D`, region route `0x6012E`, city-gate route `0x6012F` и полный
-//! city-transfer ingress `0x60130` и admission-permit `0x60132`; остальной owner —
-//! `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! city-transfer ingress `0x60130`, admission-permit `0x60132` и city-war
+//! terminal `0x60133`; остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
@@ -134,6 +134,10 @@
 //! player-а ordered `IsFreePlayer` и при nullable-success вызывает уже
 //! восстановленный `CFaction::SetIsPermit(player, permit)` в slot `+0x11C`.
 //! Online/route/tail checks Linux-донора в EXE отсутствуют; wire-ответа нет.
+//! Exact `0x004A7A7D..0x004A7AB5` для `0x60133` читает ровно `(result,
+//! region ID, attacker player ID, defender faction ID)` и без route/tail
+//! проверок вызывает полный `COrganizingCtrl::OnAttackCityEnd`; прямого
+//! wire-ответа ingress не создаёт, сообщения войны рождает concrete owner.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -179,7 +183,8 @@ use crate::worldserver::appworld::organizingsystem::factionwarsys::{
 };
 use crate::worldserver::appworld::organizingsystem::attackcitysys::CAttackCitySys;
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
-    COrganizingCtrl, CityTransferEffects, CityTransferEndpointBlock,
+    AttackCityEndBlock, AttackCityEndEffects, AttackCityEndReport, COrganizingCtrl,
+    CityTransferEffects, CityTransferEndpointBlock,
     CityTransferSessionBlock, CityTransferSessionReport, CityTransferSessionRequest,
     CityTransferSessionRuntime, CityTransferStartBlock, CityTransferStartOutcome,
     CityTransferTerminal, DeclareWarFactionPage, DeclareWarFactionPageBlock, FreePlayerLookup,
@@ -238,6 +243,7 @@ const OPERATE_CITY_GATE_MESSAGE_TYPE: i32 = 0x6012F;
 const OPERATE_CITY_GATE_RESPONSE_TYPE: i32 = 0x7FE2A;
 const TRANSFER_CITY_OWNER_MESSAGE_TYPE: i32 = 0x60130;
 const SET_FACTION_ADMISSION_PERMIT_MESSAGE_TYPE: i32 = 0x60132;
+const ATTACK_CITY_END_MESSAGE_TYPE: i32 = 0x60133;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -568,6 +574,29 @@ impl CityTransferEffects for WorldUnionApplicationEffects<'_> {
     }
 
     fn broadcast_city_transfer(&mut self, text: &[u8]) -> Result<i32, SendMessageError> {
+        COrganizingCtrl::send_organizing_info_to_all(
+            self.game,
+            text,
+            0xFFDA_EDFE,
+            0x328F_93FC,
+        )
+    }
+}
+
+impl AttackCityEndEffects for WorldUnionApplicationEffects<'_> {
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[UnionFormatArgument<'_>],
+    ) -> Vec<u8> {
+        (self.callbacks.format_world_string)(string_id, arguments)
+    }
+
+    fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32) {
+        (self.callbacks.refresh_owned_city)(region_id, faction_id, union_id);
+    }
+
+    fn broadcast_city_war_result(&mut self, text: &[u8]) -> Result<i32, SendMessageError> {
         COrganizingCtrl::send_organizing_info_to_all(
             self.game,
             text,
@@ -2187,6 +2216,52 @@ pub(crate) fn dispatch_admission_permit(
         requested_value,
         player_id,
         faction_id: Some(faction_id),
+        outcome,
+    }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingAttackCityEndDispatch {
+    pub(crate) result: i32,
+    pub(crate) region_id: i32,
+    pub(crate) attacker_player_id: i32,
+    pub(crate) defender_faction_id: i32,
+    pub(crate) outcome: AttackCityEndReport,
+}
+
+/// Выполняет `0x60133`: четыре legacy `Long` и полный `OnAttackCityEnd`.
+pub(crate) fn dispatch_attack_city_end<Effects>(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    effects: &mut Effects,
+    update_player: &mut dyn FnMut(i32),
+) -> Option<Result<OrganizingAttackCityEndDispatch, AttackCityEndBlock>>
+where
+    Effects: AttackCityEndEffects,
+{
+    if message.message_type() != ATTACK_CITY_END_MESSAGE_TYPE {
+        return None;
+    }
+
+    let result = message.base_mut().get_long().unwrap_or(0);
+    let region_id = message.base_mut().get_long().unwrap_or(0);
+    let attacker_player_id = message.base_mut().get_long().unwrap_or(0);
+    let defender_faction_id = message.base_mut().get_long().unwrap_or(0);
+    let outcome = organizing.on_attack_city_end(
+        game,
+        result,
+        region_id,
+        attacker_player_id,
+        defender_faction_id,
+        effects,
+        update_player,
+    );
+    Some(outcome.map(|outcome| OrganizingAttackCityEndDispatch {
+        result,
+        region_id,
+        attacker_player_id,
+        defender_faction_id,
         outcome,
     }))
 }
