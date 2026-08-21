@@ -1300,6 +1300,11 @@ impl CPlayer {
         }
     }
 
+    /// Возвращает exact unsigned `m_BaseProperty.wPkCount`.
+    pub(crate) fn pk_count(&self) -> u16 {
+        self.base_property.read_u16(BASE_PROPERTY_PK_COUNT_OFFSET)
+    }
+
     /// Повторяет unsigned 32-bit сложение исходного `dwExploit += long`.
     pub(crate) fn add_exploit_wrapping(&mut self, increment: i32) -> PlayerExploitUpdate {
         let previous_exploit = self.base_property.read_u32(BASE_PROPERTY_EXPLOIT_OFFSET);

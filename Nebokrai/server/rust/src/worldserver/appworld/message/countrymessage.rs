@@ -3,7 +3,7 @@
 //! Dispatcher RVA `0x000A47F0` остаётся `IMPLEMENTED_PARTIAL`: country relays
 //! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, а также вход country victory
 //! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, exile-time
-//! `0x6030E -> 0x7FF15`, `0x60316 -> 0x7FF15`, war-declare
+//! `0x6030D -> 0x7FF0E`, `0x6030E -> 0x7FF15`, `0x60316 -> 0x7FF15`, war-declare
 //! `0x60317 -> 0x7FF16` и four-nation result
 //! `0x60319 -> 0x7FE49`, `0x6031A -> 0x7FE46/DB`, no-op `0x6031B` и
 //! `0x6031C -> 0x7FE47`, `0x6031D -> 0x7FA04` имеют статус
@@ -44,6 +44,11 @@
 //! цикл дополнял оборванный inter-server payload нулями до заявленного размера
 //! и мог выделять до `INT_MAX` элементов, что является внутренним malformed-
 //! input дефектом, а не Miracle-протоколом.
+//! Exact `0x6030D` читает target/king как signed long и country через signed
+//! `char -> unsigned char`, затем строго вызывает `GetCountry -> IsKing ->
+//! CanOperate(4) -> Exile`. Missing country и любой false gate останавливают
+//! цепочку; source map/socket и хвост не участвуют. Donor ownership/socket
+//! gates и pending-request registry поэтому не перенесены.
 //! Exact `0x004A4FC9..0x004A5049` задаёт `0x60317`: два signed long,
 //! синхронный `player_declare`, затем ответ `char accepted, player, target` в
 //! исходный `m_lMapID`. Проверок socket-owner и полного tail здесь нет; они
@@ -75,7 +80,8 @@ use crate::public::tools::put_string_to_file;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::worldserver::appworld::country::country::{
     CountryExileResultContext, CountryExileTimeLookup, CountryQuestSwitchUpdate,
-    CountryScalarUpdate, CountrySuccessExiledReport,
+    CountryCanExileDisposition, CountryExileRequestDisposition, CountryScalarUpdate,
+    CountrySuccessExiledReport,
 };
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::country::countryparam::{
@@ -206,6 +212,31 @@ pub(crate) struct WorldCountryExileResultSync {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldCountryExileRequestDisposition {
+    CountryMissing,
+    KingRejected,
+    OperationRejected(CountryCanExileDisposition),
+    Requested {
+        operation: CountryCanExileDisposition,
+        legacy_result: i32,
+        request: CountryExileRequestDisposition,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldCountryExileRequestSync {
+    pub(crate) source_map_id: i32,
+    pub(crate) source_socket_id: i32,
+    pub(crate) target_player_id: i32,
+    pub(crate) target_complete: bool,
+    pub(crate) king_player_id: i32,
+    pub(crate) king_complete: bool,
+    pub(crate) country_id: u8,
+    pub(crate) country_complete: bool,
+    pub(crate) disposition: WorldCountryExileRequestDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldCountryWarDeclarationSync {
     pub(crate) player_id: i32,
     pub(crate) player_id_complete: bool,
@@ -281,6 +312,7 @@ pub(crate) enum WorldCountryMessageOutcome {
     ScalarSynchronized(WorldCountryScalarSync),
     QuestSwitchSynchronized(WorldCountryQuestSwitchSync),
     ExileTimeSynchronized(WorldCountryExileTimeSync),
+    ExileRequested(WorldCountryExileRequestSync),
     ExileResultSynchronized(WorldCountryExileResultSync),
     CountryWarDeclared(WorldCountryWarDeclarationSync),
     CountryWarVictory(WorldCountryWarVictorySync),
@@ -605,6 +637,63 @@ pub(crate) fn dispatch_country_exile_result_message<
             wire,
             delivery,
         },
+    })
+}
+
+pub(crate) fn dispatch_country_exile_request_message<
+    Context: CountryExileResultContext + ?Sized,
+>(
+    message: &mut CMessage,
+    country_handler: &mut CCountryHandler,
+    country_parameters: &CCountryParam,
+    context: &mut Context,
+) -> Option<WorldCountryExileRequestSync> {
+    if message.message_type() != 0x6030d {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_target = message.base_mut().get_long();
+    let target_player_id = decoded_target.unwrap_or(0);
+    let decoded_king = message.base_mut().get_long();
+    let king_player_id = decoded_king.unwrap_or(0);
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+
+    let disposition = match country_handler.get_country(country_id) {
+        None => WorldCountryExileRequestDisposition::CountryMissing,
+        Some(country) if !country.authorize_king(king_player_id, context) => {
+            WorldCountryExileRequestDisposition::KingRejected
+        }
+        Some(country) => {
+            let operation = country.can_exile(country_parameters, context);
+            if !matches!(operation, CountryCanExileDisposition::Allowed) {
+                WorldCountryExileRequestDisposition::OperationRejected(operation)
+            } else {
+                let request = country.exile(target_player_id, country_parameters, context);
+                let legacy_result = if matches!(request, CountryExileRequestDisposition::Sent { .. }) {
+                    target_player_id
+                } else {
+                    0
+                };
+                WorldCountryExileRequestDisposition::Requested {
+                    operation,
+                    legacy_result,
+                    request,
+                }
+            }
+        }
+    };
+    Some(WorldCountryExileRequestSync {
+        source_map_id,
+        source_socket_id,
+        target_player_id,
+        target_complete: decoded_target.is_some(),
+        king_player_id,
+        king_complete: decoded_king.is_some(),
+        country_id,
+        country_complete: decoded_country.is_some(),
+        disposition,
     })
 }
 

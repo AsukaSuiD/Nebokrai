@@ -2,7 +2,8 @@
 //!
 //! Статус `CCountry::SetCountryPower/SetCountryTreasury/SetCountryTech` RVA
 //! `0x000A4750/0x000A4790/0x000A47D0`, `CCountry::AddToByteArray` RVA `0x000C6E30`,
-//! `CCountry::SuccessExiled` RVA `0x000C7EE0`,
+//! `CCountry::IsKing/CanOperate/Exile/SuccessExiled` RVA
+//! `0x000C7160/0x000C7520/0x000C7AD0/0x000C7EE0`,
 //! `CCountry::CloneCountryData` RVA `0x000C9CE0` и
 //! `CCountry::CloneSaveData` RVA `0x000CC470` — `IMPLEMENTED`; остальной корпус
 //! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
@@ -32,6 +33,14 @@
 //! использует `WS0072`, причём порядок там обратный: king-log до private send.
 //! Старое переполнение `char[260]` не является протоколом: Rust сохраняет не
 //! более 259 видимых bytes и единственный wire-NUL.
+//! Для входного `0x6030D` exact `CanOperate(4)` сначала читает минимальные
+//! control points, затем проверяет `m_bIsWarring`, минимум и wrapping
+//! `_max_exile_num - 1`; `0x004C7850/0x004C7AA6` машинно подтверждают false/
+//! true. `Exile` последовательно проверяет короля, online-player, страну,
+//! наличие exile-rect, unsigned PK и map-route. Только успешный путь отправляет
+//! `0x7FF0E { country:u8, player:i32 }`; `0x004C7EAF` возвращает player ID,
+//! все отказные ветки возвращают ноль. Linux-донор добавлял socket-correlation,
+//! request registry и source/tail validation — их нет в поставочном EXE.
 //! Clone копирует country ID, treasury, power,
 //! current/level-up tech exp, tech level, king identity/flags и war-result.
 //! Три king-point ограничиваются соответствующими максимумами `CCountryParam`.
@@ -109,6 +118,7 @@ pub(crate) struct CCountry {
     pub(crate) king_quest_switch: bool,
     pub(crate) country_war_result: i32,
     pub(crate) ministers: BTreeMap<u8, CountryMinisterState>,
+    pub(crate) is_warring: bool,
     pub(crate) exile_count: i32,
     pub(crate) exile_started_at_ms: BTreeMap<i32, i32>,
 }
@@ -173,9 +183,17 @@ pub(crate) struct CountryExileMessageDelivery {
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CountryExileTarget {
+    pub(crate) name: Vec<u8>,
+    pub(crate) country: Option<u8>,
+    pub(crate) pk_count: u16,
+}
+
 /// Узкая граница player/localization/network/log эффектов исходного owner-а.
 pub(crate) trait CountryExileResultContext {
     fn map_player_name(&mut self, player_id: i32) -> Option<Vec<u8>>;
+    fn online_player(&mut self, player_id: i32) -> Option<CountryExileTarget>;
     fn country_name(&mut self, country_id: u8) -> Vec<u8>;
     fn format_world_string(
         &mut self,
@@ -227,7 +245,232 @@ pub(crate) struct CountrySuccessExiledReport {
     pub(crate) disposition: CountrySuccessExiledDisposition,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryExileRejection {
+    CountryAtWar,
+    InsufficientControlPoint,
+    DailyLimitReached,
+    TargetIsKing,
+    TargetMissing,
+    TargetCountryUnavailable,
+    TargetFromAnotherCountry,
+    ExileRectMissing,
+    TargetPkTooHigh,
+    TargetRouteMissing,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountryCanExileDisposition {
+    Allowed,
+    ParameterUnavailable(CountryParameterUnavailable),
+    Rejected {
+        reason: CountryExileRejection,
+        text: Vec<u8>,
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountryExileRequestDisposition {
+    ParameterUnavailable(CountryParameterUnavailable),
+    Rejected {
+        reason: CountryExileRejection,
+        text: Vec<u8>,
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+    Sent {
+        map_id: i32,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
 impl CCountry {
+    /// Exact `IsKing`: нулевой candidate всегда отклоняется с `WS0033`.
+    pub(crate) fn authorize_king<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        candidate: i32,
+        context: &mut Context,
+    ) -> bool {
+        if candidate != 0 && self.king.id == candidate {
+            return true;
+        }
+        let country_name = context.country_name(self.country_id);
+        let string_id = if candidate == 0 { b"WS0033" } else { b"WS0034" };
+        let text = legacy_country_text(context.format_world_string(
+            string_id,
+            &[CountryExileTextArgument::Text(&country_name)],
+        ));
+        context.put_king_log(&text);
+        false
+    }
+
+    /// Exact `CanOperate(4)` с исходным порядком warring/points/daily-limit.
+    pub(crate) fn can_exile<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> CountryCanExileDisposition {
+        let Some(minimum) = parameters.min_king_control_point() else {
+            return CountryCanExileDisposition::ParameterUnavailable(
+                CountryParameterUnavailable {
+                    field: "_min_king_control_point",
+                },
+            );
+        };
+        let rejection = if self.is_warring {
+            Some((CountryExileRejection::CountryAtWar, b"WS0047" as &'static [u8], None))
+        } else if self.king.control_point < minimum {
+            Some((
+                CountryExileRejection::InsufficientControlPoint,
+                b"WS0048" as &'static [u8],
+                Some(minimum),
+            ))
+        } else {
+            let Some(maximum) = parameters.max_exile_count() else {
+                return CountryCanExileDisposition::ParameterUnavailable(
+                    CountryParameterUnavailable {
+                        field: "_max_exile_num",
+                    },
+                );
+            };
+            if self.exile_count <= maximum.wrapping_sub(1) {
+                None
+            } else {
+                Some((
+                    CountryExileRejection::DailyLimitReached,
+                    b"WS0049" as &'static [u8],
+                    Some(maximum),
+                ))
+            }
+        };
+        let Some((reason, string_id, argument)) = rejection else {
+            return CountryCanExileDisposition::Allowed;
+        };
+        let arguments = argument
+            .as_ref()
+            .map(|value| [CountryExileTextArgument::Signed(*value)]);
+        let text = legacy_country_text(context.format_world_string(
+            string_id,
+            arguments.as_ref().map_or(&[], |arguments| arguments.as_slice()),
+        ));
+        let private_delivery = self.send_private_message(&text, 0, context);
+        CountryCanExileDisposition::Rejected {
+            reason,
+            text,
+            private_delivery,
+        }
+    }
+
+    /// Exact `CCountry::Exile`: валидный путь только отправляет `0x7FF0E`.
+    pub(crate) fn exile<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        player_id: i32,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> CountryExileRequestDisposition {
+        if player_id == self.king.id {
+            let country_name = context.country_name(self.country_id);
+            return self.reject_exile_request(
+                CountryExileRejection::TargetIsKing,
+                b"WS0071",
+                &[CountryExileTextArgument::Text(&country_name)],
+                false,
+                context,
+            );
+        }
+        let Some(player) = context.online_player(player_id) else {
+            return self.reject_exile_request(
+                CountryExileRejection::TargetMissing,
+                b"WS0072",
+                &[],
+                true,
+                context,
+            );
+        };
+        let Some(player_country) = player.country else {
+            return CountryExileRequestDisposition::Rejected {
+                reason: CountryExileRejection::TargetCountryUnavailable,
+                text: Vec::new(),
+                private_delivery: None,
+            };
+        };
+        if player_country != self.country_id {
+            return self.reject_exile_request(
+                CountryExileRejection::TargetFromAnotherCountry,
+                b"WS0073",
+                &[],
+                true,
+                context,
+            );
+        }
+        if !parameters.has_exile_rect(self.country_id) {
+            let country_name = context.country_name(self.country_id);
+            return self.reject_exile_request(
+                CountryExileRejection::ExileRectMissing,
+                b"WS0074",
+                &[CountryExileTextArgument::Text(&country_name)],
+                false,
+                context,
+            );
+        }
+        let Some(maximum_pk) = parameters.max_exile_pk() else {
+            return CountryExileRequestDisposition::ParameterUnavailable(
+                CountryParameterUnavailable {
+                    field: "_max_exile_pk",
+                },
+            );
+        };
+        if i32::from(player.pk_count) > maximum_pk {
+            return self.reject_exile_request(
+                CountryExileRejection::TargetPkTooHigh,
+                b"WS0075",
+                &[CountryExileTextArgument::Text(&player.name)],
+                true,
+                context,
+            );
+        }
+        let map_id = context.game_server_number_by_player_id(player_id);
+        if map_id == 0 {
+            return self.reject_exile_request(
+                CountryExileRejection::TargetRouteMissing,
+                b"WS0076",
+                &[CountryExileTextArgument::Text(&player.name)],
+                true,
+                context,
+            );
+        }
+        let mut message = CMessage::new(0x0007_FF0E);
+        message.base_mut().add_byte(self.country_id);
+        message.base_mut().add_long(player_id);
+        let wire = message.as_wire_bytes().to_vec();
+        CountryExileRequestDisposition::Sent {
+            map_id,
+            wire,
+            delivery: context.send_to_map_id(&message, map_id),
+        }
+    }
+
+    fn reject_exile_request<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        reason: CountryExileRejection,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+        notify_king: bool,
+        context: &mut Context,
+    ) -> CountryExileRequestDisposition {
+        let text = legacy_country_text(context.format_world_string(string_id, arguments));
+        context.put_king_log(&text);
+        let private_delivery = notify_king
+            .then(|| self.send_private_message(&text, 0, context))
+            .flatten();
+        CountryExileRequestDisposition::Rejected {
+            reason,
+            text,
+            private_delivery,
+        }
+    }
+
     /// Nonzero-ветка exact `IsKing`; caller отдельно сохраняет исходный log.
     pub(crate) fn has_king_id(&self, player_id: i32) -> bool {
         self.king.id == player_id
@@ -857,7 +1100,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::IsKing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:566
@@ -865,6 +1108,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 // ADDRESS: 004c7160
 // PROTOTYPE: bool __thiscall IsKing(long param_1)
 //
+// Реализовано выше как `authorize_king`; тело сохранено как source-reference.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -885,7 +1129,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::CanOperate
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_PARTIAL_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:638
@@ -893,13 +1137,15 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 // ADDRESS: 004c7520
 // PROTOTYPE: bool __thiscall CanOperate(uchar param_1)
 //
+// Ветка operation `4` реализована выше как `can_exile`; остальные selectors
+// остаются source-reference.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CCountry::Exile
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1156
@@ -907,6 +1153,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 // ADDRESS: 004c7ad0
 // PROTOTYPE: long __thiscall Exile(long param_1)
 //
+// Реализовано выше; тело сохранено как машинная source-reference.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

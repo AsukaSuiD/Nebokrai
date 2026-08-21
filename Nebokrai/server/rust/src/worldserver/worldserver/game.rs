@@ -980,7 +980,7 @@ use crate::public::tools::{ini_decode, put_string_to_file};
 use crate::transport::bind_tcp_ipv4;
 use crate::worldserver::appworld::country::country::{
     CCountry, CountryExileMessageDelivery, CountryExileResultContext,
-    CountryExileTextArgument, CountryKingSaveLimits,
+    CountryExileTarget, CountryExileTextArgument, CountryKingSaveLimits,
 };
 use crate::worldserver::appworld::country::countryhandler::{
     CCountryHandler, CountryInfoDeliveryContext, CountryRunBlock, CountryRunReport,
@@ -1012,6 +1012,7 @@ use crate::worldserver::appworld::message::countrymessage::{
     WorldFourNationExploitDatabaseDisposition, WorldFourNationExploitSync,
     decode_four_nation_exploit_message,
     dispatch_country_exile_result_message,
+    dispatch_country_exile_request_message,
     dispatch_country_war_declaration_message, dispatch_country_war_victory_message,
     dispatch_four_nation_country_fail_message, dispatch_four_nation_war_result_message,
     dispatch_four_nation_war_time_message, on_country_message,
@@ -12079,6 +12080,16 @@ impl CountryExileResultContext for WorldCountryExileResultEffects<'_> {
             .map(|player| legacy_c_string_prefix(player.get_name()).to_vec())
     }
 
+    fn online_player(&mut self, player_id: i32) -> Option<CountryExileTarget> {
+        self.game
+            .online_player_by_id(player_id as u32)
+            .map(|player| CountryExileTarget {
+                name: legacy_c_string_prefix(player.get_name()).to_vec(),
+                country: player.country(),
+                pk_count: player.pk_count(),
+            })
+    }
+
     fn country_name(&mut self, country_id: u8) -> Vec<u8> {
         self.globe_setup
             .country_name(country_id)
@@ -12648,6 +12659,26 @@ where
                 source,
                 legacy_run_result,
                 outcome: WorldCountryMessageOutcome::ExileResultSynchronized(sync),
+            };
+        }
+        let exile_request = {
+            let mut effects = WorldCountryExileResultEffects {
+                game,
+                globe_setup,
+                format_world_string: &mut *application_callbacks.format_world_string,
+            };
+            dispatch_country_exile_request_message(
+                &mut message,
+                country_handler,
+                country_parameters,
+                &mut effects,
+            )
+        };
+        if let Some(sync) = exile_request {
+            return ProcessedWorldEvent::CountryMessage {
+                source,
+                legacy_run_result,
+                outcome: WorldCountryMessageOutcome::ExileRequested(sync),
             };
         }
         let four_nation_country_fail = {

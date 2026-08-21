@@ -49,10 +49,13 @@ const COUNTRY_PARAMETER_COUNT: usize = 39;
 const MAX_COUNTRY_POWER: usize = 2;
 const MAX_COUNTRY_TREASURY: usize = 4;
 const MAX_KING_CONTROL_POINT: usize = 10;
+const MIN_KING_CONTROL_POINT: usize = 11;
 const DEC_KING_CONTROL_POINT_EXILE: usize = 20;
 const MAX_KING_MATERIAL_POINT: usize = 26;
 const MAX_KING_WAR_POINT: usize = 28;
 const EXILE_TIME: usize = 32;
+const MAX_EXILE_NUM: usize = 31;
+const MAX_EXILE_PK: usize = 33;
 
 const COUNTRY_PARAMETER_FIELDS: [&str; COUNTRY_PARAMETER_COUNT] = [
     "m_lMaxCountyrs",
@@ -282,6 +285,10 @@ impl CCountryParam {
         self.parameters[MAX_KING_CONTROL_POINT]
     }
 
+    pub(crate) const fn min_king_control_point(&self) -> Option<i32> {
+        self.parameters[MIN_KING_CONTROL_POINT]
+    }
+
     /// Возвращает exact `_dec_king_control_point_exile` без default-подстановки.
     pub(crate) const fn exile_control_point_cost(&self) -> Option<i32> {
         self.parameters[DEC_KING_CONTROL_POINT_EXILE]
@@ -299,6 +306,18 @@ impl CCountryParam {
 
     pub(crate) const fn exile_time_ms(&self) -> Option<i32> {
         self.parameters[EXILE_TIME]
+    }
+
+    pub(crate) const fn max_exile_count(&self) -> Option<i32> {
+        self.parameters[MAX_EXILE_NUM]
+    }
+
+    pub(crate) const fn max_exile_pk(&self) -> Option<i32> {
+        self.parameters[MAX_EXILE_PK]
+    }
+
+    pub(crate) fn has_exile_rect(&self, country: u8) -> bool {
+        self.exile_rects.contains_key(&country)
     }
 
     /// Дописывает полный country-parameter wire в исходном порядке.
