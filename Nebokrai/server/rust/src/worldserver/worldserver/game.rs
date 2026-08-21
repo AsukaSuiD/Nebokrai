@@ -870,6 +870,9 @@
 //! затем полностью очищает `m_HonorElimilateList` и повторяет reset под lock
 //! `CPlayerDataQueue`. `BTreeMap`, `VecDeque` и `parking_lot::Mutex` заменяют
 //! только STL/critical-section plumbing; накопительный total не меняется.
+//! Ветка `OnOtherMessage(0x5FD0D)` использует тот же map как per-player список
+//! уже учтённых eliminator ID: отсутствие online player и дубликат завершают
+//! обработку, новая пара добавляется в хвост до чтения четырёх счётчиков.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
@@ -931,7 +934,7 @@ use crate::worldserver::appworld::leiting::{
     CLeiTing, LeiTingBlock, LeiTingContext, LeiTingLocalTime, LeiTingRunReport,
 };
 use crate::worldserver::appworld::message::othermessage::{
-    WorldHonorEliminateReset, WorldOtherMessageDispatch, on_other_message,
+    WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
 };
 use crate::worldserver::appworld::message::servermessage::{
     WorldLoginClientReplacement, WorldServerMessageDispatch, WorldServerMessageError,
@@ -1704,6 +1707,14 @@ pub(crate) enum WorldMessageOwner {
     MiscAuction,
 }
 
+/// Результат exact duplicate-ledger gate ветки `0x5FD0D`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldHonorEliminatorRegistration {
+    MissingOnlinePlayer,
+    Duplicate,
+    Accepted,
+}
+
 /// Safe-граница обязательного `s_pNetServer` для локальных World-сообщений.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldLocalMessageQueueBlock {
@@ -1757,7 +1768,7 @@ pub(crate) enum ProcessedWorldEvent {
     OtherMessage {
         source: WorldMessageSource,
         legacy_run_result: i32,
-        outcome: WorldHonorEliminateReset,
+        outcome: WorldOtherMessageOutcome,
     },
     LoginClientReconnected(WorldLoginClientReplacement),
 }
@@ -7648,9 +7659,11 @@ impl CGame {
     /// заново читается текущий Login client и фиксируется его число сообщений.
     /// Поэтому typed reconnect из первой очереди заменяет owner до второго
     /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
-    /// ветви `0x4FC02/0x4FC03` исполняются, остальные остаются owned pending.
+    /// ветви server-owner-а и honor `0x5FD0C/0x5FD0D` исполняются, остальные
+    /// остаются owned pending.
     pub(crate) fn process_message(
         &mut self,
+        honor_ranks: &mut CHonorRanks,
     ) -> Result<WorldProcessMessageOutcome, WorldProcessMessageError> {
         let server_started_at = legacy_tick_ms();
         let mut server_remaining = self
@@ -7673,6 +7686,7 @@ impl CGame {
                     WorldServerEvent::Message(message) => {
                         events.push(process_world_message(
                             self,
+                            honor_ranks,
                             WorldMessageSource::GameServer,
                             message,
                         ));
@@ -7703,6 +7717,7 @@ impl CGame {
             if let Some(message) = message {
                 events.push(process_world_message(
                     self,
+                    honor_ranks,
                     WorldMessageSource::LoginServer,
                     message,
                 ));
@@ -7732,6 +7747,7 @@ impl CGame {
     /// накопитель: исходный невозвратившийся путь их не достигал.
     pub(crate) fn process_message_main_loop_stage<GetTick>(
         &mut self,
+        honor_ranks: &mut CHonorRanks,
         clocks: &mut WorldMainLoopClockState,
         state: &mut WorldProcessMessageStageState,
         mut get_tick: GetTick,
@@ -7740,7 +7756,7 @@ impl CGame {
         GetTick: FnMut() -> u32,
     {
         let started_at_ms = get_tick();
-        let outcome = match self.process_message() {
+        let outcome = match self.process_message(honor_ranks) {
             Ok(outcome) => outcome,
             Err(error) => {
                 return WorldProcessMessageStageReport::Blocked {
@@ -8708,6 +8724,7 @@ impl CGame {
             &mut *callbacks.random,
         );
         let process_message = match self.process_message_main_loop_stage(
+            owners.honor_ranks,
             state.clocks,
             state.process_message,
             &mut *callbacks.get_tick,
@@ -9965,6 +9982,27 @@ impl CGame {
         true
     }
 
+    /// Повторяет online-check и per-player duplicate-ledger ветки `0x5FD0D`.
+    pub(crate) fn register_honor_eliminator(
+        &mut self,
+        player_id: u32,
+        eliminator_id: u32,
+    ) -> WorldHonorEliminatorRegistration {
+        if self.online_player_by_id(player_id).is_none() {
+            return WorldHonorEliminatorRegistration::MissingOnlinePlayer;
+        }
+
+        let eliminators = self.honor_eliminate_list.entry(player_id).or_default();
+        if eliminators
+            .iter()
+            .any(|tracked_id| *tracked_id == eliminator_id)
+        {
+            return WorldHonorEliminatorRegistration::Duplicate;
+        }
+        eliminators.push_back(eliminator_id);
+        WorldHonorEliminatorRegistration::Accepted
+    }
+
     /// Публикует owned сообщение в исходную receive FIFO `s_pNetServer`.
     pub(crate) fn queue_local_world_message(
         &self,
@@ -10173,6 +10211,7 @@ pub(crate) async fn game_thread_func<Runtime: WorldGameThreadRuntime>(
 
 fn process_world_message(
     game: &mut CGame,
+    honor_ranks: &mut CHonorRanks,
     source: WorldMessageSource,
     mut message: CMessage,
 ) -> ProcessedWorldEvent {
@@ -10197,7 +10236,7 @@ fn process_world_message(
     }
 
     if selector.owner == Some(WorldMessageOwner::Other) {
-        match on_other_message(game, message) {
+        match on_other_message(game, honor_ranks, message) {
             WorldOtherMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::OtherMessage {
                     source,
