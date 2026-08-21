@@ -18,10 +18,16 @@
 //! typed loaders/accessors могут безопасно накладывать подтверждённые offsets
 //! поверх него. Static storage оригинала было zero-initialized, что Rust
 //! сохраняет через `Default` без утечки padding/heap-мусора.
+//! `OnPlayerDeclareWar` exact `0x0046FE62..0x0046FE71` индексирует country
+//! name как `m_stSetup + 0x906 + country * 0x40` только для `0..=4`; typed
+//! accessor ниже накладывает эту подтверждённую границу на тот же raw snapshot.
 
 use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 
 pub(crate) const GLOBE_SETUP_BLOB_LENGTH: usize = 0x1114;
+const COUNTRY_NAME_OFFSET: usize = 0x906;
+const COUNTRY_NAME_SLOT_LENGTH: usize = 0x40;
+const COUNTRY_NAME_COUNT: usize = 5;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -43,6 +49,18 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn bytes_mut(&mut self) -> &mut [u8; GLOBE_SETUP_BLOB_LENGTH] {
         &mut self.bytes
+    }
+
+    /// Возвращает C-string prefix одного exact `szCountryName[5][0x40]`.
+    pub(crate) fn country_name(&self, country_id: u8) -> Option<&[u8]> {
+        let index = usize::from(country_id);
+        if index >= COUNTRY_NAME_COUNT {
+            return None;
+        }
+        let start = COUNTRY_NAME_OFFSET + index * COUNTRY_NAME_SLOT_LENGTH;
+        let slot = &self.bytes[start..start + COUNTRY_NAME_SLOT_LENGTH];
+        let visible_len = slot.iter().position(|byte| *byte == 0).unwrap_or(slot.len());
+        Some(&slot[..visible_len])
     }
 
     pub(crate) fn add_to_byte_array(

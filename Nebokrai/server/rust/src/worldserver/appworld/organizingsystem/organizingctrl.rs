@@ -7,6 +7,8 @@
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`, `DisbandFaction` RVA `0x00038550` и
 //! `UpdateOtherFacInfoToClient` RVA `0x00034980` — `IMPLEMENTED`;
 //! `IsFreePlayer` RVA `0x000343A0`, `IsFreeFaction` RVA `0x00034420`,
+//! `SetAllCityFacEnemyChanged/ClearAllCityFacRelation/UpdateAllCityEneFacRelation`
+//! RVA `0x00034240/0x000342C0/0x00034330`,
 //! `RemovePersonFromApplyFactionList/GetFactionByPlayerInApplyList` RVA
 //! `0x00034880/0x000348F0`,
 //! `SetPlayerOrganizing` RVA `0x000370A0` и callback-цепочки
@@ -315,7 +317,8 @@ use rustix::time::{ClockId, clock_gettime};
 
 use super::attackcitysys::CAttackCitySys;
 use super::faction::{
-    CFaction, FactionCloneSaveBlock, FactionContributorBlock, FactionContributorContext,
+    CFaction, CityWarEnemyRefreshOutcome, FactionCloneSaveBlock, FactionContributorBlock,
+    FactionContributorContext,
     FactionContributorOutcome, FactionDeleteOrganizingBuildError,
     FactionDeleteOrganizingOutcome, FactionDisbandBlock, FactionDisbandContext,
     FactionDisbandOutcome, FactionDisbandProgress, FactionDisbandRejection,
@@ -2750,6 +2753,86 @@ impl COrganizingCtrl {
         FreeFactionLookup::NoUnion
     }
 
+    /// Разворачивает faction в concrete faction-организации для city-war.
+    ///
+    /// Свободная faction даёт собственный ID только при живом owner-е. Union
+    /// использует исходный signed member-order и pointer-identity dedupe
+    /// `CUnion::GetAllFacs`; отсутствующие member-owner-ы пропускаются.
+    pub(crate) fn expand_city_war_faction_organizings(
+        &self,
+        faction_id: i32,
+    ) -> Result<Vec<i32>, FactionUnionMembershipLookupBlock> {
+        match self.is_free_faction(faction_id) {
+            FreeFactionLookup::NoUnion => Ok(self
+                .faction_by_id(faction_id)
+                .map(|faction| vec![faction.faction_id()])
+                .unwrap_or_default()),
+            FreeFactionLookup::BlockedNullConfederation { map_key } => {
+                Err(FactionUnionMembershipLookupBlock { map_key })
+            }
+            FreeFactionLookup::Union(union_id) => {
+                let Some(union) = self.confederation_by_id(union_id) else {
+                    return Ok(Vec::new());
+                };
+                Ok(union
+                    .member_organizings(|member_id| self.faction_by_id(member_id))
+                    .into_iter()
+                    .map(CFaction::faction_id)
+                    .collect())
+            }
+        }
+    }
+
+    /// Добавляет city-war enemy через concrete faction virtual-owner.
+    pub(crate) fn add_city_war_enemy_organizing<Context>(
+        &mut self,
+        organizing_id: i32,
+        enemy_organizing_id: i32,
+        context: &mut Context,
+    ) -> Result<bool, FactionEnemyMutationBlock>
+    where
+        Context: FactionEnemyMutationContext,
+    {
+        let Some(faction) = self.faction_by_id_mut(organizing_id) else {
+            return Ok(false);
+        };
+        faction.add_city_war_enemy_organizing(enemy_organizing_id, context)?;
+        Ok(true)
+    }
+
+    /// Ставит city-war changed-флаг всем живым faction в signed map-order.
+    pub(crate) fn set_all_city_faction_enemy_changed(&mut self, changed: bool) {
+        for faction in self.factions.values_mut().flatten() {
+            faction.set_city_war_enemy_factions_changed(changed);
+        }
+    }
+
+    /// Очищает city-war relation-set всех живых faction в signed map-order.
+    pub(crate) fn clear_all_city_faction_relations(&mut self) {
+        for faction in self.factions.values_mut().flatten() {
+            faction.clear_city_war_enemy_factions();
+        }
+    }
+
+    /// Публикует изменённые city-war relation-set в signed map-order.
+    pub(crate) fn update_all_city_enemy_faction_relations(
+        &self,
+        game: &CGame,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Vec<(i32, CityWarEnemyRefreshOutcome)> {
+        self.factions
+            .iter()
+            .filter_map(|(&map_key, faction)| {
+                faction.as_deref().map(|faction| {
+                    (
+                        map_key,
+                        faction.update_city_war_enemy_faction(game, &mut *update_player),
+                    )
+                })
+            })
+            .collect()
+    }
+
     /// Проверяет literal ID в исходном list-order без изменения списка.
     pub(crate) fn is_union_application_reserved(&self, faction_id: i32) -> bool {
         self.request_establishment_union_players
@@ -4735,7 +4818,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::SetAllCityFacEnemyChanged
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1312
@@ -4749,7 +4832,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::ClearAllCityFacRelation
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1322
@@ -4763,7 +4846,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::UpdateAllCityEneFacRelation
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1340
