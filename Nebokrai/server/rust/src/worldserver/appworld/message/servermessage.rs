@@ -98,7 +98,9 @@
 //! item set в subtype `8`. Уже восстановленный `CCountryParam` следом отправляет
 //! 39 scalar-полей и пять ordered map-секций subtype `0x18`. После него
 //! country-map с вложенными `CCountry` records уходит subtype `0x19` через
-//! `CCountryHandler`; следующая точная граница — `CGodsBattleConf`.
+//! `CCountryHandler`. `CGodsBattleConf` затем передаёт семь positional секций
+//! subtype `0x39`; явный старый `Update` уже является инвариантом каждого
+//! `CBaseMessage::add`. Следующая граница — ordered region snapshots.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -167,6 +169,7 @@ use crate::setup::contributesetup::{CContributeSetup, ContributeSetupSerializeEr
 use crate::setup::emotion::{CEmotion, EmotionSerializeError};
 use crate::setup::goodsdestructionconfig::{GoodsDestroySerializeError, GoodsDestroySetup};
 use crate::setup::globesetup::GlobeSetupSnapshot;
+use crate::setup::godsbattleconf::{CGodsBattleConf, GodsBattleSerializeError};
 use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelSerializeError};
 use crate::setup::incrementshoplist::{CIncrementShopList, IncrementShopSerializeError};
 use crate::setup::logsystem::{CLogSystem, LogSystemSerializeError};
@@ -600,6 +603,20 @@ pub(crate) enum WorldCountryHandlerConfigurationCompletion {
 pub(crate) struct WorldCountryHandlerConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldCountryHandlerConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после `CGodsBattleConf`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldGodsBattleConfigurationCompletion {
+    GodsBattle(GodsBattleSerializeError),
+    RegionSnapshotsPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/0x39` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldGodsBattleConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldGodsBattleConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1706,6 +1723,32 @@ pub(crate) fn continue_game_server_country_handler_configuration(
         completion: WorldCountryHandlerConfigurationCompletion::GodsBattleConfigurationPending {
             socket_id,
         },
+    }
+}
+
+/// Кодирует и отправляет точный `CGodsBattleConf` initial-config packet.
+pub(crate) fn continue_game_server_gods_battle_configuration(
+    game: &CGame,
+    socket_id: i32,
+    gods_battle: &CGodsBattleConf,
+) -> WorldGodsBattleConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = gods_battle.add_to_byte_array(&mut payload) {
+        return WorldGodsBattleConfigurationReport {
+            delivery: None,
+            completion: WorldGodsBattleConfigurationCompletion::GodsBattle(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldGodsBattleConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x39,
+            &payload,
+        )),
+        completion: WorldGodsBattleConfigurationCompletion::RegionSnapshotsPending { socket_id },
     }
 }
 

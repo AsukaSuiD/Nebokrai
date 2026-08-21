@@ -21,6 +21,11 @@ pub(crate) mod goodsdestructionconfig;
     reason = "globe snapshot подключён к initial-config до typed loaders/accessors"
 )]
 pub(crate) mod globesetup;
+#[allow(
+    dead_code,
+    reason = "GodsBattle serializer подключён к initial-config до loaders/runtime owner-а"
+)]
+pub(crate) mod godsbattleconf;
 pub(crate) mod hitlevelsetup;
 #[allow(
     dead_code,
