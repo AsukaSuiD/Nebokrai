@@ -68,6 +68,9 @@
 //! Успешная mode-7 ветка `AppointMinister(0, job, 7)` рассылает `WS0068`,
 //! очищает ID/имя, публикует `0x7FF04 {country, old_player, job, 2}`, затем
 //! `0x7FF10` и полный `0x7FF07` королю; appointed/salary flags не очищаются.
+//! `CCountry::NewTerm` RVA `0x000C6F40` — `IMPLEMENTED`: он очищает DB/live
+//! appointed/salary flags короля и всех non-null minister owner-ов, рассылает
+//! пустой `0x7FF14`, затем обнуляет четыре дневных счётчика.
 //! Последующий original clone разыменовывал null slot; безопасный save-clone
 //! его пропускает как внутренний UB, но два наблюдаемых wire-count сохраняет.
 //! `0x60309` использует тот же target/job/king/country wire и selector `1`.
@@ -195,6 +198,7 @@ pub(crate) struct CCountry {
     pub(crate) king_timestamp_ms: u32,
     pub(crate) is_warring: bool,
     pub(crate) silence_count: i32,
+    pub(crate) pk_count: i32,
     pub(crate) exile_count: i32,
     pub(crate) absolve_count: i32,
     pub(crate) exile_started_at_ms: BTreeMap<i32, i32>,
@@ -220,6 +224,30 @@ pub(crate) struct CountryQuestSwitchUpdate {
     pub(crate) target: CountryQuestSwitchTarget,
     pub(crate) previous: bool,
     pub(crate) applied: bool,
+}
+
+pub(crate) trait CountryNewTermContext {
+    fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryMinisterTermReset {
+    pub(crate) job: u8,
+    pub(crate) previous_appointed: bool,
+    pub(crate) previous_salary_received: bool,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountryNewTermReport {
+    pub(crate) previous_king_appointed: bool,
+    pub(crate) previous_king_salary_received: bool,
+    pub(crate) minister_resets: Vec<CountryMinisterTermReset>,
+    pub(crate) previous_silence_count: i32,
+    pub(crate) previous_pk_count: i32,
+    pub(crate) previous_exile_count: i32,
+    pub(crate) previous_absolve_count: i32,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -865,6 +893,52 @@ pub(crate) struct CountryAppointMinisterReport {
 }
 
 impl CCountry {
+    /// Повторяет exact `CCountry::NewTerm` без MSVC map/message plumbing.
+    pub(crate) fn new_term<Context: CountryNewTermContext + ?Sized>(
+        &mut self,
+        context: &mut Context,
+    ) -> CountryNewTermReport {
+        let previous_king_appointed = self.king.appointed;
+        let previous_king_salary_received = self.king.salary_received;
+        self.king.appointed = false;
+        self.king.salary_received = false;
+
+        let minister_resets = self
+            .ministers
+            .iter_mut()
+            .map(|(&job, minister)| {
+                let reset = CountryMinisterTermReset {
+                    job,
+                    previous_appointed: minister.snapshot.appointed,
+                    previous_salary_received: minister.snapshot.salary_received,
+                };
+                minister.snapshot.appointed = false;
+                minister.snapshot.salary_received = false;
+                reset
+            })
+            .collect();
+
+        let message = CMessage::new(0x0007_FF14);
+        let wire = message.as_wire_bytes().to_vec();
+        let delivery = context.send_all(&message);
+
+        let previous_silence_count = std::mem::replace(&mut self.silence_count, 0);
+        let previous_pk_count = std::mem::replace(&mut self.pk_count, 0);
+        let previous_exile_count = std::mem::replace(&mut self.exile_count, 0);
+        let previous_absolve_count = std::mem::replace(&mut self.absolve_count, 0);
+        CountryNewTermReport {
+            previous_king_appointed,
+            previous_king_salary_received,
+            minister_resets,
+            previous_silence_count,
+            previous_pk_count,
+            previous_exile_count,
+            previous_absolve_count,
+            wire,
+            delivery,
+        }
+    }
+
     /// Exact `GetInfo`: wrapper без дополнительных side effect.
     pub(crate) fn get_info<Context: CountryExileResultContext + ?Sized>(
         &self,
@@ -3592,7 +3666,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::NewTerm
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1764

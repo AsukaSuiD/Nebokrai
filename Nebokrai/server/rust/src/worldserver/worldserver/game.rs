@@ -980,7 +980,7 @@ use crate::public::tools::{ini_decode, put_string_to_file};
 use crate::transport::bind_tcp_ipv4;
 use crate::worldserver::appworld::country::country::{
     CCountry, CountryAbsolveCounterReset, CountryExileMessageDelivery, CountryExileResultContext,
-    CountryExileTarget, CountryExileTextArgument, CountryFactionSnapshot,
+    CountryExileTarget, CountryExileTextArgument, CountryFactionSnapshot, CountryNewTermContext,
     CountryGovernanceContextBlock, CountryKingSaveLimits, CountryOnlinePlayer,
     CountryPlayersListContext, CountryPlayersListContextBlock,
 };
@@ -12160,6 +12160,12 @@ struct WorldFourNationCountryFailEffects<'a> {
         &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
 }
 
+impl CountryNewTermContext for WorldCountryExileResultEffects<'_> {
+    fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError> {
+        message.send_all(self.game.current_game_server_sender().as_ref())
+    }
+}
+
 impl FourNationWarResultContext for WorldFourNationWarResultEffects<'_> {
     fn game_server_number_by_region_id(&mut self, region_id: i32) -> i32 {
         self.game.game_server_number_by_region_id(region_id)
@@ -12596,7 +12602,7 @@ impl CountryExileResultContext for WorldCountryDemiseEffects<'_> {
     }
 
     fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError> {
-        self.base.send_all(message)
+        CountryExileResultContext::send_all(&mut self.base, message)
     }
 
     fn put_king_log(&mut self, text: &[u8]) {
