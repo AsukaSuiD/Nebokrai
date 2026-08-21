@@ -163,6 +163,9 @@ use crate::setup::incrementshoplist::{CIncrementShopList, IncrementShopSerialize
 use crate::setup::monsterlist::{
     MonsterDropRegistry, MonsterListSerializeError, MonsterRegistry, serialize_monster_list,
 };
+use crate::setup::newskillmonsterlist::{
+    NewSkillMonsterConf, NewSkillMonsterSerializeError,
+};
 use crate::setup::playerlist::{CPlayerList, PlayerListSerializeError};
 use crate::setup::preciousboxconf::{PreciousBoxConf, PreciousBoxSerializeError};
 use crate::setup::prisonconf::{PrisonConf, PrisonConfSerializeError};
@@ -497,6 +500,20 @@ pub(crate) enum WorldEquipmentComposeConfigurationCompletion {
 pub(crate) struct WorldEquipmentComposeConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldEquipmentComposeConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после `CNewSkillMonserConf`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldNewSkillMonsterConfigurationCompletion {
+    NewSkillMonster(NewSkillMonsterSerializeError),
+    GoodsDestroyConfigurationPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/0x22` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldNewSkillMonsterConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldNewSkillMonsterConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1434,6 +1451,34 @@ pub(crate) fn continue_game_server_equipment_compose_configuration(
             WorldEquipmentComposeConfigurationCompletion::NewSkillMonsterConfigurationPending {
                 socket_id,
             },
+    }
+}
+
+/// Кодирует и отправляет точный `CNewSkillMonserConf` initial-config packet.
+pub(crate) fn continue_game_server_new_skill_monster_configuration(
+    game: &CGame,
+    socket_id: i32,
+    new_skill_monsters: &NewSkillMonsterConf,
+) -> WorldNewSkillMonsterConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = new_skill_monsters.add_to_byte_array(&mut payload) {
+        return WorldNewSkillMonsterConfigurationReport {
+            delivery: None,
+            completion: WorldNewSkillMonsterConfigurationCompletion::NewSkillMonster(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldNewSkillMonsterConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x22,
+            &payload,
+        )),
+        completion: WorldNewSkillMonsterConfigurationCompletion::GoodsDestroyConfigurationPending {
+            socket_id,
+        },
     }
 }
 

@@ -18,6 +18,11 @@ pub(crate) mod hitlevelsetup;
 )]
 pub(crate) mod incrementshoplist;
 pub(crate) mod monsterlist;
+#[allow(
+    dead_code,
+    reason = "new-skill-monster serializer подключён к initial-config до XML loader-а"
+)]
+pub(crate) mod newskillmonsterlist;
 pub(crate) mod playerlist;
 #[allow(
     dead_code,
