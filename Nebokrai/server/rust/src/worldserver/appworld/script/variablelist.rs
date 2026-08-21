@@ -1,7 +1,8 @@
 //! Владелец `CVariableList` исторического WorldServer из `variablelist.cpp`.
 //!
-//! Статус `SaveVarData` RVA `0x000A1930` и `AddToByteArray` RVA `0x000A1B10`
-//! — `IMPLEMENTED`; остальные функции файла ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Статусы `SetVarValue` RVA `0x000A11B0/0x000A1240`, `SaveVarData` RVA
+//! `0x000A1930` и `AddToByteArray` RVA `0x000A1B10` — `IMPLEMENTED`;
+//! остальные функции файла ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -33,6 +34,15 @@
 //! tag равен `-(bytes + NUL)`. Typed enum заменяет две C++ union-пары, `Vec`
 //! заменяет raw-массивы, сохраняя порядок и wire. Невозможные count/length,
 //! внутренний NUL и пустой массив блокируются до изменения destination.
+//!
+//! Достигнутый World call-site integer-overload всегда передаёт index `0`.
+//! Владелец линейно ищет первое ASCII-only `_strcmpi`-совпадение, меняет
+//! scalar либо нулевой элемент непустого массива и продолжает поиск после
+//! совпавшей string-записи. String-overload меняет первую совпавшую string.
+//! EXE технически позволял переписать integer/array как string, но после этого
+//! сохранённый union интерпретировался как `char*` и дальнейшее чтение имело UB;
+//! Rust останавливает этот недопустимый owner-state typed-границей. `Vec` и
+//! enum заменяют только raw allocation/union, не меняя штатную мутацию.
 
 use std::error::Error;
 use std::fmt;
@@ -66,6 +76,57 @@ impl CVariableList {
 
     pub(crate) fn variables(&self) -> &[VariableEntry] {
         &self.variables
+    }
+
+    /// Точный достигнутый `SetVarValue(name, 0, value)` World call-site.
+    pub(crate) fn set_zero_index_integer(
+        &mut self,
+        name: &[u8],
+        value: i32,
+    ) -> VariableSetOutcome {
+        let name = visible_c_string(name);
+        for (variable_index, variable) in self.variables.iter_mut().enumerate() {
+            if !visible_c_string(&variable.name).eq_ignore_ascii_case(name) {
+                continue;
+            }
+            match &mut variable.value {
+                VariableValue::Integer { current, .. } => {
+                    *current = value;
+                    return VariableSetOutcome::Updated { variable_index };
+                }
+                VariableValue::IntegerArray { current, .. } => {
+                    let Some(first) = current.first_mut() else {
+                        return VariableSetOutcome::Blocked(
+                            VariableSetBlock::EmptyIntegerArray { variable_index },
+                        );
+                    };
+                    *first = value;
+                    return VariableSetOutcome::Updated { variable_index };
+                }
+                VariableValue::String { .. } => {}
+            }
+        }
+        VariableSetOutcome::NotFound
+    }
+
+    /// Штатная часть `SetVarValue(name, string)` без unsafe union-retyping.
+    pub(crate) fn set_string(&mut self, name: &[u8], value: &[u8]) -> VariableSetOutcome {
+        let name = visible_c_string(name);
+        let value = visible_c_string(value);
+        for (variable_index, variable) in self.variables.iter_mut().enumerate() {
+            if !visible_c_string(&variable.name).eq_ignore_ascii_case(name) {
+                continue;
+            }
+            let VariableValue::String { current, .. } = &mut variable.value else {
+                return VariableSetOutcome::Blocked(
+                    VariableSetBlock::StringWriteWouldRetypeSavedUnion { variable_index },
+                );
+            };
+            current.clear();
+            current.extend_from_slice(value);
+            return VariableSetOutcome::Updated { variable_index };
+        }
+        VariableSetOutcome::NotFound
     }
 
     pub(crate) fn add_to_byte_array(
@@ -140,6 +201,19 @@ impl CVariableList {
         destination.extend_from_slice(&payload);
         Ok(())
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum VariableSetOutcome {
+    Updated { variable_index: usize },
+    NotFound,
+    Blocked(VariableSetBlock),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum VariableSetBlock {
+    EmptyIntegerArray { variable_index: usize },
+    StringWriteWouldRetypeSavedUnion { variable_index: usize },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -224,6 +298,13 @@ fn write_variable_c_string(
     destination.extend_from_slice(value);
     destination.push(0);
     Ok(())
+}
+
+fn visible_c_string(bytes: &[u8]) -> &[u8] {
+    bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .map_or(bytes, |end| &bytes[..end])
 }
 
 /// Три byte-exact строки, которые исходный `GetOneVar` отдавал DB-owner-у.
@@ -418,7 +499,7 @@ pub(crate) async fn save_var_data<S: VariableListSaveSource, O: RsGenVarOwner>(
 
 // ============================================================================
 // FUNCTION: CVariableList::SetVarValue
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\script\variablelist.cpp:577
@@ -432,7 +513,7 @@ pub(crate) async fn save_var_data<S: VariableListSaveSource, O: RsGenVarOwner>(
 
 // ============================================================================
 // FUNCTION: CVariableList::SetVarValue
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\script\variablelist.cpp:601

@@ -4,7 +4,7 @@
 //! внутрипроцессного события `0x3FC03`,
 //! регистрации GameServer и reconnect player-data хвоста в `0x5FA01`,
 //! snapshot/cleanup хвоста `0x5FA03`, обычных opcode `0x4FC01..=0x4FC03`,
-//! `0x5FA04`, `0x5FA06`, `0x5FA07`, `0x5FA09`, `0x5FA0A..=0x5FA0D` и
+//! `0x5FA04..=0x5FA07`, `0x5FA09`, `0x5FA0A..=0x5FA0D` и
 //! `0x5FA0F..=0x5FA10` из
 //! `OnServerMessage` RVA `0x000ADCF0`;
 //! остальные ветви остаются `UNKNOWN` (исследовательский декомпилят хранится локально) ниже. Точная пара:
@@ -216,6 +216,14 @@
 //! подавляет send после уже выполненных чтений. Все C-строки остаются
 //! byte-exact, результаты transport-а не управляют дальнейшими эффектами.
 //!
+//! `0x5FA05` читает signed type и имя `0x100`; type `1` затем читает signed
+//! integer, type `3` — строку `0x100`. Nullable общий `CVariableList` выполняет
+//! ASCII-only `_strcmpi` mutation и только при исходном success `1` World
+//! рассылает `0x7F805` с теми же полями всем GameServer. Sentinel
+//! `-99999999` подавляет send. Для иных type EXE сравнивал неинициализированный
+//! stack-slot с sentinel; Rust фиксирует этот UB как safe typed-границу и не
+//! придумывает недоказанный broadcast.
+//!
 //! `0x5FA0F` всегда сначала читает signed subtype и создаёт временный response
 //! `0x7F80E`. Subtype `0` возвращает два текущих XYD; subtype `1` читает
 //! faction/XYD, применяет только faction `1/2`, добавляет однобайтовый маркер
@@ -317,7 +325,7 @@ use crate::worldserver::appworld::player::{
     PlayerCodecError, PlayerMurderCounterUpdate, PlayerPropertyCoefficients,
 };
 use crate::worldserver::appworld::script::variablelist::{
-    CVariableList, VariableListSerializationBlock,
+    CVariableList, VariableListSerializationBlock, VariableSetOutcome,
 };
 use crate::worldserver::appworld::skills::skillfactory::{
     CSkillFactory, SkillFactorySerializeError,
@@ -373,6 +381,7 @@ pub(crate) enum WorldServerMessageOutcome {
     GameServerPingStarted(WorldGameServerPingStart),
     GodsBattle(WorldGodsBattleMessage),
     GodsBattleTopTen(WorldGodsBattleTopTenMessage),
+    GeneralVariableUpdated(WorldGeneralVariableUpdate),
     LoginServerTupleRelay(WorldLoginServerTupleRelay),
     LoginServerIdentityAssigned(WorldLoginServerIdentity),
     MurderReported(WorldMurderReport),
@@ -458,6 +467,34 @@ pub(crate) enum WorldGodsBattleTopTenDisposition {
         message_type: i32,
         delivery: Result<i32, SendMessageError>,
         notices: Vec<RsGodsBattleNotice>,
+    },
+}
+
+/// Полный typed-итог server opcode `0x5FA05`.
+#[derive(Debug)]
+pub(crate) struct WorldGeneralVariableUpdate {
+    pub(crate) variable_type: i32,
+    pub(crate) type_complete: bool,
+    pub(crate) name: Vec<u8>,
+    pub(crate) value: Option<WorldGeneralVariableValue>,
+    pub(crate) disposition: WorldGeneralVariableUpdateDisposition,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WorldGeneralVariableValue {
+    Integer { value: i32, complete: bool },
+    String(Vec<u8>),
+}
+
+#[derive(Debug)]
+pub(crate) enum WorldGeneralVariableUpdateDisposition {
+    UnsupportedTypeLegacyUndefined,
+    VariableListUnavailable,
+    MutationRejected(VariableSetOutcome),
+    Broadcast {
+        mutation: VariableSetOutcome,
+        message_type: i32,
+        delivery: Result<i32, SendMessageError>,
     },
 }
 
@@ -1529,6 +1566,7 @@ pub(crate) async fn on_server_message(
     mut message: CMessage,
     registry: &GoodsBasePropertiesRegistry,
     coefficients: &PlayerPropertyCoefficients,
+    general_variables: Option<&mut CVariableList>,
     gods_battle: &mut CGodsBattleConf,
     rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
     mut gods_battle_database: Option<&mut WorldTdsClient>,
@@ -1674,6 +1712,82 @@ pub(crate) async fn on_server_message(
                         values,
                         values_complete,
                         resolved_named_player_id,
+                        disposition,
+                    },
+                ),
+            )
+        }
+        0x0005_FA05 => {
+            let decoded_type = message.base_mut().get_long();
+            let variable_type = decoded_type.unwrap_or(0);
+            let name = message
+                .base_mut()
+                .get_str_bytes(0x100)
+                .expect("ненулевая GetStr-граница задана точным owner-ом");
+            let value = match variable_type {
+                1 => {
+                    let decoded = message.base_mut().get_long();
+                    Some(WorldGeneralVariableValue::Integer {
+                        value: decoded.unwrap_or(0),
+                        complete: decoded.is_some(),
+                    })
+                }
+                3 => Some(WorldGeneralVariableValue::String(
+                    message
+                        .base_mut()
+                        .get_str_bytes(0x100)
+                        .expect("ненулевая GetStr-граница задана точным owner-ом"),
+                )),
+                _ => None,
+            };
+
+            let disposition = if value.is_none() {
+                WorldGeneralVariableUpdateDisposition::UnsupportedTypeLegacyUndefined
+            } else {
+                match general_variables {
+                    None => WorldGeneralVariableUpdateDisposition::VariableListUnavailable,
+                    Some(variables) => {
+                        let mutation = match value.as_ref().expect("type `1/3` имеет value") {
+                            WorldGeneralVariableValue::Integer { value, .. } => {
+                                variables.set_zero_index_integer(&name, *value)
+                            }
+                            WorldGeneralVariableValue::String(value) => {
+                                variables.set_string(&name, value)
+                            }
+                        };
+                        if matches!(mutation, VariableSetOutcome::Updated { .. }) {
+                            let mut response = CMessage::new(0x0007_F805);
+                            response.base_mut().add_long(variable_type);
+                            add_legacy_c_string(response.base_mut(), &name);
+                            match value.as_ref().expect("type `1/3` имеет value") {
+                                WorldGeneralVariableValue::Integer { value, .. } => {
+                                    response.base_mut().add_long(*value);
+                                }
+                                WorldGeneralVariableValue::String(value) => {
+                                    add_legacy_c_string(response.base_mut(), value);
+                                }
+                            }
+                            let sender = game.current_game_server_sender();
+                            let delivery = response.send_all(sender.as_ref());
+                            WorldGeneralVariableUpdateDisposition::Broadcast {
+                                mutation,
+                                message_type: 0x0007_F805,
+                                delivery,
+                            }
+                        } else {
+                            WorldGeneralVariableUpdateDisposition::MutationRejected(mutation)
+                        }
+                    }
+                }
+            };
+
+            WorldServerMessageDispatch::Handled(
+                WorldServerMessageOutcome::GeneralVariableUpdated(
+                    WorldGeneralVariableUpdate {
+                        variable_type,
+                        type_complete: decoded_type.is_some(),
+                        name,
+                        value,
                         disposition,
                     },
                 ),

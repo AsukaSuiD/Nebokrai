@@ -1089,7 +1089,9 @@ use crate::worldserver::appworld::player::{
     PlayerPropertyCoefficients,
 };
 use crate::worldserver::appworld::region::RegionSerializationBlock;
-use crate::worldserver::appworld::script::variablelist::VariableListSaveSource;
+use crate::worldserver::appworld::script::variablelist::{
+    CVariableList, VariableListSaveSource,
+};
 use crate::worldserver::appworld::session::csessionfactory::{
     CSessionFactory, WorldSessionFactoryAiReport,
 };
@@ -2779,6 +2781,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) player_ranks: &'a mut CPlayerRanks,
     pub(crate) rs_player: &'a mut TiberiusRsPlayer,
     pub(crate) player_database: Option<&'a mut WorldTdsClient>,
+    pub(crate) general_variables: Option<&'a mut CVariableList>,
     pub(crate) gods_battle: &'a mut CGodsBattleConf,
     pub(crate) rs_gods_battle: Option<&'a mut TiberiusRsGodsBattle>,
     pub(crate) gods_battle_database: Option<&'a mut WorldTdsClient>,
@@ -8477,7 +8480,7 @@ impl CGame {
     /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, other
     /// transport/cursor `0x5FD02/0x5FD06..0x5FD09/0x5FD0E`, copy-number
     /// `0x5FD0B`, LeiTing update `0x5FD10`, honor
-    /// `0x5FD0C/0x5FD0D`, server `0x5FA04/0x5FA06/0x5FA07/0x5FA09/0x5FA0F`,
+    /// `0x5FD0C/0x5FD0D`, server `0x5FA04..=0x5FA07/0x5FA09/0x5FA0F/0x5FA10`,
     /// organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
@@ -8514,6 +8517,7 @@ impl CGame {
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
         rs_player: &mut TiberiusRsPlayer,
         mut player_database: Option<&mut WorldTdsClient>,
+        mut general_variables: Option<&mut CVariableList>,
         gods_battle: &mut CGodsBattleConf,
         mut rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
         mut gods_battle_database: Option<&mut WorldTdsClient>,
@@ -8565,6 +8569,7 @@ impl CGame {
                             application_callbacks,
                             &mut *rs_player,
                             player_database.as_deref_mut(),
+                            general_variables.as_deref_mut(),
                             &mut *gods_battle,
                             rs_gods_battle.as_deref_mut(),
                             gods_battle_database.as_deref_mut(),
@@ -8625,6 +8630,7 @@ impl CGame {
                     application_callbacks,
                     &mut *rs_player,
                     player_database.as_deref_mut(),
+                    general_variables.as_deref_mut(),
                     &mut *gods_battle,
                     rs_gods_battle.as_deref_mut(),
                     gods_battle_database.as_deref_mut(),
@@ -8684,6 +8690,7 @@ impl CGame {
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
         rs_player: &mut TiberiusRsPlayer,
         player_database: Option<&mut WorldTdsClient>,
+        general_variables: Option<&mut CVariableList>,
         gods_battle: &mut CGodsBattleConf,
         rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
         gods_battle_database: Option<&mut WorldTdsClient>,
@@ -8735,6 +8742,7 @@ impl CGame {
             application_callbacks,
             rs_player,
             player_database,
+            general_variables,
             gods_battle,
             rs_gods_battle,
             gods_battle_database,
@@ -9831,6 +9839,7 @@ impl CGame {
             &mut union_application_callbacks,
             owners.rs_player,
             owners.player_database.as_deref_mut(),
+            owners.general_variables.as_deref_mut(),
             owners.gods_battle,
             owners.rs_gods_battle.as_deref_mut(),
             owners.gods_battle_database.as_deref_mut(),
@@ -11805,6 +11814,7 @@ async fn process_world_message<TimerCallback: Copy>(
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     rs_player: &mut TiberiusRsPlayer,
     player_database: Option<&mut WorldTdsClient>,
+    general_variables: Option<&mut CVariableList>,
     gods_battle: &mut CGodsBattleConf,
     rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
     gods_battle_database: Option<&mut WorldTdsClient>,
@@ -11829,6 +11839,7 @@ async fn process_world_message<TimerCallback: Copy>(
             message,
             registry,
             coefficients,
+            general_variables,
             gods_battle,
             rs_gods_battle,
             gods_battle_database,
