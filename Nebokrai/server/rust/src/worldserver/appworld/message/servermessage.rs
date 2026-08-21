@@ -133,7 +133,9 @@
 //! `0x1B`; он использует уже восстановленный schedule owner и его downstream-
 //! compatible snapshot. Следующая граница — `CVillageWarSys` subtype `0x1C`;
 //! он также использует уже восстановленный schedule owner и нормализованный
-//! snapshot. Следующая граница — `CountryWarSys` subtype `0x1F`.
+//! snapshot. Следующая граница — `CountryWarSys` subtype `0x1F`, причём её
+//! подтверждённый World-layout сохраняется даже при несовпадении с layout
+//! парного Game-декодера. Следующая граница — identity packet subtype `0x3B`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -228,6 +230,7 @@ use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};
 use crate::setup::tradelist::{CTradeList, TradeListSerializeError};
 use crate::worldserver::appworld::country::country::CountryKingSaveLimits;
+use crate::worldserver::appworld::country::countrywarsys::CountryWarSys;
 use crate::worldserver::appworld::country::countryparam::{
     CCountryParam, CountryParamSerializationBlock,
 };
@@ -966,6 +969,17 @@ pub(crate) enum WorldVillageWarConfigurationCompletion {
 pub(crate) struct WorldVillageWarConfigurationReport {
     pub(crate) delivery: WorldInitialConfigurationDelivery,
     pub(crate) completion: WorldVillageWarConfigurationCompletion,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldCountryWarConfigurationCompletion {
+    GameServerIdentityPending { socket_id: i32 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldCountryWarConfigurationReport {
+    pub(crate) delivery: WorldInitialConfigurationDelivery,
+    pub(crate) completion: WorldCountryWarConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -2718,6 +2732,28 @@ pub(crate) fn continue_game_server_village_war_configuration(
             &payload,
         ),
         completion: WorldVillageWarConfigurationCompletion::CountryWarConfigurationPending {
+            socket_id,
+        },
+    }
+}
+
+/// Отправляет точный World-layout `CountryWarSys` subtype `0x1F`.
+pub(crate) fn continue_game_server_country_war_configuration(
+    game: &CGame,
+    socket_id: i32,
+    country_war: &CountryWarSys,
+) -> WorldCountryWarConfigurationReport {
+    let mut payload = Vec::new();
+    let _legacy_success = country_war.add_to_byte_array(&mut payload);
+    let sender = game.current_game_server_sender();
+    WorldCountryWarConfigurationReport {
+        delivery: send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x1F,
+            &payload,
+        ),
+        completion: WorldCountryWarConfigurationCompletion::GameServerIdentityPending {
             socket_id,
         },
     }

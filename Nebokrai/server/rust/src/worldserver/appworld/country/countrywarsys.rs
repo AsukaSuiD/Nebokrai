@@ -1,9 +1,9 @@
 //! WorldServer-владелец country-war victory state `CountryWarSys`.
 //!
-//! `on_flag_destory` (исходное PDB-написание) RVA `0x00091E00` имеет статус
-//! `IMPLEMENTED`; остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, исходник
-//! `appworld/country/countrywarsys.cpp`.
+//! `AddToByteArray` RVA `0x0008F800` и `on_flag_destory` (исходное
+//! PDB-написание) RVA `0x00091E00` имеют статус `IMPLEMENTED`; остальной корпус
+//! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара `WorldServer/Nworldserver.exe +
+//! WorldServer/WorldServer.pdb`, исходник `appworld/country/countrywarsys.cpp`.
 //!
 //! PDB/static map хранит `CountryWarRegion` размером `0x0C`: clear-byte с
 //! padding, signed defend и attack country. `BTreeMap` сохраняет map-order.
@@ -16,6 +16,13 @@
 //! state/message/result/clear подтверждены exact EXE `0x00491E69..0x00492142`.
 //! Region, localization, country-map и network owners остаются явной context-
 //! границей; неизвестность в них сохраняет уже выполненные предыдущие эффекты.
+//!
+//! Snapshot намеренно сохраняет layout World EXE: `state_clear + 3 bytes
+//! padding`, затем defender и attacker. Парный Game EXE RVA `0x000EBD60`
+//! трактует те же 12 bytes как defender, attacker, `state_clear + padding` —
+//! это подтверждённое несовпадение поставленных бинарников, а не повод молча
+//! менять World wire. Неинициализированный padding старого World нормализован
+//! нулями: он не несёт семантики Miracle и не должен утекать в сеть.
 
 use std::collections::BTreeMap;
 
@@ -82,6 +89,18 @@ pub(crate) struct CountryWarSys {
 }
 
 impl CountryWarSys {
+    pub(crate) fn add_to_byte_array(&self, output: &mut Vec<u8>) -> bool {
+        output.extend_from_slice(&(self.war_regions.len() as u32).to_le_bytes());
+        for (&region_id, state) in &self.war_regions {
+            output.extend_from_slice(&region_id.to_le_bytes());
+            output.push(u8::from(state.state_clear));
+            output.extend_from_slice(&[0; 3]);
+            output.extend_from_slice(&state.defend_country.to_le_bytes());
+            output.extend_from_slice(&state.attack_country.to_le_bytes());
+        }
+        true
+    }
+
     pub(crate) fn on_flag_destory<Context: CountryWarVictoryContext + ?Sized>(
         &mut self,
         country: i32,
@@ -209,7 +228,7 @@ impl CountryWarSys {
 
 // ============================================================================
 // FUNCTION: CountryWarSys::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:335
@@ -217,6 +236,7 @@ impl CountryWarSys {
 // ADDRESS: 0048f800
 // PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
 //
+// Реализовано выше с exact World layout и нулевым техническим padding.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
