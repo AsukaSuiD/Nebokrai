@@ -1923,7 +1923,7 @@ pub(crate) struct ConfederationCreationCallbackReport {
     pub(crate) second_reservation_removed: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum ConfederationCreationCallbackBlock {
     Initial {
         report: ConfederationCreationCallbackReport,

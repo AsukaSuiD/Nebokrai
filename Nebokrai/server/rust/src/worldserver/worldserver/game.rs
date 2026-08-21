@@ -1078,7 +1078,8 @@ use crate::worldserver::appworld::message::playermessage::{
     WorldPlayerMessageDispatch, WorldPlayerMessageOutcome, on_player_message,
 };
 use crate::worldserver::appworld::message::organsysmessage::{
-    CityTransferConfirmationDelivery, OrganizingAdmissionPermitBlock,
+    CityTransferConfirmationDelivery, ConfederationCreationConfirmationDelivery,
+    OrganizingAdmissionPermitBlock,
     OrganizingAdmissionPermitDispatch, OrganizingAttackCityEndDispatch,
     OrganizingCityGateBlock, OrganizingCityGateDispatch, OrganizingCityTransferDispatch,
     OrganizingCityWarApplicationBlock, OrganizingCityWarApplicationDispatch,
@@ -1117,7 +1118,8 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEnableDispatch,
     OrganizingPronounceDispatch, OrganizingSessionResultDispatch,
     OrganizingUnionApplicationDispatch,
-    QueuedCityTransferTerminal, QueuedOrganizingSessionTerminal,
+    QueuedCityTransferTerminal, QueuedConfederationCreationTerminal,
+    QueuedOrganizingSessionTerminal,
     QueuedUnionApplicationTerminal,
     UnionApplicationConfirmationDelivery,
     WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects,
@@ -1170,7 +1172,9 @@ use crate::worldserver::appworld::organizingsystem::factionwarsys::{
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     AttackCityEndBlock, COrganizingCtrl, CityTransferEndpointBlock, CityTransferFinishBlock,
     CityTransferFinishReport, CityTransferSessionBlock, CityTransferSessionReport,
-    CityTransferStartBlock, OrganizingContributorBlock, OrganizingDisbandOutcome,
+    CityTransferStartBlock, ConfederationCreationCallbackBlock,
+    ConfederationCreationCallbackReport, ConfederationCreationEndpointBlock,
+    OrganizingContributorBlock, OrganizingDisbandOutcome,
     OrganizingDisbandPlayer, OrganizingRunBlock, OrganizingRunReport, OrganizingSaveDataBlock,
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock, OrganizingLeaveWordEnableBlock,
     OrganizingFactionDoJoinBlock,
@@ -2100,6 +2104,15 @@ pub(crate) struct WorldCityTransferTerminalDispatch {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldConfederationCreationTerminalDispatch {
+    pub(crate) request: QueuedConfederationCreationTerminal,
+    pub(crate) outcome: Result<
+        ConfederationCreationCallbackReport,
+        ConfederationCreationCallbackBlock,
+    >,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldUnionApplicationRuntimeReport {
     pub(crate) terminals: Vec<WorldUnionApplicationTerminalDispatch>,
     pub(crate) confirmations: Vec<UnionApplicationConfirmationDelivery>,
@@ -2107,6 +2120,12 @@ pub(crate) struct WorldUnionApplicationRuntimeReport {
     pub(crate) city_terminals: Vec<WorldCityTransferTerminalDispatch>,
     pub(crate) city_confirmations: Vec<CityTransferConfirmationDelivery>,
     pub(crate) city_endpoint_blocks: Vec<CityTransferEndpointBlock>,
+    pub(crate) confederation_creation_terminals:
+        Vec<WorldConfederationCreationTerminalDispatch>,
+    pub(crate) confederation_creation_confirmations:
+        Vec<ConfederationCreationConfirmationDelivery>,
+    pub(crate) confederation_creation_endpoint_blocks:
+        Vec<ConfederationCreationEndpointBlock>,
 }
 
 /// Один фактически извлечённый элемент двух FIFO `ProcessMessage`.
@@ -16145,6 +16164,7 @@ fn drain_union_application_runtime(
 ) -> WorldUnionApplicationRuntimeReport {
     let mut terminals = Vec::new();
     let mut city_terminals = Vec::new();
+    let mut confederation_creation_terminals = Vec::new();
     while let Some(request) = runtime.pop_terminal() {
         match request {
             QueuedOrganizingSessionTerminal::Union(request) => {
@@ -16158,6 +16178,23 @@ fn drain_union_application_runtime(
                     update_player,
                 );
                 terminals.push(WorldUnionApplicationTerminalDispatch { request, outcome });
+            }
+            QueuedOrganizingSessionTerminal::ConfederationCreation(request) => {
+                let outcome = organizing.finish_confederation_creation(
+                    game,
+                    organizing_parameters,
+                    request.first_player_id,
+                    request.second_player_id,
+                    request.first_faction_id,
+                    request.second_faction_id,
+                    &request.union_name,
+                    request.terminal,
+                    effects,
+                    update_player,
+                );
+                confederation_creation_terminals.push(
+                    WorldConfederationCreationTerminalDispatch { request, outcome },
+                );
             }
             QueuedOrganizingSessionTerminal::CityTransfer(request) => {
                 let outcome = organizing.finish_city_transfer(
@@ -16181,6 +16218,11 @@ fn drain_union_application_runtime(
         city_terminals,
         city_confirmations: runtime.take_city_confirmations(),
         city_endpoint_blocks: runtime.take_city_blocks(),
+        confederation_creation_terminals,
+        confederation_creation_confirmations:
+            runtime.take_confederation_creation_confirmations(),
+        confederation_creation_endpoint_blocks:
+            runtime.take_confederation_creation_blocks(),
     }
 }
 

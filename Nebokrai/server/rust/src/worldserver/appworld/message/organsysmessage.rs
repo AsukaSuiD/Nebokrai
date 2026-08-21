@@ -418,6 +418,10 @@ use crate::worldserver::appworld::organizingsystem::attackcitysys::{
 };
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     AttackCityEndBlock, AttackCityEndEffects, AttackCityEndReport, COrganizingCtrl,
+    ConfederationCreationEffects, ConfederationCreationEndpointBlock,
+    ConfederationCreationSessionBlock, ConfederationCreationSessionReport,
+    ConfederationCreationSessionRequest, ConfederationCreationSessionRuntime,
+    ConfederationCreationTerminal,
     CityTransferEffects, CityTransferEndpointBlock,
     CityTransferSessionBlock, CityTransferSessionReport, CityTransferSessionRequest,
     CityTransferSessionRuntime, CityTransferStartBlock, CityTransferStartOutcome,
@@ -440,7 +444,8 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingUnionApplyForJoinOutcome, OrganizingFactionApplicationBlock,
     OrganizingNameCountryBlock, OrganizingNameKind, OrganizingNameLookupBlock,
     OrganizingNameMatch, OrganizingNamedUnionApplicationBlock,
-    OrganizingFactionDoJoinBlock, OrganizingFactionDoJoinOutcome, begin_city_transfer_session,
+    OrganizingFactionDoJoinBlock, OrganizingFactionDoJoinOutcome,
+    begin_city_transfer_session, begin_confederation_creation_session,
     OrganizingUnionDemiseBlock, OrganizingUnionDemiseOutcome,
     OrganizingUnionExitBlock, OrganizingUnionExitOutcome,
     OrganizingUnionFireOutBlock, OrganizingUnionFireOutOutcome,
@@ -564,13 +569,31 @@ pub(crate) struct QueuedCityTransferTerminal {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct QueuedConfederationCreationTerminal {
+    pub(crate) first_player_id: i32,
+    pub(crate) second_player_id: i32,
+    pub(crate) first_faction_id: i32,
+    pub(crate) second_faction_id: i32,
+    pub(crate) union_name: Vec<u8>,
+    pub(crate) terminal: ConfederationCreationTerminal,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum QueuedOrganizingSessionTerminal {
     Union(QueuedUnionApplicationTerminal),
+    ConfederationCreation(QueuedConfederationCreationTerminal),
     CityTransfer(QueuedCityTransferTerminal),
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CityTransferConfirmationDelivery {
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ConfederationCreationConfirmationDelivery {
     pub(crate) recipient_player_id: i32,
     pub(crate) game_server_id: i32,
     pub(crate) result: Result<i32, SendMessageError>,
@@ -583,6 +606,9 @@ struct WorldUnionApplicationRuntimeState {
     blocks: Mutex<VecDeque<UnionApplicationEndpointBlock>>,
     city_confirmations: Mutex<VecDeque<CityTransferConfirmationDelivery>>,
     city_blocks: Mutex<VecDeque<CityTransferEndpointBlock>>,
+    confederation_creation_confirmations:
+        Mutex<VecDeque<ConfederationCreationConfirmationDelivery>>,
+    confederation_creation_blocks: Mutex<VecDeque<ConfederationCreationEndpointBlock>>,
 }
 
 /// Process-lifetime очередь между `CNetSessionManager` и organizing owner-ом.
@@ -616,6 +642,18 @@ impl WorldUnionApplicationRuntimeOwner {
         })
     }
 
+    fn confederation_creation_endpoint(
+        &self,
+        sender: Option<ServerCommandHandle>,
+        game_server_id: i32,
+    ) -> Arc<dyn ConfederationCreationSessionRuntime> {
+        Arc::new(WorldConfederationCreationEndpointRuntime {
+            state: Arc::clone(&self.state),
+            sender,
+            game_server_id,
+        })
+    }
+
     pub(crate) fn pop_terminal(&self) -> Option<QueuedOrganizingSessionTerminal> {
         self.state.terminals.lock().pop_front()
     }
@@ -634,6 +672,26 @@ impl WorldUnionApplicationRuntimeOwner {
 
     pub(crate) fn take_city_blocks(&self) -> Vec<CityTransferEndpointBlock> {
         self.state.city_blocks.lock().drain(..).collect()
+    }
+
+    pub(crate) fn take_confederation_creation_confirmations(
+        &self,
+    ) -> Vec<ConfederationCreationConfirmationDelivery> {
+        self.state
+            .confederation_creation_confirmations
+            .lock()
+            .drain(..)
+            .collect()
+    }
+
+    pub(crate) fn take_confederation_creation_blocks(
+        &self,
+    ) -> Vec<ConfederationCreationEndpointBlock> {
+        self.state
+            .confederation_creation_blocks
+            .lock()
+            .drain(..)
+            .collect()
     }
 }
 
@@ -680,6 +738,63 @@ impl UnionApplicationSessionRuntime for WorldUnionApplicationEndpointRuntime {
 
     fn block_union_application_endpoint(&self, block: UnionApplicationEndpointBlock) {
         self.state.blocks.lock().push_back(block);
+    }
+}
+
+struct WorldConfederationCreationEndpointRuntime {
+    state: Arc<WorldUnionApplicationRuntimeState>,
+    sender: Option<ServerCommandHandle>,
+    game_server_id: i32,
+}
+
+impl ConfederationCreationSessionRuntime for WorldConfederationCreationEndpointRuntime {
+    fn send_confederation_creation_confirmation(
+        &self,
+        recipient_player_id: i32,
+        message: &CMessage,
+    ) {
+        let result = message.send_to_map_id(self.sender.as_ref(), self.game_server_id);
+        self.state
+            .confederation_creation_confirmations
+            .lock()
+            .push_back(ConfederationCreationConfirmationDelivery {
+                recipient_player_id,
+                game_server_id: self.game_server_id,
+                result,
+            });
+    }
+
+    fn finish_confederation_creation(
+        &self,
+        first_player_id: i32,
+        second_player_id: i32,
+        first_faction_id: i32,
+        second_faction_id: i32,
+        union_name: &[u8],
+        terminal: ConfederationCreationTerminal,
+    ) {
+        self.state.terminals.lock().push_back(
+            QueuedOrganizingSessionTerminal::ConfederationCreation(
+                QueuedConfederationCreationTerminal {
+                    first_player_id,
+                    second_player_id,
+                    first_faction_id,
+                    second_faction_id,
+                    union_name: union_name.to_vec(),
+                    terminal,
+                },
+            ),
+        );
+    }
+
+    fn block_confederation_creation_endpoint(
+        &self,
+        block: ConfederationCreationEndpointBlock,
+    ) {
+        self.state
+            .confederation_creation_blocks
+            .lock()
+            .push_back(block);
     }
 }
 
@@ -822,6 +937,38 @@ impl UnionAddFactionEffects for WorldUnionApplicationEffects<'_> {
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
         let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+impl ConfederationCreationEffects for WorldUnionApplicationEffects<'_> {
+    type SessionReport = ConfederationCreationSessionReport;
+    type SessionBlock = ConfederationCreationSessionBlock;
+
+    fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
+        (self.callbacks.world_string)(string_id)
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+
+    fn begin_confederation_creation_session(
+        &mut self,
+        request: ConfederationCreationSessionRequest,
+    ) -> Result<Self::SessionReport, Self::SessionBlock> {
+        let game_server_id = self
+            .game
+            .game_server_number_by_player_id(request.second_player_id);
+        let endpoint = self.runtime.confederation_creation_endpoint(
+            self.game.current_game_server_sender(),
+            game_server_id,
+        );
+        begin_confederation_creation_session(
+            self.manager,
+            request,
+            endpoint,
+            |upper_bound| (self.callbacks.random)(upper_bound),
+        )
     }
 }
 
