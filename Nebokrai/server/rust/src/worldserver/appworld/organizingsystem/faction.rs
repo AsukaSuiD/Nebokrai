@@ -20,6 +20,7 @@
 //! `IsHaveEnymyFaction/IsHaveCityEnemyFaction` RVA `0x000B50F0/0x000B5100`,
 //! `SetSuperiorOrganizing` RVA `0x000B5110`,
 //! `IsOwnedCity` RVA `0x000B5490`, `GetOwnedCities` RVA `0x000BD7D0`,
+//! `AddOwnedCitiesToByteArray` RVA `0x000BDD70`,
 //! `UpdateExpToClient/SetExp` RVA `0x000B55B0/0x000B61F0`,
 //! `OnMemberLvlChange` RVA `0x000B6590`,
 //! базовые query-owner-ы `GetID/GetName/GetMasterID/GetLvl/GetExp/GetCountry`
@@ -101,6 +102,11 @@
 //! очистки он был непустым. Отдельный virtual `IsEnemyFaction` в этой версии
 //! является подтверждённым stub и всегда возвращает `0`; membership дают
 //! другие owner-ы, поэтому эти контракты намеренно не объединены.
+//! Owned-city wire сохраняет list-order: 32-битный count, затем для каждого
+//! узла signed city ID и NUL-terminated region name. Missing key и null
+//! `pRegion` дают пустую строку. Exact ASM подтверждает lookup по текущему city
+//! ID и локальный `char[256]`; переполнение `strcpy` заменено typed-границей,
+//! сохраняя уже дописанный prefix результата.
 //! Experience-update `0x7FE14` получает только contributor либо master и несёт
 //! recipient/current/upgrade exp. `SetExp` ставит dirty-bit до этой рассылки.
 //! Простые query-owner-ы возвращают достигнутые scalar/property/member поля
@@ -616,6 +622,25 @@ pub(crate) enum MemberPositionChangeOutcome {
     Published(Result<MemberUpdateReport, MemberUpdateBuildError>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OwnedCitiesWireBuildError {
+    pub(crate) region_id: i32,
+    pub(crate) byte_len: usize,
+    pub(crate) completed_cities: usize,
+}
+
+impl fmt::Display for OwnedCitiesWireBuildError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "имя региона {} длиной {} байт не помещается в старый char[256]",
+            self.region_id, self.byte_len
+        )
+    }
+}
+
+impl Error for OwnedCitiesWireBuildError {}
+
 /// Ошибка безопасного C-string view одного fixed-поля `tagLeaveWord`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct UnterminatedLeaveWordField {
@@ -1028,6 +1053,35 @@ impl CFaction {
     /// Возвращает исходный list-order `m_OwnedCities`.
     pub(crate) const fn owned_cities(&self) -> &VecDeque<i32> {
         &self.owned_cities
+    }
+
+    /// Дописывает owned-city list вместе с исходными region C-строками.
+    pub(crate) fn add_owned_cities_to_byte_array(
+        &self,
+        game: &CGame,
+        output: &mut Vec<u8>,
+    ) -> Result<bool, OwnedCitiesWireBuildError> {
+        output.extend_from_slice(&(self.owned_cities.len() as u32).to_le_bytes());
+        let mut completed_cities = 0usize;
+        for &region_id in &self.owned_cities {
+            append_i32(output, region_id);
+            let region_name = match game.region_name(region_id) {
+                WorldRegionNameLookup::RegionNotFound
+                | WorldRegionNameLookup::NullRegionPointer => &[][..],
+                WorldRegionNameLookup::Name(name) => name,
+            };
+            if region_name.len() >= 256 {
+                return Err(OwnedCitiesWireBuildError {
+                    region_id,
+                    byte_len: region_name.len(),
+                    completed_cities,
+                });
+            }
+            output.extend_from_slice(region_name);
+            output.push(0);
+            completed_cities += 1;
+        }
+        Ok(true)
     }
 
     /// Возвращает faction ID, только если город есть в исходном list-order.
@@ -3311,7 +3365,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::AddOwnedCitiesToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:404
