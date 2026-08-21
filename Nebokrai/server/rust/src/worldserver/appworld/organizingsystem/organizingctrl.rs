@@ -296,11 +296,12 @@
 //! Exact key-dataflow исправляет повреждённые raw stack-slot имена для обоих
 //! map lookup, `IsControbute` и `GetTitleByID`.
 //!
-//! `CPlayer::AddOwnedRegion` копировал все восемь байт локального `tagOwnedReg`,
-//! хотя PDB задаёт только `long +0` и `unsigned short +4`: два последних байта
-//! не инициализировались и позже наблюдались в player-wire. Rust сохраняет все
-//! предшествующие мутации, но останавливается перед первым таким добавлением с
-//! `BLOCKED_MISSING_FACT`; нули или иное значение padding не выдумываются.
+//! `CPlayer::AddOwnedRegion` exact `0x0045DD10..0x0045DD75` подтверждает
+//! unique-by-region-ID и append-order, но копирует в wire два
+//! неинициализированных stack-padding байта. GameServer поглощает полные
+//! восемь байт и использует только ID/type, поэтому safe Rust сохраняет ABI-
+//! ширину и обнуляет этот внутренний stack leak. Owned city больше не
+//! блокирует достигнутый `SetPlayerOrganizing`.
 //!
 //! Constructor RVA `0x00036C90` создаёт `m_FacOrg` пустым. `CreateFaction` RVA
 //! `0x000381A0` выделяет concrete `CFaction` и сохраняет base-pointer в map, а
@@ -7903,21 +7904,16 @@ impl PlayerOrganizingUpdater for COrganizingPlayerUpdater<'_> {
             )?;
             organizing.enemy_factions = faction.enemy_factions().clone();
             organizing.city_war_enemy_factions = faction.city_war_enemy_factions().clone();
-            organizing.owned_regions.clear();
+            organizing.clear_owned_regions();
 
             for &region_id in faction.owned_cities() {
                 let Some(region_type) = self.region_types.get(&region_id) else {
                     continue;
                 };
-                let Some(_region_type) = *region_type else {
+                let Some(region_type) = *region_type else {
                     return Err(PlayerOrganizingUpdateError::UninitializedRegionType { region_id });
                 };
-                // BLOCKED_MISSING_FACT: AddOwnedRegion RVA `0x0005DD10`
-                // копирует два неинициализированных padding-байта local
-                // tagOwnedReg. Они входят в последующий player-wire.
-                return Err(
-                    PlayerOrganizingUpdateError::UninitializedOwnedRegionPadding { region_id },
-                );
+                organizing.add_owned_region(region_id, region_type);
             }
         }
 

@@ -3,7 +3,9 @@
 //! Статус `CPlayer::GetAccount` RVA `0x00002F90`, `CPlayer::SaveData` RVA
 //! `0x0005B4E0`, `CPlayer::CheckGoodsInPacket` RVA `0x0005BA90`, inherited
 //! `GetName`, reached `ProcessPlayerDataQueue`, `CPlayer::ChangeCountry` RVA
-//! `0x0005EA30`, `CPlayer::UpdateFactionInfo` RVA `0x0005C1D0`
+//! `0x0005EA30`, `CPlayer::UpdateFactionInfo` RVA `0x0005C1D0`,
+//! `CPlayer::ClearOwnedRegion` RVA `0x00033B50` и
+//! `CPlayer::AddOwnedRegion` RVA `0x0005DD10`
 //! accessors для level/friends и inherited `CShape::SetState`,
 //! process-wide `CPlayer::GetNetExID` inline-path в `CUnion::ApplyForJoin`
 //! `0x004C2C51..0x004C2C5E`,
@@ -235,11 +237,15 @@
 //! Положительный faction ID открывает точный порядок logo, `u16` level,
 //! experience, signed force, расширенного до `u32` contribute-флага, двух
 //! ANSI C-строк, трёх signed ID, двух signed-order set и списка регионов.
-//! `tagOwnedReg` PDB задаёт поля `long +0` и `unsigned short +4`, но исходник
-//! копирует все восемь байт; Rust поэтому хранит полный wire-record вместе с
-//! наблюдаемыми двумя padding-байтами. Соседний GameServer
-//! `DecordOrgSysFromByteArray` подтверждает ту же ширину и порядок. STL-tree/
-//! list traversal заменены `BTreeSet<i32>` и `VecDeque` без изменения порядка.
+//! `tagOwnedReg` PDB задаёт поля `long +0` и `unsigned short +4`. Exact
+//! `AddOwnedRegion` `0x0045DD10..0x0045DD75` резервирует восемь stack-байт,
+//! пишет только первые шесть и копирует запись целиком: последние два байта
+//! были утечкой неинициализированного стека, а не gameplay-контрактом.
+//! GameServer `DecordOrgSysFromByteArray` всё равно поглощает восемь байт и
+//! использует только region ID/type. Rust сохраняет ширину wire, но
+//! детерминированно пишет padding нулями; это исправление внутреннего UB без
+//! изменения потребляемой семантики. STL-tree/list traversal заменены
+//! `BTreeSet<i32>` и `VecDeque` без изменения порядка.
 //!
 //! Suffix тех же `AddToByteArray/DecordFromByteArray` от variable-data до
 //! `m_strSessionID` теперь также `IMPLEMENTED`. PDB задаёт signed variable
@@ -739,6 +745,22 @@ pub(crate) struct PlayerPropertyCoefficients {
     pub(crate) int_to_resistant: [f32; 3],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PlayerOwnedRegion {
+    region_id: i32,
+    region_type: u16,
+}
+
+impl PlayerOwnedRegion {
+    /// Сохраняет ABI-ширину `tagOwnedReg`, безопасно обнуляя старый stack leak.
+    fn wire_bytes(self) -> [u8; 8] {
+        let mut wire = [0; 8];
+        wire[..4].copy_from_slice(&self.region_id.to_le_bytes());
+        wire[4..6].copy_from_slice(&self.region_type.to_le_bytes());
+        wire
+    }
+}
+
 /// Достигнутые organization-поля `CPlayer`, обновляемые `SetPlayerOrganizing`.
 pub(crate) struct PlayerOrganizingState {
     pub(crate) faction_id: i32,
@@ -754,8 +776,29 @@ pub(crate) struct PlayerOrganizingState {
     pub(crate) faction_contribute: bool,
     pub(crate) enemy_factions: BTreeSet<i32>,
     pub(crate) city_war_enemy_factions: BTreeSet<i32>,
-    /// Полные восемь wire-байт `tagOwnedReg`, включая наблюдаемый padding.
-    pub(crate) owned_regions: VecDeque<[u8; 8]>,
+    owned_regions: VecDeque<PlayerOwnedRegion>,
+}
+
+impl PlayerOrganizingState {
+    /// Exact `CPlayer::ClearOwnedRegion` над safe Rust-owner-ом списка.
+    pub(crate) fn clear_owned_regions(&mut self) {
+        self.owned_regions.clear();
+    }
+
+    /// Exact unique-by-region-ID insertion `CPlayer::AddOwnedRegion`.
+    pub(crate) fn add_owned_region(&mut self, region_id: i32, region_type: u16) {
+        if self
+            .owned_regions
+            .iter()
+            .any(|owned_region| owned_region.region_id == region_id)
+        {
+            return;
+        }
+        self.owned_regions.push_back(PlayerOwnedRegion {
+            region_id,
+            region_type,
+        });
+    }
 }
 
 /// Safe-границы точного `COrganizingCtrl::SetPlayerOrganizing`.
@@ -776,9 +819,6 @@ pub(crate) enum PlayerOrganizingUpdateError {
         player_id: i32,
     },
     UninitializedRegionType {
-        region_id: i32,
-    },
-    UninitializedOwnedRegionPadding {
         region_id: i32,
     },
 }
@@ -808,10 +848,6 @@ impl fmt::Display for PlayerOrganizingUpdateError {
             Self::UninitializedRegionType { region_id } => write!(
                 formatter,
                 "регион {region_id} не материализовал REGION_TYPE до SetPlayerOrganizing"
-            ),
-            Self::UninitializedOwnedRegionPadding { region_id } => write!(
-                formatter,
-                "для owned-региона {region_id} неизвестны два наблюдаемых padding-байта tagOwnedReg"
             ),
         }
     }
@@ -1629,7 +1665,7 @@ impl CPlayer {
         // Исходник оставлял stale owned-region list при переходе во free
         // player, но serializer при faction ID `0` её никогда не читал.
         // Это внутренний lifecycle-дефект без внешнего контракта.
-        self.organizing.owned_regions.clear();
+        self.organizing.clear_owned_regions();
 
         self.set_player_organizing(context)
             .map_err(PlayerFactionInfoUpdateBlock::InitialOrganizing)?;
@@ -2360,8 +2396,8 @@ impl CPlayer {
             "m_OwnedRegions",
             organizing.owned_regions.len(),
         )?;
-        for owned_region in &organizing.owned_regions {
-            destination.extend_from_slice(owned_region);
+        for &owned_region in &organizing.owned_regions {
+            destination.extend_from_slice(&owned_region.wire_bytes());
         }
         Ok(true)
     }
@@ -2866,7 +2902,7 @@ fn read_player_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CPlayer::ClearOwnedRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.h:533
@@ -2874,6 +2910,8 @@ fn read_player_array<const N: usize>(
 // ADDRESS: 00433b50
 // PROTOTYPE: void __thiscall ClearOwnedRegion(void)
 //
+// IMPLEMENTED_OWNER: `PlayerOrganizingState::clear_owned_regions` выше
+// делегирует exact clear безопасному `VecDeque` owner-у.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -3083,7 +3121,7 @@ fn read_player_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CPlayer::AddOwnedRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:758
@@ -3091,6 +3129,9 @@ fn read_player_array<const N: usize>(
 // ADDRESS: 0045dd10
 // PROTOTYPE: void __thiscall AddOwnedRegion(long param_1, ushort param_2)
 //
+// IMPLEMENTED_OWNER: `PlayerOrganizingState::add_owned_region` выше сохраняет
+// unique-by-region-ID и append-order. Wire padding детерминированно обнулён:
+// exact `0x0045DD18..0x0045DD57` подтверждает исходный stack leak.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
