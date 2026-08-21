@@ -986,6 +986,9 @@ use crate::worldserver::appworld::leiting::{
 use crate::worldserver::appworld::message::othermessage::{
     WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
 };
+use crate::worldserver::appworld::message::countrymessage::{
+    WorldCountryMessageDispatch, WorldCountryRelayOutcome, on_country_message,
+};
 use crate::worldserver::appworld::message::playermessage::{
     WorldPlayerMessageDispatch, WorldPlayerMessageOutcome, on_player_message,
 };
@@ -1942,6 +1945,11 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: WorldPlayerMessageOutcome,
+    },
+    CountryMessage {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: WorldCountryRelayOutcome,
     },
     OrganizingSessionResult {
         source: WorldMessageSource,
@@ -8365,7 +8373,8 @@ impl CGame {
     /// заново читается текущий Login client и фиксируется его число сообщений.
     /// Поэтому typed reconnect из первой очереди заменяет owner до второго
     /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
-    /// ветви server-owner-а, player relay `0x5FC01..0x5FC04`, honor
+    /// ветви server-owner-а, player relay `0x5FC01..0x5FC04`, country relay
+    /// `0x60310/0x60311`, honor
     /// `0x5FD0C/0x5FD0D`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
@@ -11423,6 +11432,19 @@ fn process_world_message<TimerCallback: Copy>(
                 };
             }
             WorldOtherMessageDispatch::Pending(pending) => message = pending,
+        }
+    }
+
+    if selector.owner == Some(WorldMessageOwner::Country) {
+        match on_country_message(game, message) {
+            WorldCountryMessageDispatch::Handled(outcome) => {
+                return ProcessedWorldEvent::CountryMessage {
+                    source,
+                    legacy_run_result,
+                    outcome,
+                };
+            }
+            WorldCountryMessageDispatch::Pending(pending) => message = pending,
         }
     }
 
