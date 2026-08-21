@@ -237,6 +237,14 @@ impl COrganizingParam {
         self.attack_city_minimum_level
     }
 
+    pub(crate) const fn disband_faction_minimum_members(&self) -> i32 {
+        self.disband_faction_minimum_members
+    }
+
+    pub(crate) const fn disband_faction_minutes(&self) -> i32 {
+        self.disband_faction_minutes
+    }
+
     pub(crate) const fn latest_tax_event_id(&self) -> Option<TimerId> {
         self.latest_tax_event_id
     }

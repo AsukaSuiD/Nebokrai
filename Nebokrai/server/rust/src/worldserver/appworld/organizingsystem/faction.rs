@@ -10,7 +10,11 @@
 //! `CFaction::IsMember` RVA `0x000BD840` и
 //! `UpdateMemberInfoToClient` RVA `0x000BA7C0`, а также
 //! `OnMemberExitGame` RVA `0x000B64D0`,
-//! `InitialPropertyByLvl` RVA `0x000B4BA0` и
+//! `InitialPropertyByLvl` RVA `0x000B4BA0`,
+//! `IsHaveEnymyFaction/IsHaveCityEnemyFaction` RVA `0x000B50F0/0x000B5100`,
+//! `SetSuperiorOrganizing` RVA `0x000B5110`,
+//! `IsOwnedCity` RVA `0x000B5490`, `GetOwnedCities` RVA `0x000BD7D0`,
+//! `IsSuperiorOrganizing` RVA `0x000BD780`, `IsMaster` RVA `0x000C1EE0` и
 //! `OnMemberEnterGame` RVA `0x000C0A10` — `IMPLEMENTED`; спорные ключи lookup
 //! имеют статус `VERIFIED_DISASSEMBLY`.
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
@@ -35,6 +39,11 @@
 //! upgrade experience — только после неё. Поэтому отсутствующий уровень
 //! сохраняет уже выполненный prefix и возвращает старый `false`; отсутствующий
 //! live property остаётся отдельной safe-границей узкого Rust-owner-а.
+//! `SetSuperiorOrganizing` так же принимает параметры явно. Машинный проход
+//! `0x004B5110..0x004B5167` подтверждает, что union ID меняется первым, positive
+//! ID только отменяет положительный countdown, а negative/zero ID сравнивает
+//! member-count с порогом через unsigned `JNC`. При неполном live-state уже
+//! выполненная смена union ID не откатывается.
 //! Достигнутый `SetPlayerOrganizing` дополнительно читает `m_strName`,
 //! `m_lMastterID`, `m_Property.lLvl/lExp`, `m_OwnedCities` и два enemy-set.
 //! Коллекции, которые constructor действительно создавал пустыми, хранятся
@@ -281,6 +290,12 @@ pub(crate) enum FactionCloneSaveBlock {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FactionInitialPropertyBlock;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionSuperiorOrganizingBlock {
+    MissingBaseProperty,
+    DeleteRemainTimeAbsent,
+}
 
 /// Результат одной исходно игнорировавшейся отправки member-update.
 #[derive(Debug, Eq, PartialEq)]
@@ -578,14 +593,85 @@ impl CFaction {
         &self.owned_cities
     }
 
+    /// Возвращает faction ID, только если город есть в исходном list-order.
+    pub(crate) fn is_owned_city(&self, region_id: i32) -> i32 {
+        if self.owned_cities.contains(&region_id) {
+            self.faction_id
+        } else {
+            0
+        }
+    }
+
+    /// Возвращает faction ID только для текущего `m_lMastterID`.
+    pub(crate) const fn is_master(&self, player_id: i32) -> i32 {
+        match self.master_id {
+            Some(master_id) if master_id == player_id => self.faction_id,
+            Some(_) | None => 0,
+        }
+    }
+
     /// Возвращает копируемый `m_EnemyFactions` в signed key-order.
     pub(crate) const fn enemy_factions(&self) -> &BTreeSet<i32> {
         &self.enemy_factions
     }
 
+    /// Сохраняет exact `set::_Mysize != 0` без зависимости от MSVC layout.
+    pub(crate) fn has_enemy_faction(&self) -> bool {
+        !self.enemy_factions.is_empty()
+    }
+
     /// Возвращает копируемый `m_CityWarEnemyFactions` в signed key-order.
     pub(crate) const fn city_war_enemy_factions(&self) -> &BTreeSet<i32> {
         &self.city_war_enemy_factions
+    }
+
+    /// Сохраняет exact `set::_Mysize != 0` для city-war enemy-set.
+    pub(crate) fn has_city_war_enemy_faction(&self) -> bool {
+        !self.city_war_enemy_factions.is_empty()
+    }
+
+    /// Возвращает достигнутый `m_Property.lConfederationID`.
+    pub(crate) const fn superior_organizing(&self) -> Option<i32> {
+        match self.base_property {
+            Some(property) => Some(property.union_id()),
+            None => None,
+        }
+    }
+
+    /// Назначает union ID и поддерживает исходный countdown роспуска.
+    pub(crate) fn set_superior_organizing(
+        &mut self,
+        organizing_id: i32,
+        parameters: &COrganizingParam,
+    ) -> Result<(), FactionSuperiorOrganizingBlock> {
+        let property = self
+            .base_property
+            .as_mut()
+            .ok_or(FactionSuperiorOrganizingBlock::MissingBaseProperty)?;
+        if property.union_id() != organizing_id {
+            property.write_signed(0x18, organizing_id);
+        }
+
+        if organizing_id < 1 {
+            let member_count = self.members.len() as u32;
+            let minimum_members = parameters.disband_faction_minimum_members() as u32;
+            if member_count < minimum_members {
+                let delete_remain_time = self
+                    .delete_remain_time
+                    .ok_or(FactionSuperiorOrganizingBlock::DeleteRemainTimeAbsent)?;
+                if delete_remain_time < 0 {
+                    self.delete_remain_time = Some(parameters.disband_faction_minutes());
+                }
+            }
+        } else {
+            let delete_remain_time = self
+                .delete_remain_time
+                .ok_or(FactionSuperiorOrganizingBlock::DeleteRemainTimeAbsent)?;
+            if delete_remain_time > 0 {
+                self.delete_remain_time = Some(-1);
+            }
+        }
+        Ok(())
     }
 
     /// Возвращает member-title без завершающего NUL либо старую overread-границу.
@@ -1144,7 +1230,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::IsHaveEnymyFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:637
@@ -1158,7 +1244,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::IsHaveCityEnemyFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:644
@@ -1172,7 +1258,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetSuperiorOrganizing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1260
@@ -1186,7 +1272,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::IsOwnedCity
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:456
@@ -2208,7 +2294,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::IsSuperiorOrganizing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:192
@@ -2264,7 +2350,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetOwnedCities
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:252
@@ -2728,7 +2814,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::IsMaster
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:178
