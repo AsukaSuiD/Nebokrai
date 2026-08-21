@@ -4,7 +4,7 @@
 //! внутрипроцессного события `0x3FC03`,
 //! регистрации GameServer и reconnect player-data хвоста в `0x5FA01`,
 //! snapshot/cleanup хвоста `0x5FA03`, обычных opcode `0x4FC01..=0x4FC03`,
-//! `0x5FA06`, `0x5FA07` и `0x5FA0A..=0x5FA0D` из
+//! `0x5FA06`, `0x5FA07`, `0x5FA09` и `0x5FA0A..=0x5FA0D` из
 //! `OnServerMessage` RVA `0x000ADCF0`;
 //! остальные ветви остаются `UNKNOWN` (исследовательский декомпилят хранится локально) ниже. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
@@ -195,6 +195,17 @@
 //! total tax, today total tax и owned faction. Отсутствующие map/region owner-ы
 //! и короткий payload выражены typed-результатом без выдуманной мутации.
 //!
+//! `0x5FA09` сохраняет три subtype-а синхронизации player-data. `0` читает
+//! declared online count, сбрасывает найденный GameServer counter и достигает
+//! operator-log; `1` сначала wrapping-увеличивает уже инициализированный
+//! counter, затем читает player ID и декодирует существующего либо нового
+//! `CPlayer`; новый owner заменяет запись по decoded ID, но не попадает в
+//! offline-list. `2` читает declared sent count и достигает итогового log с
+//! фактическим counter. Неизвестный subtype только потребляет selector.
+//! Неинициализированный loader-ом counter остаётся `Uninitialized`, а не
+//! получает выдуманное значение; player decode после него всё равно идёт в
+//! исходном порядке и сохраняет независимые доказанные эффекты.
+//!
 //! Reached хвост `0x5FA03` после равенства response-count сначала уже сбросил
 //! `m_nDBResponsed`, затем выполняет полный `GenerateDBData` и строго
 //! `ClearMapPlayerForOffline -> ClearRestorePlayer -> ClearCreationPlayer ->
@@ -281,8 +292,9 @@ use crate::worldserver::worldserver::game::{
     WorldGenerateDbDataBlock, WorldGenerateDbDataReport, WorldGlobeVariablesDelivery,
     WorldInitialRegionSnapshot, WorldInitialRegionSnapshotBlock, WorldInitialRegionSnapshotKind,
     WorldOnlinePlayerAppendOutcome, WorldPingGameServerInfo, WorldReconnectedPlayerDecode,
-    WorldRegionParamDecodeOutcome, WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest,
-    prepare_save_thread_launch,
+    WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate, WorldRegionParamDecodeOutcome,
+    WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest, WorldServerSnapshotPlayerDecode,
+    WorldServerSnapshotPlayerOwner, prepare_save_thread_launch,
 };
 use crate::worldserver::worldserver::honorranks::{CHonorRanks, HonorRanksSerializationBlock};
 use crate::worldserver::worldserver::playerranks::{
@@ -328,6 +340,7 @@ pub(crate) enum WorldServerMessageOutcome {
     LoginServerIdentityAssigned(WorldLoginServerIdentity),
     MurderReported(WorldMurderReport),
     OpaqueFieldsRead(WorldOpaqueServerFields),
+    PlayerDataSynchronized(WorldPlayerDataSync),
     RegionParametersUpdated(WorldRegionParameterUpdate),
     RegionMessageRelayed(WorldRegionMessageRelay),
 }
@@ -364,6 +377,41 @@ pub(crate) struct WorldRegionParameterUpdate {
     pub(crate) cursor_before_decode: usize,
     pub(crate) cursor_after_decode: usize,
     pub(crate) outcome: WorldRegionParamDecodeOutcome,
+}
+
+/// Наблюдаемый итог одного subtype-а player-data sync `0x5FA09`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerDataSync {
+    pub(crate) subtype: i8,
+    pub(crate) subtype_complete: bool,
+    pub(crate) game_server_index: i32,
+    pub(crate) disposition: WorldPlayerDataSyncDisposition,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WorldPlayerDataSyncDisposition {
+    Started {
+        declared_online_players: i32,
+        payload_complete: bool,
+        counter: WorldReceivedPlayerDataUpdate,
+        operator_notice: bool,
+    },
+    Player {
+        counter: WorldReceivedPlayerDataUpdate,
+        requested_player_id: i32,
+        player_id_complete: bool,
+        cursor_before_decode: usize,
+        cursor_after_decode: usize,
+        decoded: Result<WorldServerSnapshotPlayerDecode, PlayerCodecError>,
+        missing_player_notice: bool,
+    },
+    Finished {
+        declared_sent_players: i32,
+        payload_complete: bool,
+        received_players: WorldReceivedPlayerDataRead,
+        operator_notice: bool,
+    },
+    Ignored,
 }
 
 /// Следующая точная позиция ветки `0x5FA01` после достигнутой начальной части.
@@ -1326,6 +1374,8 @@ pub(crate) fn materialize_completed_save_response_snapshot(
 pub(crate) fn on_server_message(
     game: &mut CGame,
     mut message: CMessage,
+    registry: &GoodsBasePropertiesRegistry,
+    coefficients: &PlayerPropertyCoefficients,
 ) -> WorldServerMessageDispatch {
     match message.message_type() {
         0x0004_FC01 => {
@@ -1418,6 +1468,77 @@ pub(crate) fn on_server_message(
                     cursor_before_decode,
                     cursor_after_decode,
                     outcome,
+                }),
+            )
+        }
+        0x0005_FA09 => {
+            let decoded_subtype = message.base_mut().get_char();
+            let subtype = decoded_subtype.unwrap_or(0);
+            let game_server_index = message.map_id();
+            let disposition = match subtype {
+                0 => {
+                    let decoded_count = message.base_mut().get_long();
+                    let declared_online_players = decoded_count.unwrap_or(0);
+                    let counter = game.reset_received_player_data(game_server_index);
+                    WorldPlayerDataSyncDisposition::Started {
+                        declared_online_players,
+                        payload_complete: decoded_count.is_some(),
+                        counter,
+                        operator_notice: true,
+                    }
+                }
+                1 => {
+                    let counter = game.increment_received_player_data(game_server_index);
+                    let decoded_player_id = message.base_mut().get_long();
+                    let requested_player_id = decoded_player_id.unwrap_or(0);
+                    let cursor_before_decode = message.base_mut().cursor();
+                    let decoded = {
+                        let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                        game.decord_server_snapshot_player(
+                            requested_player_id as u32,
+                            source,
+                            cursor,
+                            registry,
+                            coefficients,
+                        )
+                    };
+                    let cursor_after_decode = message.base_mut().cursor();
+                    let missing_player_notice = matches!(
+                        &decoded,
+                        Ok(player) if matches!(
+                            player.owner,
+                            WorldServerSnapshotPlayerOwner::Created { .. }
+                        )
+                    );
+                    WorldPlayerDataSyncDisposition::Player {
+                        counter,
+                        requested_player_id,
+                        player_id_complete: decoded_player_id.is_some(),
+                        cursor_before_decode,
+                        cursor_after_decode,
+                        decoded,
+                        missing_player_notice,
+                    }
+                }
+                2 => {
+                    let decoded_count = message.base_mut().get_long();
+                    let declared_sent_players = decoded_count.unwrap_or(0);
+                    let received_players = game.received_player_data(game_server_index);
+                    WorldPlayerDataSyncDisposition::Finished {
+                        declared_sent_players,
+                        payload_complete: decoded_count.is_some(),
+                        received_players,
+                        operator_notice: true,
+                    }
+                }
+                _ => WorldPlayerDataSyncDisposition::Ignored,
+            };
+            WorldServerMessageDispatch::Handled(
+                WorldServerMessageOutcome::PlayerDataSynchronized(WorldPlayerDataSync {
+                    subtype,
+                    subtype_complete: decoded_subtype.is_some(),
+                    game_server_index,
+                    disposition,
                 }),
             )
         }

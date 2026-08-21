@@ -1798,6 +1798,23 @@ pub(crate) struct WorldReconnectedPlayerDecode {
     pub(crate) owner: WorldReconnectedPlayerOwner,
 }
 
+/// Владение player после subtype `1` server-снимка `0x5FA09`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldServerSnapshotPlayerOwner {
+    Existing,
+    Created {
+        replaced_existing_decoded_id: bool,
+    },
+}
+
+/// Итог полного player decode из обычной ветки `0x5FA09/1`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldServerSnapshotPlayerDecode {
+    pub(crate) requested_player_id: u32,
+    pub(crate) decoded_player_id: i32,
+    pub(crate) owner: WorldServerSnapshotPlayerOwner,
+}
+
 /// Итог `list::remove` online-ID и следующего organizing exit callback-а.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldOnlinePlayerRemoveOutcome {
@@ -4728,6 +4745,25 @@ pub(crate) struct WorldGameServerEntry {
     pub(crate) ip: Vec<u8>,
     pub(crate) port: Option<u32>,
     pub(crate) received_player_data: Option<i32>,
+}
+
+/// Изменение `tagGameServer::lReceivedPlayerData` при subtype `0/1`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldReceivedPlayerDataUpdate {
+    GameServerNotFound,
+    Uninitialized,
+    Updated {
+        previous: Option<i32>,
+        current: i32,
+    },
+}
+
+/// Чтение `lReceivedPlayerData` для итогового subtype `2`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldReceivedPlayerDataRead {
+    GameServerNotFound { legacy_value: i32 },
+    Uninitialized,
+    Value(i32),
 }
 
 /// Точный переход состояния `tagGameServer::bConnected = true` из `0x5FA01`.
@@ -8436,7 +8472,7 @@ impl CGame {
     /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, other
     /// transport/cursor `0x5FD02/0x5FD06..0x5FD09/0x5FD0E`, copy-number
     /// `0x5FD0B`, LeiTing update `0x5FD10`, honor
-    /// `0x5FD0C/0x5FD0D`, server `0x5FA06/0x5FA07`, organizing session
+    /// `0x5FD0C/0x5FD0D`, server `0x5FA06/0x5FA07/0x5FA09`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
     /// войны `0x6011E`, само объявление `0x6011F`, общий leaf
@@ -10575,6 +10611,54 @@ impl CGame {
         self.game_servers.get(&index)
     }
 
+    /// Сбрасывает received-player counter найденного GameServer в ноль.
+    pub(crate) fn reset_received_player_data(
+        &mut self,
+        game_server_index: i32,
+    ) -> WorldReceivedPlayerDataUpdate {
+        let Some(game_server) = self.game_servers.get_mut(&(game_server_index as u32)) else {
+            return WorldReceivedPlayerDataUpdate::GameServerNotFound;
+        };
+        let previous = game_server.received_player_data.replace(0);
+        WorldReceivedPlayerDataUpdate::Updated {
+            previous,
+            current: 0,
+        }
+    }
+
+    /// Выполняет native signed increment только после доказанной инициализации.
+    pub(crate) fn increment_received_player_data(
+        &mut self,
+        game_server_index: i32,
+    ) -> WorldReceivedPlayerDataUpdate {
+        let Some(game_server) = self.game_servers.get_mut(&(game_server_index as u32)) else {
+            return WorldReceivedPlayerDataUpdate::GameServerNotFound;
+        };
+        let Some(previous) = game_server.received_player_data else {
+            return WorldReceivedPlayerDataUpdate::Uninitialized;
+        };
+        let current = previous.wrapping_add(1);
+        game_server.received_player_data = Some(current);
+        WorldReceivedPlayerDataUpdate::Updated {
+            previous: Some(previous),
+            current,
+        }
+    }
+
+    /// Возвращает exact counter; отсутствие map-entry сохраняет local-ноль EXE.
+    pub(crate) fn received_player_data(
+        &self,
+        game_server_index: i32,
+    ) -> WorldReceivedPlayerDataRead {
+        let Some(game_server) = self.game_servers.get(&(game_server_index as u32)) else {
+            return WorldReceivedPlayerDataRead::GameServerNotFound { legacy_value: 0 };
+        };
+        game_server.received_player_data.map_or(
+            WorldReceivedPlayerDataRead::Uninitialized,
+            WorldReceivedPlayerDataRead::Value,
+        )
+    }
+
     /// Читает `bConnected`, сохраняя bit-pattern signed Windows `long` ключа.
     pub(crate) fn is_game_server_connected(&self, server_number: i32) -> bool {
         self.game_server(server_number as u32)
@@ -10825,6 +10909,39 @@ impl CGame {
             owner: WorldReconnectedPlayerOwner::Created {
                 replaced_existing_decoded_id,
                 offline_inserted,
+            },
+        })
+    }
+
+    /// Декодирует обычный `0x5FA09/1` snapshot без reconnect offline-эффекта.
+    pub(crate) fn decord_server_snapshot_player(
+        &mut self,
+        requested_player_id: u32,
+        source: &[u8],
+        cursor: &mut usize,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<WorldServerSnapshotPlayerDecode, PlayerCodecError> {
+        if let Some(player) = self.players.get_mut(&requested_player_id) {
+            let _ = player.decord_from_byte_array(source, cursor, true, registry, coefficients)?;
+            return Ok(WorldServerSnapshotPlayerDecode {
+                requested_player_id,
+                decoded_player_id: player.get_id(),
+                owner: WorldServerSnapshotPlayerOwner::Existing,
+            });
+        }
+
+        let mut player = Box::new(CPlayer::with_clone_decode_constructor_state());
+        let _ = player.decord_from_byte_array(source, cursor, true, registry, coefficients)?;
+        let decoded_player_id = player.get_id();
+        let decoded_key = decoded_player_id as u32;
+        let replaced_existing_decoded_id = self.players.remove(&decoded_key).is_some();
+        self.players.insert(decoded_key, player);
+        Ok(WorldServerSnapshotPlayerDecode {
+            requested_player_id,
+            decoded_player_id,
+            owner: WorldServerSnapshotPlayerOwner::Created {
+                replaced_existing_decoded_id,
             },
         })
     }
@@ -11680,7 +11797,7 @@ async fn process_world_message<TimerCallback: Copy>(
     let legacy_run_result = message.run(&mut selector);
 
     if selector.owner == Some(WorldMessageOwner::Server) {
-        match on_server_message(game, message) {
+        match on_server_message(game, message, registry, coefficients) {
             WorldServerMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::ServerMessage {
                     source,
