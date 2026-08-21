@@ -12,11 +12,15 @@
 //! оба `CheckOperValidate` RVA `0x000B4CE0/0x000C17F0`,
 //! `OnMemberExitGame` RVA `0x000B64D0`,
 //! `InitialPropertyByLvl` RVA `0x000B4BA0`,
+//! `AddEnemyFactionsToByteArray/AddCityWarEnemyFactionsToByteArray` RVA
+//! `0x000B5E40/0x000B5ED0`,
 //! `IsHaveEnymyFaction/IsHaveCityEnemyFaction` RVA `0x000B50F0/0x000B5100`,
 //! `SetSuperiorOrganizing` RVA `0x000B5110`,
 //! `IsOwnedCity` RVA `0x000B5490`, `GetOwnedCities` RVA `0x000BD7D0`,
 //! `DelMember` RVA `0x000B9EF0`,
 //! `UpdatePropertyToClient` RVA `0x000B9FB0`,
+//! `UpdateEnemyFactionToClient/UpdateCityWarEnemyFactionToClient` RVA
+//! `0x000BA0F0/0x000BA210`,
 //! `AddDefence/Offense/VillageWarVictorCounts` RVA
 //! `0x000BA3B0/0x000BA3D0/0x000BA3F0`,
 //! `ReInitialPropertyByLvl` RVA `0x000BA630`,
@@ -68,6 +72,9 @@
 //! Трёхаргументный `CheckOperValidate` проверяет право requester и запрещает
 //! ему управлять target с тем же правом, кроме случая requester-master; exact
 //! ASM подтверждает, что финальный `IsMaster` получает requester.
+//! Enemy-update сообщения передают полный set, а не delta: `0x7FE11/0x7FE12`,
+//! recipient ID, 32-битный count и signed IDs в tree-order. Объявленные
+//! `enemy_id/operator` исходные функции не читали и в Rust-интерфейс не входят.
 //! Достигнутый `SetPlayerOrganizing` дополнительно читает `m_strName`,
 //! `m_lMastterID`, `m_Property.lLvl/lExp`, `m_OwnedCities` и два enemy-set.
 //! Коллекции, которые constructor действительно создавал пустыми, хранятся
@@ -358,6 +365,20 @@ pub(crate) struct FactionPropertyDelivery {
     pub(crate) recipient_player_id: i32,
     pub(crate) game_server_id: i32,
     pub(crate) result: Result<i32, SendMessageError>,
+}
+
+/// Результат одной исходно игнорировавшейся отправки enemy-set.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionEnemyDelivery {
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Clone, Copy)]
+enum EnemyFactionSetKind {
+    Standard,
+    CityWar,
 }
 
 /// Полный результат `CFaction::ReInitialPropertyByLvl` после safe-границ.
@@ -775,6 +796,66 @@ impl CFaction {
     /// Сохраняет exact `set::_Mysize != 0` для city-war enemy-set.
     pub(crate) fn has_city_war_enemy_faction(&self) -> bool {
         !self.city_war_enemy_factions.is_empty()
+    }
+
+    /// Дописывает полный standard enemy-set в исходном wire-формате.
+    pub(crate) fn add_enemy_factions_to_byte_array(&self, output: &mut Vec<u8>) -> bool {
+        append_signed_set(output, &self.enemy_factions);
+        true
+    }
+
+    /// Дописывает полный city-war enemy-set в исходном wire-формате.
+    pub(crate) fn add_city_war_enemy_factions_to_byte_array(
+        &self,
+        output: &mut Vec<u8>,
+    ) -> bool {
+        append_signed_set(output, &self.city_war_enemy_factions);
+        true
+    }
+
+    fn update_enemy_set_to_client(
+        &self,
+        game: &CGame,
+        kind: EnemyFactionSetKind,
+    ) -> Vec<FactionEnemyDelivery> {
+        let (message_type, enemy_factions) = match kind {
+            EnemyFactionSetKind::Standard => (0x7FE11, &self.enemy_factions),
+            EnemyFactionSetKind::CityWar => (0x7FE12, &self.city_war_enemy_factions),
+        };
+        let mut deliveries = Vec::new();
+        for &recipient_player_id in self.members.keys() {
+            let player = game.online_player_by_id(recipient_player_id as u32);
+            let game_server_id = game.game_server_number_by_player_id(recipient_player_id);
+            if player.is_none_or(|player| !player.faction_data_received()) || game_server_id == 0 {
+                continue;
+            }
+
+            let mut message = CMessage::new(message_type);
+            message.base_mut().add_long(recipient_player_id);
+            let mut serialized_set = Vec::new();
+            append_signed_set(&mut serialized_set, enemy_factions);
+            message.base_mut().add(&serialized_set);
+            deliveries.push(FactionEnemyDelivery {
+                recipient_player_id,
+                game_server_id,
+                result: game.send_msg_to_game_server(game_server_id, &message),
+            });
+        }
+        deliveries
+    }
+
+    pub(crate) fn update_enemy_factions_to_client(
+        &self,
+        game: &CGame,
+    ) -> Vec<FactionEnemyDelivery> {
+        self.update_enemy_set_to_client(game, EnemyFactionSetKind::Standard)
+    }
+
+    pub(crate) fn update_city_war_enemy_factions_to_client(
+        &self,
+        game: &CGame,
+    ) -> Vec<FactionEnemyDelivery> {
+        self.update_enemy_set_to_client(game, EnemyFactionSetKind::CityWar)
     }
 
     /// Возвращает достигнутый `m_Property.lConfederationID`.
@@ -1382,6 +1463,13 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
     output.extend_from_slice(&value.to_le_bytes());
 }
 
+fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
+    output.extend_from_slice(&(values.len() as u32).to_le_bytes());
+    for &value in values {
+        append_i32(output, value);
+    }
+}
+
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
@@ -1715,7 +1803,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::AddEnemyFactionsToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:423
@@ -1729,7 +1817,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::AddCityWarEnemyFactionsToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:435
@@ -2149,7 +2237,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::UpdateEnemyFactionToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2659
@@ -2163,7 +2251,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::UpdateCityWarEnemyFactionToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2681
