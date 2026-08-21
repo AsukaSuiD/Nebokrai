@@ -206,10 +206,11 @@
 //! virtual deleting destructor, а два wrapping millisecond аккумулятора
 //! сохраняют `g_lGSMessageTime/g_lLSMessageTime`. Обычный `CMessage::Run`
 //! выполняет точный numeric selector; готовые ветви server-owner
-//! `0x4FC01..=0x4FC03`, other honor и organizing session-result
-//! `0x60120/0x60122/0x60124` исполняются сразу, а остальные сообщения
-//! возвращаются owned вместе с выбранным сырым owner-ом и не выдаются за no-op
-//! исполнение. Session manager передаётся тому же `ProcessMessage` явно вместо
+//! `0x4FC01..=0x4FC03`, other honor, достигнутые organizing owner-ы вплоть до
+//! billboard `0x60125` и faction upgrade `0x60126` исполняются сразу, а
+//! остальные сообщения возвращаются owned вместе с выбранным сырым owner-ом
+//! и не выдаются за no-op исполнение. Session manager передаётся тому же
+//! `ProcessMessage` явно вместо
 //! process-global singleton-а; cookie/result и terminal removal остаются у
 //! уже восстановленного manager-owner-а.
 //! Внешний MainLoop call-site теперь также готов: отдельный tick снимается до
@@ -966,7 +967,9 @@ use crate::worldserver::appworld::country::country::{CCountry, CountryKingSaveLi
 use crate::worldserver::appworld::country::countryhandler::{
     CCountryHandler, CountryRunBlock, CountryRunReport,
 };
-use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
+use crate::worldserver::appworld::goods::cgoodsfactory::{
+    GoodsBasePropertiesRegistry, GoodsOriginalNameIndex,
+};
 use crate::worldserver::appworld::jjcsystem::{
     CJJcSystem, JjcRunBlock, JjcRunConfig, JjcRunContext, JjcRunReport,
 };
@@ -980,7 +983,8 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingConsumedLongDispatch, OrganizingDeclareFactionWarBlock,
     OrganizingDeclareFactionWarDispatch, OrganizingDeclareWarFactionListBlock,
     OrganizingDeclareWarFactionListDispatch, OrganizingFactionBillboardBlock,
-    OrganizingFactionBillboardOutcome, OrganizingLeaveWordDispatch,
+    OrganizingFactionBillboardOutcome, OrganizingFactionUpgradeBlock,
+    OrganizingFactionUpgradeDispatch, OrganizingLeaveWordDispatch,
     OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEnableDispatch,
     OrganizingPronounceDispatch, OrganizingSessionResultDispatch,
     OrganizingUnionApplicationDispatch,
@@ -988,8 +992,8 @@ use crate::worldserver::appworld::message::organsysmessage::{
     UnionApplicationConfirmationDelivery,
     WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects,
     WorldUnionApplicationRuntimeOwner, dispatch_consumed_long, dispatch_declare_faction_war,
-    dispatch_declare_war_faction_list, dispatch_faction_billboard, dispatch_leave_word,
-    dispatch_leave_word_edit,
+    dispatch_declare_war_faction_list, dispatch_faction_billboard, dispatch_faction_upgrade,
+    dispatch_leave_word, dispatch_leave_word_edit,
     dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_pronounce,
     dispatch_union_application,
 };
@@ -1909,6 +1913,12 @@ pub(crate) enum ProcessedWorldEvent {
         outcome: Result<OrganizingFactionBillboardOutcome, OrganizingFactionBillboardBlock>,
         runtime: WorldUnionApplicationRuntimeReport,
     },
+    OrganizingFactionUpgrade {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<OrganizingFactionUpgradeDispatch, OrganizingFactionUpgradeBlock>,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
     OrganizingUnionApplication {
         source: WorldMessageSource,
         legacy_run_result: i32,
@@ -2508,6 +2518,7 @@ pub(crate) struct WorldMainLoopOwners<
     TeamOwner,
 > {
     pub(crate) registry: &'a GoodsBasePropertiesRegistry,
+    pub(crate) original_name_index: &'a GoodsOriginalNameIndex,
     pub(crate) coefficients: &'a PlayerPropertyCoefficients,
     pub(crate) organizing: &'a mut COrganizingCtrl,
     pub(crate) country: &'a mut CCountryHandler,
@@ -2554,6 +2565,9 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     pub(crate) put_union_war_log: &'a mut dyn FnMut(&[u8]),
     pub(crate) refresh_union_owned_city: &'a mut dyn FnMut(i32, i32, i32),
     pub(crate) update_union_player: &'a mut dyn FnMut(i32),
+    pub(crate) faction_level_log_enabled: bool,
+    pub(crate) write_faction_level_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, i32, &[u8]),
     pub(crate) dispatch_timer:
         &'a mut dyn FnMut(&mut CTimer<TimerCallback>, TimerCallbackInvocation<TimerCallback>),
     pub(crate) get_lei_ting_local_time: &'a mut dyn FnMut() -> LeiTingLocalTime,
@@ -8140,6 +8154,7 @@ impl CGame {
         organizing_parameters: &COrganizingParam,
         faction_war_sys: &mut CFactionWarSys,
         registry: &GoodsBasePropertiesRegistry,
+        original_name_index: &GoodsOriginalNameIndex,
         coefficients: &PlayerPropertyCoefficients,
         net_sessions: &CNetSessionManager,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
@@ -8172,6 +8187,7 @@ impl CGame {
                             organizing_parameters,
                             faction_war_sys,
                             registry,
+                            original_name_index,
                             coefficients,
                             net_sessions,
                             application_runtime,
@@ -8212,6 +8228,7 @@ impl CGame {
                     organizing_parameters,
                     faction_war_sys,
                     registry,
+                    original_name_index,
                     coefficients,
                     net_sessions,
                     application_runtime,
@@ -8251,6 +8268,7 @@ impl CGame {
         organizing_parameters: &COrganizingParam,
         faction_war_sys: &mut CFactionWarSys,
         registry: &GoodsBasePropertiesRegistry,
+        original_name_index: &GoodsOriginalNameIndex,
         coefficients: &PlayerPropertyCoefficients,
         net_sessions: &CNetSessionManager,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
@@ -8270,6 +8288,7 @@ impl CGame {
             organizing_parameters,
             faction_war_sys,
             registry,
+            original_name_index,
             coefficients,
             net_sessions,
             application_runtime,
@@ -8756,6 +8775,8 @@ impl CGame {
             format_world_string: &mut *application_callbacks.format_world_string,
             put_war_log: &mut *application_callbacks.put_war_log,
             refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+            faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+            write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
         };
         let mut effects =
             WorldUnionApplicationEffects::new(self, manager, application_runtime, callbacks);
@@ -9327,6 +9348,8 @@ impl CGame {
             format_world_string: &mut *callbacks.format_union_world_string,
             put_war_log: &mut *callbacks.put_union_war_log,
             refresh_owned_city: &mut *callbacks.refresh_union_owned_city,
+            faction_level_log_enabled: callbacks.faction_level_log_enabled,
+            write_faction_level_log: &mut *callbacks.write_faction_level_log,
         };
         let process_message = match self.process_message_main_loop_stage(
             owners.honor_ranks,
@@ -9334,6 +9357,7 @@ impl CGame {
             owners.organizing_parameters,
             owners.faction_war,
             owners.registry,
+            owners.original_name_index,
             owners.coefficients,
             owners.net_sessions,
             owners.union_application_runtime,
@@ -9415,6 +9439,8 @@ impl CGame {
             format_world_string: &mut *callbacks.format_union_world_string,
             put_war_log: &mut *callbacks.put_union_war_log,
             refresh_owned_city: &mut *callbacks.refresh_union_owned_city,
+            faction_level_log_enabled: callbacks.faction_level_log_enabled,
+            write_faction_level_log: &mut *callbacks.write_faction_level_log,
         };
         let net_sessions = self.run_main_loop_net_session_stage(
             owners.net_sessions,
@@ -10985,6 +11011,7 @@ fn process_world_message(
     organizing_parameters: &COrganizingParam,
     faction_war_sys: &mut CFactionWarSys,
     registry: &GoodsBasePropertiesRegistry,
+    original_name_index: &GoodsOriginalNameIndex,
     coefficients: &PlayerPropertyCoefficients,
     net_sessions: &CNetSessionManager,
     application_runtime: &WorldUnionApplicationRuntimeOwner,
@@ -11034,6 +11061,8 @@ fn process_world_message(
                 format_world_string: &mut *application_callbacks.format_world_string,
                 put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -11063,6 +11092,8 @@ fn process_world_message(
                 format_world_string: &mut *application_callbacks.format_world_string,
                 put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -11092,6 +11123,8 @@ fn process_world_message(
                 format_world_string: &mut *application_callbacks.format_world_string,
                 put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -11132,6 +11165,8 @@ fn process_world_message(
                 format_world_string: &mut *application_callbacks.format_world_string,
                 put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -11167,6 +11202,8 @@ fn process_world_message(
                 format_world_string: &mut *application_callbacks.format_world_string,
                 put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -11189,6 +11226,49 @@ fn process_world_message(
                 runtime,
             };
         }
+        let use_log_system = game.setup.use_log_system;
+        if let Some(outcome) = dispatch_faction_upgrade(
+            &mut message,
+            game,
+            organizing,
+            organizing_parameters,
+            registry,
+            original_name_index,
+            coefficients,
+            use_log_system,
+            application_callbacks,
+            update_player,
+        ) {
+            let callbacks = WorldUnionApplicationEffectCallbacks {
+                random: &mut *application_callbacks.random,
+                world_string: &mut *application_callbacks.world_string,
+                format_world_string: &mut *application_callbacks.format_world_string,
+                put_war_log: &mut *application_callbacks.put_war_log,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
+            };
+            let mut effects = WorldUnionApplicationEffects::new(
+                game,
+                net_sessions,
+                application_runtime,
+                callbacks,
+            );
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingFactionUpgrade {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
         let game_server_sender = game.current_game_server_sender();
         let callbacks = WorldUnionApplicationEffectCallbacks {
             random: &mut *application_callbacks.random,
@@ -11196,6 +11276,8 @@ fn process_world_message(
             format_world_string: &mut *application_callbacks.format_world_string,
             put_war_log: &mut *application_callbacks.put_war_log,
             refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+            faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+            write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
         };
         let mut effects = WorldUnionApplicationEffects::new(
             game,

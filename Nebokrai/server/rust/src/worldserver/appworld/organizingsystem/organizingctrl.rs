@@ -281,6 +281,7 @@ use super::faction::{
     FactionOwnedCityRefreshReport, FactionOwnedCityUpdateBuildError, FactionPlayerHeaderContext,
     FactionPronounceBlock, FactionPronounceOutcome, FactionPropertyDelivery,
     FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome, FactionSuperiorOrganizingBlock,
+    FactionUpgradeBlock, FactionUpgradeContext, FactionUpgradeOutcome,
     MemberEnterOutcome, MemberExitOutcome, OwnedCityMutationBuildError,
 };
 use super::factionwarsys::{
@@ -1208,6 +1209,26 @@ impl COrganizingCtrl {
             3 => self.add_billboard_to_byte_array(output, &self.defence_victories_billboard),
             _ => append_i32(output, 0),
         }
+    }
+
+    /// Выполняет nullable faction lookup и уже восстановленный `CFaction::Upgrade`.
+    pub(crate) fn upgrade_faction<Context>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        faction_id: i32,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Result<Option<FactionUpgradeOutcome>, FactionUpgradeBlock>
+    where
+        Context: FactionUpgradeContext,
+    {
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return Ok(None);
+        };
+        faction
+            .upgrade(game, parameters, player_id, context)
+            .map(Some)
     }
 
     fn add_billboard_to_byte_array(

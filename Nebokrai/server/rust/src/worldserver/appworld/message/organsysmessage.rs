@@ -1,6 +1,7 @@
 //! Статус корпуса: `IMPLEMENTED_PARTIAL` для достигнутых organizing opcode,
-//! включая заявку союза `0x60118`, общий session-result dispatch и billboard
-//! `0x60125`; остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! включая заявку союза `0x60118`, общий session-result dispatch, billboard
+//! `0x60125` и улучшение фракции `0x60126`; остальной owner —
+//! `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
@@ -54,6 +55,14 @@
 //! `2` — offense; defense недостижим. Отрицательный type исходник не отсекал
 //! и индексировал память перед process-static массивом; Rust останавливает
 //! этот внутренний out-of-bounds как локальный `BLOCKED_MISSING_FACT`.
+//! Exact `0x004A7B1E..0x004A7BA3` для `0x60126` читает `(faction ID,
+//! player ID)`, ищет online player, декодирует в него полный snapshot с
+//! текущего message cursor и только затем повторно разрешает faction. При
+//! non-null faction вызывается virtual slot `+0x50`, то есть уже
+//! восстановленный `CFaction::Upgrade(long)`, с полным 32-битным player ID;
+//! bool-result игнорируется и wire-ответ не формируется. Приведение к `char`
+//! в RAW было артефактом декомпиляции. Дополнительных ownership/tail-проверок
+//! старого Linux-донора в EXE нет, поэтому они не перенесены.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -72,6 +81,7 @@
 //! материализованы; функция ниже добавляет только конкретный opcode dispatch.
 
 use std::collections::VecDeque;
+use std::ffi::CString;
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
@@ -80,9 +90,13 @@ use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::servers::ServerCommandHandle;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionCallbackOutcome};
 use crate::public::date::TagTime;
-use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
+use crate::worldserver::appworld::goods::cgoodsfactory::{
+    GoodsBasePropertiesRegistry, GoodsOriginalNameIndex, query_goods_name,
+};
 use crate::worldserver::appworld::organizingsystem::faction::{
-    FactionMemberInfoRequest, FactionOrganizingInfoContext,
+    FactionLevelContext, FactionMemberInfoRequest, FactionOrganizingInfoContext,
+    FactionUpgradeBlock, FactionUpgradeContext, FactionUpgradeFormatArgument,
+    FactionUpgradeOutcome,
 };
 use crate::worldserver::appworld::organizingsystem::factionwarsys::{
     CFactionWarSys, FactionWarDeclarationBlock, FactionWarDeclarationOutcome,
@@ -97,6 +111,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingUnionApplyForJoinOutcome,
 };
 use crate::worldserver::appworld::organizingsystem::organizing::{EOperator, TagTimeValue};
+use crate::worldserver::appworld::organizingsystem::organizingparam::COrganizingParam;
 use crate::worldserver::appworld::organizingsystem::union::{
     UnionAddFactionEffects, UnionApplicationEndpointBlock, UnionApplicationSessionBlock,
     UnionApplicationSessionReport, UnionApplicationSessionRequest, UnionApplicationSessionRuntime,
@@ -120,6 +135,7 @@ const DECLARE_FACTION_WAR_RESPONSE_TYPE: i32 = 0x7FE19;
 const CONSUMED_LONG_MESSAGE_TYPES: [i32; 2] = [0x60121, 0x60123];
 const FACTION_BILLBOARD_MESSAGE_TYPE: i32 = 0x60125;
 const FACTION_BILLBOARD_RESPONSE_TYPE: i32 = 0x7FE1D;
+const UPGRADE_FACTION_MESSAGE_TYPE: i32 = 0x60126;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -230,6 +246,9 @@ pub(crate) struct WorldUnionApplicationEffectCallbacks<'a> {
         &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
     pub(crate) put_war_log: &'a mut dyn FnMut(&[u8]),
     pub(crate) refresh_owned_city: &'a mut dyn FnMut(i32, i32, i32),
+    pub(crate) faction_level_log_enabled: bool,
+    pub(crate) write_faction_level_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, i32, &[u8]),
 }
 
 /// Тонкий concrete adapter готовых string/transport/session owners.
@@ -319,6 +338,108 @@ impl FactionOrganizingInfoContext for WorldUnionApplicationEffects<'_> {
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
         let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+/// Concrete player/goods/string/log adapter для готового `CFaction::Upgrade`.
+struct WorldFactionUpgradeEffects<'game, 'callbacks, 'effects, 'update> {
+    game: &'game CGame,
+    registry: &'game GoodsBasePropertiesRegistry,
+    original_name_index: &'game GoodsOriginalNameIndex,
+    use_log_system: bool,
+    callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
+    update_player: &'update mut dyn FnMut(i32),
+}
+
+impl FactionOrganizingInfoContext for WorldFactionUpgradeEffects<'_, '_, '_, '_> {
+    fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
+        Some((self.callbacks.world_string)(string_id))
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+impl FactionLevelContext for WorldFactionUpgradeEffects<'_, '_, '_, '_> {
+    fn format_world_string_signed(
+        &mut self,
+        string_id: &'static [u8],
+        value: i32,
+    ) -> Vec<u8> {
+        (self.callbacks.format_world_string)(
+            string_id,
+            &[UnionFormatArgument::Signed(value)],
+        )
+    }
+}
+
+impl FactionUpgradeContext for WorldFactionUpgradeEffects<'_, '_, '_, '_> {
+    fn player_money(&self, player_id: i32) -> Option<u32> {
+        self.game
+            .online_player_by_id(player_id as u32)
+            .map(|player| player.money())
+    }
+
+    fn goods_in_packet(&self, player_id: i32, original_name: &[u8]) -> i32 {
+        let Ok(original_name) = CString::new(original_name) else {
+            return 0;
+        };
+        self.game
+            .online_player_by_id(player_id as u32)
+            .map_or(0, |player| {
+                player.check_goods_in_packet(
+                    Some(original_name.as_c_str()),
+                    self.original_name_index,
+                )
+            })
+    }
+
+    fn goods_display_name(&self, original_name: &[u8]) -> Option<Vec<u8>> {
+        let goods_id = self.original_name_index.get(original_name).copied()?;
+        query_goods_name(self.registry, goods_id).map(ToOwned::to_owned)
+    }
+
+    fn format_upgrade_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[FactionUpgradeFormatArgument<'_>],
+    ) -> Vec<u8> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| match argument {
+                FactionUpgradeFormatArgument::Text(value) => UnionFormatArgument::Text(value),
+                FactionUpgradeFormatArgument::Signed(value) => {
+                    UnionFormatArgument::Signed(*value)
+                }
+            })
+            .collect::<Vec<_>>();
+        (self.callbacks.format_world_string)(string_id, &arguments)
+    }
+
+    fn update_player_faction_info(&mut self, player_id: i32) {
+        (self.update_player)(player_id);
+    }
+
+    fn faction_level_log_enabled(&self) -> bool {
+        self.use_log_system && self.callbacks.faction_level_log_enabled
+    }
+
+    fn write_faction_level_log(
+        &mut self,
+        faction_id: i32,
+        faction_name: &[u8],
+        level: i32,
+        master_id: i32,
+        master_name: &[u8],
+    ) {
+        (self.callbacks.write_faction_level_log)(
+            faction_id,
+            faction_name,
+            level,
+            master_id,
+            master_name,
+        );
     }
 }
 
@@ -973,6 +1094,100 @@ pub(crate) fn dispatch_faction_billboard(
             wire,
             delivery,
         },
+    }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionUpgradeOutcome {
+    PlayerOffline,
+    FactionMissing,
+    Upgrade(FactionUpgradeOutcome),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionUpgradeBlock {
+    PlayerDecode(PlayerCodecError),
+    Upgrade(FactionUpgradeBlock),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionUpgradeDispatch {
+    pub(crate) faction_id: i32,
+    pub(crate) player_id: i32,
+    pub(crate) outcome: OrganizingFactionUpgradeOutcome,
+}
+
+/// Выполняет `0x60126`: live player snapshot и virtual `CFaction::Upgrade`.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "opcode использует прежние game/faction/goods/string/log singleton-ы"
+)]
+pub(crate) fn dispatch_faction_upgrade(
+    message: &mut CMessage,
+    game: &mut CGame,
+    organizing: &mut COrganizingCtrl,
+    parameters: &COrganizingParam,
+    registry: &GoodsBasePropertiesRegistry,
+    original_name_index: &GoodsOriginalNameIndex,
+    coefficients: &PlayerPropertyCoefficients,
+    use_log_system: bool,
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    update_player: &mut dyn FnMut(i32),
+) -> Option<Result<OrganizingFactionUpgradeDispatch, OrganizingFactionUpgradeBlock>> {
+    if message.message_type() != UPGRADE_FACTION_MESSAGE_TYPE {
+        return None;
+    }
+
+    let faction_id = message.base_mut().get_long().unwrap_or(0);
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let player_online = {
+        let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+        match game.decord_online_player_by_id(
+            player_id as u32,
+            source,
+            cursor,
+            registry,
+            coefficients,
+        ) {
+            Ok(player_online) => player_online,
+            Err(source) => {
+                return Some(Err(OrganizingFactionUpgradeBlock::PlayerDecode(source)));
+            }
+        }
+    };
+    if !player_online {
+        return Some(Ok(OrganizingFactionUpgradeDispatch {
+            faction_id,
+            player_id,
+            outcome: OrganizingFactionUpgradeOutcome::PlayerOffline,
+        }));
+    }
+
+    let game_ref: &CGame = game;
+    let mut effects = WorldFactionUpgradeEffects {
+        game: game_ref,
+        registry,
+        original_name_index,
+        use_log_system,
+        callbacks,
+        update_player,
+    };
+    let outcome = match organizing.upgrade_faction(
+        game_ref,
+        parameters,
+        faction_id,
+        player_id,
+        &mut effects,
+    ) {
+        Ok(Some(outcome)) => OrganizingFactionUpgradeOutcome::Upgrade(outcome),
+        Ok(None) => OrganizingFactionUpgradeOutcome::FactionMissing,
+        Err(source) => return Some(Err(OrganizingFactionUpgradeBlock::Upgrade(source))),
+    };
+
+    Some(Ok(OrganizingFactionUpgradeDispatch {
+        faction_id,
+        player_id,
+        outcome,
     }))
 }
 
