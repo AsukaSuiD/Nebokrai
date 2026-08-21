@@ -7,6 +7,8 @@
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY` с явной границей ещё сырого
 //! `DisbandFaction`;
 //! `IsFreePlayer` RVA `0x000343A0`, `IsFreeFaction` RVA `0x00034420`,
+//! `RemovePersonFromApplyFactionList/GetFactionByPlayerInApplyList` RVA
+//! `0x00034880/0x000348F0`,
 //! `SetPlayerOrganizing` RVA `0x000370A0` и callback-цепочки
 //! `OnPlayerEnterGame/OnPlayerExitGame` RVA `0x00037B70/0x00037BD0` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`; `GenerateSaveData` RVA `0x00034A10` —
@@ -55,6 +57,18 @@
 //! member-map обоих concrete owners лежат по одинаковым offsets. Он ищет
 //! входной faction ID и возвращает первый положительный union ID. Null map-
 //! value остаётся такой же локальной неизвестностью старого разыменования.
+//!
+//! `RemovePersonFromApplyFactionList` вызывает `RemoveApplyMember(player)` у
+//! каждой faction в signed map-order, игнорирует все concrete return values и
+//! после полного прохода всегда возвращает `0`. Каждое фактическое удаление
+//! поэтому успевает опубликовать пустой `OP_Delete`-record и поставить dirty
+//! bit `8`, прежде чем обход продолжится. `GetFactionByPlayerInApplyList`
+//! проходит тот же map и возвращает `GetID()` первой faction, чей
+//! `IsInApplyMembers(player)` дал положительное значение; miss возвращает `0`.
+//! Exact ASM `0x00434880..0x004348EC/0x004348F0..0x0043496F` подтверждает
+//! virtual slots, ранний выход lookup и порядок. Rust отчёты сохраняют исходно
+//! игнорировавшиеся результаты удалений; null map-value остаётся локальной
+//! typed-границей после уже завершённого prefix-а.
 //!
 //! Exact `SetPlayerOrganizing` `0x004370A0..0x0043737A` сначала всегда пишет
 //! результат `IsFreePlayer`. Для найденной faction он в точном порядке пишет
@@ -163,7 +177,7 @@ use rustix::time::{ClockId, clock_gettime};
 
 use super::faction::{
     CFaction, FactionCloneSaveBlock, FactionInitialPropertyBlock,
-    FactionPropertyDelivery, FactionPropertyReinitialization,
+    FactionPropertyDelivery, FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome,
     FactionSuperiorOrganizingBlock, MemberEnterOutcome, MemberExitOutcome,
 };
 use super::organizingparam::COrganizingParam;
@@ -218,6 +232,33 @@ pub(crate) enum FreeFactionLookup {
     NoUnion,
     Union(i32),
     BlockedNullConfederation { map_key: i32 },
+}
+
+/// Результат одного вызова `CFaction::RemoveApplyMember` в map-order.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ApplyFactionRemoval {
+    pub(crate) map_key: i32,
+    pub(crate) outcome: FactionRemoveApplyMemberOutcome,
+}
+
+/// Полный normal-return либо точная null-pointer граница ordered прохода.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum RemovePersonFromApplyFactionListOutcome {
+    Completed {
+        removals: Vec<ApplyFactionRemoval>,
+    },
+    BlockedNullFaction {
+        map_key: i32,
+        completed_removals: Vec<ApplyFactionRemoval>,
+    },
+}
+
+/// Результат поиска первой faction, содержащей player в apply-list.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ApplyFactionLookup {
+    NoFaction,
+    Faction(i32),
+    BlockedNullFaction { map_key: i32 },
 }
 
 /// Локальная safe-граница ordered `GenerateSaveData` traversal.
@@ -563,6 +604,41 @@ impl COrganizingCtrl {
             }
         }
         FreeFactionLookup::NoUnion
+    }
+
+    /// Удаляет player из apply-list каждой faction и на normal return даёт `0`.
+    pub(crate) fn remove_person_from_apply_faction_list(
+        &mut self,
+        game: &CGame,
+        player_id: i32,
+    ) -> RemovePersonFromApplyFactionListOutcome {
+        let mut removals = Vec::with_capacity(self.factions.len());
+        for (&map_key, faction) in &mut self.factions {
+            let Some(faction) = faction.as_deref_mut() else {
+                return RemovePersonFromApplyFactionListOutcome::BlockedNullFaction {
+                    map_key,
+                    completed_removals: removals,
+                };
+            };
+            removals.push(ApplyFactionRemoval {
+                map_key,
+                outcome: faction.remove_apply_member(game, player_id),
+            });
+        }
+        RemovePersonFromApplyFactionListOutcome::Completed { removals }
+    }
+
+    /// Возвращает ID первой faction с положительным apply-membership.
+    pub(crate) fn faction_by_player_in_apply_list(&self, player_id: i32) -> ApplyFactionLookup {
+        for (&map_key, faction) in &self.factions {
+            let Some(faction) = faction.as_deref() else {
+                return ApplyFactionLookup::BlockedNullFaction { map_key };
+            };
+            if faction.is_in_apply_members(player_id) > 0 {
+                return ApplyFactionLookup::Faction(faction.faction_id());
+            }
+        }
+        ApplyFactionLookup::NoFaction
     }
 
     /// Связывает один точный SetPlayerOrganizing с достигнутым region snapshot.
@@ -1241,7 +1317,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::RemovePersonFromApplyFactionList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1531
@@ -1255,7 +1331,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::GetFactionByPlayerInApplyList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1542
