@@ -21,6 +21,7 @@
 //! `ClearEnemyFation/ClearCityWarEnemyFation` RVA `0x000B6030/0x000B6080`,
 //! `IsHaveEnymyFaction/IsHaveCityEnemyFaction` RVA `0x000B50F0/0x000B5100`,
 //! `ClearOwnedCity/DelOwnedCity` RVA `0x000B54C0/0x000B5F60`,
+//! `RefreshOwnCityInfo` RVA `0x000B5570`,
 //! обе перегрузки `GetMemberList` RVA `0x000B5530/0x000B9E60`,
 //! оба `AddOwnedCity` RVA `0x000B9DE0/0x000BA650` и `SetOwnedCity` RVA
 //! `0x000C16A0`,
@@ -149,6 +150,11 @@
 //! delete всегда делают `0x7FE13`, затем player refresh; single-add — только
 //! после фактической вставки, set — только `0x7FE13`. Exact ASM подтверждает,
 //! что delete при miss всё равно публикует и возвращает `true`.
+//! `RefreshOwnCityInfo` проходит тот же list-order и вызывает внешний
+//! `RefreshOwnedCityOrg(region, faction, union)` для каждого элемента. Пустой
+//! список не читает property; при непустом точный union ID берётся из
+//! `tagFacBaseProperty +0x18`. ASM `0x004B5570..0x004B55AB` подтверждает порядок
+//! чтений и трёх аргументов; singleton/game plumbing заменён узким callback-ом.
 //! Experience-update `0x7FE14` получает только contributor либо master и несёт
 //! recipient/current/upgrade exp. `SetExp` ставит dirty-bit до этой рассылки.
 //! Простые query-owner-ы возвращают достигнутые scalar/property/member поля
@@ -595,6 +601,16 @@ pub(crate) struct OwnedCityBooleanMutationReport {
 pub(crate) struct OwnedCityMutationBuildError {
     pub(crate) state_changed: bool,
     pub(crate) source: FactionOwnedCityUpdateBuildError,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionOwnedCityRefreshBlock {
+    MissingBaseProperty,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionOwnedCityRefreshReport {
+    pub(crate) refreshed_region_ids: Vec<i32>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1265,6 +1281,34 @@ impl CFaction {
     /// Возвращает исходный list-order `m_OwnedCities`.
     pub(crate) const fn owned_cities(&self) -> &VecDeque<i32> {
         &self.owned_cities
+    }
+
+    /// Синхронизирует каждый owned region с текущими faction/union ID.
+    pub(crate) fn refresh_owned_city_info<F>(
+        &self,
+        mut refresh_owned_city: F,
+    ) -> Result<FactionOwnedCityRefreshReport, FactionOwnedCityRefreshBlock>
+    where
+        F: FnMut(i32, i32, i32),
+    {
+        if self.owned_cities.is_empty() {
+            return Ok(FactionOwnedCityRefreshReport {
+                refreshed_region_ids: Vec::new(),
+            });
+        }
+        let union_id = self
+            .base_property
+            .as_ref()
+            .ok_or(FactionOwnedCityRefreshBlock::MissingBaseProperty)?
+            .union_id();
+        let mut refreshed_region_ids = Vec::with_capacity(self.owned_cities.len());
+        for &region_id in &self.owned_cities {
+            refresh_owned_city(region_id, self.faction_id, union_id);
+            refreshed_region_ids.push(region_id);
+        }
+        Ok(FactionOwnedCityRefreshReport {
+            refreshed_region_ids,
+        })
     }
 
     /// Дописывает owned-city list вместе с исходными region C-строками.
@@ -2855,7 +2899,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::RefreshOwnCityInfo
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1288
