@@ -8,8 +8,9 @@
 //! RVA `0x000CA830/0x000CAC30/0x000CB030/0x000CB8F0/0x000CC320`,
 //! `CCountry::CloneCountryData` RVA `0x000C9CE0` и
 //! `CCountry::CloneSaveData` RVA `0x000CC470`, `CCountry::AI` RVA
-//! `0x000CB710` — `IMPLEMENTED`; остальной корпус
-//! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `0x000CB710`, `GetMinister` RVA `0x000C6DE0`, `SendPrivateMsg` RVA
+//! `0x000C6870` и `SendCountryMsg` RVA `0x000C7090` — `IMPLEMENTED`; остальной
+//! корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
@@ -86,6 +87,14 @@
 //! итог вызывает `DeposeKing(4)`. `CCountryHandler::Run` сохраняет unsigned
 //! country-map order и теперь вызывает этот concrete owner через уже
 //! восстановленный governance context вместо сырого whole-AI callback-а.
+//! `GetMinister` exact `0x004C6DE0..0x004C6E30` принимает только job `2..=7`,
+//! дважды выполняет исходный map lookup и возвращает nullable minister-owner.
+//! Rust делает один стандартный `BTreeMap::get`, сохраняя gate и результат.
+//! `SendPrivateMsg/SendCountryMsg` exact `0x004C6870..0x004C691C` и
+//! `0x004C7090..0x004C7160` независимо подтверждают уже используемый wire:
+//! пустой текст ничего не отправляет; private target `0` означает king ID и
+//! требует ненулевой player route, а country message идёт только connected
+//! GameServer-ам в unsigned map-order.
 //! `SetNewDay` exact `0x004C9FD0..0x004CA058` сначала обнуляет silence/PK,
 //! затем только при прежнем `m_nDay != 0` начисляет village tax ненулевому
 //! королю, вызывает `NewTerm`, выполняет настоящий `operator[]` minister slot
@@ -1083,6 +1092,21 @@ impl CCountry {
             },
             CountryConstructorReport { next_technology },
         )
+    }
+
+    /// Возвращает exact nullable `GetMinister` только для job `2..=7`.
+    fn get_minister(&self, job: u8) -> Option<&CountryMinisterState> {
+        if !(2..=7).contains(&job) {
+            return None;
+        }
+        self.ministers.get(&job)
+    }
+
+    fn get_minister_mut(&mut self, job: u8) -> Option<&mut CountryMinisterState> {
+        if !(2..=7).contains(&job) {
+            return None;
+        }
+        self.ministers.get_mut(&job)
     }
 
     /// Выполняет exact `CCountry::AI`: unsigned wrapping deadline, одно
@@ -2448,7 +2472,7 @@ impl CCountry {
                 context,
             );
         }
-        let Some(minister) = self.ministers.get(&job) else {
+        let Some(minister) = self.get_minister(job) else {
             let country_name = context.country_name(self.country_id);
             let identity_name = context.country_identity_name(job);
             return self.reject_appoint_minister(
@@ -2545,7 +2569,10 @@ impl CCountry {
                 context,
             );
         }
-        self.ministers.get_mut(&job).expect("minister проверен выше").snapshot.appointed = true;
+        self.get_minister_mut(job)
+            .expect("minister проверен выше")
+            .snapshot
+            .appointed = true;
         let Some(cost) = parameters.appoint_control_point_cost() else {
             return self.appoint_parameter_unavailable(
                 player_id,
@@ -2577,7 +2604,7 @@ impl CCountry {
         ));
         let country_deliveries = self.send_country_message(&text, context);
         context.put_king_log(&text);
-        let minister = self.ministers.get_mut(&job).expect("minister проверен выше");
+        let minister = self.get_minister_mut(job).expect("minister проверен выше");
         minister.snapshot.id = player_id;
         minister.snapshot.name = player.name;
         let king_map_id = context.game_server_number_by_player_id(self.king.id);
@@ -3698,10 +3725,7 @@ impl CCountry {
                 applied: enabled,
             });
         }
-        if !(2..=7).contains(&job) {
-            return None;
-        }
-        let minister = self.ministers.get_mut(&job)?;
+        let minister = self.get_minister_mut(job)?;
         let previous = minister.quest_switch;
         minister.quest_switch = enabled;
         Some(CountryQuestSwitchUpdate {
@@ -4003,7 +4027,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::SendPrivateMsg
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1712
@@ -4011,6 +4035,8 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 // ADDRESS: 004c6870
 // PROTOTYPE: void __thiscall SendPrivateMsg(char * param_1, long param_2)
 //
+// Реализовано выше как `send_private_message`; exact disassembly
+// `0x004C6870..0x004C691C` подтверждает target/route/wire-порядок.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -4061,7 +4087,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::GetMinister
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1466
@@ -4069,6 +4095,8 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 // ADDRESS: 004c6de0
 // PROTOTYPE: CMinister * __thiscall GetMinister(uchar param_1)
 //
+// Реализовано выше как `get_minister`; exact disassembly
+// `0x004C6DE0..0x004C6E30` подтверждает inclusive job gate `2..=7`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -4092,7 +4120,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::SendCountryMsg
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1686
@@ -4100,6 +4128,8 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 // ADDRESS: 004c7090
 // PROTOTYPE: void __thiscall SendCountryMsg(char * param_1)
 //
+// Реализовано выше как `send_country_message`; exact disassembly
+// `0x004C7090..0x004C7160` подтверждает connected-server fan-out.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
