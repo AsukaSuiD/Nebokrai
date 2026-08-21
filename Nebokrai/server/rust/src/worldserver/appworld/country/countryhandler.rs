@@ -3,7 +3,7 @@
 //! Статус `CCountryHandler::GetCountry` RVA `0x00036C40`,
 //! `AddToByteArray` RVA `0x000449F0`,
 //! `send_info_to_client` RVA `0x00044760`, `GenerateSaveData` RVA `0x00044970`,
-//! `SetNewDay` RVA `0x00044A70`,
+//! `SetNewDay` RVA `0x00044A70`, `Append` RVA `0x000452B0`,
 //! `AddOneTopInfo` RVA `0x00045130` и полный `Run` RVA `0x00045040` —
 //! `IMPLEMENTED`; остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
 //! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
@@ -38,6 +38,9 @@
 //! `SetNewDay` exact `0x00444A70..0x00444B04` проходит unsigned country-key
 //! map-order, пропускает null values и вызывает `CCountry::SetNewDay` с тем же
 //! signed day. `BTreeMap` заменяет только MSVC tree traversal.
+//! `Append` отвергает null, затем делает `operator[]` по country byte и
+//! безусловно заменяет value. Rust сохраняет last-write-wins, но освобождает
+//! прежний owned country вместо исходной внутренней утечки pointer-а.
 //!
 //! Initial-config wire начинается signed размером всей country-map и затем
 //! содержит `CCountry` records в unsigned key-order; отдельный map key не
@@ -133,6 +136,15 @@ pub(crate) struct CountryHandlerNewDayReport {
     pub(crate) skipped_null_country_keys: Vec<u8>,
 }
 
+#[derive(Debug)]
+pub(crate) enum CountryAppendDisposition {
+    NullRejected,
+    Stored {
+        country_id: u8,
+        previous: Option<Box<CCountry>>,
+    },
+}
+
 pub(crate) trait CountryInfoDeliveryContext {
     /// Синхронно повторяет `CMessage::SendAll`; старый return игнорировался.
     fn send_all(&mut self, message: &CMessage) -> i32;
@@ -145,6 +157,22 @@ pub(crate) struct CCountryHandler {
 }
 
 impl CCountryHandler {
+    /// Повторяет exact `Append`: null reject, затем `operator[]` overwrite.
+    pub(crate) fn append_country(
+        &mut self,
+        country: Option<Box<CCountry>>,
+    ) -> CountryAppendDisposition {
+        let Some(country) = country else {
+            return CountryAppendDisposition::NullRejected;
+        };
+        let country_id = country.country_id;
+        let previous = self.countries.insert(country_id, Some(country)).flatten();
+        CountryAppendDisposition::Stored {
+            country_id,
+            previous,
+        }
+    }
+
     /// Повторяет exact ordered map traversal `CCountryHandler::SetNewDay`.
     pub(crate) fn set_new_day<Context: CountrySetNewDayContext + ?Sized>(
         &mut self,
@@ -448,7 +476,7 @@ impl CCountryHandler {
 
 // ============================================================================
 // FUNCTION: CCountryHandler::Append
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countryhandler.cpp:66
