@@ -212,18 +212,20 @@ use super::faction::{
     FactionEnemyDelivery, FactionInitialPropertyBlock, FactionMemberInfoReport,
     FactionMemberInfoRequest,
     FactionOperationAuthorityContext, FactionOrganizingInfoContext, FactionOtherInfoBuildError,
-    FactionOtherInfoDelivery, FactionOwnedCityDelivery, FactionOwnedCityUpdateBuildError,
-    FactionPlayerHeaderContext, FactionPropertyDelivery, FactionPropertyReinitialization,
-    FactionRemoveApplyMemberOutcome, FactionSuperiorOrganizingBlock, MemberEnterOutcome,
-    MemberExitOutcome, OwnedCityMutationBuildError,
+    FactionOtherInfoDelivery, FactionOwnedCityDelivery, FactionOwnedCityRefreshBlock,
+    FactionOwnedCityRefreshReport, FactionOwnedCityUpdateBuildError, FactionPlayerHeaderContext,
+    FactionPropertyDelivery, FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome,
+    FactionSuperiorOrganizingBlock, MemberEnterOutcome, MemberExitOutcome,
+    OwnedCityMutationBuildError,
 };
 use super::organizing::EOperator;
 use super::organizingparam::COrganizingParam;
 use super::union::{
     CUnion, UnionClientSnapshotContext, UnionFactionMemberContext,
-    UnionFactionLevelBlock, UnionFactionStateMutationContext, UnionInitialMutationContext,
-    UnionMasterFactionQueryContext, UnionOperatorValidationContext,
-    UnionOwnedCityMutationContext, UnionPlayerRefreshContext, UnionSendInfoContext,
+    UnionFactionJoinContext, UnionFactionLevelBlock, UnionFactionStateMutationContext,
+    UnionInitialMutationContext, UnionMasterFactionQueryContext,
+    UnionOperatorValidationContext, UnionOwnedCityMutationContext,
+    UnionPlayerRefreshContext, UnionSendInfoContext,
 };
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::appworld::player::{
@@ -1425,6 +1427,18 @@ impl UnionInitialMutationContext for COrganizingCtrl {
         };
         faction.set_superior_organizing(union_id, parameters)?;
         Ok(true)
+    }
+}
+
+impl UnionFactionJoinContext for COrganizingCtrl {
+    fn faction_refresh_owned_city_info(
+        &self,
+        faction_id: i32,
+        refresh_owned_city: &mut dyn FnMut(i32, i32, i32),
+    ) -> Result<Option<FactionOwnedCityRefreshReport>, FactionOwnedCityRefreshBlock> {
+        self.faction_by_id(faction_id)
+            .map(|faction| faction.refresh_owned_city_info(refresh_owned_city))
+            .transpose()
     }
 }
 

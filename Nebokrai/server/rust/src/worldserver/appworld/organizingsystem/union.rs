@@ -25,7 +25,8 @@
 //! `0x000C6290`, `DeleteOrgaToClient` RVA `0x000C5D20` и
 //! `UpdateMemberInfoToClient` RVA `0x000C5840`, `AddMembersToByteArray` RVA
 //! `0x000C21D0`, `AddToByteArray` RVA `0x000C6590`, public-конструктор RVA
-//! `0x000C64D0` и `Initial` RVA `0x000C1FE0` — `IMPLEMENTED`;
+//! `0x000C64D0`, `Initial` RVA `0x000C1FE0` и `AddFaction` RVA
+//! `0x000C3170` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -159,14 +160,24 @@
 //! неинициализированные name/region bytes заменены нулями без добавления этой
 //! отсутствующей копии. Затем record вставляется под master key, faction
 //! получает union ID, dirty-mask сбрасывается и обновляются её online players.
+//! `AddFaction` снимает member time и разрешает `WS0268` до faction lookup.
+//! Miss/non-positive ID форматирует `WS0269(faction, union)` и пишет `war`, не
+//! меняя state. Success создаёт job `99`, права
+//! `0,2,0,0,0,0,0,0,0,0,0`, имя/level найденной faction и перезаписывает
+//! существующий key без duplicate-gate. Затем строго идут superior assignment,
+//! `RefreshOwnCityInfo`, `WS0270(faction name, union name)` с title `WS0188`
+//! всем union members и player refresh только добавленной faction. Dirty-bit
+//! этот owner не ставит. Fixed name/title сохраняют layout с typed overflow;
+//! внутренние 256-байтовые `_sprintf` buffers заменены владеющим formatter-ом.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::faction::{
     current_local_member_time, FactionEnemyDelivery, FactionInitialPropertyBlock,
     FactionMemberInfoReport, FactionMemberInfoRequest, FactionOwnedCityDelivery,
-    FactionOwnedCityUpdateBuildError, FactionPropertyDelivery, FactionSuperiorOrganizingBlock,
-    OwnedCityMutationBuildError,
+    FactionOwnedCityRefreshBlock, FactionOwnedCityRefreshReport,
+    FactionOwnedCityUpdateBuildError, FactionPropertyDelivery,
+    FactionSuperiorOrganizingBlock, OwnedCityMutationBuildError,
 };
 use super::organizing::{
     EOperator, EPurview, EPurviewOwnState, MemberPurviewMutation, TagMemInfo, TagTimeValue,
@@ -318,6 +329,43 @@ pub(crate) trait UnionInitialMutationContext {
     ) -> Result<bool, FactionSuperiorOrganizingBlock>;
 }
 
+/// Faction-side callbacks полного `CUnion::AddFaction` owner-а.
+pub(crate) trait UnionFactionJoinContext:
+    UnionFactionMemberContext
+    + UnionInitialMutationContext
+    + UnionPlayerRefreshContext
+    + UnionSendInfoContext
+{
+    fn faction_refresh_owned_city_info(
+        &self,
+        faction_id: i32,
+        refresh_owned_city: &mut dyn FnMut(i32, i32, i32),
+    ) -> Result<Option<FactionOwnedCityRefreshReport>, FactionOwnedCityRefreshBlock>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UnionFormatArgument<'a> {
+    Text(&'a [u8]),
+    Signed(i32),
+}
+
+/// StringTable, `war` log и внешние эффекты, не принадлежащие union state.
+pub(crate) trait UnionAddFactionEffects {
+    fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8>;
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[UnionFormatArgument<'_>],
+    ) -> Vec<u8>;
+
+    fn put_war_log(&mut self, text: &[u8]);
+
+    fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32);
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>);
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct UnionFactionPlayerRefreshReport {
     pub(crate) faction_id: i32,
@@ -346,6 +394,50 @@ pub(crate) enum UnionInitialBlock {
     SuperiorOrganizing {
         faction_id: i32,
         source: FactionSuperiorOrganizingBlock,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionAddFactionReport {
+    pub(crate) faction_id: i32,
+    pub(crate) replaced_existing_member: bool,
+    pub(crate) superior_assigned: bool,
+    pub(crate) owned_city_refresh: FactionOwnedCityRefreshReport,
+    pub(crate) member_information: UnionInfoFanoutReport,
+    pub(crate) player_refresh: UnionPlayerRefreshReport,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionAddFactionOutcome {
+    Added(UnionAddFactionReport),
+    FactionUnavailable {
+        faction_id: i32,
+        war_log: Vec<u8>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionAddFactionBlock {
+    MemberTitleWouldOverflow {
+        visible_length: usize,
+        capacity: usize,
+    },
+    FactionNameWouldOverflow {
+        faction_id: i32,
+        visible_length: usize,
+        capacity: usize,
+    },
+    MissingFactionLevel(UnionFactionLevelBlock),
+    SuperiorOrganizing {
+        faction_id: i32,
+        member_inserted: bool,
+        source: FactionSuperiorOrganizingBlock,
+    },
+    OwnedCityRefresh {
+        faction_id: i32,
+        member_inserted: bool,
+        superior_assigned: bool,
+        source: FactionOwnedCityRefreshBlock,
     },
 }
 
@@ -707,6 +799,155 @@ impl CUnion {
     /// Save-проекция не выдумывает transient apply-person; live `Initial` — 0.
     pub(crate) const fn apply_person(&self) -> Option<i32> {
         self.apply_person
+    }
+
+    /// Добавляет faction-member и выполняет полный исходный callback-порядок.
+    pub(crate) fn add_faction<Context, Effects>(
+        &mut self,
+        faction_id: i32,
+        context: &mut Context,
+        effects: &mut Effects,
+        parameters: &COrganizingParam,
+        game: &CGame,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<UnionAddFactionOutcome, UnionAddFactionBlock>
+    where
+        Context: UnionFactionJoinContext,
+        Effects: UnionAddFactionEffects,
+    {
+        let member_time = current_local_member_time();
+        let member_title = effects.world_string(b"WS0268");
+        let visible_title = legacy_c_string_visible_bytes(&member_title);
+        let mut title = [0; 64];
+        if visible_title.len() >= title.len() {
+            return Err(UnionAddFactionBlock::MemberTitleWouldOverflow {
+                visible_length: visible_title.len(),
+                capacity: title.len(),
+            });
+        }
+        title[..visible_title.len()].copy_from_slice(visible_title);
+
+        let faction_name = if faction_id > 0 {
+            context.faction_name(faction_id)
+        } else {
+            None
+        };
+        let Some(faction_name) = faction_name else {
+            let war_log = effects.format_world_string(
+                b"WS0269",
+                &[
+                    UnionFormatArgument::Signed(faction_id),
+                    UnionFormatArgument::Signed(self.union_id),
+                ],
+            );
+            let war_log = legacy_c_string_visible_bytes(&war_log).to_vec();
+            effects.put_war_log(&war_log);
+            return Ok(UnionAddFactionOutcome::FactionUnavailable {
+                faction_id,
+                war_log,
+            });
+        };
+
+        let visible_faction_name = legacy_c_string_visible_bytes(&faction_name);
+        let mut fixed_name = [0; 32];
+        if visible_faction_name.len() >= fixed_name.len() {
+            return Err(UnionAddFactionBlock::FactionNameWouldOverflow {
+                faction_id,
+                visible_length: visible_faction_name.len(),
+                capacity: fixed_name.len(),
+            });
+        }
+        fixed_name[..visible_faction_name.len()].copy_from_slice(visible_faction_name);
+        let level = match context.faction_level(faction_id) {
+            Ok(Some(level)) => level,
+            Ok(None) => {
+                return Err(UnionAddFactionBlock::MissingFactionLevel(
+                    UnionFactionLevelBlock { faction_id },
+                ));
+            }
+            Err(source) => return Err(UnionAddFactionBlock::MissingFactionLevel(source)),
+        };
+
+        let member = TagMemInfo::from_complete_fields(
+            faction_id,
+            fixed_name,
+            level,
+            0,
+            99,
+            title,
+            [
+                EPurviewOwnState::No,
+                EPurviewOwnState::Permit,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+            ],
+            [0; 64],
+            member_time,
+            false,
+        );
+        let replaced_existing_member = self.members.insert(faction_id, member).is_some();
+
+        let superior_assigned = context
+            .faction_set_superior_organizing(faction_id, self.union_id, parameters)
+            .map_err(|source| UnionAddFactionBlock::SuperiorOrganizing {
+                faction_id,
+                member_inserted: true,
+                source,
+            })?;
+        let mut refresh_owned_city = |region_id, owner_faction_id, owner_union_id| {
+            effects.refresh_owned_city(region_id, owner_faction_id, owner_union_id);
+        };
+        let owned_city_refresh = context
+            .faction_refresh_owned_city_info(faction_id, &mut refresh_owned_city)
+            .map_err(|source| UnionAddFactionBlock::OwnedCityRefresh {
+                faction_id,
+                member_inserted: true,
+                superior_assigned,
+                source,
+            })?
+            .unwrap_or(FactionOwnedCityRefreshReport {
+                refreshed_region_ids: Vec::new(),
+            });
+
+        let information = effects.format_world_string(
+            b"WS0270",
+            &[
+                UnionFormatArgument::Text(visible_faction_name),
+                UnionFormatArgument::Text(legacy_c_string_visible_bytes(&self.name)),
+            ],
+        );
+        let information = legacy_c_string_visible_bytes(&information);
+        let information_title = effects.world_string(b"WS0188");
+        let information_title = legacy_c_string_visible_bytes(&information_title);
+        let member_information = self.send_info_to_all_members(
+            information,
+            information_title,
+            -1,
+            0x0087_A238,
+            context,
+            &mut |request| effects.send_organizing_info(request),
+        );
+        let player_refresh = self.update_player_faction_info(
+            faction_id,
+            context,
+            game,
+            update_player,
+        );
+        Ok(UnionAddFactionOutcome::Added(UnionAddFactionReport {
+            faction_id,
+            replaced_existing_member,
+            superior_assigned,
+            owned_city_refresh,
+            member_information,
+            player_refresh,
+        }))
     }
 
     /// Legacy union не менял title/job и всегда сообщал успех.
@@ -2451,7 +2692,7 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CUnion::AddFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:720
