@@ -1,6 +1,6 @@
 //! Статус корпуса: `IMPLEMENTED_PARTIAL` для достигнутых organizing opcode,
 //! включая смерть faction-master-а `0x60101`, создание фракции `0x60103`,
-//! список фракций страны `0x60107`,
+//! initial organizing data `0x60104`, список фракций страны `0x60107`,
 //! подачу заявки `0x60108`, отмену
 //! заявки `0x60109`, решение по заявке `0x6010A`, исключение участника
 //! `0x6010B`, исключение фракции из союза `0x6010C`, выход из фракции
@@ -43,6 +43,12 @@
 //! player-name lookup остаётся на своей exact позиции между двумя частями
 //! concrete `CreateFaction`; технически ADO заменён параметризованным
 //! `tiberius`, но порядок и политика ошибки сохранены.
+//! Exact `0x004A6685..0x004A66D7` для `0x60104` читает один player ID,
+//! требует online player с `m_bGetFactionData != true` и без проверки
+//! результатов последовательно вызывает faction, union и all-faction
+//! snapshot owner-ы. Route/tail gates Linux-донора отсутствуют. Concrete
+//! `AddUnionToClientByPlayerID` `0x004376F0..0x00437807` ставит player flag
+//! только после отправки полного `0x7FE04`.
 //! Exact диапазоны
 //! `0x004A66DC..0x004A69A4` восстанавливают `0x60107`: запрос читает
 //! `(request ID, cookie, player ID, page)`, берёт country только у online
@@ -473,6 +479,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingUnionApplyForJoinOutcome, OrganizingFactionApplicationBlock,
     FactionCreationBlock, FactionCreationEffects, FactionCreationOutcome,
     FactionCreationPreparation, FactionClientSnapshotBlock, AllFactionInfoClientBlock,
+    UnionClientSnapshotByPlayerBlock, UnionClientSnapshotByPlayerOutcome,
     PlayerInviteFactionBlock, PlayerInviteFactionEffects, PlayerInviteFactionOutcome,
     OrganizingNameCountryBlock, OrganizingNameKind, OrganizingNameLookupBlock,
     OrganizingNameMatch, OrganizingNamedUnionApplicationBlock,
@@ -511,6 +518,7 @@ const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
 const FACTION_WAR_PLAYER_DIED_MESSAGE_TYPE: i32 = 0x60101;
 const CREATE_FACTION_MESSAGE_TYPE: i32 = 0x60103;
 const CREATE_FACTION_RESPONSE_TYPE: i32 = 0x7FE01;
+const INITIAL_ORGANIZING_DATA_MESSAGE_TYPE: i32 = 0x60104;
 const FACTION_LIST_MESSAGE_TYPE: i32 = 0x60107;
 const FACTION_LIST_RESPONSE_TYPE: i32 = 0x7FE07;
 const FACTION_APPLICATION_MESSAGE_TYPE: i32 = 0x60108;
@@ -2629,6 +2637,104 @@ fn send_create_faction_response(
         wire,
         delivery,
     }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingInitialDataOutcome {
+    PlayerOffline,
+    AlreadyReceived,
+    Sent {
+        faction_snapshot: bool,
+        union_snapshot: UnionClientSnapshotByPlayerOutcome,
+        all_factions_snapshot: bool,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingInitialDataBlock {
+    Faction(FactionClientSnapshotBlock),
+    Union {
+        faction_snapshot: bool,
+        source: UnionClientSnapshotByPlayerBlock,
+    },
+    AllFactions {
+        faction_snapshot: bool,
+        union_snapshot: UnionClientSnapshotByPlayerOutcome,
+        source: AllFactionInfoClientBlock,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingInitialDataDispatch {
+    pub(crate) player_id: i32,
+    pub(crate) outcome: Result<OrganizingInitialDataOutcome, OrganizingInitialDataBlock>,
+}
+
+pub(crate) fn dispatch_initial_organizing_data(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+) -> Option<OrganizingInitialDataDispatch> {
+    if message.message_type() != INITIAL_ORGANIZING_DATA_MESSAGE_TYPE {
+        return None;
+    }
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let Some(player) = game.online_player_by_id(player_id as u32) else {
+        return Some(OrganizingInitialDataDispatch {
+            player_id,
+            outcome: Ok(OrganizingInitialDataOutcome::PlayerOffline),
+        });
+    };
+    if player.faction_data_received() {
+        return Some(OrganizingInitialDataDispatch {
+            player_id,
+            outcome: Ok(OrganizingInitialDataOutcome::AlreadyReceived),
+        });
+    }
+
+    let faction_snapshot = match organizing.add_faction_to_client_by_player_id(game, player_id) {
+        Ok(outcome) => outcome,
+        Err(source) => {
+            return Some(OrganizingInitialDataDispatch {
+                player_id,
+                outcome: Err(OrganizingInitialDataBlock::Faction(source)),
+            });
+        }
+    };
+    let union_snapshot = match organizing.add_union_to_client_by_player_id(game, player_id) {
+        Ok(outcome) => outcome,
+        Err(source) => {
+            return Some(OrganizingInitialDataDispatch {
+                player_id,
+                outcome: Err(OrganizingInitialDataBlock::Union {
+                    faction_snapshot,
+                    source,
+                }),
+            });
+        }
+    };
+    let all_factions_snapshot =
+        match organizing.add_all_faction_info_to_client_by_player_id(game, player_id) {
+            Ok(outcome) => outcome,
+            Err(source) => {
+                return Some(OrganizingInitialDataDispatch {
+                    player_id,
+                    outcome: Err(OrganizingInitialDataBlock::AllFactions {
+                        faction_snapshot,
+                        union_snapshot,
+                        source,
+                    }),
+                });
+            }
+        };
+    Some(OrganizingInitialDataDispatch {
+        player_id,
+        outcome: Ok(OrganizingInitialDataOutcome::Sent {
+            faction_snapshot,
+            union_snapshot,
+            all_factions_snapshot,
+        }),
+    })
 }
 
 /// Узкая граница online-player owner-а для списка faction одной страны.

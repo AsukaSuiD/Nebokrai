@@ -33,8 +33,8 @@
 //! country-specific `GetFactionNumber` RVA `0x00033D10` и
 //! `AddFactionListToByteArray` RVA `0x00033D90`,
 //! `FindOrgaByName` RVA `0x000345A0`,
-//! `AddAllFactinInfoToClientByPlayerID/AddFactionToClientByPlayerID` RVA
-//! `0x00034D00/0x00037380`,
+//! `AddAllFactinInfoToClientByPlayerID/AddFactionToClientByPlayerID/
+//! AddUnionToClientByPlayerID` RVA `0x00034D00/0x00037380/0x000376F0`,
 //! `IsFactionMaster` RVA `0x000344A0`, `IsConferationMaster` RVA `0x00034520`,
 //! `ReInitialFacFactionByLvl` RVA
 //! `0x00034C80` и `AddUnionToClientByFactionID` RVA `0x00038010` —
@@ -179,6 +179,12 @@
 //! отправляет его, не меняя player flag. Detached adapter `DoJoin` подставляет
 //! живую target faction в обоих проходах на прежний map-key; `Cell<bool>` у
 //! player-а заменяет только raw aliasing, сохраняя момент мутации флага.
+//! `AddUnionToClientByPlayerID` последовательно разрешает faction и union,
+//! требует online player только после live union lookup, отправляет ему
+//! `0x7FE04(player, full union snapshot)` даже на route `0` и лишь после send
+//! ставит `m_bGetFactionData=true`. Missing union после положительного
+//! membership возвращает исходный `true`, offline player — `false`; exact
+//! `0x004376F0..0x00437807` подтверждает эти разные return-path.
 //! Через read-only `FactionOperationAuthorityContext` этот lookup и уже
 //! материализованный `IsFreeFaction` обслуживают faction tax/city-gate owner-ы;
 //! null во время membership scan остаётся typed-границей старого UB.
@@ -1054,6 +1060,31 @@ pub(crate) enum AddUnionToFactionBlock {
         game_server_id: i32,
         source: UnionMemberSnapshotBlock,
         completed_deliveries: Vec<AddUnionToFactionDelivery>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionClientSnapshotByPlayerOutcome {
+    NoFaction,
+    NoUnion { faction_id: i32 },
+    MissingUnion { faction_id: i32, union_id: i32 },
+    PlayerOffline { faction_id: i32, union_id: i32 },
+    Sent {
+        faction_id: i32,
+        union_id: i32,
+        game_server_id: i32,
+        result: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionClientSnapshotByPlayerBlock {
+    PlayerMembership { map_key: i32 },
+    UnionMembership { map_key: i32 },
+    Snapshot {
+        faction_id: i32,
+        union_id: i32,
+        source: UnionMemberSnapshotBlock,
     },
 }
 
@@ -4152,6 +4183,69 @@ impl COrganizingCtrl {
             return Ok(false);
         };
         self.add_faction_to_client_with_detached(game, faction_id, faction, player_id)
+    }
+
+    /// Выполняет exact `AddUnionToClientByPlayerID` для одного online player.
+    pub(crate) fn add_union_to_client_by_player_id(
+        &mut self,
+        game: &CGame,
+        player_id: i32,
+    ) -> Result<UnionClientSnapshotByPlayerOutcome, UnionClientSnapshotByPlayerBlock> {
+        let faction_id = match self.is_free_player(player_id) {
+            FreePlayerLookup::NoFaction => {
+                return Ok(UnionClientSnapshotByPlayerOutcome::NoFaction);
+            }
+            FreePlayerLookup::Faction(faction_id) => faction_id,
+            FreePlayerLookup::BlockedNullFaction { map_key } => {
+                return Err(UnionClientSnapshotByPlayerBlock::PlayerMembership { map_key });
+            }
+        };
+        let union_id = match self.is_free_faction(faction_id) {
+            FreeFactionLookup::NoUnion => {
+                return Ok(UnionClientSnapshotByPlayerOutcome::NoUnion { faction_id });
+            }
+            FreeFactionLookup::Union(union_id) => union_id,
+            FreeFactionLookup::BlockedNullConfederation { map_key } => {
+                return Err(UnionClientSnapshotByPlayerBlock::UnionMembership { map_key });
+            }
+        };
+        if self.confederation_by_id(union_id).is_none() {
+            return Ok(UnionClientSnapshotByPlayerOutcome::MissingUnion {
+                faction_id,
+                union_id,
+            });
+        }
+        let Some(player) = game.online_player_by_id(player_id as u32) else {
+            return Ok(UnionClientSnapshotByPlayerOutcome::PlayerOffline {
+                faction_id,
+                union_id,
+            });
+        };
+        let game_server_id = game.game_server_number_by_player_id(player_id);
+        let (factions, confederations) = (&self.factions, &mut self.confederations);
+        let union = confederations
+            .get_mut(&union_id)
+            .and_then(Option::as_deref_mut)
+            .expect("union owner проверен до split borrow");
+        let mut message = CMessage::new(UNION_INITIAL_MESSAGE_TYPE);
+        message.base_mut().add_long(player_id);
+        let mut snapshot = Vec::new();
+        union
+            .add_to_byte_array(&mut snapshot, &UnionFactionMapView { factions })
+            .map_err(|source| UnionClientSnapshotByPlayerBlock::Snapshot {
+                faction_id,
+                union_id,
+                source,
+            })?;
+        message.base_mut().add(&snapshot);
+        let result = game.send_msg_to_game_server(game_server_id, &message);
+        player.set_faction_data_received(true);
+        Ok(UnionClientSnapshotByPlayerOutcome::Sent {
+            faction_id,
+            union_id,
+            game_server_id,
+            result,
+        })
     }
 
     /// Выполняет exact public `AddAllFactinInfoToClientByPlayerID` без detach.
@@ -8554,7 +8648,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::AddUnionToClientByPlayerID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:595
@@ -8562,6 +8656,7 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 004376f0
 // PROTOTYPE: bool __thiscall AddUnionToClientByPlayerID(long param_1)
 //
+// IMPLEMENTED_OWNER: `COrganizingCtrl::add_union_to_client_by_player_id` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

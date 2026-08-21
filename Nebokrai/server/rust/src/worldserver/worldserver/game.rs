@@ -1100,6 +1100,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingFactionDisbandBlock, OrganizingFactionDisbandDispatch,
     OrganizingFactionFireOutBlock, OrganizingFactionFireOutDispatch,
     OrganizingFactionWarPlayerDiedDispatch,
+    OrganizingInitialDataDispatch,
     OrganizingFactionExitBlock, OrganizingFactionExitDispatch,
     OrganizingUnionDemiseDispatch,
     OrganizingUnionDisbandBlock, OrganizingUnionDisbandDispatch,
@@ -1130,6 +1131,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     dispatch_change_region_router, dispatch_city_war_result,
     dispatch_consumed_long, dispatch_create_faction, dispatch_declare_faction_war,
     dispatch_faction_war_player_died,
+    dispatch_initial_organizing_data,
     dispatch_declare_war_faction_list, dispatch_faction_application,
     dispatch_faction_application_decision,
     dispatch_faction_dub,
@@ -2210,6 +2212,12 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: OrganizingFactionWarPlayerDiedDispatch,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingInitialData {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: OrganizingInitialDataDispatch,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingDeclareWarFactionList {
@@ -9111,7 +9119,7 @@ impl CGame {
     /// `0x5FD0C/0x5FD0D`, server `0x5FA01..=0x5FA07/0x5FA09/0x5FA0F/0x5FA10`,
     /// organizing session
     /// result, смерть faction-master-а `0x60101`, создание faction `0x60103`,
-    /// список faction страны `0x60107`,
+    /// initial organizing data `0x60104`, список faction страны `0x60107`,
     /// подача заявки `0x60108`,
     /// отмена заявки `0x60109`, решение по ней `0x6010A`, member/faction/union
     /// mutations `0x6010B..0x60113`, union application
@@ -14681,6 +14689,43 @@ where
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingCreateFaction {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        if let Some(outcome) =
+            dispatch_initial_organizing_data(&mut message, game, organizing)
+        {
+            let callbacks = WorldUnionApplicationEffectCallbacks {
+                random: &mut *application_callbacks.random,
+                world_string: &mut *application_callbacks.world_string,
+                format_world_string: &mut *application_callbacks.format_world_string,
+                put_war_log: &mut *application_callbacks.put_war_log,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
+            };
+            let mut effects = WorldUnionApplicationEffects::new(
+                game,
+                net_sessions,
+                application_runtime,
+                callbacks,
+            );
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingInitialData {
                 source,
                 legacy_run_result,
                 outcome,
