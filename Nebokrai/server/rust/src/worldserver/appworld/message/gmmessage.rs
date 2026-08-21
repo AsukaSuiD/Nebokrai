@@ -18,6 +18,8 @@
 //! Region query `0x5FF04` сохраняет case-sensitive `GetRegion(name)`, exact
 //! `s_mapGameServer[index].bConnected` gate и общий `SendAll` ответа `0x7FC04`;
 //! donor-замены через current socket и ответ только источнику не перенесены.
+//! Reload `0x5FF06` вызывает уже достигнутый `CGame::ReLoad(profile,true,true)`
+//! без добавленного донором failure-log-а.
 //!
 //! Rust `VecDeque::len` шире старого 32-битного `_Mysize`; значение вне
 //! legacy-range безопасно блокируется typed-исходом, а не молча обрезается.
@@ -28,7 +30,9 @@
 use std::ffi::CString;
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
-use crate::worldserver::worldserver::game::{CGame, WorldNamedRegionLookup};
+use crate::worldserver::worldserver::game::{
+    CGame, WorldNamedRegionLookup, WorldReloadBlock, WorldReloadContext,
+};
 
 const ONLINE_PLAYER_COUNT_REQUEST: i32 = 0x0005_FF01;
 const ONLINE_PLAYER_COUNT_RESPONSE: i32 = 0x0007_FC01;
@@ -159,6 +163,14 @@ pub(crate) enum WorldGmMessageOutcome {
         wire: Vec<u8>,
         delivery: Result<i32, SendMessageError>,
     },
+    Reload {
+        request_id: i32,
+        request_id_complete: bool,
+        profile: Vec<u8>,
+        send_to_game_servers: bool,
+        reload_server_resources: bool,
+        result: Result<i32, WorldReloadBlock>,
+    },
     Transport(WorldGmTransportOutcome),
 }
 
@@ -168,7 +180,11 @@ pub(crate) enum WorldGmMessageDispatch {
 }
 
 /// Исполняет достигнутые query-ветви частичного GM-owner-а.
-pub(crate) fn on_gm_message(game: &CGame, mut message: CMessage) -> WorldGmMessageDispatch {
+pub(crate) fn on_gm_message(
+    game: &mut CGame,
+    reload_context: &mut dyn WorldReloadContext,
+    mut message: CMessage,
+) -> WorldGmMessageDispatch {
     let decoded_request_id = message.base_mut().get_long();
     let request_id = decoded_request_id.unwrap_or(0);
     match message.message_type() {
@@ -242,6 +258,21 @@ pub(crate) fn on_gm_message(game: &CGame, mut message: CMessage) -> WorldGmMessa
                 response_type: ONLINE_PLAYER_ID_RESPONSE,
                 wire,
                 delivery,
+            })
+        }
+        0x0005_FF06 => {
+            let profile = message
+                .base_mut()
+                .get_str_bytes(0x100)
+                .expect("literal 0x100 исключает zero-capacity GetStr");
+            let result = game.reload(reload_context, &profile, true, true);
+            WorldGmMessageDispatch::Handled(WorldGmMessageOutcome::Reload {
+                request_id,
+                request_id_complete: decoded_request_id.is_some(),
+                profile,
+                send_to_game_servers: true,
+                reload_server_resources: true,
+                result,
             })
         }
         0x0005_FF02 => {

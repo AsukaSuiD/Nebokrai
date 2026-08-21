@@ -8406,7 +8406,7 @@ impl CGame {
     /// Поэтому typed reconnect из первой очереди заменяет owner до второго
     /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
     /// ветви server-owner-а, GMA `0x4FD01/0x4FD04/0x60401/0x60402`, GM
-    /// query/transport ветви GM `0x5FF01..05/07..0A/0D..11/13..16`,
+    /// query/reload/transport ветви GM `0x5FF01..0A/0D..11/13..16`,
     /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, honor
     /// `0x5FD0C/0x5FD0D`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
@@ -8441,6 +8441,7 @@ impl CGame {
         net_sessions: &CNetSessionManager,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+        reload_context: &mut dyn WorldReloadContext,
         add_gma_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
         update_player: &mut dyn FnMut(i32),
         clear_city_war_country_warring: &mut dyn FnMut(u8),
@@ -8486,6 +8487,7 @@ impl CGame {
                             net_sessions,
                             application_runtime,
                             application_callbacks,
+                            &mut *reload_context,
                             &mut *add_gma_log_text,
                             update_player,
                             clear_city_war_country_warring,
@@ -8539,6 +8541,7 @@ impl CGame {
                     net_sessions,
                     application_runtime,
                     application_callbacks,
+                    &mut *reload_context,
                     &mut *add_gma_log_text,
                     update_player,
                     clear_city_war_country_warring,
@@ -8591,6 +8594,7 @@ impl CGame {
         net_sessions: &CNetSessionManager,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+        reload_context: &mut dyn WorldReloadContext,
         log: &mut WorldLogTextOwner,
         get_log_local_time: &mut dyn FnMut() -> WorldLogLocalTime,
         put_log_info: &mut dyn FnMut(&[u8]),
@@ -8636,6 +8640,7 @@ impl CGame {
             net_sessions,
             application_runtime,
             application_callbacks,
+            reload_context,
             &mut add_gma_log_text,
             update_player,
             clear_city_war_country_warring,
@@ -9724,6 +9729,7 @@ impl CGame {
             owners.net_sessions,
             owners.union_application_runtime,
             &mut union_application_callbacks,
+            &mut *callbacks.reload_context,
             owners.log,
             &mut *callbacks.get_log_local_time,
             &mut *callbacks.put_log_info,
@@ -11491,6 +11497,7 @@ fn process_world_message<TimerCallback: Copy>(
     net_sessions: &CNetSessionManager,
     application_runtime: &WorldUnionApplicationRuntimeOwner,
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    reload_context: &mut dyn WorldReloadContext,
     add_gma_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     update_player: &mut dyn FnMut(i32),
     clear_city_war_country_warring: &mut dyn FnMut(u8),
@@ -11558,7 +11565,7 @@ fn process_world_message<TimerCallback: Copy>(
     }
 
     if selector.owner == Some(WorldMessageOwner::Gm) {
-        match on_gm_message(game, message) {
+        match on_gm_message(game, reload_context, message) {
             WorldGmMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::GmMessage {
                     source,
