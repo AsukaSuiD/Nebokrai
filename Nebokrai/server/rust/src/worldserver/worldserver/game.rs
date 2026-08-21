@@ -1204,8 +1204,10 @@ use crate::worldserver::appworld::organizingsystem::villagewarsys::{
 };
 use crate::worldserver::appworld::player::{
     CPlayer, PlayerCodecError, PlayerCountryChangeReport, PlayerExploitUpdate,
+    PlayerFactionInfoContext, PlayerFactionInfoDelivery, PlayerFactionInfoUpdateBlock,
+    PlayerFactionInfoUpdateReport,
     PlayerMurderCounterReset, PlayerMurderCounterUpdate, PlayerOrganizingUpdateError,
-    PlayerPropertyCoefficients,
+    PlayerOrganizingState, PlayerOrganizingUpdater, PlayerPropertyCoefficients,
 };
 use crate::worldserver::appworld::region::RegionSerializationBlock;
 use crate::worldserver::appworld::script::variablelist::{
@@ -5609,6 +5611,39 @@ impl fmt::Display for WorldCreationPlayerAppendLog {
                 write!(formatter, "{player_id} Player Is In CreationPlayerList.")
             }
             Self::ExistingMapOwner => formatter.write_str("MapPlayer Not Found or NULL."),
+        }
+    }
+}
+
+/// Тонкий concrete adapter organizing/region/transport owner-ов
+/// `CPlayer::UpdateFactionInfo`.
+struct WorldPlayerFactionInfoContext<'a> {
+    game: &'a CGame,
+    organizing: &'a COrganizingCtrl,
+    region_types: &'a BTreeMap<i32, Option<u16>>,
+}
+
+impl PlayerOrganizingUpdater for WorldPlayerFactionInfoContext<'_> {
+    fn set_player_organizing(
+        &mut self,
+        player_id: i32,
+        organizing: &mut PlayerOrganizingState,
+    ) -> Result<(), PlayerOrganizingUpdateError> {
+        let mut updater = self.organizing.player_updater(self.region_types);
+        updater.set_player_organizing(player_id, organizing)
+    }
+}
+
+impl PlayerFactionInfoContext for WorldPlayerFactionInfoContext<'_> {
+    fn send_player_faction_info(
+        &mut self,
+        player_id: i32,
+        message: &CMessage,
+    ) -> PlayerFactionInfoDelivery {
+        let game_server_id = self.game.game_server_number_by_player_id(player_id);
+        PlayerFactionInfoDelivery {
+            game_server_id,
+            result: self.game.send_msg_to_game_server(game_server_id, message),
         }
     }
 }
@@ -11730,6 +11765,34 @@ impl CGame {
         self.map_player(player_id)
     }
 
+    /// Выполняет concrete `CPlayer::UpdateFactionInfo` для map-owner-а.
+    ///
+    /// Временное извлечение из map заменяет старый raw alias: organizing-
+    /// updater и queue-send не выполняют повторный lookup этого player-а.
+    /// Owner возвращается в map и при typed block, поэтому Rust lifecycle не
+    /// зависит от результата сериализации.
+    pub(crate) fn update_player_faction_info(
+        &mut self,
+        organizing: &COrganizingCtrl,
+        player_id: i32,
+    ) -> Result<Option<PlayerFactionInfoUpdateReport>, PlayerFactionInfoUpdateBlock> {
+        let region_types = self.player_organizing_region_types();
+        let player_key = player_id as u32;
+        let Some(mut player) = self.players.remove(&player_key) else {
+            return Ok(None);
+        };
+        let outcome = {
+            let mut context = WorldPlayerFactionInfoContext {
+                game: self,
+                organizing,
+                region_types: &region_types,
+            };
+            player.update_faction_info(&mut context)
+        };
+        self.players.insert(player_key, player);
+        outcome.map(Some)
+    }
+
     /// Меняет country только у owner-а, подтверждённого exact online-list.
     pub(crate) fn change_online_player_country(
         &mut self,
@@ -14657,7 +14720,6 @@ where
             check_invalid_organizing_string,
             game.setup.use_log_system && faction_create_log_enabled,
             write_faction_create_log,
-            update_player,
         )
         .await;
         if let Some(outcome) = faction_create {

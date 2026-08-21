@@ -508,7 +508,10 @@ use crate::worldserver::appworld::organizingsystem::villagewarsys::{
     VillageWarCallbacks, VillageWarResultBlock, VillageWarResultContext,
     VillageWarResultFaction, VillageWarResultRegion, VillageWarResultReport,
 };
-use crate::worldserver::appworld::player::{PlayerCodecError, PlayerPropertyCoefficients};
+use crate::worldserver::appworld::player::{
+    PlayerCodecError, PlayerFactionInfoUpdateBlock, PlayerFactionInfoUpdateReport,
+    PlayerPropertyCoefficients,
+};
 use crate::worldserver::worldserver::game::{
     CGame, WorldRegionNameLookup, WorldRegionParamUpdateOutcome, legacy_tick_ms,
 };
@@ -2382,7 +2385,7 @@ pub(crate) enum OrganizingCreateFactionOutcome {
         outcome: FactionCreationOutcome,
         response: OrganizingCreateFactionResponse,
         notice: crate::worldserver::appworld::organizingsystem::organizingctrl::OrganizingInfoDelivery,
-        player_refreshed: bool,
+        player_refresh: Option<PlayerFactionInfoUpdateReport>,
         faction_snapshot: Option<Result<bool, FactionClientSnapshotBlock>>,
         all_factions_snapshot: Option<Result<bool, AllFactionInfoClientBlock>>,
     },
@@ -2392,6 +2395,8 @@ pub(crate) enum OrganizingCreateFactionOutcome {
 pub(crate) enum OrganizingCreateFactionBlock {
     PlayerDecode(PlayerCodecError),
     Creation(FactionCreationBlock),
+    PlayerRefresh(PlayerFactionInfoUpdateBlock),
+    PlayerRefreshOwnerMissing,
 }
 
 #[derive(Debug)]
@@ -2423,7 +2428,6 @@ pub(crate) async fn dispatch_create_faction(
     check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
     faction_create_log_enabled: bool,
     write_faction_create_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
-    update_player: &mut dyn FnMut(i32),
 ) -> Option<Result<OrganizingCreateFactionDispatch, OrganizingCreateFactionBlock>> {
     if message.message_type() != CREATE_FACTION_MESSAGE_TYPE {
         return None;
@@ -2568,11 +2572,21 @@ pub(crate) async fn dispatch_create_faction(
         FactionCreationOutcome::Rejected(_) => (0, b"WS0115".as_slice(), false),
         FactionCreationOutcome::Created(_) => (1, b"WS0117".as_slice(), true),
     };
-    let player_refreshed = if created {
-        update_player(player_id);
-        true
+    drop(effects);
+    let player_refresh = if created {
+        match game.update_player_faction_info(organizing, player_id) {
+            Ok(Some(report)) => Some(report),
+            Ok(None) => {
+                return Some(Err(
+                    OrganizingCreateFactionBlock::PlayerRefreshOwnerMissing,
+                ));
+            }
+            Err(source) => {
+                return Some(Err(OrganizingCreateFactionBlock::PlayerRefresh(source)));
+            }
+        }
     } else {
-        false
+        None
     };
     let faction_snapshot = created.then(|| {
         organizing.add_faction_to_client_by_player_id(game, player_id)
@@ -2583,8 +2597,8 @@ pub(crate) async fn dispatch_create_faction(
     let response = send_create_faction_response(
         game, map_id, request_id, cookie, player_id, result,
     );
-    let first_text = (effects.callbacks.world_string)(notice_id);
-    let second_text = (effects.callbacks.world_string)(b"WS0118");
+    let first_text = (callbacks.world_string)(notice_id);
+    let second_text = (callbacks.world_string)(b"WS0118");
     let notice = COrganizingCtrl::send_organizing_info_to_client(
         game,
         FactionMemberInfoRequest {
@@ -2606,7 +2620,7 @@ pub(crate) async fn dispatch_create_faction(
             outcome: creation,
             response,
             notice,
-            player_refreshed,
+            player_refresh,
             faction_snapshot,
             all_factions_snapshot,
         },

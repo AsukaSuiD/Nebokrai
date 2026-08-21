@@ -3,7 +3,7 @@
 //! Статус `CPlayer::GetAccount` RVA `0x00002F90`, `CPlayer::SaveData` RVA
 //! `0x0005B4E0`, `CPlayer::CheckGoodsInPacket` RVA `0x0005BA90`, inherited
 //! `GetName`, reached `ProcessPlayerDataQueue`, `CPlayer::ChangeCountry` RVA
-//! `0x0005EA30`
+//! `0x0005EA30`, `CPlayer::UpdateFactionInfo` RVA `0x0005C1D0`
 //! accessors для level/friends и inherited `CShape::SetState`,
 //! process-wide `CPlayer::GetNetExID` inline-path в `CUnion::ApplyForJoin`
 //! `0x004C2C51..0x004C2C5E`,
@@ -69,6 +69,18 @@
 //! сравнения именно с `true`. Raw constructor назначает `false`, поэтому
 //! reached-state хранится отдельным Rust `bool`, не расширяя это до заявления
 //! о полном layout `CPlayer`.
+//!
+//! `UpdateFactionInfo` exact `0x0045C1D0..0x0045C345` сбрасывает достигнутые
+//! organizing-поля, вызывает `SetPlayerOrganizing`, при faction ID `0`
+//! снимает `m_bGetFactionData`, затем создаёт `0x7FE06` с player ID. Вызванный
+//! через virtual slot `AddOrgSysToByteArray` ещё раз выполняет
+//! `SetPlayerOrganizing`; этот наблюдаемый двойной вызов сохранён. Готовое
+//! сообщение уходит в `GetGameServerNumber_ByPlayerID(player ID)` без
+//! дополнительного online-gate. Rust context заменяет только process-global
+//! singleton и транспорт. Старый owner не очищал owned-region container при
+//! переходе во free player, однако serializer при faction ID `0` его не
+//! читал; Rust удаляет это ненаблюдаемое stale-состояние как внутренний
+//! lifecycle-дефект.
 //!
 //! `ChangeCountry` exact `0x0045EA30..0x0045EA81` сначала сравнивает unsigned
 //! byte `m_btCountry +0x844`, затем требует signed `m_lFactionID +0x86C == 0`,
@@ -304,6 +316,7 @@ use crate::dbaccess::worlddb::rsplayer::{
     PlayerThing as DbPlayerThing, RsPlayerOwner,
 };
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
+use crate::nets::networld::message::{CMessage, SendMessageError};
 
 use super::container::camountlimitgoodscontainer::{
     AmountContainerCodecError, CAmountLimitGoodsContainer,
@@ -816,6 +829,36 @@ pub(crate) trait PlayerOrganizingUpdater {
     ) -> Result<(), PlayerOrganizingUpdateError>;
 }
 
+/// Транспортная граница финального `0x7FE06` из `UpdateFactionInfo`.
+pub(crate) trait PlayerFactionInfoContext: PlayerOrganizingUpdater {
+    fn send_player_faction_info(
+        &mut self,
+        player_id: i32,
+        message: &CMessage,
+    ) -> PlayerFactionInfoDelivery;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct PlayerFactionInfoDelivery {
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct PlayerFactionInfoUpdateReport {
+    pub(crate) player_id: i32,
+    pub(crate) faction_id_after_initial_update: i32,
+    pub(crate) faction_data_reset: bool,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: PlayerFactionInfoDelivery,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerFactionInfoUpdateBlock {
+    InitialOrganizing(PlayerOrganizingUpdateError),
+    Serialization(PlayerCodecError),
+}
+
 /// Owned DB-проекция пятнадцати frozen container-ов одного `CPlayer`.
 pub(crate) struct PlayerGoodsDbProjection {
     packet: Vec<TraversedGoods>,
@@ -950,6 +993,7 @@ pub(crate) struct CPlayer {
     session_id: Vec<u8>,
     organizing: PlayerOrganizingState,
     faction_data_received: Cell<bool>,
+    create_union_operator: bool,
     faction_war_operator: bool,
 }
 
@@ -1278,6 +1322,7 @@ impl CPlayer {
                 owned_regions: VecDeque::new(),
             },
             faction_data_received: Cell::new(false),
+            create_union_operator: false,
             faction_war_operator: false,
         }
     }
@@ -1555,6 +1600,61 @@ impl CPlayer {
     ) -> Result<(), PlayerOrganizingUpdateError> {
         let player_id = self.get_id();
         updater.set_player_organizing(player_id, &mut self.organizing)
+    }
+
+    /// Выполняет exact `CPlayer::UpdateFactionInfo` и публикует `0x7FE06`.
+    pub(crate) fn update_faction_info<Context>(
+        &mut self,
+        context: &mut Context,
+    ) -> Result<PlayerFactionInfoUpdateReport, PlayerFactionInfoUpdateBlock>
+    where
+        Context: PlayerFactionInfoContext,
+    {
+        self.organizing.faction_id = 0;
+        self.organizing.faction_logo_id = 0;
+        self.organizing.faction_name.clear();
+        self.organizing.faction_title.clear();
+        self.organizing.faction_master_id = 0;
+        self.organizing.faction_level = 0;
+        self.organizing.faction_experience = 0;
+        self.organizing.faction_contribute = false;
+        self.organizing.union_id = 0;
+        self.organizing.union_master_id = 0;
+        self.organizing.enemy_factions.clear();
+        self.city_war_died_state_time = 0;
+        self.organizing.city_war_enemy_factions.clear();
+        self.create_union_operator = false;
+        self.faction_war_operator = false;
+        self.organizing.force = 0;
+        // Исходник оставлял stale owned-region list при переходе во free
+        // player, но serializer при faction ID `0` её никогда не читал.
+        // Это внутренний lifecycle-дефект без внешнего контракта.
+        self.organizing.owned_regions.clear();
+
+        self.set_player_organizing(context)
+            .map_err(PlayerFactionInfoUpdateBlock::InitialOrganizing)?;
+        let faction_id_after_initial_update = self.organizing.faction_id;
+        let faction_data_reset = faction_id_after_initial_update == 0;
+        if faction_data_reset {
+            self.faction_data_received.set(false);
+        }
+
+        let player_id = self.get_id();
+        let mut message = CMessage::new(0x0007_FE06);
+        message.base_mut().add_long(player_id);
+        let mut organization_wire = Vec::new();
+        self.add_org_sys_to_byte_array(&mut organization_wire, context)
+            .map_err(PlayerFactionInfoUpdateBlock::Serialization)?;
+        message.base_mut().add(&organization_wire);
+        let wire = message.as_wire_bytes().to_vec();
+        let delivery = context.send_player_faction_info(player_id, &message);
+        Ok(PlayerFactionInfoUpdateReport {
+            player_id,
+            faction_id_after_initial_update,
+            faction_data_reset,
+            wire,
+            delivery,
+        })
     }
 
     /// Присваивает state унаследованного shape-owner-а.
@@ -2940,7 +3040,7 @@ fn read_player_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CPlayer::UpdateFactionInfo
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_PARTIAL / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:715
@@ -2948,6 +3048,8 @@ fn read_player_array<const N: usize>(
 // ADDRESS: 0045c1d0
 // PROTOTYPE: void __thiscall UpdateFactionInfo(void)
 //
+// IMPLEMENTED_OWNER: `CPlayer::update_faction_info` выше сохраняет exact reset,
+// двойной `SetPlayerOrganizing`, payload `0x7FE06` и GS-маршрутизацию.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
