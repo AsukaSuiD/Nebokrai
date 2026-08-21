@@ -2,7 +2,7 @@
 //! включая заявку союза `0x60118`, общий session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
-//! `0x6012A`; остальной owner —
+//! `0x6012A`, а также парные city-tax gate `0x6012B/0x6012C`; остальной owner —
 //! `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
@@ -96,6 +96,15 @@
 //! соседний `+0x148`. Иные operation и missing faction прекращают ветвь, не
 //! потребляя четвёртое поле. Online-player lookup, ownership/tail-проверки и
 //! wire-ответ отсутствуют; дополнительные rejects Linux-донора не перенесены.
+//! Exact `0x004A7ABA..0x004A7CEC/0x004A7CF1..0x004A7F1A` для парных
+//! `0x6012B/0x6012C` читает `(player ID, region ID)`, разрешает faction через
+//! ordered `IsFreePlayer` и проверяет сначала `CAttackCitySys::GetCityState`,
+//! затем `CVillageWarSys::GetRegionState` на literal `CIS_Fight`. Эти ветви
+//! отправляют соответственно `WS0126/WS0121` и `WS0127/WS0121`. Вне войны
+//! virtual slot `+0x48` вызывает готовый `CFaction::OperatorTax(player,
+//! region)`; только true-result меняет type исходного сообщения на
+//! `0x7FE28/0x7FE29` соответственно и отправляет весь исходный payload в его
+//! socket. Online-player ownership и exact-tail checks отсутствуют.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -129,6 +138,7 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
 use crate::worldserver::appworld::organizingsystem::faction::{
     FactionContributorContext, FactionExperienceBlock, FactionExperienceUpdate,
     FactionLevelContext, FactionMemberInfoRequest, FactionOrganizingInfoContext,
+    FactionOperationBlock, FactionOperationOutcome, FactionOperationRejection,
     FactionUpgradeBlock, FactionUpgradeContext, FactionUpgradeFormatArgument,
     FactionUpgradeOutcome, FactionUploadIconBlock, FactionUploadIconContext,
     FactionUploadIconOutcome,
@@ -136,10 +146,12 @@ use crate::worldserver::appworld::organizingsystem::faction::{
 use crate::worldserver::appworld::organizingsystem::factionwarsys::{
     CFactionWarSys, FactionWarDeclarationBlock, FactionWarDeclarationOutcome,
 };
+use crate::worldserver::appworld::organizingsystem::attackcitysys::CAttackCitySys;
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     COrganizingCtrl, DeclareWarFactionPage, DeclareWarFactionPageBlock, FreePlayerLookup,
     OrganizingContributorBlock, OrganizingContributorOutcome,
-    OrganizingFactionExperienceMutation, OrganizingFactionMemberStateOutcome,
+    FactionUnionMembershipLookupBlock, OrganizingFactionExperienceMutation,
+    OrganizingFactionMemberStateOutcome,
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock,
     OrganizingLeaveWordEditOutcome, OrganizingLeaveWordEnableBlock,
     OrganizingFactionWarDeclarationBlock, WorldFactionWarDeclarationEffects,
@@ -147,7 +159,9 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingPronounceOutcome, OrganizingUnionApplyForJoinDispatchBlock,
     OrganizingUnionApplyForJoinOutcome,
 };
-use crate::worldserver::appworld::organizingsystem::organizing::{EOperator, TagTimeValue};
+use crate::worldserver::appworld::organizingsystem::organizing::{
+    ECityState, EOperator, TagTimeValue,
+};
 use crate::worldserver::appworld::organizingsystem::organizingparam::COrganizingParam;
 use crate::worldserver::appworld::organizingsystem::union::{
     UnionAddFactionEffects, UnionApplicationEndpointBlock, UnionApplicationSessionBlock,
@@ -155,6 +169,7 @@ use crate::worldserver::appworld::organizingsystem::union::{
     UnionApplicationTerminal, UnionApplyForJoinEffects, UnionFormatArgument,
     begin_union_application_session,
 };
+use crate::worldserver::appworld::organizingsystem::villagewarsys::CVillageWarSys;
 use crate::worldserver::appworld::player::{PlayerCodecError, PlayerPropertyCoefficients};
 use crate::worldserver::worldserver::game::CGame;
 
@@ -177,6 +192,10 @@ const UPLOAD_FACTION_ICON_MESSAGE_TYPE: i32 = 0x60127;
 const SET_FACTION_CONTRIBUTOR_MESSAGE_TYPE: i32 = 0x60128;
 const ADD_FACTION_EXPERIENCE_MESSAGE_TYPE: i32 = 0x60129;
 const CHANGE_FACTION_MEMBER_STATE_MESSAGE_TYPE: i32 = 0x6012A;
+const OPERATE_FACTION_TAX_MESSAGE_TYPE: i32 = 0x6012B;
+const OPERATE_FACTION_TAX_RESPONSE_TYPE: i32 = 0x7FE28;
+const ADJUST_FACTION_TAX_MESSAGE_TYPE: i32 = 0x6012C;
+const ADJUST_FACTION_TAX_RESPONSE_TYPE: i32 = 0x7FE29;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -1528,6 +1547,172 @@ pub(crate) fn dispatch_faction_member_state(
         operation,
         outcome,
     })
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionTaxResponse {
+    pub(crate) socket_id: i32,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionTaxOutcome {
+    FactionNotFound,
+    AttackCityFight,
+    VillageWarFight,
+    Rejected {
+        faction_id: i32,
+        reason: FactionOperationRejection,
+    },
+    Authorized {
+        faction_id: i32,
+        response: OrganizingFactionTaxResponse,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionTaxBlock {
+    Membership { map_key: i32 },
+    Operation {
+        faction_id: i32,
+        source: FactionOperationBlock<FactionUnionMembershipLookupBlock>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionTaxDispatch {
+    pub(crate) request_type: i32,
+    pub(crate) player_id: i32,
+    pub(crate) region_id: i32,
+    pub(crate) outcome: OrganizingFactionTaxOutcome,
+}
+
+/// Выполняет `0x6012B/0x6012C`: два ordered war-gate и `CFaction::OperatorTax`.
+pub(crate) fn dispatch_faction_tax<Context>(
+    message: &mut CMessage,
+    organizing: &COrganizingCtrl,
+    attack_city: &CAttackCitySys,
+    village_war: &CVillageWarSys,
+    context: &mut Context,
+    sender: Option<&ServerCommandHandle>,
+) -> Option<Result<OrganizingFactionTaxDispatch, OrganizingFactionTaxBlock>>
+where
+    Context: FactionOrganizingInfoContext,
+{
+    let request_type = message.message_type();
+    let response_type = match request_type {
+        OPERATE_FACTION_TAX_MESSAGE_TYPE => OPERATE_FACTION_TAX_RESPONSE_TYPE,
+        ADJUST_FACTION_TAX_MESSAGE_TYPE => ADJUST_FACTION_TAX_RESPONSE_TYPE,
+        _ => return None,
+    };
+
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let region_id = message.base_mut().get_long().unwrap_or(0);
+    let faction_id = match organizing.is_free_player(player_id) {
+        FreePlayerLookup::NoFaction => {
+            return Some(Ok(OrganizingFactionTaxDispatch {
+                request_type,
+                player_id,
+                region_id,
+                outcome: OrganizingFactionTaxOutcome::FactionNotFound,
+            }));
+        }
+        FreePlayerLookup::Faction(faction_id) => faction_id,
+        FreePlayerLookup::BlockedNullFaction { map_key } => {
+            return Some(Err(OrganizingFactionTaxBlock::Membership { map_key }));
+        }
+    };
+    if organizing.faction_by_id(faction_id).is_none() {
+        return Some(Ok(OrganizingFactionTaxDispatch {
+            request_type,
+            player_id,
+            region_id,
+            outcome: OrganizingFactionTaxOutcome::FactionNotFound,
+        }));
+    }
+
+    if attack_city.get_city_state(region_id) == ECityState::Fight {
+        send_faction_tax_notice(context, player_id, b"WS0126");
+        return Some(Ok(OrganizingFactionTaxDispatch {
+            request_type,
+            player_id,
+            region_id,
+            outcome: OrganizingFactionTaxOutcome::AttackCityFight,
+        }));
+    }
+    if village_war.get_region_state(region_id) == ECityState::Fight {
+        send_faction_tax_notice(context, player_id, b"WS0127");
+        return Some(Ok(OrganizingFactionTaxDispatch {
+            request_type,
+            player_id,
+            region_id,
+            outcome: OrganizingFactionTaxOutcome::VillageWarFight,
+        }));
+    }
+
+    let operation = match organizing.operate_faction_tax(faction_id, player_id, region_id) {
+        Ok(Some(operation)) => operation,
+        Ok(None) => {
+            return Some(Ok(OrganizingFactionTaxDispatch {
+                request_type,
+                player_id,
+                region_id,
+                outcome: OrganizingFactionTaxOutcome::FactionNotFound,
+            }));
+        }
+        Err(source) => {
+            return Some(Err(OrganizingFactionTaxBlock::Operation {
+                faction_id,
+                source,
+            }));
+        }
+    };
+    let outcome = match operation {
+        FactionOperationOutcome::Rejected(reason) => OrganizingFactionTaxOutcome::Rejected {
+            faction_id,
+            reason,
+        },
+        FactionOperationOutcome::Authorized => {
+            message.set_message_type(response_type);
+            let socket_id = message.socket_id();
+            let wire = message.as_wire_bytes().to_vec();
+            let delivery = message.send_to_socket(sender, socket_id);
+            OrganizingFactionTaxOutcome::Authorized {
+                faction_id,
+                response: OrganizingFactionTaxResponse {
+                    socket_id,
+                    wire,
+                    delivery,
+                },
+            }
+        }
+    };
+    Some(Ok(OrganizingFactionTaxDispatch {
+        request_type,
+        player_id,
+        region_id,
+        outcome,
+    }))
+}
+
+fn send_faction_tax_notice<Context>(
+    context: &mut Context,
+    player_id: i32,
+    first_string_id: &'static [u8],
+) where
+    Context: FactionOrganizingInfoContext,
+{
+    let first_text = context.world_string(first_string_id).unwrap_or_default();
+    let second_text = context.world_string(b"WS0121").unwrap_or_default();
+    context.send_organizing_info(FactionMemberInfoRequest {
+        recipient_player_id: player_id,
+        first_text: legacy_c_string_prefix(&first_text),
+        second_text: legacy_c_string_prefix(&second_text),
+        information_type: -1,
+        color: 0xFFDA_EDFE,
+        trailing_value: 0,
+    });
 }
 
 fn send_declare_war_faction_list_notice<Context>(

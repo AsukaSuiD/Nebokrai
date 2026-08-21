@@ -209,7 +209,7 @@
 //! `0x4FC01..=0x4FC03`, other honor, достигнутые organizing owner-ы вплоть до
 //! billboard `0x60125`, faction upgrade `0x60126`, upload-icon gate `0x60127`
 //! и contributor gate `0x60128`, faction-experience `0x60129`, а также
-//! member level/position callback `0x6012A`
+//! member level/position callback `0x6012A` и city-tax gates `0x6012B/0x6012C`
 //! исполняются сразу. Остальные сообщения возвращаются owned вместе с
 //! выбранным сырым owner-ом и не выдаются за no-op исполнение. Session manager
 //! передаётся тому же
@@ -988,7 +988,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingDeclareWarFactionListDispatch, OrganizingFactionBillboardBlock,
     OrganizingFactionBillboardOutcome, OrganizingFactionContributorDispatch,
     OrganizingFactionExperienceDispatch, OrganizingFactionMemberStateDispatch,
-    OrganizingFactionUpgradeBlock,
+    OrganizingFactionTaxBlock, OrganizingFactionTaxDispatch, OrganizingFactionUpgradeBlock,
     OrganizingFactionUpgradeDispatch, OrganizingFactionUploadIconDispatch,
     OrganizingLeaveWordDispatch,
     OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEnableDispatch,
@@ -1000,7 +1000,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     WorldUnionApplicationRuntimeOwner, dispatch_consumed_long, dispatch_declare_faction_war,
     dispatch_declare_war_faction_list, dispatch_faction_billboard, dispatch_faction_upgrade,
     dispatch_faction_contributor, dispatch_faction_experience, dispatch_faction_member_state,
-    dispatch_faction_upload_icon,
+    dispatch_faction_tax, dispatch_faction_upload_icon,
     dispatch_leave_word, dispatch_leave_word_edit,
     dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_pronounce,
     dispatch_union_application,
@@ -1012,6 +1012,7 @@ use crate::worldserver::appworld::message::servermessage::{
 use crate::worldserver::appworld::organizingsystem::faction::{
     CFaction, FactionExperienceBlock, FactionUploadIconBlock,
 };
+use crate::worldserver::appworld::organizingsystem::attackcitysys::CAttackCitySys;
 use crate::worldserver::appworld::organizingsystem::factionwarsys::{
     CFactionWarSys, FactionWarRunReport, FactionWarStopBlock, FactionWarStopContext,
 };
@@ -1031,6 +1032,7 @@ use crate::worldserver::appworld::organizingsystem::union::{
     CUnion, UnionApplicationEndpointBlock, UnionApplicationSessionBlock,
     UnionApplicationSessionReport, UnionFormatArgument,
 };
+use crate::worldserver::appworld::organizingsystem::villagewarsys::CVillageWarSys;
 use crate::worldserver::appworld::player::{
     CPlayer, PlayerCodecError, PlayerOrganizingUpdateError, PlayerPropertyCoefficients,
 };
@@ -1954,6 +1956,12 @@ pub(crate) enum ProcessedWorldEvent {
         outcome: OrganizingFactionMemberStateDispatch,
         runtime: WorldUnionApplicationRuntimeReport,
     },
+    OrganizingFactionTax {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<OrganizingFactionTaxDispatch, OrganizingFactionTaxBlock>,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
     OrganizingUnionApplication {
         source: WorldMessageSource,
         legacy_run_result: i32,
@@ -2567,6 +2575,8 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) session_factory: &'a mut CSessionFactory,
     pub(crate) timer: &'a mut CTimer<TimerCallback>,
     pub(crate) faction_war: &'a mut CFactionWarSys,
+    pub(crate) attack_city: &'a CAttackCitySys,
+    pub(crate) village_war: &'a CVillageWarSys,
     pub(crate) lei_ting: &'a mut CLeiTing,
     pub(crate) db_misc: &'a mut CDbMisc,
     pub(crate) net_sessions: &'a CNetSessionManager,
@@ -8191,6 +8201,8 @@ impl CGame {
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
         faction_war_sys: &mut CFactionWarSys,
+        attack_city: &CAttackCitySys,
+        village_war: &CVillageWarSys,
         registry: &GoodsBasePropertiesRegistry,
         original_name_index: &GoodsOriginalNameIndex,
         coefficients: &PlayerPropertyCoefficients,
@@ -8224,6 +8236,8 @@ impl CGame {
                             organizing,
                             organizing_parameters,
                             faction_war_sys,
+                            attack_city,
+                            village_war,
                             registry,
                             original_name_index,
                             coefficients,
@@ -8265,6 +8279,8 @@ impl CGame {
                     organizing,
                     organizing_parameters,
                     faction_war_sys,
+                    attack_city,
+                    village_war,
                     registry,
                     original_name_index,
                     coefficients,
@@ -8305,6 +8321,8 @@ impl CGame {
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
         faction_war_sys: &mut CFactionWarSys,
+        attack_city: &CAttackCitySys,
+        village_war: &CVillageWarSys,
         registry: &GoodsBasePropertiesRegistry,
         original_name_index: &GoodsOriginalNameIndex,
         coefficients: &PlayerPropertyCoefficients,
@@ -8325,6 +8343,8 @@ impl CGame {
             organizing,
             organizing_parameters,
             faction_war_sys,
+            attack_city,
+            village_war,
             registry,
             original_name_index,
             coefficients,
@@ -9400,6 +9420,8 @@ impl CGame {
             owners.organizing,
             owners.organizing_parameters,
             owners.faction_war,
+            owners.attack_city,
+            owners.village_war,
             owners.registry,
             owners.original_name_index,
             owners.coefficients,
@@ -11056,6 +11078,8 @@ fn process_world_message(
     organizing: &mut COrganizingCtrl,
     organizing_parameters: &COrganizingParam,
     faction_war_sys: &mut CFactionWarSys,
+    attack_city: &CAttackCitySys,
+    village_war: &CVillageWarSys,
     registry: &GoodsBasePropertiesRegistry,
     original_name_index: &GoodsOriginalNameIndex,
     coefficients: &PlayerPropertyCoefficients,
@@ -11522,6 +11546,29 @@ fn process_world_message(
             application_runtime,
             callbacks,
         );
+        if let Some(outcome) = dispatch_faction_tax(
+            &mut message,
+            organizing,
+            attack_city,
+            village_war,
+            &mut effects,
+            game_server_sender.as_ref(),
+        ) {
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingFactionTax {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
         if let Some(outcome) = dispatch_declare_war_faction_list(
             &mut message,
             organizing,

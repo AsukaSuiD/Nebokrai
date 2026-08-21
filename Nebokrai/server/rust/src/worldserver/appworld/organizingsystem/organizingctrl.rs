@@ -278,7 +278,8 @@ use super::faction::{
     FactionInitialPropertyBlock,
     FactionLeaveWordBlock, FactionLeaveWordOutcome, FactionMemberInfoReport,
     FactionMemberInfoRequest,
-    FactionOperationAuthorityContext, FactionOrganizingInfoContext, FactionOtherInfoBuildError,
+    FactionOperationAuthorityContext, FactionOperationBlock, FactionOperationOutcome,
+    FactionOrganizingInfoContext, FactionOtherInfoBuildError,
     FactionOtherInfoDelivery, FactionOwnedCityDelivery, FactionOwnedCityRefreshBlock,
     FactionOwnedCityRefreshReport, FactionOwnedCityUpdateBuildError, FactionPlayerHeaderContext,
     FactionPronounceBlock, FactionPronounceOutcome, FactionPropertyDelivery,
@@ -1382,6 +1383,24 @@ impl COrganizingCtrl {
             ),
             _ => OrganizingFactionMemberStateOutcome::UnknownOperation,
         }
+    }
+
+    /// Выполняет конкретный `CFaction::OperatorTax` после внешних war-gates.
+    pub(crate) fn operate_faction_tax(
+        &self,
+        faction_id: i32,
+        player_id: i32,
+        region_id: i32,
+    ) -> Result<
+        Option<FactionOperationOutcome>,
+        FactionOperationBlock<FactionUnionMembershipLookupBlock>,
+    > {
+        let Some(faction) = self.faction_by_id(faction_id) else {
+            return Ok(None);
+        };
+        faction
+            .operator_tax(player_id, region_id, self)
+            .map(Some)
     }
 
     fn add_billboard_to_byte_array(
