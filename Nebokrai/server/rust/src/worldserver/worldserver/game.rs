@@ -860,6 +860,11 @@
 //! `ReLoadOneRegionSetup/ReLoadAllRegionSetup` RVA
 //! `0x000120F0/0x000108F0` уже сохраняют signed map-order, null-skip и точный
 //! `0x7F801/0x10` send соответствующему GameServer.
+//! Init-pass после organizing load больше не делегирует целый
+//! `InitOwnerRelation` внешнему контексту: каждый concrete region owner прямо
+//! проверяет faction/union, восстанавливает faction city-list и country byte.
+//! Внешней остаётся только узкая player-refresh граница уже готового
+//! `CFaction::AddOwnedCity`.
 //!
 //! `region_name` выполняет ровно цепочку numeric `GetRegion -> pRegion ->
 //! CWorldRegion -> CRegion -> CBaseObject::m_strName`. Typed lookup сохраняет
@@ -1170,7 +1175,8 @@ use crate::worldserver::appworld::worldcountrywarregion::{
 };
 use crate::worldserver::appworld::worldregion::{
     CWorldRegion, WorldRegionLoadError, WorldRegionLoadedCounts, WorldRegionResourceContext,
-    WorldRegionParamDecodeError, WorldRegionSerializationBlock, WorldRegionSetupSerializationBlock,
+    WorldRegionOwnerRelationBlock, WorldRegionOwnerRelationReport, WorldRegionParamDecodeError,
+    WorldRegionSerializationBlock, WorldRegionSetupSerializationBlock,
 };
 use crate::worldserver::appworld::worldvillageregion::CWorldVillageRegion;
 use crate::worldserver::appworld::worldwarregion::WorldWarRegionSerializationBlock;
@@ -1468,6 +1474,7 @@ pub(crate) enum WorldGameInitEvent {
     CountryWarInitialized(CountryWarLoadReport),
     RegionOwnerRelationInitialized {
         region_id: i32,
+        report: WorldRegionOwnerRelationReport,
     },
     PlayerRanksInitialized(PlayerRanksInitializationReport),
     PlayerRanksLoaded(PlayerRanksStatRunReport),
@@ -1514,6 +1521,10 @@ pub(crate) enum WorldGameInitBlockReason<ContextBlock> {
     CountryHandler,
     CountryWarLoad(CountryWarLoadError),
     CountryWar,
+    RegionOwnerRelation {
+        region_id: i32,
+        source: WorldRegionOwnerRelationBlock,
+    },
     PlayerRanksSchedule(PlayerRanksScheduleBlock),
     PlayerRanksStat(PlayerRanksStatRunBlock),
     NetworkClient(WorldClientInitializationError),
@@ -1574,8 +1585,6 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn country_parameter_source(&mut self) -> Option<Vec<u8>>;
     fn country_war_source(&mut self) -> Option<Vec<u8>>;
     fn initialize_words_filter(&mut self, invalid_strings: &[u8], char_codes: &[u8]);
-    fn initialize_region_owner_relation(&mut self, region_id: i32, region: &mut CWorldRegion);
-
     fn use_appellation_function(&mut self) -> bool;
     /// Возвращает достигнутый player DB-owner и его текущий caller-connection.
     fn player_database(
@@ -1592,12 +1601,13 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn start_worker(&mut self, kind: WorldGameInitWorkerKind) -> WorldGameInitWorkerHandleState;
 }
 
-/// Clock/log adapters полного Init; доменные owners остаются в Context.
+/// Clock/log и узкий player-refresh adapters полного Init.
 pub(crate) struct WorldGameInitCallbacks<'a> {
     pub(crate) get_tick: &'a mut dyn FnMut() -> u32,
     pub(crate) get_log_local_time: &'a mut dyn FnMut() -> WorldLogLocalTime,
     pub(crate) get_timer_local_time: &'a mut dyn FnMut() -> TagTime,
     pub(crate) put_log_info: &'a mut dyn FnMut(&[u8]),
+    pub(crate) update_player: &'a mut dyn FnMut(i32),
 }
 
 /// Локальная safe-граница `SaveCityRegion(0)` до virtual save-вызова.
@@ -7582,7 +7592,7 @@ impl CGame {
         timer: &mut CTimer<TimerCallback>,
         organizing_tax_callback: TimerCallback,
         player_ranks_callback: TimerCallback,
-        organizing: &COrganizingCtrl,
+        organizing: &mut COrganizingCtrl,
         country_handler: &mut CCountryHandler,
         country_parameters: &mut CCountryParam,
         country_database: &mut CountryDatabase,
@@ -7972,15 +7982,33 @@ impl CGame {
         ));
         let region_ids = self.regions.keys().copied().collect::<Vec<_>>();
         for region_id in region_ids {
-            let Some(region) = self
+            let Some(mut region_owner) = self
                 .regions
                 .get_mut(&region_id)
-                .and_then(|assignment| assignment.region.as_mut())
+                .and_then(|assignment| assignment.region.take())
             else {
                 continue;
             };
-            context.initialize_region_owner_relation(region_id, region.base_mut());
-            events.push(WorldGameInitEvent::RegionOwnerRelationInitialized { region_id });
+            let relation = region_owner.base_mut().init_owner_relation(
+                organizing,
+                &*self,
+                &mut *callbacks.update_player,
+            );
+            self.regions
+                .get_mut(&region_id)
+                .expect("region-map key не удаляется во время owner relation")
+                .region = Some(region_owner);
+            let report = match relation {
+                Ok(report) => report,
+                Err(source) => stop!(WorldGameInitBlockReason::RegionOwnerRelation {
+                    region_id,
+                    source,
+                }),
+            };
+            events.push(WorldGameInitEvent::RegionOwnerRelationInitialized {
+                region_id,
+                report,
+            });
         }
 
         for owner in [

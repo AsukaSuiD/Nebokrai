@@ -151,6 +151,11 @@ impl CRegion {
         self.country
     }
 
+    /// Присваивает достигнутый country byte унаследованного `CRegion`.
+    pub(crate) const fn set_country(&mut self, country: u8) {
+        self.country = Some(country);
+    }
+
     /// Дописывает только унаследованный `CBaseObject` для отдельного proxy-wire.
     pub(crate) fn add_base_object_to_byte_array(
         &self,

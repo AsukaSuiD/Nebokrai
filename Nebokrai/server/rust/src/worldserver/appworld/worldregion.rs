@@ -13,7 +13,8 @@
 //! `0x00073F00`, selective parameter decoder RVA `0x00073F50`, parameter
 //! setters RVA `0x00073FA0/0x00073FF0`, ownership accessors RVA
 //! `0x00077990/0x000779B0/0x000779C0`, no-op virtual decoder RVA `0x000C18C0`,
-//! direct `New` RVA `0x00077980`, `GetReturnPoint` RVA `0x00075AA0`,
+//! direct `New` RVA `0x00077980`, `InitOwnerRelation` RVA `0x000759D0`,
+//! `GetReturnPoint` RVA `0x00075AA0`,
 //! `SetEnterPosXY` RVA `0x00075C30`, а также
 //! `CWorldRegion::GenerateSaveData` RVA `0x00077DF0` — `IMPLEMENTED`;
 //! остальной virtual gameplay API ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
@@ -56,6 +57,15 @@
 //! `0x00401000`, чьё тело — единственный `ret`. Поэтому MainLoop выполняет
 //! доказанный no-op напрямую; Linux-донорская форма `pRegion->AI()` остаётся
 //! подсказкой к call-site, но не поводом материализовать недостижимое дерево.
+//! `InitOwnerRelation` exact `0x004759D0..0x00475A96` выполняется только при
+//! исходном положительном owned-faction ID. Miss/null faction обнуляет оба
+//! ownership ID; miss/null union затем отдельно обнуляет union ID. Если после
+//! этого virtual `GetOwnedCityFaction` всё ещё положителен, owner вызывает
+//! concrete `COrganizingCtrl::AddOwnedCityToFaction` с собственным base ID,
+//! повторно получает faction country и записывает byte в `CRegion+0x80`.
+//! `CGame::Init` временно вынимает region owner из map-slot только для
+//! безопасного split borrow и всегда возвращает его в тот же slot; это не
+//! меняет исходный порядок либо lifetime.
 //!
 //! Proxy serializer не является сокращением обычного region serializer-а: он
 //! вызывает непосредственно `CBaseObject::AddToByteArray`, затем пишет country
@@ -106,12 +116,17 @@
 //! `m_Param`.
 
 use super::country::countryparam::CCountryParam;
+use super::organizingsystem::faction::{
+    FactionInitialPropertyBlock, OwnedCityAddOutcome, OwnedCityMutationBuildError,
+};
+use super::organizingsystem::organizingctrl::COrganizingCtrl;
 use super::organizingsystem::villagewarsys::CVillageWarSys;
 use super::player::CPlayer;
 use super::region::{
     CRegion, RegionLoadError, RegionRandomPositionBlock, RegionSerializationBlock,
 };
 use crate::dbaccess::worlddb::rsregion::RegionSaveSnapshot;
+use crate::worldserver::worldserver::game::CGame;
 
 /// Полная достигнутая семантика исходного `tagRegionParam`.
 #[derive(Clone, Copy, Debug)]
@@ -178,6 +193,29 @@ pub(crate) enum WorldRegionEnterBlock {
     UninitializedPlayerCountry,
     CoordinateOverflow { operation: &'static str },
     RandomPosition(RegionRandomPositionBlock),
+}
+
+/// Полный normal-return результат `CWorldRegion::InitOwnerRelation`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldRegionOwnerRelationReport {
+    pub(crate) initial_faction_id: i32,
+    pub(crate) faction_cleared: bool,
+    pub(crate) union_cleared: bool,
+    pub(crate) owned_city: Option<OwnedCityAddOutcome>,
+    pub(crate) country: Option<u8>,
+}
+
+/// Safe-граница после уже выполненного prefix-а owner relation.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldRegionOwnerRelationBlock {
+    OwnedCity {
+        report: WorldRegionOwnerRelationReport,
+        source: OwnedCityMutationBuildError,
+    },
+    Country {
+        report: WorldRegionOwnerRelationReport,
+        source: FactionInitialPropertyBlock,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -884,6 +922,64 @@ impl CWorldRegion {
         self.param.owned_union_id
     }
 
+    /// Восстанавливает faction/union/country relation после DB-load.
+    pub(crate) fn init_owner_relation(
+        &mut self,
+        organizing: &mut COrganizingCtrl,
+        game: &CGame,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<WorldRegionOwnerRelationReport, WorldRegionOwnerRelationBlock> {
+        let initial_faction_id = self.param.owned_faction_id;
+        let mut report = WorldRegionOwnerRelationReport {
+            initial_faction_id,
+            faction_cleared: false,
+            union_cleared: false,
+            owned_city: None,
+            country: None,
+        };
+        if initial_faction_id <= 0 {
+            return Ok(report);
+        }
+
+        if organizing.faction_by_id(initial_faction_id).is_none() {
+            self.param.owned_faction_id = 0;
+            self.param.owned_union_id = 0;
+            report.faction_cleared = true;
+        }
+        if organizing
+            .confederation_by_id(self.param.owned_union_id)
+            .is_none()
+        {
+            report.union_cleared = self.param.owned_union_id != 0;
+            self.param.owned_union_id = 0;
+        }
+
+        let faction_id = self.get_owned_city_faction();
+        if faction_id <= 0 {
+            return Ok(report);
+        }
+        report.owned_city = match organizing.add_owned_city_to_faction(
+            game,
+            faction_id,
+            self.get_id(),
+            update_player,
+        ) {
+            Ok(outcome) => outcome,
+            Err(source) => {
+                return Err(WorldRegionOwnerRelationBlock::OwnedCity { report, source });
+            }
+        };
+        let country = match organizing.country_by_faction(faction_id) {
+            Ok(country) => country.unwrap_or(0),
+            Err(source) => {
+                return Err(WorldRegionOwnerRelationBlock::Country { report, source });
+            }
+        };
+        self.region.set_country(country);
+        report.country = Some(country);
+        Ok(report)
+    }
+
     /// Делегирует virtual `New` единственному `CRegion` base-owner-у.
     pub(crate) fn new_region(&mut self) -> Result<i32, RegionLoadError> {
         self.region.new_region()
@@ -1278,7 +1374,7 @@ fn assign_next_i32(tokens: &mut RegionSetupTokens<'_>, field: &mut Option<i32>) 
 
 // ============================================================================
 // FUNCTION: CWorldRegion::InitOwnerRelation
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\worldregion.cpp:366
@@ -1286,8 +1382,8 @@ fn assign_next_i32(tokens: &mut RegionSetupTokens<'_>, field: &mut Option<i32>) 
 // ADDRESS: 004759d0
 // PROTOTYPE: void __thiscall InitOwnerRelation(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// Реализовано выше как `init_owner_relation`; exact lookup/mutation/call order
+// и прямое присваивание inherited country byte сохранены.
 //
 
 // ============================================================================

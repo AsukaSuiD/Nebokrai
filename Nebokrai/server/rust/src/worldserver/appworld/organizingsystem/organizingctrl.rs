@@ -16,7 +16,8 @@
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`; `GenerateSaveData` RVA `0x00034A10` —
 //! `IMPLEMENTED`, `GetpFactionById` RVA `0x00034080` и
 //! `GetConfederationOrganizing` RVA `0x00036BF0`,
-//! `GetCountryByFaction` RVA `0x00037B20`,
+//! `GetCountryByFaction` RVA `0x00037B20` и
+//! `AddOwnedCityToFaction` RVA `0x00037C20`,
 //! `IsFactionMaster` RVA `0x000344A0`, `ReInitialFacFactionByLvl` RVA
 //! `0x00034C80` и `AddUnionToClientByFactionID` RVA `0x00038010` —
 //! `IMPLEMENTED`; `PushToEstaList` RVA `0x000367C0` и оба overload-а
@@ -62,6 +63,12 @@
 //! отделяет этот нулевой miss от ещё не материализованного
 //! `CFaction::m_Property`: первый есть `Ok(None)`, второй остаётся typed
 //! safe-границей вместо выдуманной страны `0`.
+//! `AddOwnedCityToFaction` повторяет те же positive-ID/map/null gates и затем
+//! вызывает virtual `AddOwnedCity` slot `+0x80`. Exact ASM
+//! `0x00437C20..0x00437C69` подтверждает порядок обоих аргументов и отсутствие
+//! иных эффектов controller-а. Concrete `CFaction::add_owned_city` уже
+//! сохраняет list/duplicate/wire/player семантику; controller возвращает её
+//! typed report только для Rust caller-а, не добавляя legacy return value.
 //! Через read-only `FactionOperationAuthorityContext` этот lookup и уже
 //! материализованный `IsFreeFaction` обслуживают faction tax/city-gate owner-ы;
 //! null во время membership scan остаётся typed-границей старого UB.
@@ -2158,6 +2165,25 @@ impl COrganizingCtrl {
         faction.country().map(Some).ok_or(FactionInitialPropertyBlock)
     }
 
+    /// Повторяет exact `AddOwnedCityToFaction` через concrete faction owner.
+    pub(crate) fn add_owned_city_to_faction(
+        &mut self,
+        game: &CGame,
+        faction_id: i32,
+        region_id: i32,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<Option<OwnedCityAddOutcome>, OwnedCityMutationBuildError> {
+        if faction_id <= 0 {
+            return Ok(None);
+        }
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return Ok(None);
+        };
+        faction
+            .add_owned_city(game, region_id, update_player)
+            .map(Some)
+    }
+
     /// Узкий concrete dispatch достигнутого `CFaction::SetGoodsWarCount`.
     pub(crate) fn set_faction_goods_war_count(
         &mut self,
@@ -4134,12 +4160,8 @@ impl UnionOwnedCityMutationContext for COrganizingCtrl {
         region_id: i32,
         update_player: &mut dyn FnMut(i32),
     ) -> Result<bool, OwnedCityMutationBuildError> {
-        let Some(faction) = self.faction_by_id_mut(faction_id) else {
-            return Ok(false);
-        };
-        faction
-            .add_owned_city(game, region_id, update_player)
-            .map(|_| true)
+        self.add_owned_city_to_faction(game, faction_id, region_id, update_player)
+            .map(|outcome| outcome.is_some())
     }
 
     fn faction_add_owned_cities(
@@ -5283,7 +5305,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::AddOwnedCityToFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1717
@@ -5291,8 +5313,8 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00437c20
 // PROTOTYPE: void __thiscall AddOwnedCityToFaction(long param_1, long param_2)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// Реализовано выше как `add_owned_city_to_faction`; exact slot `+0x80`,
+// positive-ID/map/null gates и отсутствие controller-side эффектов сохранены.
 //
 
 // ============================================================================
