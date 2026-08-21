@@ -74,6 +74,11 @@ impl CMoveShape {
         self.shape_base.get_name()
     }
 
+    /// Присваивает имя через тот же inherited `CBaseObject::SetName` owner.
+    pub(crate) fn set_name(&mut self, name: &[u8]) {
+        self.shape_base.set_name(name);
+    }
+
     /// Возвращает region ID через унаследованный shape-owner.
     pub(crate) const fn get_region_id(&self) -> i32 {
         self.shape_base.get_region_id()

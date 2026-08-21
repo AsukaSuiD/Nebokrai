@@ -578,6 +578,15 @@
 //! `0x004052AF..0x004052CC` возвращает `false/true`, а
 //! `0x004054BF..0x004054DD` — `nullptr/[map_node+0x10]`.
 //!
+//! `CPlayer::ChangeName` exact `0x0045D1C0..0x0045D39A` использует эти
+//! lookup-и в порядке map -> frozen DB data -> frozen DB creation -> ADO.
+//! До них он ограничивает новое C-string имя 16 байтами, требует
+//! case-sensitive вхождения `strSpeStr` именно в текущем имени и передаёт
+//! отдельную `std::string`-копию в `CheckInvalidString(false)`, но после
+//! проверки продолжает работать с исходным input. Rust сохраняет этот порядок,
+//! byte-exact input и коды `1/8/2/3/4/5/6/7/0`; Tiberius parameter binding,
+//! `Vec` и explicit borrows заменяют только ADO/STL/global plumbing.
+//!
 //! `ClearCreationPlayer` удаляет все list-node без player-map мутаций и без
 //! уничтожения самих `CPlayer`; `VecDeque::clear` заменяет только link traversal
 //! и освобождение узлов. `GetCreationPlayerCountInCdkey` проходит player-map в
@@ -5559,6 +5568,29 @@ impl WorldDbDataSaveSession<'_> {
 pub(crate) enum WorldPlayerNameLookupError {
     PlayerNameTooLongForLegacyBuffer { player_id: u32, length: usize },
     RequestedNameTooLongForLegacyBuffer { length: usize },
+}
+
+/// Exact terminal CPlayer::ChangeName branch до однобайтового ответа GS.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WorldPlayerNameChangeDisposition {
+    PlayerMissing,
+    NullName,
+    NameTooLong { length: usize },
+    CurrentNameMissingSpecialString,
+    InvalidString,
+    MapPlayerNameExists,
+    DbDataNameExists,
+    DbCreationNameExists,
+    PersistentNameExists,
+    Changed { previous_name: Vec<u8> },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerNameChangeReport {
+    pub(crate) player_id: u32,
+    pub(crate) requested_name: Vec<u8>,
+    pub(crate) legacy_result: i32,
+    pub(crate) disposition: WorldPlayerNameChangeDisposition,
 }
 
 /// Результат `AppendCreationPlayer` с явным владением на каждой ветви.
@@ -12326,6 +12358,123 @@ impl CGame {
         Ok(false)
     }
 
+    /// Выполняет полный reached `CPlayer::ChangeName` без global singleton-ов.
+    /// Filter получает отдельную mutable копию, а последующие проверки и
+    /// финальное присваивание используют исходные bytes, как exact owner.
+    pub(crate) async fn change_map_player_name<Database, CheckInvalidString>(
+        &mut self,
+        player_id: u32,
+        requested_name: Option<&[u8]>,
+        globe_setup: &GlobeSetupSnapshot,
+        database: &mut Database,
+        active_transaction: Option<&mut WorldTdsClient>,
+        mut check_invalid_string: CheckInvalidString,
+    ) -> Result<WorldPlayerNameChangeReport, WorldPlayerNameLookupError>
+    where
+        Database: RsPlayerOwner + ?Sized,
+        CheckInvalidString: FnMut(&mut Vec<u8>, bool) -> bool,
+    {
+        let report = |requested_name: &[u8], legacy_result, disposition| {
+            WorldPlayerNameChangeReport {
+                player_id,
+                requested_name: requested_name.to_vec(),
+                legacy_result,
+                disposition,
+            }
+        };
+
+        let Some(player) = self.players.get(&player_id) else {
+            return Ok(report(
+                requested_name.unwrap_or_default(),
+                1,
+                WorldPlayerNameChangeDisposition::PlayerMissing,
+            ));
+        };
+        let Some(requested_name) = requested_name else {
+            return Ok(report(
+                &[],
+                1,
+                WorldPlayerNameChangeDisposition::NullName,
+            ));
+        };
+        let requested_name = legacy_c_string_prefix(requested_name);
+        if requested_name.len() > 0x10 {
+            return Ok(report(
+                requested_name,
+                8,
+                WorldPlayerNameChangeDisposition::NameTooLong {
+                    length: requested_name.len(),
+                },
+            ));
+        }
+
+        let current_name = legacy_c_string_prefix(player.get_name()).to_vec();
+        let special_string = globe_setup.special_string();
+        let contains_special_string = special_string.is_empty()
+            || current_name
+                .windows(special_string.len())
+                .any(|window| window == special_string);
+        if !contains_special_string {
+            return Ok(report(
+                requested_name,
+                2,
+                WorldPlayerNameChangeDisposition::CurrentNameMissingSpecialString,
+            ));
+        }
+
+        let mut checked_name = requested_name.to_vec();
+        if !check_invalid_string(&mut checked_name, false) {
+            return Ok(report(
+                requested_name,
+                3,
+                WorldPlayerNameChangeDisposition::InvalidString,
+            ));
+        }
+        if self.is_name_exist_in_map_player(requested_name)? {
+            return Ok(report(
+                requested_name,
+                4,
+                WorldPlayerNameChangeDisposition::MapPlayerNameExists,
+            ));
+        }
+        if self.is_name_exist_in_db_data(requested_name)? {
+            return Ok(report(
+                requested_name,
+                5,
+                WorldPlayerNameChangeDisposition::DbDataNameExists,
+            ));
+        }
+        if self.is_name_exist_in_db_creation(requested_name)? {
+            return Ok(report(
+                requested_name,
+                6,
+                WorldPlayerNameChangeDisposition::DbCreationNameExists,
+            ));
+        }
+        if database
+            .is_name_exist(requested_name, active_transaction)
+            .await
+        {
+            return Ok(report(
+                requested_name,
+                7,
+                WorldPlayerNameChangeDisposition::PersistentNameExists,
+            ));
+        }
+
+        self.players
+            .get_mut(&player_id)
+            .expect("эксклюзивный CGame borrow сохраняет map-owner через DB await")
+            .set_validated_name(requested_name);
+        Ok(report(
+            requested_name,
+            0,
+            WorldPlayerNameChangeDisposition::Changed {
+                previous_name: current_name,
+            },
+        ))
+    }
+
     /// Полностью очищает creation-list, не меняя владеющий player-map.
     pub(crate) fn clear_creation_player(&mut self) {
         self.creation_players.clear();
@@ -14244,7 +14393,17 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::Other) {
-        match on_other_message(game, honor_ranks, message) {
+        match on_other_message(
+            game,
+            honor_ranks,
+            globe_setup,
+            rs_player,
+            player_database.as_deref_mut(),
+            check_invalid_organizing_string,
+            message,
+        )
+        .await
+        {
             WorldOtherMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::OtherMessage {
                     source,

@@ -2,8 +2,8 @@
 //!
 //! Весь dispatcher RVA `0x000AC680` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме локального
 //! transport leaves `0x5FD02`, `0x5FD06..0x5FD09`, copy-number `0x5FD0B`,
-//! cursor-only `0x5FD0E`, LeiTing update `0x5FD10`, honor-reset `0x5FD0C` и
-//! eliminate update `0x5FD0D` со статусом
+//! cursor-only `0x5FD0E`, player rename `0x5FD05`, LeiTing update `0x5FD10`,
+//! honor-reset `0x5FD0C` и eliminate update `0x5FD0D` со статусом
 //! `IMPLEMENTED`. Reset читает один Windows `long`, получает текущий `CGame`
 //! и вызывает `ResetHonorElimilateInfo`.
 //! Недостаточный payload сохраняет старое поведение numeric getter-а: значение
@@ -29,12 +29,22 @@
 //! `0x5FD10` читает player ID и только для online owner-а делегирует оставшийся
 //! buffer/cursor уже достигнутому `CPlayer::DecodeByteArrayLeiTing`; malformed
 //! хвост возвращается typed-ошибкой с сохранением доказанных prefix-мутаций.
+//! `0x5FD05` читает signed player ID и `GetStr(..., 0x20)`, оставляет result
+//! `1` при отсутствующем map-owner-е, иначе выполняет exact восемь проверок
+//! `CPlayer::ChangeName`. Ответ всегда `0x7FA0E + ID + char(result) + name\0`;
+//! parameterized Tiberius query заменяет только старый ADO owner. Только
+//! локальная safe-граница недопустимо длинного уже сохранённого имени не
+//! получает выдуманного response после исходного stack-overread.
 
+use crate::dbaccess::worlddb::rsplayer::TiberiusRsPlayer;
+use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::worldserver::appworld::misc::{add_copy_num, get_copy_num};
 use crate::worldserver::appworld::player::PlayerCodecError;
 use crate::worldserver::worldserver::game::{
-    CGame, WorldHonorEliminatorRegistration,
+    CGame, WorldHonorEliminatorRegistration, WorldPlayerNameChangeReport,
+    WorldPlayerNameLookupError,
 };
 use crate::worldserver::worldserver::honorranks::{
     CHonorRanks, HonorRankPushBlock, HonorRanksKilledPlayerReport,
@@ -119,6 +129,15 @@ pub(crate) enum WorldOtherMessageOutcome {
         cursor_after_decode: usize,
         decode: Result<bool, PlayerCodecError>,
     },
+    PlayerNameChange {
+        player_id: u32,
+        player_id_complete: bool,
+        requested_name: Vec<u8>,
+        change: Result<WorldPlayerNameChangeReport, WorldPlayerNameLookupError>,
+        response_type: i32,
+        wire: Option<Vec<u8>>,
+        delivery: Option<Result<i32, SendMessageError>>,
+    },
     HonorEliminateReset(WorldHonorEliminateReset),
     HonorEliminateUpdate(WorldHonorEliminateUpdate),
 }
@@ -130,9 +149,13 @@ pub(crate) enum WorldOtherMessageDispatch {
 }
 
 /// Исполняет достигнутые transport/cursor/honor ветви other-owner-а.
-pub(crate) fn on_other_message(
+pub(crate) async fn on_other_message(
     game: &mut CGame,
     honor_ranks: &mut CHonorRanks,
+    globe_setup: &GlobeSetupSnapshot,
+    rs_player: &mut TiberiusRsPlayer,
+    player_database: Option<&mut WorldTdsClient>,
+    check_invalid_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
     mut message: CMessage,
 ) -> WorldOtherMessageDispatch {
     match message.message_type() {
@@ -214,6 +237,48 @@ pub(crate) fn on_other_message(
                 returned_copy_number,
                 copy_number_after,
                 response_type: 0x0007_FA15,
+                wire,
+                delivery,
+            })
+        }
+        0x0005_FD05 => {
+            let decoded_player_id = message.base_mut().get_long();
+            let player_id = decoded_player_id.unwrap_or(0) as u32;
+            let requested_name = message
+                .base_mut()
+                .get_str_bytes(0x20)
+                .expect("literal 0x20 исключает zero-capacity GetStr");
+            let change = game
+                .change_map_player_name(
+                    player_id,
+                    Some(&requested_name),
+                    globe_setup,
+                    rs_player,
+                    player_database,
+                    &mut *check_invalid_string,
+                )
+                .await;
+
+            let (wire, delivery) = if let Ok(report) = &change {
+                let mut response = CMessage::new(0x0007_FA0E);
+                response.base_mut().add_ulong(player_id);
+                response.base_mut().add_char(report.legacy_result as i8);
+                add_c_string(&mut response, &requested_name);
+                let wire = response.as_wire_bytes().to_vec();
+                let delivery = response.send_to_socket(
+                    game.current_game_server_sender().as_ref(),
+                    message.socket_id(),
+                );
+                (Some(wire), Some(delivery))
+            } else {
+                (None, None)
+            };
+            WorldOtherMessageDispatch::Handled(WorldOtherMessageOutcome::PlayerNameChange {
+                player_id,
+                player_id_complete: decoded_player_id.is_some(),
+                requested_name,
+                change,
+                response_type: 0x0007_FA0E,
                 wire,
                 delivery,
             })
@@ -328,6 +393,12 @@ pub(crate) fn on_other_message(
         }
         _ => WorldOtherMessageDispatch::Pending(message),
     }
+}
+
+fn add_c_string(message: &mut CMessage, bytes: &[u8]) {
+    let visible = bytes.iter().position(|byte| *byte == 0).unwrap_or(bytes.len());
+    message.base_mut().add(&bytes[..visible]);
+    message.base_mut().add_char(0);
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer

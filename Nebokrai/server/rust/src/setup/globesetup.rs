@@ -24,8 +24,9 @@
 //! Country `IsMinister` exact использует соседний `szCountryIdentity` по
 //! `+0xA46`, восемь slots по `0x40`; второй accessor не копирует строки.
 //! PDB type `CGlobeSetup::tagSetup` дополнительно подтверждает
-//! `wTotalJingLiDanCnt` по `+0x1110`; LeiTing owner читает его прямо из того же
-//! snapshot без отдельного дублирующего state.
+//! `strSpeStr[0x40]` по `+0x520` и `wTotalJingLiDanCnt` по `+0x1110`;
+//! player rename и LeiTing owners читают их прямо из того же snapshot без
+//! отдельного дублирующего state.
 
 use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 
@@ -35,6 +36,8 @@ const COUNTRY_NAME_SLOT_LENGTH: usize = 0x40;
 const COUNTRY_NAME_COUNT: usize = 5;
 const COUNTRY_IDENTITY_OFFSET: usize = 0xA46;
 const COUNTRY_IDENTITY_COUNT: usize = 8;
+const SPECIAL_STRING_OFFSET: usize = 0x520;
+const SPECIAL_STRING_LENGTH: usize = 0x40;
 const TOTAL_JING_LI_DAN_COUNT_OFFSET: usize = 0x1110;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -81,6 +84,14 @@ impl GlobeSetupSnapshot {
         let slot = &self.bytes[start..start + COUNTRY_NAME_SLOT_LENGTH];
         let visible_len = slot.iter().position(|byte| *byte == 0).unwrap_or(slot.len());
         Some(&slot[..visible_len])
+    }
+
+    /// Возвращает C-string prefix exact `strSpeStr[0x40]` по PDB `+0x520`.
+    pub(crate) fn special_string(&self) -> &[u8] {
+        let slot =
+            &self.bytes[SPECIAL_STRING_OFFSET..SPECIAL_STRING_OFFSET + SPECIAL_STRING_LENGTH];
+        let visible_len = slot.iter().position(|byte| *byte == 0).unwrap_or(slot.len());
+        &slot[..visible_len]
     }
 
     /// Возвращает exact `wTotalJingLiDanCnt` по PDB-offset `+0x1110`.

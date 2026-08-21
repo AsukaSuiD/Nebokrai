@@ -3,7 +3,8 @@
 //! Статус `CPlayer::GetAccount` RVA `0x00002F90`, `CPlayer::SaveData` RVA
 //! `0x0005B4E0`, `CPlayer::CheckGoodsInPacket` RVA `0x0005BA90`, inherited
 //! `GetName`, reached `ProcessPlayerDataQueue`, `CPlayer::ChangeCountry` RVA
-//! `0x0005EA30`, `CPlayer::UpdateFactionInfo` RVA `0x0005C1D0`,
+//! `0x0005EA30`, `CPlayer::ChangeName` RVA `0x0005D1C0`,
+//! `CPlayer::UpdateFactionInfo` RVA `0x0005C1D0`,
 //! `CPlayer::ClearOwnedRegion` RVA `0x00033B50` и
 //! `CPlayer::AddOwnedRegion` RVA `0x0005DD10`
 //! accessors для level/friends и inherited `CShape::SetState`,
@@ -1537,6 +1538,11 @@ impl CPlayer {
     /// Заимствует byte-exact имя через унаследованный `CBaseObject` owner.
     pub(crate) fn get_name(&self) -> &[u8] {
         self.move_shape_base.get_name()
+    }
+
+    /// Финальная exact-мутация `ChangeName` после ordered global/DB checks.
+    pub(crate) fn set_validated_name(&mut self, name: &[u8]) {
+        self.move_shape_base.set_name(name);
     }
 
     /// Заменяет exact `m_lSilienceTime`, возвращая прежнее значение.
@@ -3221,7 +3227,7 @@ fn read_player_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CPlayer::ChangeName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:849
@@ -3229,6 +3235,12 @@ fn read_player_array<const N: usize>(
 // ADDRESS: 0045d1c0
 // PROTOTYPE: int __thiscall ChangeName(char * param_1)
 //
+// IMPLEMENTED_OWNER: ordered orchestration находится в
+// `CGame::change_map_player_name`; финальная inherited name-мутация — в
+// `CPlayer::set_validated_name`. Exact `0x0045D1C0..0x0045D39A` подтвердил
+// return-коды `1/8/2/3/4/5/6/7/0`, case-sensitive `strstr` текущего имени с
+// `CGlobeSetup::tagSetup::strSpeStr +0x520` и неизменный original input после
+// проверки его временной `std::string`-копии.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
