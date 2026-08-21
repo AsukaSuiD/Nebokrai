@@ -14,7 +14,8 @@
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`; `GenerateSaveData` RVA `0x00034A10` —
 //! `IMPLEMENTED`, `GetpFactionById` RVA `0x00034080` и
 //! `GetConfederationOrganizing` RVA `0x00036BF0`,
-//! `ReInitialFacFactionByLvl` RVA `0x00034C80` — `IMPLEMENTED`. Точная пара:
+//! `IsFactionMaster` RVA `0x000344A0`, `ReInitialFacFactionByLvl` RVA
+//! `0x00034C80` — `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -52,6 +53,10 @@
 //! союз отдельно разрешает master-faction через `m_FacOrg`, где miss/null даёт
 //! старый `0`, а отсутствующий reached master ID concrete Rust-faction остаётся
 //! typed-блокировкой.
+//! `IsFactionMaster` проходит faction-map в signed order и возвращает только
+//! первый положительный concrete faction ID, чей master равен входному player
+//! ID. Null value был разыменованием, а отсутствующий reached Rust master ID
+//! не получает выдуманного продолжения: обе границы возвращаются typed.
 //!
 //! `IsFreePlayer` проходит `m_FacOrg` в порядке исходного ordered map и для
 //! каждого `COrganizing*` вызывает virtual slot `+0xDC`. Точный PDB
@@ -213,6 +218,7 @@ use super::faction::{
 use super::organizing::EOperator;
 use super::organizingparam::COrganizingParam;
 use super::union::CUnion;
+use super::union::UnionOperatorValidationContext;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::appworld::player::{
     PlayerOrganizingState, PlayerOrganizingUpdateError, PlayerOrganizingUpdater,
@@ -275,6 +281,12 @@ pub(crate) struct FactionUnionMembershipLookupBlock {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct UnionPlayerHeaderLookupBlock {
     pub(crate) master_faction_id: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionMasterLookupBlock {
+    NullFaction { map_key: i32 },
+    MissingMasterId { map_key: i32 },
 }
 
 /// Результат одного вызова `CFaction::RemoveApplyMember` в map-order.
@@ -652,6 +664,30 @@ impl COrganizingCtrl {
         self.confederations
             .get(&union_id)
             .and_then(Option::as_deref)
+    }
+
+    /// Повторяет ordered `IsFactionMaster` и не продолжает после старого UB.
+    pub(crate) fn faction_id_by_master_player(
+        &self,
+        player_id: i32,
+    ) -> Result<i32, FactionMasterLookupBlock> {
+        for (&map_key, faction) in &self.factions {
+            let Some(faction) = faction.as_deref() else {
+                return Err(FactionMasterLookupBlock::NullFaction { map_key });
+            };
+            let master_id = faction
+                .master_id()
+                .ok_or(FactionMasterLookupBlock::MissingMasterId { map_key })?;
+            let faction_id = if master_id == player_id {
+                faction.faction_id()
+            } else {
+                0
+            };
+            if faction_id > 0 {
+                return Ok(faction_id);
+            }
+        }
+        Ok(0)
     }
 
     /// Публикует одно other-faction изменение всем concrete faction-owner-ам.
@@ -1210,6 +1246,14 @@ impl FactionPlayerHeaderContext for COrganizingCtrl {
     }
 }
 
+impl UnionOperatorValidationContext for COrganizingCtrl {
+    type Block = FactionMasterLookupBlock;
+
+    fn faction_id_by_master_player(&self, player_id: i32) -> Result<i32, Self::Block> {
+        COrganizingCtrl::faction_id_by_master_player(self, player_id)
+    }
+}
+
 impl PlayerOrganizingUpdater for COrganizingPlayerUpdater<'_> {
     fn set_player_organizing(
         &mut self,
@@ -1613,7 +1657,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::IsFactionMaster
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1398

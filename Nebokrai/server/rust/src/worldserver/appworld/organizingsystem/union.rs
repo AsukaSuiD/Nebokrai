@@ -9,7 +9,8 @@
 //! `GetEstablishedTime` RVA `0x000C1F00` и compiler-owned destructor RVA
 //! `0x000C1F40`, обе перегрузки `GetMemberList` RVA
 //! `0x000C1BB0/0x000C2710`, `IsUsingPV/SetMemPV/AbolishMemPV` RVA
-//! `0x000C1D00/0x000C1D70/0x000C1DD0` — `IMPLEMENTED`;
+//! `0x000C1D00/0x000C1D70/0x000C1DD0` и обе `CheckOperValidate` RVA
+//! `0x000C18D0/0x000C1970` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -65,12 +66,24 @@
 //! только точный `PST_Permit`; grant меняет лишь `PST_No`, revoke — любое
 //! ненулевое состояние. Общий typed-результат перенесён к owner-у
 //! `COrganizing::tagMemInfo`, но concrete map и переходы остаются в `CUnion`.
+//! Validation сначала преобразует player master-а через controller-wide scan в
+//! положительный faction ID. Простая перегрузка требует union-membership и
+//! право; target-перегрузка дополнительно отвергает literal equality входных
+//! ID, нулевой target и master-faction союза, затем требует членство обоих и
+//! ровно `Permit` у manager при отсутствии `Permit` у target.
 
 use std::collections::BTreeMap;
 
 use super::organizing::{
     EOperator, EPurview, EPurviewOwnState, MemberPurviewMutation, TagMemInfo, TagTimeValue,
 };
+
+/// Узкая read-only граница controller-wide `IsFactionMaster`.
+pub(crate) trait UnionOperatorValidationContext {
+    type Block;
+
+    fn faction_id_by_master_player(&self, player_id: i32) -> Result<i32, Self::Block>;
+}
 
 /// Поля `CUnion`, которые буквально копирует и читает save-цепочка.
 pub(crate) struct CUnion {
@@ -289,6 +302,53 @@ impl CUnion {
         MemberPurviewMutation::Changed
     }
 
+    /// Проверяет право player-а через faction-master scan и union membership.
+    pub(crate) fn check_operator_validate<Context>(
+        &self,
+        manager_player_id: i32,
+        purview: i32,
+        context: &Context,
+    ) -> Result<bool, Context::Block>
+    where
+        Context: UnionOperatorValidationContext,
+    {
+        let manager_faction_id = context.faction_id_by_master_player(manager_player_id)?;
+        if manager_faction_id == 0 || self.is_member(manager_faction_id) == 0 {
+            return Ok(false);
+        }
+        Ok(self.is_using_purview(manager_faction_id, purview))
+    }
+
+    /// Проверяет manager-а относительно другой member-faction.
+    pub(crate) fn check_operator_validate_target<Context>(
+        &self,
+        manager_player_id: i32,
+        target_faction_id: i32,
+        purview: i32,
+        context: &Context,
+    ) -> Result<bool, Context::Block>
+    where
+        Context: UnionOperatorValidationContext,
+    {
+        if manager_player_id == target_faction_id {
+            return Ok(false);
+        }
+        let manager_faction_id = context.faction_id_by_master_player(manager_player_id)?;
+        if manager_faction_id == 0
+            || target_faction_id == 0
+            || target_faction_id == self.master_id
+            || self.is_member(manager_faction_id) == 0
+            || self.is_member(target_faction_id) == 0
+        {
+            return Ok(false);
+        }
+        let manager_permitted = self.is_using_purview(manager_faction_id, purview);
+        if !manager_permitted {
+            return Ok(false);
+        }
+        Ok(manager_permitted != self.is_using_purview(target_faction_id, purview))
+    }
+
     pub(crate) const fn change_data_type(&self) -> i32 {
         self.change_data_type
     }
@@ -474,7 +534,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::CheckOperValidate
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:471
@@ -502,7 +562,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::CheckOperValidate
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:494
