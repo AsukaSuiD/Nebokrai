@@ -44,6 +44,8 @@
 //! `SetIsPermit/OnMemberEnterGame` RVA `0x000C09A0/0x000C0A10` —
 //! `IMPLEMENTED`; спорные ключи и порядок side effect имеют статус
 //! `VERIFIED_DISASSEMBLY`.
+//! `OnMemberPosChange` RVA `0x000C0B40` — `IMPLEMENTED` и
+//! `VERIFIED_DISASSEMBLY`.
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
 //! SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -230,6 +232,14 @@
 //! этого owner-а; оба slot-а теперь замкнуты. Заменённые project-блоки удалены;
 //! tree traversal, allocator, local scratch и cleanup остаются ненаблюдаемой
 //! STL/compiler/CRT-семантикой, выраженной `BTreeMap`, slices и `Drop`.
+//!
+//! `OnMemberPosChange` не ищет online-player и не сравнивает старый регион:
+//! member lookup идёт по первому аргументу, region lookup — по второму, затем
+//! `CWorldRegion::m_strName` копируется прямо в `strRegion[64]` и безусловно
+//! публикуется `OP_Update`. Exact ASM `0x004C0B45..0x004C0BDA` подтверждает оба
+//! потерянных raw stack-key, destination `tagMemInfo + 0xAC` и порядок вызова.
+//! Missing/null region остаётся исходным no-op; переполнение старого `strcpy`
+//! заменено typed safe-границей без частичной записи.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -582,6 +592,21 @@ pub(crate) enum MemberExitOutcome {
 pub(crate) enum MemberLevelChangeOutcome {
     MemberNotFound,
     Unchanged,
+    Published(Result<MemberUpdateReport, MemberUpdateBuildError>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MemberPositionChangeBlocked {
+    pub(crate) region_id: i32,
+    pub(crate) byte_len: usize,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum MemberPositionChangeOutcome {
+    MemberNotFound,
+    RegionNotFound,
+    NullRegionPointer,
+    Blocked(MemberPositionChangeBlocked),
     Published(Result<MemberUpdateReport, MemberUpdateBuildError>),
 }
 
@@ -1698,6 +1723,46 @@ impl CFaction {
         }
         member.level = level;
         MemberLevelChangeOutcome::Published(self.update_member_info_to_client(
+            game,
+            player_id,
+            EOperator::Update,
+        ))
+    }
+
+    /// Копирует имя заданного региона в member-state и публикует `Update`.
+    pub(crate) fn on_member_position_change(
+        &mut self,
+        game: &CGame,
+        player_id: i32,
+        region_id: i32,
+    ) -> MemberPositionChangeOutcome {
+        if !self.members.contains_key(&player_id) {
+            return MemberPositionChangeOutcome::MemberNotFound;
+        }
+
+        let region_name = match game.region_name(region_id) {
+            WorldRegionNameLookup::RegionNotFound => {
+                return MemberPositionChangeOutcome::RegionNotFound;
+            }
+            WorldRegionNameLookup::NullRegionPointer => {
+                return MemberPositionChangeOutcome::NullRegionPointer;
+            }
+            WorldRegionNameLookup::Name(name) => name,
+        };
+        let member = self
+            .members
+            .get_mut(&player_id)
+            .expect("member проверен до region lookup");
+        if region_name.len() >= member.region.len() {
+            return MemberPositionChangeOutcome::Blocked(MemberPositionChangeBlocked {
+                region_id,
+                byte_len: region_name.len(),
+            });
+        }
+
+        member.region[..region_name.len()].copy_from_slice(region_name);
+        member.region[region_name.len()] = 0;
+        MemberPositionChangeOutcome::Published(self.update_member_info_to_client(
             game,
             player_id,
             EOperator::Update,
@@ -3398,7 +3463,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::OnMemberPosChange
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2598
