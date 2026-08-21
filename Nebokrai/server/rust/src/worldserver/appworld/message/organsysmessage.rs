@@ -23,6 +23,10 @@
 //! вызывает `GetStr(..., 0xD2)`, читает player ID, разрешает его faction через
 //! `IsFreePlayer`, копирует все восемь WORD полей одного `GetLocalTime` в
 //! `tagTime` и вызывает virtual `CFaction::LeaveWord` в slot `+0x38`.
+//! Exact `0x004A771F..0x004A776D` для `0x6011C` читает leave-word ID, затем
+//! player ID, разрешает faction через `IsFreePlayer` и вызывает virtual
+//! `CFaction::EditLeaveWord(player ID, leave-word ID, EOperator::Delete)` в
+//! slot `+0x3C`.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -53,11 +57,12 @@ use crate::worldserver::appworld::organizingsystem::faction::{
     FactionMemberInfoRequest, FactionOrganizingInfoContext,
 };
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
-    COrganizingCtrl, OrganizingLeaveWordBlock, OrganizingLeaveWordEnableBlock,
+    COrganizingCtrl, OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock,
+    OrganizingLeaveWordEditOutcome, OrganizingLeaveWordEnableBlock,
     OrganizingLeaveWordEnableOutcome, OrganizingLeaveWordOutcome,
     OrganizingUnionApplyForJoinDispatchBlock, OrganizingUnionApplyForJoinOutcome,
 };
-use crate::worldserver::appworld::organizingsystem::organizing::TagTimeValue;
+use crate::worldserver::appworld::organizingsystem::organizing::{EOperator, TagTimeValue};
 use crate::worldserver::appworld::organizingsystem::union::{
     UnionAddFactionEffects, UnionApplicationEndpointBlock, UnionApplicationSessionBlock,
     UnionApplicationSessionReport, UnionApplicationSessionRequest, UnionApplicationSessionRuntime,
@@ -71,6 +76,7 @@ const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
+const EDIT_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011C;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -425,6 +431,36 @@ pub(crate) fn dispatch_leave_word(
                 player_id,
                 content,
                 time,
+                outcome,
+            }),
+    )
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingLeaveWordEditDispatch {
+    pub(crate) leave_word_id: i32,
+    pub(crate) player_id: i32,
+    pub(crate) outcome: OrganizingLeaveWordEditOutcome,
+}
+
+/// Выполняет `0x6011C`: player membership и `EditLeaveWord(..., Delete)`.
+pub(crate) fn dispatch_leave_word_edit(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+) -> Option<Result<OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEditBlock>> {
+    if message.message_type() != EDIT_LEAVE_WORD_MESSAGE_TYPE {
+        return None;
+    }
+
+    let leave_word_id = message.base_mut().get_long().unwrap_or(0);
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    Some(
+        organizing
+            .edit_leave_word_for_player(game, player_id, leave_word_id, EOperator::Delete)
+            .map(|outcome| OrganizingLeaveWordEditDispatch {
+                leave_word_id,
+                player_id,
                 outcome,
             }),
     )
