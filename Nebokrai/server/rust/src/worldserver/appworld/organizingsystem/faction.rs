@@ -5,6 +5,7 @@
 //! `m_ChangeDataType` из `CRsFaction::SaveFaction` RVA `0x000FF070`,
 //! `GetPronounceData` RVA
 //! `0x000B4CA0`, `SetGoodsWarCount` RVA `0x000B4D70`,
+//! `UpdatePronounceToClient` RVA `0x000B56C0`,
 //! `AddMembersToByteArray` RVA `0x000B53D0`, PDB-inline
 //! `AddApplyPersonsToByteArray/AddLeaveWordsToByteArray` RVA
 //! `0x000B5D30/0x000B5DD0`,
@@ -194,9 +195,10 @@
 //! `m_ApplyPersons`, а `AddApplyPersonsToByteArray` дополнительно подтверждает
 //! value: `strName[20], lLvl, lOccu`. Поэтому owner хранит полный
 //! `BTreeMap<i32, TagApplyPerson>`, не перенося MSVC tree-layout.
-//! `GetPronounceData` буквально дописывает все `0x828` bytes
-//! `m_Pronounce`; partial-owner хранит их byte-exact, не объявляя Rust-layout
-//! формой ещё не восстановленного `tagPronounceWord`. `Vec<u8>` и
+//! PDB и `UpdatePronounceToClient` подтверждают полный `tagPronounceWord`:
+//! `lPlayerID +0x00`, `strName[20] +0x04`, `tagTime +0x18` и
+//! `strContent[2048] +0x28`, общий размер `0x828`. `GetPronounceData` буквально
+//! дописывает эти bytes. `Vec<u8>` и
 //! `TagTimeValue` заменяют только STL-vector и Windows `SYSTEMTIME`-совместимое
 //! значение значка. Оба конструктора создавали пустые map/vector, а достигнутый
 //! `Initial` обнулял весь pronounce-блок; тот же достигнутый baseline задаёт
@@ -314,6 +316,12 @@
 //! `0x004B5D30..0x004B5E3B` подтверждает offsets и порядок. Нетерминированные
 //! fixed C-строки локализованы typed-ошибками после уже записанного prefix,
 //! вместо исходного чтения за массивом.
+//! `UpdatePronounceToClient` не читает объявленный target ID: всем online
+//! member-ам с ненулевым GameServer ID и `m_bGetFactionData` отправляется
+//! `0x7FE10` с `recipient, operator, pronounce.player_id, name\0, content\0,
+//! time[0x10]`. Exact ASM `0x004B56C0..0x004B57DB` подтверждает framing,
+//! фильтр и неиспользованный первый аргумент. Нетерминированная C-строка
+//! останавливает текущий message typed-ошибкой вместо чтения за `0x828`.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -331,12 +339,15 @@ use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::worldserver::game::{CGame, WorldRegionNameLookup};
 
 const MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0D;
+const PRONOUNCE_UPDATE_MESSAGE_TYPE: i32 = 0x7FE10;
 const OWNED_CITY_UPDATE_MESSAGE_TYPE: i32 = 0x7FE13;
 const ENTER_REGION_BUFFER_CAPACITY: usize = 256;
 const ENEMY_WAR_LOG_BUFFER_CAPACITY: usize = 256;
 const LEAVE_WORD_NAME_CAPACITY: usize = 20;
 const LEAVE_WORD_CONTENT_CAPACITY: usize = 212;
 const APPLY_PERSON_NAME_CAPACITY: usize = 20;
+const PRONOUNCE_NAME_CAPACITY: usize = 20;
+const PRONOUNCE_CONTENT_CAPACITY: usize = 2048;
 const PRONOUNCE_DATA_SIZE: usize = 0x828;
 const FACTION_BASE_PROPERTY_SIZE: usize = 0x38;
 
@@ -528,6 +539,21 @@ pub(crate) enum CityWarEnemyRefreshOutcome {
     ChangeFlagUnknown,
     Unchanged,
     Published(FactionEnemyRefreshReport),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionPronounceDelivery {
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionPronounceUpdateBuildError {
+    pub(crate) source: UnterminatedPronounceField,
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) completed_deliveries: Vec<FactionPronounceDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -855,6 +881,82 @@ impl TagApplyPerson {
     }
 }
 
+/// Ошибка безопасного C-string view одного fixed-поля `tagPronounceWord`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UnterminatedPronounceField {
+    pub(crate) field: &'static str,
+}
+
+impl fmt::Display for UnterminatedPronounceField {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "в фиксированном поле {} отсутствует завершающий NUL",
+            self.field
+        )
+    }
+}
+
+impl Error for UnterminatedPronounceField {}
+
+/// Полное PDB-подтверждённое значение исходного `tagPronounceWord`.
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub(crate) struct TagPronounceWord {
+    pub(crate) player_id: i32,
+    pub(crate) name: [u8; PRONOUNCE_NAME_CAPACITY],
+    pub(crate) time: TagTimeValue,
+    pub(crate) content: [u8; PRONOUNCE_CONTENT_CAPACITY],
+}
+
+impl TagPronounceWord {
+    const ZERO: Self = Self {
+        player_id: 0,
+        name: [0; PRONOUNCE_NAME_CAPACITY],
+        time: ZERO_TIME,
+        content: [0; PRONOUNCE_CONTENT_CAPACITY],
+    };
+
+    pub(crate) const fn from_complete_fields(
+        player_id: i32,
+        name: [u8; PRONOUNCE_NAME_CAPACITY],
+        time: TagTimeValue,
+        content: [u8; PRONOUNCE_CONTENT_CAPACITY],
+    ) -> Self {
+        Self {
+            player_id,
+            name,
+            time,
+            content,
+        }
+    }
+
+    fn name_wire_bytes(&self) -> Result<&[u8], UnterminatedPronounceField> {
+        let Some(terminator) = self.name.iter().position(|byte| *byte == 0) else {
+            return Err(UnterminatedPronounceField {
+                field: "tagPronounceWord::strName",
+            });
+        };
+        Ok(&self.name[..=terminator])
+    }
+
+    fn content_wire_bytes(&self) -> Result<&[u8], UnterminatedPronounceField> {
+        let Some(terminator) = self.content.iter().position(|byte| *byte == 0) else {
+            return Err(UnterminatedPronounceField {
+                field: "tagPronounceWord::strContent",
+            });
+        };
+        Ok(&self.content[..=terminator])
+    }
+
+    fn append_wire_bytes(&self, output: &mut Vec<u8>) {
+        append_i32(output, self.player_id);
+        output.extend_from_slice(&self.name);
+        output.extend_from_slice(&self.time.wire_bytes());
+        output.extend_from_slice(&self.content);
+    }
+}
+
 /// Ошибка безопасного C-string view одного fixed-поля `tagLeaveWord`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct UnterminatedLeaveWordField {
@@ -932,6 +1034,11 @@ const _: () = {
     assert!(offset_of!(TagApplyPerson, name) == 0x00);
     assert!(offset_of!(TagApplyPerson, level) == 0x14);
     assert!(offset_of!(TagApplyPerson, occupation) == 0x18);
+    assert!(size_of::<TagPronounceWord>() == PRONOUNCE_DATA_SIZE);
+    assert!(offset_of!(TagPronounceWord, player_id) == 0x00);
+    assert!(offset_of!(TagPronounceWord, name) == 0x04);
+    assert!(offset_of!(TagPronounceWord, time) == 0x18);
+    assert!(offset_of!(TagPronounceWord, content) == 0x28);
     assert!(size_of::<TagLeaveWord>() == 0x100);
     assert!(offset_of!(TagLeaveWord, id) == 0x00);
     assert!(offset_of!(TagLeaveWord, player_id) == 0x04);
@@ -956,7 +1063,7 @@ pub(crate) struct CFaction {
     enemy_factions_changed: Option<bool>,
     city_war_enemy_factions_changed: Option<bool>,
     apply_persons: BTreeMap<i32, TagApplyPerson>,
-    pronounce_data: [u8; PRONOUNCE_DATA_SIZE],
+    pronounce: TagPronounceWord,
     leave_words: VecDeque<TagLeaveWord>,
     last_upload_icon_time: TagTimeValue,
     icon_data: Vec<u8>,
@@ -983,7 +1090,7 @@ impl CFaction {
             enemy_factions_changed: None,
             city_war_enemy_factions_changed: None,
             apply_persons: BTreeMap::new(),
-            pronounce_data: [0; PRONOUNCE_DATA_SIZE],
+            pronounce: TagPronounceWord::ZERO,
             leave_words: VecDeque::new(),
             last_upload_icon_time: ZERO_TIME,
             icon_data: Vec::new(),
@@ -1890,6 +1997,58 @@ impl CFaction {
         Ok(deliveries)
     }
 
+    /// Рассылает полный pronounce-state всем готовым member recipient-ам.
+    pub(crate) fn update_pronounce_to_client(
+        &self,
+        game: &CGame,
+        operator: EOperator,
+    ) -> Result<Vec<FactionPronounceDelivery>, FactionPronounceUpdateBuildError> {
+        let mut deliveries = Vec::new();
+        for &recipient_player_id in self.members.keys() {
+            let player = game.online_player_by_id(recipient_player_id as u32);
+            let game_server_id = game.game_server_number_by_player_id(recipient_player_id);
+            if player.is_none_or(|player| !player.faction_data_received()) || game_server_id == 0 {
+                continue;
+            }
+
+            let mut message = CMessage::new(PRONOUNCE_UPDATE_MESSAGE_TYPE);
+            message.base_mut().add_long(recipient_player_id);
+            message.base_mut().add_long(operator.wire_value());
+            message.base_mut().add_long(self.pronounce.player_id);
+            let name = match self.pronounce.name_wire_bytes() {
+                Ok(name) => name,
+                Err(source) => {
+                    return Err(FactionPronounceUpdateBuildError {
+                        source,
+                        recipient_player_id,
+                        game_server_id,
+                        completed_deliveries: deliveries,
+                    });
+                }
+            };
+            message.base_mut().add(name);
+            let content = match self.pronounce.content_wire_bytes() {
+                Ok(content) => content,
+                Err(source) => {
+                    return Err(FactionPronounceUpdateBuildError {
+                        source,
+                        recipient_player_id,
+                        game_server_id,
+                        completed_deliveries: deliveries,
+                    });
+                }
+            };
+            message.base_mut().add(content);
+            message.base_mut().add(&self.pronounce.time.wire_bytes());
+            deliveries.push(FactionPronounceDelivery {
+                recipient_player_id,
+                game_server_id,
+                result: game.send_msg_to_game_server(game_server_id, &message),
+            });
+        }
+        Ok(deliveries)
+    }
+
     /// Clamp-ит и публикует faction experience с исходным порядком эффектов.
     pub(crate) fn set_experience(
         &mut self,
@@ -2198,10 +2357,10 @@ impl CFaction {
             } else {
                 BTreeMap::new()
             },
-            pronounce_data: if change_data_type & 8 != 0 {
-                self.pronounce_data
+            pronounce: if change_data_type & 8 != 0 {
+                self.pronounce
             } else {
-                [0; PRONOUNCE_DATA_SIZE]
+                TagPronounceWord::ZERO
             },
             leave_words: if change_data_type & 4 != 0 {
                 self.leave_words.clone()
@@ -2309,7 +2468,7 @@ impl CFaction {
 
     /// Дописывает byte-exact `m_Pronounce` в исходный output-vector.
     pub(crate) fn get_pronounce_data(&self, output: &mut Vec<u8>) -> bool {
-        output.extend_from_slice(&self.pronounce_data);
+        self.pronounce.append_wire_bytes(output);
         true
     }
 
@@ -2927,7 +3086,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::UpdatePronounceToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1497
