@@ -603,6 +603,30 @@ pub(crate) enum UnionApplicationSessionBlock {
     },
 }
 
+impl std::fmt::Debug for UnionApplicationSessionBlock {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Create(source) => formatter.debug_tuple("Create").field(source).finish(),
+            Self::SetCallback { session, source } => {
+                let source = match source {
+                    NetSessionSetCallbackBlock::SessionNotFound { .. } => "SessionNotFound",
+                    NetSessionSetCallbackBlock::AlreadyAssigned(_) => "AlreadyAssigned",
+                };
+                formatter
+                    .debug_struct("SetCallback")
+                    .field("session", session)
+                    .field("source", &source)
+                    .finish()
+            }
+            Self::Begin { session, source } => formatter
+                .debug_struct("Begin")
+                .field("session", session)
+                .field("source", source)
+                .finish(),
+        }
+    }
+}
+
 /// Связывает доменный request с уже восстановленным session manager в exact order.
 pub(crate) fn begin_union_application_session(
     manager: &CNetSessionManager,

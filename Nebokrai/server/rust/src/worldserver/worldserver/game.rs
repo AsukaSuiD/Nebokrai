@@ -977,7 +977,11 @@ use crate::worldserver::appworld::message::othermessage::{
     WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
 };
 use crate::worldserver::appworld::message::organsysmessage::{
-    OrganizingSessionResultDispatch, dispatch_organizing_session_result,
+    OrganizingSessionResultDispatch, OrganizingUnionApplicationDispatch,
+    QueuedUnionApplicationTerminal, UnionApplicationConfirmationDelivery,
+    WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects,
+    WorldUnionApplicationRuntimeOwner, dispatch_organizing_session_result,
+    dispatch_union_application,
 };
 use crate::worldserver::appworld::message::servermessage::{
     WorldLoginClientReplacement, WorldServerMessageDispatch, WorldServerMessageError,
@@ -989,13 +993,18 @@ use crate::worldserver::appworld::organizingsystem::factionwarsys::{
 };
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     COrganizingCtrl, OrganizingRunBlock, OrganizingRunReport, OrganizingSaveDataBlock,
-    OrganizingSaveDataReport, PlayerEnterGameOutcome, PlayerExitGameOutcome,
+    OrganizingSaveDataReport, OrganizingUnionApplicationCallbackBlock,
+    OrganizingUnionApplicationCallbackReport, OrganizingUnionApplyForJoinDispatchBlock,
+    PlayerEnterGameOutcome, PlayerExitGameOutcome,
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::{
     COrganizingParam, OrganizingParamLoadError, OrganizingParamLoadReport,
     OrganizingTaxScheduleBlock, OrganizingTodayTaxRefreshReport, PreparedTodayTaxRefresh,
 };
-use crate::worldserver::appworld::organizingsystem::union::CUnion;
+use crate::worldserver::appworld::organizingsystem::union::{
+    CUnion, UnionApplicationEndpointBlock, UnionApplicationSessionBlock,
+    UnionApplicationSessionReport, UnionFormatArgument,
+};
 use crate::worldserver::appworld::player::{
     CPlayer, PlayerCodecError, PlayerOrganizingUpdateError, PlayerPropertyCoefficients,
 };
@@ -1823,6 +1832,25 @@ impl fmt::Debug for RoutedWorldMessage {
     }
 }
 
+pub(crate) type WorldUnionApplicationStartBlock =
+    OrganizingUnionApplyForJoinDispatchBlock<UnionApplicationSessionBlock>;
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldUnionApplicationTerminalDispatch {
+    pub(crate) request: QueuedUnionApplicationTerminal,
+    pub(crate) outcome: Result<
+        OrganizingUnionApplicationCallbackReport,
+        OrganizingUnionApplicationCallbackBlock,
+    >,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldUnionApplicationRuntimeReport {
+    pub(crate) terminals: Vec<WorldUnionApplicationTerminalDispatch>,
+    pub(crate) confirmations: Vec<UnionApplicationConfirmationDelivery>,
+    pub(crate) endpoint_blocks: Vec<UnionApplicationEndpointBlock>,
+}
+
 /// Один фактически извлечённый элемент двух FIFO `ProcessMessage`.
 #[derive(Debug)]
 pub(crate) enum ProcessedWorldEvent {
@@ -1841,6 +1869,16 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: OrganizingSessionResultDispatch,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingUnionApplication {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<
+            OrganizingUnionApplicationDispatch<UnionApplicationSessionReport>,
+            WorldUnionApplicationStartBlock,
+        >,
+        runtime: WorldUnionApplicationRuntimeReport,
     },
     LoginClientReconnected(WorldLoginClientReplacement),
 }
@@ -2232,6 +2270,7 @@ pub(crate) struct WorldMainLoopDbMiscStageReport {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldMainLoopNetSessionStageReport {
     pub(crate) sessions: NetSessionRunReport,
+    pub(crate) union_applications: WorldUnionApplicationRuntimeReport,
     pub(crate) finished_at_ms: u32,
     pub(crate) elapsed_ms: u32,
     pub(crate) accumulated_time_ms: u32,
@@ -2423,6 +2462,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) lei_ting: &'a mut CLeiTing,
     pub(crate) db_misc: &'a mut CDbMisc,
     pub(crate) net_sessions: &'a CNetSessionManager,
+    pub(crate) union_application_runtime: &'a WorldUnionApplicationRuntimeOwner,
     pub(crate) jjc: &'a mut CJJcSystem,
     pub(crate) faction_context: &'a mut FactionContext,
     pub(crate) lei_ting_context: &'a mut LeiTingContextOwner,
@@ -2447,6 +2487,11 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
     pub(crate) get_timer_local_time: &'a mut dyn FnMut() -> TagTime,
     pub(crate) world_string_by_id: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
+    pub(crate) format_union_world_string:
+        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+    pub(crate) put_union_war_log: &'a mut dyn FnMut(&[u8]),
+    pub(crate) refresh_union_owned_city: &'a mut dyn FnMut(i32, i32, i32),
+    pub(crate) update_union_player: &'a mut dyn FnMut(i32),
     pub(crate) dispatch_timer:
         &'a mut dyn FnMut(&mut CTimer<TimerCallback>, TimerCallbackInvocation<TimerCallback>),
     pub(crate) get_lei_ting_local_time: &'a mut dyn FnMut() -> LeiTingLocalTime,
@@ -8019,12 +8064,19 @@ impl CGame {
     /// заново читается текущий Login client и фиксируется его число сообщений.
     /// Поэтому typed reconnect из первой очереди заменяет owner до второго
     /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
-    /// ветви server-owner-а, honor `0x5FD0C/0x5FD0D` и organizing session
-    /// result исполняются, остальные остаются owned pending.
+    /// ветви server-owner-а, honor `0x5FD0C/0x5FD0D`, organizing session
+    /// result и union application `0x60118` исполняются, остальные остаются
+    /// owned pending. Terminal session actions применяются FIFO до перехода к
+    /// следующему входящему сообщению.
     pub(crate) fn process_message(
         &mut self,
         honor_ranks: &mut CHonorRanks,
+        organizing: &mut COrganizingCtrl,
+        organizing_parameters: &COrganizingParam,
         net_sessions: &CNetSessionManager,
+        application_runtime: &WorldUnionApplicationRuntimeOwner,
+        application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+        update_player: &mut dyn FnMut(i32),
     ) -> Result<WorldProcessMessageOutcome, WorldProcessMessageError> {
         let server_started_at = legacy_tick_ms();
         let mut server_remaining = self
@@ -8048,7 +8100,12 @@ impl CGame {
                         events.push(process_world_message(
                             self,
                             honor_ranks,
+                            organizing,
+                            organizing_parameters,
                             net_sessions,
+                            application_runtime,
+                            application_callbacks,
+                            update_player,
                             WorldMessageSource::GameServer,
                             message,
                         ));
@@ -8080,7 +8137,12 @@ impl CGame {
                 events.push(process_world_message(
                     self,
                     honor_ranks,
+                    organizing,
+                    organizing_parameters,
                     net_sessions,
+                    application_runtime,
+                    application_callbacks,
+                    update_player,
                     WorldMessageSource::LoginServer,
                     message,
                 ));
@@ -8111,7 +8173,12 @@ impl CGame {
     pub(crate) fn process_message_main_loop_stage<GetTick>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
+        organizing: &mut COrganizingCtrl,
+        organizing_parameters: &COrganizingParam,
         net_sessions: &CNetSessionManager,
+        application_runtime: &WorldUnionApplicationRuntimeOwner,
+        application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+        update_player: &mut dyn FnMut(i32),
         clocks: &mut WorldMainLoopClockState,
         state: &mut WorldProcessMessageStageState,
         mut get_tick: GetTick,
@@ -8120,7 +8187,15 @@ impl CGame {
         GetTick: FnMut() -> u32,
     {
         let started_at_ms = get_tick();
-        let outcome = match self.process_message(honor_ranks, net_sessions) {
+        let outcome = match self.process_message(
+            honor_ranks,
+            organizing,
+            organizing_parameters,
+            net_sessions,
+            application_runtime,
+            application_callbacks,
+            update_player,
+        ) {
             Ok(outcome) => outcome,
             Err(error) => {
                 return WorldProcessMessageStageReport::Blocked {
@@ -8574,13 +8649,19 @@ impl CGame {
         })
     }
 
-    /// Выполняет полный session timeout pass и закрывает `DAT_0056e518`.
+    /// Выполняет полный session timeout pass, применяет его terminal actions и
+    /// закрывает `DAT_0056e518`.
     ///
     /// Следующий участок MainLoop начинает проверку ping без нового shared
     /// start tick, поэтому `clocks.stage_started_at_ms` здесь не меняется.
     pub(crate) fn run_main_loop_net_session_stage<GetTick>(
         &self,
         manager: &CNetSessionManager,
+        organizing: &mut COrganizingCtrl,
+        organizing_parameters: &COrganizingParam,
+        application_runtime: &WorldUnionApplicationRuntimeOwner,
+        application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+        update_player: &mut dyn FnMut(i32),
         clocks: &WorldMainLoopClockState,
         profile_state: &mut WorldMainLoopProfileState,
         mut get_tick: GetTick,
@@ -8589,12 +8670,30 @@ impl CGame {
         GetTick: FnMut() -> u32,
     {
         let sessions = manager.run();
+        let callbacks = WorldUnionApplicationEffectCallbacks {
+            random: &mut *application_callbacks.random,
+            world_string: &mut *application_callbacks.world_string,
+            format_world_string: &mut *application_callbacks.format_world_string,
+            put_war_log: &mut *application_callbacks.put_war_log,
+            refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+        };
+        let mut effects =
+            WorldUnionApplicationEffects::new(self, manager, application_runtime, callbacks);
+        let union_applications = drain_union_application_runtime(
+            self,
+            organizing,
+            organizing_parameters,
+            application_runtime,
+            &mut effects,
+            update_player,
+        );
         let finished_at_ms = get_tick();
         let elapsed_ms = finished_at_ms.wrapping_sub(clocks.stage_started_at_ms);
         profile_state.net_session_time_ms =
             profile_state.net_session_time_ms.wrapping_add(elapsed_ms);
         WorldMainLoopNetSessionStageReport {
             sessions,
+            union_applications,
             finished_at_ms,
             elapsed_ms,
             accumulated_time_ms: profile_state.net_session_time_ms,
@@ -9142,9 +9241,21 @@ impl CGame {
             &mut *callbacks.get_tick,
             &mut *callbacks.random,
         );
+        let mut union_application_callbacks = WorldUnionApplicationEffectCallbacks {
+            random: &mut *callbacks.random,
+            world_string: &mut *callbacks.world_string_by_id,
+            format_world_string: &mut *callbacks.format_union_world_string,
+            put_war_log: &mut *callbacks.put_union_war_log,
+            refresh_owned_city: &mut *callbacks.refresh_union_owned_city,
+        };
         let process_message = match self.process_message_main_loop_stage(
             owners.honor_ranks,
+            owners.organizing,
+            owners.organizing_parameters,
             owners.net_sessions,
+            owners.union_application_runtime,
+            &mut union_application_callbacks,
+            &mut *callbacks.update_union_player,
             state.clocks,
             state.process_message,
             &mut *callbacks.get_tick,
@@ -9215,8 +9326,20 @@ impl CGame {
                 &mut *callbacks.get_tick,
             )
             .map_err(|block| Box::new(WorldMainLoopBlock::DbMisc(block)))?;
+        let mut union_application_callbacks = WorldUnionApplicationEffectCallbacks {
+            random: &mut *callbacks.random,
+            world_string: &mut *callbacks.world_string_by_id,
+            format_world_string: &mut *callbacks.format_union_world_string,
+            put_war_log: &mut *callbacks.put_union_war_log,
+            refresh_owned_city: &mut *callbacks.refresh_union_owned_city,
+        };
         let net_sessions = self.run_main_loop_net_session_stage(
             owners.net_sessions,
+            owners.organizing,
+            owners.organizing_parameters,
+            owners.union_application_runtime,
+            &mut union_application_callbacks,
+            &mut *callbacks.update_union_player,
             state.clocks,
             state.profile,
             &mut *callbacks.get_tick,
@@ -10752,7 +10875,12 @@ pub(crate) async fn game_thread_func<Runtime: WorldGameThreadRuntime>(
 fn process_world_message(
     game: &mut CGame,
     honor_ranks: &mut CHonorRanks,
+    organizing: &mut COrganizingCtrl,
+    organizing_parameters: &COrganizingParam,
     net_sessions: &CNetSessionManager,
+    application_runtime: &WorldUnionApplicationRuntimeOwner,
+    application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    update_player: &mut dyn FnMut(i32),
     source: WorldMessageSource,
     mut message: CMessage,
 ) -> ProcessedWorldEvent {
@@ -10790,15 +10918,55 @@ fn process_world_message(
     }
 
     if selector.owner == Some(WorldMessageOwner::OrganizingSystem) {
+        let callbacks = WorldUnionApplicationEffectCallbacks {
+            random: &mut *application_callbacks.random,
+            world_string: &mut *application_callbacks.world_string,
+            format_world_string: &mut *application_callbacks.format_world_string,
+            put_war_log: &mut *application_callbacks.put_war_log,
+            refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+        };
+        let mut effects = WorldUnionApplicationEffects::new(
+            game,
+            net_sessions,
+            application_runtime,
+            callbacks,
+        );
         match dispatch_organizing_session_result(&mut message, net_sessions) {
             OrganizingSessionResultDispatch::NotHandled => {}
             outcome => {
+                let runtime = drain_union_application_runtime(
+                    game,
+                    organizing,
+                    organizing_parameters,
+                    application_runtime,
+                    &mut effects,
+                    update_player,
+                );
                 return ProcessedWorldEvent::OrganizingSessionResult {
                     source,
                     legacy_run_result,
                     outcome,
+                    runtime,
                 };
             }
+        }
+        if let Some(outcome) =
+            dispatch_union_application(&mut message, game, organizing, &mut effects)
+        {
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingUnionApplication {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
         }
     }
 
@@ -10809,6 +10977,34 @@ fn process_world_message(
         legacy_run_result,
         message,
     })
+}
+
+fn drain_union_application_runtime(
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    organizing_parameters: &COrganizingParam,
+    runtime: &WorldUnionApplicationRuntimeOwner,
+    effects: &mut WorldUnionApplicationEffects<'_>,
+    update_player: &mut dyn FnMut(i32),
+) -> WorldUnionApplicationRuntimeReport {
+    let mut terminals = Vec::new();
+    while let Some(request) = runtime.pop_terminal() {
+        let outcome = organizing.finish_union_application(
+            game,
+            organizing_parameters,
+            request.union_id,
+            request.applicant_faction_id,
+            request.terminal,
+            effects,
+            update_player,
+        );
+        terminals.push(WorldUnionApplicationTerminalDispatch { request, outcome });
+    }
+    WorldUnionApplicationRuntimeReport {
+        terminals,
+        confirmations: runtime.take_confirmations(),
+        endpoint_blocks: runtime.take_blocks(),
+    }
 }
 
 struct WorldOwnerSelector {
