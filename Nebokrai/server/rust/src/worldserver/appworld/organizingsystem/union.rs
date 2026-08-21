@@ -3,7 +3,11 @@
 //! Статус достигнутой save-части `CUnion`, `CUnion::CloneSaveData` RVA
 //! `0x000C6380`, `SetChangeData` RVA `0x000C17D0` и `CUnion::IsMember` RVA
 //! `0x000BD840`, `CUnion::GetPlayerHeader` RVA `0x000C6320`, а также
-//! `CUnion::DelMember` RVA `0x000C2B30` — `IMPLEMENTED`;
+//! `CUnion::DelMember` RVA `0x000C2B30`, inert virtual-ы
+//! `DubAndSetJobLvl/EditLeaveWord/OperatorTax/SetControbuter/Upgrade` RVA
+//! `0x000C18B0/0x000C1EC0/0x000C1ED0/0x000C1F20/0x000C1F30`,
+//! `GetEstablishedTime` RVA `0x000C1F00` и compiler-owned destructor RVA
+//! `0x000C1F40` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -42,10 +46,18 @@
 //! `GetMasterID`, не рекурсивный `GetPlayerHeader`; miss/null map-value также
 //! дают `0`. Недостигнутый Rust master ID у найденной concrete faction остаётся
 //! typed-блокировкой caller-а, а не выдуманным нулём.
+//! Пять inert virtual-ов машинно не читают receiver или аргументы: title/job
+//! возвращает `true`, edit/tax/upgrade — `false`, contributor-mutator ничего не
+//! делает. Эти результаты сохранены буквально, а не заменены предполагаемой
+//! faction-логикой. `GetEstablishedTime` возвращал const reference на точные
+//! `0x10` bytes; Copy-значение Rust отделяет lifetime без изменения данных.
+//! Destructor до следующего PDB-символа освобождает только member-map, string и
+//! base storage. Обычный `Drop` Rust-полей заменяет MSVC tree/string cleanup;
+//! ручного destructor callback-а нет.
 
 use std::collections::BTreeMap;
 
-use super::organizing::{TagMemInfo, TagTimeValue};
+use super::organizing::{EOperator, TagMemInfo, TagTimeValue};
 
 /// Поля `CUnion`, которые буквально копирует и читает save-цепочка.
 pub(crate) struct CUnion {
@@ -108,6 +120,50 @@ impl CUnion {
 
     pub(crate) const fn master_id(&self) -> i32 {
         self.master_id
+    }
+
+    /// Возвращает byte-exact время учреждения; старый const-reference был Copy.
+    pub(crate) const fn established_time(&self) -> TagTimeValue {
+        self.established_time
+    }
+
+    /// Legacy union не менял title/job и всегда сообщал успех.
+    pub(crate) const fn dub_and_set_job_level(
+        &self,
+        _manager_id: i32,
+        _target_id: i32,
+        _title: &[u8],
+        _job_level: i32,
+    ) -> bool {
+        true
+    }
+
+    /// У union нет leave-word мутации; virtual всегда возвращал `false`.
+    pub(crate) const fn edit_leave_word(
+        &self,
+        _player_id: i32,
+        _word_id: i32,
+        _operation: EOperator,
+    ) -> bool {
+        false
+    }
+
+    /// У union нет tax-операции; оба аргумента игнорировались.
+    pub(crate) const fn operator_tax(&self, _player_id: i32, _operation: i32) -> bool {
+        false
+    }
+
+    /// Virtual присутствовал в общем interface, но union не менял state.
+    pub(crate) const fn set_contributor(
+        &self,
+        _requester_id: i32,
+        _target_id: i32,
+        _enabled: bool,
+    ) {}
+
+    /// Union-upgrade отсутствовал и всегда возвращал `false`.
+    pub(crate) const fn upgrade(&self, _player_id: i32) -> bool {
+        false
     }
 
     /// Разрешает header через master-faction, сохраняя legacy `0` на miss.
@@ -308,7 +364,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::DubAndSetJobLvl
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1171
@@ -490,7 +546,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::EditLeaveWord
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h:51
@@ -504,7 +560,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::OperatorTax
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1165
@@ -518,7 +574,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::GetEstablishedTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h:125
@@ -546,7 +602,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::SetControbuter
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h:177
@@ -560,7 +616,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::Upgrade
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h:57
@@ -574,7 +630,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::~CUnion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:31
