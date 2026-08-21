@@ -19,7 +19,9 @@
 //! `ClearEnemyFation/GetEnemyLeaderOrgnizingID` RVA
 //! `0x000C28D0/0x000C2950` и три victor fan-out RVA
 //! `0x000C29B0/0x000C2A30/0x000C2AB0`, `UpdatePlayerFactionInfo` RVA
-//! `0x000C5770` — `IMPLEMENTED`;
+//! `0x000C5770` и `UpdateEnemyFactionToClient/
+//! UpdateCityWarEnemyFactionToClient/UpdateOwnedCityToClient` RVA
+//! `0x000C5FF0/0x000C60D0/0x000C61B0` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -107,11 +109,18 @@
 //! отрицательный не вызывает ничего. Каждый найденный target получает
 //! concrete `CFaction::UpdatePlayerFactionInfo(0)`; lookup miss/null тихо
 //! пропускается.
+//! Три client-snapshot wrapper-а выбирают targets по тому же правилу и
+//! полностью игнорируют входной `operation`: найденной faction всегда
+//! передаётся `(player=0, OP_Update=2)`. Rust вызывает уже восстановленные
+//! concrete snapshot-owner-ы напрямую и сохраняет результаты всех send;
+//! owned-city serialization block останавливает обход после выполненного
+//! prefix-а вместо выдуманного продолжения после safe-границы.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::faction::{
-    FactionInitialPropertyBlock, FactionPropertyDelivery, OwnedCityMutationBuildError,
+    FactionEnemyDelivery, FactionInitialPropertyBlock, FactionOwnedCityDelivery,
+    FactionOwnedCityUpdateBuildError, FactionPropertyDelivery, OwnedCityMutationBuildError,
 };
 use super::organizing::{
     EOperator, EPurview, EPurviewOwnState, MemberPurviewMutation, TagMemInfo, TagTimeValue,
@@ -256,6 +265,56 @@ pub(crate) struct UnionFactionPlayerRefreshReport {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct UnionPlayerRefreshReport {
     pub(crate) factions: Vec<UnionFactionPlayerRefreshReport>,
+}
+
+/// Read-only faction callback для полных enemy/owned-city snapshot-ов.
+pub(crate) trait UnionClientSnapshotContext {
+    fn faction_update_enemy_snapshot(
+        &self,
+        faction_id: i32,
+        game: &CGame,
+    ) -> Option<Vec<FactionEnemyDelivery>>;
+
+    fn faction_update_city_war_enemy_snapshot(
+        &self,
+        faction_id: i32,
+        game: &CGame,
+    ) -> Option<Vec<FactionEnemyDelivery>>;
+
+    fn faction_update_owned_city_snapshot(
+        &self,
+        faction_id: i32,
+        game: &CGame,
+    ) -> Result<Option<Vec<FactionOwnedCityDelivery>>, FactionOwnedCityUpdateBuildError>;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionEnemySnapshotFactionReport {
+    pub(crate) faction_id: i32,
+    pub(crate) deliveries: Vec<FactionEnemyDelivery>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionEnemySnapshotReport {
+    pub(crate) factions: Vec<UnionEnemySnapshotFactionReport>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionOwnedCitySnapshotFactionReport {
+    pub(crate) faction_id: i32,
+    pub(crate) deliveries: Vec<FactionOwnedCityDelivery>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionOwnedCitySnapshotReport {
+    pub(crate) factions: Vec<UnionOwnedCitySnapshotFactionReport>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionOwnedCitySnapshotBlock {
+    pub(crate) faction_id: i32,
+    pub(crate) completed_factions: Vec<UnionOwnedCitySnapshotFactionReport>,
+    pub(crate) source: FactionOwnedCityUpdateBuildError,
 }
 
 /// Поля `CUnion`, которые буквально копирует и читает save-цепочка.
@@ -844,6 +903,14 @@ impl CUnion {
         })
     }
 
+    fn target_faction_ids(&self, faction_id: i32) -> Vec<i32> {
+        if faction_id == 0 {
+            self.members.keys().copied().collect()
+        } else {
+            vec![faction_id]
+        }
+    }
+
     /// Обновляет online player-ов одной faction либо всех member-фракций.
     pub(crate) fn update_player_faction_info<Context>(
         &self,
@@ -855,13 +922,8 @@ impl CUnion {
     where
         Context: UnionPlayerRefreshContext,
     {
-        let target_faction_ids: Vec<i32> = if faction_id == 0 {
-            self.members.keys().copied().collect()
-        } else {
-            vec![faction_id]
-        };
         let mut factions = Vec::new();
-        for target_faction_id in target_faction_ids {
+        for target_faction_id in self.target_faction_ids(faction_id) {
             if target_faction_id <= 0 {
                 continue;
             }
@@ -878,6 +940,98 @@ impl CUnion {
             });
         }
         UnionPlayerRefreshReport { factions }
+    }
+
+    /// Публикует полный standard enemy snapshot выбранных faction-target-ов.
+    pub(crate) fn update_enemy_factions_to_client<Context>(
+        &self,
+        faction_id: i32,
+        _operation: EOperator,
+        context: &Context,
+        game: &CGame,
+    ) -> UnionEnemySnapshotReport
+    where
+        Context: UnionClientSnapshotContext,
+    {
+        let mut factions = Vec::new();
+        for target_faction_id in self.target_faction_ids(faction_id) {
+            if target_faction_id <= 0 {
+                continue;
+            }
+            let Some(deliveries) =
+                context.faction_update_enemy_snapshot(target_faction_id, game)
+            else {
+                continue;
+            };
+            factions.push(UnionEnemySnapshotFactionReport {
+                faction_id: target_faction_id,
+                deliveries,
+            });
+        }
+        UnionEnemySnapshotReport { factions }
+    }
+
+    /// Публикует полный city-war enemy snapshot выбранных faction-target-ов.
+    pub(crate) fn update_city_war_enemy_factions_to_client<Context>(
+        &self,
+        faction_id: i32,
+        _operation: EOperator,
+        context: &Context,
+        game: &CGame,
+    ) -> UnionEnemySnapshotReport
+    where
+        Context: UnionClientSnapshotContext,
+    {
+        let mut factions = Vec::new();
+        for target_faction_id in self.target_faction_ids(faction_id) {
+            if target_faction_id <= 0 {
+                continue;
+            }
+            let Some(deliveries) =
+                context.faction_update_city_war_enemy_snapshot(target_faction_id, game)
+            else {
+                continue;
+            };
+            factions.push(UnionEnemySnapshotFactionReport {
+                faction_id: target_faction_id,
+                deliveries,
+            });
+        }
+        UnionEnemySnapshotReport { factions }
+    }
+
+    /// Публикует полный owned-city snapshot выбранных faction-target-ов.
+    pub(crate) fn update_owned_cities_to_client<Context>(
+        &self,
+        faction_id: i32,
+        _operation: EOperator,
+        context: &Context,
+        game: &CGame,
+    ) -> Result<UnionOwnedCitySnapshotReport, UnionOwnedCitySnapshotBlock>
+    where
+        Context: UnionClientSnapshotContext,
+    {
+        let mut factions = Vec::new();
+        for target_faction_id in self.target_faction_ids(faction_id) {
+            if target_faction_id <= 0 {
+                continue;
+            }
+            match context.faction_update_owned_city_snapshot(target_faction_id, game) {
+                Ok(Some(deliveries)) => factions.push(UnionOwnedCitySnapshotFactionReport {
+                    faction_id: target_faction_id,
+                    deliveries,
+                }),
+                Ok(None) => {}
+                Err(source) => {
+                    return Err(UnionOwnedCitySnapshotBlock {
+                        faction_id: target_faction_id,
+                        completed_factions: factions,
+                        source,
+                    });
+                }
+            }
+        }
+        Ok(UnionOwnedCitySnapshotReport { factions })
     }
 
     pub(crate) const fn change_data_type(&self) -> i32 {
@@ -1779,7 +1933,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::UpdateEnemyFactionToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1355
@@ -1793,7 +1947,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::UpdateCityWarEnemyFactionToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1374
@@ -1807,7 +1961,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::UpdateOwnedCityToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1402

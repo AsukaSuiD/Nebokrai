@@ -209,8 +209,9 @@ use super::faction::{
     CFaction, FactionCloneSaveBlock, FactionDeleteOrganizingBuildError,
     FactionDeleteOrganizingOutcome, FactionDisbandBlock, FactionDisbandContext,
     FactionDisbandOutcome, FactionDisbandProgress, FactionDisbandRejection,
-    FactionInitialPropertyBlock, FactionMemberInfoRequest, FactionOperationAuthorityContext,
-    FactionOrganizingInfoContext, FactionOtherInfoBuildError, FactionOtherInfoDelivery,
+    FactionEnemyDelivery, FactionInitialPropertyBlock, FactionMemberInfoRequest,
+    FactionOperationAuthorityContext, FactionOrganizingInfoContext, FactionOtherInfoBuildError,
+    FactionOtherInfoDelivery, FactionOwnedCityDelivery, FactionOwnedCityUpdateBuildError,
     FactionPlayerHeaderContext, FactionPropertyDelivery, FactionPropertyReinitialization,
     FactionRemoveApplyMemberOutcome, FactionSuperiorOrganizingBlock, MemberEnterOutcome,
     MemberExitOutcome, OwnedCityMutationBuildError,
@@ -218,8 +219,9 @@ use super::faction::{
 use super::organizing::EOperator;
 use super::organizingparam::COrganizingParam;
 use super::union::{
-    CUnion, UnionFactionStateMutationContext, UnionMasterFactionQueryContext,
-    UnionOperatorValidationContext, UnionOwnedCityMutationContext, UnionPlayerRefreshContext,
+    CUnion, UnionClientSnapshotContext, UnionFactionStateMutationContext,
+    UnionMasterFactionQueryContext, UnionOperatorValidationContext,
+    UnionOwnedCityMutationContext, UnionPlayerRefreshContext,
 };
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::appworld::player::{
@@ -1406,6 +1408,36 @@ impl UnionPlayerRefreshContext for COrganizingCtrl {
         self.faction_by_id(faction_id).map(|faction| {
             faction.update_player_faction_info(game, 0, update_player)
         })
+    }
+}
+
+impl UnionClientSnapshotContext for COrganizingCtrl {
+    fn faction_update_enemy_snapshot(
+        &self,
+        faction_id: i32,
+        game: &CGame,
+    ) -> Option<Vec<FactionEnemyDelivery>> {
+        self.faction_by_id(faction_id)
+            .map(|faction| faction.update_enemy_factions_to_client(game))
+    }
+
+    fn faction_update_city_war_enemy_snapshot(
+        &self,
+        faction_id: i32,
+        game: &CGame,
+    ) -> Option<Vec<FactionEnemyDelivery>> {
+        self.faction_by_id(faction_id)
+            .map(|faction| faction.update_city_war_enemy_factions_to_client(game))
+    }
+
+    fn faction_update_owned_city_snapshot(
+        &self,
+        faction_id: i32,
+        game: &CGame,
+    ) -> Result<Option<Vec<FactionOwnedCityDelivery>>, FactionOwnedCityUpdateBuildError> {
+        self.faction_by_id(faction_id)
+            .map(|faction| faction.update_owned_cities_to_client(game))
+            .transpose()
     }
 }
 
