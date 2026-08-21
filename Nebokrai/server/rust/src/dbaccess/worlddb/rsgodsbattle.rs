@@ -1,9 +1,10 @@
 //! DB-владелец `CRSGodsBattle` исторического WorldServer из
 //! `rsgodsbattle.cpp`.
 //!
-//! Статусы `SaveFacitonXYD` RVA `0x000ED0F0` и caller-connection overload
-//! `SaveNpcFaction` RVA `0x000ED4B0` — `IMPLEMENTED`; constructor, destructor,
-//! load-владельцы и no-argument `SaveNpcFaction` ниже остаются
+//! Статусы `SaveFacitonXYD` RVA `0x000ED0F0`, caller-connection overload
+//! `SaveNpcFaction` RVA `0x000ED4B0` и `GetTopTenSZLPlayer` RVA `0x000EE3E0` —
+//! `IMPLEMENTED`; constructor, destructor, load-владельцы и no-argument
+//! `SaveNpcFaction` ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -51,13 +52,22 @@
 //! параметризованный INSERT и caller-owned ordered slice заменяют только
 //! BSTR/ADO, table-recordset и MSVC vector storage. Raw этого overload-а, его
 //! catch и compiler-эпилог удалены; отдельный no-argument overload не смешан.
+//!
+//! `GetTopTenSZLPlayer` выполняет точный `TOP 10 ... ORDER BY SZL DESC` для
+//! одной faction и только после успешного чтения всего recordset дописывает в
+//! caller-vector records `long 1 + long faction + C-string Name + unsigned
+//! long SZL + unsigned long Levels`. Имя проходит исходную Windows-1251
+//! границу `char[0x11]`: не более 16 видимых байт плюс NUL. Ошибка не оставляет
+//! в caller-vector частично прочитанные строки. Tiberius и параметр `@P1`
+//! заменяют только ADO и `_sprintf`; framing, TOP/order, кодировка и unsigned
+//! 32-bit диапазон остаются явным контрактом Miracle.
 
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 
 use encoding_rs::WINDOWS_1251;
-use tiberius::Query;
+use tiberius::{Query, Row};
 
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 
@@ -68,6 +78,8 @@ const DELETE_NPC_FACTIONS_SQL: &str = "DELETE FROM CSL_GODSBATTLE_NPC";
 const OPEN_NPC_FACTIONS_SQL: &str = "SELECT TOP 0 * FROM CSL_GODSBATTLE_NPC";
 const INSERT_NPC_FACTION_SQL: &str =
     "INSERT INTO CSL_GODSBATTLE_NPC (NPC_NAME, Faciton) VALUES (@P1, @P2)";
+const TOP_TEN_SZL_SQL: &str = "SELECT TOP 10 Name,SZL,Levels FROM CSL_PLAYER_ABILITY WHERE GodsBattleFaction = @P1 ORDER BY SZL DESC";
+const TOP_TEN_NAME_VISIBLE_BYTES: usize = 16;
 
 /// Два значения, которые исходный DB-владелец читал из `CGodsBattleConf`.
 #[derive(Clone, Copy, Debug)]
@@ -104,6 +116,25 @@ pub(crate) enum RsGodsBattleNotice {
         operation: GodsBattleSaveOperation,
         row_index: Option<usize>,
         error: RsGodsBattleDatabaseError,
+    },
+    TopTenFailed {
+        faction: i32,
+        row_index: Option<usize>,
+        failure: GodsBattleTopTenFailure,
+    },
+}
+
+/// Причина исходного `false` из достигнутого рейтингового DB-владельца.
+#[derive(Debug)]
+pub(crate) enum GodsBattleTopTenFailure {
+    MissingConnection,
+    Database(RsGodsBattleDatabaseError),
+    MissingRequiredValue {
+        column: &'static str,
+    },
+    NumericOutsideUnsignedLong {
+        column: &'static str,
+        value: i64,
     },
 }
 
@@ -142,6 +173,14 @@ pub(crate) trait RsGodsBattleOwner {
     async fn save_npc_faction(
         &mut self,
         snapshot: &[GodsBattleNpcFactionSnapshot],
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> bool;
+
+    /// Дописывает одну faction-секцию рейтинга в существующий byte-vector.
+    async fn get_top_ten_szl_players(
+        &mut self,
+        faction: i32,
+        destination: &mut Vec<u8>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
@@ -260,6 +299,111 @@ impl RsGodsBattleOwner for TiberiusRsGodsBattle {
         true
     }
 
+    async fn get_top_ten_szl_players(
+        &mut self,
+        faction: i32,
+        destination: &mut Vec<u8>,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> bool {
+        macro_rules! top_ten_failed {
+            ($row_index:expr, $failure:expr) => {{
+                self.notices.push_back(RsGodsBattleNotice::TopTenFailed {
+                    faction,
+                    row_index: $row_index,
+                    failure: $failure,
+                });
+                return false;
+            }};
+        }
+
+        let Some(active_transaction) = active_transaction else {
+            top_ten_failed!(None, GodsBattleTopTenFailure::MissingConnection);
+        };
+
+        let mut query = Query::new(TOP_TEN_SZL_SQL);
+        query.bind(faction);
+        let stream = match query.query(active_transaction).await {
+            Ok(stream) => stream,
+            Err(error) => top_ten_failed!(
+                None,
+                GodsBattleTopTenFailure::Database(error.into())
+            ),
+        };
+        let rows = match stream.into_first_result().await {
+            Ok(rows) => rows,
+            Err(error) => top_ten_failed!(
+                None,
+                GodsBattleTopTenFailure::Database(error.into())
+            ),
+        };
+
+        let mut decoded = Vec::with_capacity(rows.len());
+        for (row_index, row) in rows.iter().enumerate() {
+            let name = match row.try_get::<&str, _>("Name") {
+                Ok(Some(name)) => name,
+                Ok(None) => top_ten_failed!(
+                    Some(row_index),
+                    GodsBattleTopTenFailure::MissingRequiredValue { column: "Name" }
+                ),
+                Err(error) => top_ten_failed!(
+                    Some(row_index),
+                    GodsBattleTopTenFailure::Database(error.into())
+                ),
+            };
+            let (name, _, _) = WINDOWS_1251.encode(name);
+            let mut name = visible_c_string(name.as_ref()).to_vec();
+            name.truncate(TOP_TEN_NAME_VISIBLE_BYTES);
+
+            let szl = match read_ado_unsigned_long(row, "SZL") {
+                Ok(Some(value)) => value,
+                Ok(None) => top_ten_failed!(
+                    Some(row_index),
+                    GodsBattleTopTenFailure::MissingRequiredValue { column: "SZL" }
+                ),
+                Err(ReadUnsignedLongError::Database(error)) => top_ten_failed!(
+                    Some(row_index),
+                    GodsBattleTopTenFailure::Database(error.into())
+                ),
+                Err(ReadUnsignedLongError::OutsideRange(value)) => top_ten_failed!(
+                    Some(row_index),
+                    GodsBattleTopTenFailure::NumericOutsideUnsignedLong {
+                        column: "SZL",
+                        value,
+                    }
+                ),
+            };
+            let level = match read_ado_unsigned_long(row, "Levels") {
+                Ok(Some(value)) => value,
+                Ok(None) => top_ten_failed!(
+                    Some(row_index),
+                    GodsBattleTopTenFailure::MissingRequiredValue { column: "Levels" }
+                ),
+                Err(ReadUnsignedLongError::Database(error)) => top_ten_failed!(
+                    Some(row_index),
+                    GodsBattleTopTenFailure::Database(error.into())
+                ),
+                Err(ReadUnsignedLongError::OutsideRange(value)) => top_ten_failed!(
+                    Some(row_index),
+                    GodsBattleTopTenFailure::NumericOutsideUnsignedLong {
+                        column: "Levels",
+                        value,
+                    }
+                ),
+            };
+            decoded.push((name, szl, level));
+        }
+
+        for (name, szl, level) in decoded {
+            destination.extend_from_slice(&1_i32.to_le_bytes());
+            destination.extend_from_slice(&faction.to_le_bytes());
+            destination.extend_from_slice(&name);
+            destination.push(0);
+            destination.extend_from_slice(&szl.to_le_bytes());
+            destination.extend_from_slice(&level.to_le_bytes());
+        }
+        true
+    }
+
     fn pop_notice(&mut self) -> Option<RsGodsBattleNotice> {
         self.notices.pop_front()
     }
@@ -270,6 +414,50 @@ fn visible_c_string(bytes: &[u8]) -> &[u8] {
         .iter()
         .position(|byte| *byte == 0)
         .map_or(bytes, |end| &bytes[..end])
+}
+
+enum ReadUnsignedLongError {
+    Database(tiberius::error::Error),
+    OutsideRange(i64),
+}
+
+fn read_ado_unsigned_long(
+    row: &Row,
+    column: &'static str,
+) -> Result<Option<u32>, ReadUnsignedLongError> {
+    let first_error = match row.try_get::<i32, _>(column) {
+        Ok(value) => {
+            return value
+                .map(i64::from)
+                .map(|value| {
+                    u32::try_from(value)
+                        .map_err(|_| ReadUnsignedLongError::OutsideRange(value))
+                })
+                .transpose()
+        }
+        Err(error) => error,
+    };
+    if let Ok(value) = row.try_get::<u8, _>(column) {
+        return Ok(value.map(u32::from));
+    }
+    if let Ok(value) = row.try_get::<i16, _>(column) {
+        return value
+            .map(i64::from)
+            .map(|value| {
+                u32::try_from(value)
+                    .map_err(|_| ReadUnsignedLongError::OutsideRange(value))
+            })
+            .transpose();
+    }
+    if let Ok(value) = row.try_get::<i64, _>(column) {
+        return value
+            .map(|value| {
+                u32::try_from(value)
+                    .map_err(|_| ReadUnsignedLongError::OutsideRange(value))
+            })
+            .transpose();
+    }
+    Err(ReadUnsignedLongError::Database(first_error))
 }
 
 async fn execute_batch(
@@ -416,7 +604,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRSGodsBattle::GetTopTenSZLPlayer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsgodsbattle.cpp:93

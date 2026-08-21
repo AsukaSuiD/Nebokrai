@@ -5,7 +5,7 @@
 //! регистрации GameServer и reconnect player-data хвоста в `0x5FA01`,
 //! snapshot/cleanup хвоста `0x5FA03`, обычных opcode `0x4FC01..=0x4FC03`,
 //! `0x5FA04`, `0x5FA06`, `0x5FA07`, `0x5FA09`, `0x5FA0A..=0x5FA0D` и
-//! `0x5FA0F` из
+//! `0x5FA0F..=0x5FA10` из
 //! `OnServerMessage` RVA `0x000ADCF0`;
 //! остальные ветви остаются `UNKNOWN` (исследовательский декомпилят хранится локально) ниже. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
@@ -225,6 +225,14 @@
 //! не подавляет save. Rust использует готовый Tiberius owner и awaits его до
 //! следующего FIFO slot-а, сохраняя синхронный порядок старого ADO call-site.
 //!
+//! `0x5FA10` не читает payload: nullable `CRSGodsBattle` последовательно
+//! дописывает рейтинг faction `5`, затем faction `6`. Второй SQL и ответ
+//! достигаются только после успешного первого; `0x7F80F` отправляется тому же
+//! socket только после обоих успехов и заканчивается signed-long маркером `0`.
+//! Каждая строка уже кодируется DB-owner-ом как `1 + faction + name\0 + SZL +
+//! Levels`. Await между вызовами сохраняет порядок старого synchronous ADO;
+//! Tiberius и параметризованный SQL являются только технической заменой.
+//!
 //! Reached хвост `0x5FA03` после равенства response-count сначала уже сбросил
 //! `m_nDBResponsed`, затем выполняет полный `GenerateDBData` и строго
 //! `ClearMapPlayerForOffline -> ClearRestorePlayer -> ClearCreationPlayer ->
@@ -364,6 +372,7 @@ pub(crate) enum WorldServerMessageOutcome {
     GameServerPingResponseRecorded(WorldGameServerPingResponse),
     GameServerPingStarted(WorldGameServerPingStart),
     GodsBattle(WorldGodsBattleMessage),
+    GodsBattleTopTen(WorldGodsBattleTopTenMessage),
     LoginServerTupleRelay(WorldLoginServerTupleRelay),
     LoginServerIdentityAssigned(WorldLoginServerIdentity),
     MurderReported(WorldMurderReport),
@@ -420,6 +429,34 @@ pub(crate) enum WorldGodsBattleNpcSave {
     Completed {
         snapshot_records: usize,
         save_returned: bool,
+        notices: Vec<RsGodsBattleNotice>,
+    },
+}
+
+/// Полный typed-итог server opcode `0x5FA10`.
+#[derive(Debug)]
+pub(crate) struct WorldGodsBattleTopTenMessage {
+    pub(crate) socket_id: i32,
+    pub(crate) disposition: WorldGodsBattleTopTenDisposition,
+}
+
+#[derive(Debug)]
+pub(crate) enum WorldGodsBattleTopTenDisposition {
+    DatabaseOwnerUnavailable,
+    FactionFiveFailed {
+        notices: Vec<RsGodsBattleNotice>,
+    },
+    FactionSixFailed {
+        faction_five_payload_bytes: usize,
+        notices: Vec<RsGodsBattleNotice>,
+    },
+    Sent {
+        faction_five_payload_bytes: usize,
+        faction_six_payload_bytes: usize,
+        terminal_marker: i32,
+        payload_bytes: usize,
+        message_type: i32,
+        delivery: Result<i32, SendMessageError>,
         notices: Vec<RsGodsBattleNotice>,
     },
 }
@@ -1494,7 +1531,7 @@ pub(crate) async fn on_server_message(
     coefficients: &PlayerPropertyCoefficients,
     gods_battle: &mut CGodsBattleConf,
     rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
-    gods_battle_database: Option<&mut WorldTdsClient>,
+    mut gods_battle_database: Option<&mut WorldTdsClient>,
 ) -> WorldServerMessageDispatch {
     match message.message_type() {
         0x0004_FC01 => {
@@ -1964,6 +2001,70 @@ pub(crate) async fn on_server_message(
                     disposition,
                 },
             ))
+        }
+        0x0005_FA10 => {
+            let socket_id = message.socket_id();
+            let disposition = match rs_gods_battle {
+                None => WorldGodsBattleTopTenDisposition::DatabaseOwnerUnavailable,
+                Some(database_owner) => {
+                    let notice_checkpoint = database_owner.notice_checkpoint();
+                    let mut payload = Vec::new();
+                    let faction_five_succeeded = database_owner
+                        .get_top_ten_szl_players(
+                            5,
+                            &mut payload,
+                            gods_battle_database.as_deref_mut(),
+                        )
+                        .await;
+                    if !faction_five_succeeded {
+                        let notices = database_owner.drain_notices_after(notice_checkpoint);
+                        WorldGodsBattleTopTenDisposition::FactionFiveFailed { notices }
+                    } else {
+                        let faction_five_payload_bytes = payload.len();
+                        let faction_six_succeeded = database_owner
+                            .get_top_ten_szl_players(
+                                6,
+                                &mut payload,
+                                gods_battle_database.as_deref_mut(),
+                            )
+                            .await;
+                        if !faction_six_succeeded {
+                            let notices = database_owner.drain_notices_after(notice_checkpoint);
+                            WorldGodsBattleTopTenDisposition::FactionSixFailed {
+                                faction_five_payload_bytes,
+                                notices,
+                            }
+                        } else {
+                            let faction_six_payload_bytes =
+                                payload.len() - faction_five_payload_bytes;
+                            payload.extend_from_slice(&0_i32.to_le_bytes());
+                            let mut response = CMessage::new(0x0007_F80F);
+                            response.base_mut().add(&payload);
+                            let sender = game.current_game_server_sender();
+                            let delivery =
+                                response.send_to_socket(sender.as_ref(), socket_id);
+                            let notices = database_owner.drain_notices_after(notice_checkpoint);
+                            WorldGodsBattleTopTenDisposition::Sent {
+                                faction_five_payload_bytes,
+                                faction_six_payload_bytes,
+                                terminal_marker: 0,
+                                payload_bytes: payload.len(),
+                                message_type: 0x0007_F80F,
+                                delivery,
+                                notices,
+                            }
+                        }
+                    }
+                }
+            };
+            WorldServerMessageDispatch::Handled(
+                WorldServerMessageOutcome::GodsBattleTopTen(
+                    WorldGodsBattleTopTenMessage {
+                        socket_id,
+                        disposition,
+                    },
+                ),
+            )
         }
         _ => WorldServerMessageDispatch::Pending(message),
     }
