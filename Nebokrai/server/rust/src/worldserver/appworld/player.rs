@@ -53,6 +53,12 @@
 //! диапазоне `0x004BA82D..0x004BA834`, поэтому offset дополнительно имеет
 //! статус `VERIFIED_DISASSEMBLY`.
 //!
+//! Достигнутый через `CGame::ResetHonorElimilateInfo` reset напрямую меняет
+//! три DWORD `tagBaseProperty`: day обнуляется безусловно, week только при
+//! `mask & 2`, month только при `mask & 4`; накопительный total не меняется.
+//! Rust пишет уже подтверждённые wire-offsets вместо воспроизведения старого
+//! object-layout.
+//!
 //! Деструктор сначала вызывает virtual slot `+0x24` у шестнадцати container-
 //! подобъектов. Точный PDB исправляет ошибочную первоначальную классификацию:
 //! у `CContainer` slot `+0x14` — `Clear(void *)`, а `+0x24` — `Release()`.
@@ -1300,6 +1306,20 @@ impl CPlayer {
     /// Возвращает полный восьмибитный уровень игрока.
     pub(crate) fn get_level(&self) -> u8 {
         self.base_property.read_u8(BASE_PROPERTY_LEVEL_OFFSET)
+    }
+
+    /// Повторяет прямые honor-eliminate записи `CGame` в player base-owner.
+    pub(crate) fn reset_honor_eliminate_info(&mut self, rank_mask: u32) {
+        if rank_mask & 0x02 != 0 {
+            self.base_property
+                .write_u32(BASE_PROPERTY_WEEKS_HONOR_OFFSET, 0);
+        }
+        if rank_mask & 0x04 != 0 {
+            self.base_property
+                .write_u32(BASE_PROPERTY_MONTHS_HONOR_OFFSET, 0);
+        }
+        self.base_property
+            .write_u32(BASE_PROPERTY_DAYS_HONOR_OFFSET, 0);
     }
 
     /// Возвращает текущее число элементов `m_listFriend`.

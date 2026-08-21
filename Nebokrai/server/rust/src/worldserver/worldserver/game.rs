@@ -864,6 +864,12 @@
 //! результата `>= 256` linked MSVC `_snprintf` не ставил NUL, после чего caller
 //! читал за stack-buffer; это локальный `BLOCKED_MISSING_FACT`, а не основание
 //! для truncation, `unsafe` либо нового fail-closed результата.
+//!
+//! `ResetHonorElimilateInfo` RVA `0x00014390` проходит `m_mPlayer` в map-order,
+//! сбрасывает достигнутые day/week/month counters по исходной mask-семантике,
+//! затем полностью очищает `m_HonorElimilateList` и повторяет reset под lock
+//! `CPlayerDataQueue`. `BTreeMap`, `VecDeque` и `parking_lot::Mutex` заменяют
+//! только STL/critical-section plumbing; накопительный total не меняется.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
@@ -4385,6 +4391,7 @@ pub(crate) struct CGame {
     bai_tan_routes: BTreeMap<i32, i32>,
     bai_tan_ip_refcounts: BTreeMap<u32, i32>,
     bai_tan_player_ips: BTreeMap<i32, u32>,
+    honor_eliminate_list: BTreeMap<u32, VecDeque<u32>>,
     login_server_id: i32,
     ping_in_progress: bool,
     last_ping_game_server_time_ms: u32,
@@ -4436,6 +4443,7 @@ impl CGame {
             bai_tan_routes: BTreeMap::new(),
             bai_tan_ip_refcounts: BTreeMap::new(),
             bai_tan_player_ips: BTreeMap::new(),
+            honor_eliminate_list: BTreeMap::new(),
             login_server_id: 0,
             ping_in_progress: false,
             last_ping_game_server_time_ms: legacy_tick_ms(),
@@ -9920,6 +9928,17 @@ impl CGame {
         self.login_server_id
     }
 
+    /// Сбрасывает live/queued honor counters и общий elimination-ledger.
+    pub(crate) fn reset_honor_eliminate_info(&mut self, rank_mask: u32) -> bool {
+        for player in self.players.values_mut() {
+            player.reset_honor_eliminate_info(rank_mask);
+        }
+        self.honor_eliminate_list.clear();
+        self.player_data_queue
+            .reset_honor_eliminate_info(rank_mask);
+        true
+    }
+
     fn close_and_remove_net_client(&mut self) {
         if let Some(client) = self.net_client.as_mut() {
             let _legacy_result = client.close();
@@ -11670,7 +11689,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::ResetHonorElimilateInfo
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5986
@@ -11678,6 +11697,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 00414390
 // PROTOTYPE: bool __thiscall ResetHonorElimilateInfo(ulong param_1)
 //
+// Реализовано выше через reached player/queue owners и Rust-коллекции.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

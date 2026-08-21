@@ -1,6 +1,7 @@
 //! Владелец очереди загруженных игроков исторического `WorldServer`.
 //!
 //! `CPlayerLoadQueue::GetSize` RVA `0x000E6080`,
+//! `CPlayerDataQueue::ResetHonorElimilateInfo` RVA `0x000E6110`,
 //! `CPlayerDataQueue::PopPlayerData` RVA `0x000E6190`, constructor
 //! RVA `0x000E6210`, `Clear` RVA `0x000E6230` и `PushPlayerData`
 //! RVA `0x000E65C0` имеют статус `IMPLEMENTED`. Точная пара:
@@ -27,9 +28,10 @@
 //! получить старый null record и потому соответствует только исходной
 //! successful ветви.
 //!
-//! `ResetHonorElimilateInfo` RVA `0x000E6110` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально): он
-//! меняет ещё не достигнутые honor-поля каждого queued player. Для `Clear`
-//! exact EXE `0x004E6242..0x004E6321` опровергает ложный ранний return
+//! `ResetHonorElimilateInfo` под тем же mutex проходит FIFO без удаления: у
+//! каждого non-null queued player day обнуляется всегда, week при `flags & 2`,
+//! month при `flags & 4`, а total остаётся накопительным. Для `Clear` exact
+//! EXE `0x004E6242..0x004E6321` опровергает ложный ранний return
 //! декомпилятора: цикл уничтожает все player/record owners, tidy-ит deque и
 //! только затем снимает lock. `Mutex<VecDeque<_>>` и `Box/Drop` сохраняют этот
 //! порядок без ручных STL/allocator/destructor internals.
@@ -114,6 +116,16 @@ impl CPlayerDataQueue {
         true
     }
 
+    /// Обновляет каждого non-null queued player, сохраняя FIFO и записи.
+    pub(crate) fn reset_honor_eliminate_info(&self, rank_mask: u32) {
+        let mut entries = self.entries.lock();
+        for entry in entries.iter_mut() {
+            if let Some(player) = entry.player.as_deref_mut() {
+                player.reset_honor_eliminate_info(rank_mask);
+            }
+        }
+    }
+
     /// Уничтожает всех player-owner-ов и records в FIFO-порядке под одним lock.
     pub(crate) fn clear(&self) {
         let mut entries = self.entries.lock();
@@ -124,11 +136,9 @@ impl CPlayerDataQueue {
     }
 }
 
-// Неперенесённый контракт (локальный анализ): `CPlayerDataQueue::ResetHonorElimilateInfo` RVA 0x000E6110.
-// Для каждого queued non-null `pPlayer`: при `flags & 2` обнуляет weeks,
-// при `flags & 4` — months, затем безусловно days honor-eliminate counter.
-// BLOCKED_MISSING_FACT: соответствующие поля `CPlayer::tagBaseProperty` ещё не
-// достигнуты текущим call-chain; метод не вызывается ProcessPlayerDataQueue.
+// IMPLEMENTED: `CPlayerDataQueue::ResetHonorElimilateInfo` RVA 0x000E6110
+// находится выше. `Mutex<VecDeque<_>>` заменяет только исходный critical
+// section и deque traversal; player-мутации и их порядок сохранены.
 
 // IMPLEMENTED: `CPlayerDataQueue::Clear` RVA 0x000E6230 находится выше.
 // VERIFIED_DISASSEMBLY:
