@@ -5,7 +5,8 @@
 //! `SendAllTopInfoToInfoToOneClient` RVA `0x000352C0` — `IMPLEMENTED`;
 //! полный `COrganizingCtrl::Run` RVA `0x0003A550` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`, `DisbandFaction` RVA `0x00038550` и
-//! `UpdateOtherFacInfoToClient` RVA `0x00034980` — `IMPLEMENTED`;
+//! `UpdateOtherFacInfoToClient` RVA `0x00034980` и `DisbandConferation` RVA
+//! `0x000393B0` — `IMPLEMENTED`;
 //! `IsFreePlayer` RVA `0x000343A0`, `IsFreeFaction` RVA `0x00034420`,
 //! `SetAllCityFacEnemyChanged/ClearAllCityFacRelation/UpdateAllCityEneFacRelation`
 //! RVA `0x00034240/0x000342C0/0x00034330`,
@@ -68,6 +69,13 @@
 //! отделяет этот нулевой miss от ещё не материализованного
 //! `CFaction::m_Property`: первый есть `Ok(None)`, второй остаётся typed
 //! safe-границей вместо выдуманной страны `0`.
+//! `DisbandConferation` RVA `0x000393B0` сначала повторяет
+//! standard/city war gates с `WS0246/WS0247`, очищает обе enemy-проекции и
+//! вызывает concrete `CUnion::Disband`. Только его true-result добавляет union
+//! ID в delete-очередь, сбрасывает union у owned cities master-faction,
+//! удаляет owner из map и обновляет player-ов всех прежних member-фракций.
+//! Rust временно detaches `CUnion`, чтобы сохранить reentrant faction-callback
+//! без raw alias; владеющий `Box`/Drop заменяет map erase + delete.
 //! `AddOwnedCityToFaction` повторяет те же positive-ID/map/null gates и затем
 //! вызывает virtual `AddOwnedCity` slot `+0x80`. Exact ASM
 //! `0x00437C20..0x00437C69` подтверждает порядок обоих аргументов и отсутствие
@@ -415,11 +423,15 @@ use super::union::{
     UnionApplicationFactionSnapshot, UnionApplicationTerminal, UnionApplyForJoinBlock,
     UnionApplyForJoinContext, UnionApplyForJoinEffects, UnionApplyForJoinOutcome,
     UnionClientSnapshotContext, UnionDoJoinBlock, UnionDoJoinContext, UnionDoJoinOutcome,
-    UnionFactionJoinContext, UnionFactionLevelBlock, UnionFactionMemberContext,
+    UnionDisbandBlock, UnionDisbandOutcome,
+    UnionFireOutBlock, UnionFireOutContext, UnionFireOutEffects, UnionFireOutOutcome,
+    UnionFactionFanoutReport, UnionFactionJoinContext, UnionFactionLevelBlock,
+    UnionFactionMemberContext,
     UnionFactionStateMutationContext, UnionInitialMutationContext, UnionMasterFactionQueryContext,
     UnionMemberSnapshotBlock, UnionOperatorValidationContext, UnionOwnedCityBooleanMutationReport,
     UnionOwnedCityFanoutReport, UnionOwnedCityMutationBlock, UnionOwnedCityMutationContext,
-    UnionFormatArgument, UnionPlayerRefreshContext, UnionSendInfoContext,
+    UnionFormatArgument, UnionPlayerRefreshContext, UnionPlayerRefreshReport,
+    UnionSendInfoContext,
     UnionVictorFanoutReport, UnionVictorMutationBlock,
 };
 use super::villagewarsys::CVillageWarSys;
@@ -1179,6 +1191,66 @@ pub(crate) enum OrganizingFactionDoJoinBlock {
 pub(crate) enum OrganizingUnionByMasterBlock {
     FactionMaster(FactionMasterLookupBlock),
     UnionMembership(FactionUnionMembershipLookupBlock),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingUnionFireOutOutcome {
+    UnionNotFound,
+    Applied {
+        union_id: i32,
+        outcome: UnionFireOutOutcome<UnionMemberDetachOutcome>,
+        automatic_disband: Option<OrganizingConfederationDisbandOutcome>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingUnionFireOutBlock {
+    Lookup(OrganizingUnionByMasterBlock),
+    FireOut {
+        union_id: i32,
+        source: UnionFireOutBlock<FactionMasterLookupBlock, UnionMemberDetachBlock>,
+    },
+    AutomaticDisband {
+        union_id: i32,
+        fire_out: UnionFireOutOutcome<UnionMemberDetachOutcome>,
+        source: OrganizingConfederationDisbandBlock,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingConfederationDisbandRejection {
+    StandardWar,
+    CityWar,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingConfederationDisbandReport {
+    pub(crate) union_id: i32,
+    pub(crate) standard_enemy_clear: UnionFactionFanoutReport,
+    pub(crate) city_enemy_clear: UnionFactionFanoutReport,
+    pub(crate) union_outcome: UnionDisbandOutcome<UnionMemberDetachOutcome>,
+    pub(crate) delete_queued: bool,
+    pub(crate) owned_city_refreshes: Vec<(i32, i32, i32)>,
+    pub(crate) player_refresh: Option<UnionPlayerRefreshReport>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingConfederationDisbandOutcome {
+    UnionNotFound,
+    Rejected(OrganizingConfederationDisbandRejection),
+    Applied(OrganizingConfederationDisbandReport),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingConfederationDisbandBlock {
+    Disband {
+        union_id: i32,
+        source: UnionDisbandBlock<
+            FactionMasterLookupBlock,
+            UnionMemberDetachBlock,
+            UnionMemberDetachOutcome,
+        >,
+    },
 }
 
 pub(crate) type OrganizingUnionApplyForJoinBlock<SessionBlock> =
@@ -3526,6 +3598,185 @@ impl COrganizingCtrl {
             })
     }
 
+    /// Выполняет exact controller-цепочку `0x6010C`: `GetUnion(manager)` и
+    /// virtual `CUnion::FireOut(manager, target faction)`.
+    pub(crate) fn fire_out_union_by_master<Effects>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        manager_id: i32,
+        target_faction_id: i32,
+        effects: &mut Effects,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<OrganizingUnionFireOutOutcome, OrganizingUnionFireOutBlock>
+    where
+        Effects: UnionFireOutEffects,
+    {
+        let Some(union_id) = self
+            .union_id_by_master_player(manager_id)
+            .map_err(OrganizingUnionFireOutBlock::Lookup)?
+        else {
+            return Ok(OrganizingUnionFireOutOutcome::UnionNotFound);
+        };
+        let mut union = self
+            .confederations
+            .get_mut(&union_id)
+            .and_then(Option::take)
+            .expect("GetUnion вернул живой owner из того же controller map");
+        let result = union.fire_out(
+            game,
+            parameters,
+            manager_id,
+            target_faction_id,
+            self,
+            effects,
+            update_player,
+        );
+        let should_disband = union.member_count() <= 1;
+        *self
+            .confederations
+            .get_mut(&union_id)
+            .expect("detached union slot не удаляется") = Some(union);
+        let outcome = result
+            .map_err(|source| OrganizingUnionFireOutBlock::FireOut { union_id, source })?;
+        let automatic_disband = if should_disband {
+            match self.disband_confederation(
+                game,
+                parameters,
+                manager_id,
+                union_id,
+                effects,
+                update_player,
+            ) {
+                Ok(outcome) => Some(outcome),
+                Err(source) => {
+                    return Err(OrganizingUnionFireOutBlock::AutomaticDisband {
+                        union_id,
+                        fire_out: outcome,
+                        source,
+                    });
+                }
+            }
+        } else {
+            None
+        };
+        Ok(OrganizingUnionFireOutOutcome::Applied {
+            union_id,
+            outcome,
+            automatic_disband,
+        })
+    }
+
+    /// Выполняет exact `DisbandConferation`: war gates, concrete union
+    /// disband, delete-очередь, owned-city refresh и удаление owner-а.
+    pub(crate) fn disband_confederation<Effects>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        manager_id: i32,
+        union_id: i32,
+        effects: &mut Effects,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<OrganizingConfederationDisbandOutcome, OrganizingConfederationDisbandBlock>
+    where
+        Effects: UnionFireOutEffects,
+    {
+        let Some(mut union) = self
+            .confederations
+            .get_mut(&union_id)
+            .and_then(Option::take)
+        else {
+            return Ok(OrganizingConfederationDisbandOutcome::UnionNotFound);
+        };
+
+        let rejection = if union.has_enemy_faction(self) {
+            Some((OrganizingConfederationDisbandRejection::StandardWar, b"WS0246".as_slice()))
+        } else if union.has_city_war_enemy_faction(self) {
+            Some((OrganizingConfederationDisbandRejection::CityWar, b"WS0247".as_slice()))
+        } else {
+            None
+        };
+        if let Some((rejection, string_id)) = rejection {
+            let first_text = effects.world_string(string_id);
+            let second_text = effects.world_string(b"WS0121");
+            effects.send_organizing_info(FactionMemberInfoRequest {
+                recipient_player_id: manager_id,
+                first_text: &first_text,
+                second_text: &second_text,
+                information_type: -1,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            });
+            *self
+                .confederations
+                .get_mut(&union_id)
+                .expect("detached union slot не удаляется") = Some(union);
+            return Ok(OrganizingConfederationDisbandOutcome::Rejected(rejection));
+        }
+
+        let standard_enemy_clear = union.clear_enemy_factions(self);
+        let city_enemy_clear = union.clear_city_war_enemy_factions(self);
+        let union_outcome = match union.disband(
+            game,
+            parameters,
+            manager_id,
+            self,
+            effects,
+        ) {
+            Ok(outcome) => outcome,
+            Err(source) => {
+                *self
+                    .confederations
+                    .get_mut(&union_id)
+                    .expect("detached union slot не удаляется") = Some(union);
+                return Err(OrganizingConfederationDisbandBlock::Disband {
+                    union_id,
+                    source,
+                });
+            }
+        };
+        if !matches!(union_outcome, UnionDisbandOutcome::Disbanded(_)) {
+            *self
+                .confederations
+                .get_mut(&union_id)
+                .expect("detached union slot не удаляется") = Some(union);
+            return Ok(OrganizingConfederationDisbandOutcome::Applied(
+                OrganizingConfederationDisbandReport {
+                    union_id,
+                    standard_enemy_clear,
+                    city_enemy_clear,
+                    union_outcome,
+                    delete_queued: false,
+                    owned_city_refreshes: Vec::new(),
+                    player_refresh: None,
+                },
+            ));
+        }
+
+        self.delete_unions.push_back(union_id);
+        let mut owned_city_refreshes = Vec::new();
+        if let Some(master_faction) = self.faction_by_id(union.master_id()) {
+            let master_faction_id = master_faction.faction_id();
+            for &region_id in master_faction.owned_cities() {
+                effects.refresh_owned_city(region_id, master_faction_id, 0);
+                owned_city_refreshes.push((region_id, master_faction_id, 0));
+            }
+        }
+        self.confederations.remove(&union_id);
+        let player_refresh = union.update_player_faction_info(0, self, game, update_player);
+        Ok(OrganizingConfederationDisbandOutcome::Applied(
+            OrganizingConfederationDisbandReport {
+                union_id,
+                standard_enemy_clear,
+                city_enemy_clear,
+                union_outcome,
+                delete_queued: true,
+                owned_city_refreshes,
+                player_refresh: Some(player_refresh),
+            },
+        ))
+    }
+
     /// Строит и маршрутизирует точный player-targeted organizing-info wire.
     pub(crate) fn send_organizing_info_to_client(
         game: &CGame,
@@ -5053,6 +5304,20 @@ impl UnionOperatorValidationContext for COrganizingCtrl {
     }
 }
 
+impl UnionFireOutContext for COrganizingCtrl {
+    type DetachBlock = UnionMemberDetachBlock;
+    type DetachOutcome = UnionMemberDetachOutcome;
+
+    fn detach_union_member_for_fire_out(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        faction_id: i32,
+    ) -> Result<Self::DetachOutcome, Self::DetachBlock> {
+        self.detach_union_member(game, parameters, faction_id)
+    }
+}
+
 impl UnionDoJoinContext for COrganizingCtrl {
     type FreeFactionBlock = FactionUnionMembershipLookupBlock;
     type InitialSnapshotBlock = AddUnionToFactionBlock;
@@ -5211,6 +5476,14 @@ impl UnionFactionStateMutationContext for COrganizingCtrl {
             return false;
         };
         faction.clear_enemy_factions();
+        true
+    }
+
+    fn faction_clear_city_war_enemy_factions(&mut self, faction_id: i32) -> bool {
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return false;
+        };
+        faction.clear_city_war_enemy_factions();
         true
     }
 
@@ -6400,7 +6673,8 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::DisbandConferation
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
+// IMPLEMENTED_OWNER: `COrganizingCtrl::disband_confederation` выше.
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1053

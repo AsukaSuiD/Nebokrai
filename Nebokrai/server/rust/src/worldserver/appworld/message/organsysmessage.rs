@@ -1,7 +1,7 @@
 //! Статус корпуса: `IMPLEMENTED_PARTIAL` для достигнутых organizing opcode,
 //! включая список фракций страны `0x60107`, подачу заявки `0x60108`, отмену
 //! заявки `0x60109`, решение по заявке `0x6010A`, исключение участника
-//! `0x6010B`, заявку союза `0x60118`,
+//! `0x6010B`, исключение фракции из союза `0x6010C`, заявку союза `0x60118`,
 //! общий session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
@@ -56,6 +56,13 @@
 //! проверки старого Linux-донора не перенесены. War/Goods-War gates,
 //! уведомления, member mutations, fire-log и локальный `0x60508` остаются
 //! внутри exact concrete owner `0x004BB140..0x004BB897`.
+//! Exact `0x004A71D1..0x004A722D` для `0x6010C` читает `(manager ID, target
+//! faction ID)`, один раз выполняет `COrganizingCtrl::GetUnion(manager ID)` и
+//! при non-null вызывает virtual `CUnion::FireOut(manager, target)` в том же
+//! slot `+0x24`. Результат игнорируется: затем безусловно читается member count
+//! и при `<= 1` вызывается `DisbandConferation(manager, union ID)`, даже если
+//! `FireOut` отказал. Online/route/tail gates и wire-ответ отсутствуют; старый
+//! Linux-донор добавлял ingress-проверки, которых нет в EXE.
 //! Exact диапазоны
 //! `0x004A74C6..0x004A7509` и `0x004A7511..0x004A7543` исправляют повреждённый
 //! RAW. Общий branch читает
@@ -357,6 +364,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingNameCountryBlock, OrganizingNameKind, OrganizingNameLookupBlock,
     OrganizingNameMatch, OrganizingNamedUnionApplicationBlock,
     OrganizingFactionDoJoinBlock, OrganizingFactionDoJoinOutcome, begin_city_transfer_session,
+    OrganizingUnionFireOutBlock, OrganizingUnionFireOutOutcome,
 };
 use crate::worldserver::appworld::organizingsystem::organizing::{
     ECityState, EOperator, TagTimeValue,
@@ -366,7 +374,7 @@ use crate::worldserver::appworld::organizingsystem::union::{
     UnionAddFactionEffects, UnionApplicationEndpointBlock, UnionApplicationSessionBlock,
     UnionApplicationSessionReport, UnionApplicationSessionRequest, UnionApplicationSessionRuntime,
     UnionApplicationTerminal, UnionApplyForJoinEffects, UnionApplyForJoinOutcome,
-    UnionFactionStateMutationContext,
+    UnionFactionStateMutationContext, UnionFireOutEffects,
     UnionFormatArgument, UnionOwnedCityMutationContext,
     begin_union_application_session,
 };
@@ -388,6 +396,7 @@ const FACTION_APPLICATION_MESSAGE_TYPE: i32 = 0x60108;
 const CANCEL_FACTION_APPLICATION_MESSAGE_TYPE: i32 = 0x60109;
 const FACTION_APPLICATION_DECISION_MESSAGE_TYPE: i32 = 0x6010A;
 const FACTION_FIRE_OUT_MESSAGE_TYPE: i32 = 0x6010B;
+const UNION_FIRE_OUT_MESSAGE_TYPE: i32 = 0x6010C;
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
@@ -724,6 +733,37 @@ impl UnionAddFactionEffects for WorldUnionApplicationEffects<'_> {
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
         let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+struct WorldUnionFireOutEffects<'game, 'callbacks, 'effects> {
+    game: &'game CGame,
+    callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
+}
+
+impl UnionFireOutEffects for WorldUnionFireOutEffects<'_, '_, '_> {
+    fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
+        (self.callbacks.world_string)(string_id)
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[UnionFormatArgument<'_>],
+    ) -> Vec<u8> {
+        (self.callbacks.format_world_string)(string_id, arguments)
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+
+    fn put_war_log(&mut self, text: &[u8]) {
+        (self.callbacks.put_war_log)(text);
+    }
+
+    fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32) {
+        (self.callbacks.refresh_owned_city)(region_id, faction_id, union_id);
     }
 }
 
@@ -2052,6 +2092,48 @@ pub(crate) fn dispatch_faction_fire_out(
     Some(Ok(OrganizingFactionFireOutDispatch {
         manager_id,
         target_id,
+        outcome,
+    }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingUnionFireOutDispatch {
+    pub(crate) manager_id: i32,
+    pub(crate) target_faction_id: i32,
+    pub(crate) outcome: OrganizingUnionFireOutOutcome,
+}
+
+/// Выполняет exact `0x6010C`: два `Long`, nullable `GetUnion(manager)`, virtual
+/// `CUnion::FireOut` и автоматический disband при member count `<= 1`.
+pub(crate) fn dispatch_union_fire_out(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    parameters: &COrganizingParam,
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    update_player: &mut dyn FnMut(i32),
+) -> Option<Result<OrganizingUnionFireOutDispatch, OrganizingUnionFireOutBlock>> {
+    if message.message_type() != UNION_FIRE_OUT_MESSAGE_TYPE {
+        return None;
+    }
+
+    let manager_id = message.base_mut().get_long().unwrap_or(0);
+    let target_faction_id = message.base_mut().get_long().unwrap_or(0);
+    let mut effects = WorldUnionFireOutEffects { game, callbacks };
+    let outcome = match organizing.fire_out_union_by_master(
+        game,
+        parameters,
+        manager_id,
+        target_faction_id,
+        &mut effects,
+        update_player,
+    ) {
+        Ok(outcome) => outcome,
+        Err(source) => return Some(Err(source)),
+    };
+    Some(Ok(OrganizingUnionFireOutDispatch {
+        manager_id,
+        target_faction_id,
         outcome,
     }))
 }
