@@ -1,8 +1,10 @@
 //! Владелец таблиц почётных рангов исторического `WorldServer`.
 //!
-//! Статус `CHonorRanks::GenerateSaveData` RVA `0x0001B090` и
-//! `AddToByteArray` RVA `0x0001A6F0` — `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
-//! остальные функции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Статус `CHonorRanks::GenerateSaveData` RVA `0x0001B090` —
+//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`; `AddToByteArray` RVA `0x0001A6F0`,
+//! accessors/clear RVA `0x0001A540..0x0001A890` и `CopyHonorRanks` RVA
+//! `0x0001AE20` — `IMPLEMENTED`. Остальные функции ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
@@ -43,6 +45,12 @@
 //! подтверждает те же границы. `Vec` заменяет `std::list`, сохраняя insertion
 //! order; fixed `[u8; 20]` остаётся storage-контрактом, а отсутствие NUL теперь
 //! typed-блокирует сериализацию вместо чтения C++ за пределами массива.
+//!
+//! Rank rollover принимает исходную битовую маску day/week/month/total и идёт
+//! по четырём странам в прежнем порядке. Для day/week/month current-list после
+//! полной копии в history очищается; total history тоже заменяется копией, но
+//! current total намеренно остаётся накопительным. `Vec::clone/clear` заменяют
+//! только MSVC list allocation/cleanup, не меняя порядок записей.
 
 use std::error::Error;
 use std::fmt;
@@ -103,6 +111,59 @@ impl CHonorRanks {
         country: u8,
     ) -> Option<&mut Vec<HonorRankDbEntry>> {
         self.history[rank_type as usize].get_mut(usize::from(country))
+    }
+
+    /// Даёт loader/runtime-owner-у одну доказанную current-секцию.
+    pub(crate) fn current_mut(
+        &mut self,
+        rank_type: HonorRanksType,
+        country: u8,
+    ) -> Option<&mut Vec<HonorRankDbEntry>> {
+        self.current[rank_type as usize].get_mut(usize::from(country))
+    }
+
+    /// Полностью очищает все шестнадцать history-list в исходном порядке.
+    pub(crate) fn clear_history_honor_ranks(&mut self) {
+        for by_country in &mut self.history {
+            for ranks in by_country {
+                ranks.clear();
+            }
+        }
+    }
+
+    /// Полностью очищает все шестнадцать current-list в исходном порядке.
+    pub(crate) fn clear_current_honor_ranks(&mut self) {
+        for by_country in &mut self.current {
+            for ranks in by_country {
+                ranks.clear();
+            }
+        }
+    }
+
+    /// Копирует выбранные rank-типы current → history перед новым периодом.
+    pub(crate) fn copy_honor_ranks(&mut self, rank_mask: u32) -> bool {
+        for country in 0..4 {
+            if rank_mask & 0x01 != 0 {
+                self.history[HonorRanksType::Day as usize][country] =
+                    self.current[HonorRanksType::Day as usize][country].clone();
+                self.current[HonorRanksType::Day as usize][country].clear();
+            }
+            if rank_mask & 0x02 != 0 {
+                self.history[HonorRanksType::Week as usize][country] =
+                    self.current[HonorRanksType::Week as usize][country].clone();
+                self.current[HonorRanksType::Week as usize][country].clear();
+            }
+            if rank_mask & 0x04 != 0 {
+                self.history[HonorRanksType::Month as usize][country] =
+                    self.current[HonorRanksType::Month as usize][country].clone();
+                self.current[HonorRanksType::Month as usize][country].clear();
+            }
+            if rank_mask & 0x08 != 0 {
+                self.history[HonorRanksType::Total as usize][country] =
+                    self.current[HonorRanksType::Total as usize][country].clone();
+            }
+        }
+        true
     }
 
     /// Повторяет `AddToByteArray(type, country)`; `None` соответствует `-1`.
@@ -802,7 +863,7 @@ impl Error for HonorRanksSerializationBlock {}
 
 // ============================================================================
 // FUNCTION: CHonorRanks::GetHistoryHonorRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp:328
@@ -810,13 +871,14 @@ impl Error for HonorRanksSerializationBlock {}
 // ADDRESS: 0041a540
 // PROTOTYPE: list<tagHorRank,std::allocator<tagHorRank>_> * __cdecl GetHistoryHonorRanks(int param_1, int param_2)
 //
+// Реализовано выше как typed history accessor.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CHonorRanks::GetNowHonorRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp:337
@@ -824,6 +886,7 @@ impl Error for HonorRanksSerializationBlock {}
 // ADDRESS: 0041a570
 // PROTOTYPE: list<tagHorRank,std::allocator<tagHorRank>_> * __cdecl GetNowHonorRanks(int param_1, int param_2)
 //
+// Реализовано выше как typed current accessor.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -858,7 +921,7 @@ impl Error for HonorRanksSerializationBlock {}
 
 // ============================================================================
 // FUNCTION: CHonorRanks::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp:187
@@ -866,13 +929,14 @@ impl Error for HonorRanksSerializationBlock {}
 // ADDRESS: 0041a6f0
 // PROTOTYPE: bool __cdecl AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, int param_2, int param_3)
 //
+// Реализовано выше без копирования ABI-layout `std::list`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CHonorRanks::ClearHistoryHonorRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp:346
@@ -880,13 +944,14 @@ impl Error for HonorRanksSerializationBlock {}
 // ADDRESS: 0041a840
 // PROTOTYPE: void __cdecl ClearHistoryHonorRanks(void)
 //
+// Реализовано выше через полную очистку шестнадцати `Vec`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CHonorRanks::ClearNowHonorRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp:357
@@ -894,6 +959,7 @@ impl Error for HonorRanksSerializationBlock {}
 // ADDRESS: 0041a890
 // PROTOTYPE: void __cdecl ClearNowHonorRanks(void)
 //
+// Реализовано выше через полную очистку шестнадцати `Vec`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -914,7 +980,7 @@ impl Error for HonorRanksSerializationBlock {}
 
 // ============================================================================
 // FUNCTION: CHonorRanks::CopyHonorRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp:102
@@ -922,6 +988,7 @@ impl Error for HonorRanksSerializationBlock {}
 // ADDRESS: 0041ae20
 // PROTOTYPE: bool __cdecl CopyHonorRanks(ulong param_1)
 //
+// Реализовано выше с исходной битовой маской и накопительным total-list.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
