@@ -7,6 +7,8 @@
 //! `0x00034E90/0x00033680/0x00034EF0` — `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
 //! `CreateConfederation` RVA `0x000389D0` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
+//! локальный `CreateUnion::OnAsyncCallback` RVA `0x00038D80` —
+//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
 //! полный `COrganizingCtrl::Run` RVA `0x0003A550` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`, `DisbandFaction` RVA `0x00038550` и
 //! `UpdateOtherFacInfoToClient` RVA `0x00034980` и `DisbandConferation` RVA
@@ -101,6 +103,15 @@
 //! Переданный аргумент имени EXE не читает: endpoint получает имя первой
 //! faction. Rust на внутренней ошибке session setup снимает обе reservation
 //! вместо исходного null dereference; внешнего Miracle-контракта у UB нет.
+//! Creation callback различает approve, явный deny (`WS0245/WS0193`) и прочий
+//! terminal. Approve создаёт union с новым organizing ID, выполняет `Initial`,
+//! рассылает первой faction `WS0244/WS0119` с decimal color `10000`, добавляет
+//! вторую faction и вставляет owner в union-map. Затем машина повторно ставит
+//! superior обеим faction, обновляет их города и двух master-player-ов,
+//! условно отправляет им `0x7FE04` и ещё раз обновляет города первой faction;
+//! этот порядок и дублирующие side effects сохранены. Exact EXE
+//! `0x0043930C..0x00439388` исправляет ошибочный RAW: callback всегда проходит
+//! cleanup first, затем second reservation, без раннего возврата между ними.
 //! `AddOwnedCityToFaction` повторяет те же positive-ID/map/null gates и затем
 //! вызывает virtual `AddOwnedCity` slot `+0x80`. Exact ASM
 //! `0x00437C20..0x00437C69` подтверждает порядок обоих аргументов и отсутствие
@@ -444,7 +455,8 @@ use super::factionwarsys::{
 use super::organizing::{ECityState, EOperator, TagTimeValue};
 use super::organizingparam::COrganizingParam;
 use super::union::{
-    CUnion, UnionAddFactionEffects, UnionApplicationFactionBlock,
+    CUnion, UnionAddFactionBlock, UnionAddFactionEffects, UnionAddFactionOutcome,
+    UnionApplicationFactionBlock,
     UnionApplicationFactionSnapshot, UnionApplicationTerminal, UnionApplyForJoinBlock,
     UnionApplyForJoinContext, UnionApplyForJoinEffects, UnionApplyForJoinOutcome,
     UnionClientSnapshotContext, UnionDoJoinBlock, UnionDoJoinContext, UnionDoJoinOutcome,
@@ -454,7 +466,8 @@ use super::union::{
     UnionFireOutBlock, UnionFireOutContext, UnionFireOutEffects, UnionFireOutOutcome,
     UnionFactionFanoutReport, UnionFactionJoinContext, UnionFactionLevelBlock,
     UnionFactionMemberContext,
-    UnionFactionStateMutationContext, UnionInitialMutationContext, UnionMasterFactionQueryContext,
+    UnionFactionStateMutationContext, UnionInitialBlock, UnionInitialMutationContext,
+    UnionInitialReport, UnionMasterFactionQueryContext,
     UnionMemberSnapshotBlock, UnionOperatorValidationContext, UnionOwnedCityBooleanMutationReport,
     UnionOwnedCityFanoutReport, UnionOwnedCityMutationBlock, UnionOwnedCityMutationContext,
     UnionFormatArgument, UnionPlayerRefreshContext, UnionPlayerRefreshReport,
@@ -1877,6 +1890,72 @@ pub(crate) enum ConfederationCreationStartBlock<SessionBlock> {
         first_reservation_removed: bool,
         second_reservation_removed: bool,
         source: SessionBlock,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ConfederationCreationSnapshotDelivery {
+    pub(crate) player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ConfederationCreationCallbackReport {
+    pub(crate) terminal: ConfederationCreationTerminal,
+    pub(crate) rejection_notice_sent: bool,
+    pub(crate) first_faction_found: bool,
+    pub(crate) second_faction_found: bool,
+    pub(crate) union_id: Option<i32>,
+    pub(crate) initial: Option<UnionInitialReport>,
+    pub(crate) first_faction_notice: Option<FactionMemberInfoReport>,
+    pub(crate) second_faction_addition: Option<UnionAddFactionOutcome>,
+    pub(crate) first_superior_assigned: Option<bool>,
+    pub(crate) second_superior_assigned: Option<bool>,
+    pub(crate) first_owned_city_refresh: Option<FactionOwnedCityRefreshReport>,
+    pub(crate) second_owned_city_refresh: Option<FactionOwnedCityRefreshReport>,
+    pub(crate) first_player_refresh: Option<Vec<i32>>,
+    pub(crate) second_player_refresh: Option<Vec<i32>>,
+    pub(crate) first_player_snapshot: Option<ConfederationCreationSnapshotDelivery>,
+    pub(crate) second_player_snapshot: Option<ConfederationCreationSnapshotDelivery>,
+    pub(crate) repeated_first_city_refreshes: Vec<i32>,
+    pub(crate) first_reservation_removed: bool,
+    pub(crate) second_reservation_removed: bool,
+}
+
+#[derive(Debug)]
+pub(crate) enum ConfederationCreationCallbackBlock {
+    Initial {
+        report: ConfederationCreationCallbackReport,
+        source: UnionInitialBlock,
+    },
+    AddSecondFaction {
+        report: ConfederationCreationCallbackReport,
+        source: UnionAddFactionBlock,
+    },
+    FirstSuperior {
+        report: ConfederationCreationCallbackReport,
+        source: FactionSuperiorOrganizingBlock,
+    },
+    SecondSuperior {
+        report: ConfederationCreationCallbackReport,
+        source: FactionSuperiorOrganizingBlock,
+    },
+    FirstOwnedCityRefresh {
+        report: ConfederationCreationCallbackReport,
+        source: FactionOwnedCityRefreshBlock,
+    },
+    SecondOwnedCityRefresh {
+        report: ConfederationCreationCallbackReport,
+        source: FactionOwnedCityRefreshBlock,
+    },
+    FirstSnapshot {
+        report: ConfederationCreationCallbackReport,
+        source: UnionMemberSnapshotBlock,
+    },
+    SecondSnapshot {
+        report: ConfederationCreationCallbackReport,
+        source: UnionMemberSnapshotBlock,
     },
 }
 
@@ -5127,6 +5206,335 @@ impl COrganizingCtrl {
         })
     }
 
+    /// Завершает exact `CreateUnion::OnAsyncCallback` в organizing owner-е.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "terminal хранит exact поля локального C++ callback-owner-а"
+    )]
+    pub(crate) fn finish_confederation_creation<Effects>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        first_player_id: i32,
+        second_player_id: i32,
+        first_faction_id: i32,
+        second_faction_id: i32,
+        union_name: &[u8],
+        terminal: ConfederationCreationTerminal,
+        effects: &mut Effects,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<ConfederationCreationCallbackReport, ConfederationCreationCallbackBlock>
+    where
+        Effects: UnionAddFactionEffects,
+    {
+        let mut report = ConfederationCreationCallbackReport {
+            terminal,
+            rejection_notice_sent: false,
+            first_faction_found: false,
+            second_faction_found: false,
+            union_id: None,
+            initial: None,
+            first_faction_notice: None,
+            second_faction_addition: None,
+            first_superior_assigned: None,
+            second_superior_assigned: None,
+            first_owned_city_refresh: None,
+            second_owned_city_refresh: None,
+            first_player_refresh: None,
+            second_player_refresh: None,
+            first_player_snapshot: None,
+            second_player_snapshot: None,
+            repeated_first_city_refreshes: Vec::new(),
+            first_reservation_removed: false,
+            second_reservation_removed: false,
+        };
+
+        if terminal == ConfederationCreationTerminal::Denied {
+            let second_text = effects.world_string(b"WS0193");
+            let first_text = effects.world_string(b"WS0245");
+            effects.send_organizing_info(FactionMemberInfoRequest {
+                recipient_player_id: first_player_id,
+                first_text: legacy_c_string_prefix(&first_text),
+                second_text: legacy_c_string_prefix(&second_text),
+                information_type: -1,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            });
+            report.rejection_notice_sent = true;
+        }
+
+        if terminal != ConfederationCreationTerminal::Approved {
+            self.finish_confederation_creation_reservations(
+                first_faction_id,
+                second_faction_id,
+                &mut report,
+            );
+            return Ok(report);
+        }
+
+        report.first_faction_found = self.faction_by_id(first_faction_id).is_some();
+        report.second_faction_found = self.faction_by_id(second_faction_id).is_some();
+        if !report.first_faction_found || !report.second_faction_found {
+            self.finish_confederation_creation_reservations(
+                first_faction_id,
+                second_faction_id,
+                &mut report,
+            );
+            return Ok(report);
+        }
+
+        let union_id = self.generate_db_organizing_id();
+        report.union_id = Some(union_id);
+        let (mut union, initial) = match CUnion::from_live_state(
+            union_id,
+            first_faction_id,
+            union_name.to_vec(),
+            None,
+            self,
+            parameters,
+            game,
+            update_player,
+        ) {
+            Ok(result) => result,
+            Err((_union, source)) => {
+                self.finish_confederation_creation_reservations(
+                    first_faction_id,
+                    second_faction_id,
+                    &mut report,
+                );
+                return Err(ConfederationCreationCallbackBlock::Initial { report, source });
+            }
+        };
+        report.initial = Some(initial);
+
+        let second_text = effects.world_string(b"WS0119");
+        let first_text = effects.world_string(b"WS0244");
+        report.first_faction_notice = self.faction_by_id(first_faction_id).map(|faction| {
+            faction.send_info_to_all_members_with_color(
+                legacy_c_string_prefix(&first_text),
+                legacy_c_string_prefix(&second_text),
+                -1,
+                10_000,
+                |request| effects.send_organizing_info(request),
+            )
+        });
+
+        report.second_faction_addition = match union.add_faction(
+            second_faction_id,
+            self,
+            effects,
+            parameters,
+            game,
+            update_player,
+        ) {
+            Ok(outcome) => Some(outcome),
+            Err(source) => {
+                self.finish_confederation_creation_reservations(
+                    first_faction_id,
+                    second_faction_id,
+                    &mut report,
+                );
+                return Err(ConfederationCreationCallbackBlock::AddSecondFaction {
+                    report,
+                    source,
+                });
+            }
+        };
+        self.confederations.insert(union_id, Some(Box::new(union)));
+
+        report.first_superior_assigned = Some(match self
+            .faction_by_id_mut(first_faction_id)
+            .expect("обе faction проверены перед созданием union")
+            .set_superior_organizing(union_id, parameters)
+        {
+            Ok(()) => true,
+            Err(source) => {
+                self.finish_confederation_creation_reservations(
+                    first_faction_id,
+                    second_faction_id,
+                    &mut report,
+                );
+                return Err(ConfederationCreationCallbackBlock::FirstSuperior {
+                    report,
+                    source,
+                });
+            }
+        });
+        report.second_superior_assigned = Some(match self
+            .faction_by_id_mut(second_faction_id)
+            .expect("обе faction проверены перед созданием union")
+            .set_superior_organizing(union_id, parameters)
+        {
+            Ok(()) => true,
+            Err(source) => {
+                self.finish_confederation_creation_reservations(
+                    first_faction_id,
+                    second_faction_id,
+                    &mut report,
+                );
+                return Err(ConfederationCreationCallbackBlock::SecondSuperior {
+                    report,
+                    source,
+                });
+            }
+        });
+
+        report.first_owned_city_refresh = Some(match self
+            .faction_by_id(first_faction_id)
+            .expect("обе faction проверены перед созданием union")
+            .refresh_owned_city_info(|region_id, faction_id, union_id| {
+                effects.refresh_owned_city(region_id, faction_id, union_id);
+            })
+        {
+            Ok(refresh) => refresh,
+            Err(source) => {
+                self.finish_confederation_creation_reservations(
+                    first_faction_id,
+                    second_faction_id,
+                    &mut report,
+                );
+                return Err(
+                    ConfederationCreationCallbackBlock::FirstOwnedCityRefresh {
+                        report,
+                        source,
+                    },
+                );
+            }
+        });
+        report.second_owned_city_refresh = Some(match self
+            .faction_by_id(second_faction_id)
+            .expect("обе faction проверены перед созданием union")
+            .refresh_owned_city_info(|region_id, faction_id, union_id| {
+                effects.refresh_owned_city(region_id, faction_id, union_id);
+            })
+        {
+            Ok(refresh) => refresh,
+            Err(source) => {
+                self.finish_confederation_creation_reservations(
+                    first_faction_id,
+                    second_faction_id,
+                    &mut report,
+                );
+                return Err(
+                    ConfederationCreationCallbackBlock::SecondOwnedCityRefresh {
+                        report,
+                        source,
+                    },
+                );
+            }
+        });
+        report.first_player_refresh = Some(
+            self.faction_by_id(first_faction_id)
+                .expect("обе faction проверены перед созданием union")
+                .update_player_faction_info(game, first_player_id, &mut *update_player),
+        );
+        report.second_player_refresh = Some(
+            self.faction_by_id(second_faction_id)
+                .expect("обе faction проверены перед созданием union")
+                .update_player_faction_info(game, second_player_id, &mut *update_player),
+        );
+
+        report.first_player_snapshot = match self.send_created_union_snapshot(
+            game,
+            union_id,
+            first_player_id,
+        ) {
+            Ok(delivery) => delivery,
+            Err(source) => {
+                self.finish_confederation_creation_reservations(
+                    first_faction_id,
+                    second_faction_id,
+                    &mut report,
+                );
+                return Err(ConfederationCreationCallbackBlock::FirstSnapshot {
+                    report,
+                    source,
+                });
+            }
+        };
+        report.second_player_snapshot = match self.send_created_union_snapshot(
+            game,
+            union_id,
+            second_player_id,
+        ) {
+            Ok(delivery) => delivery,
+            Err(source) => {
+                self.finish_confederation_creation_reservations(
+                    first_faction_id,
+                    second_faction_id,
+                    &mut report,
+                );
+                return Err(ConfederationCreationCallbackBlock::SecondSnapshot {
+                    report,
+                    source,
+                });
+            }
+        };
+
+        let first_owned_cities = self
+            .faction_by_id(first_faction_id)
+            .expect("обе faction проверены перед созданием union")
+            .owned_cities()
+            .clone();
+        for region_id in first_owned_cities {
+            effects.refresh_owned_city(region_id, first_faction_id, union_id);
+            report.repeated_first_city_refreshes.push(region_id);
+        }
+
+        self.finish_confederation_creation_reservations(
+            first_faction_id,
+            second_faction_id,
+            &mut report,
+        );
+        Ok(report)
+    }
+
+    fn send_created_union_snapshot(
+        &mut self,
+        game: &CGame,
+        union_id: i32,
+        player_id: i32,
+    ) -> Result<Option<ConfederationCreationSnapshotDelivery>, UnionMemberSnapshotBlock> {
+        let Some(player) = game.online_player_by_id(player_id as u32) else {
+            return Ok(None);
+        };
+        if !player.faction_data_received() {
+            return Ok(None);
+        }
+
+        let game_server_id = game.game_server_number_by_player_id(player_id);
+        let (factions, confederations) = (&self.factions, &mut self.confederations);
+        let union = confederations
+            .get_mut(&union_id)
+            .and_then(Option::as_deref_mut)
+            .expect("created union вставлен до client snapshot");
+        let mut message = CMessage::new(UNION_INITIAL_MESSAGE_TYPE);
+        message.base_mut().add_long(player_id);
+        let mut snapshot = Vec::new();
+        union.add_to_byte_array(&mut snapshot, &UnionFactionMapView { factions })?;
+        message.base_mut().add(&snapshot);
+        Ok(Some(ConfederationCreationSnapshotDelivery {
+            player_id,
+            game_server_id,
+            result: game.send_msg_to_game_server(game_server_id, &message),
+        }))
+    }
+
+    /// Удаляет первое совпадение каждого ID в машинном порядке first/second.
+    /// RAW ошибочно вставляет `return` после первого erase; exact EXE
+    /// `0x0043930C..0x00439388` безусловно продолжает ко второму проходу.
+    fn finish_confederation_creation_reservations(
+        &mut self,
+        first_faction_id: i32,
+        second_faction_id: i32,
+        report: &mut ConfederationCreationCallbackReport,
+    ) {
+        report.first_reservation_removed =
+            self.remove_from_establishment_list(first_faction_id);
+        report.second_reservation_removed =
+            self.remove_from_establishment_list(second_faction_id);
+    }
+
     /// Выполняет preflight и запускает `TransferIOwnerCity` в машинном порядке.
     #[allow(
         clippy::too_many_arguments,
@@ -7315,7 +7723,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: `public:_enum_eCrOrgResult___thiscall_COrganizingCtrl::CreateConfederation(long,long,std::basic_string<char,std::char_traits<char>,std::allocator<char>_>&)'::__l28::CreateUnion::OnAsyncCallback
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:953
@@ -7323,6 +7731,8 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00438d80
 // PROTOTYPE: void __thiscall OnAsyncCallback(tagAsyncResult * param_1)
 //
+// сохраняет terminal/result, exact creation side effects и два независимых
+// reservation erase; `send_created_union_snapshot` реализует `0x7FE04`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
