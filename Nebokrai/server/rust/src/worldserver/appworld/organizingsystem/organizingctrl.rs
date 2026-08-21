@@ -217,8 +217,7 @@ use super::faction::{
 };
 use super::organizing::EOperator;
 use super::organizingparam::COrganizingParam;
-use super::union::CUnion;
-use super::union::UnionOperatorValidationContext;
+use super::union::{CUnion, UnionMasterFactionQueryContext, UnionOperatorValidationContext};
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::appworld::player::{
     PlayerOrganizingState, PlayerOrganizingUpdateError, PlayerOrganizingUpdater,
@@ -1251,6 +1250,33 @@ impl UnionOperatorValidationContext for COrganizingCtrl {
 
     fn faction_id_by_master_player(&self, player_id: i32) -> Result<i32, Self::Block> {
         COrganizingCtrl::faction_id_by_master_player(self, player_id)
+    }
+}
+
+impl UnionMasterFactionQueryContext for COrganizingCtrl {
+    fn faction_is_owned_city(&self, faction_id: i32, region_id: i32) -> Option<i32> {
+        self.faction_by_id(faction_id)
+            .map(|faction| faction.is_owned_city(region_id))
+    }
+
+    fn faction_is_enemy_faction(&self, faction_id: i32, enemy_id: i32) -> Option<i32> {
+        self.faction_by_id(faction_id)
+            .map(|faction| faction.is_enemy_faction(enemy_id))
+    }
+
+    fn faction_owned_cities(&self, faction_id: i32) -> Option<VecDeque<i32>> {
+        self.faction_by_id(faction_id)
+            .map(|faction| faction.owned_cities().clone())
+    }
+
+    fn faction_has_enemy(&self, faction_id: i32) -> Option<bool> {
+        self.faction_by_id(faction_id)
+            .map(CFaction::has_enemy_faction)
+    }
+
+    fn faction_has_city_war_enemy(&self, faction_id: i32) -> Option<bool> {
+        self.faction_by_id(faction_id)
+            .map(CFaction::has_city_war_enemy_faction)
     }
 }
 

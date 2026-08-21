@@ -10,7 +10,10 @@
 //! `0x000C1F40`, обе перегрузки `GetMemberList` RVA
 //! `0x000C1BB0/0x000C2710`, `IsUsingPV/SetMemPV/AbolishMemPV` RVA
 //! `0x000C1D00/0x000C1D70/0x000C1DD0` и обе `CheckOperValidate` RVA
-//! `0x000C18D0/0x000C1970` — `IMPLEMENTED`;
+//! `0x000C18D0/0x000C1970`, empty enemy-set getter-ы RVA `0x000C1C50`,
+//! `IsOwnedCity/IsEnemyFaction/GetOwnedCities/IsHaveEnymyFaction/
+//! IsHaveCityEnemyFaction` RVA
+//! `0x000C2340/0x000C23A0/0x000C2650/0x000C2810/0x000C2870` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -71,8 +74,15 @@
 //! право; target-перегрузка дополнительно отвергает literal equality входных
 //! ID, нулевой target и master-faction союза, затем требует членство обоих и
 //! ровно `Permit` у manager при отсутствии `Permit` у target.
+//! Оба enemy-set getter-а folded в один owner, который не читает receiver и
+//! всегда строит пустой set. Остальные read-only proxy используют только
+//! положительный master-faction ID и nullable controller lookup; miss даёт
+//! `0`, `false` либо пустой owned-city list. Старый miss `GetOwnedCities`
+//! возвращал ссылку на уже уничтоженный локальный list. Safe Rust исправляет
+//! этот чистый lifetime/UB-дефект, возвращая owned snapshot либо пустой
+//! `VecDeque`, не меняя задуманное значение нормальных ветвей.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::organizing::{
     EOperator, EPurview, EPurviewOwnState, MemberPurviewMutation, TagMemInfo, TagTimeValue,
@@ -83,6 +93,19 @@ pub(crate) trait UnionOperatorValidationContext {
     type Block;
 
     fn faction_id_by_master_player(&self, player_id: i32) -> Result<i32, Self::Block>;
+}
+
+/// Узкая read-only граница master-faction proxy без singleton-а.
+pub(crate) trait UnionMasterFactionQueryContext {
+    fn faction_is_owned_city(&self, faction_id: i32, region_id: i32) -> Option<i32>;
+
+    fn faction_is_enemy_faction(&self, faction_id: i32, enemy_id: i32) -> Option<i32>;
+
+    fn faction_owned_cities(&self, faction_id: i32) -> Option<VecDeque<i32>>;
+
+    fn faction_has_enemy(&self, faction_id: i32) -> Option<bool>;
+
+    fn faction_has_city_war_enemy(&self, faction_id: i32) -> Option<bool>;
 }
 
 /// Поля `CUnion`, которые буквально копирует и читает save-цепочка.
@@ -213,6 +236,16 @@ impl CUnion {
     /// Возвращает новый снимок member-ID в исходном signed map-order.
     pub(crate) fn member_ids_snapshot(&self) -> Vec<i32> {
         self.members.keys().copied().collect()
+    }
+
+    /// Union не хранит отдельный standard enemy-set и всегда возвращал пустой.
+    pub(crate) fn enemy_factions_snapshot(&self) -> BTreeSet<i32> {
+        BTreeSet::new()
+    }
+
+    /// Folded city-war getter также всегда возвращал новый пустой set.
+    pub(crate) fn city_war_enemy_factions_snapshot(&self) -> BTreeSet<i32> {
+        BTreeSet::new()
     }
 
     /// Разрешает member faction-объекты и сохраняет pointer-identity dedupe.
@@ -347,6 +380,65 @@ impl CUnion {
             return Ok(false);
         }
         Ok(manager_permitted != self.is_using_purview(target_faction_id, purview))
+    }
+
+    /// Делегирует owned-city predicate только найденной master-faction.
+    pub(crate) fn is_owned_city<Context>(&self, region_id: i32, context: &Context) -> i32
+    where
+        Context: UnionMasterFactionQueryContext,
+    {
+        if self.master_id <= 0 {
+            return 0;
+        }
+        context
+            .faction_is_owned_city(self.master_id, region_id)
+            .unwrap_or(0)
+    }
+
+    /// Делегирует исторический enemy predicate только master-faction.
+    pub(crate) fn is_enemy_faction<Context>(&self, enemy_id: i32, context: &Context) -> i32
+    where
+        Context: UnionMasterFactionQueryContext,
+    {
+        if self.master_id <= 0 {
+            return 0;
+        }
+        context
+            .faction_is_enemy_faction(self.master_id, enemy_id)
+            .unwrap_or(0)
+    }
+
+    /// Возвращает независимый owned-city snapshot вместо dangling reference.
+    pub(crate) fn owned_cities_snapshot<Context>(&self, context: &Context) -> VecDeque<i32>
+    where
+        Context: UnionMasterFactionQueryContext,
+    {
+        if self.master_id <= 0 {
+            return VecDeque::new();
+        }
+        context
+            .faction_owned_cities(self.master_id)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn has_enemy_faction<Context>(&self, context: &Context) -> bool
+    where
+        Context: UnionMasterFactionQueryContext,
+    {
+        self.master_id > 0
+            && context
+                .faction_has_enemy(self.master_id)
+                .unwrap_or(false)
+    }
+
+    pub(crate) fn has_city_war_enemy_faction<Context>(&self, context: &Context) -> bool
+    where
+        Context: UnionMasterFactionQueryContext,
+    {
+        self.master_id > 0
+            && context
+                .faction_has_city_war_enemy(self.master_id)
+                .unwrap_or(false)
     }
 
     pub(crate) const fn change_data_type(&self) -> i32 {
@@ -604,7 +696,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::GetEnemyList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:321
@@ -646,7 +738,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::GetEnemyList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:308
@@ -828,7 +920,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::IsOwnedCity
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:193
@@ -842,7 +934,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::IsEnemyFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:202
@@ -926,7 +1018,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::GetOwnedCities
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:274
@@ -954,7 +1046,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::IsHaveEnymyFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:334
@@ -968,7 +1060,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::IsHaveCityEnemyFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:343
