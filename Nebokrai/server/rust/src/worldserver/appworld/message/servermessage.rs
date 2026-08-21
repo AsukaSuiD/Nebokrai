@@ -116,7 +116,8 @@
 //! `count + payload length + tagged values` subtype `12`. Ordered script-file
 //! map следует отдельными subtype `13`: C-string path, signed `lstrlenA` data
 //! и C-string data. `CQuestSystem` затем передаёт setup и ordered quest records
-//! subtype `0x16`. Следующая граница — `CPlayerRanks` subtype `0x17`.
+//! subtype `0x16`. `CPlayerRanks` следом отправляет insertion-order рейтинг
+//! subtype `0x17`. Следующая граница — `CGMList` subtype `9`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -233,6 +234,9 @@ use crate::worldserver::worldserver::game::{
     WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest, prepare_save_thread_launch,
 };
 use crate::worldserver::worldserver::honorranks::{CHonorRanks, HonorRanksSerializationBlock};
+use crate::worldserver::worldserver::playerranks::{
+    CPlayerRanks, PlayerRanksSerializationBlock,
+};
 
 /// Наблюдаемый итог typed-замены LoginServer client из ветки `0x3FC03`.
 #[derive(Debug)]
@@ -813,6 +817,18 @@ pub(crate) enum WorldQuestConfigurationCompletion {
 pub(crate) struct WorldQuestConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldQuestConfigurationCompletion,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldPlayerRanksConfigurationCompletion {
+    PlayerRanks(PlayerRanksSerializationBlock),
+    GmListPending { socket_id: i32 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerRanksConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldPlayerRanksConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -2304,6 +2320,31 @@ pub(crate) fn continue_game_server_quest_configuration(
             &payload,
         )),
         completion: WorldQuestConfigurationCompletion::PlayerRanksPending { socket_id },
+    }
+}
+
+/// Кодирует и отправляет точный `CPlayerRanks` subtype `0x17`.
+pub(crate) fn continue_game_server_player_ranks_configuration(
+    game: &CGame,
+    socket_id: i32,
+    player_ranks: &CPlayerRanks,
+) -> WorldPlayerRanksConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = player_ranks.add_to_byte_array(&mut payload) {
+        return WorldPlayerRanksConfigurationReport {
+            delivery: None,
+            completion: WorldPlayerRanksConfigurationCompletion::PlayerRanks(error),
+        };
+    }
+    let sender = game.current_game_server_sender();
+    WorldPlayerRanksConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x17,
+            &payload,
+        )),
+        completion: WorldPlayerRanksConfigurationCompletion::GmListPending { socket_id },
     }
 }
 

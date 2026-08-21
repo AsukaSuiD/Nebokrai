@@ -1,6 +1,130 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Общий рейтинг игроков исторического WorldServer.
+//!
+//! Статус World `CPlayerRanks::AddToByteArray` RVA `0x0001B760`:
+//! `IMPLEMENTED`; статистика, timer/DB lifecycle и Game runtime ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
+//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
+//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Исходный owner PDB:
+//! `e:\svn\fengyun_russia_dev\server\worldserver\worldserver\playerranks.cpp:75`.
+//!
+//! Exact World serializer и Game decoder подтверждают wire: signed count и
+//! insertion-order records `i32 player_id + C-string name + u16 occupation +
+//! u16 level + C-string faction_name`. `Vec` заменяет `std::list`, owned bytes
+//! — `std::string`; порядок и little-endian поля не меняются. Невозможный
+//! 32-битный count и внутренний NUL typed-блокируют весь append до изменения
+//! destination вместо переполнения или чтения за строкой.
+
+use std::error::Error;
+use std::fmt;
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerRankEntry {
+    pub(crate) player_id: i32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) occupation: u16,
+    pub(crate) level: u16,
+    pub(crate) faction_name: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CPlayerRanks {
+    ranks: Vec<PlayerRankEntry>,
+}
+
+impl CPlayerRanks {
+    pub(crate) fn push(&mut self, rank: PlayerRankEntry) {
+        self.ranks.push(rank);
+    }
+
+    pub(crate) fn ranks(&self) -> &[PlayerRankEntry] {
+        &self.ranks
+    }
+
+    pub(crate) fn add_to_byte_array(
+        &self,
+        destination: &mut Vec<u8>,
+    ) -> Result<(), PlayerRanksSerializationBlock> {
+        let count = i32::try_from(self.ranks.len()).map_err(|_| {
+            PlayerRanksSerializationBlock::CountOutOfRange {
+                count: self.ranks.len(),
+            }
+        })?;
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&count.to_le_bytes());
+        for (rank_index, rank) in self.ranks.iter().enumerate() {
+            payload.extend_from_slice(&rank.player_id.to_le_bytes());
+            write_player_rank_string(
+                &mut payload,
+                rank_index,
+                PlayerRankStringField::PlayerName,
+                &rank.name,
+            )?;
+            payload.extend_from_slice(&rank.occupation.to_le_bytes());
+            payload.extend_from_slice(&rank.level.to_le_bytes());
+            write_player_rank_string(
+                &mut payload,
+                rank_index,
+                PlayerRankStringField::FactionName,
+                &rank.faction_name,
+            )?;
+        }
+        destination.extend_from_slice(&payload);
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerRankStringField {
+    PlayerName,
+    FactionName,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerRanksSerializationBlock {
+    CountOutOfRange {
+        count: usize,
+    },
+    StringContainsNul {
+        rank_index: usize,
+        field: PlayerRankStringField,
+    },
+}
+
+impl fmt::Display for PlayerRanksSerializationBlock {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CountOutOfRange { count } => write!(
+                formatter,
+                "PlayerRanks содержит {count} записей вне signed 32-битного диапазона"
+            ),
+            Self::StringContainsNul { rank_index, field } => write!(
+                formatter,
+                "PlayerRanks #{rank_index}: поле {field:?} содержит внутренний NUL"
+            ),
+        }
+    }
+}
+
+impl Error for PlayerRanksSerializationBlock {}
+
+fn write_player_rank_string(
+    destination: &mut Vec<u8>,
+    rank_index: usize,
+    field: PlayerRankStringField,
+    value: &[u8],
+) -> Result<(), PlayerRanksSerializationBlock> {
+    if value.contains(&0) {
+        return Err(PlayerRanksSerializationBlock::StringContainsNul {
+            rank_index,
+            field,
+        });
+    }
+    destination.extend_from_slice(value);
+    destination.push(0);
+    Ok(())
+}
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
