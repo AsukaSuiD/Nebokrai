@@ -3,6 +3,8 @@
 //! Статус `COrganizingCtrl::AddOneTopInfo` RVA `0x00036960`,
 //! `SendTopInfoToClient` RVA `0x00033FC0` и
 //! `SendAllTopInfoToInfoToOneClient` RVA `0x000352C0` — `IMPLEMENTED`;
+//! локальные `CreateUnion::{CreateUnion,DoAsyncCall,Release}` RVA
+//! `0x00034E90/0x00033680/0x00034EF0` — `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
 //! полный `COrganizingCtrl::Run` RVA `0x0003A550` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`, `DisbandFaction` RVA `0x00038550` и
 //! `UpdateOtherFacInfoToClient` RVA `0x00034980` и `DisbandConferation` RVA
@@ -83,6 +85,12 @@
 //! удаляет owner из map и обновляет player-ов всех прежних member-фракций.
 //! Rust временно detaches `CUnion`, чтобы сохранить reentrant faction-callback
 //! без raw alias; владеющий `Box`/Drop заменяет map erase + delete.
+//! Локальный `CreateUnion` хранит двух игроков, две фракции и имя будущего
+//! союза в safe endpoint-е. Его `DoAsyncCall` отправляет второму игроку exact
+//! `0x7FE16`: second player, first player, C-string имени, session ID и cookie;
+//! ответ `AR_OK` с первым `long == 1` отделён от отказа и non-result terminal.
+//! `Arc`, typed payload и автоматический `Drop` заменяют только множественное
+//! наследование, raw `char *`, ручное выделение и virtual `Release` оригинала.
 //! `AddOwnedCityToFaction` повторяет те же positive-ID/map/null gates и затем
 //! вызывает virtual `AddOwnedCity` slot `+0x80`. Exact ASM
 //! `0x00437C20..0x00437C69` подтверждает порядок обоих аргументов и отсутствие
@@ -464,6 +472,7 @@ const EXPIRING_TIMER_FLAG: i32 = 2;
 const DECLARE_WAR_FACTION_PAGE_SIZE: i32 = 11;
 const DEFAULT_FACTION_BILLBOARD_SIZE: i32 = 10;
 const CITY_TRANSFER_CONFIRMATION_MESSAGE_TYPE: i32 = 0x7FE2B;
+const CONFEDERATION_CREATION_CONFIRMATION_MESSAGE_TYPE: i32 = 0x7FE16;
 
 const UNUSED_UNION_APPLICATION_TIME: TagTimeValue = TagTimeValue {
     year: 0,
@@ -1626,6 +1635,188 @@ pub(crate) enum OrganizingDisbandBlock {
         source: OrganizingOtherFactionUpdateBlock,
         progress: OrganizingDisbandProgress,
     },
+}
+
+/// Поля exact `CreateUnion::DoAsyncCall` и его terminal owner-а.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ConfederationCreationSessionRequest {
+    pub(crate) first_player_id: i32,
+    pub(crate) second_player_id: i32,
+    pub(crate) first_faction_id: i32,
+    pub(crate) second_faction_id: i32,
+    pub(crate) requested_session_id: i32,
+    pub(crate) timeout_ticks: u32,
+    pub(crate) union_name: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ConfederationCreationTerminal {
+    Approved,
+    Denied,
+    NonResult { kind: NetSessionAsyncResultKind },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ConfederationCreationEndpointBlock {
+    BeginPayloadType,
+    ResultPayloadType,
+}
+
+/// Потокобезопасная граница callback-а и единственного organizing owner-а.
+pub(crate) trait ConfederationCreationSessionRuntime: Send + Sync {
+    fn send_confederation_creation_confirmation(
+        &self,
+        recipient_player_id: i32,
+        message: &CMessage,
+    );
+
+    fn finish_confederation_creation(
+        &self,
+        first_player_id: i32,
+        second_player_id: i32,
+        first_faction_id: i32,
+        second_faction_id: i32,
+        union_name: &[u8],
+        terminal: ConfederationCreationTerminal,
+    );
+
+    fn block_confederation_creation_endpoint(&self, block: ConfederationCreationEndpointBlock);
+}
+
+/// Safe owner локального `CreateUnion` вместо двух C++ subobject-ов.
+pub(crate) struct CreateConfederationEndpoint {
+    first_player_id: i32,
+    second_player_id: i32,
+    first_faction_id: i32,
+    second_faction_id: i32,
+    union_name: Vec<u8>,
+    runtime: Arc<dyn ConfederationCreationSessionRuntime>,
+}
+
+impl NetSessionEndpoint for CreateConfederationEndpoint {
+    fn do_async_call(&self, session_id: i64, cookie_second: i32, payload: &dyn Any) {
+        let Some(request) = payload.downcast_ref::<ConfederationCreationSessionRequest>() else {
+            self.runtime.block_confederation_creation_endpoint(
+                ConfederationCreationEndpointBlock::BeginPayloadType,
+            );
+            return;
+        };
+
+        let mut message = CMessage::new(CONFEDERATION_CREATION_CONFIRMATION_MESSAGE_TYPE);
+        message.base_mut().add_long(request.second_player_id);
+        message.base_mut().add_long(request.first_player_id);
+        message
+            .base_mut()
+            .add(legacy_c_string_prefix(&request.union_name));
+        message.base_mut().add_byte(0);
+        message.base_mut().add_long64(session_id);
+        message.base_mut().add_long(cookie_second);
+        self.runtime.send_confederation_creation_confirmation(
+            request.second_player_id,
+            &message,
+        );
+    }
+
+    fn on_async_callback(&self, result: NetSessionAsyncResult<'_>) {
+        let terminal = if result.kind == NetSessionAsyncResultKind::Result {
+            let Some(decision) = result
+                .payload
+                .and_then(|payload| payload.downcast_ref::<i32>())
+            else {
+                self.runtime.block_confederation_creation_endpoint(
+                    ConfederationCreationEndpointBlock::ResultPayloadType,
+                );
+                return;
+            };
+            if *decision == 1 {
+                ConfederationCreationTerminal::Approved
+            } else {
+                ConfederationCreationTerminal::Denied
+            }
+        } else {
+            ConfederationCreationTerminal::NonResult { kind: result.kind }
+        };
+        self.runtime.finish_confederation_creation(
+            self.first_player_id,
+            self.second_player_id,
+            self.first_faction_id,
+            self.second_faction_id,
+            &self.union_name,
+            terminal,
+        );
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ConfederationCreationSessionReport {
+    pub(crate) session: CreatedNetSession,
+}
+
+pub(crate) enum ConfederationCreationSessionBlock {
+    Create(NetSessionCreateBlock),
+    SetCallback {
+        session: CreatedNetSession,
+        source: NetSessionSetCallbackBlock,
+    },
+    Begin {
+        session: CreatedNetSession,
+        source: NetSessionManagerBeginBlock,
+    },
+}
+
+impl std::fmt::Debug for ConfederationCreationSessionBlock {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Create(source) => formatter.debug_tuple("Create").field(source).finish(),
+            Self::SetCallback { session, source } => {
+                let source = match source {
+                    NetSessionSetCallbackBlock::SessionNotFound { .. } => "SessionNotFound",
+                    NetSessionSetCallbackBlock::AlreadyAssigned(_) => "AlreadyAssigned",
+                };
+                formatter
+                    .debug_struct("SetCallback")
+                    .field("session", session)
+                    .field("source", &source)
+                    .finish()
+            }
+            Self::Begin { session, source } => formatter
+                .debug_struct("Begin")
+                .field("session", session)
+                .field("source", source)
+                .finish(),
+        }
+    }
+}
+
+/// Связывает exact creation request с готовым session manager в исходном order.
+pub(crate) fn begin_confederation_creation_session(
+    manager: &CNetSessionManager,
+    request: ConfederationCreationSessionRequest,
+    runtime: Arc<dyn ConfederationCreationSessionRuntime>,
+    random: impl FnMut(i32) -> i32,
+) -> Result<ConfederationCreationSessionReport, ConfederationCreationSessionBlock> {
+    let session = manager
+        .create_session(
+            request.second_player_id,
+            request.requested_session_id,
+            random,
+        )
+        .map_err(ConfederationCreationSessionBlock::Create)?;
+    let endpoint = Box::new(CreateConfederationEndpoint {
+        first_player_id: request.first_player_id,
+        second_player_id: request.second_player_id,
+        first_faction_id: request.first_faction_id,
+        second_faction_id: request.second_faction_id,
+        union_name: request.union_name.clone(),
+        runtime,
+    });
+    manager
+        .set_callback_handle(session.id, endpoint)
+        .map_err(|source| ConfederationCreationSessionBlock::SetCallback { session, source })?;
+    manager
+        .beging(session.id, request.timeout_ticks, &request)
+        .map_err(|source| ConfederationCreationSessionBlock::Begin { session, source })?;
+    Ok(ConfederationCreationSessionReport { session })
 }
 
 /// Поля синхронного `PlayerTransferOwnerCity::DoAsyncCall`.
@@ -6243,7 +6434,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: `public:_enum_eCrOrgResult___thiscall_COrganizingCtrl::CreateConfederation(long,long,std::basic_string<char,std::char_traits<char>,std::allocator<char>_>&)'::__l28::CreateUnion::DoAsyncCall
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:937
@@ -6251,6 +6442,9 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00433680
 // PROTOTYPE: void __thiscall DoAsyncCall(__int64 param_1, long param_2, char * param_3)
 //
+// IMPLEMENTED_OWNER: `CreateConfederationEndpoint::do_async_call` и
+// `begin_confederation_creation_session` сохраняют exact `0x7FE16` wire-order,
+// route по second player, session/cookie и terminal-разбор ответа.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -6602,7 +6796,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: `public:_enum_eCrOrgResult___thiscall_COrganizingCtrl::CreateConfederation(long,long,std::basic_string<char,std::char_traits<char>,std::allocator<char>_>&)'::__l28::CreateUnion::CreateUnion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:931
@@ -6610,13 +6804,15 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00434e90
 // PROTOTYPE: undefined __thiscall CreateUnion(long param_1, long param_2, long param_3, long param_4, basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_5)
 //
+// IMPLEMENTED_OWNER: `CreateConfederationEndpoint` владеет exact полями
+// first/second player, first/second faction и копией C-string имени союза.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: `public:_enum_eCrOrgResult___thiscall_COrganizingCtrl::CreateConfederation(long,long,std::basic_string<char,std::char_traits<char>,std::allocator<char>_>&)'::__l28::CreateUnion::Release
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:934
@@ -6624,6 +6820,8 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00434ef0
 // PROTOTYPE: void __thiscall Release(void)
 //
+// IMPLEMENTED_OWNER: Rust `Box`/`Arc`/`Drop` освобождают endpoint после
+// terminal callback-а без ручного virtual delete и сохраняемого leak/UB.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
