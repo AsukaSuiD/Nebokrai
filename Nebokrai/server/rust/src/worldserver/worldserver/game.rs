@@ -1019,6 +1019,7 @@ use crate::worldserver::appworld::message::countrymessage::{
     dispatch_country_depose_minister_message,
     dispatch_country_exile_result_message,
     dispatch_country_exile_request_message,
+    dispatch_country_info_message,
     dispatch_country_players_list_message,
     dispatch_country_silence_request_message,
     dispatch_country_war_declaration_message, dispatch_country_war_victory_message,
@@ -13076,6 +13077,26 @@ where
                         after_database,
                     },
                 ),
+            };
+        }
+        let country_info = {
+            let mut effects = WorldCountryExileResultEffects {
+                game,
+                globe_setup,
+                format_world_string: &mut *application_callbacks.format_world_string,
+            };
+            dispatch_country_info_message(
+                &mut message,
+                &*country_handler,
+                country_parameters,
+                &mut effects,
+            )
+        };
+        if let Some(sync) = country_info {
+            return ProcessedWorldEvent::CountryMessage {
+                source,
+                legacy_run_result,
+                outcome: WorldCountryMessageOutcome::CountryInfoSent(sync),
             };
         }
         let players_list = {

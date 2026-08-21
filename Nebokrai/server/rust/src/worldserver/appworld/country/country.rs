@@ -815,6 +815,15 @@ pub(crate) struct CountryAppointMinisterReport {
 }
 
 impl CCountry {
+    /// Exact `GetInfo`: wrapper без дополнительных side effect.
+    pub(crate) fn get_info<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> CountryBaseInfoDisposition {
+        self.send_base_info_to_client(parameters, context)
+    }
+
     /// Exact `IsKing` для player-list owner-а с тем же `WS0033/WS0034`.
     pub(crate) fn authorize_king_for_players<Context: CountryPlayersListContext + ?Sized>(
         &self,

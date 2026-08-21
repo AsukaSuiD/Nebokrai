@@ -3,7 +3,7 @@
 //! Dispatcher RVA `0x000A47F0` остаётся `IMPLEMENTED_PARTIAL`: country relays
 //! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, а также вход country victory
 //! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, appoint-minister
-//! `0x60307 -> InitialOLPlayersList/Sort/0x7FF08`,
+//! `0x60306 -> GetInfo/0x7FF07`, `0x60307 -> InitialOLPlayersList/Sort/0x7FF08`,
 //! `0x60309 -> 0x7FF04/0x7FF10/0x7FF07`, depose-minister
 //! `0x6030A -> 0x7FF04/0x7FF10/0x7FF07`, absolve
 //! `0x60308 -> CanDemise/RegisterKing/DeposeKing/0x7FE27/0x7FF04/0x7FF10/0x7FF12`,
@@ -75,6 +75,10 @@
 //! отсутствуют. Exact owner сохраняет wrapping page arithmetic,
 //! GM-фильтр и return king ID; добавленные donor-ом валидации и
 //! return count не переносятся.
+//! `0x60306` читает `king:i32, country:i8 -> u8` и строго идёт
+//! `GetCountry -> IsKing -> GetInfo`; последний только вызывает уже
+//! восстановленный `SendBaseInfoToClient -> 0x7FF07`. Source/tail/country-
+//! range gates старого Linux-донора в exact dispatcher отсутствуют.
 //! Exact `0x004A4FC9..0x004A5049` задаёт `0x60317`: два signed long,
 //! синхронный `player_declare`, затем ответ `char accepted, player, target` в
 //! исходный `m_lMapID`. Проверок socket-owner и полного tail здесь нет; они
@@ -105,7 +109,8 @@ use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::tools::put_string_to_file;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::worldserver::appworld::country::country::{
-    CountryAbsolveReport, CountryAppointMinisterReport, CountryCanAbsolveDisposition,
+    CountryAbsolveReport, CountryAppointMinisterReport, CountryBaseInfoDisposition,
+    CountryCanAbsolveDisposition,
     CountryCanAppointMinisterDisposition, CountryCanExileDisposition,
     CountryCanDemiseDisposition, CountryCanDeposeMinisterDisposition, CountryCanSilenceDisposition,
     CountryDemiseReport,
@@ -393,6 +398,24 @@ pub(crate) struct WorldCountryDemiseSync {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldCountryInfoDisposition {
+    CountryMissing,
+    KingRejected,
+    Sent(CountryBaseInfoDisposition),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldCountryInfoSync {
+    pub(crate) source_map_id: i32,
+    pub(crate) source_socket_id: i32,
+    pub(crate) king_player_id: i32,
+    pub(crate) king_complete: bool,
+    pub(crate) country_id: u8,
+    pub(crate) country_complete: bool,
+    pub(crate) disposition: WorldCountryInfoDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryPlayersListDisposition {
     CountryMissing,
     KingRejected,
@@ -496,6 +519,7 @@ pub(crate) enum WorldCountryMessageOutcome {
     MinisterDeposed(WorldCountryDeposeMinisterSync),
     MinisterAppointed(WorldCountryAppointMinisterSync),
     KingDemised(WorldCountryDemiseSync),
+    CountryInfoSent(WorldCountryInfoSync),
     CountryPlayersListed(WorldCountryPlayersListSync),
     CountryWarDeclared(WorldCountryWarDeclarationSync),
     CountryWarVictory(WorldCountryWarVictorySync),
@@ -1119,6 +1143,41 @@ pub(crate) fn dispatch_country_players_list_message<
         source_socket_id,
         page,
         page_complete: decoded_page.is_some(),
+        king_player_id,
+        king_complete: decoded_king.is_some(),
+        country_id,
+        country_complete: decoded_country.is_some(),
+        disposition,
+    })
+}
+
+pub(crate) fn dispatch_country_info_message<Context: CountryExileResultContext + ?Sized>(
+    message: &mut CMessage,
+    country_handler: &CCountryHandler,
+    country_parameters: &CCountryParam,
+    context: &mut Context,
+) -> Option<WorldCountryInfoSync> {
+    if message.message_type() != 0x60306 {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_king = message.base_mut().get_long();
+    let king_player_id = decoded_king.unwrap_or(0);
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+    let disposition = match country_handler.get_country(country_id) {
+        None => WorldCountryInfoDisposition::CountryMissing,
+        Some(country) if !country.authorize_king(king_player_id, context) => {
+            WorldCountryInfoDisposition::KingRejected
+        }
+        Some(country) => WorldCountryInfoDisposition::Sent(
+            country.get_info(country_parameters, context),
+        ),
+    };
+    Some(WorldCountryInfoSync {
+        source_map_id,
+        source_socket_id,
         king_player_id,
         king_complete: decoded_king.is_some(),
         country_id,
