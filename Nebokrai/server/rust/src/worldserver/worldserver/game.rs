@@ -997,6 +997,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingFactionUpgradeDispatch, OrganizingFactionUploadIconDispatch,
     OrganizingRegionParamDispatch, OrganizingRegionRouteDispatch,
     OrganizingVillageWarApplicationBlock, OrganizingVillageWarApplicationDispatch,
+    OrganizingVillageWarResultDispatch,
     OrganizingLeaveWordDispatch,
     OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEnableDispatch,
     OrganizingPronounceDispatch, OrganizingSessionResultDispatch,
@@ -1014,7 +1015,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     dispatch_leave_word, dispatch_leave_word_edit,
     dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_pronounce,
     dispatch_region_param_update, dispatch_region_route, dispatch_union_application,
-    dispatch_village_war_application,
+    dispatch_village_war_application, dispatch_village_war_result,
 };
 use crate::worldserver::appworld::message::servermessage::{
     WorldLoginClientReplacement, WorldServerMessageDispatch, WorldServerMessageError,
@@ -1045,7 +1046,9 @@ use crate::worldserver::appworld::organizingsystem::union::{
     CUnion, UnionApplicationEndpointBlock, UnionApplicationSessionBlock,
     UnionApplicationSessionReport, UnionFormatArgument,
 };
-use crate::worldserver::appworld::organizingsystem::villagewarsys::CVillageWarSys;
+use crate::worldserver::appworld::organizingsystem::villagewarsys::{
+    CVillageWarSys, VillageWarCallbacks,
+};
 use crate::worldserver::appworld::player::{
     CPlayer, PlayerCodecError, PlayerOrganizingUpdateError, PlayerPropertyCoefficients,
 };
@@ -2032,6 +2035,12 @@ pub(crate) enum ProcessedWorldEvent {
         >,
         runtime: WorldUnionApplicationRuntimeReport,
     },
+    OrganizingVillageWarResult {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: OrganizingVillageWarResultDispatch,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
     OrganizingUnionApplication {
         source: WorldMessageSource,
         legacy_run_result: i32,
@@ -2647,6 +2656,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) faction_war: &'a mut CFactionWarSys,
     pub(crate) attack_city: &'a CAttackCitySys,
     pub(crate) village_war: &'a mut CVillageWarSys,
+    pub(crate) village_war_callbacks: VillageWarCallbacks<TimerCallback>,
     pub(crate) lei_ting: &'a mut CLeiTing,
     pub(crate) db_misc: &'a mut CDbMisc,
     pub(crate) net_sessions: &'a CNetSessionManager,
@@ -8270,10 +8280,10 @@ impl CGame {
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
     /// войны `0x6011E`, само объявление `0x6011F`, общий leaf
     /// `0x60121/0x60123`, передача города `0x60130`, admission permit
-    /// `0x60132`, terminal войны за город `0x60133` и заявка village-war
-    /// `0x60135` исполняются; остальные остаются owned pending. Terminal
-    /// actions применяются FIFO до следующего сообщения.
-    pub(crate) fn process_message(
+    /// `0x60132`, terminal войны за город `0x60133`, заявка village-war
+    /// `0x60135` и её result `0x60136` исполняются; остальные остаются owned
+    /// pending. Terminal actions применяются FIFO до следующего сообщения.
+    pub(crate) fn process_message<TimerCallback: Copy>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
         organizing: &mut COrganizingCtrl,
@@ -8282,6 +8292,8 @@ impl CGame {
         faction_war_sys: &mut CFactionWarSys,
         attack_city: &CAttackCitySys,
         village_war: &mut CVillageWarSys,
+        timer: &mut CTimer<TimerCallback>,
+        village_war_callbacks: VillageWarCallbacks<TimerCallback>,
         registry: &GoodsBasePropertiesRegistry,
         original_name_index: &GoodsOriginalNameIndex,
         coefficients: &PlayerPropertyCoefficients,
@@ -8318,6 +8330,8 @@ impl CGame {
                             faction_war_sys,
                             attack_city,
                             village_war,
+                            timer,
+                            village_war_callbacks,
                             registry,
                             original_name_index,
                             coefficients,
@@ -8362,6 +8376,8 @@ impl CGame {
                     faction_war_sys,
                     attack_city,
                     village_war,
+                    timer,
+                    village_war_callbacks,
                     registry,
                     original_name_index,
                     coefficients,
@@ -8396,7 +8412,7 @@ impl CGame {
     ///
     /// Safe block не получает придуманных end/next-stage ticks и не меняет
     /// накопитель: исходный невозвратившийся путь их не достигал.
-    pub(crate) fn process_message_main_loop_stage<GetTick>(
+    pub(crate) fn process_message_main_loop_stage<TimerCallback, GetTick>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
         organizing: &mut COrganizingCtrl,
@@ -8405,6 +8421,8 @@ impl CGame {
         faction_war_sys: &mut CFactionWarSys,
         attack_city: &CAttackCitySys,
         village_war: &mut CVillageWarSys,
+        timer: &mut CTimer<TimerCallback>,
+        village_war_callbacks: VillageWarCallbacks<TimerCallback>,
         registry: &GoodsBasePropertiesRegistry,
         original_name_index: &GoodsOriginalNameIndex,
         coefficients: &PlayerPropertyCoefficients,
@@ -8417,6 +8435,7 @@ impl CGame {
         mut get_tick: GetTick,
     ) -> WorldProcessMessageStageReport
     where
+        TimerCallback: Copy,
         GetTick: FnMut() -> u32,
     {
         let started_at_ms = get_tick();
@@ -8428,6 +8447,8 @@ impl CGame {
             faction_war_sys,
             attack_city,
             village_war,
+            timer,
+            village_war_callbacks,
             registry,
             original_name_index,
             coefficients,
@@ -9506,6 +9527,8 @@ impl CGame {
             owners.faction_war,
             owners.attack_city,
             owners.village_war,
+            owners.timer,
+            owners.village_war_callbacks,
             owners.registry,
             owners.original_name_index,
             owners.coefficients,
@@ -11192,7 +11215,7 @@ pub(crate) async fn game_thread_func<Runtime: WorldGameThreadRuntime>(
     }
 }
 
-fn process_world_message(
+fn process_world_message<TimerCallback: Copy>(
     game: &mut CGame,
     honor_ranks: &mut CHonorRanks,
     organizing: &mut COrganizingCtrl,
@@ -11201,6 +11224,8 @@ fn process_world_message(
     faction_war_sys: &mut CFactionWarSys,
     attack_city: &CAttackCitySys,
     village_war: &mut CVillageWarSys,
+    timer: &mut CTimer<TimerCallback>,
+    village_war_callbacks: VillageWarCallbacks<TimerCallback>,
     registry: &GoodsBasePropertiesRegistry,
     original_name_index: &GoodsOriginalNameIndex,
     coefficients: &PlayerPropertyCoefficients,
@@ -11725,6 +11750,50 @@ fn process_world_message(
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingVillageWarApplication {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        if let Some(outcome) = dispatch_village_war_result(
+            &mut message,
+            game,
+            organizing,
+            village_war,
+            timer,
+            village_war_callbacks,
+            application_callbacks,
+            update_player,
+        ) {
+            let callbacks = WorldUnionApplicationEffectCallbacks {
+                random: &mut *application_callbacks.random,
+                world_string: &mut *application_callbacks.world_string,
+                format_world_string: &mut *application_callbacks.format_world_string,
+                put_war_log: &mut *application_callbacks.put_war_log,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
+            };
+            let mut effects = WorldUnionApplicationEffects::new(
+                game,
+                net_sessions,
+                application_runtime,
+                callbacks,
+            );
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingVillageWarResult {
                 source,
                 legacy_run_result,
                 outcome,
