@@ -156,6 +156,11 @@ pub(crate) mod appworld {
         pub(crate) mod organizingctrl;
         #[allow(
             dead_code,
+            reason = "параметры организаций подключены к Init и timer callback до остальных faction callers"
+        )]
+        pub(crate) mod organizingparam;
+        #[allow(
+            dead_code,
             reason = "save-state CUnion подключён к CGame::tagDBData перед GenerateSaveData"
         )]
         pub(crate) mod union;
