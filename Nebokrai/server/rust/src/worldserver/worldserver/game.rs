@@ -53,6 +53,7 @@
 //! `CGame::AppendSaveFaction/AppendSaveUnion` RVA `0x000110D0/0x00011130`,
 //! `CGame::AppendDelFaction/AppendDelUnion` RVA `0x00011190/0x000111F0`,
 //! `CGame::AppendRegionParam` RVA `0x00011250`,
+//! `CGame::AddGoodsLink/FindGoodsLink` RVA `0x000112B0/0x00005A10`,
 //! `CGame::AppendDBCountry` RVA `0x00011070`,
 //! `CGame::SetEnemyFactions` RVA `0x00014D90` и
 //! `CGame::ClearDBData` RVA `0x0000D490`, live restore/deletion list-owner-ы
@@ -1045,6 +1046,7 @@ use crate::worldserver::appworld::country::countrywarsys::{
     CountryWarTopInfoContext, CountryWarTopInfoKind, CountryWarTopInfoReport,
     CountryWarVictoryContext, CountryWarVictoryRegion,
 };
+use crate::worldserver::appworld::goods::cgoods::CGoods;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsOriginalNameIndex,
 };
@@ -5158,6 +5160,55 @@ pub(crate) struct WorldSystemBroadcast {
     last_notify_time_seconds: u32,
 }
 
+const INITIAL_GOODS_LINK_PLACEHOLDERS: usize = 500;
+const LEGACY_GOODS_LINK_MAX_SIZE: usize = 0x0CCC_CCCC;
+static NEXT_GOODS_LINK_INDEX: AtomicU32 = AtomicU32::new(1);
+
+/// Владеющая Rust-форма точного 20-байтового `CGame::tagGoodsLink`.
+///
+/// `Box<CGoods>` заменяет сырой owning pointer только для `bChange != 0`;
+/// unchanged-запись хранит исходные `dwType/lNum`. Старый padding не
+/// материализуется, потому что ни lookup, ни wire его не наблюдают.
+pub(crate) enum WorldGoodsLinkPayload {
+    Changed(Box<CGoods>),
+    Original { goods_type: u32, amount: u8 },
+}
+
+pub(crate) struct WorldGoodsLink {
+    index: u32,
+    payload: WorldGoodsLinkPayload,
+}
+
+impl WorldGoodsLink {
+    fn placeholder() -> Self {
+        Self {
+            index: 0,
+            payload: WorldGoodsLinkPayload::Original {
+                goods_type: 0,
+                amount: 0,
+            },
+        }
+    }
+
+    pub(crate) fn changed(goods: Box<CGoods>) -> Self {
+        Self {
+            index: goods.get_id() as u32,
+            payload: WorldGoodsLinkPayload::Changed(goods),
+        }
+    }
+
+    pub(crate) const fn original(goods_type: u32, amount: u8) -> Self {
+        Self {
+            index: 0,
+            payload: WorldGoodsLinkPayload::Original { goods_type, amount },
+        }
+    }
+
+    pub(crate) const fn payload(&self) -> &WorldGoodsLinkPayload {
+        &self.payload
+    }
+}
+
 /// Точная send-ветвь выбранного системного broadcast-а.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldSystemBroadcastTarget {
@@ -5702,6 +5753,7 @@ pub(crate) struct CGame {
     script_file_data: BTreeMap<Vec<u8>, Vec<u8>>,
     game_servers: BTreeMap<u32, WorldGameServerEntry>,
     system_broadcasts: VecDeque<WorldSystemBroadcast>,
+    goods_links: VecDeque<WorldGoodsLink>,
     player_data_queue: CPlayerDataQueue,
     players: BTreeMap<u32, Box<CPlayer>>,
     team_session_ids: BTreeMap<u32, i32>,
@@ -5755,6 +5807,9 @@ impl CGame {
             script_file_data: BTreeMap::new(),
             game_servers: BTreeMap::new(),
             system_broadcasts: VecDeque::new(),
+            goods_links: std::iter::repeat_with(WorldGoodsLink::placeholder)
+                .take(INITIAL_GOODS_LINK_PLACEHOLDERS)
+                .collect(),
             player_data_queue: CPlayerDataQueue::new(),
             players: BTreeMap::new(),
             team_session_ids: BTreeMap::new(),
@@ -5780,6 +5835,30 @@ impl CGame {
             game_server_message_time_ms: 0,
             login_server_message_time_ms: 0,
         }
+    }
+
+    /// Добавляет точную POD-запись в хвост `m_listGoodsLink`.
+    ///
+    /// Constructor уже создал 500 нулевых placeholder-ов, а process-global
+    /// индекс начинается с `1`. Changed-запись сохраняет ID декодированного
+    /// товара и global не двигает. Редкая `list::max_size` ветвь удаляет голову;
+    /// Rust одновременно освобождает её owned товар, исправляя только утечку.
+    pub(crate) fn add_goods_link(&mut self, mut link: WorldGoodsLink) -> u32 {
+        if self.goods_links.len() == LEGACY_GOODS_LINK_MAX_SIZE {
+            let _ = self.goods_links.pop_front();
+        }
+        if matches!(&link.payload, WorldGoodsLinkPayload::Original { .. }) {
+            link.index = NEXT_GOODS_LINK_INDEX.fetch_add(1, Ordering::Relaxed);
+        }
+        let index = link.index;
+        self.goods_links.push_back(link);
+        index
+    }
+
+    /// Возвращает первое совпадение в list-order, включая constructor-ный
+    /// placeholder для индекса `0`.
+    pub(crate) fn find_goods_link(&self, index: u32) -> Option<&WorldGoodsLink> {
+        self.goods_links.iter().find(|link| link.index == index)
     }
 
     /// Возвращает byte-exact script buffer по case-sensitive normalized key.
@@ -8691,6 +8770,7 @@ impl CGame {
         events.push(WorldGameReleaseEvent::SaveWorkerJoined { previous_handle });
 
         context.release_void_owner(WorldGameReleaseVoidOwner::ReleaseGoodsLinks);
+        self.goods_links.clear();
         events.push(WorldGameReleaseEvent::VoidOwner(
             WorldGameReleaseVoidOwner::ReleaseGoodsLinks,
         ));
@@ -9213,7 +9293,8 @@ impl CGame {
     /// ветви server-owner-а, GMA `0x4FD01/0x4FD04/0x60401/0x60402`, полный GM
     /// owner `0x5FF01..0x5FF16`,
     /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, other
-    /// transport/cursor `0x5FD02/0x5FD06..0x5FD09/0x5FD0E`, copy-number
+    /// transport/cursor `0x5FD02/0x5FD06..0x5FD09/0x5FD0E`, goods-link
+    /// `0x5FD03/0x5FD04`, copy-number
     /// `0x5FD0B`, LeiTing update `0x5FD10`, honor
     /// `0x5FD0C/0x5FD0D`, server `0x5FA01..=0x5FA07/0x5FA09/0x5FA0F/0x5FA10`,
     /// organizing session
@@ -14397,6 +14478,8 @@ where
             game,
             honor_ranks,
             globe_setup,
+            registry,
+            &mut *application_callbacks.random,
             rs_player,
             player_database.as_deref_mut(),
             check_invalid_organizing_string,
@@ -17857,7 +17940,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::FindGoodsLink
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4181
@@ -17865,6 +17948,8 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 00405a10
 // PROTOTYPE: tagGoodsLink * __thiscall FindGoodsLink(ulong param_1)
 //
+// `0x00405A10..0x00405A33` выполняет первый linear list-order match по
+// `dwIndex +8`. Constructor-ные 500 нулевых записей сохранены явно.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -18254,7 +18339,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::AddGoodsLink
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4164
@@ -18262,6 +18347,10 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 004112b0
 // PROTOTYPE: void __thiscall AddGoodsLink(tagGoodsLink * param_1)
 //
+// `0x004112B0..0x00411336` удаляет голову только при MSVC list max-size
+// `0x0CCCCCCC`, назначает unchanged-записи process-global wrapping index с
+// initial `1` и копирует POD в хвост. `VecDeque` заменяет только STL plumbing;
+// Rust освобождает owned `CGoods` при крайне редком удалении вместо утечки.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

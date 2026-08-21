@@ -501,7 +501,7 @@ pub(crate) fn create_goods<Random>(
     random: &mut Random,
 ) -> Option<Box<CGoods>>
 where
-    Random: FnMut(i32) -> i32,
+    Random: FnMut(i32) -> i32 + ?Sized,
 {
     let properties = query_goods_base_properties(registry, index)?;
     let mut goods = create_goods_base(index, properties);

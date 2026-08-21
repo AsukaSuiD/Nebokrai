@@ -1,7 +1,8 @@
 //! WorldServer dispatcher-owner `OnOtherMessage`.
 //!
 //! Весь dispatcher RVA `0x000AC680` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме локального
-//! transport leaves `0x5FD02`, `0x5FD06..0x5FD09`, copy-number `0x5FD0B`,
+//! transport leaves `0x5FD02`, `0x5FD06..0x5FD09`, goods-link publish/lookup
+//! `0x5FD03/0x5FD04`, copy-number `0x5FD0B`,
 //! cursor-only `0x5FD0E`, player rename `0x5FD05`, LeiTing update `0x5FD10`,
 //! honor-reset `0x5FD0C` и eliminate update `0x5FD0D` со статусом
 //! `IMPLEMENTED`. Reset читает один Windows `long`, получает текущий `CGame`
@@ -35,16 +36,31 @@
 //! parameterized Tiberius query заменяет только старый ADO owner. Только
 //! локальная safe-граница недопустимо длинного уже сохранённого имени не
 //! получает выдуманного response после исходного stack-overread.
+//!
+//! Goods-link publish точно сохраняет три `long`, условную строку type `2`,
+//! title/text, positive signed count и два entry-вида. Changed entry владеет
+//! декодированным `CGoods`, unchanged хранит `type + uchar amount`; ссылка
+//! добавляется до изменения текста. Rewrite удаляет девять байт от `change=`,
+//! заменяет участок с offset `+3` до `>` signed-десятичным индексом и продолжает
+//! после `</goodslink>`. Lookup возвращает `long(found)` и либо прежний goods,
+//! либо новый factory-roll с сохранённым amount. Добавленные Linux-донором
+//! owner/tail/type/count проверки в exact EXE отсутствуют и не перенесены.
+//! Malformed goods и невозможные позиции `std::string` остаются typed safe-
+//! границами; уже добавленные prefix-ссылки при rewrite-ошибке не откатываются.
 
 use crate::dbaccess::worlddb::rsplayer::TiberiusRsPlayer;
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::worldserver::appworld::misc::{add_copy_num, get_copy_num};
+use crate::worldserver::appworld::goods::cgoods::{CGoods, GoodsCodecError};
+use crate::worldserver::appworld::goods::cgoodsfactory::{
+    GoodsBasePropertiesRegistry, create_goods,
+};
 use crate::worldserver::appworld::player::PlayerCodecError;
 use crate::worldserver::worldserver::game::{
     CGame, WorldHonorEliminatorRegistration, WorldPlayerNameChangeReport,
-    WorldPlayerNameLookupError,
+    WorldPlayerNameLookupError, WorldGoodsLink, WorldGoodsLinkPayload,
 };
 use crate::worldserver::worldserver::honorranks::{
     CHonorRanks, HonorRankPushBlock, HonorRanksKilledPlayerReport,
@@ -60,6 +76,59 @@ pub(crate) struct WorldHonorEliminateReset {
     pub(crate) rank_mask: u32,
     pub(crate) payload_complete: bool,
     pub(crate) legacy_result: bool,
+}
+
+/// Safe-границы двух `std::string` операций publish-ветки.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldGoodsLinkTextRewriteBlock {
+    MissingChangeMarker,
+    MissingTagEnd,
+    MissingClosingTag,
+}
+
+/// Локальная граница очередного publish-entry; уже добавленные предыдущие
+/// ссылки и текущая ссылка перед text-ошибкой не откатываются.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldGoodsLinkPublishBlock {
+    GoodsDecode {
+        entry_index: usize,
+        source: GoodsCodecError,
+    },
+    TextRewrite {
+        entry_index: usize,
+        source: WorldGoodsLinkTextRewriteBlock,
+    },
+}
+
+/// Успешно сформированный exact response одной goods-link ветки.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldGoodsLinkResponse {
+    pub(crate) response_type: i32,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+/// Publish сохраняет prefix-side-effects: AddGoodsLink предшествует rewrite.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldGoodsLinkPublishOutcome {
+    pub(crate) link_type: i32,
+    pub(crate) first_parameter: i32,
+    pub(crate) source_player_id: i32,
+    pub(crate) requested_count: i32,
+    pub(crate) added_indexes: Vec<u32>,
+    pub(crate) result: Result<WorldGoodsLinkResponse, WorldGoodsLinkPublishBlock>,
+}
+
+/// Lookup различает найденную ссылку и реально сериализованный товар: для
+/// constructor-placeholder-а index `0` и неизвестного type оригинал посылает
+/// found=`1`, но не добавляет goods bytes.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldGoodsLinkLookupOutcome {
+    pub(crate) requester_player_id: i32,
+    pub(crate) link_index: u32,
+    pub(crate) found: bool,
+    pub(crate) serialized_goods: bool,
+    pub(crate) result: Result<WorldGoodsLinkResponse, GoodsCodecError>,
 }
 
 /// Наблюдаемый исход exact duplicate-ledger и rank-update ветки `0x5FD0D`.
@@ -138,6 +207,8 @@ pub(crate) enum WorldOtherMessageOutcome {
         wire: Option<Vec<u8>>,
         delivery: Option<Result<i32, SendMessageError>>,
     },
+    GoodsLinkPublish(WorldGoodsLinkPublishOutcome),
+    GoodsLinkLookup(WorldGoodsLinkLookupOutcome),
     HonorEliminateReset(WorldHonorEliminateReset),
     HonorEliminateUpdate(WorldHonorEliminateUpdate),
 }
@@ -153,6 +224,8 @@ pub(crate) async fn on_other_message(
     game: &mut CGame,
     honor_ranks: &mut CHonorRanks,
     globe_setup: &GlobeSetupSnapshot,
+    goods_registry: &GoodsBasePropertiesRegistry,
+    random: &mut dyn FnMut(i32) -> i32,
     rs_player: &mut TiberiusRsPlayer,
     player_database: Option<&mut WorldTdsClient>,
     check_invalid_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
@@ -174,6 +247,15 @@ pub(crate) async fn on_other_message(
                 delivery,
             })
         }
+        0x0005_FD03 => WorldOtherMessageDispatch::Handled(
+            handle_goods_link_publish(game, &mut message),
+        ),
+        0x0005_FD04 => WorldOtherMessageDispatch::Handled(handle_goods_link_lookup(
+            game,
+            goods_registry,
+            random,
+            &mut message,
+        )),
         request_type @ (0x0005_FD06 | 0x0005_FD07 | 0x0005_FD08 | 0x0005_FD09) => {
             let response_type = match request_type {
                 0x0005_FD06 => 0x0007_FA03,
@@ -393,6 +475,220 @@ pub(crate) async fn on_other_message(
         }
         _ => WorldOtherMessageDispatch::Pending(message),
     }
+}
+
+fn handle_goods_link_publish(game: &mut CGame, message: &mut CMessage) -> WorldOtherMessageOutcome {
+    let link_type = message.base_mut().get_long().unwrap_or(0);
+    let first_parameter = message.base_mut().get_long().unwrap_or(0);
+    let source_player_id = message.base_mut().get_long().unwrap_or(0);
+    let optional_name = (link_type == 2).then(|| {
+        message
+            .base_mut()
+            .get_str_bytes(0x100)
+            .expect("literal 0x100 исключает zero-capacity GetStr")
+    });
+    let title = message
+        .base_mut()
+        .get_str_bytes(0x100)
+        .expect("literal 0x100 исключает zero-capacity GetStr");
+    let mut rewritten_text = message
+        .base_mut()
+        .get_str_bytes(0x400)
+        .expect("literal 0x400 исключает zero-capacity GetStr");
+    let requested_count = message.base_mut().get_long().unwrap_or(0);
+    let mut added_indexes = Vec::new();
+    let mut text_search_offset = 0;
+
+    for entry_index in 0..requested_count.max(0) as usize {
+        let wire_kind = message.base_mut().get_long().unwrap_or(0);
+        let link = if wire_kind == 1 {
+            let mut goods = Box::new(CGoods::with_constructor_base_and_type());
+            let decoded = {
+                let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                goods.decord_from_byte_array(source, cursor, true)
+            };
+            if let Err(source) = decoded {
+                return WorldOtherMessageOutcome::GoodsLinkPublish(
+                    WorldGoodsLinkPublishOutcome {
+                        link_type,
+                        first_parameter,
+                        source_player_id,
+                        requested_count,
+                        added_indexes,
+                        result: Err(WorldGoodsLinkPublishBlock::GoodsDecode {
+                            entry_index,
+                            source,
+                        }),
+                    },
+                );
+            }
+            WorldGoodsLink::changed(goods)
+        } else {
+            let goods_type = message.base_mut().get_long().unwrap_or(0) as u32;
+            let amount = message.base_mut().get_byte().unwrap_or(0);
+            WorldGoodsLink::original(goods_type, amount)
+        };
+
+        let index = game.add_goods_link(link);
+        added_indexes.push(index);
+        if let Err(source) = rewrite_goods_link_text(
+            &mut rewritten_text,
+            index,
+            entry_index,
+            &mut text_search_offset,
+        ) {
+            return WorldOtherMessageOutcome::GoodsLinkPublish(WorldGoodsLinkPublishOutcome {
+                link_type,
+                first_parameter,
+                source_player_id,
+                requested_count,
+                added_indexes,
+                result: Err(source),
+            });
+        }
+    }
+
+    let mut response = CMessage::new(0x0007_FA06);
+    response.base_mut().add_long(link_type);
+    response.base_mut().add_long(first_parameter);
+    response.base_mut().add_long(source_player_id);
+    if let Some(optional_name) = optional_name.as_deref() {
+        add_c_string(&mut response, optional_name);
+    }
+    add_c_string(&mut response, &title);
+    add_c_string(&mut response, &rewritten_text);
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = response.send_to_socket(
+        game.current_game_server_sender().as_ref(),
+        message.socket_id(),
+    );
+    WorldOtherMessageOutcome::GoodsLinkPublish(WorldGoodsLinkPublishOutcome {
+        link_type,
+        first_parameter,
+        source_player_id,
+        requested_count,
+        added_indexes,
+        result: Ok(WorldGoodsLinkResponse {
+            response_type: 0x0007_FA06,
+            wire,
+            delivery,
+        }),
+    })
+}
+
+fn rewrite_goods_link_text(
+    text: &mut Vec<u8>,
+    index: u32,
+    entry_index: usize,
+    search_offset: &mut usize,
+) -> Result<(), WorldGoodsLinkPublishBlock> {
+    let marker = find_bytes(text, b"change=", *search_offset).ok_or(
+        WorldGoodsLinkPublishBlock::TextRewrite {
+            entry_index,
+            source: WorldGoodsLinkTextRewriteBlock::MissingChangeMarker,
+        },
+    )?;
+    text.drain(marker..(marker + 9).min(text.len()));
+
+    let index_position = marker + 3;
+    let tag_end = text
+        .get(index_position..)
+        .ok_or(WorldGoodsLinkPublishBlock::TextRewrite {
+            entry_index,
+            source: WorldGoodsLinkTextRewriteBlock::MissingTagEnd,
+        })?
+        .iter()
+        .position(|byte| *byte == b'>')
+        .map(|position| index_position + position)
+        .ok_or(WorldGoodsLinkPublishBlock::TextRewrite {
+            entry_index,
+            source: WorldGoodsLinkTextRewriteBlock::MissingTagEnd,
+        })?;
+    text.drain(index_position..tag_end);
+    let digits = (index as i32).to_string().into_bytes();
+    text.splice(index_position..index_position, digits);
+    let closing = find_bytes(text, b"</goodslink>", index_position).ok_or(
+        WorldGoodsLinkPublishBlock::TextRewrite {
+            entry_index,
+            source: WorldGoodsLinkTextRewriteBlock::MissingClosingTag,
+        },
+    )?;
+
+    *search_offset = closing + b"</goodslink>".len();
+    Ok(())
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8], start: usize) -> Option<usize> {
+    haystack
+        .get(start..)?
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|position| start + position)
+}
+
+fn handle_goods_link_lookup(
+    game: &mut CGame,
+    registry: &GoodsBasePropertiesRegistry,
+    random: &mut dyn FnMut(i32) -> i32,
+    message: &mut CMessage,
+) -> WorldOtherMessageOutcome {
+    let requester_player_id = message.base_mut().get_long().unwrap_or(0);
+    let link_index = message.base_mut().get_long().unwrap_or(0) as u32;
+    let mut response = CMessage::new(0x0007_FA07);
+    response.base_mut().add_long(requester_player_id);
+
+    let found = game.find_goods_link(link_index);
+    response.base_mut().add_long(i32::from(found.is_some()));
+    let mut serialized_goods = false;
+    let serialization = if let Some(link) = found {
+        let mut encoded = Vec::new();
+        let encoded_result = match link.payload() {
+            WorldGoodsLinkPayload::Changed(goods) => {
+                goods.add_to_byte_array(&mut encoded, true)
+            }
+            WorldGoodsLinkPayload::Original { goods_type, amount } => {
+                if let Some(mut goods) = create_goods(registry, *goods_type, random) {
+                    goods.set_amount(u32::from(*amount));
+                    goods.add_to_byte_array(&mut encoded, true)
+                } else {
+                    Ok(true)
+                }
+            }
+        };
+        encoded_result.map(|_| {
+            serialized_goods = !encoded.is_empty();
+            response.base_mut().add(&encoded);
+        })
+    } else {
+        Ok(())
+    };
+
+    if let Err(source) = serialization {
+        return WorldOtherMessageOutcome::GoodsLinkLookup(WorldGoodsLinkLookupOutcome {
+            requester_player_id,
+            link_index,
+            found: found.is_some(),
+            serialized_goods,
+            result: Err(source),
+        });
+    }
+
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = response.send_to_socket(
+        game.current_game_server_sender().as_ref(),
+        message.socket_id(),
+    );
+    WorldOtherMessageOutcome::GoodsLinkLookup(WorldGoodsLinkLookupOutcome {
+        requester_player_id,
+        link_index,
+        found: found.is_some(),
+        serialized_goods,
+        result: Ok(WorldGoodsLinkResponse {
+            response_type: 0x0007_FA07,
+            wire,
+            delivery,
+        }),
+    })
 }
 
 fn add_c_string(message: &mut CMessage, bytes: &[u8]) {
