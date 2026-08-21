@@ -438,6 +438,7 @@ use super::faction::{
     FactionOrganizingInfoContext, FactionOtherInfoBuildError,
     FactionOtherInfoDelivery, FactionOwnedCityDelivery, FactionOwnedCityRefreshBlock,
     FactionOwnedCityRefreshReport, FactionOwnedCityUpdateBuildError, FactionPlayerHeaderContext,
+    FactionPlayerHeaderBlock,
     FactionPermitBlock, FactionPermitUpdate,
     FactionPronounceBlock, FactionPronounceOutcome, FactionPropertyDelivery,
     FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome, FactionSuperiorOrganizingBlock,
@@ -468,6 +469,7 @@ use super::union::{
     UnionFactionMemberContext,
     UnionFactionStateMutationContext, UnionInitialBlock, UnionInitialMutationContext,
     UnionInitialReport, UnionMasterFactionQueryContext,
+    UnionInviteBlock, UnionInviteEffects, UnionInviteOutcome,
     UnionMemberSnapshotBlock, UnionOperatorValidationContext, UnionOwnedCityBooleanMutationReport,
     UnionOwnedCityFanoutReport, UnionOwnedCityMutationBlock, UnionOwnedCityMutationContext,
     UnionFormatArgument, UnionPlayerRefreshContext, UnionPlayerRefreshReport,
@@ -1402,6 +1404,60 @@ pub(crate) enum OrganizingUnionApplicationCallbackBlock {
     DoJoin {
         union_id: i32,
         applicant_faction_id: i32,
+        source: OrganizingUnionApplicationJoinBlock,
+        rejection_notice_sent: bool,
+    },
+}
+
+pub(crate) type OrganizingUnionInviteBlock<SessionBlock> = UnionInviteBlock<
+    FactionMasterLookupBlock,
+    FactionUnionMembershipLookupBlock,
+    SessionBlock,
+>;
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingUnionInviteOutcome<SessionReport> {
+    UnionNotFound,
+    Applied {
+        union_id: i32,
+        outcome: UnionInviteOutcome<SessionReport>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingUnionInviteDispatchBlock<SessionBlock> {
+    TargetMissing { union_id: i32 },
+    Invite {
+        union_id: i32,
+        source: OrganizingUnionInviteBlock<SessionBlock>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingUnionInvitationCallbackReport {
+    pub(crate) union_id: i32,
+    pub(crate) inviter_faction_id: i32,
+    pub(crate) invited_faction_id: i32,
+    pub(crate) union_found: bool,
+    pub(crate) rejection_notice_sent: bool,
+    pub(crate) join: Option<UnionDoJoinOutcome>,
+    pub(crate) application_cleared: bool,
+    pub(crate) establishment_reservation_removed: bool,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingUnionInvitationCallbackBlock {
+    InviterPlayerHeader {
+        union_id: i32,
+        inviter_faction_id: i32,
+        invited_faction_id: i32,
+        source: FactionPlayerHeaderBlock<UnionPlayerHeaderLookupBlock>,
+        rejection_notice_sent: bool,
+    },
+    DoJoin {
+        union_id: i32,
+        inviter_faction_id: i32,
+        invited_faction_id: i32,
         source: OrganizingUnionApplicationJoinBlock,
         rejection_notice_sent: bool,
     },
@@ -4034,6 +4090,51 @@ impl COrganizingCtrl {
             })
     }
 
+    /// Вызывает exact `CUnion::Invite(source faction, invited faction)`.
+    pub(crate) fn invite_faction_to_union<Effects>(
+        &mut self,
+        game: &CGame,
+        union_id: i32,
+        inviter_faction_id: i32,
+        invited_faction_id: i32,
+        effects: &mut Effects,
+    ) -> Result<
+        OrganizingUnionInviteOutcome<Effects::SessionReport>,
+        OrganizingUnionInviteDispatchBlock<Effects::SessionBlock>,
+    >
+    where
+        Effects: UnionInviteEffects,
+    {
+        let invited_membership = self.is_free_faction(invited_faction_id);
+        let Some(mut union) = self
+            .confederations
+            .get_mut(&union_id)
+            .and_then(Option::take)
+        else {
+            return Err(OrganizingUnionInviteDispatchBlock::TargetMissing { union_id });
+        };
+        self.detached_union_membership_lookup
+            .set(Some((invited_faction_id, invited_membership)));
+        let result = union.invite(
+            game,
+            inviter_faction_id,
+            invited_faction_id,
+            self,
+            effects,
+        );
+        self.detached_union_membership_lookup.set(None);
+        *self
+            .confederations
+            .get_mut(&union_id)
+            .expect("detached union slot не удаляется") = Some(union);
+        result
+            .map(|outcome| OrganizingUnionInviteOutcome::Applied { union_id, outcome })
+            .map_err(|source| OrganizingUnionInviteDispatchBlock::Invite {
+                union_id,
+                source,
+            })
+    }
+
     /// Выполняет exact controller-цепочку `0x6010C`: `GetUnion(manager)` и
     /// virtual `CUnion::FireOut(manager, target faction)`.
     pub(crate) fn fire_out_union_by_master<Effects>(
@@ -5959,6 +6060,151 @@ impl COrganizingCtrl {
         Ok(OrganizingUnionApplicationCallbackReport {
             union_id,
             applicant_faction_id,
+            union_found: true,
+            rejection_notice_sent,
+            join,
+            application_cleared: true,
+            establishment_reservation_removed,
+        })
+    }
+
+    /// Завершает result/timeout локального `InviteJoinConfeder`.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "аргументы повторяют exact поля callback-owner-а"
+    )]
+    pub(crate) fn finish_union_invitation<Effects>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        union_id: i32,
+        inviter_faction_id: i32,
+        invited_faction_id: i32,
+        terminal: UnionApplicationTerminal,
+        effects: &mut Effects,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<
+        OrganizingUnionInvitationCallbackReport,
+        OrganizingUnionInvitationCallbackBlock,
+    >
+    where
+        Effects: UnionAddFactionEffects,
+    {
+        let rejection_notice_sent = if terminal == UnionApplicationTerminal::Denied {
+            let recipient = match self.faction_by_id(inviter_faction_id) {
+                Some(faction) => match faction.player_header(self) {
+                    Ok(player_id) => Some(player_id),
+                    Err(source) => {
+                        let establishment_reservation_removed =
+                            self.remove_from_establishment_list(invited_faction_id);
+                        let _ = establishment_reservation_removed;
+                        return Err(
+                            OrganizingUnionInvitationCallbackBlock::InviterPlayerHeader {
+                                union_id,
+                                inviter_faction_id,
+                                invited_faction_id,
+                                source,
+                                rejection_notice_sent: false,
+                            },
+                        );
+                    }
+                },
+                None => None,
+            };
+            if let Some(recipient_player_id) = recipient {
+                let second_text = effects.world_string(b"WS0193");
+                let first_text = effects.world_string(b"WS0245");
+                effects.send_organizing_info(FactionMemberInfoRequest {
+                    recipient_player_id,
+                    first_text: legacy_c_string_prefix(&first_text),
+                    second_text: legacy_c_string_prefix(&second_text),
+                    information_type: -1,
+                    color: 0xFFDA_EDFE,
+                    trailing_value: 0,
+                });
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        let union_found = union_id > 0
+            && self
+                .confederations
+                .get(&union_id)
+                .is_some_and(Option::is_some);
+        if !union_found {
+            return Ok(OrganizingUnionInvitationCallbackReport {
+                union_id,
+                inviter_faction_id,
+                invited_faction_id,
+                union_found: false,
+                rejection_notice_sent,
+                join: None,
+                application_cleared: false,
+                establishment_reservation_removed: self
+                    .remove_from_establishment_list(invited_faction_id),
+            });
+        }
+
+        let detached_membership_lookup =
+            (terminal == UnionApplicationTerminal::Approved)
+                .then(|| self.is_free_faction(invited_faction_id));
+        let mut union = self
+            .confederations
+            .get_mut(&union_id)
+            .and_then(Option::take)
+            .expect("union entry и pointer проверены до временного take");
+        let join = if terminal == UnionApplicationTerminal::Approved {
+            self.detached_union_membership_lookup.set(
+                detached_membership_lookup.map(|lookup| (invited_faction_id, lookup)),
+            );
+            let join_result = union.do_join(
+                game,
+                parameters,
+                inviter_faction_id,
+                invited_faction_id,
+                1,
+                UNUSED_UNION_APPLICATION_TIME,
+                self,
+                effects,
+                update_player,
+            );
+            self.detached_union_membership_lookup.set(None);
+            match join_result {
+                Ok(outcome) => Some(outcome),
+                Err(source) => {
+                    *self
+                        .confederations
+                        .get_mut(&union_id)
+                        .expect("временный union slot не удаляется") = Some(union);
+                    let _ = self.remove_from_establishment_list(invited_faction_id);
+                    return Err(OrganizingUnionInvitationCallbackBlock::DoJoin {
+                        union_id,
+                        inviter_faction_id,
+                        invited_faction_id,
+                        source,
+                        rejection_notice_sent,
+                    });
+                }
+            }
+        } else {
+            None
+        };
+
+        union.finish_union_application_callback();
+        *self
+            .confederations
+            .get_mut(&union_id)
+            .expect("временный union slot не удаляется") = Some(union);
+        let establishment_reservation_removed =
+            self.remove_from_establishment_list(invited_faction_id);
+        Ok(OrganizingUnionInvitationCallbackReport {
+            union_id,
+            inviter_faction_id,
+            invited_faction_id,
             union_found: true,
             rejection_notice_sent,
             join,

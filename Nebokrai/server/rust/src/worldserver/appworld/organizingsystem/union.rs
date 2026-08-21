@@ -34,8 +34,8 @@
 //! `PlayerApplyForJoinConfeder` constructor/`DoAsyncCall`/`OnAsyncCallback`
 //! RVA `0x000C19C0/0x000C1A70/0x000C2EA0`, `DoJoin` RVA `0x000C66A0` и
 //! `Invite` RVA `0x000C3660`, его локальные
-//! `InviteJoinConfeder` constructor/`DoAsyncCall` RVA
-//! `0x000C1870/0x000C39B0`,
+//! `InviteJoinConfeder` constructor/`DoAsyncCall`/`OnAsyncCallback` RVA
+//! `0x000C1870/0x000C39B0/0x000C3B10`,
 //! `Disband/FireOut` RVA `0x000C43F0/0x000C49D0` —
 //! `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
@@ -278,6 +278,12 @@
 //! интерпретирует значение как master-player ID; странный gate сохранён как
 //! наблюдаемая семантика. Offline и limit notices идут player-header первой
 //! faction как `WS0264/WS0265 + WS0193`; NetEx ID расходуется до limit gate.
+//! Invitation callback на approve вызывает `DoJoin` с тем же faction ID в
+//! manager-позиции и нулевым техническим `TagTimeValue`: ingress передаёт лишь
+//! 4-байтовый result, а машинное чтение следующих `0x10` stack bytes является
+//! тем же неиспользуемым OOB, что у apply-callback. Deny отправляет
+//! `WS0245/WS0193` через virtual player-header приглашающей faction;
+//! terminal сбрасывает pending и удаляет первую reservation приглашённой.
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -4803,7 +4809,7 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: `public:_virtual_bool___thiscall_CUnion::Invite(long,long)'::__l22::InviteJoinConfeder::OnAsyncCallback
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:871
@@ -4811,6 +4817,9 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 // ADDRESS: 004c3b10
 // PROTOTYPE: void __thiscall OnAsyncCallback(tagAsyncResult * param_1)
 //
+// IMPLEMENTED_OWNER: `InviteJoinConfeder::on_async_callback` и
+// `COrganizingCtrl::finish_union_invitation` сохраняют result/deny/timeout,
+// exact `DoJoin` аргументы, pending reset и reservation cleanup.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
