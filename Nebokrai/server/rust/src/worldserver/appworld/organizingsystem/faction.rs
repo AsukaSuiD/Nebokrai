@@ -14,6 +14,8 @@
 //! `IsHaveEnymyFaction/IsHaveCityEnemyFaction` RVA `0x000B50F0/0x000B5100`,
 //! `SetSuperiorOrganizing` RVA `0x000B5110`,
 //! `IsOwnedCity` RVA `0x000B5490`, `GetOwnedCities` RVA `0x000BD7D0`,
+//! `UpdatePropertyToClient` RVA `0x000B9FB0`,
+//! `ReInitialPropertyByLvl` RVA `0x000BA630`,
 //! `IsSuperiorOrganizing` RVA `0x000BD780`, `IsMaster` RVA `0x000C1EE0` и
 //! `OnMemberEnterGame` RVA `0x000C0A10` — `IMPLEMENTED`; спорные ключи lookup
 //! имеют статус `VERIFIED_DISASSEMBLY`.
@@ -44,6 +46,10 @@
 //! ID только отменяет положительный countdown, а negative/zero ID сравнивает
 //! member-count с порогом через unsigned `JNC`. При неполном live-state уже
 //! выполненная смена union ID не откатывается.
+//! `UpdatePropertyToClient` публикует message `0x7FE0B`: recipient ID, затем
+//! все `0x38` байт property вместе с padding. Получатели обходятся по signed
+//! member key и допускаются только при online-owner, ненулевом GameServer ID и
+//! уже выставленном `m_bGetFactionData`; результат каждого send игнорировался.
 //! Достигнутый `SetPlayerOrganizing` дополнительно читает `m_strName`,
 //! `m_lMastterID`, `m_Property.lLvl/lExp`, `m_OwnedCities` и два enemy-set.
 //! Коллекции, которые constructor действительно создавал пустыми, хранятся
@@ -264,6 +270,10 @@ impl FactionBaseProperty {
         self.signed_at(0x34)
     }
 
+    const fn wire_bytes(&self) -> &[u8; FACTION_BASE_PROPERTY_SIZE] {
+        &self.bytes
+    }
+
     fn write_signed(&mut self, offset: usize, value: i32) {
         self.bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
@@ -295,6 +305,21 @@ pub(crate) struct FactionInitialPropertyBlock;
 pub(crate) enum FactionSuperiorOrganizingBlock {
     MissingBaseProperty,
     DeleteRemainTimeAbsent,
+}
+
+/// Результат одной исходно игнорировавшейся отправки полного property.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionPropertyDelivery {
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
+/// Полный результат `CFaction::ReInitialPropertyByLvl` после safe-границ.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionPropertyReinitialization {
+    pub(crate) level_parameters_found: bool,
+    pub(crate) deliveries: Vec<FactionPropertyDelivery>,
 }
 
 /// Результат одной исходно игнорировавшейся отправки member-update.
@@ -569,6 +594,46 @@ impl CFaction {
         };
         property.write_signed(0x20, level_parameters.experience);
         Ok(true)
+    }
+
+    /// Публикует полный `tagFacBaseProperty` всем готовым faction-members.
+    pub(crate) fn update_property_to_client(
+        &self,
+        game: &CGame,
+    ) -> Result<Vec<FactionPropertyDelivery>, FactionInitialPropertyBlock> {
+        let property = self.base_property.ok_or(FactionInitialPropertyBlock)?;
+        let mut deliveries = Vec::new();
+        for &recipient_player_id in self.members.keys() {
+            let player = game.online_player_by_id(recipient_player_id as u32);
+            let game_server_id = game.game_server_number_by_player_id(recipient_player_id);
+            if player.is_none_or(|player| !player.faction_data_received()) || game_server_id == 0 {
+                continue;
+            }
+
+            let mut message = CMessage::new(0x7FE0B);
+            message.base_mut().add_long(recipient_player_id);
+            message.base_mut().add(property.wire_bytes());
+            deliveries.push(FactionPropertyDelivery {
+                recipient_player_id,
+                game_server_id,
+                result: game.send_msg_to_game_server(game_server_id, &message),
+            });
+        }
+        Ok(deliveries)
+    }
+
+    /// Пересчитывает property и безусловно публикует его, как старый wrapper.
+    pub(crate) fn reinitialize_property_by_level(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+    ) -> Result<FactionPropertyReinitialization, FactionInitialPropertyBlock> {
+        let level_parameters_found = self.initial_property_by_level(parameters)?;
+        let deliveries = self.update_property_to_client(game)?;
+        Ok(FactionPropertyReinitialization {
+            level_parameters_found,
+            deliveries,
+        })
     }
 
     /// Возвращает reached `m_EstablishedTime` без выдуманного default.
@@ -1874,7 +1939,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::UpdatePropertyToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1343
@@ -1972,7 +2037,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::ReInitialPropertyByLvl
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:205

@@ -10,7 +10,8 @@
 //! `SetPlayerOrganizing` RVA `0x000370A0` и callback-цепочки
 //! `OnPlayerEnterGame/OnPlayerExitGame` RVA `0x00037B70/0x00037BD0` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`; `GenerateSaveData` RVA `0x00034A10` —
-//! `IMPLEMENTED`, `GetpFactionById` RVA `0x00034080` — `IMPLEMENTED`. Точная пара:
+//! `IMPLEMENTED`, `GetpFactionById` RVA `0x00034080` и
+//! `ReInitialFacFactionByLvl` RVA `0x00034C80` — `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -77,6 +78,13 @@
 //! pointer/null и доказанное владение, сохраняя signed key-порядок. Достигнутый
 //! `m_ConfedeOrganizings` выражен симметричным map `CUnion`; Rust-layout не
 //! выдаётся за Windows ABI, а остальные поля singleton-а остаются raw.
+//!
+//! `ReInitialFacFactionByLvl` проходит тот же signed faction-map. Exact EXE
+//! `0x00434C80..0x00434CFE` делает RTTI cast каждого value, пропускает null либо
+//! иной concrete type и вызывает `CFaction::ReInitialPropertyByLvl`; typed map
+//! исключает посторонний concrete owner, а `Option::None` сохраняет skip.
+//! Результаты уже выполненных property-send не откатываются при safe-границе
+//! неполного Rust-owner-а.
 //!
 //! Оба callback-а сначала сохраняют исходный player ID, вызывают
 //! `IsFreePlayer`, а при положительном результате ищут именно этот faction ID
@@ -146,7 +154,11 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 use rustix::time::{ClockId, clock_gettime};
 
-use super::faction::{CFaction, FactionCloneSaveBlock, MemberEnterOutcome, MemberExitOutcome};
+use super::faction::{
+    CFaction, FactionCloneSaveBlock, FactionInitialPropertyBlock,
+    FactionPropertyReinitialization, MemberEnterOutcome, MemberExitOutcome,
+};
+use super::organizingparam::COrganizingParam;
 use super::union::CUnion;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::appworld::player::{
@@ -309,6 +321,22 @@ pub(crate) enum PlayerExitGameOutcome {
     Dispatched(FactionExitDispatch),
 }
 
+/// Один успешно переинициализированный faction-owner в signed map-order.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionReinitializationEntry {
+    pub(crate) map_key: i32,
+    pub(crate) result: FactionPropertyReinitialization,
+}
+
+/// Safe-граница неполного concrete `CFaction` внутри старого pointer-map.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionReinitializationBlock {
+    pub(crate) map_key: i32,
+    pub(crate) source: FactionInitialPropertyBlock,
+    /// Уже выполненные публикации исходный ordered проход не откатывал бы.
+    pub(crate) completed: Vec<FactionReinitializationEntry>,
+}
+
 /// Достигнутые faction-callback и top-info части исходного singleton owner-а.
 pub(crate) struct COrganizingCtrl {
     factions: BTreeMap<i32, Option<Box<CFaction>>>,
@@ -410,6 +438,33 @@ impl COrganizingCtrl {
     /// `nullptr`; caller сам сохраняет последующую pointer-семантику.
     pub(crate) fn faction_by_id(&self, faction_id: i32) -> Option<&CFaction> {
         self.factions.get(&faction_id).and_then(Option::as_deref)
+    }
+
+    /// Пересчитывает и публикует property всех concrete faction-owner-ов.
+    pub(crate) fn reinitialize_factions_by_level(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+    ) -> Result<Vec<FactionReinitializationEntry>, FactionReinitializationBlock> {
+        let mut completed = Vec::new();
+        for (&map_key, faction) in &mut self.factions {
+            let Some(faction) = faction.as_deref_mut() else {
+                // Exact RTTI cast null/non-CFaction pointer пропускал.
+                continue;
+            };
+            let result = match faction.reinitialize_property_by_level(game, parameters) {
+                Ok(result) => result,
+                Err(source) => {
+                    return Err(FactionReinitializationBlock {
+                        map_key,
+                        source,
+                        completed,
+                    });
+                }
+            };
+            completed.push(FactionReinitializationEntry { map_key, result });
+        }
+        Ok(completed)
     }
 
     /// Ищет первый положительный faction ID в signed map-порядке.
@@ -1166,7 +1221,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::ReInitialFacFactionByLvl
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:2050
