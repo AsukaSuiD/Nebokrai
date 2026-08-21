@@ -1,9 +1,11 @@
 //! WorldServer-владелец country-war state `CountryWarSys`.
 //!
 //! `AddToByteArray` RVA `0x0008F800`, `player_declare` RVA `0x00091B00`,
-//! `end_war` RVA `0x0008F890`, `on_flag_destory` (исходное PDB-написание) RVA
-//! `0x00091E00`, `initialize` RVA `0x00092220` и `reload` RVA `0x00092DF0`
-//! имеют статус `IMPLEMENTED`; остальной корпус
+//! `end_war` RVA `0x0008F890`, пять phase callbacks RVA
+//! `0x0008F490/0x0008FA00/0x0008FB40/0x0008FC80/0x00091530`,
+//! `on_flag_destory` (исходное PDB-написание) RVA `0x00091E00`, `initialize`
+//! RVA `0x00092220` и `reload` RVA `0x00092DF0` имеют статус `IMPLEMENTED`;
+//! остальной корпус
 //! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара `WorldServer/Nworldserver.exe +
 //! WorldServer/WorldServer.pdb`, исходник `appworld/country/countrywarsys.cpp`.
 //!
@@ -64,6 +66,18 @@
 //! сохраняет счётчики уже выполненных kill side effects. Return рассылки
 //! `0x7FF1D` оригинал не проверял; typed report хранит полный `Result`, не
 //! сворачивая ошибку очереди в придуманный signed код.
+//!
+//! Phase callbacks сохраняют точный side-effect порядок. `DeclareBegin`
+//! сначала обходит country IDs `1..=4`, назначая war-result `0` только живым
+//! странам, затем рассылает `0x7FF17` и публикует `WS0095`. Exact
+//! `0x00491565..0x0049159F` подтверждает один и тот же stack-byte как ключ
+//! `find/operator[]`, исправляя ложное раздвоение переменных в RAW. Остальные
+//! пары: `DeclareEnd = 0x7FF18/WS0096`, `PrepareBegin = 0x7FF19/WS0097`,
+//! `PrepareEnd = 0x7FF1A/WS0098`; clear callback только рассылает `0x7FF1E`.
+//! Timer parameter во всех пяти функциях не читается. Lookup null превращается
+//! в пустую строку до старого no-argument `_sprintf`; форматирование и
+//! 256-byte UB-граница остаются у явного context-а, а нормальные bytes не
+//! требуют собственного formatter-а.
 //!
 //! Snapshot намеренно сохраняет layout World EXE: `state_clear + 3 bytes
 //! padding`, затем defender и attacker. Парный Game EXE RVA `0x000EBD60`
@@ -340,6 +354,89 @@ pub(crate) trait CountryWarDeclarationContext {
     fn send_country_info(&mut self, text: &[u8], title: u32, color: u32) -> i32;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarPhase {
+    Clear,
+    DeclareBegin,
+    DeclareEnd,
+    PrepareBegin,
+    PrepareEnd,
+}
+
+impl CountryWarPhase {
+    const fn opcode(self) -> i32 {
+        match self {
+            Self::Clear => 0x7ff1e,
+            Self::DeclareBegin => 0x7ff17,
+            Self::DeclareEnd => 0x7ff18,
+            Self::PrepareBegin => 0x7ff19,
+            Self::PrepareEnd => 0x7ff1a,
+        }
+    }
+
+    const fn string_id(self) -> Option<&'static [u8]> {
+        match self {
+            Self::Clear => None,
+            Self::DeclareBegin => Some(b"WS0095"),
+            Self::DeclareEnd => Some(b"WS0096"),
+            Self::PrepareBegin => Some(b"WS0097"),
+            Self::PrepareEnd => Some(b"WS0098"),
+        }
+    }
+}
+
+pub(crate) trait CountryWarPhaseContext {
+    type Block;
+
+    /// Повторяет `GetCountry(1..=4)` и назначает result только живой стране.
+    fn reset_country_war_result_if_present(
+        &mut self,
+        country: u8,
+    ) -> Result<bool, Self::Block>;
+
+    fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError>;
+
+    /// Выполняет `GetStringByID`, null -> empty и штатную no-argument ветвь
+    /// старого `_sprintf(char[256], localized_format)`.
+    fn format_phase_notice(
+        &mut self,
+        string_id: &'static [u8],
+    ) -> Result<Vec<u8>, Self::Block>;
+
+    fn send_country_info(
+        &mut self,
+        text: &[u8],
+        title: u32,
+        color: u32,
+    ) -> Result<i32, Self::Block>;
+}
+
+#[derive(Debug)]
+pub(crate) struct CountryWarPhaseReport {
+    pub(crate) phase: CountryWarPhase,
+    pub(crate) reset_countries: Vec<u8>,
+    pub(crate) broadcast_delivery: Option<Result<i32, SendMessageError>>,
+    pub(crate) notice: Option<Vec<u8>>,
+    pub(crate) info_delivery: Option<i32>,
+}
+
+#[derive(Debug)]
+pub(crate) enum CountryWarPhaseBlock<ContextBlock> {
+    ResetCountry {
+        country: u8,
+        report: CountryWarPhaseReport,
+        source: ContextBlock,
+    },
+    FormatNotice {
+        report: CountryWarPhaseReport,
+        source: ContextBlock,
+    },
+    SendInfo {
+        report: CountryWarPhaseReport,
+        source: ContextBlock,
+    },
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum CountryWarDeclarationRejection {
     PlayerMissing,
@@ -577,6 +674,69 @@ impl CountryWarSys {
             .iter()
             .find(|(_, state)| state.defend_country == 0 && state.attack_country == 0)
             .map(|(&region_id, _)| region_id)
+    }
+
+    /// Выполняет пять callbacks, чей внешний контракт ограничен country reset,
+    /// одним broadcast и optional phase-info.
+    pub(crate) fn run_phase<Context>(
+        &mut self,
+        phase: CountryWarPhase,
+        _war_id: i32,
+        context: &mut Context,
+    ) -> Result<CountryWarPhaseReport, CountryWarPhaseBlock<Context::Block>>
+    where
+        Context: CountryWarPhaseContext + ?Sized,
+    {
+        let mut report = CountryWarPhaseReport {
+            phase,
+            reset_countries: Vec::new(),
+            broadcast_delivery: None,
+            notice: None,
+            info_delivery: None,
+        };
+
+        if phase == CountryWarPhase::DeclareBegin {
+            for country in 1u8..5 {
+                let reset = match context.reset_country_war_result_if_present(country) {
+                    Ok(reset) => reset,
+                    Err(source) => {
+                        return Err(CountryWarPhaseBlock::ResetCountry {
+                            country,
+                            report,
+                            source,
+                        });
+                    }
+                };
+                if reset {
+                    report.reset_countries.push(country);
+                }
+            }
+        }
+
+        let message = CMessage::new(phase.opcode());
+        report.broadcast_delivery = Some(context.send_all(&message));
+        let Some(string_id) = phase.string_id() else {
+            return Ok(report);
+        };
+        let notice = match context.format_phase_notice(string_id) {
+            Ok(notice) => notice,
+            Err(source) => {
+                return Err(CountryWarPhaseBlock::FormatNotice { report, source });
+            }
+        };
+        report.notice = Some(notice);
+        let info_delivery = match context.send_country_info(
+            report.notice.as_deref().unwrap_or_default(),
+            0xffff_fe92,
+            0xffff_0000,
+        ) {
+            Ok(delivery) => delivery,
+            Err(source) => {
+                return Err(CountryWarPhaseBlock::SendInfo { report, source });
+            }
+        };
+        report.info_delivery = Some(info_delivery);
+        Ok(report)
     }
 
     pub(crate) fn player_declare<Context: CountryWarDeclarationContext + ?Sized>(
@@ -1017,7 +1177,7 @@ where
 
 // ============================================================================
 // FUNCTION: CountryWarSys::on_war_clear
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:477
@@ -1025,6 +1185,7 @@ where
 // ADDRESS: 0048f490
 // PROTOTYPE: void __stdcall on_war_clear(long param_1)
 //
+// Реализовано выше через `run_phase(Clear, ...)`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1104,7 +1265,7 @@ where
 
 // ============================================================================
 // FUNCTION: CountryWarSys::on_declare_end
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:514
@@ -1112,13 +1273,14 @@ where
 // ADDRESS: 0048fa00
 // PROTOTYPE: void __stdcall on_declare_end(long param_1)
 //
+// Реализовано выше через `run_phase(DeclareEnd, ...)`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CountryWarSys::on_prepare_begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:526
@@ -1126,13 +1288,14 @@ where
 // ADDRESS: 0048fb40
 // PROTOTYPE: void __stdcall on_prepare_begin(long param_1)
 //
+// Реализовано выше через `run_phase(PrepareBegin, ...)`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CountryWarSys::on_prepare_end
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:538
@@ -1140,6 +1303,7 @@ where
 // ADDRESS: 0048fc80
 // PROTOTYPE: void __stdcall on_prepare_end(long param_1)
 //
+// Реализовано выше через `run_phase(PrepareEnd, ...)`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1174,7 +1338,7 @@ where
 
 // ============================================================================
 // FUNCTION: CountryWarSys::on_declare_begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:495
@@ -1182,6 +1346,8 @@ where
 // ADDRESS: 00491530
 // PROTOTYPE: void __stdcall on_declare_begin(long param_1)
 //
+// Реализовано выше через `run_phase(DeclareBegin, ...)`; exact disassembly
+// подтверждает country IDs `1..=4` и единый byte-key обоих map-вызовов.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
