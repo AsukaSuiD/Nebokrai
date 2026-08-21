@@ -52,6 +52,11 @@
 //! но никуда не передаёт результат и не меняет состояние. Rust сохраняет
 //! внешний no-op и country gate, удаляя только неиспользуемые allocation,
 //! string lookup и `_snprintf` как внутреннюю мёртвую работу.
+//!
+//! Exact `SendPlayerWarTimeToGS` `0x00493D50..0x00493E19` отображает country
+//! `1..=4` в regions `11000..14000`, принимает только map route `1..=4` и
+//! отправляет `0x7FE47 { player_id:i32, war_time:u32 }`. Source/socket,
+//! connected-state и send-result не влияют на ветвление.
 
 use std::error::Error;
 use std::fmt;
@@ -154,6 +159,26 @@ pub(crate) enum FourNationSignUpDisposition {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FourNationWarTimeDisposition {
+    CountryIgnored,
+    RouteRejected { region_id: i32, map_id: i32 },
+    Sent {
+        region_id: i32,
+        map_id: i32,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FourNationWarTimeReport {
+    pub(crate) player_id: i32,
+    pub(crate) war_time: u32,
+    pub(crate) country: i32,
+    pub(crate) disposition: FourNationWarTimeDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FourNationMoralePublicationDisposition {
     RouteRejected,
     Sent {
@@ -185,6 +210,53 @@ impl CFourNationWarSys {
             FourNationSignUpDisposition::ValidCountryNoExternalEffect
         } else {
             FourNationSignUpDisposition::CountryIgnored
+        }
+    }
+
+    pub(crate) fn send_player_war_time_to_game_server<
+        Context: FourNationWarResultContext + ?Sized,
+    >(
+        &mut self,
+        player_id: i32,
+        war_time: u32,
+        country: i32,
+        context: &mut Context,
+    ) -> FourNationWarTimeReport {
+        let region_id = match country {
+            1 => 11_000,
+            2 => 12_000,
+            3 => 13_000,
+            4 => 14_000,
+            _ => {
+                return FourNationWarTimeReport {
+                    player_id,
+                    war_time,
+                    country,
+                    disposition: FourNationWarTimeDisposition::CountryIgnored,
+                };
+            }
+        };
+        let map_id = context.game_server_number_by_region_id(region_id);
+        let disposition = if (1..5).contains(&map_id) {
+            let mut update = CMessage::new(0x7fe47);
+            update.base_mut().add_long(player_id);
+            update.base_mut().add_ulong(war_time);
+            let wire = update.as_wire_bytes().to_vec();
+            let delivery = context.send_to_map_id(&update, map_id);
+            FourNationWarTimeDisposition::Sent {
+                region_id,
+                map_id,
+                wire,
+                delivery,
+            }
+        } else {
+            FourNationWarTimeDisposition::RouteRejected { region_id, map_id }
+        };
+        FourNationWarTimeReport {
+            player_id,
+            war_time,
+            country,
+            disposition,
         }
     }
 

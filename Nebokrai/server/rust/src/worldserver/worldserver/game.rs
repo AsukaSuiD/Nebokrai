@@ -1009,7 +1009,8 @@ use crate::worldserver::appworld::message::countrymessage::{
     WorldFourNationExploitDatabaseDisposition, WorldFourNationExploitSync,
     decode_four_nation_exploit_message,
     dispatch_country_war_declaration_message, dispatch_country_war_victory_message,
-    dispatch_four_nation_war_result_message, on_country_message,
+    dispatch_four_nation_war_result_message, dispatch_four_nation_war_time_message,
+    on_country_message,
 };
 use crate::worldserver::appworld::message::gmamessage::{
     WorldGmaMessageDispatch, WorldGmaMessageOutcome, on_gma_message,
@@ -12509,6 +12510,21 @@ where
                         after_database,
                     },
                 ),
+            };
+        }
+        let four_nation_war_time = {
+            let mut effects = WorldFourNationWarResultEffects { game };
+            dispatch_four_nation_war_time_message(
+                &mut message,
+                four_nation_war,
+                &mut effects,
+            )
+        };
+        if let Some(sync) = four_nation_war_time {
+            return ProcessedWorldEvent::CountryMessage {
+                source,
+                legacy_run_result,
+                outcome: WorldCountryMessageOutcome::FourNationWarTime(sync),
             };
         }
         let four_nation_result = {

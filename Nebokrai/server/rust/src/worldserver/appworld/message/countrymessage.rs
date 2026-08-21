@@ -4,7 +4,8 @@
 //! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, а также вход country victory
 //! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, exile-time
 //! `0x60316 -> 0x7FF15`, war-declare `0x60317 -> 0x7FF16` и four-nation result
-//! `0x60319 -> 0x7FE49`, `0x6031A -> 0x7FE46/DB` и no-op `0x6031B` имеют статус
+//! `0x60319 -> 0x7FE49`, `0x6031A -> 0x7FE46/DB`, no-op `0x6031B` и
+//! `0x6031C -> 0x7FE47` имеют статус
 //! `IMPLEMENTED`. Victory читает один
 //! unsigned country byte и вызывает исходно
 //! названный `CountryWarSys::on_flag_destory`; соседние opcodes helper не
@@ -49,6 +50,9 @@
 //! только для `1..=4` форматирует неиспользуемый локальный текст; состояния,
 //! log-а и network side effect нет, поэтому Rust сохраняет typed no-op без
 //! мёртвого `_snprintf`.
+//! Exact `0x004A50B6..0x004A50DE` для `0x6031C` читает signed player ID,
+//! 32-bit war-time и signed country; route/wire выполняет подтверждённый
+//! `SendPlayerWarTimeToGS` без source/tail gate.
 //! Exact switch target `0x004A504E..0x004A5065` подтверждает, что `0x60318`
 //! читает один unsigned country byte и сразу передаёт его достигнутому
 //! `CountryWarSys`; конкретный region/country/localization/network context
@@ -66,7 +70,7 @@ use crate::worldserver::appworld::country::countryparam::{
 };
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
     CFourNationWarSys, FourNationExploitLoadedReport, FourNationSignUpDisposition,
-    FourNationWarResultContext, FourNationWarResultReport,
+    FourNationWarResultContext, FourNationWarResultReport, FourNationWarTimeReport,
 };
 use crate::worldserver::worldserver::game::{CGame, legacy_tick_ms};
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
@@ -209,6 +213,14 @@ pub(crate) struct WorldFourNationSignUpSync {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldFourNationWarTimeSync {
+    pub(crate) source_map_id: i32,
+    pub(crate) source_socket_id: i32,
+    pub(crate) numeric_payload_complete: [bool; 3],
+    pub(crate) report: FourNationWarTimeReport,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryMessageOutcome {
     Relay(WorldCountryRelayOutcome),
     ScalarSynchronized(WorldCountryScalarSync),
@@ -219,6 +231,7 @@ pub(crate) enum WorldCountryMessageOutcome {
     FourNationWarResult(WorldFourNationWarResultSync),
     FourNationExploit(WorldFourNationExploitSync),
     FourNationSignUp(WorldFourNationSignUpSync),
+    FourNationWarTime(WorldFourNationWarTimeSync),
 }
 
 pub(crate) enum WorldCountryMessageDispatch {
@@ -489,6 +502,39 @@ pub(crate) fn dispatch_four_nation_war_result_message<
     Some(WorldFourNationWarResultSync {
         source_map_id,
         source_socket_id,
+        report,
+    })
+}
+
+pub(crate) fn dispatch_four_nation_war_time_message<
+    Context: FourNationWarResultContext + ?Sized,
+>(
+    message: &mut CMessage,
+    four_nation_war: &mut CFourNationWarSys,
+    context: &mut Context,
+) -> Option<WorldFourNationWarTimeSync> {
+    if message.message_type() != 0x6031c {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_player_id = message.base_mut().get_long();
+    let player_id = decoded_player_id.unwrap_or(0);
+    let decoded_war_time = message.base_mut().get_long();
+    let war_time = decoded_war_time.unwrap_or(0) as u32;
+    let decoded_country = message.base_mut().get_long();
+    let country = decoded_country.unwrap_or(0);
+    let report = four_nation_war.send_player_war_time_to_game_server(
+        player_id, war_time, country, context,
+    );
+    Some(WorldFourNationWarTimeSync {
+        source_map_id,
+        source_socket_id,
+        numeric_payload_complete: [
+            decoded_player_id.is_some(),
+            decoded_war_time.is_some(),
+            decoded_country.is_some(),
+        ],
         report,
     })
 }
