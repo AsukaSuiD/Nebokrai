@@ -11,6 +11,8 @@
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
 //! `OnPlayerInviteFaction` RVA `0x0003A780` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
+//! `CreateFaction` RVA `0x000381A0` —
+//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
 //! полный `COrganizingCtrl::Run` RVA `0x0003A550` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`, `DisbandFaction` RVA `0x00038550` и
 //! `UpdateOtherFacInfoToClient` RVA `0x00034980` и `DisbandConferation` RVA
@@ -124,6 +126,15 @@
 //! два союза — `WS0241/WS0193`. Exact ASM `0x0043A780..0x0043AC6C`
 //! подтверждает отсутствие source AttackCity gate и true-return после любого
 //! вызванного owner-а независимо от его bool/result.
+//! `CreateFaction` проверяет membership, затем mutable invalid-string filter и
+//! пять player-name index-ов строго до `FindOrgaByName`. После успеха удаляет
+//! все faction applications, генерирует ID, строит exact `CFaction::Initial`,
+//! назначает country, вставляет owner, ставит dirty `0x0F`, публикует Add всем
+//! faction и только затем пишет optional structured create-log. Exact ASM
+//! `0x004381A0..0x00438549` подтверждает порядок и результаты `Fail/NameExist/
+//! Ok`. Странная country-проверка в прологе машинно является тавтологией и не
+//! ограничивает ни одно `u8`; Rust поэтому не добавляет собственного range
+//! gate. SQL-formatting/heap-buffer остаются за библиотечным log adapter-ом.
 //! `AddOwnedCityToFaction` повторяет те же positive-ID/map/null gates и затем
 //! вызывает virtual `AddOwnedCity` slot `+0x80`. Exact ASM
 //! `0x00437C20..0x00437C69` подтверждает порядок обоих аргументов и отсутствие
@@ -443,7 +454,7 @@ use super::faction::{
     FactionExperienceBlock, FactionExperienceUpdate,
     FactionEditLeaveWordOutcome, FactionEnemyDelivery, FactionEnemyMutationBlock,
     FactionEnemyMutationContext, FactionEnemyWarLogArgument, FactionFeatureFunctionUpdate,
-    FactionFullSnapshotBlock, FactionInitialPropertyBlock,
+    FactionFullSnapshotBlock, FactionInitialBlock, FactionInitialPropertyBlock,
     FactionLeaveWordBlock, FactionLeaveWordOutcome, FactionMemberInfoReport,
     FactionMemberInfoRequest,
     FactionOperationAuthorityContext, FactionOperationBlock, FactionOperationOutcome,
@@ -501,7 +512,9 @@ use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::player::{
     PlayerOrganizingState, PlayerOrganizingUpdateError, PlayerOrganizingUpdater,
 };
-use crate::worldserver::worldserver::game::{CGame, WorldRegionNameLookup};
+use crate::worldserver::worldserver::game::{
+    CGame, WorldPlayerNameLookupError, WorldRegionNameLookup,
+};
 
 const TOP_INFO_MESSAGE_TYPE: i32 = 0x7FA04;
 const UNION_INITIAL_MESSAGE_TYPE: i32 = 0x7FE04;
@@ -1957,6 +1970,63 @@ pub(crate) fn begin_confederation_creation_session(
         .beging(session.id, request.timeout_ticks, &request)
         .map_err(|source| ConfederationCreationSessionBlock::Begin { session, source })?;
     Ok(ConfederationCreationSessionReport { session })
+}
+
+/// Внешние name-index, localization и structured-log границы CreateFaction.
+pub(crate) trait FactionCreationEffects {
+    fn check_invalid_organizing_string(&mut self, name: &mut Vec<u8>, strict: bool) -> bool;
+    fn db_creation_name_exists(&mut self, name: &[u8]) -> bool;
+    fn db_data_name_exists(&mut self, name: &[u8]) -> bool;
+    fn persistent_player_name_exists(&mut self, name: &[u8]) -> bool;
+    fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8>;
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>);
+    fn faction_create_log_enabled(&self) -> bool;
+    fn write_faction_create_log(
+        &mut self,
+        faction_id: i32,
+        faction_name: &[u8],
+        player_id: i32,
+        player_name: &[u8],
+    );
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionCreationRejection {
+    PlayerAlreadyInFaction,
+    InvalidName { notice_sent: bool },
+    NameExists,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionCreationReport {
+    pub(crate) faction_id: i32,
+    pub(crate) application_removals: Vec<ApplyFactionRemoval>,
+    pub(crate) other_faction_updates: Vec<OrganizingOtherFactionUpdate>,
+    pub(crate) log_written: bool,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionCreationOutcome {
+    Rejected(FactionCreationRejection),
+    Created(FactionCreationReport),
+}
+
+#[derive(Debug)]
+pub(crate) enum FactionCreationBlock {
+    PlayerMembership { map_key: i32 },
+    CreationPlayerName(WorldPlayerNameLookupError),
+    MapPlayerName(WorldPlayerNameLookupError),
+    OrganizingName(OrganizingNameLookupBlock),
+    ApplicationRemoval {
+        map_key: i32,
+        completed_removals: Vec<ApplyFactionRemoval>,
+    },
+    Initial(FactionInitialBlock),
+    GeneratedIdCollision { faction_id: i32 },
+    OtherFactionUpdate {
+        faction_id: i32,
+        source: OrganizingOtherFactionUpdateBlock,
+    },
 }
 
 /// Внешние границы синхронного `COrganizingCtrl::CreateConfederation`.
@@ -5415,6 +5485,144 @@ impl COrganizingCtrl {
         })
     }
 
+    /// Выполняет exact concrete `CreateFaction` после внешних ingress-gates.
+    pub(crate) fn create_faction<Effects>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        player_id: i32,
+        _reserved: i32,
+        established_time: TagTimeValue,
+        faction_name: &mut Vec<u8>,
+        country: u8,
+        effects: &mut Effects,
+    ) -> Result<FactionCreationOutcome, FactionCreationBlock>
+    where
+        Effects: FactionCreationEffects,
+    {
+        match self.is_free_player(player_id) {
+            FreePlayerLookup::Faction(_) => {
+                return Ok(FactionCreationOutcome::Rejected(
+                    FactionCreationRejection::PlayerAlreadyInFaction,
+                ));
+            }
+            FreePlayerLookup::BlockedNullFaction { map_key } => {
+                return Err(FactionCreationBlock::PlayerMembership { map_key });
+            }
+            FreePlayerLookup::NoFaction => {}
+        }
+
+        if !effects.check_invalid_organizing_string(faction_name, false) {
+            let second_text = effects.world_string(b"WS0193");
+            let first_text = effects.world_string(b"WS0194");
+            effects.send_organizing_info(FactionMemberInfoRequest {
+                recipient_player_id: player_id,
+                first_text: legacy_c_string_prefix(&first_text),
+                second_text: legacy_c_string_prefix(&second_text),
+                information_type: -1,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            });
+            return Ok(FactionCreationOutcome::Rejected(
+                FactionCreationRejection::InvalidName { notice_sent: true },
+            ));
+        }
+
+        let name = legacy_c_string_prefix(faction_name);
+        let name_exists = game
+            .creation_player_by_name(name)
+            .map_err(FactionCreationBlock::CreationPlayerName)?
+            .is_some()
+            || game
+                .is_name_exist_in_map_player(name)
+                .map_err(FactionCreationBlock::MapPlayerName)?
+            || effects.db_creation_name_exists(name)
+            || effects.db_data_name_exists(name)
+            || effects.persistent_player_name_exists(name)
+            || self
+                .organizing_by_name(name)
+                .map_err(FactionCreationBlock::OrganizingName)?
+                .is_some();
+        if name_exists {
+            return Ok(FactionCreationOutcome::Rejected(
+                FactionCreationRejection::NameExists,
+            ));
+        }
+
+        let application_removals = match self.remove_person_from_apply_faction_list(
+            game,
+            player_id,
+        ) {
+            RemovePersonFromApplyFactionListOutcome::Completed { removals } => removals,
+            RemovePersonFromApplyFactionListOutcome::BlockedNullFaction {
+                map_key,
+                completed_removals,
+            } => {
+                return Err(FactionCreationBlock::ApplicationRemoval {
+                    map_key,
+                    completed_removals,
+                });
+            }
+        };
+
+        let faction_id = self.generate_db_organizing_id();
+        if self.factions.contains_key(&faction_id) {
+            return Err(FactionCreationBlock::GeneratedIdCollision { faction_id });
+        }
+        let master_title = effects.world_string(b"WS0157");
+        let mut faction = CFaction::for_creation(
+            faction_id,
+            player_id,
+            established_time,
+            name,
+            &master_title,
+            game,
+            parameters,
+        )
+        .map_err(FactionCreationBlock::Initial)?;
+        faction
+            .set_country(country)
+            .expect("for_creation материализует полный base property");
+        self.factions.insert(faction_id, Some(Box::new(faction)));
+        self.factions
+            .get_mut(&faction_id)
+            .and_then(Option::as_deref_mut)
+            .expect("только что вставленный faction owner остаётся в map")
+            .set_change_data(0x0F);
+
+        let other_faction_updates = self
+            .update_other_faction_info_to_client(
+                game,
+                faction_id,
+                name,
+                EOperator::Add,
+            )
+            .map_err(|source| FactionCreationBlock::OtherFactionUpdate {
+                faction_id,
+                source,
+            })?;
+
+        let mut log_written = false;
+        if effects.faction_create_log_enabled()
+            && let Some(player) = game.online_player_by_id(player_id as u32)
+        {
+            effects.write_faction_create_log(
+                faction_id,
+                name,
+                player_id,
+                legacy_c_string_prefix(player.get_name()),
+            );
+            log_written = true;
+        }
+
+        Ok(FactionCreationOutcome::Created(FactionCreationReport {
+            faction_id,
+            application_removals,
+            other_faction_updates,
+            log_written,
+        }))
+    }
+
     /// Проверяет две faction и запускает exact подтверждение учреждения союза.
     ///
     /// Переданное старому API имя намеренно не используется: EXE копирует в
@@ -8149,7 +8357,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::CreateFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:651
@@ -8157,6 +8365,8 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 004381a0
 // PROTOTYPE: eCrOrgResult __thiscall CreateFaction(long param_1, long param_2, tagTime * param_3, basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_4, uchar param_5)
 //
+// IMPLEMENTED_OWNER: `COrganizingCtrl::create_faction` выше сохраняет exact
+// lookup/mutation/publication/log order поверх безопасного faction owner-а.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
