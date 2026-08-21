@@ -24,41 +24,51 @@
 //! `CRsPlayer::ResetAllLeitingInDB`, end-log и только затем замена сохранённой
 //! даты. Возвраты send и DB-spawn исходный caller не читал.
 //!
-//! `LeiTingContext` — узкая граница ровно этих ещё сырых соседних owners. Он
-//! не скрывает порядок: map keys снимаются до прохода, update и serialization
-//! разделены, message строит сам `CLeiTing`, а DB callback вызывается после
-//! `_mktime`. Контекст обязан синхронно скопировать message до возврата.
-//! Неизвестные null/codec/time границы возвращаются как `Block`, не получая
-//! придуманного fail-closed продолжения. Старые hash/STL constructors,
-//! allocator, unwind и deleting-destructor blocks удалены как
+//! `CGame`, `CPlayer`, `CThingSetup` и globe snapshot теперь являются
+//! concrete owners этого прохода. `LeiTingContext` оставляет только platform-
+//! time, log, transport и DB worker границы: map keys снимает `CGame`, player
+//! update/serialization выполняет `CPlayer`, message строит `CLeiTing`.
+//! Контекст обязан синхронно скопировать message до возврата. Неизвестные
+//! codec/time границы возвращаются как typed `Block`; старые hash/STL
+//! constructors, allocator, unwind и deleting-destructor blocks удалены как
 //! compiler/library noise.
 
 use std::error::Error;
 use std::fmt;
 
 use crate::nets::networld::message::CMessage;
-
-/// Девять signed полей старого 32-bit MSVC `tm` в исходном порядке.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct LeiTingLocalTime {
-    pub(crate) second: i32,
-    pub(crate) minute: i32,
-    pub(crate) hour: i32,
-    pub(crate) month_day: i32,
-    pub(crate) month: i32,
-    pub(crate) year_since_1900: i32,
-    pub(crate) week_day: i32,
-    pub(crate) year_day: i32,
-    pub(crate) daylight_saving: i32,
-}
+use crate::setup::globesetup::GlobeSetupSnapshot;
+use crate::setup::leitingsetup::CThingSetup;
+pub(crate) use crate::setup::leitingsetup::LeiTingLocalTime;
+use crate::worldserver::appworld::player::{
+    PlayerCodecError, PlayerLeiTingClock, PlayerLeiTingUpdateBlock,
+};
+use crate::worldserver::worldserver::game::CGame;
 
 /// Safe-граница неизвестного соседнего callback-а.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct LeiTingBlock<ContextBlock>(pub(crate) ContextBlock);
+#[derive(Debug)]
+pub(crate) enum LeiTingBlock<ContextBlock> {
+    Context(ContextBlock),
+    Player(PlayerLeiTingUpdateBlock<ContextBlock>),
+    PlayerCodec(PlayerCodecError),
+}
 
 impl<ContextBlock: fmt::Display> fmt::Display for LeiTingBlock<ContextBlock> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "CLeiTing callback заблокирован: {}", self.0)
+        match self {
+            Self::Context(source) => write!(formatter, "CLeiTing callback заблокирован: {source}"),
+            Self::Player(PlayerLeiTingUpdateBlock::PreviousLocalTime(source)) => write!(
+                formatter,
+                "CPlayer::UpdateLeiTing не получил previous localtime: {source}"
+            ),
+            Self::Player(PlayerLeiTingUpdateBlock::Stamp(source)) => write!(
+                formatter,
+                "CPlayer::UpdateLeiTing не нормализовал новый stamp: {source}"
+            ),
+            Self::PlayerCodec(source) => {
+                write!(formatter, "CPlayer::AddByteArrayLeiTing заблокирован: {source}")
+            }
+        }
     }
 }
 
@@ -85,30 +95,17 @@ pub(crate) struct LeiTingRunReport {
 pub(crate) trait LeiTingContext {
     type Block;
 
-    /// Выполняет `CThingSetup::SetDailyUpdateStamp` над переданным `tm`.
-    fn set_daily_update_stamp(&mut self, local_time: &mut LeiTingLocalTime);
-
     /// Выполняет отдельный `GetLocalTime` и первый formatted `AddLogText`.
     fn add_update_start_log(&mut self);
 
-    /// Возвращает snapshot unsigned key-order `CGame::m_mPlayer`.
-    fn player_map_keys(&self) -> Vec<u32>;
-
-    /// Вызывает `CPlayer::UpdateLeiTing`; null map-value возвращает `None`.
-    /// Живой player возвращает свой inherited signed ID для message.
-    fn update_player(
+    /// Platform replacement 32-bit CRT `_localtime` для player stamp.
+    fn local_time_from_timestamp(
         &mut self,
-        map_key: u32,
-        update_kind: u32,
-        local_time: &mut LeiTingLocalTime,
-    ) -> Result<Option<i32>, Self::Block>;
+        timestamp: u32,
+    ) -> Result<LeiTingLocalTime, Self::Block>;
 
-    /// Вызывает `CPlayer::AddByteArrayLeiTing` для того же map entry.
-    fn add_player_lei_ting(
-        &self,
-        map_key: u32,
-        destination: &mut Vec<u8>,
-    ) -> Result<(), Self::Block>;
+    /// Отдельный Win32 `GetLocalTime().wDayOfWeek` внутри weekly item loop.
+    fn current_week_day(&mut self) -> u16;
 
     /// Синхронно повторяет `CMessage::SendAll`; старый return игнорируется.
     fn send_all(&mut self, message: &CMessage);
@@ -122,6 +119,25 @@ pub(crate) trait LeiTingContext {
     fn reset_all_lei_ting_in_database(&mut self, update_kind: u32, stamp: i32);
 
     fn add_update_end_log(&mut self);
+}
+
+impl<Context: LeiTingContext + ?Sized> PlayerLeiTingClock for Context {
+    type Block = Context::Block;
+
+    fn local_time_from_timestamp(
+        &mut self,
+        timestamp: u32,
+    ) -> Result<LeiTingLocalTime, Self::Block> {
+        LeiTingContext::local_time_from_timestamp(self, timestamp)
+    }
+
+    fn mktime(&mut self, local_time: &mut LeiTingLocalTime) -> Result<i32, Self::Block> {
+        LeiTingContext::mktime(self, local_time)
+    }
+
+    fn current_week_day(&mut self) -> u16 {
+        LeiTingContext::current_week_day(self)
+    }
 }
 
 /// Owned замена process-static singleton-а и его `s_date`.
@@ -141,9 +157,12 @@ impl CLeiTing {
     pub(crate) fn run<Context: LeiTingContext>(
         &mut self,
         mut current: LeiTingLocalTime,
+        game: &mut CGame,
+        globe_setup: &GlobeSetupSnapshot,
+        thing_setup: &CThingSetup,
         context: &mut Context,
     ) -> Result<LeiTingRunReport, LeiTingBlock<Context::Block>> {
-        context.set_daily_update_stamp(&mut current);
+        CThingSetup::set_daily_update_stamp(&mut current);
         if current.year_day == self.saved_date.year_day {
             return Ok(LeiTingRunReport {
                 current,
@@ -153,33 +172,42 @@ impl CLeiTing {
 
         context.add_update_start_log();
         let update_kind = u32::from(current.month != self.saved_date.month) + 1;
-        let map_keys = context.player_map_keys();
+        let map_keys = game.player_map_keys();
         let map_entries = map_keys.len();
         let mut updated_players = 0;
         let mut null_players = 0;
 
         for map_key in map_keys {
-            let player_id = context
-                .update_player(map_key, update_kind, &mut current)
-                .map_err(LeiTingBlock)?;
-            let Some(player_id) = player_id else {
+            let update = game
+                .update_map_player_lei_ting(
+                    map_key,
+                    update_kind,
+                    &mut current,
+                    globe_setup,
+                    thing_setup,
+                    context,
+                )
+                .map_err(LeiTingBlock::Player)?;
+            let Some(update) = update else {
                 null_players += 1;
                 continue;
             };
 
             let mut player_payload = Vec::new();
-            context
-                .add_player_lei_ting(map_key, &mut player_payload)
-                .map_err(LeiTingBlock)?;
+            game.map_player(map_key)
+                .expect("неизменный map-owner только что выполнил UpdateLeiTing")
+                .add_byte_array_lei_ting(&mut player_payload)
+                .map_err(LeiTingBlock::PlayerCodec)?;
             let mut message = CMessage::new(0x0007_FA17);
-            message.base_mut().add_long(player_id);
+            message.base_mut().add_long(update.player_id);
             message.base_mut().add(&player_payload);
             context.send_all(&message);
             updated_players += 1;
         }
 
         context.add_database_begin_log();
-        let database_stamp = context.mktime(&mut current).map_err(LeiTingBlock)?;
+        let database_stamp = LeiTingContext::mktime(context, &mut current)
+            .map_err(LeiTingBlock::Context)?;
         context.reset_all_lei_ting_in_database(update_kind, database_stamp);
         context.add_update_end_log();
         self.saved_date = current;

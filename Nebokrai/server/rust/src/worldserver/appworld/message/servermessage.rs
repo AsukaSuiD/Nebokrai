@@ -72,10 +72,12 @@
 //! а `0x36` — всем GameServer, даже уже подключённым. Результаты send исходник
 //! игнорировал, поэтому ошибка очереди записывается в отчёт и не переставляет
 //! последующие пакеты. `CGoodsFactory::Serialize` уже заменён его точным
-//! serializer-ом; ещё сырые owner-ы передают готовые byte snapshots и тем
-//! самым не объявляются восстановленными. Невозможный безопасный state
-//! registry товаров останавливает цепочку после уже отправленного prefix-а,
-//! вместо старого null-dereference либо выхода за 32-битный размер.
+//! serializer-ом; `CThingSetup::AddToByteArray` теперь также вызывается как
+//! concrete owner на своей exact позиции. Ещё сырые owner-ы передают готовые
+//! byte snapshots и тем самым не объявляются восстановленными. Невозможный
+//! безопасный state registry товаров или 32-битный count ThingSetup
+//! останавливает цепочку после уже отправленного prefix-а, вместо старого
+//! null-dereference либо выхода за 32-битный размер.
 //! Следующий `CMonsterList` уже использует восстановленный общий setup-owner:
 //! оба ordered registry кодируются им в пакет `0x7F801/2`, после чего точной
 //! следующей границей остаётся `CHitLevelSetup`. Это адресный send только
@@ -303,6 +305,7 @@ use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelSerializeError};
 use crate::setup::honorelimilateconfig::HonorElimilateConfig;
 use crate::setup::incrementshoplist::{CIncrementShopList, IncrementShopSerializeError};
 use crate::setup::lingbao::{CLingBaoSetup, LingBaoSerializationBlock};
+use crate::setup::leitingsetup::{CThingSetup, ThingSetupCodecError};
 use crate::setup::logsystem::{CLogSystem, LogSystemSerializeError};
 use crate::setup::monsterlist::{
     MonsterDropRegistry, MonsterListSerializeError, MonsterRegistry, serialize_monster_list,
@@ -803,13 +806,13 @@ pub(crate) struct WorldGameServerConnectionReport {
     pub(crate) continuation: WorldGameServerConnectionContinuation,
 }
 
-/// Уже сериализованные owner-снимки достигнутого prefix-а initial-config.
+/// Concrete owner-снимки достигнутого prefix-а initial-config.
 pub(crate) struct WorldGameServerInitialConfigurationPrefix<'a> {
     pub(crate) da_kong_xiang_qian: &'a [u8],
     pub(crate) string_table: &'a [u8],
     pub(crate) valid_words_filter: Option<&'a [u8]>,
     pub(crate) goods_registry: &'a GoodsBasePropertiesRegistry,
-    pub(crate) thing_setup: &'a [u8],
+    pub(crate) thing_setup: &'a CThingSetup,
 }
 
 /// Получатель одного `0x7F801` initial-config сообщения.
@@ -832,6 +835,7 @@ pub(crate) struct WorldInitialConfigurationDelivery {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldInitialConfigurationPrefixCompletion {
     GoodsRegistry(GoodsRegistrySerializeError),
+    ThingSetup(ThingSetupCodecError),
     MonsterListPending { socket_id: i32 },
 }
 
@@ -2780,10 +2784,19 @@ pub(crate) fn continue_game_server_initial_configuration_prefix(
         0,
         &goods,
     ));
+    let mut thing_setup = Vec::new();
+    if let Err(error) = snapshots.thing_setup.add_to_byte_array(&mut thing_setup) {
+        return WorldInitialConfigurationPrefixReport {
+            deliveries,
+            language_notice,
+            words_filter_notice,
+            completion: WorldInitialConfigurationPrefixCompletion::ThingSetup(error),
+        };
+    }
     deliveries.push(send_initial_configuration_to_all(
         sender.as_ref(),
         0x36,
-        snapshots.thing_setup,
+        &thing_setup,
     ));
 
     WorldInitialConfigurationPrefixReport {

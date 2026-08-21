@@ -1001,6 +1001,7 @@ use crate::public::timer::{
 };
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::godsbattleconf::CGodsBattleConf;
+use crate::setup::leitingsetup::CThingSetup;
 use crate::setup::regionrouter::RegionRouter;
 use crate::public::tools::{ini_decode, put_string_to_file};
 use crate::transport::bind_tcp_ipv4;
@@ -1206,6 +1207,7 @@ use crate::worldserver::appworld::player::{
     CPlayer, PlayerCodecError, PlayerCountryChangeReport, PlayerExploitUpdate,
     PlayerFactionInfoContext, PlayerFactionInfoDelivery, PlayerFactionInfoUpdateBlock,
     PlayerFactionInfoUpdateReport,
+    PlayerLeiTingClock, PlayerLeiTingUpdateBlock, PlayerLeiTingUpdateReport,
     PlayerMurderCounterReset, PlayerMurderCounterUpdate, PlayerOrganizingUpdateError,
     PlayerOrganizingState, PlayerOrganizingUpdater, PlayerPropertyCoefficients,
 };
@@ -3251,6 +3253,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) goods_war: &'a mut CGoodsWarMember,
     pub(crate) village_war_callbacks: VillageWarCallbacks<TimerCallback>,
     pub(crate) lei_ting: &'a mut CLeiTing,
+    pub(crate) thing_setup: &'a CThingSetup,
     pub(crate) db_misc: &'a mut CDbMisc,
     pub(crate) net_sessions: &'a CNetSessionManager,
     pub(crate) union_application_runtime: &'a WorldUnionApplicationRuntimeOwner,
@@ -10003,8 +10006,10 @@ impl CGame {
 
     /// Выполняет следующий непрофилированный MainLoop owner `CLeiTing::Run`.
     pub(crate) fn run_main_loop_lei_ting_stage<Context, GetLocalTime>(
-        &self,
+        &mut self,
         lei_ting: &mut CLeiTing,
+        globe_setup: &GlobeSetupSnapshot,
+        thing_setup: &CThingSetup,
         context: &mut Context,
         mut get_local_time: GetLocalTime,
     ) -> Result<LeiTingRunReport, LeiTingBlock<Context::Block>>
@@ -10013,7 +10018,7 @@ impl CGame {
         GetLocalTime: FnMut() -> LeiTingLocalTime,
     {
         let current = get_local_time();
-        lei_ting.run(current, context)
+        lei_ting.run(current, self, globe_setup, thing_setup, context)
     }
 
     /// Выполняет соседний `DoneOutList -> Pop/DoneListIn -> LoadAuction` batch.
@@ -10856,6 +10861,8 @@ impl CGame {
         let lei_ting = self
             .run_main_loop_lei_ting_stage(
                 owners.lei_ting,
+                owners.globe_setup,
+                owners.thing_setup,
                 owners.lei_ting_context,
                 &mut *callbacks.get_lei_ting_local_time,
             )
@@ -11684,6 +11691,38 @@ impl CGame {
     /// Возвращает игрока непосредственно из владеющего map либо `None`.
     pub(crate) fn map_player(&self, player_id: u32) -> Option<&CPlayer> {
         self.players.get(&player_id).map(Box::as_ref)
+    }
+
+    /// Снимает unsigned map-order ключей для exact `CLeiTing` прохода.
+    pub(crate) fn player_map_keys(&self) -> Vec<u32> {
+        self.players.keys().copied().collect()
+    }
+
+    /// Выполняет concrete `CPlayer::UpdateLeiTing` без online-gate.
+    pub(crate) fn update_map_player_lei_ting<Clock: PlayerLeiTingClock>(
+        &mut self,
+        map_key: u32,
+        update_kind: u32,
+        stamp: &mut LeiTingLocalTime,
+        globe_setup: &GlobeSetupSnapshot,
+        thing_setup: &CThingSetup,
+        clock: &mut Clock,
+    ) -> Result<
+        Option<PlayerLeiTingUpdateReport>,
+        PlayerLeiTingUpdateBlock<Clock::Block>,
+    > {
+        let Some(player) = self.players.get_mut(&map_key) else {
+            return Ok(None);
+        };
+        player
+            .update_lei_ting(
+                update_kind,
+                stamp,
+                globe_setup.total_jing_li_dan_count(),
+                thing_setup,
+                clock,
+            )
+            .map(Some)
     }
 
     /// Повторяет reached continuation `DisbandFaction`: snapshot имени берётся

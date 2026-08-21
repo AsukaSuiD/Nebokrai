@@ -47,6 +47,7 @@ pub(crate) mod incrementshoplist;
     reason = "LingBao serializer подключён к combined initial-config до точного text loader-а"
 )]
 pub(crate) mod lingbao;
+pub(crate) mod leitingsetup;
 #[allow(
     dead_code,
     reason = "log-system serializer подключён к initial-config до text loader-а"

@@ -23,6 +23,9 @@
 //! accessor ниже накладывает эту подтверждённую границу на тот же raw snapshot.
 //! Country `IsMinister` exact использует соседний `szCountryIdentity` по
 //! `+0xA46`, восемь slots по `0x40`; второй accessor не копирует строки.
+//! PDB type `CGlobeSetup::tagSetup` дополнительно подтверждает
+//! `wTotalJingLiDanCnt` по `+0x1110`; LeiTing owner читает его прямо из того же
+//! snapshot без отдельного дублирующего state.
 
 use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 
@@ -32,6 +35,7 @@ const COUNTRY_NAME_SLOT_LENGTH: usize = 0x40;
 const COUNTRY_NAME_COUNT: usize = 5;
 const COUNTRY_IDENTITY_OFFSET: usize = 0xA46;
 const COUNTRY_IDENTITY_COUNT: usize = 8;
+const TOTAL_JING_LI_DAN_COUNT_OFFSET: usize = 0x1110;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -77,6 +81,15 @@ impl GlobeSetupSnapshot {
         let slot = &self.bytes[start..start + COUNTRY_NAME_SLOT_LENGTH];
         let visible_len = slot.iter().position(|byte| *byte == 0).unwrap_or(slot.len());
         Some(&slot[..visible_len])
+    }
+
+    /// Возвращает exact `wTotalJingLiDanCnt` по PDB-offset `+0x1110`.
+    pub(crate) fn total_jing_li_dan_count(&self) -> u16 {
+        u16::from_le_bytes(
+            self.bytes[TOTAL_JING_LI_DAN_COUNT_OFFSET..TOTAL_JING_LI_DAN_COUNT_OFFSET + 2]
+                .try_into()
+                .expect("PDB-offset находится внутри globe snapshot"),
+        )
     }
 
     pub(crate) fn add_to_byte_array(

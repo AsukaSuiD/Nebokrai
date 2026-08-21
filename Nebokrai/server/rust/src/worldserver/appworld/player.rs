@@ -177,10 +177,21 @@
 //! `IMPLEMENTED`: `AddByteCiQing/DeByteCiQing` RVA
 //! `0x0005BB80/0x0005D9E0`, `AddByteArrayLeiTing/DecodeByteArrayLeiTing` RVA
 //! `0x0005B690/0x0005DE40` и
+//! `UpdateLeiTing` RVA `0x0005DD80`,
 //! `AddQuestDataToByteArray/DecordQuestDataFromByteArray` RVA
 //! `0x0005BC10/0x0005E970`. `BTreeSet` сохраняет unsigned порядок tattoo ID,
 //! `VecDeque` — порядок восьмибайтовых `tagThing`, а `BTreeMap` — unsigned
 //! порядок quest-key при отдельном mapped `wQuestID/byComplete`.
+//!
+//! `UpdateLeiTing` exact `0x0045DD80..0x0045DE3D` сначала обнуляет energy и
+//! восстанавливает `wRemainJingLiDanCnt` из globe setup, затем через 32-bit
+//! CRT localtime сравнивает только year/yday прежнего stamp с переданным
+//! mutable `tm`. При отличии `_mktime` нормализует тот же `tm`, и его signed
+//! result сохраняется как DWORD bits. Kind `1` снимает четыре младших flag-
+//! бита, kind `2` обнуляет flags и `wLTUp60Cnt`; остальные kind не меняют их.
+//! В конце `GetDailyThingList` может заменить список только непустой выборкой.
+//! Rust сохраняет этот порядок и partial mutations; невозможный platform-time
+//! вместо исходного null-dereference становится typed safe-границей.
 //!
 //! Container-сегмент `CPlayer::AddToByteArray/DecordFromByteArray` RVA
 //! `0x0005BDA0/0x0005F520` также `IMPLEMENTED` между готовым LeiTing-prefix и
@@ -323,6 +334,7 @@ use crate::dbaccess::worlddb::rsplayer::{
 };
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::setup::leitingsetup::{CThingSetup, LeiTingDailyThing, LeiTingLocalTime};
 
 use super::container::camountlimitgoodscontainer::{
     AmountContainerCodecError, CAmountLimitGoodsContainer,
@@ -695,6 +707,39 @@ struct PlayerThing {
     count: u16,
     max_count: u16,
     point: u16,
+}
+
+/// Platform-time граница exact `CPlayer::UpdateLeiTing`.
+pub(crate) trait PlayerLeiTingClock {
+    type Block;
+
+    fn local_time_from_timestamp(
+        &mut self,
+        timestamp: u32,
+    ) -> Result<LeiTingLocalTime, Self::Block>;
+
+    /// Повторяет mutable `_mktime`; signed `-1` сохраняется как timestamp bits.
+    fn mktime(&mut self, local_time: &mut LeiTingLocalTime) -> Result<i32, Self::Block>;
+
+    /// Повторяет отдельный `GetLocalTime().wDayOfWeek` внутри daily-list loop.
+    fn current_week_day(&mut self) -> u16;
+}
+
+#[derive(Debug)]
+pub(crate) enum PlayerLeiTingUpdateBlock<ClockBlock> {
+    PreviousLocalTime(ClockBlock),
+    Stamp(ClockBlock),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerLeiTingUpdateReport {
+    pub(crate) player_id: i32,
+    pub(crate) update_kind: u32,
+    pub(crate) previous_stamp: u32,
+    pub(crate) resulting_stamp: u32,
+    pub(crate) stamp_replaced: bool,
+    pub(crate) daily_list_replaced: bool,
+    pub(crate) daily_thing_count: usize,
 }
 
 /// Точный четырёхбайтовый value `CPlayer::tagSkill`.
@@ -2474,6 +2519,88 @@ impl CPlayer {
         Ok(())
     }
 
+    /// Выполняет exact daily/monthly `CPlayer::UpdateLeiTing`.
+    pub(crate) fn update_lei_ting<Clock: PlayerLeiTingClock>(
+        &mut self,
+        update_kind: u32,
+        stamp: &mut LeiTingLocalTime,
+        total_jing_li_dan_count: u16,
+        thing_setup: &CThingSetup,
+        clock: &mut Clock,
+    ) -> Result<PlayerLeiTingUpdateReport, PlayerLeiTingUpdateBlock<Clock::Block>> {
+        let previous_stamp = self
+            .base_property
+            .read_u32(BASE_PROPERTY_LT_60_STAMP_OFFSET);
+        self.base_property
+            .write_u32(BASE_PROPERTY_FY_ENERGY_OFFSET, 0);
+        self.base_property.write_u16(
+            BASE_PROPERTY_REMAIN_JING_LI_DAN_COUNT_OFFSET,
+            total_jing_li_dan_count,
+        );
+
+        let previous_time = clock
+            .local_time_from_timestamp(previous_stamp)
+            .map_err(PlayerLeiTingUpdateBlock::PreviousLocalTime)?;
+        let stamp_replaced = previous_time.year_since_1900 != stamp.year_since_1900
+            || previous_time.year_day != stamp.year_day;
+        if stamp_replaced {
+            let normalized_stamp = clock
+                .mktime(stamp)
+                .map_err(PlayerLeiTingUpdateBlock::Stamp)?;
+            self.base_property.write_u32(
+                BASE_PROPERTY_LT_60_STAMP_OFFSET,
+                normalized_stamp as u32,
+            );
+        }
+
+        if update_kind == 1 {
+            let flags = self
+                .base_property
+                .read_u32(BASE_PROPERTY_FY_ENABLE_FLAGS_OFFSET);
+            self.base_property
+                .write_u32(BASE_PROPERTY_FY_ENABLE_FLAGS_OFFSET, flags & 0xFFFF_FFF0);
+        } else if update_kind == 2 {
+            self.base_property
+                .write_u32(BASE_PROPERTY_FY_ENABLE_FLAGS_OFFSET, 0);
+            self.base_property
+                .write_u16(BASE_PROPERTY_LT_UP_60_COUNT_OFFSET, 0);
+        }
+
+        let mut daily_things = VecDeque::new();
+        thing_setup.get_daily_thing_list(|| clock.current_week_day(), &mut daily_things);
+        let daily_list_replaced = !daily_things.is_empty();
+        if daily_list_replaced {
+            self.daily_things = daily_things
+                .into_iter()
+                .map(
+                    |LeiTingDailyThing {
+                         thing_id,
+                         count,
+                         max_count,
+                         point,
+                     }| PlayerThing {
+                        thing_id,
+                        count,
+                        max_count,
+                        point,
+                    },
+                )
+                .collect();
+        }
+
+        Ok(PlayerLeiTingUpdateReport {
+            player_id: self.get_id(),
+            update_kind,
+            previous_stamp,
+            resulting_stamp: self
+                .base_property
+                .read_u32(BASE_PROPERTY_LT_60_STAMP_OFFSET),
+            stamp_replaced,
+            daily_list_replaced,
+            daily_thing_count: self.daily_things.len(),
+        })
+    }
+
     /// Читает LeiTing scalar, затем очищает и наполняет deque по порядку.
     pub(crate) fn decode_byte_array_lei_ting(
         &mut self,
@@ -3138,7 +3265,7 @@ fn read_player_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CPlayer::UpdateLeiTing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:1053
@@ -3146,6 +3273,8 @@ fn read_player_array<const N: usize>(
 // ADDRESS: 0045dd80
 // PROTOTYPE: void __thiscall UpdateLeiTing(ulong param_1, tm * param_2)
 //
+// IMPLEMENTED_OWNER: `CPlayer::update_lei_ting` выше сохраняет reset/time/
+// update-kind/daily-list порядок; CRT time и setup singleton заменены явными
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
