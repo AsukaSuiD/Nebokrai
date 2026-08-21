@@ -285,7 +285,8 @@ use super::faction::{
     FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome, FactionSuperiorOrganizingBlock,
     FactionUpgradeBlock, FactionUpgradeContext, FactionUpgradeOutcome, FactionUploadIconBlock,
     FactionUploadIconContext, FactionUploadIconOutcome,
-    MemberEnterOutcome, MemberExitOutcome, OwnedCityMutationBuildError,
+    MemberEnterOutcome, MemberExitOutcome, MemberLevelChangeOutcome,
+    MemberPositionChangeOutcome, OwnedCityMutationBuildError,
 };
 use super::factionwarsys::{
     CFactionWarSys, FactionWarDeclarationContext, FactionWarFactionSnapshot,
@@ -796,6 +797,15 @@ pub(crate) enum OrganizingFactionExperienceMutation {
         before_experience: i32,
         update: FactionExperienceUpdate,
     },
+}
+
+/// Результат virtual callback-а состояния участника из `0x6012A`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionMemberStateOutcome {
+    FactionNotFound,
+    Level(MemberLevelChangeOutcome),
+    Position(MemberPositionChangeOutcome),
+    UnknownOperation,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1345,6 +1355,33 @@ impl COrganizingCtrl {
             before_experience,
             update,
         })
+    }
+
+    /// Разрешает faction до чтения operation-specific поля и вызывает
+    /// соответствующий соседний virtual owner `OnMember*Change`.
+    pub(crate) fn change_faction_member_state<ReadValue>(
+        &mut self,
+        game: &CGame,
+        faction_id: i32,
+        player_id: i32,
+        operation: i32,
+        mut read_value: ReadValue,
+    ) -> OrganizingFactionMemberStateOutcome
+    where
+        ReadValue: FnMut() -> i32,
+    {
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return OrganizingFactionMemberStateOutcome::FactionNotFound;
+        };
+        match operation {
+            1 => OrganizingFactionMemberStateOutcome::Level(
+                faction.on_member_level_change(game, player_id, read_value()),
+            ),
+            2 => OrganizingFactionMemberStateOutcome::Position(
+                faction.on_member_position_change(game, player_id, read_value()),
+            ),
+            _ => OrganizingFactionMemberStateOutcome::UnknownOperation,
+        }
     }
 
     fn add_billboard_to_byte_array(

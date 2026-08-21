@@ -1,7 +1,8 @@
 //! Статус корпуса: `IMPLEMENTED_PARTIAL` для достигнутых organizing opcode,
 //! включая заявку союза `0x60118`, общий session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
-//! вкладчика `0x60128` и вклад опыта `0x60129`; остальной owner —
+//! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
+//! `0x6012A`; остальной owner —
 //! `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
@@ -88,6 +89,13 @@
 //! именно delta. Wire-ответ отсутствует. Rust callback передаёт typed поля
 //! владельцу DB-очереди вместо `_sprintf` в 256-байтовый heap-buffer и тем
 //! самым устраняет внутренние overflow/leak, не меняя DB-контракт.
+//! Exact `0x004A83E0..0x004A8451` для `0x6012A` сначала читает `(faction ID,
+//! player ID, operation)` и разрешает faction. Только для найденной faction и
+//! operation `1/2` читается четвёртый `Long`: новый level передаётся virtual
+//! `OnMemberLvlChange` в slot `+0x144`, region ID — `OnMemberPosChange` в
+//! соседний `+0x148`. Иные operation и missing faction прекращают ветвь, не
+//! потребляя четвёртое поле. Online-player lookup, ownership/tail-проверки и
+//! wire-ответ отсутствуют; дополнительные rejects Linux-донора не перенесены.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -131,7 +139,7 @@ use crate::worldserver::appworld::organizingsystem::factionwarsys::{
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     COrganizingCtrl, DeclareWarFactionPage, DeclareWarFactionPageBlock, FreePlayerLookup,
     OrganizingContributorBlock, OrganizingContributorOutcome,
-    OrganizingFactionExperienceMutation,
+    OrganizingFactionExperienceMutation, OrganizingFactionMemberStateOutcome,
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock,
     OrganizingLeaveWordEditOutcome, OrganizingLeaveWordEnableBlock,
     OrganizingFactionWarDeclarationBlock, WorldFactionWarDeclarationEffects,
@@ -168,6 +176,7 @@ const UPGRADE_FACTION_MESSAGE_TYPE: i32 = 0x60126;
 const UPLOAD_FACTION_ICON_MESSAGE_TYPE: i32 = 0x60127;
 const SET_FACTION_CONTRIBUTOR_MESSAGE_TYPE: i32 = 0x60128;
 const ADD_FACTION_EXPERIENCE_MESSAGE_TYPE: i32 = 0x60129;
+const CHANGE_FACTION_MEMBER_STATE_MESSAGE_TYPE: i32 = 0x6012A;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -1483,6 +1492,42 @@ pub(crate) fn dispatch_faction_experience(
             log_written,
         },
     }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionMemberStateDispatch {
+    pub(crate) faction_id: i32,
+    pub(crate) player_id: i32,
+    pub(crate) operation: i32,
+    pub(crate) outcome: OrganizingFactionMemberStateOutcome,
+}
+
+/// Выполняет `0x6012A`, сохраняя условное чтение четвёртого legacy `Long`.
+pub(crate) fn dispatch_faction_member_state(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+) -> Option<OrganizingFactionMemberStateDispatch> {
+    if message.message_type() != CHANGE_FACTION_MEMBER_STATE_MESSAGE_TYPE {
+        return None;
+    }
+
+    let faction_id = message.base_mut().get_long().unwrap_or(0);
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let operation = message.base_mut().get_long().unwrap_or(0);
+    let outcome = organizing.change_faction_member_state(
+        game,
+        faction_id,
+        player_id,
+        operation,
+        || message.base_mut().get_long().unwrap_or(0),
+    );
+    Some(OrganizingFactionMemberStateDispatch {
+        faction_id,
+        player_id,
+        operation,
+        outcome,
+    })
 }
 
 fn send_declare_war_faction_list_notice<Context>(
