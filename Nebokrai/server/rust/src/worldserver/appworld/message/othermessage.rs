@@ -2,7 +2,8 @@
 //!
 //! Весь dispatcher RVA `0x000AC680` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме локального
 //! transport leaves `0x5FD02`, `0x5FD06..0x5FD09`, copy-number `0x5FD0B`,
-//! cursor-only `0x5FD0E`, honor-reset `0x5FD0C` и eliminate update `0x5FD0D` со статусом
+//! cursor-only `0x5FD0E`, LeiTing update `0x5FD10`, honor-reset `0x5FD0C` и
+//! eliminate update `0x5FD0D` со статусом
 //! `IMPLEMENTED`. Reset читает один Windows `long`, получает текущий `CGame`
 //! и вызывает `ResetHonorElimilateInfo`.
 //! Недостаточный payload сохраняет старое поведение numeric getter-а: значение
@@ -25,9 +26,13 @@
 //! `0x5FD0B` отражает первые два signed long, добавляет прежнее значение
 //! `s_nCopyNum` и только при ненулевом третьем поле увеличивает global до
 //! `SendToSocket`; это сохраняет peek/reserve и side-effect-before-send.
+//! `0x5FD10` читает player ID и только для online owner-а делегирует оставшийся
+//! buffer/cursor уже достигнутому `CPlayer::DecodeByteArrayLeiTing`; malformed
+//! хвост возвращается typed-ошибкой с сохранением доказанных prefix-мутаций.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::appworld::misc::{add_copy_num, get_copy_num};
+use crate::worldserver::appworld::player::PlayerCodecError;
 use crate::worldserver::worldserver::game::{
     CGame, WorldHonorEliminatorRegistration,
 };
@@ -106,6 +111,13 @@ pub(crate) enum WorldOtherMessageOutcome {
         response_type: i32,
         wire: Vec<u8>,
         delivery: Result<i32, SendMessageError>,
+    },
+    LeiTingUpdate {
+        player_id: u32,
+        player_id_complete: bool,
+        cursor_before_decode: usize,
+        cursor_after_decode: usize,
+        decode: Result<bool, PlayerCodecError>,
     },
     HonorEliminateReset(WorldHonorEliminateReset),
     HonorEliminateUpdate(WorldHonorEliminateUpdate),
@@ -204,6 +216,23 @@ pub(crate) fn on_other_message(
                 response_type: 0x0007_FA15,
                 wire,
                 delivery,
+            })
+        }
+        0x0005_FD10 => {
+            let decoded_player_id = message.base_mut().get_long();
+            let player_id = decoded_player_id.unwrap_or(0) as u32;
+            let cursor_before_decode = message.base_mut().cursor();
+            let decode = {
+                let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                game.decode_online_player_lei_ting(player_id, source, cursor)
+            };
+            let cursor_after_decode = message.base_mut().cursor();
+            WorldOtherMessageDispatch::Handled(WorldOtherMessageOutcome::LeiTingUpdate {
+                player_id,
+                player_id_complete: decoded_player_id.is_some(),
+                cursor_before_decode,
+                cursor_after_decode,
+                decode,
             })
         }
         HONOR_ELIMINATE_RESET => {

@@ -8426,7 +8426,7 @@ impl CGame {
     /// owner `0x5FF01..0x5FF16`,
     /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, other
     /// transport/cursor `0x5FD02/0x5FD06..0x5FD09/0x5FD0E`, copy-number
-    /// `0x5FD0B`, honor
+    /// `0x5FD0B`, LeiTing update `0x5FD10`, honor
     /// `0x5FD0C/0x5FD0D`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
@@ -10675,6 +10675,27 @@ impl CGame {
             return Ok(false);
         };
         let _ = player.decord_from_byte_array(source, cursor, true, registry, coefficients)?;
+        Ok(true)
+    }
+
+    /// Декодирует LeiTing-хвост только у игрока из exact online-list.
+    pub(crate) fn decode_online_player_lei_ting(
+        &mut self,
+        player_id: u32,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<bool, PlayerCodecError> {
+        if !self
+            .online_players
+            .iter()
+            .any(|&online_id| online_id == player_id)
+        {
+            return Ok(false);
+        }
+        let Some(player) = self.players.get_mut(&player_id) else {
+            return Ok(false);
+        };
+        player.decode_byte_array_lei_ting(source, cursor)?;
         Ok(true)
     }
 
