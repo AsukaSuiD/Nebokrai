@@ -8381,8 +8381,8 @@ impl CGame {
     /// заново читается текущий Login client и фиксируется его число сообщений.
     /// Поэтому typed reconnect из первой очереди заменяет owner до второго
     /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
-    /// ветви server-owner-а, GMA relays `0x4FD04/0x60401/0x60402`, player
-    /// relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, honor
+    /// ветви server-owner-а, GMA `0x4FD01/0x4FD04/0x60401/0x60402`, player relay
+    /// `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, honor
     /// `0x5FD0C/0x5FD0D`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
@@ -8416,6 +8416,7 @@ impl CGame {
         net_sessions: &CNetSessionManager,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+        add_gma_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
         update_player: &mut dyn FnMut(i32),
         clear_city_war_country_warring: &mut dyn FnMut(u8),
         set_city_war_country_king_and_city: &mut dyn FnMut(u8, i32, i32),
@@ -8460,6 +8461,7 @@ impl CGame {
                             net_sessions,
                             application_runtime,
                             application_callbacks,
+                            &mut *add_gma_log_text,
                             update_player,
                             clear_city_war_country_warring,
                             set_city_war_country_king_and_city,
@@ -8512,6 +8514,7 @@ impl CGame {
                     net_sessions,
                     application_runtime,
                     application_callbacks,
+                    &mut *add_gma_log_text,
                     update_player,
                     clear_city_war_country_warring,
                     set_city_war_country_king_and_city,
@@ -8563,6 +8566,9 @@ impl CGame {
         net_sessions: &CNetSessionManager,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+        log: &mut WorldLogTextOwner,
+        get_log_local_time: &mut dyn FnMut() -> WorldLogLocalTime,
+        put_log_info: &mut dyn FnMut(&[u8]),
         update_player: &mut dyn FnMut(i32),
         clear_city_war_country_warring: &mut dyn FnMut(u8),
         set_city_war_country_king_and_city: &mut dyn FnMut(u8, i32, i32),
@@ -8575,6 +8581,16 @@ impl CGame {
         GetTick: FnMut() -> u32,
     {
         let started_at_ms = get_tick();
+        let save_info_time_ms = self.setup.save_info_time_ms;
+        let mut add_gma_log_text = |message: &[u8]| {
+            log.add_log_text(
+                message,
+                save_info_time_ms,
+                &mut get_tick,
+                &mut *get_log_local_time,
+                &mut *put_log_info,
+            )
+        };
         let outcome = match self.process_message(
             honor_ranks,
             organizing,
@@ -8595,6 +8611,7 @@ impl CGame {
             net_sessions,
             application_runtime,
             application_callbacks,
+            &mut add_gma_log_text,
             update_player,
             clear_city_war_country_warring,
             set_city_war_country_king_and_city,
@@ -8607,6 +8624,7 @@ impl CGame {
                 };
             }
         };
+        drop(add_gma_log_text);
         let finished_at_ms = get_tick();
         let elapsed_ms = finished_at_ms.wrapping_sub(started_at_ms);
         state.accumulated_time_ms = state.accumulated_time_ms.wrapping_add(elapsed_ms);
@@ -9681,6 +9699,9 @@ impl CGame {
             owners.net_sessions,
             owners.union_application_runtime,
             &mut union_application_callbacks,
+            owners.log,
+            &mut *callbacks.get_log_local_time,
+            &mut *callbacks.put_log_info,
             &mut *callbacks.update_union_player,
             &mut *callbacks.clear_city_war_country_warring,
             &mut *callbacks.set_city_war_country_king_and_city,
@@ -10575,6 +10596,24 @@ impl CGame {
         0
     }
 
+    /// Возвращает первого по map-порядку online-player с `_strcmpi`-равным account.
+    pub(crate) fn online_player_by_cdkey(&self, cdkey: &[u8]) -> Option<&CPlayer> {
+        let cdkey = legacy_c_string_prefix(cdkey);
+        for (&player_id, player) in &self.players {
+            if !legacy_c_string_prefix(player.get_account()).eq_ignore_ascii_case(cdkey) {
+                continue;
+            }
+            if self
+                .online_players
+                .iter()
+                .any(|&online_id| online_id == player_id)
+            {
+                return Some(player);
+            }
+        }
+        None
+    }
+
     /// Добавляет ID в хвост только при отсутствии и всегда вызывает enter.
     pub(crate) fn append_online_player(
         &mut self,
@@ -11391,6 +11430,7 @@ fn process_world_message<TimerCallback: Copy>(
     net_sessions: &CNetSessionManager,
     application_runtime: &WorldUnionApplicationRuntimeOwner,
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    add_gma_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     update_player: &mut dyn FnMut(i32),
     clear_city_war_country_warring: &mut dyn FnMut(u8),
     set_city_war_country_king_and_city: &mut dyn FnMut(u8, i32, i32),
@@ -11431,7 +11471,7 @@ fn process_world_message<TimerCallback: Copy>(
     }
 
     if selector.owner == Some(WorldMessageOwner::Gma) {
-        match on_gma_message(game, message) {
+        match on_gma_message(game, message, add_gma_log_text) {
             WorldGmaMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::GmaMessage {
                     source,
@@ -13603,7 +13643,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::GetOnlinePlayerByCdkey
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:3477
