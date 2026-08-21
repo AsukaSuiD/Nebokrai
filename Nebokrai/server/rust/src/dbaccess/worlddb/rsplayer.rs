@@ -12,7 +12,8 @@
 //! `DeletePlayer` RVA `0x00101A60`, а также `LoadHonorRanksByType` RVA
 //! `0x0010FB90`, внешний `LoadHonorRanks` RVA `0x001113B0`, `InsertHonorRanks`
 //! RVA `0x00101680`, `SaveHonorRanksByType` RVA `0x00105080` и внешний
-//! `SaveHonorRanks` RVA `0x00105E20` — `IMPLEMENTED`; constructor, destructor
+//! `SaveHonorRanks` RVA `0x00105E20` и `StatRanks` RVA `0x00109570` —
+//! `IMPLEMENTED`; constructor, destructor
 //! и остальные функции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -405,6 +406,15 @@
 //! дефекты заменены bounds-checked slice decoder-ом: корректные bytes и
 //! insertion order остаются прежними, malformed blob возвращает typed block.
 //! Лишний хвост после четвёртой секции намеренно игнорируется, как exact owner.
+//!
+//! `StatRanks` форматирует exact `SELECT TOP m_nMaxNum`, читает строки в DB-
+//! порядке и сразу вызывает live `CPlayerRanks::AddRank`. Поэтому поздняя
+//! ошибка сохраняет уже добавленный prefix; staging/swap Linux-донора не
+//! переносится. ADO/BSTR заменены Tiberius и Windows-1251. Успех `AL=1` и
+//! catch/null `AL=0` подтверждены machine-кодом `0x00509A6E/0x00509AD6`.
+//! Неинициализированный constructor-ом `m_nMaxNum` и null faction внутри
+//! `IsFreePlayer` остаются локальными typed-границами вместо чтения мусора или
+//! raw null-dereference.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::Infallible;
@@ -414,7 +424,8 @@ use std::mem::{offset_of, size_of};
 
 use chrono::{Datelike, Days, Local, NaiveDate, TimeZone, Timelike};
 use encoding_rs::WINDOWS_1251;
-use tiberius::Query;
+use futures_util::TryStreamExt;
+use tiberius::{Query, Row};
 
 use crate::dbaccess::worlddb::dbgoods::{
     DbGoodsOwner, GoodsFiledSaveOutcome, PlayerGoodsFiledSnapshot,
@@ -422,6 +433,8 @@ use crate::dbaccess::worlddb::dbgoods::{
 use crate::dbaccess::worlddb::goodslistener::GoodsTraversalBlock;
 use crate::dbaccess::worlddb::rsjjcsys::{PlayerJjcDataSnapshot, RsJjcSysOwner};
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
+use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
+use crate::worldserver::worldserver::playerranks::{CPlayerRanks, PlayerRankAddBlock};
 
 const LEGACY_SQL_BUFFER_CAPACITY: usize = 1024;
 const CREATE_PLAYER_BASE_PREFIX: &[u8] = b"INSERT INTO CSL_PLAYER_BASE (id,name,Account,levels,occupation,sex,Country,HEAD,\t\t\t\t\t HELM,BODY,GLOV,BOOT,WEAPON,BACK,\t\t\t\t\t HEADGEAR,FROCK,WING,MANTEAU,FAIRY,\t\t\t\t\t HelmLevel,BodyLevel,GlovLevel,BootLevel,WeaponLevel,BackLevel,\t\t\t\t\t HEADGEARLevel,FROCKLevel,WINGLevel,MANTEAULevel,FAIRYLevel,\t\t\t\t\t Region) \t\t\t\t VALUES (";
@@ -904,6 +917,7 @@ pub(crate) struct RsPlayerNotice {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum RsPlayerOperation {
+    StatRanks,
     Outer,
     BaseRow,
     SaveBaseRow,
@@ -922,6 +936,7 @@ pub(crate) enum RsPlayerOperation {
 pub(crate) enum RsPlayerSaveError {
     Database(RsPlayerDatabaseError),
     MissingConnection,
+    PlayerRanksStatFailed,
     MissingBaseRow,
     MissingAbilityRow,
     MissingHonorRanksRow { period: HonorRanksSavePeriod },
@@ -933,6 +948,9 @@ impl fmt::Display for RsPlayerSaveError {
         match self {
             Self::Database(error) => error.fmt(formatter),
             Self::MissingConnection => write!(formatter, "не передано соединение World player DB"),
+            Self::PlayerRanksStatFailed => {
+                write!(formatter, "пересчёт рейтинга игроков завершился ошибкой")
+            }
             Self::MissingBaseRow => write!(formatter, "не найдена строка CSL_PLAYER_BASE"),
             Self::MissingAbilityRow => write!(formatter, "не найдена строка CSL_PLAYER_ABILITY"),
             Self::MissingHonorRanksRow { period } => write!(
@@ -951,6 +969,7 @@ impl Error for RsPlayerSaveError {
         match self {
             Self::Database(error) => Some(error),
             Self::MissingConnection
+            | Self::PlayerRanksStatFailed
             | Self::MissingBaseRow
             | Self::MissingAbilityRow
             | Self::MissingHonorRanksRow { .. }
@@ -981,8 +1000,70 @@ impl From<tiberius::error::Error> for RsPlayerDatabaseError {
     }
 }
 
+#[derive(Debug)]
+pub(crate) enum PlayerRanksStatFailure {
+    MissingConnection,
+    Database {
+        row_index: Option<usize>,
+        source: tiberius::error::Error,
+    },
+    MissingRequiredValue {
+        row_index: usize,
+        column: &'static str,
+    },
+    NumericOutsideLegacyRange {
+        row_index: usize,
+        column: &'static str,
+        value: i64,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerRanksStatBlock {
+    MaximumCountUnknown,
+    AddRank {
+        row_index: usize,
+        source: PlayerRankAddBlock,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum PlayerRanksStatOutcome {
+    ReturnedTrue { row_count: usize },
+    ReturnedFalse(PlayerRanksStatFailure),
+    BlockedMissingFact(PlayerRanksStatBlock),
+}
+
+fn read_ado_integer(
+    row: &Row,
+    column: &'static str,
+) -> Result<Option<i64>, tiberius::error::Error> {
+    let first_error = match row.try_get::<i32, _>(column) {
+        Ok(value) => return Ok(value.map(i64::from)),
+        Err(error) => error,
+    };
+    if let Ok(value) = row.try_get::<u8, _>(column) {
+        return Ok(value.map(i64::from));
+    }
+    if let Ok(value) = row.try_get::<i16, _>(column) {
+        return Ok(value.map(i64::from));
+    }
+    if let Ok(value) = row.try_get::<i64, _>(column) {
+        return Ok(value);
+    }
+    Err(first_error)
+}
+
 /// Узкая объектная граница достигнутой стадии исходного `CRsPlayer`.
 pub(crate) trait RsPlayerOwner {
+    /// Потоково добавляет exact TOP-рейтинг в уже очищенный live owner.
+    async fn stat_ranks(
+        &mut self,
+        ranks: &mut CPlayerRanks,
+        organizing: &COrganizingCtrl,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> PlayerRanksStatOutcome;
+
     /// Выполняет три create-стадии, останавливаясь после первого исходного false.
     async fn create_player<J: RsJjcSysOwner, G: DbGoodsOwner>(
         &mut self,
@@ -1850,6 +1931,178 @@ pub(crate) fn save_thing_field<S: PlayerAbilityFieldSink>(
 }
 
 impl RsPlayerOwner for TiberiusRsPlayer {
+    async fn stat_ranks(
+        &mut self,
+        ranks: &mut CPlayerRanks,
+        organizing: &COrganizingCtrl,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> PlayerRanksStatOutcome {
+        macro_rules! stat_failed {
+            ($failure:expr) => {{
+                self.notices.push_back(RsPlayerNotice {
+                    operation: RsPlayerOperation::StatRanks,
+                    error: RsPlayerSaveError::PlayerRanksStatFailed,
+                });
+                PlayerRanksStatOutcome::ReturnedFalse($failure)
+            }};
+        }
+
+        let Some(maximum_count) = ranks.maximum_count() else {
+            return PlayerRanksStatOutcome::BlockedMissingFact(
+                PlayerRanksStatBlock::MaximumCountUnknown,
+            );
+        };
+        let Some(active_transaction) = active_transaction else {
+            self.notices.push_back(RsPlayerNotice {
+                operation: RsPlayerOperation::StatRanks,
+                error: RsPlayerSaveError::MissingConnection,
+            });
+            return PlayerRanksStatOutcome::ReturnedFalse(
+                PlayerRanksStatFailure::MissingConnection,
+            );
+        };
+        let sql = format!(
+            "SELECT TOP {} ID, Name, Levels, Occupation\t\t\t\t\tFROM CSL_PLAYER_ABILITY \t\t\t\t\tORDER BY Levels DESC, Exp DESC",
+            maximum_count,
+        );
+        let mut rows = match active_transaction.simple_query(sql).await {
+            Ok(rows) => rows,
+            Err(source) => {
+                return stat_failed!(
+                    PlayerRanksStatFailure::Database {
+                        row_index: None,
+                        source,
+                    }
+                );
+            }
+        };
+        let mut row_index = 0usize;
+        loop {
+            let item = match rows.try_next().await {
+                Ok(Some(item)) => item,
+                Ok(None) => break,
+                Err(source) => {
+                    return stat_failed!(
+                        PlayerRanksStatFailure::Database {
+                            row_index: Some(row_index),
+                            source,
+                        }
+                    );
+                }
+            };
+            let Some(row) = item.into_row() else {
+                continue;
+            };
+
+            macro_rules! required {
+                ($type:ty, $column:literal) => {
+                    match row.try_get::<$type, _>($column) {
+                        Ok(Some(value)) => value,
+                        Ok(None) => {
+                            return stat_failed!(
+                                PlayerRanksStatFailure::MissingRequiredValue {
+                                    row_index,
+                                    column: $column,
+                                }
+                            );
+                        }
+                        Err(source) => {
+                            return stat_failed!(
+                                PlayerRanksStatFailure::Database {
+                                    row_index: Some(row_index),
+                                    source,
+                                }
+                            );
+                        }
+                    }
+                };
+            }
+
+            macro_rules! required_integer {
+                ($column:literal) => {
+                    match read_ado_integer(&row, $column) {
+                        Ok(Some(value)) => value,
+                        Ok(None) => {
+                            return stat_failed!(
+                                PlayerRanksStatFailure::MissingRequiredValue {
+                                    row_index,
+                                    column: $column,
+                                }
+                            );
+                        }
+                        Err(source) => {
+                            return stat_failed!(
+                                PlayerRanksStatFailure::Database {
+                                    row_index: Some(row_index),
+                                    source,
+                                }
+                            );
+                        }
+                    }
+                };
+            }
+
+            let player_id_value = required_integer!("ID");
+            let player_id = match i32::try_from(player_id_value) {
+                Ok(player_id) => player_id,
+                Err(_) => {
+                    return stat_failed!(
+                        PlayerRanksStatFailure::NumericOutsideLegacyRange {
+                            row_index,
+                            column: "ID",
+                            value: player_id_value,
+                        }
+                    );
+                }
+            };
+            let name = required!(&str, "Name");
+            let (name, _, _) = WINDOWS_1251.encode(name);
+            let name = name
+                .split(|byte| *byte == 0)
+                .next()
+                .unwrap_or_default()
+                .to_vec();
+            let level_value = required_integer!("Levels");
+            let level = match u16::try_from(level_value) {
+                Ok(level) => level,
+                Err(_) => {
+                    return stat_failed!(
+                        PlayerRanksStatFailure::NumericOutsideLegacyRange {
+                            row_index,
+                            column: "Levels",
+                            value: level_value,
+                        }
+                    );
+                }
+            };
+            let occupation_value = required_integer!("Occupation");
+            let occupation = match u16::try_from(occupation_value) {
+                Ok(occupation) => occupation,
+                Err(_) => {
+                    return stat_failed!(
+                        PlayerRanksStatFailure::NumericOutsideLegacyRange {
+                            row_index,
+                            column: "Occupation",
+                            value: occupation_value,
+                        }
+                    );
+                }
+            };
+            if let Err(source) =
+                ranks.add_rank(organizing, player_id, name, occupation, level)
+            {
+                return PlayerRanksStatOutcome::BlockedMissingFact(
+                    PlayerRanksStatBlock::AddRank { row_index, source },
+                );
+            }
+            row_index += 1;
+        }
+
+        PlayerRanksStatOutcome::ReturnedTrue {
+            row_count: row_index,
+        }
+    }
+
     async fn create_player<J: RsJjcSysOwner, G: DbGoodsOwner>(
         &mut self,
         snapshot: Option<&PlayerCreationSnapshot<'_, '_>>,
@@ -3177,7 +3430,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::StatRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:1561
@@ -3185,6 +3438,7 @@ async fn execute_batch(
 // ADDRESS: 00509570
 // PROTOTYPE: bool __thiscall StatRanks(CPlayerRanks * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
 //
+// Реализовано выше потоковым Tiberius-чтением с exact live-prefix publication.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

@@ -1,8 +1,9 @@
 //! Общий рейтинг игроков исторического WorldServer.
 //!
 //! Статус World `CPlayerRanks::AddToByteArray` RVA `0x0001B760` и
-//! `UpdateRanksToGameServer` RVA `0x0001B890`: `IMPLEMENTED`; статистика и
-//! timer/DB lifecycle ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `UpdateRanksToGameServer` RVA `0x0001B890`, `StatPlayerRanks` RVA
+//! `0x0001C0D0` и `AddRank` RVA `0x0001C1A0`: `IMPLEMENTED`; timer/init
+//! lifecycle ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -12,20 +13,28 @@
 //! Exact World serializer и Game decoder подтверждают wire: signed count и
 //! insertion-order records `i32 player_id + C-string name + u16 occupation +
 //! u16 level + C-string faction_name`. `Vec` заменяет `std::list`, owned bytes
-//! — `std::string`; порядок и little-endian поля не меняются. Невозможный
-//! 32-битный count и внутренний NUL typed-блокируют весь append до изменения
-//! destination вместо переполнения или чтения за строкой.
+//! — `std::string`; порядок и little-endian поля не меняются. Внутренний NUL
+//! штатно завершает исходный C-string и поэтому обрезает только wire-поле.
+//! Невозможный 32-битный count блокирует весь append до изменения destination.
 //!
 //! Публикация использует готовые `CMessage` и `ServerCommandHandle`: exact
 //! `0x7F801 + subtype 0x17 + serialized ranks` сохраняется, а самописные
 //! буфер, CRC-envelope и fan-out не дублируются. Исходный `SendAll` игнорировал
 //! transport-result; Rust оставляет его в отчёте, не меняя порядок вызовов.
+//! `StatPlayerRanks` связан в `CGame` с реальным `CRsPlayer`: список очищается
+//! до start-log, tick снимается после него, DB добавляет live prefix, затем
+//! всегда идут end-log и публикация даже после DB `false`. `AddRank` получает
+//! organizing явно вместо singleton-а и сохраняет empty-name ветви отсутствия
+//! faction; исходный null внутри map остаётся typed-блоком.
 
 use std::error::Error;
 use std::fmt;
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::servers::ServerCommandHandle;
+use crate::worldserver::appworld::organizingsystem::organizingctrl::{
+    COrganizingCtrl, FreePlayerLookup,
+};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerRankEntry {
@@ -38,6 +47,7 @@ pub(crate) struct PlayerRankEntry {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CPlayerRanks {
+    maximum_count: Option<i32>,
     ranks: Vec<PlayerRankEntry>,
 }
 
@@ -49,8 +59,48 @@ pub(crate) struct PlayerRanksGameServerUpdate {
 }
 
 impl CPlayerRanks {
+    pub(crate) const fn maximum_count(&self) -> Option<i32> {
+        self.maximum_count
+    }
+
+    pub(crate) fn set_maximum_count(&mut self, maximum_count: i32) {
+        self.maximum_count = Some(maximum_count);
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.ranks.clear();
+    }
+
     pub(crate) fn push(&mut self, rank: PlayerRankEntry) {
         self.ranks.push(rank);
+    }
+
+    /// Добавляет строку DB и вычисляет faction-name по live organizing map.
+    pub(crate) fn add_rank(
+        &mut self,
+        organizing: &COrganizingCtrl,
+        player_id: i32,
+        name: Vec<u8>,
+        occupation: u16,
+        level: u16,
+    ) -> Result<(), PlayerRankAddBlock> {
+        let faction_name = match organizing.is_free_player(player_id) {
+            FreePlayerLookup::NoFaction => Vec::new(),
+            FreePlayerLookup::Faction(faction_id) => organizing
+                .faction_by_id(faction_id)
+                .map_or_else(Vec::new, |faction| faction.name().to_vec()),
+            FreePlayerLookup::BlockedNullFaction { map_key } => {
+                return Err(PlayerRankAddBlock::NullFaction { map_key });
+            }
+        };
+        self.ranks.push(PlayerRankEntry {
+            player_id,
+            name,
+            occupation,
+            level,
+            faction_name,
+        });
+        Ok(())
     }
 
     pub(crate) fn ranks(&self) -> &[PlayerRankEntry] {
@@ -68,22 +118,12 @@ impl CPlayerRanks {
         })?;
         let mut payload = Vec::new();
         payload.extend_from_slice(&count.to_le_bytes());
-        for (rank_index, rank) in self.ranks.iter().enumerate() {
+        for rank in &self.ranks {
             payload.extend_from_slice(&rank.player_id.to_le_bytes());
-            write_player_rank_string(
-                &mut payload,
-                rank_index,
-                PlayerRankStringField::PlayerName,
-                &rank.name,
-            )?;
+            write_player_rank_string(&mut payload, &rank.name);
             payload.extend_from_slice(&rank.occupation.to_le_bytes());
             payload.extend_from_slice(&rank.level.to_le_bytes());
-            write_player_rank_string(
-                &mut payload,
-                rank_index,
-                PlayerRankStringField::FactionName,
-                &rank.faction_name,
-            )?;
+            write_player_rank_string(&mut payload, &rank.faction_name);
         }
         destination.extend_from_slice(&payload);
         Ok(())
@@ -108,21 +148,16 @@ impl CPlayerRanks {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerRankStringField {
-    PlayerName,
-    FactionName,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerRanksSerializationBlock {
     CountOutOfRange {
         count: usize,
     },
-    StringContainsNul {
-        rank_index: usize,
-        field: PlayerRankStringField,
-    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerRankAddBlock {
+    NullFaction { map_key: i32 },
 }
 
 impl fmt::Display for PlayerRanksSerializationBlock {
@@ -132,31 +167,16 @@ impl fmt::Display for PlayerRanksSerializationBlock {
                 formatter,
                 "PlayerRanks содержит {count} записей вне signed 32-битного диапазона"
             ),
-            Self::StringContainsNul { rank_index, field } => write!(
-                formatter,
-                "PlayerRanks #{rank_index}: поле {field:?} содержит внутренний NUL"
-            ),
         }
     }
 }
 
 impl Error for PlayerRanksSerializationBlock {}
 
-fn write_player_rank_string(
-    destination: &mut Vec<u8>,
-    rank_index: usize,
-    field: PlayerRankStringField,
-    value: &[u8],
-) -> Result<(), PlayerRanksSerializationBlock> {
-    if value.contains(&0) {
-        return Err(PlayerRanksSerializationBlock::StringContainsNul {
-            rank_index,
-            field,
-        });
-    }
-    destination.extend_from_slice(value);
+fn write_player_rank_string(destination: &mut Vec<u8>, value: &[u8]) {
+    let prefix = value.split(|byte| *byte == 0).next().unwrap_or_default();
+    destination.extend_from_slice(prefix);
     destination.push(0);
-    Ok(())
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
@@ -282,7 +302,7 @@ fn write_player_rank_string(
 
 // ============================================================================
 // FUNCTION: CPlayerRanks::StatPlayerRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\playerranks.cpp:109
@@ -290,13 +310,14 @@ fn write_player_rank_string(
 // ADDRESS: 0041c0d0
 // PROTOTYPE: void __thiscall StatPlayerRanks(void)
 //
+// Реализовано связанным проходом в `CGame::run_main_loop_maintenance_stage`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CPlayerRanks::AddRank
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\playerranks.cpp:121
@@ -304,6 +325,7 @@ fn write_player_rank_string(
 // ADDRESS: 0041c1a0
 // PROTOTYPE: void __thiscall AddRank(int param_1, basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_2, ushort param_3, ushort param_4)
 //
+// Реализовано выше через явный `COrganizingCtrl` и insertion-order `Vec`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

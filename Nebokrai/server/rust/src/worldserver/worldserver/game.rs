@@ -280,8 +280,10 @@
 //! отдельных singleton-вызовов, сохраняет Appellation guard, nullable
 //! HonorRanks instance, strict day mismatch, точный tick/log/OnNewDay/log
 //! порядок и затем безусловно достигает AuctionBang daily gate. Сырые
-//! PlayerRanks DB-вызовы остаются локальным trait-контрактом своего owner-а;
-//! достигнутые `CHonorRanks` и `CAuctionLog` исполняются напрямую. Суточная
+//! PlayerRanks DB-чтение, `CHonorRanks` и `CAuctionLog` исполняются напрямую.
+//! PlayerRanks сохраняет clear/log/tick/stream-prefix/log/send порядок и
+//! продолжает публикацию даже после DB `false`, как исходный void-wrapper.
+//! Суточная
 //! AuctionBang-ветвь передаёт реальный Log DB connection, присваивает день до
 //! update и сохраняет его неатомарный outcome. Неинициализированный исходным
 //! constructor-ом `m_lAucOldDay` остаётся typed `BLOCKED_MISSING_FACT`, а не
@@ -910,7 +912,10 @@ use crate::dbaccess::worlddb::rsgodsbattle::{
     GodsBattleFactionXydSnapshot, GodsBattleNpcFactionSnapshot, RsGodsBattleOwner,
 };
 use crate::dbaccess::worlddb::rsjjcsys::RsJjcSysOwner;
-use crate::dbaccess::worlddb::rsplayer::{HonorRanksLoadOutcome, RsPlayerOwner};
+use crate::dbaccess::worlddb::rsplayer::{
+    HonorRanksLoadOutcome, PlayerRanksStatBlock, PlayerRanksStatOutcome, RsPlayerOwner,
+    TiberiusRsPlayer,
+};
 use crate::dbaccess::worlddb::rsregion::{RegionSaveSnapshot, RsRegionOwner};
 use crate::dbaccess::worlddb::rssetup::{
     LoadedSetupIds, RsSetupOwner, WorldDatabaseSettings, WorldDatabaseSettingsParts,
@@ -2185,7 +2190,6 @@ pub(crate) struct WorldMainLoopStateOwners<'a> {
 pub(crate) struct WorldMainLoopOwners<
     'a,
     TimerCallback,
-    Maintenance,
     FactionContext,
     LeiTingContextOwner,
     DbMiscContextOwner,
@@ -2197,7 +2201,9 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) organizing: &'a mut COrganizingCtrl,
     pub(crate) country: &'a mut CCountryHandler,
     pub(crate) honor_ranks: &'a mut CHonorRanks,
-    pub(crate) player_ranks: &'a CPlayerRanks,
+    pub(crate) player_ranks: &'a mut CPlayerRanks,
+    pub(crate) rs_player: &'a mut TiberiusRsPlayer,
+    pub(crate) player_database: Option<&'a mut WorldTdsClient>,
     pub(crate) auction_log: &'a mut CAuctionLog,
     pub(crate) auction_log_database: Option<&'a mut WorldTdsClient>,
     pub(crate) session_factory: &'a mut CSessionFactory,
@@ -2207,7 +2213,6 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) db_misc: &'a mut CDbMisc,
     pub(crate) net_sessions: &'a CNetSessionManager,
     pub(crate) jjc: &'a mut CJJcSystem,
-    pub(crate) maintenance: &'a mut Maintenance,
     pub(crate) faction_context: &'a mut FactionContext,
     pub(crate) lei_ting_context: &'a mut LeiTingContextOwner,
     pub(crate) db_misc_context: &'a mut DbMiscContextOwner,
@@ -2957,17 +2962,17 @@ impl WorldPlayerRanksRequestState {
     }
 }
 
-/// Операции соседнего ещё не достигнутого PlayerRanks owner-а.
-pub(crate) trait WorldMainLoopMaintenanceOwners {
-    /// Пересчитывает PlayerRanks.
-    fn stat_player_ranks(&mut self);
-}
-
 /// Итог ручной PlayerRanks-ветви одного MainLoop turn.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) enum WorldPlayerRanksMaintenanceDisposition {
     NotRequested,
     Updated {
+        started_at_ms: u32,
+        finished_at_ms: u32,
+        elapsed_ms: u32,
+        stat: PlayerRanksStatOutcome,
+        start_log: AddLogTextDisposition,
+        complete_log: AddLogTextDisposition,
         publication: PlayerRanksGameServerUpdate,
     },
 }
@@ -3022,6 +3027,11 @@ pub(crate) enum WorldAuctionBangMaintenanceDisposition {
 /// Первая безопасно неразрешимая граница maintenance-блока.
 #[derive(Debug)]
 pub(crate) enum WorldMainLoopMaintenanceBlock {
+    PlayerRanksStat {
+        started_at_ms: u32,
+        start_log: AddLogTextDisposition,
+        source: PlayerRanksStatBlock,
+    },
     PlayerRanksSerialization(PlayerRanksSerializationBlock),
     HonorRanks(WorldHonorRanksMaintenanceBlock),
     AuctionOldDayUnknown { current_month_day: i32 },
@@ -8576,7 +8586,6 @@ impl CGame {
     )]
     pub(crate) async fn main_loop<
         TimerCallback,
-        Maintenance,
         FactionContext,
         LeiTingContextOwner,
         DbMiscContextOwner,
@@ -8589,7 +8598,6 @@ impl CGame {
         owners: &mut WorldMainLoopOwners<
             '_,
             TimerCallback,
-            Maintenance,
             FactionContext,
             LeiTingContextOwner,
             DbMiscContextOwner,
@@ -8600,7 +8608,6 @@ impl CGame {
     ) -> WorldMainLoopResult<FactionContext::Block, LeiTingContextOwner::Block>
     where
         TimerCallback: Copy,
-        Maintenance: WorldMainLoopMaintenanceOwners,
         FactionContext: FactionWarStopContext,
         LeiTingContextOwner: LeiTingContext,
         DbMiscContextOwner: DbMiscContext,
@@ -8673,8 +8680,10 @@ impl CGame {
         let maintenance = self.run_main_loop_maintenance_stage(
             state.player_ranks_request,
             configuration.use_appellation_function,
-            owners.maintenance,
             owners.player_ranks,
+            owners.rs_player,
+            owners.player_database.as_deref_mut(),
+            owners.organizing,
             owners.honor_ranks,
             owners.auction_log,
             owners.auction_log_database.as_deref_mut(),
@@ -9058,7 +9067,6 @@ impl CGame {
         reason = "caller сохраняет clock/log callbacks и явные границы доменных owners"
     )]
     pub(crate) async fn run_main_loop_maintenance_stage<
-        Owners,
         GetTick,
         GetLocalTime,
         GetAuctionMonthDay,
@@ -9067,8 +9075,10 @@ impl CGame {
         &self,
         player_ranks_request: &WorldPlayerRanksRequestState,
         use_appellation_function: bool,
-        owners: &mut Owners,
-        player_ranks: &CPlayerRanks,
+        player_ranks: &mut CPlayerRanks,
+        rs_player: &mut TiberiusRsPlayer,
+        player_database: Option<&mut WorldTdsClient>,
+        organizing: &COrganizingCtrl,
         honor_ranks_owner: &mut CHonorRanks,
         auction_log: &mut CAuctionLog,
         auction_log_database: Option<&mut WorldTdsClient>,
@@ -9079,19 +9089,58 @@ impl CGame {
         put_log_info: &mut PutLogInfo,
     ) -> Result<WorldMainLoopMaintenanceReport, WorldMainLoopMaintenanceBlock>
     where
-        Owners: WorldMainLoopMaintenanceOwners,
         GetTick: FnMut() -> u32,
         GetLocalTime: FnMut() -> WorldLogLocalTime,
         GetAuctionMonthDay: FnMut() -> i32,
         PutLogInfo: FnMut(&[u8]),
     {
         let player_ranks = if player_ranks_request.take_if_requested() {
-            owners.stat_player_ranks();
+            player_ranks.clear();
+            let start_log = log.add_log_text(
+                b"PlayerRanks Stat. START...",
+                self.setup.save_info_time_ms,
+                &mut *get_tick,
+                &mut *get_local_time,
+                &mut *put_log_info,
+            );
+            let started_at_ms = get_tick();
+            let stat = rs_player
+                .stat_ranks(player_ranks, organizing, player_database)
+                .await;
+            if let PlayerRanksStatOutcome::BlockedMissingFact(source) = &stat {
+                return Err(WorldMainLoopMaintenanceBlock::PlayerRanksStat {
+                    started_at_ms,
+                    start_log,
+                    source: *source,
+                });
+            }
+            let finished_at_ms = get_tick();
+            let elapsed_ms = finished_at_ms.wrapping_sub(started_at_ms);
+            let complete_text = format!(
+                "PlayerRanks Stat. END(USED TIME:{}MS)",
+                elapsed_ms as i32,
+            )
+            .into_bytes();
+            let complete_log = log.add_log_text(
+                &complete_text,
+                self.setup.save_info_time_ms,
+                &mut *get_tick,
+                &mut *get_local_time,
+                &mut *put_log_info,
+            );
             let sender = self.current_game_server_sender();
             let publication = player_ranks
                 .update_ranks_to_game_server(sender.as_ref())
                 .map_err(WorldMainLoopMaintenanceBlock::PlayerRanksSerialization)?;
-            WorldPlayerRanksMaintenanceDisposition::Updated { publication }
+            WorldPlayerRanksMaintenanceDisposition::Updated {
+                started_at_ms,
+                finished_at_ms,
+                elapsed_ms,
+                stat,
+                start_log,
+                complete_log,
+                publication,
+            }
         } else {
             WorldPlayerRanksMaintenanceDisposition::NotRequested
         };
