@@ -2009,6 +2009,12 @@ pub(crate) enum FactionCreationOutcome {
     Created(FactionCreationReport),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionCreationPreparation {
+    Rejected(FactionCreationRejection),
+    ReadyForPersistentLookup,
+}
+
 #[derive(Debug)]
 pub(crate) enum FactionCreationBlock {
     PlayerMembership { map_key: i32 },
@@ -3954,6 +3960,49 @@ impl COrganizingCtrl {
         self.factions.get(&map_key).and_then(Option::as_deref)
     }
 
+    /// Выполняет exact public `AddFactionToClientByPlayerID` без detach.
+    pub(crate) fn add_faction_to_client_by_player_id(
+        &self,
+        game: &CGame,
+        player_id: i32,
+    ) -> Result<bool, FactionClientSnapshotBlock> {
+        let faction_id = match self.is_free_player(player_id) {
+            FreePlayerLookup::NoFaction => return Ok(false),
+            FreePlayerLookup::Faction(faction_id) => faction_id,
+            FreePlayerLookup::BlockedNullFaction { map_key } => {
+                return Err(FactionClientSnapshotBlock::MembershipNullFaction { map_key });
+            }
+        };
+        let Some(faction) = self.faction_by_id(faction_id) else {
+            return Ok(false);
+        };
+        self.add_faction_to_client_with_detached(game, faction_id, faction, player_id)
+    }
+
+    /// Выполняет exact public `AddAllFactinInfoToClientByPlayerID` без detach.
+    pub(crate) fn add_all_faction_info_to_client_by_player_id(
+        &self,
+        game: &CGame,
+        player_id: i32,
+    ) -> Result<bool, AllFactionInfoClientBlock> {
+        let faction_id = match self.is_free_player(player_id) {
+            FreePlayerLookup::NoFaction => return Ok(false),
+            FreePlayerLookup::Faction(faction_id) => faction_id,
+            FreePlayerLookup::BlockedNullFaction { map_key } => {
+                return Err(AllFactionInfoClientBlock::MembershipNullFaction { map_key });
+            }
+        };
+        let Some(faction) = self.faction_by_id(faction_id) else {
+            return Ok(false);
+        };
+        self.add_all_faction_info_to_client_with_detached(
+            game,
+            faction_id,
+            faction,
+            player_id,
+        )
+    }
+
     /// Выполняет exact `AddFactionToClientByPlayerID` с временно detached
     /// target faction на её исходной позиции controller-map.
     fn add_faction_to_client_with_detached(
@@ -5485,24 +5534,20 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Выполняет exact concrete `CreateFaction` после внешних ingress-gates.
-    pub(crate) fn create_faction<Effects>(
+    /// Выполняет exact prefix до синхронного persistent player-name lookup.
+    pub(crate) fn prepare_faction_creation<Effects>(
         &mut self,
         game: &CGame,
-        parameters: &COrganizingParam,
         player_id: i32,
-        _reserved: i32,
-        established_time: TagTimeValue,
         faction_name: &mut Vec<u8>,
-        country: u8,
         effects: &mut Effects,
-    ) -> Result<FactionCreationOutcome, FactionCreationBlock>
+    ) -> Result<FactionCreationPreparation, FactionCreationBlock>
     where
         Effects: FactionCreationEffects,
     {
         match self.is_free_player(player_id) {
             FreePlayerLookup::Faction(_) => {
-                return Ok(FactionCreationOutcome::Rejected(
+                return Ok(FactionCreationPreparation::Rejected(
                     FactionCreationRejection::PlayerAlreadyInFaction,
                 ));
             }
@@ -5523,7 +5568,7 @@ impl COrganizingCtrl {
                 color: 0xFFDA_EDFE,
                 trailing_value: 0,
             });
-            return Ok(FactionCreationOutcome::Rejected(
+            return Ok(FactionCreationPreparation::Rejected(
                 FactionCreationRejection::InvalidName { notice_sent: true },
             ));
         }
@@ -5541,13 +5586,42 @@ impl COrganizingCtrl {
                 .map_err(FactionCreationBlock::DbCreationPlayerName)?
             || game
                 .is_name_exist_in_db_data(name)
-                .map_err(FactionCreationBlock::DbDataPlayerName)?
-            || effects.persistent_player_name_exists(name)
+                .map_err(FactionCreationBlock::DbDataPlayerName)?;
+        if name_exists {
+            return Ok(FactionCreationPreparation::Rejected(
+                FactionCreationRejection::NameExists,
+            ));
+        }
+        Ok(FactionCreationPreparation::ReadyForPersistentLookup)
+    }
+
+    /// Завершает `CreateFaction` после exact-position persistent lookup.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "аргументы сохраняют исходную CreateFaction boundary"
+    )]
+    pub(crate) fn finish_faction_creation<Effects>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        player_id: i32,
+        _reserved: i32,
+        established_time: TagTimeValue,
+        faction_name: &[u8],
+        country: u8,
+        persistent_name_exists: bool,
+        effects: &mut Effects,
+    ) -> Result<FactionCreationOutcome, FactionCreationBlock>
+    where
+        Effects: FactionCreationEffects,
+    {
+        let name = legacy_c_string_prefix(faction_name);
+        if persistent_name_exists
             || self
                 .organizing_by_name(name)
                 .map_err(FactionCreationBlock::OrganizingName)?
-                .is_some();
-        if name_exists {
+                .is_some()
+        {
             return Ok(FactionCreationOutcome::Rejected(
                 FactionCreationRejection::NameExists,
             ));
@@ -5625,6 +5699,47 @@ impl COrganizingCtrl {
             other_faction_updates,
             log_written,
         }))
+    }
+
+    /// Синхронная exact composition для владельцев с готовым name-index.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "аргументы сохраняют исходную CreateFaction boundary"
+    )]
+    pub(crate) fn create_faction<Effects>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        player_id: i32,
+        reserved: i32,
+        established_time: TagTimeValue,
+        faction_name: &mut Vec<u8>,
+        country: u8,
+        effects: &mut Effects,
+    ) -> Result<FactionCreationOutcome, FactionCreationBlock>
+    where
+        Effects: FactionCreationEffects,
+    {
+        match self.prepare_faction_creation(game, player_id, faction_name, effects)? {
+            FactionCreationPreparation::Rejected(reason) => {
+                Ok(FactionCreationOutcome::Rejected(reason))
+            }
+            FactionCreationPreparation::ReadyForPersistentLookup => {
+                let persistent_name_exists = effects
+                    .persistent_player_name_exists(legacy_c_string_prefix(faction_name));
+                self.finish_faction_creation(
+                    game,
+                    parameters,
+                    player_id,
+                    reserved,
+                    established_time,
+                    faction_name,
+                    country,
+                    persistent_name_exists,
+                    effects,
+                )
+            }
+        }
     }
 
     /// Проверяет две faction и запускает exact подтверждение учреждения союза.

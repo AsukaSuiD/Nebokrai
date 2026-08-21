@@ -1,5 +1,6 @@
 //! Статус корпуса: `IMPLEMENTED_PARTIAL` для достигнутых organizing opcode,
-//! включая список фракций страны `0x60107`, подачу заявки `0x60108`, отмену
+//! включая создание фракции `0x60103`, список фракций страны `0x60107`,
+//! подачу заявки `0x60108`, отмену
 //! заявки `0x60109`, решение по заявке `0x6010A`, исключение участника
 //! `0x6010B`, исключение фракции из союза `0x6010C`, выход из фракции
 //! `0x6010D`, выход фракции из союза `0x6010E`, передачу главы фракции
@@ -24,6 +25,17 @@
 //!
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
 //! `OnOrgasysMessage` RVA `0x000A6110`. Exact диапазоны
+//! `0x004A6186..0x004A6685` восстанавливают `0x60103`: запрос читает
+//! `(request ID, cookie, player ID, country, name[20])`, после непустого имени
+//! снимает один local-time и декодирует online player из остатка сообщения.
+//! Country/level/goods/money gates отвечают `0x7FE01` с result `0`; успешный
+//! `CreateFaction` обновляет player faction-data и отправляет оба faction
+//! snapshot-а. `Fail/NameExist/Ok` отображаются в `WS0115/WS0116/WS0117`,
+//! затем всегда идут ответ и organizing notice с `WS0118`. Persistent
+//! player-name lookup остаётся на своей exact позиции между двумя частями
+//! concrete `CreateFaction`; технически ADO заменён параметризованным
+//! `tiberius`, но порядок и политика ошибки сохранены.
+//! Exact диапазоны
 //! `0x004A66DC..0x004A69A4` восстанавливают `0x60107`: запрос читает
 //! `(request ID, cookie, player ID, page)`, берёт country только у online
 //! player-а, считает faction этой страны и отвечает `0x7FE07`. Нулевой список
@@ -364,6 +376,8 @@ use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
 
+use crate::dbaccess::worlddb::rsplayer::{RsPlayerOwner, TiberiusRsPlayer};
+use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::servers::ServerCommandHandle;
 use crate::setup::globesetup::GlobeSetupSnapshot;
@@ -447,6 +461,8 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingLeaveWordEnableOutcome, OrganizingLeaveWordOutcome, OrganizingPronounceBlock,
     OrganizingPronounceOutcome, OrganizingUnionApplyForJoinDispatchBlock,
     OrganizingUnionApplyForJoinOutcome, OrganizingFactionApplicationBlock,
+    FactionCreationBlock, FactionCreationEffects, FactionCreationOutcome,
+    FactionCreationPreparation, FactionClientSnapshotBlock, AllFactionInfoClientBlock,
     PlayerInviteFactionBlock, PlayerInviteFactionEffects, PlayerInviteFactionOutcome,
     OrganizingNameCountryBlock, OrganizingNameKind, OrganizingNameLookupBlock,
     OrganizingNameMatch, OrganizingNamedUnionApplicationBlock,
@@ -482,6 +498,8 @@ use crate::worldserver::worldserver::game::{
 
 const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
     [0x60117, 0x60119, 0x60120, 0x60122, 0x60124, 0x60131];
+const CREATE_FACTION_MESSAGE_TYPE: i32 = 0x60103;
+const CREATE_FACTION_RESPONSE_TYPE: i32 = 0x7FE01;
 const FACTION_LIST_MESSAGE_TYPE: i32 = 0x60107;
 const FACTION_LIST_RESPONSE_TYPE: i32 = 0x7FE07;
 const FACTION_APPLICATION_MESSAGE_TYPE: i32 = 0x60108;
@@ -1073,6 +1091,52 @@ impl ConfederationCreationEffects for WorldUnionApplicationEffects<'_> {
             endpoint,
             |upper_bound| (self.callbacks.random)(upper_bound),
         )
+    }
+}
+
+struct WorldFactionCreationEffects<'game, 'callbacks, 'effects, 'invalid, 'log> {
+    game: &'game CGame,
+    callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
+    check_invalid_organizing_string: &'invalid mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
+    persistent_name_exists: bool,
+    faction_create_log_enabled: bool,
+    write_faction_create_log: &'log mut dyn FnMut(i32, &[u8], i32, &[u8]),
+}
+
+impl FactionCreationEffects for WorldFactionCreationEffects<'_, '_, '_, '_, '_> {
+    fn check_invalid_organizing_string(&mut self, name: &mut Vec<u8>, strict: bool) -> bool {
+        (self.check_invalid_organizing_string)(name, strict)
+    }
+
+    fn persistent_player_name_exists(&mut self, _name: &[u8]) -> bool {
+        self.persistent_name_exists
+    }
+
+    fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
+        (self.callbacks.world_string)(string_id)
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+
+    fn faction_create_log_enabled(&self) -> bool {
+        self.faction_create_log_enabled
+    }
+
+    fn write_faction_create_log(
+        &mut self,
+        faction_id: i32,
+        faction_name: &[u8],
+        player_id: i32,
+        player_name: &[u8],
+    ) {
+        (self.write_faction_create_log)(
+            faction_id,
+            faction_name,
+            player_id,
+            player_name,
+        );
     }
 }
 
@@ -2223,6 +2287,294 @@ pub(crate) fn dispatch_pronounce(
                 outcome,
             }),
     )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingCreateFactionGate {
+    CountryMissing,
+    PlayerLevel,
+    RequiredGoods,
+    Money,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingCreateFactionResponse {
+    pub(crate) request_id: i64,
+    pub(crate) cookie: i32,
+    pub(crate) player_id: i32,
+    pub(crate) result: i32,
+    pub(crate) map_id: i32,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingCreateFactionOutcome {
+    EmptyName,
+    PlayerOffline,
+    GateRejected {
+        gate: OrganizingCreateFactionGate,
+        response: OrganizingCreateFactionResponse,
+    },
+    Creation {
+        outcome: FactionCreationOutcome,
+        response: OrganizingCreateFactionResponse,
+        notice: crate::worldserver::appworld::organizingsystem::organizingctrl::OrganizingInfoDelivery,
+        player_refreshed: bool,
+        faction_snapshot: Option<Result<bool, FactionClientSnapshotBlock>>,
+        all_factions_snapshot: Option<Result<bool, AllFactionInfoClientBlock>>,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum OrganizingCreateFactionBlock {
+    PlayerDecode(PlayerCodecError),
+    Creation(FactionCreationBlock),
+}
+
+#[derive(Debug)]
+pub(crate) struct OrganizingCreateFactionDispatch {
+    pub(crate) request_id: i64,
+    pub(crate) cookie: i32,
+    pub(crate) player_id: i32,
+    pub(crate) country: u8,
+    pub(crate) faction_name: Vec<u8>,
+    pub(crate) outcome: OrganizingCreateFactionOutcome,
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "границы один к одному соответствуют exact World owner-ам"
+)]
+pub(crate) async fn dispatch_create_faction(
+    message: &mut CMessage,
+    game: &mut CGame,
+    organizing: &mut COrganizingCtrl,
+    parameters: &COrganizingParam,
+    countries: &CCountryHandler,
+    registry: &GoodsBasePropertiesRegistry,
+    original_name_index: &GoodsOriginalNameIndex,
+    coefficients: &PlayerPropertyCoefficients,
+    rs_player: &mut TiberiusRsPlayer,
+    player_database: Option<&mut WorldTdsClient>,
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
+    faction_create_log_enabled: bool,
+    write_faction_create_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
+    update_player: &mut dyn FnMut(i32),
+) -> Option<Result<OrganizingCreateFactionDispatch, OrganizingCreateFactionBlock>> {
+    if message.message_type() != CREATE_FACTION_MESSAGE_TYPE {
+        return None;
+    }
+
+    let request_id = message.base_mut().get_long64().unwrap_or(0);
+    let cookie = message.base_mut().get_long().unwrap_or(0);
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let country = message.base_mut().get_byte().unwrap_or(0);
+    let mut faction_name = message.base_mut().get_str_bytes(20).unwrap_or_default();
+    if faction_name.is_empty() {
+        return Some(Ok(OrganizingCreateFactionDispatch {
+            request_id,
+            cookie,
+            player_id,
+            country,
+            faction_name,
+            outcome: OrganizingCreateFactionOutcome::EmptyName,
+        }));
+    }
+
+    let established_time = capture_local_tag_time();
+
+    let player_online = {
+        let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+        match game.decord_online_player_by_id(
+            player_id as u32,
+            source,
+            cursor,
+            registry,
+            coefficients,
+        ) {
+            Ok(player_online) => player_online,
+            Err(source) => {
+                return Some(Err(OrganizingCreateFactionBlock::PlayerDecode(source)));
+            }
+        }
+    };
+    if !player_online {
+        return Some(Ok(OrganizingCreateFactionDispatch {
+            request_id,
+            cookie,
+            player_id,
+            country,
+            faction_name,
+            outcome: OrganizingCreateFactionOutcome::PlayerOffline,
+        }));
+    }
+
+    let gate = if countries.get_country(country).is_none() {
+        Some(OrganizingCreateFactionGate::CountryMissing)
+    } else {
+        let player = game
+            .online_player_by_id(player_id as u32)
+            .expect("успешный Decord сохранил тот же online owner");
+        if i32::from(player.get_level()) < parameters.create_faction_player_level() {
+            Some(OrganizingCreateFactionGate::PlayerLevel)
+        } else {
+            let required_goods = legacy_c_string_prefix(parameters.create_faction_goods());
+            let has_required_goods = if required_goods == b"0" {
+                true
+            } else {
+                CString::new(required_goods).is_ok_and(|name| {
+                    player.check_goods_in_packet(
+                        Some(name.as_c_str()),
+                        original_name_index,
+                    ) > 0
+                })
+            };
+            if !has_required_goods {
+                Some(OrganizingCreateFactionGate::RequiredGoods)
+            } else if player.money() < parameters.create_faction_money() as u32 {
+                Some(OrganizingCreateFactionGate::Money)
+            } else {
+                None
+            }
+        }
+    };
+    let map_id = message.map_id();
+    if let Some(gate) = gate {
+        let response = send_create_faction_response(
+            game, map_id, request_id, cookie, player_id, 0,
+        );
+        return Some(Ok(OrganizingCreateFactionDispatch {
+            request_id,
+            cookie,
+            player_id,
+            country,
+            faction_name,
+            outcome: OrganizingCreateFactionOutcome::GateRejected { gate, response },
+        }));
+    }
+
+    let mut effects = WorldFactionCreationEffects {
+        game,
+        callbacks,
+        check_invalid_organizing_string,
+        persistent_name_exists: false,
+        faction_create_log_enabled,
+        write_faction_create_log,
+    };
+    let preparation = match organizing.prepare_faction_creation(
+        game,
+        player_id,
+        &mut faction_name,
+        &mut effects,
+    ) {
+        Ok(preparation) => preparation,
+        Err(source) => return Some(Err(OrganizingCreateFactionBlock::Creation(source))),
+    };
+    let creation = match preparation {
+        FactionCreationPreparation::Rejected(reason) => {
+            FactionCreationOutcome::Rejected(reason)
+        }
+        FactionCreationPreparation::ReadyForPersistentLookup => {
+            let persistent_name_exists = rs_player
+                .is_name_exist(legacy_c_string_prefix(&faction_name), player_database)
+                .await;
+            effects.persistent_name_exists = persistent_name_exists;
+            match organizing.finish_faction_creation(
+                game,
+                parameters,
+                player_id,
+                0,
+                established_time,
+                &faction_name,
+                country,
+                persistent_name_exists,
+                &mut effects,
+            ) {
+                Ok(outcome) => outcome,
+                Err(source) => {
+                    return Some(Err(OrganizingCreateFactionBlock::Creation(source)));
+                }
+            }
+        }
+    };
+    let (result, notice_id, created) = match &creation {
+        FactionCreationOutcome::Rejected(
+            crate::worldserver::appworld::organizingsystem::organizingctrl::FactionCreationRejection::NameExists,
+        ) => (0, b"WS0116".as_slice(), false),
+        FactionCreationOutcome::Rejected(_) => (0, b"WS0115".as_slice(), false),
+        FactionCreationOutcome::Created(_) => (1, b"WS0117".as_slice(), true),
+    };
+    let player_refreshed = if created {
+        update_player(player_id);
+        true
+    } else {
+        false
+    };
+    let faction_snapshot = created.then(|| {
+        organizing.add_faction_to_client_by_player_id(game, player_id)
+    });
+    let all_factions_snapshot = created.then(|| {
+        organizing.add_all_faction_info_to_client_by_player_id(game, player_id)
+    });
+    let response = send_create_faction_response(
+        game, map_id, request_id, cookie, player_id, result,
+    );
+    let first_text = (effects.callbacks.world_string)(notice_id);
+    let second_text = (effects.callbacks.world_string)(b"WS0118");
+    let notice = COrganizingCtrl::send_organizing_info_to_client(
+        game,
+        FactionMemberInfoRequest {
+            recipient_player_id: player_id,
+            first_text: legacy_c_string_prefix(&first_text),
+            second_text: legacy_c_string_prefix(&second_text),
+            information_type: map_id,
+            color: 0xFFDA_EDFE,
+            trailing_value: 0,
+        },
+    );
+    Some(Ok(OrganizingCreateFactionDispatch {
+        request_id,
+        cookie,
+        player_id,
+        country,
+        faction_name,
+        outcome: OrganizingCreateFactionOutcome::Creation {
+            outcome: creation,
+            response,
+            notice,
+            player_refreshed,
+            faction_snapshot,
+            all_factions_snapshot,
+        },
+    }))
+}
+
+fn send_create_faction_response(
+    game: &CGame,
+    map_id: i32,
+    request_id: i64,
+    cookie: i32,
+    player_id: i32,
+    result: i32,
+) -> OrganizingCreateFactionResponse {
+    let mut response = CMessage::new(CREATE_FACTION_RESPONSE_TYPE);
+    response.base_mut().add_long64(request_id);
+    response.base_mut().add_long(cookie);
+    response.base_mut().add_long(player_id);
+    response.base_mut().add_long(result);
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = game.send_msg_to_game_server(map_id, &response);
+    OrganizingCreateFactionResponse {
+        request_id,
+        cookie,
+        player_id,
+        result,
+        map_id,
+        wire,
+        delivery,
+    }
 }
 
 /// Узкая граница online-player owner-а для списка faction одной страны.
