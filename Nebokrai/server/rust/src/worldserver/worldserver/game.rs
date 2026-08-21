@@ -209,7 +209,8 @@
 //! `0x4FC01..=0x4FC03`, other honor, достигнутые organizing owner-ы вплоть до
 //! billboard `0x60125`, faction upgrade `0x60126`, upload-icon gate `0x60127`
 //! и contributor gate `0x60128`, faction-experience `0x60129`, а также
-//! member level/position callback `0x6012A` и city-tax gates `0x6012B/0x6012C`
+//! member level/position callback `0x6012A`, city-tax gates `0x6012B/0x6012C`
+//! и region-param broadcast `0x6012D`
 //! исполняются сразу. Остальные сообщения возвращаются owned вместе с
 //! выбранным сырым owner-ом и не выдаются за no-op исполнение. Session manager
 //! передаётся тому же
@@ -990,6 +991,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingFactionExperienceDispatch, OrganizingFactionMemberStateDispatch,
     OrganizingFactionTaxBlock, OrganizingFactionTaxDispatch, OrganizingFactionUpgradeBlock,
     OrganizingFactionUpgradeDispatch, OrganizingFactionUploadIconDispatch,
+    OrganizingRegionParamDispatch,
     OrganizingLeaveWordDispatch,
     OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEnableDispatch,
     OrganizingPronounceDispatch, OrganizingSessionResultDispatch,
@@ -1003,7 +1005,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     dispatch_faction_tax, dispatch_faction_upload_icon,
     dispatch_leave_word, dispatch_leave_word_edit,
     dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_pronounce,
-    dispatch_union_application,
+    dispatch_region_param_update, dispatch_union_application,
 };
 use crate::worldserver::appworld::message::servermessage::{
     WorldLoginClientReplacement, WorldServerMessageDispatch, WorldServerMessageError,
@@ -1960,6 +1962,12 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: Result<OrganizingFactionTaxDispatch, OrganizingFactionTaxBlock>,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingRegionParamUpdate {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: OrganizingRegionParamDispatch,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingUnionApplication {
@@ -4475,6 +4483,13 @@ pub(crate) enum WorldRegionNameLookup<'a> {
     RegionNotFound,
     NullRegionPointer,
     Name(&'a [u8]),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldRegionParamUpdateOutcome {
+    RegionNotFound,
+    NullRegionPointer,
+    Applied,
 }
 
 /// Минимальная достигнутая часть исходного `CGame::tagGameServer`.
@@ -10589,6 +10604,28 @@ impl CGame {
         self.regions.get(&region_id)
     }
 
+    /// Применяет три tax-поля к достигнутому `tagRegion::pRegion`.
+    pub(crate) fn set_region_param_from_game_server(
+        &mut self,
+        region_id: i32,
+        current_tax_rate: i32,
+        today_total_tax: u32,
+        total_tax: u32,
+    ) -> WorldRegionParamUpdateOutcome {
+        let Some(assignment) = self.regions.get_mut(&region_id) else {
+            return WorldRegionParamUpdateOutcome::RegionNotFound;
+        };
+        let Some(region) = assignment.region.as_mut() else {
+            return WorldRegionParamUpdateOutcome::NullRegionPointer;
+        };
+        region.base_mut().set_param_from_gs(
+            current_tax_rate,
+            today_total_tax,
+            total_tax,
+        );
+        WorldRegionParamUpdateOutcome::Applied
+    }
+
     /// Сериализует initial-config регионы в signed map-order и передаёт каждый
     /// элемент visitor-у до перехода к следующему узлу.
     pub(crate) fn visit_initial_region_snapshots<Visit>(
@@ -11527,6 +11564,45 @@ fn process_world_message(
             };
         }
         let game_server_sender = game.current_game_server_sender();
+        if let Some(outcome) = dispatch_region_param_update(
+            &mut message,
+            game,
+            game_server_sender.as_ref(),
+        ) {
+            let callbacks = WorldUnionApplicationEffectCallbacks {
+                random: &mut *application_callbacks.random,
+                world_string: &mut *application_callbacks.world_string,
+                format_world_string: &mut *application_callbacks.format_world_string,
+                put_war_log: &mut *application_callbacks.put_war_log,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
+            };
+            let mut effects = WorldUnionApplicationEffects::new(
+                game,
+                net_sessions,
+                application_runtime,
+                callbacks,
+            );
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingRegionParamUpdate {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
         let callbacks = WorldUnionApplicationEffectCallbacks {
             random: &mut *application_callbacks.random,
             world_string: &mut *application_callbacks.world_string,

@@ -2,7 +2,8 @@
 //! включая заявку союза `0x60118`, общий session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
-//! `0x6012A`, а также парные city-tax gate `0x6012B/0x6012C`; остальной owner —
+//! `0x6012A`, парные city-tax gate `0x6012B/0x6012C` и region-param update
+//! `0x6012D`; остальной owner —
 //! `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
@@ -105,6 +106,12 @@
 //! region)`; только true-result меняет type исходного сообщения на
 //! `0x7FE28/0x7FE29` соответственно и отправляет весь исходный payload в его
 //! socket. Online-player ownership и exact-tail checks отсутствуют.
+//! Exact `0x004A7F1F..0x004A7F89` для `0x6012D` читает `(region ID,
+//! today total tax, total tax, current tax rate)`, при существующем ненулевом
+//! `tagRegion::pRegion` переставляет последние три значения в сигнатуру
+//! `CWorldRegion::SetParamFromGS(current, today, total)`, меняет type исходного
+//! сообщения на `0x7FE2E` и вызывает общий `SendAll`. Оба miss являются
+//! no-op; исходный payload пересылается целиком, результат send игнорируется.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -171,7 +178,7 @@ use crate::worldserver::appworld::organizingsystem::union::{
 };
 use crate::worldserver::appworld::organizingsystem::villagewarsys::CVillageWarSys;
 use crate::worldserver::appworld::player::{PlayerCodecError, PlayerPropertyCoefficients};
-use crate::worldserver::worldserver::game::CGame;
+use crate::worldserver::worldserver::game::{CGame, WorldRegionParamUpdateOutcome};
 
 const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
     [0x60117, 0x60119, 0x60120, 0x60122, 0x60124, 0x60131];
@@ -196,6 +203,8 @@ const OPERATE_FACTION_TAX_MESSAGE_TYPE: i32 = 0x6012B;
 const OPERATE_FACTION_TAX_RESPONSE_TYPE: i32 = 0x7FE28;
 const ADJUST_FACTION_TAX_MESSAGE_TYPE: i32 = 0x6012C;
 const ADJUST_FACTION_TAX_RESPONSE_TYPE: i32 = 0x7FE29;
+const UPDATE_REGION_PARAM_MESSAGE_TYPE: i32 = 0x6012D;
+const UPDATE_REGION_PARAM_RESPONSE_TYPE: i32 = 0x7FE2E;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -1713,6 +1722,60 @@ fn send_faction_tax_notice<Context>(
         color: 0xFFDA_EDFE,
         trailing_value: 0,
     });
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingRegionParamBroadcast {
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingRegionParamDispatch {
+    pub(crate) region_id: i32,
+    pub(crate) today_total_tax: u32,
+    pub(crate) total_tax: u32,
+    pub(crate) current_tax_rate: i32,
+    pub(crate) region: WorldRegionParamUpdateOutcome,
+    pub(crate) broadcast: Option<OrganizingRegionParamBroadcast>,
+}
+
+/// Выполняет `0x6012D` и пересылает in-place `0x7FE2E` только после мутации.
+pub(crate) fn dispatch_region_param_update(
+    message: &mut CMessage,
+    game: &mut CGame,
+    sender: Option<&ServerCommandHandle>,
+) -> Option<OrganizingRegionParamDispatch> {
+    if message.message_type() != UPDATE_REGION_PARAM_MESSAGE_TYPE {
+        return None;
+    }
+
+    let region_id = message.base_mut().get_long().unwrap_or(0);
+    let today_total_tax = message.base_mut().get_long().unwrap_or(0) as u32;
+    let total_tax = message.base_mut().get_long().unwrap_or(0) as u32;
+    let current_tax_rate = message.base_mut().get_long().unwrap_or(0);
+    let region = game.set_region_param_from_game_server(
+        region_id,
+        current_tax_rate,
+        today_total_tax,
+        total_tax,
+    );
+    let broadcast = if region == WorldRegionParamUpdateOutcome::Applied {
+        message.set_message_type(UPDATE_REGION_PARAM_RESPONSE_TYPE);
+        let wire = message.as_wire_bytes().to_vec();
+        let delivery = message.send_all(sender);
+        Some(OrganizingRegionParamBroadcast { wire, delivery })
+    } else {
+        None
+    };
+    Some(OrganizingRegionParamDispatch {
+        region_id,
+        today_total_tax,
+        total_tax,
+        current_tax_rate,
+        region,
+        broadcast,
+    })
 }
 
 fn send_declare_war_faction_list_notice<Context>(
