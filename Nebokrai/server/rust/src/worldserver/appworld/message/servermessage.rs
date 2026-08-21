@@ -95,7 +95,9 @@
 //! через `PreciousBoxConf`, fairy exp, synthesis, equipment compose, new-skill
 //! monsters и goods-destroy до общего `CGlobeSetup + CRegionRouter` subtype
 //! `7`. `CLogSystem` затем сохраняет 64-байтный ABI snapshot и ordered signed
-//! item set в subtype `8`; следующая точная граница — `CCountryParam`.
+//! item set в subtype `8`. Уже восстановленный `CCountryParam` следом отправляет
+//! 39 scalar-полей и пять ordered map-секций subtype `0x18`; следующая точная
+//! граница — `CCountryHandler`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -180,6 +182,9 @@ use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};
 use crate::setup::tradelist::{CTradeList, TradeListSerializeError};
 use crate::worldserver::appworld::country::country::CountryKingSaveLimits;
+use crate::worldserver::appworld::country::countryparam::{
+    CCountryParam, CountryParamSerializationBlock,
+};
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsRegistrySerializeError, serialize_goods_registry,
@@ -564,6 +569,20 @@ pub(crate) enum WorldLogSystemConfigurationCompletion {
 pub(crate) struct WorldLogSystemConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldLogSystemConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после `CCountryParam`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldCountryParamConfigurationCompletion {
+    CountryParam(CountryParamSerializationBlock),
+    CountryHandlerConfigurationPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/0x18` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldCountryParamConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldCountryParamConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1612,6 +1631,34 @@ pub(crate) fn continue_game_server_log_system_configuration(
             &payload,
         )),
         completion: WorldLogSystemConfigurationCompletion::CountryParamConfigurationPending {
+            socket_id,
+        },
+    }
+}
+
+/// Кодирует и отправляет точный `CCountryParam` initial-config packet.
+pub(crate) fn continue_game_server_country_param_configuration(
+    game: &CGame,
+    socket_id: i32,
+    country_param: &CCountryParam,
+) -> WorldCountryParamConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = country_param.add_to_byte_array(&mut payload) {
+        return WorldCountryParamConfigurationReport {
+            delivery: None,
+            completion: WorldCountryParamConfigurationCompletion::CountryParam(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldCountryParamConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x18,
+            &payload,
+        )),
+        completion: WorldCountryParamConfigurationCompletion::CountryHandlerConfigurationPending {
             socket_id,
         },
     }
