@@ -1,5 +1,6 @@
 //! Статус корпуса: `IMPLEMENTED_PARTIAL` для достигнутых organizing opcode,
-//! включая заявку союза `0x60118`, общий session-result dispatch, billboard
+//! включая список фракций страны `0x60107`, заявку союза `0x60118`, общий
+//! session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
 //! `0x6012A`, парные city-tax gate `0x6012B/0x6012C` и region-param update
@@ -16,6 +17,14 @@
 //!
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
 //! `OnOrgasysMessage` RVA `0x000A6110`. Exact диапазоны
+//! `0x004A66DC..0x004A69A4` восстанавливают `0x60107`: запрос читает
+//! `(request ID, cookie, player ID, page)`, берёт country только у online
+//! player-а, считает faction этой страны и отвечает `0x7FE07`. Нулевой список
+//! предваряется `WS0120/WS0119`; успешный ответ добавляет исходную page,
+//! текущую apply-faction игрока и exact payload `AddFactionListToByteArray`.
+//! Страница вне signed wrapping-границы ответа не получает. Проверки route,
+//! exact-tail и batch-map отправка старого Linux-донора в EXE отсутствуют.
+//! Exact диапазоны
 //! `0x004A74C6..0x004A7509` и `0x004A7511..0x004A7543` исправляют повреждённый
 //! RAW. Общий branch читает
 //! `GetLONG64`, `GetLong`, именно `GetChar`, затем `GetLong`, то есть
@@ -297,6 +306,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     CityTransferSessionBlock, CityTransferSessionReport, CityTransferSessionRequest,
     CityTransferSessionRuntime, CityTransferStartBlock, CityTransferStartOutcome,
     CityTransferTerminal, DeclareWarFactionPage, DeclareWarFactionPageBlock,
+    ApplyFactionLookup, FactionCountryCountBlock, FactionListPage, FactionListPageBlock,
     FactionMasterLookupBlock, FreeFactionLookup, FreePlayerLookup,
     FactionBillboardStatBlock,
     OrganizingContributorBlock, OrganizingContributorOutcome,
@@ -332,6 +342,8 @@ use crate::worldserver::worldserver::game::{
 
 const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
     [0x60117, 0x60119, 0x60120, 0x60122, 0x60124, 0x60131];
+const FACTION_LIST_MESSAGE_TYPE: i32 = 0x60107;
+const FACTION_LIST_RESPONSE_TYPE: i32 = 0x7FE07;
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
@@ -750,6 +762,14 @@ impl FactionOrganizingInfoContext for WorldUnionApplicationEffects<'_> {
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
         let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+impl FactionApplicationListContext for WorldUnionApplicationEffects<'_> {
+    fn online_player_country(&self, player_id: i32) -> Option<Option<u8>> {
+        self.game
+            .online_player_by_id(player_id as u32)
+            .map(|player| player.country())
     }
 }
 
@@ -1182,6 +1202,154 @@ pub(crate) fn dispatch_pronounce(
                 outcome,
             }),
     )
+}
+
+/// Узкая граница online-player owner-а для списка faction одной страны.
+pub(crate) trait FactionApplicationListContext: FactionOrganizingInfoContext {
+    /// `None` означает offline miss, внутренний `None` — ещё не
+    /// материализованный country найденного player-owner-а.
+    fn online_player_country(&self, player_id: i32) -> Option<Option<u8>>;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionListResponse {
+    pub(crate) socket_id: i32,
+    pub(crate) total_factions: i32,
+    pub(crate) included_page: Option<i32>,
+    pub(crate) applied_faction_id: Option<i32>,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionListOutcome {
+    PlayerOffline,
+    Empty {
+        country: u8,
+        response: OrganizingFactionListResponse,
+    },
+    PageOutsideRange {
+        country: u8,
+        total_factions: i32,
+        page: i32,
+    },
+    Page {
+        country: u8,
+        page: FactionListPage,
+        applied_faction_id: i32,
+        response: OrganizingFactionListResponse,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionListBlock {
+    PlayerCountry { player_id: i32 },
+    Count(FactionCountryCountBlock),
+    ApplyList { map_key: i32 },
+    Page(FactionListPageBlock),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionListDispatch {
+    pub(crate) request_id: i64,
+    pub(crate) cookie: i32,
+    pub(crate) player_id: i32,
+    pub(crate) page: i32,
+    pub(crate) outcome: OrganizingFactionListOutcome,
+}
+
+/// Выполняет exact `0x60107` и строит socket-response `0x7FE07`.
+pub(crate) fn dispatch_faction_list<Context>(
+    message: &mut CMessage,
+    organizing: &COrganizingCtrl,
+    context: &mut Context,
+    sender: Option<&ServerCommandHandle>,
+) -> Option<Result<OrganizingFactionListDispatch, OrganizingFactionListBlock>>
+where
+    Context: FactionApplicationListContext,
+{
+    if message.message_type() != FACTION_LIST_MESSAGE_TYPE {
+        return None;
+    }
+
+    let socket_id = message.socket_id();
+    let request_id = message.base_mut().get_long64().unwrap_or(0);
+    let cookie = message.base_mut().get_long().unwrap_or(0);
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let page = message.base_mut().get_long().unwrap_or(0);
+    let outcome = match context.online_player_country(player_id) {
+        None => OrganizingFactionListOutcome::PlayerOffline,
+        Some(None) => {
+            return Some(Err(OrganizingFactionListBlock::PlayerCountry {
+                player_id,
+            }));
+        }
+        Some(Some(country)) => {
+            let total_factions = match organizing.faction_count_by_country(country) {
+                Ok(total_factions) => total_factions,
+                Err(block) => return Some(Err(OrganizingFactionListBlock::Count(block))),
+            };
+            if total_factions == 0 {
+                send_faction_list_empty_notice(context, player_id);
+                OrganizingFactionListOutcome::Empty {
+                    country,
+                    response: send_faction_list_response(
+                        sender, socket_id, player_id, 0, request_id, cookie, None,
+                    ),
+                }
+            } else {
+                let start = page.wrapping_mul(11).wrapping_sub(11);
+                if start >= total_factions {
+                    OrganizingFactionListOutcome::PageOutsideRange {
+                        country,
+                        total_factions,
+                        page,
+                    }
+                } else {
+                    let applied_faction_id = match organizing
+                        .faction_by_player_in_apply_list(player_id)
+                    {
+                        ApplyFactionLookup::NoFaction => 0,
+                        ApplyFactionLookup::Faction(faction_id) => faction_id,
+                        ApplyFactionLookup::BlockedNullFaction { map_key } => {
+                            return Some(Err(OrganizingFactionListBlock::ApplyList {
+                                map_key,
+                            }));
+                        }
+                    };
+                    let page_data = match organizing.faction_list_page(page, country) {
+                        Ok(page_data) => page_data,
+                        Err(block) => {
+                            return Some(Err(OrganizingFactionListBlock::Page(block)));
+                        }
+                    };
+                    let response = send_faction_list_response(
+                        sender,
+                        socket_id,
+                        player_id,
+                        total_factions,
+                        request_id,
+                        cookie,
+                        Some((page, applied_faction_id, &page_data)),
+                    );
+                    OrganizingFactionListOutcome::Page {
+                        country,
+                        page: page_data,
+                        applied_faction_id,
+                        response,
+                    }
+                }
+            }
+        }
+    };
+
+    Some(Ok(OrganizingFactionListDispatch {
+        request_id,
+        cookie,
+        player_id,
+        page,
+        outcome,
+    }))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4407,6 +4575,53 @@ fn send_declare_war_faction_list_notice<Context>(
         color: 0xFFDA_EDFE,
         trailing_value: 0,
     });
+}
+
+fn send_faction_list_empty_notice<Context>(context: &mut Context, player_id: i32)
+where
+    Context: FactionOrganizingInfoContext,
+{
+    let first_text = context.world_string(b"WS0120").unwrap_or_default();
+    let second_text = context.world_string(b"WS0119").unwrap_or_default();
+    context.send_organizing_info(FactionMemberInfoRequest {
+        recipient_player_id: player_id,
+        first_text: legacy_c_string_prefix(&first_text),
+        second_text: legacy_c_string_prefix(&second_text),
+        information_type: -1,
+        color: 0xFFDA_EDFE,
+        trailing_value: 0,
+    });
+}
+
+fn send_faction_list_response(
+    sender: Option<&ServerCommandHandle>,
+    socket_id: i32,
+    player_id: i32,
+    total_factions: i32,
+    request_id: i64,
+    cookie: i32,
+    page: Option<(i32, i32, &FactionListPage)>,
+) -> OrganizingFactionListResponse {
+    let mut response = CMessage::new(FACTION_LIST_RESPONSE_TYPE);
+    response.base_mut().add_long(player_id);
+    response.base_mut().add_long(total_factions);
+    response.base_mut().add_long64(request_id);
+    response.base_mut().add_long(cookie);
+    if let Some((requested_page, applied_faction_id, page_data)) = page {
+        response.base_mut().add_long(requested_page);
+        response.base_mut().add_long(applied_faction_id);
+        response.base_mut().add(&page_data.payload);
+    }
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = response.send_to_socket(sender, socket_id);
+    OrganizingFactionListResponse {
+        socket_id,
+        total_factions,
+        included_page: page.map(|(requested_page, _, _)| requested_page),
+        applied_faction_id: page.map(|(_, applied_faction_id, _)| applied_faction_id),
+        wire,
+        delivery,
+    }
 }
 
 fn send_declare_war_faction_list_response(
