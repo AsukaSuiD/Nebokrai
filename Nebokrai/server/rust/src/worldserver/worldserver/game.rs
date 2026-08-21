@@ -4451,6 +4451,16 @@ impl CGame {
             .map(Vec::as_slice)
     }
 
+    /// Nullable raw owner начального пакета function-list subtype `0x0A`.
+    pub(crate) fn function_list_file_data(&self) -> Option<&[u8]> {
+        self.function_list_file_data.as_deref()
+    }
+
+    /// Nullable raw owner начального пакета variable-list subtype `0x0B`.
+    pub(crate) fn variable_list_file_data(&self) -> Option<&[u8]> {
+        self.variable_list_file_data.as_deref()
+    }
+
     /// Загружает один script и заменяет прежний owner с тем же normalized key.
     pub(crate) fn load_one_script<Context: WorldReloadContext + ?Sized>(
         &mut self,

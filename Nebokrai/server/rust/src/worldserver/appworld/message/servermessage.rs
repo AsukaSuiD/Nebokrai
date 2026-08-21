@@ -110,8 +110,10 @@
 //! пары region/duplicate-region subtype `0x1A`. `HonorElimilateConfig` затем
 //! отправляет два signed scalar-а subtype `0x26`. Четыре history-среза
 //! `CHonorRanks` идут subtype `0x27..0x2A`; total-пакет сохраняет отдельный
-//! positional ноль перед тем же rank payload. Следующая граница — nullable
-//! function-list file-data subtype `10`.
+//! positional ноль перед тем же rank payload. Nullable function/variable
+//! file-data следуют subtype `10/11` как `signed size + exact raw bytes`, без
+//! C-string преобразования. Следующая граница — nullable general variable-list
+//! subtype `12`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -719,6 +721,40 @@ pub(crate) enum WorldHonorRanksConfigurationCompletion {
 pub(crate) struct WorldHonorRanksConfigurationReport {
     pub(crate) deliveries: Vec<WorldHonorRanksConfigurationDelivery>,
     pub(crate) completion: WorldHonorRanksConfigurationCompletion,
+}
+
+/// Один из двух nullable raw script-list owners.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldRawScriptListKind {
+    Function,
+    Variable,
+}
+
+/// Невозможный для исходного signed `long` размер файла.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldRawScriptListConfigurationBlock {
+    pub(crate) kind: WorldRawScriptListKind,
+    pub(crate) length: usize,
+}
+
+/// Одна реально состоявшаяся nullable-отправка subtype `0x0A/0x0B`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldRawScriptListConfigurationDelivery {
+    pub(crate) kind: WorldRawScriptListKind,
+    pub(crate) delivery: WorldInitialConfigurationDelivery,
+}
+
+/// Следующая позиция ветки после function/variable raw file-data.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldRawScriptListsConfigurationCompletion {
+    FileSize(WorldRawScriptListConfigurationBlock),
+    GeneralVariableListPending { socket_id: i32 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldRawScriptListsConfigurationReport {
+    pub(crate) deliveries: Vec<WorldRawScriptListConfigurationDelivery>,
+    pub(crate) completion: WorldRawScriptListsConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -2047,6 +2083,63 @@ pub(crate) fn continue_game_server_honor_ranks_configuration(
     WorldHonorRanksConfigurationReport {
         deliveries,
         completion: WorldHonorRanksConfigurationCompletion::FunctionListPending { socket_id },
+    }
+}
+
+/// Отправляет nullable function/variable file-data без C-string преобразования.
+pub(crate) fn continue_game_server_raw_script_lists_configuration(
+    game: &CGame,
+    socket_id: i32,
+) -> WorldRawScriptListsConfigurationReport {
+    let sender = game.current_game_server_sender();
+    let mut deliveries = Vec::with_capacity(2);
+    for (kind, subtype, data) in [
+        (
+            WorldRawScriptListKind::Function,
+            0x0A,
+            game.function_list_file_data(),
+        ),
+        (
+            WorldRawScriptListKind::Variable,
+            0x0B,
+            game.variable_list_file_data(),
+        ),
+    ] {
+        let Some(data) = data else { continue };
+        let length = match i32::try_from(data.len()) {
+            Ok(length) => length,
+            Err(_) => {
+                return WorldRawScriptListsConfigurationReport {
+                    deliveries,
+                    completion: WorldRawScriptListsConfigurationCompletion::FileSize(
+                        WorldRawScriptListConfigurationBlock {
+                            kind,
+                            length: data.len(),
+                        },
+                    ),
+                };
+            }
+        };
+        let mut message = CMessage::new(0x0007_F801);
+        message.base_mut().add_long(subtype);
+        message.base_mut().add_long(length);
+        message.base_mut().add(data);
+        deliveries.push(WorldRawScriptListConfigurationDelivery {
+            kind,
+            delivery: WorldInitialConfigurationDelivery {
+                subtype,
+                payload_length: data.len() + 4,
+                target: WorldInitialConfigurationTarget::Socket(socket_id),
+                delivery: message.send_to_socket(sender.as_ref(), socket_id),
+            },
+        });
+    }
+
+    WorldRawScriptListsConfigurationReport {
+        deliveries,
+        completion: WorldRawScriptListsConfigurationCompletion::GeneralVariableListPending {
+            socket_id,
+        },
     }
 }
 
