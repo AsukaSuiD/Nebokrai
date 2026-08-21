@@ -207,9 +207,10 @@
 //! сохраняют `g_lGSMessageTime/g_lLSMessageTime`. Обычный `CMessage::Run`
 //! выполняет точный numeric selector; готовые ветви server-owner
 //! `0x4FC01..=0x4FC03`, other honor, достигнутые organizing owner-ы вплоть до
-//! billboard `0x60125` и faction upgrade `0x60126` исполняются сразу, а
-//! остальные сообщения возвращаются owned вместе с выбранным сырым owner-ом
-//! и не выдаются за no-op исполнение. Session manager передаётся тому же
+//! billboard `0x60125`, faction upgrade `0x60126` и upload-icon gate `0x60127`
+//! исполняются сразу, а остальные сообщения возвращаются owned вместе с
+//! выбранным сырым owner-ом и не выдаются за no-op исполнение. Session manager
+//! передаётся тому же
 //! `ProcessMessage` явно вместо
 //! process-global singleton-а; cookie/result и terminal removal остаются у
 //! уже восстановленного manager-owner-а.
@@ -984,7 +985,8 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingDeclareFactionWarDispatch, OrganizingDeclareWarFactionListBlock,
     OrganizingDeclareWarFactionListDispatch, OrganizingFactionBillboardBlock,
     OrganizingFactionBillboardOutcome, OrganizingFactionUpgradeBlock,
-    OrganizingFactionUpgradeDispatch, OrganizingLeaveWordDispatch,
+    OrganizingFactionUpgradeDispatch, OrganizingFactionUploadIconDispatch,
+    OrganizingLeaveWordDispatch,
     OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEnableDispatch,
     OrganizingPronounceDispatch, OrganizingSessionResultDispatch,
     OrganizingUnionApplicationDispatch,
@@ -993,7 +995,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects,
     WorldUnionApplicationRuntimeOwner, dispatch_consumed_long, dispatch_declare_faction_war,
     dispatch_declare_war_faction_list, dispatch_faction_billboard, dispatch_faction_upgrade,
-    dispatch_leave_word, dispatch_leave_word_edit,
+    dispatch_faction_upload_icon, dispatch_leave_word, dispatch_leave_word_edit,
     dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_pronounce,
     dispatch_union_application,
 };
@@ -1001,7 +1003,7 @@ use crate::worldserver::appworld::message::servermessage::{
     WorldLoginClientReplacement, WorldServerMessageDispatch, WorldServerMessageError,
     WorldServerMessageOutcome, on_login_client_reconnected, on_server_message,
 };
-use crate::worldserver::appworld::organizingsystem::faction::CFaction;
+use crate::worldserver::appworld::organizingsystem::faction::{CFaction, FactionUploadIconBlock};
 use crate::worldserver::appworld::organizingsystem::factionwarsys::{
     CFactionWarSys, FactionWarRunReport, FactionWarStopBlock, FactionWarStopContext,
 };
@@ -1917,6 +1919,12 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: Result<OrganizingFactionUpgradeDispatch, OrganizingFactionUpgradeBlock>,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingFactionUploadIcon {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<OrganizingFactionUploadIconDispatch, FactionUploadIconBlock>,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingUnionApplication {
@@ -11263,6 +11271,43 @@ fn process_world_message(
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingFactionUpgrade {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        if let Some(outcome) = dispatch_faction_upload_icon(
+            &mut message,
+            game,
+            organizing,
+            organizing_parameters,
+            application_callbacks,
+        ) {
+            let callbacks = WorldUnionApplicationEffectCallbacks {
+                random: &mut *application_callbacks.random,
+                world_string: &mut *application_callbacks.world_string,
+                format_world_string: &mut *application_callbacks.format_world_string,
+                put_war_log: &mut *application_callbacks.put_war_log,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
+            };
+            let mut effects = WorldUnionApplicationEffects::new(
+                game,
+                net_sessions,
+                application_runtime,
+                callbacks,
+            );
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingFactionUploadIcon {
                 source,
                 legacy_run_result,
                 outcome,

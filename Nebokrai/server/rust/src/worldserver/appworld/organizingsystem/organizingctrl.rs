@@ -281,7 +281,8 @@ use super::faction::{
     FactionOwnedCityRefreshReport, FactionOwnedCityUpdateBuildError, FactionPlayerHeaderContext,
     FactionPronounceBlock, FactionPronounceOutcome, FactionPropertyDelivery,
     FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome, FactionSuperiorOrganizingBlock,
-    FactionUpgradeBlock, FactionUpgradeContext, FactionUpgradeOutcome,
+    FactionUpgradeBlock, FactionUpgradeContext, FactionUpgradeOutcome, FactionUploadIconBlock,
+    FactionUploadIconContext, FactionUploadIconOutcome,
     MemberEnterOutcome, MemberExitOutcome, OwnedCityMutationBuildError,
 };
 use super::factionwarsys::{
@@ -1228,6 +1229,26 @@ impl COrganizingCtrl {
         };
         faction
             .upgrade(game, parameters, player_id, context)
+            .map(Some)
+    }
+
+    /// Повторно разрешает faction перед уже восстановленным `CFaction::UploadIcon`.
+    pub(crate) fn upload_faction_icon<Context>(
+        &mut self,
+        parameters: &COrganizingParam,
+        faction_id: i32,
+        player_id: i32,
+        time: &TagTimeValue,
+        context: &mut Context,
+    ) -> Result<Option<FactionUploadIconOutcome>, FactionUploadIconBlock>
+    where
+        Context: FactionUploadIconContext,
+    {
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return Ok(None);
+        };
+        faction
+            .upload_icon(parameters, player_id, time, context)
             .map(Some)
     }
 

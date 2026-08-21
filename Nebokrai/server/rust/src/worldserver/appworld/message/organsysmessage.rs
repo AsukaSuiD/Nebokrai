@@ -1,7 +1,7 @@
 //! Статус корпуса: `IMPLEMENTED_PARTIAL` для достигнутых organizing opcode,
 //! включая заявку союза `0x60118`, общий session-result dispatch, billboard
-//! `0x60125` и улучшение фракции `0x60126`; остальной owner —
-//! `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `0x60125`, улучшение фракции `0x60126` и запрос значка `0x60127`;
+//! остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
@@ -45,7 +45,7 @@
 //! `CFactionWarSys::DigUpTheHatchet` и отправляет `0x7FE19`. Стоимость войны
 //! попадает в ответ только при истинном результате; сам WorldServer её здесь
 //! не списывает.
-//! Exact `0x004A7976..0x004A7B19` для `0x60125` при первом входе лениво и
+//! Exact `0x004A812D..0x004A82C8` для `0x60125` при первом входе лениво и
 //! навсегда локализует `WS0134/WS0133/WS0132`, затем читает `(request ID,
 //! billboard type)`. Значение выше `2` не получает ответа. Для `0/1/2`
 //! строится socket-response `0x7FE1D`: request ID, соответствующий C-string
@@ -55,7 +55,7 @@
 //! `2` — offense; defense недостижим. Отрицательный type исходник не отсекал
 //! и индексировал память перед process-static массивом; Rust останавливает
 //! этот внутренний out-of-bounds как локальный `BLOCKED_MISSING_FACT`.
-//! Exact `0x004A7B1E..0x004A7BA3` для `0x60126` читает `(faction ID,
+//! Exact `0x004A799C..0x004A79FE` для `0x60126` читает `(faction ID,
 //! player ID)`, ищет online player, декодирует в него полный snapshot с
 //! текущего message cursor и только затем повторно разрешает faction. При
 //! non-null faction вызывается virtual slot `+0x50`, то есть уже
@@ -63,6 +63,13 @@
 //! bool-result игнорируется и wire-ответ не формируется. Приведение к `char`
 //! в RAW было артефактом декомпиляции. Дополнительных ownership/tail-проверок
 //! старого Linux-донора в EXE нет, поэтому они не перенесены.
+//! Exact `0x004A7A03..0x004A7A78` для `0x60127` читает `(faction ID,
+//! player ID)`, дважды выполняет nullable faction lookup, а между успешными
+//! lookup снимает один полный local `tagTime`. Затем virtual slot `+0x54`
+//! вызывает готовый `CFaction::UploadIcon(player ID, &time)`. Online-player
+//! lookup, payload decoder и wire-ответ отсутствуют; сам `UploadIcon` время не
+//! читает и реализует только master/property/interval gate. Добавленные старым
+//! Linux-донором ownership и exact-tail проверки поэтому не переносятся.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -96,7 +103,8 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
 use crate::worldserver::appworld::organizingsystem::faction::{
     FactionLevelContext, FactionMemberInfoRequest, FactionOrganizingInfoContext,
     FactionUpgradeBlock, FactionUpgradeContext, FactionUpgradeFormatArgument,
-    FactionUpgradeOutcome,
+    FactionUpgradeOutcome, FactionUploadIconBlock, FactionUploadIconContext,
+    FactionUploadIconOutcome,
 };
 use crate::worldserver::appworld::organizingsystem::factionwarsys::{
     CFactionWarSys, FactionWarDeclarationBlock, FactionWarDeclarationOutcome,
@@ -136,6 +144,7 @@ const CONSUMED_LONG_MESSAGE_TYPES: [i32; 2] = [0x60121, 0x60123];
 const FACTION_BILLBOARD_MESSAGE_TYPE: i32 = 0x60125;
 const FACTION_BILLBOARD_RESPONSE_TYPE: i32 = 0x7FE1D;
 const UPGRADE_FACTION_MESSAGE_TYPE: i32 = 0x60126;
+const UPLOAD_FACTION_ICON_MESSAGE_TYPE: i32 = 0x60127;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -443,6 +452,35 @@ impl FactionUpgradeContext for WorldFactionUpgradeEffects<'_, '_, '_, '_> {
     }
 }
 
+/// Узкий string/player adapter для готового `CFaction::UploadIcon`.
+struct WorldFactionUploadIconEffects<'game, 'callbacks, 'effects> {
+    game: &'game CGame,
+    callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
+}
+
+impl FactionOrganizingInfoContext for WorldFactionUploadIconEffects<'_, '_, '_> {
+    fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
+        Some((self.callbacks.world_string)(string_id))
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+impl FactionUploadIconContext for WorldFactionUploadIconEffects<'_, '_, '_> {
+    fn format_upload_icon_interval(
+        &mut self,
+        string_id: &'static [u8],
+        interval_minutes: i32,
+    ) -> Vec<u8> {
+        (self.callbacks.format_world_string)(
+            string_id,
+            &[UnionFormatArgument::Signed(interval_minutes)],
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OrganizingSessionResultDispatch {
     NotHandled,
@@ -565,6 +603,20 @@ pub(crate) struct OrganizingLeaveWordDispatch {
     pub(crate) outcome: OrganizingLeaveWordOutcome,
 }
 
+fn capture_local_tag_time() -> TagTimeValue {
+    let local_time = TagTime::local_now();
+    TagTimeValue {
+        year: local_time.year,
+        month: local_time.month,
+        day_of_week: local_time.day_of_week,
+        day: local_time.day,
+        hour: local_time.hour,
+        minute: local_time.minute,
+        second: local_time.second,
+        milliseconds: local_time.milliseconds,
+    }
+}
+
 /// Выполняет `0x6011B`: bounded C-string, player membership и `LeaveWord`.
 pub(crate) fn dispatch_leave_word(
     message: &mut CMessage,
@@ -580,17 +632,7 @@ pub(crate) fn dispatch_leave_word(
         .get_str_bytes(LEAVE_WORD_INPUT_CAPACITY)
         .unwrap_or_default();
     let player_id = message.base_mut().get_long().unwrap_or(0);
-    let local_time = TagTime::local_now();
-    let time = TagTimeValue {
-        year: local_time.year,
-        month: local_time.month,
-        day_of_week: local_time.day_of_week,
-        day: local_time.day,
-        hour: local_time.hour,
-        minute: local_time.minute,
-        second: local_time.second,
-        milliseconds: local_time.milliseconds,
-    };
+    let time = capture_local_tag_time();
     Some(
         organizing
             .leave_word_for_player(game, player_id, &mut content, time)
@@ -656,17 +698,7 @@ pub(crate) fn dispatch_pronounce(
         .get_str_bytes(PRONOUNCE_INPUT_CAPACITY)
         .unwrap_or_default();
     let player_id = message.base_mut().get_long().unwrap_or(0);
-    let local_time = TagTime::local_now();
-    let time = TagTimeValue {
-        year: local_time.year,
-        month: local_time.month,
-        day_of_week: local_time.day_of_week,
-        day: local_time.day,
-        hour: local_time.hour,
-        minute: local_time.minute,
-        second: local_time.second,
-        milliseconds: local_time.milliseconds,
-    };
+    let time = capture_local_tag_time();
     Some(
         organizing
             .pronounce_for_player(game, player_id, &mut content, time)
@@ -1185,6 +1217,65 @@ pub(crate) fn dispatch_faction_upgrade(
     };
 
     Some(Ok(OrganizingFactionUpgradeDispatch {
+        faction_id,
+        player_id,
+        outcome,
+    }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionUploadIconOutcome {
+    FactionMissing,
+    UploadIcon {
+        time: TagTimeValue,
+        outcome: FactionUploadIconOutcome,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionUploadIconDispatch {
+    pub(crate) faction_id: i32,
+    pub(crate) player_id: i32,
+    pub(crate) outcome: OrganizingFactionUploadIconOutcome,
+}
+
+/// Выполняет `0x60127`: два faction lookup и local-time перед `UploadIcon`.
+pub(crate) fn dispatch_faction_upload_icon(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    parameters: &COrganizingParam,
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+) -> Option<Result<OrganizingFactionUploadIconDispatch, FactionUploadIconBlock>> {
+    if message.message_type() != UPLOAD_FACTION_ICON_MESSAGE_TYPE {
+        return None;
+    }
+
+    let faction_id = message.base_mut().get_long().unwrap_or(0);
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    if organizing.faction_by_id(faction_id).is_none() {
+        return Some(Ok(OrganizingFactionUploadIconDispatch {
+            faction_id,
+            player_id,
+            outcome: OrganizingFactionUploadIconOutcome::FactionMissing,
+        }));
+    }
+
+    let time = capture_local_tag_time();
+    let mut effects = WorldFactionUploadIconEffects { game, callbacks };
+    let outcome = match organizing.upload_faction_icon(
+        parameters,
+        faction_id,
+        player_id,
+        &time,
+        &mut effects,
+    ) {
+        Ok(Some(outcome)) => OrganizingFactionUploadIconOutcome::UploadIcon { time, outcome },
+        Ok(None) => OrganizingFactionUploadIconOutcome::FactionMissing,
+        Err(source) => return Some(Err(source)),
+    };
+
+    Some(Ok(OrganizingFactionUploadIconDispatch {
         faction_id,
         player_id,
         outcome,
