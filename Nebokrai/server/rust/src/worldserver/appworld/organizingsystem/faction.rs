@@ -6,6 +6,7 @@
 //! `GetPronounceData` RVA
 //! `0x000B4CA0`, `SetGoodsWarCount` RVA `0x000B4D70`,
 //! `UpdatePronounceToClient` RVA `0x000B56C0`,
+//! `UpdateLeaveWordToClient/EditLeaveWord` RVA `0x000B6240/0x000B6790`,
 //! `SendInfoToAllMember/UpdateOtherFacInfoToClient` RVA
 //! `0x000B5890/0x000B58F0`,
 //! `Talk` RVA `0x000B5A50`,
@@ -366,6 +367,16 @@
 //! аргумент тот owner не использует: фактический цвет остаётся `0xFFDAEDFE`.
 //! Exact ASM `0x004B7030..0x004B86C8` подтверждает offsets, пары ID и порядок;
 //! общая Rust-реализация заменяет шесть копий одной технической процедуры.
+//! `UpdateLeaveWordToClient` для `OP_Delete` шлёт переданный ID, но жёсткий
+//! operator `0`; для любого другого operator игнорирует переданный ID и шлёт
+//! последний leave-word как `operator, id, player, name\0, content\0, time`.
+//! Обе ветки используют `0x7FE0F` и общий online/GameServer/faction-data фильтр.
+//! `EditLeaveWord` проверяет feature и `PV_EditLeaveWord`, ищет ID в list-order,
+//! удаляет его, публикует delete и ставит dirty-бит `4`; объявленный operator
+//! не читается. Exact ASM `0x004B6240..0x004B644C` и
+//! `0x004B6790..0x004B6823` подтверждает порядок и донорские расхождения.
+//! Чтение sentinel-а при пустом non-delete list и выход за fixed C-строки
+//! заменены typed-границами.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -384,6 +395,7 @@ use crate::worldserver::worldserver::game::{CGame, WorldRegionNameLookup};
 
 const MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0D;
 const PRONOUNCE_UPDATE_MESSAGE_TYPE: i32 = 0x7FE10;
+const LEAVE_WORD_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0F;
 const OTHER_FACTION_UPDATE_MESSAGE_TYPE: i32 = 0x7FE15;
 const FACTION_TALK_MESSAGE_TYPE: i32 = 0x7FA02;
 const FACTION_TALK_CHANNEL: i32 = 400;
@@ -608,6 +620,34 @@ pub(crate) struct FactionPronounceDelivery {
     pub(crate) recipient_player_id: i32,
     pub(crate) game_server_id: i32,
     pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionLeaveWordDelivery {
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionLeaveWordUpdateBuildError {
+    MissingLastLeaveWord,
+    Recipient {
+        source: UnterminatedLeaveWordField,
+        recipient_player_id: i32,
+        game_server_id: i32,
+        completed_deliveries: Vec<FactionLeaveWordDelivery>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionEditLeaveWordOutcome {
+    FunctionDisabled,
+    PermissionDenied,
+    LeaveWordNotFound,
+    Deleted {
+        deliveries: Result<Vec<FactionLeaveWordDelivery>, FactionLeaveWordUpdateBuildError>,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -2247,6 +2287,104 @@ impl CFaction {
         Ok(deliveries)
     }
 
+    /// Публикует удаление по переданному ID либо последний leave-word целиком.
+    pub(crate) fn update_leave_word_to_client(
+        &self,
+        game: &CGame,
+        leave_word_id: i32,
+        operator: EOperator,
+    ) -> Result<Vec<FactionLeaveWordDelivery>, FactionLeaveWordUpdateBuildError> {
+        let leave_word = if operator == EOperator::Delete {
+            None
+        } else {
+            self.leave_words.back()
+        };
+
+        let mut deliveries = Vec::new();
+        for &recipient_player_id in self.members.keys() {
+            let player = game.online_player_by_id(recipient_player_id as u32);
+            let game_server_id = game.game_server_number_by_player_id(recipient_player_id);
+            if player.is_none_or(|player| !player.faction_data_received()) || game_server_id == 0 {
+                continue;
+            }
+
+            let mut message = CMessage::new(LEAVE_WORD_UPDATE_MESSAGE_TYPE);
+            message.base_mut().add_long(recipient_player_id);
+            if operator != EOperator::Delete {
+                let Some(leave_word) = leave_word else {
+                    return Err(FactionLeaveWordUpdateBuildError::MissingLastLeaveWord);
+                };
+                message.base_mut().add_long(operator.wire_value());
+                message.base_mut().add_long(leave_word.id);
+                message.base_mut().add_long(leave_word.player_id);
+                let name = match leave_word.name_wire_bytes() {
+                    Ok(name) => name,
+                    Err(source) => {
+                        return Err(FactionLeaveWordUpdateBuildError::Recipient {
+                            source,
+                            recipient_player_id,
+                            game_server_id,
+                            completed_deliveries: deliveries,
+                        });
+                    }
+                };
+                message.base_mut().add(name);
+                let content = match leave_word.content_wire_bytes() {
+                    Ok(content) => content,
+                    Err(source) => {
+                        return Err(FactionLeaveWordUpdateBuildError::Recipient {
+                            source,
+                            recipient_player_id,
+                            game_server_id,
+                            completed_deliveries: deliveries,
+                        });
+                    }
+                };
+                message.base_mut().add(content);
+                message.base_mut().add(&leave_word.time.wire_bytes());
+            } else {
+                message.base_mut().add_long(EOperator::Delete.wire_value());
+                message.base_mut().add_long(leave_word_id);
+            }
+            deliveries.push(FactionLeaveWordDelivery {
+                recipient_player_id,
+                game_server_id,
+                result: game.send_msg_to_game_server(game_server_id, &message),
+            });
+        }
+        Ok(deliveries)
+    }
+
+    /// Удаляет leave-word; объявленный operator исходная функция не читала.
+    pub(crate) fn edit_leave_word(
+        &mut self,
+        game: &CGame,
+        player_id: i32,
+        leave_word_id: i32,
+        _operator: EOperator,
+    ) -> Result<FactionEditLeaveWordOutcome, FactionInitialPropertyBlock> {
+        let property = self.base_property.ok_or(FactionInitialPropertyBlock)?;
+        if !property.leave_word_function() {
+            return Ok(FactionEditLeaveWordOutcome::FunctionDisabled);
+        }
+        if !self.is_using_purview(player_id, EPurview::EditLeaveWord as i32) {
+            return Ok(FactionEditLeaveWordOutcome::PermissionDenied);
+        }
+        let Some(position) = self
+            .leave_words
+            .iter()
+            .position(|leave_word| leave_word.id == leave_word_id)
+        else {
+            return Ok(FactionEditLeaveWordOutcome::LeaveWordNotFound);
+        };
+
+        self.leave_words.remove(position);
+        let deliveries =
+            self.update_leave_word_to_client(game, leave_word_id, EOperator::Delete);
+        self.set_change_data(4);
+        Ok(FactionEditLeaveWordOutcome::Deleted { deliveries })
+    }
+
     /// Заменяет текущее объявление с исходными проверками и порядком эффектов.
     pub(crate) fn pronounce(
         &mut self,
@@ -3850,7 +3988,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::UpdateLeaveWordToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1453
@@ -3920,7 +4058,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::EditLeaveWord
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2075
