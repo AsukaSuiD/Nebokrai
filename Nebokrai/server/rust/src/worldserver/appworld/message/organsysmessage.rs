@@ -5,8 +5,8 @@
 //! `0x6010D`, выход фракции из союза `0x6010E`, передачу главы фракции
 //! `0x6010F`, передачу главы союза `0x60110`, роспуск фракции `0x60111`,
 //! роспуск союза `0x60112`, назначение title/job-level `0x60113`, выдачу и
-//! отзыв права `0x60114/0x60115`,
-//! заявку союза `0x60118`,
+//! отзыв права `0x60114/0x60115`, приглашение faction/выбор union-действия
+//! `0x60116`, заявку союза `0x60118`,
 //! общий session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
@@ -131,6 +131,11 @@
 //! RAW — артефакт. Online/route/tail gates и прямой wire-ответ отсутствуют;
 //! Linux-донорские ingress-rejects не перенесены. Optional purview-log остаётся
 //! внешним техническим владельцем concrete faction owner-а.
+//! Exact `0x004A74A3..0x004A74C1` для `0x60116` читает два полных `Long` как
+//! `(player ID, invited faction ID)` и безусловно вызывает готовый
+//! `COrganizingCtrl::OnPlayerInviteFaction`. Online/route/tail gates и прямой
+//! wire-ответ отсутствуют; выбор Create/Apply/Invite и war-notices остаётся
+//! внутри exact concrete controller owner-а.
 //! Exact диапазоны
 //! `0x004A74C6..0x004A7509` и `0x004A7511..0x004A7543` исправляют повреждённый
 //! RAW. Общий branch читает
@@ -442,6 +447,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingLeaveWordEnableOutcome, OrganizingLeaveWordOutcome, OrganizingPronounceBlock,
     OrganizingPronounceOutcome, OrganizingUnionApplyForJoinDispatchBlock,
     OrganizingUnionApplyForJoinOutcome, OrganizingFactionApplicationBlock,
+    PlayerInviteFactionBlock, PlayerInviteFactionEffects, PlayerInviteFactionOutcome,
     OrganizingNameCountryBlock, OrganizingNameKind, OrganizingNameLookupBlock,
     OrganizingNameMatch, OrganizingNamedUnionApplicationBlock,
     OrganizingFactionDoJoinBlock, OrganizingFactionDoJoinOutcome,
@@ -492,6 +498,7 @@ const UNION_DISBAND_MESSAGE_TYPE: i32 = 0x60112;
 const FACTION_DUB_MESSAGE_TYPE: i32 = 0x60113;
 const GRANT_FACTION_PURVIEW_MESSAGE_TYPE: i32 = 0x60114;
 const REVOKE_FACTION_PURVIEW_MESSAGE_TYPE: i32 = 0x60115;
+const PLAYER_INVITE_FACTION_MESSAGE_TYPE: i32 = 0x60116;
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
@@ -1967,6 +1974,67 @@ pub(crate) fn dispatch_organizing_session_result(
         result,
         outcome,
     }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingPlayerInviteFactionDispatch<
+    CreationReport,
+    ApplicationReport,
+    InvitationReport,
+> {
+    pub(crate) player_id: i32,
+    pub(crate) invited_faction_id: i32,
+    pub(crate) outcome:
+        PlayerInviteFactionOutcome<CreationReport, ApplicationReport, InvitationReport>,
+}
+
+/// Выполняет exact ingress `0x60116` без дополнительных транспортных gates.
+pub(crate) fn dispatch_player_invite_faction<Effects>(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    village_war: &CVillageWarSys,
+    attack_city: &CAttackCitySys,
+    effects: &mut Effects,
+) -> Option<
+    Result<
+        OrganizingPlayerInviteFactionDispatch<
+            <Effects as ConfederationCreationEffects>::SessionReport,
+            <Effects as UnionApplyForJoinEffects>::SessionReport,
+            <Effects as UnionInviteEffects>::SessionReport,
+        >,
+        PlayerInviteFactionBlock<
+            <Effects as ConfederationCreationEffects>::SessionBlock,
+            <Effects as UnionApplyForJoinEffects>::SessionBlock,
+            <Effects as UnionInviteEffects>::SessionBlock,
+        >,
+    >,
+>
+where
+    Effects: PlayerInviteFactionEffects,
+{
+    if message.message_type() != PLAYER_INVITE_FACTION_MESSAGE_TYPE {
+        return None;
+    }
+
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let invited_faction_id = message.base_mut().get_long().unwrap_or(0);
+    Some(
+        organizing
+            .on_player_invite_faction(
+                game,
+                village_war,
+                attack_city,
+                player_id,
+                invited_faction_id,
+                effects,
+            )
+            .map(|outcome| OrganizingPlayerInviteFactionDispatch {
+                player_id,
+                invited_faction_id,
+                outcome,
+            }),
+    )
 }
 
 #[derive(Debug, Eq, PartialEq)]

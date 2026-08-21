@@ -1117,7 +1117,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingLeaveWordDispatch,
     OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEnableDispatch,
     OrganizingPronounceDispatch, OrganizingSessionResultDispatch,
-    OrganizingUnionApplicationDispatch,
+    OrganizingPlayerInviteFactionDispatch, OrganizingUnionApplicationDispatch,
     QueuedCityTransferTerminal, QueuedConfederationCreationTerminal,
     QueuedOrganizingSessionTerminal,
     QueuedUnionApplicationTerminal, QueuedUnionInvitationTerminal,
@@ -1146,7 +1146,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     dispatch_faction_tax, dispatch_faction_upload_icon,
     dispatch_goods_war_command, dispatch_goods_war_faction_win,
     dispatch_player_quest_command,
-    dispatch_player_run_script,
+    dispatch_player_invite_faction, dispatch_player_run_script,
     dispatch_faction_parameter,
     dispatch_leave_word, dispatch_leave_word_edit,
     dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_pronounce,
@@ -1174,6 +1174,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     CityTransferFinishReport, CityTransferSessionBlock, CityTransferSessionReport,
     CityTransferStartBlock, ConfederationCreationCallbackBlock,
     ConfederationCreationCallbackReport, ConfederationCreationEndpointBlock,
+    ConfederationCreationSessionBlock, ConfederationCreationSessionReport,
     OrganizingContributorBlock, OrganizingDisbandOutcome,
     OrganizingDisbandPlayer, OrganizingRunBlock, OrganizingRunReport, OrganizingSaveDataBlock,
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock, OrganizingLeaveWordEnableBlock,
@@ -1183,6 +1184,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingUnionApplicationCallbackReport, OrganizingUnionApplyForJoinDispatchBlock,
     OrganizingUnionInvitationCallbackBlock, OrganizingUnionInvitationCallbackReport,
     FreeFactionLookup, FreePlayerLookup, PlayerEnterGameOutcome, PlayerExitGameOutcome,
+    PlayerInviteFactionBlock,
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::{
     COrganizingParam, OrganizingParamLoadError, OrganizingParamLoadReport,
@@ -2088,6 +2090,16 @@ impl fmt::Debug for RoutedWorldMessage {
 
 pub(crate) type WorldUnionApplicationStartBlock =
     OrganizingUnionApplyForJoinDispatchBlock<UnionApplicationSessionBlock>;
+pub(crate) type WorldPlayerInviteFactionDispatch = OrganizingPlayerInviteFactionDispatch<
+    ConfederationCreationSessionReport,
+    UnionApplicationSessionReport,
+    UnionApplicationSessionReport,
+>;
+pub(crate) type WorldPlayerInviteFactionStartBlock = PlayerInviteFactionBlock<
+    ConfederationCreationSessionBlock,
+    UnionApplicationSessionBlock,
+    UnionApplicationSessionBlock,
+>;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldUnionApplicationTerminalDispatch {
@@ -2452,6 +2464,15 @@ pub(crate) enum ProcessedWorldEvent {
         outcome: Result<
             OrganizingUnionApplicationDispatch<UnionApplicationSessionReport>,
             WorldUnionApplicationStartBlock,
+        >,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingPlayerInviteFaction {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<
+            WorldPlayerInviteFactionDispatch,
+            WorldPlayerInviteFactionStartBlock,
         >,
         runtime: WorldUnionApplicationRuntimeReport,
     },
@@ -16093,6 +16114,29 @@ where
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingConsumedLong {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        if let Some(outcome) = dispatch_player_invite_faction(
+            &mut message,
+            game,
+            organizing,
+            village_war,
+            attack_city,
+            &mut effects,
+        ) {
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingPlayerInviteFaction {
                 source,
                 legacy_run_result,
                 outcome,
