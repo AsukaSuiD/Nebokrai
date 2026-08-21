@@ -16,6 +16,8 @@
 //! `IsOwnedCity` RVA `0x000B5490`, `GetOwnedCities` RVA `0x000BD7D0`,
 //! `DelMember` RVA `0x000B9EF0`,
 //! `UpdatePropertyToClient` RVA `0x000B9FB0`,
+//! `AddDefence/Offense/VillageWarVictorCounts` RVA
+//! `0x000BA3B0/0x000BA3D0/0x000BA3F0`,
 //! `ReInitialPropertyByLvl` RVA `0x000BA630`,
 //! `IsSuperiorOrganizing` RVA `0x000BD780`, `IsMaster` RVA `0x000C1EE0` и
 //! `OnMemberEnterGame` RVA `0x000C0A10` — `IMPLEMENTED`; спорные ключи lookup
@@ -54,6 +56,8 @@
 //! все `0x38` байт property вместе с padding. Получатели обходятся по signed
 //! member key и допускаются только при online-owner, ненулевом GameServer ID и
 //! уже выставленном `m_bGetFactionData`; результат каждого send игнорировался.
+//! Три victor-counter owner-а машинно подтверждают единый порядок: wrapping
+//! 32-битный `ADD`, property-send, затем dirty-bit `1`.
 //! Достигнутый `SetPlayerOrganizing` дополнительно читает `m_strName`,
 //! `m_lMastterID`, `m_Property.lLvl/lExp`, `m_OwnedCities` и два enemy-set.
 //! Коллекции, которые constructor действительно создавал пустыми, хранятся
@@ -651,6 +655,43 @@ impl CFaction {
             level_parameters_found,
             deliveries,
         })
+    }
+
+    fn add_victor_count(
+        &mut self,
+        game: &CGame,
+        property_offset: usize,
+    ) -> Result<Vec<FactionPropertyDelivery>, FactionInitialPropertyBlock> {
+        let property = self
+            .base_property
+            .as_mut()
+            .ok_or(FactionInitialPropertyBlock)?;
+        let next = property.signed_at(property_offset).wrapping_add(1);
+        property.write_signed(property_offset, next);
+        let deliveries = self.update_property_to_client(game)?;
+        self.set_change_data(1);
+        Ok(deliveries)
+    }
+
+    pub(crate) fn add_defence_victor_count(
+        &mut self,
+        game: &CGame,
+    ) -> Result<Vec<FactionPropertyDelivery>, FactionInitialPropertyBlock> {
+        self.add_victor_count(game, 0x0C)
+    }
+
+    pub(crate) fn add_offense_victor_count(
+        &mut self,
+        game: &CGame,
+    ) -> Result<Vec<FactionPropertyDelivery>, FactionInitialPropertyBlock> {
+        self.add_victor_count(game, 0x08)
+    }
+
+    pub(crate) fn add_village_war_victor_count(
+        &mut self,
+        game: &CGame,
+    ) -> Result<Vec<FactionPropertyDelivery>, FactionInitialPropertyBlock> {
+        self.add_victor_count(game, 0x10)
     }
 
     /// Возвращает reached `m_EstablishedTime` без выдуманного default.
@@ -2049,7 +2090,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::AddDefenceVictorCounts
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2902
@@ -2063,7 +2104,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::AddOffenseVictorCounts
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2913
@@ -2077,7 +2118,7 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
 
 // ============================================================================
 // FUNCTION: CFaction::AddVillageWarVictorCounts
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2924
