@@ -7,7 +7,8 @@
 //! `DubAndSetJobLvl/EditLeaveWord/OperatorTax/SetControbuter/Upgrade` RVA
 //! `0x000C18B0/0x000C1EC0/0x000C1ED0/0x000C1F20/0x000C1F30`,
 //! `GetEstablishedTime` RVA `0x000C1F00` и compiler-owned destructor RVA
-//! `0x000C1F40` — `IMPLEMENTED`;
+//! `0x000C1F40`, обе перегрузки `GetMemberList` RVA
+//! `0x000C1BB0/0x000C2710` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -54,6 +55,11 @@
 //! Destructor до следующего PDB-символа освобождает только member-map, string и
 //! base storage. Обычный `Drop` Rust-полей заменяет MSVC tree/string cleanup;
 //! ручного destructor callback-а нет.
+//! Обе `GetMemberList` сначала очищают caller-list, затем проходят member-map в
+//! signed key-order. ID-вариант возвращает ключи; organizing-вариант для
+//! каждого положительного ключа выполняет nullable faction lookup, пропускает
+//! miss/null и не добавляет один pointer дважды. Свежий `Vec` заменяет только
+//! list clear/nodes, а lookup передаётся явно вместо singleton-а.
 
 use std::collections::BTreeMap;
 
@@ -182,6 +188,36 @@ impl CUnion {
 
     pub(crate) const fn members(&self) -> &BTreeMap<i32, TagMemInfo> {
         &self.members
+    }
+
+    /// Возвращает новый снимок member-ID в исходном signed map-order.
+    pub(crate) fn member_ids_snapshot(&self) -> Vec<i32> {
+        self.members.keys().copied().collect()
+    }
+
+    /// Разрешает member faction-объекты и сохраняет pointer-identity dedupe.
+    pub(crate) fn member_organizings<'a, T, Lookup>(&self, mut lookup: Lookup) -> Vec<&'a T>
+    where
+        T: ?Sized + 'a,
+        Lookup: FnMut(i32) -> Option<&'a T>,
+    {
+        let mut output: Vec<&'a T> = Vec::new();
+        for &member_id in self.members.keys() {
+            if member_id < 1 {
+                continue;
+            }
+            let Some(organizing) = lookup(member_id) else {
+                continue;
+            };
+            if output
+                .iter()
+                .any(|current| std::ptr::eq(*current, organizing))
+            {
+                continue;
+            }
+            output.push(organizing);
+        }
+        output
     }
 
     /// Возвращает union ID только для существующего faction-member key.
@@ -476,7 +512,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::GetMemberList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:284
@@ -784,7 +820,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::GetMemberList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:296
