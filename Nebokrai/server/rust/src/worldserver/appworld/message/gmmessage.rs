@@ -20,6 +20,9 @@
 //! donor-замены через current socket и ответ только источнику не перенесены.
 //! Reload `0x5FF06` вызывает уже достигнутый `CGame::ReLoad(profile,true,true)`
 //! без добавленного донором failure-log-а.
+//! Kick-map `0x5FF0B` проходит ordered region map по фактическому
+//! `pRegion->ID` и сохраняет исходный многократный `SendToMapID`; null owners
+//! безопасно пропускаются вместо внутреннего UB старого разыменования.
 //!
 //! Rust `VecDeque::len` шире старого 32-битного `_Mysize`; значение вне
 //! legacy-range безопасно блокируется typed-исходом, а не молча обрезается.
@@ -31,7 +34,7 @@ use std::ffi::CString;
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::worldserver::game::{
-    CGame, WorldNamedRegionLookup, WorldReloadBlock, WorldReloadContext,
+    CGame, WorldNamedRegionLookup, WorldRegionIdRouteScan, WorldReloadBlock, WorldReloadContext,
 };
 
 const ONLINE_PLAYER_COUNT_REQUEST: i32 = 0x0005_FF01;
@@ -170,6 +173,15 @@ pub(crate) enum WorldGmMessageOutcome {
         send_to_game_servers: bool,
         reload_server_resources: bool,
         result: Result<i32, WorldReloadBlock>,
+    },
+    KickMap {
+        request_id: i32,
+        region_id: i32,
+        payload_complete: [bool; 2],
+        response_type: i32,
+        scan: WorldRegionIdRouteScan,
+        wire: Option<Vec<u8>>,
+        deliveries: Vec<Result<i32, SendMessageError>>,
     },
     Transport(WorldGmTransportOutcome),
 }
@@ -470,6 +482,37 @@ pub(crate) fn on_gm_message(
                 Some(request_id),
                 None,
             )
+        }
+        0x0005_FF0B => {
+            let decoded_region_id = message.base_mut().get_long();
+            let region_id = decoded_region_id.unwrap_or(0);
+            let scan = game.region_routes_by_owner_id(region_id);
+            let wire = (!scan.routes.is_empty()).then(|| {
+                message.set_message_type(0x0007_FC0A);
+                message.as_wire_bytes().to_vec()
+            });
+            let deliveries = scan
+                .routes
+                .iter()
+                .map(|route| {
+                    message.send_to_map_id(
+                        game.current_game_server_sender().as_ref(),
+                        route.game_server_id,
+                    )
+                })
+                .collect();
+            WorldGmMessageDispatch::Handled(WorldGmMessageOutcome::KickMap {
+                request_id,
+                region_id,
+                payload_complete: [
+                    decoded_request_id.is_some(),
+                    decoded_region_id.is_some(),
+                ],
+                response_type: 0x0007_FC0A,
+                scan,
+                wire,
+                deliveries,
+            })
         }
         0x0005_FF0D => handled_player_route(
             game,

@@ -4688,6 +4688,19 @@ pub(crate) struct WorldNamedRegionLookup {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldRegionIdRoute {
+    pub(crate) map_key: i32,
+    pub(crate) game_server_id: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldRegionIdRouteScan {
+    pub(crate) skipped_null_owners: usize,
+    pub(crate) matching_region_keys: usize,
+    pub(crate) routes: Vec<WorldRegionIdRoute>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldRegionParamUpdateOutcome {
     RegionNotFound,
     NullRegionPointer,
@@ -8406,7 +8419,7 @@ impl CGame {
     /// Поэтому typed reconnect из первой очереди заменяет owner до второго
     /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
     /// ветви server-owner-а, GMA `0x4FD01/0x4FD04/0x60401/0x60402`, GM
-    /// query/reload/transport ветви GM `0x5FF01..0A/0D..11/13..16`,
+    /// query/reload/transport ветви GM `0x5FF01..0B/0D..11/13..16`,
     /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, honor
     /// `0x5FD0C/0x5FD0D`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
@@ -11033,6 +11046,35 @@ impl CGame {
         WorldNamedRegionLookup {
             skipped_null_owners,
             matched: None,
+        }
+    }
+
+    /// Собирает exact ordered fan-out по фактическому `pRegion->ID`.
+    pub(crate) fn region_routes_by_owner_id(&self, region_id: i32) -> WorldRegionIdRouteScan {
+        let mut skipped_null_owners = 0;
+        let mut matching_region_keys = 0;
+        let mut routes = Vec::new();
+        for (&map_key, assignment) in &self.regions {
+            let Some(region) = assignment.region.as_ref().map(WorldRegionOwner::base) else {
+                skipped_null_owners += 1;
+                continue;
+            };
+            if region.get_id() != region_id {
+                continue;
+            }
+            matching_region_keys += 1;
+            let game_server_id = self.game_server_number_by_region_id(map_key);
+            if game_server_id != 0 {
+                routes.push(WorldRegionIdRoute {
+                    map_key,
+                    game_server_id,
+                });
+            }
+        }
+        WorldRegionIdRouteScan {
+            skipped_null_owners,
+            matching_region_keys,
+            routes,
         }
     }
 
