@@ -5,8 +5,9 @@
 //! `0x000A2090/0x000A21D0/0x000A22C0`, `DeleteOneMember` `0x000A27A0` и
 //! `InsertOneFaction` `0x000A2960`, `MkOne` `0x000A2B60`, `FactionWin`
 //! `0x000A2BD0`, `DelOneFactionfCount` `0x000A1FA0` и
-//! `DeleteMembersByFactionId` `0x000A2850` имеют статус `IMPLEMENTED`; DB
-//! reload и остальные mutations ниже пока `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `DeleteMembersByFactionId` `0x000A2850`, `IsInFactionIdList` `0x000A2760`
+//! и destructor `0x000A29C0` имеют статус `IMPLEMENTED`; DB reload и остальные
+//! mutations ниже пока `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
@@ -42,6 +43,13 @@
 //! `DelOneFactionfCount` exact `0x004A1FA0..0x004A2084` сначала требует живой
 //! faction-owner, затем удаляет только первую C-string-равную count-запись и
 //! немедленно публикует обновлённый top-five через `RequestCountList`.
+//! `IsInFactionIdList` exact `0x004A2760..0x004A2792` является обычным find по
+//! signed set; `BTreeSet::contains` заменяет только MSVC tree. Destructor exact
+//! `0x004A29C0..0x004A2A87` освобождает count-list, set и map; стандартный
+//! `Drop` их Rust-владельцев является полной технической заменой. Constructor
+//! не объявляется готовым: после пустой инициализации он вызывает сырой
+//! `reInitDB`, поэтому `with_reached_empty_state` остаётся только явным
+//! состоянием до DB reload, а не эквивалентом полного constructor-а.
 //!
 //! Старый unbounded copy faction-name в `char[20]` мог перезаписать count и
 //! links. Это внутренний UB, а не протокол: Rust останавливает append при
@@ -693,7 +701,7 @@ fn append_faction_win_audit<Context: GoodsWarMemberContext + ?Sized>(
 
 // ============================================================================
 // FUNCTION: CGoodsWarMember::IsInFactionIdList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goodswarmember.cpp:338
@@ -701,6 +709,8 @@ fn append_faction_win_audit<Context: GoodsWarMemberContext + ?Sized>(
 // ADDRESS: 004a2760
 // PROTOTYPE: bool __thiscall IsInFactionIdList(long param_1)
 //
+// Реализовано выше как `contains_faction_id`; exact disassembly
+// `0x004A2760..0x004A2792` подтверждает обычный set find без side effects.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -751,7 +761,7 @@ fn append_faction_win_audit<Context: GoodsWarMemberContext + ?Sized>(
 
 // ============================================================================
 // FUNCTION: CGoodsWarMember::~CGoodsWarMember
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_STD_DROP
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goodswarmember.cpp:12
@@ -759,6 +769,8 @@ fn append_faction_win_audit<Context: GoodsWarMemberContext + ?Sized>(
 // ADDRESS: 004a29c0
 // PROTOTYPE: void __thiscall ~CGoodsWarMember(void)
 //
+// Стандартный Rust `Drop` concrete collections заменяет exact освобождение
+// `0x004A29C0..0x004A2A87`; наблюдаемой внешней семантики owner не имеет.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
