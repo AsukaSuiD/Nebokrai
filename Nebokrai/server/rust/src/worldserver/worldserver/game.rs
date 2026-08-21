@@ -262,6 +262,19 @@
 //! `0x004193D8..0x00419694` передают оба boolean как `false`. Соседние ещё
 //! сырые configuration owners представлены раздельными typed вызовами, а не
 //! одним непрозрачным reload callback.
+//! CountryWar-ветвь внешнего main-loop dispatcher-а теперь передаёт прямо
+//! живые `CountryWarSys`, `CTimer`, девять callback-ключей, local time,
+//! resource-context и текущий GameServer sender. Старый
+//! `WorldReloadBooleanOwner::CountryWar` удалён. Обычный `CGame::ReLoad` без
+//! этих owners возвращает явный `CountryWarOwnerRequired`, а единственный
+//! достигнутый flag-dispatcher вызывает concrete overload в той же позиции;
+//! reload-server-resources, внутренние логи, `end_war`, повторная загрузка и
+//! итоговый `0/1` сохраняют исходный порядок. Exact
+//! `0x004176D5..0x0041771D` кладёт zero-extended bool reload-owner-а в общий
+//! return slot `CGame::ReLoad`, что исправляет прежний потерянный Rust-result.
+//! Результат `SendAll(0x7FF1D)`
+//! старый код игнорировал; Rust хранит его как `Result` только в typed report,
+//! не назначая искусственный legacy error code.
 //!
 //! Внешний flag-dispatcher сохраняет все 42 проверки в
 //! исходном порядке, отдельные 32-битные low/high чтения и записи, снятие флага
@@ -995,8 +1008,8 @@ use crate::worldserver::appworld::country::countryparam::{
 };
 use crate::worldserver::appworld::country::countrywarsys::{
     CountryWarCallbacks, CountryWarDeclarationAuthority, CountryWarDeclarationContext,
-    CountryWarDeclarationPlayer, CountryWarLoadError, CountryWarLoadReport, CountryWarSys,
-    CountryWarVictoryContext, CountryWarVictoryRegion,
+    CountryWarDeclarationPlayer, CountryWarLoadError, CountryWarLoadReport,
+    CountryWarReloadBlock, CountryWarSys, CountryWarVictoryContext, CountryWarVictoryRegion,
 };
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsOriginalNameIndex,
@@ -2873,6 +2886,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) country: &'a mut CCountryHandler,
     pub(crate) country_parameters: &'a CCountryParam,
     pub(crate) country_war: &'a mut CountryWarSys,
+    pub(crate) country_war_callbacks: CountryWarCallbacks<TimerCallback>,
     pub(crate) four_nation_war: &'a mut CFourNationWarSys,
     pub(crate) honor_ranks: &'a mut CHonorRanks,
     pub(crate) organizing_parameters: &'a mut COrganizingParam,
@@ -3152,7 +3166,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     PreciousBox,
     FairyExp,
     ChangeBody,
-    CountryWar,
     BattleFairyExp,
     BattleFairyCombine,
     Synthesis,
@@ -3507,7 +3520,7 @@ pub(crate) enum WorldReloadProfilesReport {
         flags_after_clear: WorldReloadProfileFlagsSnapshot,
         block: WorldReloadRegionSetupBlock,
     },
-    BlockedRegionOwner {
+    BlockedReloadOwner {
         completed_events: Vec<WorldReloadProfileEvent>,
         half: WorldReloadFlagHalf,
         mask: u32,
@@ -4711,10 +4724,12 @@ pub(crate) struct WorldReloadRegionSnapshotBlock {
     pub(crate) source: WorldRegionOwnerSerializationBlock,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldReloadBlock {
     RegionList(WorldRegionListBlock),
     RegionSnapshot(WorldReloadRegionSnapshotBlock),
+    CountryWarOwnerRequired,
+    CountryWar(CountryWarReloadBlock),
 }
 
 pub(crate) type WorldReloadResult = Result<i32, WorldReloadBlock>;
@@ -5744,6 +5759,44 @@ impl CGame {
         self.send_reload_payload(subcode, &bytes);
     }
 
+    /// Выполняет concrete `CountryWarSys::reload` для main-loop профиля.
+    fn reload_country_war<Context, TimerCallback>(
+        &mut self,
+        context: &mut Context,
+        country_war: &mut CountryWarSys,
+        timer: &mut CTimer<TimerCallback>,
+        callbacks: CountryWarCallbacks<TimerCallback>,
+        now: TagTime,
+        reload_server_resources: bool,
+    ) -> WorldReloadResult
+    where
+        Context: WorldReloadContext + ?Sized,
+        TimerCallback: Copy,
+    {
+        if reload_server_resources {
+            context.load_reload_server_resources(self);
+        }
+        let source = context.read_resource(b"setup/CountryWarSys.ini");
+        let sender = self.current_game_server_sender();
+        let report = country_war
+            .reload(
+                source.as_deref(),
+                now,
+                timer,
+                callbacks,
+                |payload| context.add_log_text(payload),
+                |message| message.send_all(sender.as_ref()),
+            )
+            .map_err(WorldReloadBlock::CountryWar)?;
+        let succeeded = report.load.legacy_result;
+        context.add_log_text(if succeeded {
+            b"Load CountryWar...OK!"
+        } else {
+            b"Load CountryWar...FAILED!"
+        });
+        Ok(i32::from(succeeded))
+    }
+
     /// Выполняет полный case-insensitive dispatcher `CGame::ReLoad`.
     pub(crate) fn reload<Context: WorldReloadContext + ?Sized>(
         &mut self,
@@ -6211,12 +6264,7 @@ impl CGame {
                 );
             }
             WorldReloadProfile::CountryWar => {
-                let _ = Self::reload_boolean_with_log(
-                    context,
-                    WorldReloadBooleanOwner::CountryWar,
-                    b"Load CountryWar...OK!",
-                    b"Load CountryWar...FAILED!",
-                );
+                return Err(WorldReloadBlock::CountryWarOwnerRequired);
             }
             WorldReloadProfile::BattleFairyExp => {
                 self.reload_simple_serialized(
@@ -9909,12 +9957,16 @@ impl CGame {
             state.reload_flags,
             &mut *callbacks.reload_context,
             &mut *callbacks.get_log_local_time,
+            owners.country_war,
+            owners.timer,
+            owners.country_war_callbacks,
+            &mut *callbacks.get_timer_local_time,
         );
         let reload = match reload {
             complete @ WorldReloadProfilesReport::Complete { .. } => complete,
             blocked @ (WorldReloadProfilesReport::BlockedMissingFact { .. }
             | WorldReloadProfilesReport::BlockedRegionSetup { .. }
-            | WorldReloadProfilesReport::BlockedRegionOwner { .. }) => {
+            | WorldReloadProfilesReport::BlockedReloadOwner { .. }) => {
                 return Err(Box::new(WorldMainLoopBlock::Reload(blocked)));
             }
         };
@@ -15300,15 +15352,21 @@ where
 }
 
 /// Снимает и обрабатывает полный ordered набор `RELOAD_PROFILE_FLAGS`.
-pub(crate) fn reload_profiles<Context, GetLocalTime>(
+pub(crate) fn reload_profiles<Context, GetLocalTime, GetTimerLocalTime, TimerCallback>(
     game: &mut CGame,
     flags: &WorldReloadProfileFlags,
     context: &mut Context,
     mut get_local_time: GetLocalTime,
+    country_war: &mut CountryWarSys,
+    timer: &mut CTimer<TimerCallback>,
+    country_war_callbacks: CountryWarCallbacks<TimerCallback>,
+    mut get_timer_local_time: GetTimerLocalTime,
 ) -> WorldReloadProfilesReport
 where
     Context: WorldReloadContext + ?Sized,
     GetLocalTime: FnMut() -> WorldLogLocalTime,
+    GetTimerLocalTime: FnMut() -> TagTime,
+    TimerCallback: Copy,
 {
     let mut events = Vec::new();
     if !flags.has_pending() {
@@ -15326,15 +15384,26 @@ where
         flags.consume(action);
         let flags_after_clear = flags.snapshot();
         let reload_result = match action.kind {
-            WorldReloadActionKind::Reload => match game.reload(
-                context,
-                action.reload_profile,
-                action.first_option,
-                action.second_option,
-            ) {
+            WorldReloadActionKind::Reload => match if action.reload_profile == b"CountryWar" {
+                game.reload_country_war(
+                    context,
+                    country_war,
+                    timer,
+                    country_war_callbacks,
+                    get_timer_local_time(),
+                    action.second_option,
+                )
+            } else {
+                game.reload(
+                    context,
+                    action.reload_profile,
+                    action.first_option,
+                    action.second_option,
+                )
+            } {
                 Ok(result) => result,
                 Err(block) => {
-                    return WorldReloadProfilesReport::BlockedRegionOwner {
+                    return WorldReloadProfilesReport::BlockedReloadOwner {
                         completed_events: events,
                         half: action.half,
                         mask: action.mask,

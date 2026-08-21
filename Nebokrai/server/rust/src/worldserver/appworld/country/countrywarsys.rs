@@ -61,7 +61,9 @@
 //! `KillTimeEvent` девять ID, затем вызывает `end_war -> initialize`.
 //! `Option<TimerId>` не пропускает отсутствующее поле как donor helper
 //! `KillEvent(0)`: typed block возвращается в точке первого недоказанного ID и
-//! сохраняет счётчики уже выполненных kill side effects.
+//! сохраняет счётчики уже выполненных kill side effects. Return рассылки
+//! `0x7FF1D` оригинал не проверял; typed report хранит полный `Result`, не
+//! сворачивая ошибку очереди в придуманный signed код.
 //!
 //! Snapshot намеренно сохраняет layout World EXE: `state_clear + 3 bytes
 //! padding`, затем defender и attacker. Парный Game EXE RVA `0x000EBD60`
@@ -154,10 +156,10 @@ pub(crate) struct CountryWarLoadReport {
     pub(crate) registered_events: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CountryWarEndReport {
     pub(crate) reset_regions: usize,
-    pub(crate) delivery: i32,
+    pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -173,7 +175,7 @@ pub(crate) enum CountryWarReloadEvent {
     Clear,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct CountryWarReloadReport {
     pub(crate) previous_schedules: usize,
     pub(crate) kill_requests: u32,
@@ -182,7 +184,7 @@ pub(crate) struct CountryWarReloadReport {
     pub(crate) load: CountryWarLoadReport,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum CountryWarReloadBlock {
     MissingEventId {
         war_id: i32,
@@ -493,7 +495,7 @@ impl CountryWarSys {
     where
         Callback: Copy,
         Log: FnMut(&[u8]),
-        SendAll: FnMut(&CMessage) -> i32,
+        SendAll: FnMut(&CMessage) -> Result<i32, SendMessageError>,
     {
         let previous_schedules = self.country_wars.len();
         let mut kill_requests = 0u32;
@@ -516,14 +518,17 @@ impl CountryWarSys {
         }
 
         let end_war = self.end_war(&mut send_all);
-        let load = self
-            .initialize(source, now, timer, callbacks, add_log_text)
-            .map_err(|source| CountryWarReloadBlock::Load {
-                source,
-                kill_requests,
-                killed_events,
-                end_war,
-            })?;
+        let load = match self.initialize(source, now, timer, callbacks, add_log_text) {
+            Ok(load) => load,
+            Err(source) => {
+                return Err(CountryWarReloadBlock::Load {
+                    source,
+                    kill_requests,
+                    killed_events,
+                    end_war,
+                });
+            }
+        };
         Ok(CountryWarReloadReport {
             previous_schedules,
             kill_requests,
@@ -536,7 +541,7 @@ impl CountryWarSys {
     /// Сбрасывает только обе стороны каждой войны и рассылает exact `0x7FF1D`.
     pub(crate) fn end_war<SendAll>(&mut self, mut send_all: SendAll) -> CountryWarEndReport
     where
-        SendAll: FnMut(&CMessage) -> i32,
+        SendAll: FnMut(&CMessage) -> Result<i32, SendMessageError>,
     {
         for state in self.war_regions.values_mut() {
             state.defend_country = 0;
