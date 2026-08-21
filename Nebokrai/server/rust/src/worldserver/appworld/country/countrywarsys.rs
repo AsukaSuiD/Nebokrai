@@ -4,8 +4,8 @@
 //! `end_war` RVA `0x0008F890`, пять phase callbacks RVA
 //! `0x0008F490/0x0008FA00/0x0008FB40/0x0008FC80/0x00091530`,
 //! `on_flag_destory` (исходное PDB-написание) RVA `0x00091E00`, `initialize`
-//! RVA `0x00092220` и `reload` RVA `0x00092DF0` имеют статус `IMPLEMENTED`;
-//! остальной корпус
+//! RVA `0x00092220`, top-info callbacks RVA `0x000916C0/0x000918E0` и
+//! `reload` RVA `0x00092DF0` имеют статус `IMPLEMENTED`; остальной корпус
 //! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара `WorldServer/Nworldserver.exe +
 //! WorldServer/WorldServer.pdb`, исходник `appworld/country/countrywarsys.cpp`.
 //!
@@ -79,6 +79,16 @@
 //! 256-byte UB-граница остаются у явного context-а, а нормальные bytes не
 //! требуют собственного formatter-а.
 //!
+//! `on_war_start_info/on_war_end_info` делают observable `operator[]` по
+//! входному war ID до проверки времени; отсутствующий key поэтому вставляет
+//! value-initialized zero schedule. Только target строго позже local now
+//! достигает публикации. Duration вычисляется exact как
+//! `(difference.minute * 60 + difference.second) * 1000` с 32-битным
+//! wrapping и намеренно игнорирует hour/day. После `WS0099/WS0100` lookup и
+//! форматирования concrete `CCountryHandler::AddOneTopInfo(2, duration, text)`
+//! вызывается до сырого `SendTopInfoToClient` с возвращённым ID. Уже добавленная
+//! запись не откатывается при block внешней send-границы.
+//!
 //! Snapshot намеренно сохраняет layout World EXE: `state_clear + 3 bytes
 //! padding`, затем defender и attacker. Парный Game EXE RVA `0x000EBD60`
 //! трактует те же 12 bytes как defender, attacker, `state_clear + padding` —
@@ -92,6 +102,7 @@ use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::date::{TagTime, TagTimeArithmeticBlock, TagTimeParseBlock};
 use crate::public::readwrite::read_to;
 use crate::public::timer::{CTimer, TimerId};
+use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CountryWarCallbacks<Callback> {
@@ -437,6 +448,71 @@ pub(crate) enum CountryWarPhaseBlock<ContextBlock> {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarTopInfoKind {
+    Start,
+    End,
+}
+
+impl CountryWarTopInfoKind {
+    const fn string_id(self) -> &'static [u8] {
+        match self {
+            Self::Start => b"WS0099",
+            Self::End => b"WS0100",
+        }
+    }
+}
+
+pub(crate) trait CountryWarTopInfoContext {
+    type Block;
+
+    /// Выполняет GetStringByID/null-empty и штатное no-argument форматирование.
+    fn format_top_info_notice(
+        &mut self,
+        string_id: &'static [u8],
+    ) -> Result<Vec<u8>, Self::Block>;
+
+    /// Повторяет ещё сырой `CCountryHandler::SendTopInfoToClient` после уже
+    /// выполненного concrete `AddOneTopInfo`.
+    fn send_top_info(
+        &mut self,
+        top_info_id: i32,
+        timer_flag: i32,
+        duration_ms: i32,
+        text: &[u8],
+    ) -> Result<(), Self::Block>;
+}
+
+#[derive(Debug)]
+pub(crate) struct CountryWarTopInfoReport {
+    pub(crate) kind: CountryWarTopInfoKind,
+    pub(crate) war_id: i32,
+    pub(crate) schedule_inserted: bool,
+    pub(crate) target_time: TagTime,
+    pub(crate) now: TagTime,
+    pub(crate) target_in_future: bool,
+    pub(crate) duration_ms: Option<i32>,
+    pub(crate) text: Option<Vec<u8>>,
+    pub(crate) top_info_id: Option<i32>,
+    pub(crate) sent: bool,
+}
+
+#[derive(Debug)]
+pub(crate) enum CountryWarTopInfoBlock<ContextBlock> {
+    Arithmetic {
+        report: CountryWarTopInfoReport,
+        source: TagTimeArithmeticBlock,
+    },
+    FormatNotice {
+        report: CountryWarTopInfoReport,
+        source: ContextBlock,
+    },
+    Send {
+        report: CountryWarTopInfoReport,
+        source: ContextBlock,
+    },
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum CountryWarDeclarationRejection {
     PlayerMissing,
@@ -739,6 +815,82 @@ impl CountryWarSys {
         Ok(report)
     }
 
+    /// Выполняет `on_war_start_info/on_war_end_info` поверх живого top-info owner-а.
+    pub(crate) fn run_top_info<Context, GetTick>(
+        &mut self,
+        kind: CountryWarTopInfoKind,
+        war_id: i32,
+        now: TagTime,
+        country_handler: &mut CCountryHandler,
+        mut get_tick: GetTick,
+        context: &mut Context,
+    ) -> Result<CountryWarTopInfoReport, CountryWarTopInfoBlock<Context::Block>>
+    where
+        Context: CountryWarTopInfoContext + ?Sized,
+        GetTick: FnMut() -> u32,
+    {
+        let schedule_inserted = !self.country_wars.contains_key(&war_id);
+        let schedule = self
+            .country_wars
+            .entry(war_id)
+            .or_insert_with(CountryWarTime::zero_initialized);
+        let target_time = match kind {
+            CountryWarTopInfoKind::Start => schedule.start_time,
+            CountryWarTopInfoKind::End => schedule.end_time,
+        };
+        let mut report = CountryWarTopInfoReport {
+            kind,
+            war_id,
+            schedule_inserted,
+            target_time,
+            now,
+            target_in_future: false,
+            duration_ms: None,
+            text: None,
+            top_info_id: None,
+            sent: false,
+        };
+        if target_time.legacy_le(now) {
+            return Ok(report);
+        }
+        report.target_in_future = true;
+
+        let difference = match target_time.get_time_difference(now) {
+            Ok(difference) => difference,
+            Err(source) => {
+                return Err(CountryWarTopInfoBlock::Arithmetic { report, source });
+            }
+        };
+        let duration_ms = u32::from(difference.second)
+            .wrapping_add(u32::from(difference.minute).wrapping_mul(60))
+            .wrapping_mul(1_000) as i32;
+        report.duration_ms = Some(duration_ms);
+        let text = match context.format_top_info_notice(kind.string_id()) {
+            Ok(text) => text,
+            Err(source) => {
+                return Err(CountryWarTopInfoBlock::FormatNotice { report, source });
+            }
+        };
+        report.text = Some(text);
+        let top_info_id = country_handler.add_one_top_info(
+            2,
+            duration_ms,
+            report.text.as_deref().unwrap_or_default(),
+            &mut get_tick,
+        );
+        report.top_info_id = Some(top_info_id);
+        if let Err(source) = context.send_top_info(
+            top_info_id,
+            2,
+            duration_ms,
+            report.text.as_deref().unwrap_or_default(),
+        ) {
+            return Err(CountryWarTopInfoBlock::Send { report, source });
+        }
+        report.sent = true;
+        Ok(report)
+    }
+
     pub(crate) fn player_declare<Context: CountryWarDeclarationContext + ?Sized>(
         &mut self,
         player_id: i32,
@@ -948,6 +1100,32 @@ struct CountryWarOffsets {
 }
 
 impl CountryWarTime {
+    /// Повторяет value-insert `map::operator[]` для отсутствующего war ID.
+    fn zero_initialized() -> Self {
+        let zero_time = TagTime::default();
+        let zero_event = Some(TimerId::from_raw(0));
+        Self {
+            declare_begin_event_id: zero_event,
+            declare_begin_time: zero_time,
+            declare_end_event_id: zero_event,
+            declare_end_time: zero_time,
+            prepare_begin_event_id: zero_event,
+            prepare_begin_time: zero_time,
+            prepare_end_event_id: zero_event,
+            prepare_end_time: zero_time,
+            start_info_event_id: zero_event,
+            start_info_time: zero_time,
+            start_event_id: zero_event,
+            start_time: zero_time,
+            end_info_event_id: zero_event,
+            end_info_time: zero_time,
+            end_event_id: zero_event,
+            end_time: zero_time,
+            clear_event_id: zero_event,
+            clear_time: zero_time,
+        }
+    }
+
     fn from_offsets(
         begin_time: TagTime,
         offsets: CountryWarOffsets,
@@ -1354,7 +1532,7 @@ where
 
 // ============================================================================
 // FUNCTION: CountryWarSys::on_war_start_info
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:550
@@ -1362,13 +1540,14 @@ where
 // ADDRESS: 004916c0
 // PROTOTYPE: void __stdcall on_war_start_info(long param_1)
 //
+// Реализовано выше через `run_top_info(Start, ...)` и concrete AddOneTopInfo.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CountryWarSys::on_war_end_info
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:578
@@ -1376,6 +1555,7 @@ where
 // ADDRESS: 004918e0
 // PROTOTYPE: void __stdcall on_war_end_info(long param_1)
 //
+// Реализовано выше через `run_top_info(End, ...)` и concrete AddOneTopInfo.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
