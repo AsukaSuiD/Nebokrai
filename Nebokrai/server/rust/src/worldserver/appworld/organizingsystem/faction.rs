@@ -8,6 +8,8 @@
 //! `UpdatePronounceToClient` RVA `0x000B56C0`,
 //! `UpdateLeaveWordToClient/EditLeaveWord` RVA `0x000B6240/0x000B6790`,
 //! `LeaveWord/LoadLeavewords` RVA `0x000BCA40/0x000BD3F0`,
+//! `UpdateAllApplyMemberToClient/UpdateApplyMemberToClient/RemoveApplyMember`
+//! RVA `0x000B60D0/0x000BEC80/0x000B9F50`,
 //! `SendInfoToAllMember/UpdateOtherFacInfoToClient` RVA
 //! `0x000B5890/0x000B58F0`,
 //! `Talk` RVA `0x000B5A50`,
@@ -389,6 +391,17 @@
 //! `VecDeque::pop_front` сохраняет intended FIFO-limit. Неинициализированное имя
 //! offline-автора и переполнение `char[20]` заменены typed-блокировкой после уже
 //! выделенного ID; незначимые хвосты нового fixed-record безопасно обнуляются.
+//! `UpdateAllApplyMemberToClient(target)` требует только target online,
+//! ненулевой GameServer и faction-data flag, затем шлёт каждый apply-person в
+//! signed key-order. Точечный `UpdateApplyMemberToClient(id, operator)` создаёт
+//! нулевой local-record с заданным ID, заменяет его map-value при hit и шлёт
+//! только готовым member-ам с `PV_ConMem`. Оба используют `0x7FE0A` и wire
+//! `recipient, operator, candidate_id, name\0, level, occupation`; Linux-донор
+//! ошибочно переставлял два последних поля. `RemoveApplyMember` сначала стирает
+//! map-entry, затем публикует `OP_Delete` уже как ID + пустые поля, ставит
+//! dirty-бит `8` и возвращает faction ID; miss возвращает `0`. Exact ASM
+//! `0x004B60D0..0x004B61E2`, `0x004BEC80..0x004BEE2E` и
+//! `0x004B9F50..0x004B9FA7` подтверждает framing, фильтры и side effects.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -408,6 +421,7 @@ use crate::worldserver::worldserver::game::{
 };
 
 const MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0D;
+const APPLY_MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0A;
 const PRONOUNCE_UPDATE_MESSAGE_TYPE: i32 = 0x7FE10;
 const LEAVE_WORD_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0F;
 const OTHER_FACTION_UPDATE_MESSAGE_TYPE: i32 = 0x7FE15;
@@ -643,6 +657,30 @@ pub(crate) struct FactionLeaveWordDelivery {
     pub(crate) recipient_player_id: i32,
     pub(crate) game_server_id: i32,
     pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionApplyMemberDelivery {
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionApplyMemberUpdateBuildError {
+    pub(crate) candidate_player_id: i32,
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) completed_deliveries: Vec<FactionApplyMemberDelivery>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionRemoveApplyMemberOutcome {
+    NotFound,
+    Removed {
+        faction_id: i32,
+        deliveries: Result<Vec<FactionApplyMemberDelivery>, FactionApplyMemberUpdateBuildError>,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -2335,6 +2373,113 @@ impl CFaction {
             });
         }
         Ok(deliveries)
+    }
+
+    /// Публикует полный apply-list одному готовому клиенту без проверки права.
+    pub(crate) fn update_all_apply_members_to_client(
+        &self,
+        game: &CGame,
+        recipient_player_id: i32,
+    ) -> Result<Vec<FactionApplyMemberDelivery>, FactionApplyMemberUpdateBuildError> {
+        let game_server_id = game.game_server_number_by_player_id(recipient_player_id);
+        let player = game.online_player_by_id(recipient_player_id as u32);
+        if game_server_id == 0 || player.is_none_or(|player| !player.faction_data_received()) {
+            return Ok(Vec::new());
+        }
+
+        let mut deliveries = Vec::new();
+        for (&candidate_player_id, person) in &self.apply_persons {
+            let Some(name) = person.name_wire_bytes() else {
+                return Err(FactionApplyMemberUpdateBuildError {
+                    candidate_player_id,
+                    recipient_player_id,
+                    game_server_id,
+                    completed_deliveries: deliveries,
+                });
+            };
+
+            let mut message = CMessage::new(APPLY_MEMBER_UPDATE_MESSAGE_TYPE);
+            message.base_mut().add_long(recipient_player_id);
+            message.base_mut().add_long(EOperator::Add.wire_value());
+            message.base_mut().add_long(candidate_player_id);
+            message.base_mut().add(name);
+            message.base_mut().add_long(person.level);
+            message.base_mut().add_long(person.occupation);
+            deliveries.push(FactionApplyMemberDelivery {
+                recipient_player_id,
+                game_server_id,
+                result: game.send_msg_to_game_server(game_server_id, &message),
+            });
+        }
+        Ok(deliveries)
+    }
+
+    /// Публикует один apply-record только членам с правом `PV_ConMem`.
+    pub(crate) fn update_apply_member_to_client(
+        &self,
+        game: &CGame,
+        candidate_player_id: i32,
+        operator: EOperator,
+    ) -> Result<Vec<FactionApplyMemberDelivery>, FactionApplyMemberUpdateBuildError> {
+        let person = self.apply_persons.get(&candidate_player_id);
+        let mut deliveries = Vec::new();
+        for &recipient_player_id in self.members.keys() {
+            let player = game.online_player_by_id(recipient_player_id as u32);
+            let game_server_id = game.game_server_number_by_player_id(recipient_player_id);
+            if player.is_none_or(|player| !player.faction_data_received())
+                || game_server_id == 0
+                || !self.is_using_purview(recipient_player_id, EPurview::ConMem as i32)
+            {
+                continue;
+            }
+
+            let mut message = CMessage::new(APPLY_MEMBER_UPDATE_MESSAGE_TYPE);
+            message.base_mut().add_long(recipient_player_id);
+            message.base_mut().add_long(operator.wire_value());
+            message.base_mut().add_long(candidate_player_id);
+            if let Some(person) = person {
+                let Some(name) = person.name_wire_bytes() else {
+                    return Err(FactionApplyMemberUpdateBuildError {
+                        candidate_player_id,
+                        recipient_player_id,
+                        game_server_id,
+                        completed_deliveries: deliveries,
+                    });
+                };
+                message.base_mut().add(name);
+                message.base_mut().add_long(person.level);
+                message.base_mut().add_long(person.occupation);
+            } else {
+                message.base_mut().add(&[0]);
+                message.base_mut().add_long(0);
+                message.base_mut().add_long(0);
+            }
+            deliveries.push(FactionApplyMemberDelivery {
+                recipient_player_id,
+                game_server_id,
+                result: game.send_msg_to_game_server(game_server_id, &message),
+            });
+        }
+        Ok(deliveries)
+    }
+
+    /// Удаляет кандидата до публикации пустого `OP_Delete`-record-а.
+    pub(crate) fn remove_apply_member(
+        &mut self,
+        game: &CGame,
+        candidate_player_id: i32,
+    ) -> FactionRemoveApplyMemberOutcome {
+        if self.apply_persons.remove(&candidate_player_id).is_none() {
+            return FactionRemoveApplyMemberOutcome::NotFound;
+        }
+
+        let deliveries =
+            self.update_apply_member_to_client(game, candidate_player_id, EOperator::Delete);
+        self.set_change_data(8);
+        FactionRemoveApplyMemberOutcome::Removed {
+            faction_id: self.faction_id,
+            deliveries,
+        }
     }
 
     /// Публикует удаление по переданному ID либо последний leave-word целиком.
@@ -4095,7 +4240,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::UpdateAllApplyMemberToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:924
@@ -4417,7 +4562,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::RemoveApplyMember
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:775
@@ -5117,7 +5262,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::UpdateApplyMemberToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:891
