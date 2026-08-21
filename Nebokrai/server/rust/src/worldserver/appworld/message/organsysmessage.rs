@@ -1,6 +1,7 @@
 //! Статус корпуса: `IMPLEMENTED_PARTIAL` для достигнутых organizing opcode,
 //! включая список фракций страны `0x60107`, подачу заявки `0x60108`, отмену
-//! заявки `0x60109`, решение по заявке `0x6010A`, заявку союза `0x60118`,
+//! заявки `0x60109`, решение по заявке `0x6010A`, исключение участника
+//! `0x6010B`, заявку союза `0x60118`,
 //! общий session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
@@ -46,6 +47,15 @@
 //! route/tail gates и прямой wire-ответ отсутствуют; добавленные Linux-донором
 //! проверки не перенесены. Побочные сообщения, member mutations и join-log
 //! остаются внутри уже восстановленного concrete `CFaction::DoJoin`.
+//! Exact `0x004A7180..0x004A71CC` для `0x6010B` читает два полных `Long` как
+//! `(manager ID, target ID)`, разрешает faction manager-а через
+//! `IsFreePlayer`, дважды выполняет nullable `GetFactionOrganizing` и вызывает
+//! virtual `CFaction::FireOut(manager, target)` в slot `+0x24`. Между двумя
+//! lookup нет наблюдаемого действия, поэтому Rust сводит их к одному live
+//! borrow. Online-manager, route/tail gates и прямой wire-ответ отсутствуют;
+//! проверки старого Linux-донора не перенесены. War/Goods-War gates,
+//! уведомления, member mutations, fire-log и локальный `0x60508` остаются
+//! внутри exact concrete owner `0x004BB140..0x004BB897`.
 //! Exact диапазоны
 //! `0x004A74C6..0x004A7509` и `0x004A7511..0x004A7543` исправляют повреждённый
 //! RAW. Общий branch читает
@@ -303,7 +313,8 @@ use crate::worldserver::appworld::goodswarmember::{
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
     FactionApplyForJoinEffects, FactionApplyForJoinOutcome, FactionContributorContext,
-    FactionDoJoinEffects, current_local_member_time, goods_war_check_for_faction_id,
+    FactionDoJoinEffects, FactionFireOutBlock, FactionFireOutContext, FactionFireOutOutcome,
+    current_local_member_time, goods_war_check_for_faction_id,
     FactionEnemyMutationBlock, FactionEnemyMutationContext,
     FactionEnemyWarLogArgument, FactionExperienceBlock, FactionExperienceUpdate,
     FactionLevelContext, FactionMemberInfoRequest, FactionOrganizingInfoContext,
@@ -376,6 +387,7 @@ const FACTION_LIST_RESPONSE_TYPE: i32 = 0x7FE07;
 const FACTION_APPLICATION_MESSAGE_TYPE: i32 = 0x60108;
 const CANCEL_FACTION_APPLICATION_MESSAGE_TYPE: i32 = 0x60109;
 const FACTION_APPLICATION_DECISION_MESSAGE_TYPE: i32 = 0x6010A;
+const FACTION_FIRE_OUT_MESSAGE_TYPE: i32 = 0x6010B;
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
@@ -939,6 +951,100 @@ impl FactionDoJoinEffects for WorldFactionDoJoinEffects<'_, '_, '_, '_, '_> {
             faction_name,
             log_type,
         );
+    }
+}
+
+/// Concrete war/goods/string/player/log adapter faction `FireOut` ветви.
+struct WorldFactionFireOutEffects<'game, 'callbacks, 'effects, 'update, 'log> {
+    game: &'game CGame,
+    village_war: &'game CVillageWarSys,
+    attack_city: &'game CAttackCitySys,
+    goods_war: &'game mut CGoodsWarMember,
+    use_log_system: bool,
+    faction_fire_out_log_enabled: bool,
+    callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
+    update_player: &'update mut dyn FnMut(i32),
+    write_faction_fire_out_log:
+        &'log mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
+}
+
+struct WorldFactionFireOutGoodsWarDelivery<'game> {
+    game: &'game CGame,
+}
+
+impl GoodsWarDeliveryContext for WorldFactionFireOutGoodsWarDelivery<'_> {
+    fn send_all(&mut self, message: &CMessage) -> i32 {
+        message
+            .send_all(self.game.current_game_server_sender().as_ref())
+            .unwrap_or(0)
+    }
+}
+
+impl FactionOrganizingInfoContext for WorldFactionFireOutEffects<'_, '_, '_, '_, '_> {
+    fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
+        Some((self.callbacks.world_string)(string_id))
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+impl FactionFireOutContext for WorldFactionFireOutEffects<'_, '_, '_, '_, '_> {
+    fn already_declared_for_village_war(&self, faction_id: i32) -> bool {
+        self.village_war.is_already_declared_for_war(faction_id)
+    }
+
+    fn already_declared_for_city_war(&self, faction_id: i32) -> bool {
+        self.attack_city.is_already_declared_for_war(faction_id)
+    }
+
+    fn goods_war_blocks_fire_out(&self, faction_id: i32, _manager_id: i32) -> bool {
+        goods_war_check_for_faction_id(faction_id, |candidate| {
+            self.goods_war.contains_faction_id(candidate)
+        })
+    }
+
+    fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| UnionFormatArgument::Text(*argument))
+            .collect::<Vec<_>>();
+        (self.callbacks.format_world_string)(string_id, &arguments)
+    }
+
+    fn update_player_faction_info(&mut self, player_id: i32) {
+        (self.update_player)(player_id);
+    }
+
+    fn faction_fire_out_log_enabled(&self) -> bool {
+        self.use_log_system && self.faction_fire_out_log_enabled
+    }
+
+    fn write_faction_fire_out_log(
+        &mut self,
+        member_id: i32,
+        member_name: &[u8],
+        manager_id: i32,
+        manager_name: &[u8],
+        faction_id: i32,
+        faction_name: &[u8],
+        log_type: i32,
+    ) {
+        (self.write_faction_fire_out_log)(
+            member_id,
+            member_name,
+            manager_id,
+            manager_name,
+            faction_id,
+            faction_name,
+            log_type,
+        );
+    }
+
+    fn delete_goods_war_member(&mut self, player_id: i32) {
+        let mut delivery = WorldFactionFireOutGoodsWarDelivery { game: self.game };
+        let _ = self.goods_war.delete_one_member(player_id, &mut delivery);
     }
 }
 
@@ -1851,6 +1957,101 @@ pub(crate) fn dispatch_faction_application_decision(
         manager_id,
         applicant_id,
         approve_flag,
+        outcome,
+    }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionFireOutOutcome {
+    FactionNotFound { faction_id: i32 },
+    Applied {
+        faction_id: i32,
+        outcome: FactionFireOutOutcome,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionFireOutBlock {
+    ManagerMembership { map_key: i32 },
+    FireOut {
+        faction_id: i32,
+        source: FactionFireOutBlock,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionFireOutDispatch {
+    pub(crate) manager_id: i32,
+    pub(crate) target_id: i32,
+    pub(crate) outcome: OrganizingFactionFireOutOutcome,
+}
+
+/// Выполняет exact `0x6010B`: два `Long`, manager-faction lookup и virtual
+/// `CFaction::FireOut` без route/tail/wire ingress-а.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn dispatch_faction_fire_out(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    parameters: &COrganizingParam,
+    village_war: &CVillageWarSys,
+    attack_city: &CAttackCitySys,
+    goods_war: &mut CGoodsWarMember,
+    use_log_system: bool,
+    faction_fire_out_log_enabled: bool,
+    write_faction_fire_out_log:
+        &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    update_player: &mut dyn FnMut(i32),
+) -> Option<Result<OrganizingFactionFireOutDispatch, OrganizingFactionFireOutBlock>> {
+    if message.message_type() != FACTION_FIRE_OUT_MESSAGE_TYPE {
+        return None;
+    }
+
+    let manager_id = message.base_mut().get_long().unwrap_or(0);
+    let target_id = message.base_mut().get_long().unwrap_or(0);
+    let faction_id = match organizing.is_free_player(manager_id) {
+        FreePlayerLookup::NoFaction => 0,
+        FreePlayerLookup::Faction(faction_id) => faction_id,
+        FreePlayerLookup::BlockedNullFaction { map_key } => {
+            return Some(Err(OrganizingFactionFireOutBlock::ManagerMembership {
+                map_key,
+            }));
+        }
+    };
+    let Some(faction) = organizing.faction_by_id_mut(faction_id) else {
+        return Some(Ok(OrganizingFactionFireOutDispatch {
+            manager_id,
+            target_id,
+            outcome: OrganizingFactionFireOutOutcome::FactionNotFound { faction_id },
+        }));
+    };
+    let mut effects = WorldFactionFireOutEffects {
+        game,
+        village_war,
+        attack_city,
+        goods_war,
+        use_log_system,
+        faction_fire_out_log_enabled,
+        callbacks,
+        update_player,
+        write_faction_fire_out_log,
+    };
+    let outcome = match faction.fire_out(game, parameters, manager_id, target_id, &mut effects) {
+        Ok(outcome) => OrganizingFactionFireOutOutcome::Applied {
+            faction_id,
+            outcome,
+        },
+        Err(source) => {
+            return Some(Err(OrganizingFactionFireOutBlock::FireOut {
+                faction_id,
+                source,
+            }));
+        }
+    };
+    Some(Ok(OrganizingFactionFireOutDispatch {
+        manager_id,
+        target_id,
         outcome,
     }))
 }
