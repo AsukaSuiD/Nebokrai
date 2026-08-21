@@ -995,8 +995,8 @@ use crate::worldserver::appworld::jjcsystem::{
     CJJcSystem, JjcRunBlock, JjcRunConfig, JjcRunContext, JjcRunReport,
 };
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
-    CFourNationWarSys, FourNationExploitContext, FourNationExploitLoadedDisposition,
-    FourNationWarResultContext,
+    CFourNationWarSys, FourNationCountryFailContext, FourNationExploitContext,
+    FourNationExploitLoadedDisposition, FourNationWarResultContext,
 };
 use crate::worldserver::appworld::leiting::{
     CLeiTing, LeiTingBlock, LeiTingContext, LeiTingLocalTime, LeiTingRunReport,
@@ -1009,8 +1009,8 @@ use crate::worldserver::appworld::message::countrymessage::{
     WorldFourNationExploitDatabaseDisposition, WorldFourNationExploitSync,
     decode_four_nation_exploit_message,
     dispatch_country_war_declaration_message, dispatch_country_war_victory_message,
-    dispatch_four_nation_war_result_message, dispatch_four_nation_war_time_message,
-    on_country_message,
+    dispatch_four_nation_country_fail_message, dispatch_four_nation_war_result_message,
+    dispatch_four_nation_war_time_message, on_country_message,
 };
 use crate::worldserver::appworld::message::gmamessage::{
     WorldGmaMessageDispatch, WorldGmaMessageOutcome, on_gma_message,
@@ -12031,6 +12031,14 @@ struct WorldFourNationExploitEffects<'a> {
     game: &'a mut CGame,
 }
 
+struct WorldFourNationCountryFailEffects<'a> {
+    game: &'a CGame,
+    organizing: &'a COrganizingCtrl,
+    globe_setup: &'a GlobeSetupSnapshot,
+    format_world_string:
+        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+}
+
 impl FourNationWarResultContext for WorldFourNationWarResultEffects<'_> {
     fn game_server_number_by_region_id(&mut self, region_id: i32) -> i32 {
         self.game.game_server_number_by_region_id(region_id)
@@ -12071,6 +12079,33 @@ impl FourNationExploitContext for WorldFourNationExploitEffects<'_> {
         map_id: i32,
     ) -> Result<i32, SendMessageError> {
         message.send_to_map_id(self.game.current_game_server_sender().as_ref(), map_id)
+    }
+}
+
+impl FourNationCountryFailContext for WorldFourNationCountryFailEffects<'_> {
+    fn country_name(&mut self, country: i32) -> Vec<u8> {
+        u8::try_from(country)
+            .ok()
+            .and_then(|country| self.globe_setup.country_name(country))
+            .map(|name| name[..name.len().min(9)].to_vec())
+            .unwrap_or_default()
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[&[u8]],
+    ) -> Vec<u8> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| UnionFormatArgument::Text(argument))
+            .collect::<Vec<_>>();
+        (self.format_world_string)(string_id, &arguments)
+    }
+
+    fn send_top_info(&mut self, text: &[u8]) -> Result<i32, SendMessageError> {
+        self.organizing
+            .send_top_info_to_client(self.game, -1, 1, 2, text)
     }
 }
 
@@ -12510,6 +12545,22 @@ where
                         after_database,
                     },
                 ),
+            };
+        }
+        let four_nation_country_fail = {
+            let mut effects = WorldFourNationCountryFailEffects {
+                game,
+                organizing: &*organizing,
+                globe_setup,
+                format_world_string: &mut *application_callbacks.format_world_string,
+            };
+            dispatch_four_nation_country_fail_message(&mut message, &mut effects)
+        };
+        if let Some(sync) = four_nation_country_fail {
+            return ProcessedWorldEvent::CountryMessage {
+                source,
+                legacy_run_result,
+                outcome: WorldCountryMessageOutcome::FourNationCountryFail(sync),
             };
         }
         let four_nation_war_time = {

@@ -57,6 +57,15 @@
 //! `1..=4` в regions `11000..14000`, принимает только map route `1..=4` и
 //! отправляет `0x7FE47 { player_id:i32, war_time:u32 }`. Source/socket,
 //! connected-state и send-result не влияют на ветвление.
+//!
+//! Exact `OneCountryFail` `0x00494440..0x00494600` выбирает `XBWS0036`, когда
+//! обе страны равны, иначе `XBWS0037`; аргументы — копии country-name slots
+//! `m_CountryName[5][10]`. Затем он безусловно вызывает уже подтверждённый
+//! `COrganizingCtrl::SendTopInfoToClient(-1, 1, 2, text)`, то есть реальный
+//! broadcast wire — `0x7FA04`, а не донорский `0x7FE48`. Старые `strcpy` в
+//! десятибайтовые slots и последующий `strlen` после возможного `_snprintf`
+//! overflow были внутренним UB: Rust безопасно ограничивает имя девятью,
+//! notice — 255 байтами, сохраняя нормальный C-string wire.
 
 use std::error::Error;
 use std::fmt;
@@ -133,6 +142,12 @@ pub(crate) trait FourNationExploitContext {
     ) -> Result<i32, SendMessageError>;
 }
 
+pub(crate) trait FourNationCountryFailContext {
+    fn country_name(&mut self, country: i32) -> Vec<u8>;
+    fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8>;
+    fn send_top_info(&mut self, text: &[u8]) -> Result<i32, SendMessageError>;
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FourNationExploitLoadedDisposition {
     PlayerMissing,
@@ -176,6 +191,17 @@ pub(crate) struct FourNationWarTimeReport {
     pub(crate) war_time: u32,
     pub(crate) country: i32,
     pub(crate) disposition: FourNationWarTimeDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FourNationCountryFailReport {
+    pub(crate) country: i32,
+    pub(crate) failed_country: i32,
+    pub(crate) string_id: &'static [u8],
+    pub(crate) country_name: Vec<u8>,
+    pub(crate) failed_country_name: Option<Vec<u8>>,
+    pub(crate) text: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -257,6 +283,41 @@ impl CFourNationWarSys {
             war_time,
             country,
             disposition,
+        }
+    }
+
+    pub(crate) fn one_country_fail<Context: FourNationCountryFailContext + ?Sized>(
+        country: i32,
+        failed_country: i32,
+        context: &mut Context,
+    ) -> FourNationCountryFailReport {
+        let country_name = context.country_name(country);
+        let (string_id, failed_country_name, formatted) = if country == failed_country {
+            let string_id = b"XBWS0036";
+            let formatted = context.format_world_string(string_id, &[&country_name]);
+            (string_id.as_slice(), None, formatted)
+        } else {
+            let string_id = b"XBWS0037";
+            let failed_name = context.country_name(failed_country);
+            let formatted =
+                context.format_world_string(string_id, &[&country_name, &failed_name]);
+            (string_id.as_slice(), Some(failed_name), formatted)
+        };
+        let visible_length = formatted
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(formatted.len())
+            .min(0xff);
+        let text = formatted[..visible_length].to_vec();
+        let delivery = context.send_top_info(&text);
+        FourNationCountryFailReport {
+            country,
+            failed_country,
+            string_id,
+            country_name,
+            failed_country_name,
+            text,
+            delivery,
         }
     }
 

@@ -5,7 +5,7 @@
 //! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, exile-time
 //! `0x60316 -> 0x7FF15`, war-declare `0x60317 -> 0x7FF16` и four-nation result
 //! `0x60319 -> 0x7FE49`, `0x6031A -> 0x7FE46/DB`, no-op `0x6031B` и
-//! `0x6031C -> 0x7FE47` имеют статус
+//! `0x6031C -> 0x7FE47`, `0x6031D -> 0x7FA04` имеют статус
 //! `IMPLEMENTED`. Victory читает один
 //! unsigned country byte и вызывает исходно
 //! названный `CountryWarSys::on_flag_destory`; соседние opcodes helper не
@@ -53,6 +53,8 @@
 //! Exact `0x004A50B6..0x004A50DE` для `0x6031C` читает signed player ID,
 //! 32-bit war-time и signed country; route/wire выполняет подтверждённый
 //! `SendPlayerWarTimeToGS` без source/tail gate.
+//! Exact `0x004A50E0..0x004A50FE` для `0x6031D` читает две signed страны и
+//! вызывает `OneCountryFail`; source metadata и хвост не проверяются.
 //! Exact switch target `0x004A504E..0x004A5065` подтверждает, что `0x60318`
 //! читает один unsigned country byte и сразу передаёт его достигнутому
 //! `CountryWarSys`; конкретный region/country/localization/network context
@@ -69,8 +71,9 @@ use crate::worldserver::appworld::country::countryparam::{
     CCountryParam, CountryParameterUnavailable,
 };
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
-    CFourNationWarSys, FourNationExploitLoadedReport, FourNationSignUpDisposition,
-    FourNationWarResultContext, FourNationWarResultReport, FourNationWarTimeReport,
+    CFourNationWarSys, FourNationCountryFailContext, FourNationCountryFailReport,
+    FourNationExploitLoadedReport, FourNationSignUpDisposition, FourNationWarResultContext,
+    FourNationWarResultReport, FourNationWarTimeReport,
 };
 use crate::worldserver::worldserver::game::{CGame, legacy_tick_ms};
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
@@ -221,6 +224,14 @@ pub(crate) struct WorldFourNationWarTimeSync {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldFourNationCountryFailSync {
+    pub(crate) source_map_id: i32,
+    pub(crate) source_socket_id: i32,
+    pub(crate) numeric_payload_complete: [bool; 2],
+    pub(crate) report: FourNationCountryFailReport,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryMessageOutcome {
     Relay(WorldCountryRelayOutcome),
     ScalarSynchronized(WorldCountryScalarSync),
@@ -232,6 +243,7 @@ pub(crate) enum WorldCountryMessageOutcome {
     FourNationExploit(WorldFourNationExploitSync),
     FourNationSignUp(WorldFourNationSignUpSync),
     FourNationWarTime(WorldFourNationWarTimeSync),
+    FourNationCountryFail(WorldFourNationCountryFailSync),
 }
 
 pub(crate) enum WorldCountryMessageDispatch {
@@ -534,6 +546,33 @@ pub(crate) fn dispatch_four_nation_war_time_message<
             decoded_player_id.is_some(),
             decoded_war_time.is_some(),
             decoded_country.is_some(),
+        ],
+        report,
+    })
+}
+
+pub(crate) fn dispatch_four_nation_country_fail_message<
+    Context: FourNationCountryFailContext + ?Sized,
+>(
+    message: &mut CMessage,
+    context: &mut Context,
+) -> Option<WorldFourNationCountryFailSync> {
+    if message.message_type() != 0x6031d {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_country = message.base_mut().get_long();
+    let country = decoded_country.unwrap_or(0);
+    let decoded_failed_country = message.base_mut().get_long();
+    let failed_country = decoded_failed_country.unwrap_or(0);
+    let report = CFourNationWarSys::one_country_fail(country, failed_country, context);
+    Some(WorldFourNationCountryFailSync {
+        source_map_id,
+        source_socket_id,
+        numeric_payload_complete: [
+            decoded_country.is_some(),
+            decoded_failed_country.is_some(),
         ],
         report,
     })
