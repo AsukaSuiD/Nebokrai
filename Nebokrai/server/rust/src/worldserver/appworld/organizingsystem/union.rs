@@ -26,7 +26,7 @@
 //! `UpdateMemberInfoToClient` RVA `0x000C5840`, `AddMembersToByteArray` RVA
 //! `0x000C21D0`, `AddToByteArray` RVA `0x000C6590`, public-конструктор RVA
 //! `0x000C64D0`, `Initial` RVA `0x000C1FE0` и `AddFaction` RVA
-//! `0x000C3170` — `IMPLEMENTED`;
+//! `0x000C3170`, `DoJoin` RVA `0x000C66A0` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -34,7 +34,7 @@
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
 //! Исходные владельцы PDB:
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h`
-//! и `union.cpp:1442`.
+//! и `union.cpp:680,1442`.
 //!
 //! Точный PDB задаёт старый `CUnion` размером `0x50`: signed ID `+0x4`, имя
 //! `+0x8`, signed master ID `+0x24`, ordered member-map `+0x28`, `tagTime`
@@ -169,6 +169,16 @@
 //! всем union members и player refresh только добавленной faction. Dirty-bit
 //! этот owner не ставит. Fixed name/title сохраняют layout с typed overflow;
 //! внутренние 256-байтовые `_sprintf` buffers заменены владеющим formatter-ом.
+//! `DoJoin` до чтения заявки отвергает `member_count >= 50`: exact data-word
+//! EXE исправляет устаревший лимит `5` Linux-донора. Manager/applicant должны
+//! быть ненулевыми, а applicant — совпасть с единственным `m_ApplyPerson`;
+//! approve/time не читаются. После совпадения заявка немедленно сбрасывается и
+//! остаётся сброшенной при уже последующих membership/authority отказах. Затем
+//! строго идут `IsFreeFaction`, право `PV_ConMem`, `AddFaction`, initial union
+//! snapshot новой faction, `UpdateMemberInfoToClient(OP_Add)` и dirty bit `2`.
+//! Bool snapshot исходно игнорируется, что сохранено отдельно от typed safe-
+//! блокировок повреждённого state; внешние эффекты до такой границы не
+//! откатываются.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -189,6 +199,7 @@ use crate::worldserver::worldserver::game::CGame;
 
 const DELETE_UNION_ORGANIZING_MESSAGE_TYPE: i32 = 0x7FE05;
 const UNION_MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0E;
+const MAX_UNION_MEMBER_COUNT: i32 = 50;
 
 /// Узкая read-only граница controller-wide `IsFactionMaster`.
 pub(crate) trait UnionOperatorValidationContext {
@@ -366,6 +377,24 @@ pub(crate) trait UnionAddFactionEffects {
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>);
 }
 
+/// Controller callbacks, которые `CUnion::DoJoin` вызывал через singleton.
+pub(crate) trait UnionDoJoinContext {
+    type FreeFactionBlock;
+    type InitialSnapshotBlock;
+
+    fn union_id_for_joining_faction(
+        &self,
+        faction_id: i32,
+    ) -> Result<i32, Self::FreeFactionBlock>;
+
+    fn add_current_union_to_client_by_faction_id(
+        &mut self,
+        game: &CGame,
+        union: &mut CUnion,
+        faction_id: i32,
+    ) -> Result<bool, Self::InitialSnapshotBlock>;
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct UnionFactionPlayerRefreshReport {
     pub(crate) faction_id: i32,
@@ -438,6 +467,68 @@ pub(crate) enum UnionAddFactionBlock {
         member_inserted: bool,
         superior_assigned: bool,
         source: FactionOwnedCityRefreshBlock,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UnionDoJoinRejection {
+    MemberLimit {
+        member_count: i32,
+        maximum: i32,
+    },
+    InvalidApplication {
+        manager_id: i32,
+        applicant_faction_id: i32,
+        pending_applicant_faction_id: Option<i32>,
+    },
+    ApplicantAlreadyInUnion {
+        applicant_faction_id: i32,
+        union_id: i32,
+    },
+    OperatorNotAuthorized,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionDoJoinReport {
+    pub(crate) add_faction: UnionAddFactionOutcome,
+    pub(crate) initial_snapshot_legacy_result: bool,
+    pub(crate) member_update: UnionMemberUpdateReport,
+    pub(crate) dirty_set: bool,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionDoJoinOutcome {
+    Rejected {
+        reason: UnionDoJoinRejection,
+        application_cleared: bool,
+    },
+    Joined(UnionDoJoinReport),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionDoJoinBlock<FreeFactionBlock, OperatorBlock, InitialSnapshotBlock> {
+    FreeFactionScan {
+        source: FreeFactionBlock,
+        application_cleared: bool,
+    },
+    OperatorValidation {
+        source: OperatorBlock,
+        application_cleared: bool,
+    },
+    AddFaction {
+        source: UnionAddFactionBlock,
+        application_cleared: bool,
+    },
+    InitialSnapshot {
+        source: InitialSnapshotBlock,
+        application_cleared: bool,
+        add_faction: UnionAddFactionOutcome,
+    },
+    MemberUpdate {
+        source: UnionMemberUpdateBlock,
+        application_cleared: bool,
+        add_faction: UnionAddFactionOutcome,
+        initial_snapshot_legacy_result: bool,
     },
 }
 
@@ -947,6 +1038,147 @@ impl CUnion {
             owned_city_refresh,
             member_information,
             player_refresh,
+        }))
+    }
+
+    /// Принимает pending faction-заявку в точном порядке `CUnion::DoJoin`.
+    ///
+    /// EXE хранит лимит `50`; значение `5` из старого Linux-донора к этой
+    /// сборке не относится. После совпадения заявки она сбрасывается до
+    /// membership/authority-проверок. `approve_flag` и `join_time` исходная
+    /// функция не читала. Результат initial snapshot игнорируется, но
+    /// сохраняется в отчёте; safe-блокировки malformed state не продолжают
+    /// путь после места старого UB.
+    pub(crate) fn do_join<Context, Effects>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        manager_id: i32,
+        applicant_faction_id: i32,
+        _approve_flag: i32,
+        _join_time: TagTimeValue,
+        context: &mut Context,
+        effects: &mut Effects,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<
+        UnionDoJoinOutcome,
+        UnionDoJoinBlock<
+            <Context as UnionDoJoinContext>::FreeFactionBlock,
+            <Context as UnionOperatorValidationContext>::Block,
+            <Context as UnionDoJoinContext>::InitialSnapshotBlock,
+        >,
+    >
+    where
+        Context: UnionFactionJoinContext
+            + UnionOperatorValidationContext
+            + UnionDoJoinContext,
+        Effects: UnionAddFactionEffects,
+    {
+        let member_count = self.members.len() as u32 as i32;
+        if member_count >= MAX_UNION_MEMBER_COUNT {
+            return Ok(UnionDoJoinOutcome::Rejected {
+                reason: UnionDoJoinRejection::MemberLimit {
+                    member_count,
+                    maximum: MAX_UNION_MEMBER_COUNT,
+                },
+                application_cleared: false,
+            });
+        }
+        if manager_id == 0
+            || applicant_faction_id == 0
+            || self.apply_person != Some(applicant_faction_id)
+        {
+            return Ok(UnionDoJoinOutcome::Rejected {
+                reason: UnionDoJoinRejection::InvalidApplication {
+                    manager_id,
+                    applicant_faction_id,
+                    pending_applicant_faction_id: self.apply_person,
+                },
+                application_cleared: false,
+            });
+        }
+
+        self.apply_person = Some(0);
+        let existing_union_id = context
+            .union_id_for_joining_faction(applicant_faction_id)
+            .map_err(|source| UnionDoJoinBlock::FreeFactionScan {
+                source,
+                application_cleared: true,
+            })?;
+        if existing_union_id > 0 {
+            return Ok(UnionDoJoinOutcome::Rejected {
+                reason: UnionDoJoinRejection::ApplicantAlreadyInUnion {
+                    applicant_faction_id,
+                    union_id: existing_union_id,
+                },
+                application_cleared: true,
+            });
+        }
+
+        let operator_authorized = self
+            .check_operator_validate(manager_id, EPurview::ConMem as i32, context)
+            .map_err(|source| UnionDoJoinBlock::OperatorValidation {
+                source,
+                application_cleared: true,
+            })?;
+        if !operator_authorized {
+            return Ok(UnionDoJoinOutcome::Rejected {
+                reason: UnionDoJoinRejection::OperatorNotAuthorized,
+                application_cleared: true,
+            });
+        }
+
+        let add_faction = self
+            .add_faction(
+                applicant_faction_id,
+                context,
+                effects,
+                parameters,
+                game,
+                update_player,
+            )
+            .map_err(|source| UnionDoJoinBlock::AddFaction {
+                source,
+                application_cleared: true,
+            })?;
+        let initial_snapshot_legacy_result =
+            match context.add_current_union_to_client_by_faction_id(
+                game,
+                self,
+                applicant_faction_id,
+            ) {
+                Ok(result) => result,
+                Err(source) => {
+                    return Err(UnionDoJoinBlock::InitialSnapshot {
+                        source,
+                        application_cleared: true,
+                        add_faction,
+                    });
+                }
+            };
+        let member_update = match self.update_member_info_to_client(
+            game,
+            applicant_faction_id,
+            EOperator::Add,
+            context,
+        ) {
+            Ok(report) => report,
+            Err(source) => {
+                return Err(UnionDoJoinBlock::MemberUpdate {
+                    source,
+                    application_cleared: true,
+                    add_faction,
+                    initial_snapshot_legacy_result,
+                });
+            }
+        };
+        self.set_change_data(2);
+
+        Ok(UnionDoJoinOutcome::Joined(UnionDoJoinReport {
+            add_faction,
+            initial_snapshot_legacy_result,
+            member_update,
+            dirty_set: true,
         }))
     }
 
@@ -2943,21 +3175,6 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: CUnion::DoJoin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:680
-// RVA: 0x000C66A0
-// ADDRESS: 004c66a0
-// PROTOTYPE: bool __thiscall DoJoin(long param_1, long param_2, long param_3, tagTime * param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 
 // ============================================================================
 // FUNCTION: Unwind@0052ff60

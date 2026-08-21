@@ -15,14 +15,15 @@
 //! `IMPLEMENTED`, `GetpFactionById` RVA `0x00034080` и
 //! `GetConfederationOrganizing` RVA `0x00036BF0`,
 //! `IsFactionMaster` RVA `0x000344A0`, `ReInitialFacFactionByLvl` RVA
-//! `0x00034C80` — `IMPLEMENTED`. Точная пара:
+//! `0x00034C80` и `AddUnionToClientByFactionID` RVA `0x00038010` —
+//! `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
 //! Исходные владельцы PDB:
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.h`
 //! и
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:73,164,242,725,1352,1641,1655,1910,1952,1960,1970,1998`.
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:73,164,242,626,725,1352,1641,1655,1910,1952,1960,1970,1998`.
 //!
 //! `GenerateSaveData` проходит faction-map, затем union-map в signed key-order.
 //! `force_all=true` ставит bits `1/2/4/8` четырьмя virtual-вызовами; concrete
@@ -74,6 +75,18 @@
 //! member-map обоих concrete owners лежат по одинаковым offsets. Он ищет
 //! входной faction ID и возвращает первый положительный union ID. Null map-
 //! value остаётся такой же локальной неизвестностью старого разыменования.
+//!
+//! `AddUnionToClientByFactionID` при нулевом union ID сначала вызывает
+//! `IsFreeFaction`; неположительный результат и отсутствующий/null union-owner
+//! возвращают `false`. Найденная faction обходится по всем member-key в signed
+//! order — Linux-донор ошибочно ограничивал путь master-ом. Допускается только
+//! online player с ненулевым GameServer ID и полученными faction data. Wire
+//! `0x7FE04` получает live `CPlayer::GetID`, затем заново построенный полный
+//! union snapshot; поэтому cached faction name/level могут обновиться перед
+//! каждым send. Нормальный owner-путь возвращает `true` даже без получателей и
+//! игнорирует send result. `CMessage`, `BTreeMap`, split borrow и `Result`
+//! заменяют transport/MSVC tree/null plumbing; отсутствие faction, которое
+//! машина разыменовывала, остаётся typed safe-границей с выполненным prefix-ом.
 //!
 //! `RemovePersonFromApplyFactionList` вызывает `RemoveApplyMember(player)` у
 //! каждой faction в signed map-order, игнорирует все concrete return values и
@@ -222,8 +235,9 @@ use super::organizing::EOperator;
 use super::organizingparam::COrganizingParam;
 use super::union::{
     CUnion, UnionClientSnapshotContext, UnionFactionMemberContext,
-    UnionFactionJoinContext, UnionFactionLevelBlock, UnionFactionStateMutationContext,
-    UnionInitialMutationContext, UnionMasterFactionQueryContext,
+    UnionDoJoinContext, UnionFactionJoinContext, UnionFactionLevelBlock,
+    UnionFactionStateMutationContext, UnionInitialMutationContext,
+    UnionMasterFactionQueryContext, UnionMemberSnapshotBlock,
     UnionOperatorValidationContext, UnionOwnedCityMutationContext,
     UnionPlayerRefreshContext, UnionSendInfoContext,
 };
@@ -234,6 +248,7 @@ use crate::worldserver::appworld::player::{
 use crate::worldserver::worldserver::game::CGame;
 
 const TOP_INFO_MESSAGE_TYPE: i32 = 0x7FA04;
+const UNION_INITIAL_MESSAGE_TYPE: i32 = 0x7FE04;
 const EXPIRING_TIMER_FLAG: i32 = 2;
 
 static NEXT_TOP_INFO_ID: AtomicI32 = AtomicI32::new(1);
@@ -277,6 +292,49 @@ pub(crate) enum FreeFactionLookup {
     NoUnion,
     Union(i32),
     BlockedNullConfederation { map_key: i32 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AddUnionToFactionRejection {
+    UnionIdNotResolved { requested_union_id: i32 },
+    UnionEntryMissing { union_id: i32 },
+    NullUnionPointer { union_id: i32 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AddUnionToFactionDelivery {
+    pub(crate) member_map_key: i32,
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum AddUnionToFactionOutcome {
+    Rejected(AddUnionToFactionRejection),
+    Sent {
+        union_id: i32,
+        faction_id: i32,
+        deliveries: Vec<AddUnionToFactionDelivery>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum AddUnionToFactionBlock {
+    FreeFactionScan { map_key: i32 },
+    FactionUnavailable {
+        faction_id: i32,
+        entry_present: bool,
+    },
+    Snapshot {
+        union_id: i32,
+        faction_id: i32,
+        member_map_key: i32,
+        recipient_player_id: i32,
+        game_server_id: i32,
+        source: UnionMemberSnapshotBlock,
+        completed_deliveries: Vec<AddUnionToFactionDelivery>,
+    },
 }
 
 /// Safe-граница исходного null-dereference внутри `IsFreeFaction` scan.
@@ -568,6 +626,11 @@ pub(crate) struct COrganizingCtrl {
     delete_factions: VecDeque<i32>,
     delete_unions: VecDeque<i32>,
     top_infos: VecDeque<StTopInfo>,
+}
+
+/// Разделённый borrow faction-map для union snapshot во время mutable union lookup.
+struct UnionFactionMapView<'a> {
+    factions: &'a BTreeMap<i32, Option<Box<CFaction>>>,
 }
 
 /// Явная per-call замена singleton/controller и `CGame::s_mapRegionList`.
@@ -950,6 +1013,57 @@ impl COrganizingCtrl {
         FreeFactionLookup::NoUnion
     }
 
+    /// Отправляет полный union snapshot каждому готовому клиенту одной faction.
+    ///
+    /// Нулевой union ID сначала разрешается через `IsFreeFaction`. Получатели
+    /// обходятся по signed member-key, но в сообщение попадает live player ID;
+    /// snapshot заново строится для каждого получателя, как virtual
+    /// `CUnion::AddToByteArray` в исходном цикле.
+    pub(crate) fn add_union_to_client_by_faction_id(
+        &mut self,
+        game: &CGame,
+        requested_union_id: i32,
+        faction_id: i32,
+    ) -> Result<AddUnionToFactionOutcome, AddUnionToFactionBlock> {
+        let union_id = if requested_union_id == 0 {
+            match self.is_free_faction(faction_id) {
+                FreeFactionLookup::NoUnion => 0,
+                FreeFactionLookup::Union(union_id) => union_id,
+                FreeFactionLookup::BlockedNullConfederation { map_key } => {
+                    return Err(AddUnionToFactionBlock::FreeFactionScan { map_key });
+                }
+            }
+        } else {
+            requested_union_id
+        };
+        if union_id < 1 {
+            return Ok(AddUnionToFactionOutcome::Rejected(
+                AddUnionToFactionRejection::UnionIdNotResolved { requested_union_id },
+            ));
+        }
+
+        match self.confederations.get(&union_id) {
+            None => {
+                return Ok(AddUnionToFactionOutcome::Rejected(
+                    AddUnionToFactionRejection::UnionEntryMissing { union_id },
+                ));
+            }
+            Some(None) => {
+                return Ok(AddUnionToFactionOutcome::Rejected(
+                    AddUnionToFactionRejection::NullUnionPointer { union_id },
+                ));
+            }
+            Some(Some(_)) => {}
+        }
+
+        let (factions, confederations) = (&self.factions, &mut self.confederations);
+        let union = confederations
+            .get_mut(&union_id)
+            .and_then(Option::as_deref_mut)
+            .expect("union entry и pointer проверены до разделения borrow");
+        send_union_snapshot_to_faction(game, factions, union, faction_id)
+    }
+
     /// Удаляет player из apply-list каждой faction и на normal return даёт `0`.
     pub(crate) fn remove_person_from_apply_faction_list(
         &mut self,
@@ -1269,6 +1383,34 @@ impl UnionOperatorValidationContext for COrganizingCtrl {
     }
 }
 
+impl UnionDoJoinContext for COrganizingCtrl {
+    type FreeFactionBlock = FactionUnionMembershipLookupBlock;
+    type InitialSnapshotBlock = AddUnionToFactionBlock;
+
+    fn union_id_for_joining_faction(
+        &self,
+        faction_id: i32,
+    ) -> Result<i32, Self::FreeFactionBlock> {
+        match self.is_free_faction(faction_id) {
+            FreeFactionLookup::NoUnion => Ok(0),
+            FreeFactionLookup::Union(union_id) => Ok(union_id),
+            FreeFactionLookup::BlockedNullConfederation { map_key } => {
+                Err(FactionUnionMembershipLookupBlock { map_key })
+            }
+        }
+    }
+
+    fn add_current_union_to_client_by_faction_id(
+        &mut self,
+        game: &CGame,
+        union: &mut CUnion,
+        faction_id: i32,
+    ) -> Result<bool, Self::InitialSnapshotBlock> {
+        send_union_snapshot_to_faction(game, &self.factions, union, faction_id)
+            .map(|outcome| matches!(outcome, AddUnionToFactionOutcome::Sent { .. }))
+    }
+}
+
 impl UnionMasterFactionQueryContext for COrganizingCtrl {
     fn faction_is_owned_city(&self, faction_id: i32, region_id: i32) -> Option<i32> {
         self.faction_by_id(faction_id)
@@ -1517,6 +1659,100 @@ impl UnionFactionMemberContext for COrganizingCtrl {
             .map(Some)
             .ok_or(UnionFactionLevelBlock { faction_id })
     }
+}
+
+impl UnionFactionMemberContext for UnionFactionMapView<'_> {
+    fn faction_member_player_ids(&self, faction_id: i32) -> Option<Vec<i32>> {
+        self.factions
+            .get(&faction_id)
+            .and_then(Option::as_deref)
+            .map(|faction| faction.get_members().keys().copied().collect())
+    }
+
+    fn faction_name(&self, faction_id: i32) -> Option<Vec<u8>> {
+        self.factions
+            .get(&faction_id)
+            .and_then(Option::as_deref)
+            .map(|faction| faction.name().to_vec())
+    }
+
+    fn faction_level(
+        &self,
+        faction_id: i32,
+    ) -> Result<Option<i32>, UnionFactionLevelBlock> {
+        let Some(faction) = self
+            .factions
+            .get(&faction_id)
+            .and_then(Option::as_deref)
+        else {
+            return Ok(None);
+        };
+        faction
+            .level()
+            .map(Some)
+            .ok_or(UnionFactionLevelBlock { faction_id })
+    }
+}
+
+fn send_union_snapshot_to_faction(
+    game: &CGame,
+    factions: &BTreeMap<i32, Option<Box<CFaction>>>,
+    union: &mut CUnion,
+    faction_id: i32,
+) -> Result<AddUnionToFactionOutcome, AddUnionToFactionBlock> {
+    let member_map_keys = match factions.get(&faction_id) {
+        Some(Some(faction)) if faction_id > 0 => {
+            faction.get_members().keys().copied().collect::<Vec<_>>()
+        }
+        faction => {
+            return Err(AddUnionToFactionBlock::FactionUnavailable {
+                faction_id,
+                entry_present: faction.is_some(),
+            });
+        }
+    };
+
+    let union_id = union.union_id();
+    let faction_view = UnionFactionMapView { factions };
+    let mut deliveries = Vec::new();
+    for member_map_key in member_map_keys {
+        let Some(player) = game.online_player_by_id(member_map_key as u32) else {
+            continue;
+        };
+        let game_server_id = game.game_server_number_by_player_id(member_map_key);
+        if game_server_id == 0 || !player.faction_data_received() {
+            continue;
+        }
+
+        let recipient_player_id = player.get_id();
+        let mut message = CMessage::new(UNION_INITIAL_MESSAGE_TYPE);
+        message.base_mut().add_long(recipient_player_id);
+        let mut snapshot = Vec::new();
+        if let Err(source) = union.add_to_byte_array(&mut snapshot, &faction_view) {
+            return Err(AddUnionToFactionBlock::Snapshot {
+                union_id,
+                faction_id,
+                member_map_key,
+                recipient_player_id,
+                game_server_id,
+                source,
+                completed_deliveries: deliveries,
+            });
+        }
+        message.base_mut().add(&snapshot);
+        deliveries.push(AddUnionToFactionDelivery {
+            member_map_key,
+            recipient_player_id,
+            game_server_id,
+            result: game.send_msg_to_game_server(game_server_id, &message),
+        });
+    }
+
+    Ok(AddUnionToFactionOutcome::Sent {
+        union_id,
+        faction_id,
+        deliveries,
+    })
 }
 
 impl PlayerOrganizingUpdater for COrganizingPlayerUpdater<'_> {
@@ -2321,20 +2557,6 @@ fn legacy_tick_ms() -> u32 {
 // RVA: 0x00037C70
 // ADDRESS: 00437c70
 // PROTOTYPE: void __thiscall OnAttackCityEnd(long param_1, long param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: COrganizingCtrl::AddUnionToClientByFactionID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:626
-// RVA: 0x00038010
-// ADDRESS: 00438010
-// PROTOTYPE: bool __thiscall AddUnionToClientByFactionID(long param_1, long param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
