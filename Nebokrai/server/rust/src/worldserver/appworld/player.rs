@@ -4,6 +4,9 @@
 //! `0x0005B4E0`, `CPlayer::CheckGoodsInPacket` RVA `0x0005BA90`, inherited
 //! `GetName`, reached `ProcessPlayerDataQueue`, `CPlayer::ChangeCountry` RVA
 //! `0x0005EA30`, `CPlayer::ChangeName` RVA `0x0005D1C0`,
+//! DB mutation helpers `SetFairyContainerEnabled/SetFosterNum/SetHatcherNum`
+//! RVA `0x0005AEB0/0x0005AEC0/0x0005AEE0` и `AddQuestFromDB` RVA
+//! `0x0005EA00`,
 //! `CPlayer::UpdateFactionInfo` RVA `0x0005C1D0`,
 //! `CPlayer::ClearOwnedRegion` RVA `0x00033B50` и
 //! `CPlayer::AddOwnedRegion` RVA `0x0005DD10`
@@ -659,6 +662,10 @@ pub(crate) struct PlayerExploitUpdate {
 impl PlayerBaseProperty {
     fn read_u8(&self, offset: usize) -> u8 {
         self.wire[offset]
+    }
+
+    fn write_u8(&mut self, offset: usize, value: u8) {
+        self.wire[offset] = value;
     }
 
     fn read_u16(&self, offset: usize) -> u16 {
@@ -1543,6 +1550,36 @@ impl CPlayer {
     /// Финальная exact-мутация `ChangeName` после ordered global/DB checks.
     pub(crate) fn set_validated_name(&mut self, name: &[u8]) {
         self.move_shape_base.set_name(name);
+    }
+
+    /// Прямая DB-load запись exact `bFairyContainerEnabled` byte.
+    pub(crate) fn set_fairy_container_enabled(&mut self, enabled: bool) {
+        self.base_property
+            .write_u8(BASE_PROPERTY_FAIRY_ENABLED_OFFSET, u8::from(enabled));
+    }
+
+    /// Сохраняет unsigned `min(value, 5)` как exact `SetFosterNum`.
+    pub(crate) fn set_foster_num(&mut self, value: u32) {
+        self.base_property
+            .write_u32(BASE_PROPERTY_FOSTER_NUM_OFFSET, value.min(5));
+    }
+
+    /// Сохраняет unsigned `min(value, 5)` как exact `SetHatcherNum`.
+    pub(crate) fn set_hatcher_num(&mut self, value: u32) {
+        self.base_property
+            .write_u32(BASE_PROPERTY_HATCHER_NUM_OFFSET, value.min(5));
+    }
+
+    /// Вставляет/заменяет DB quest по unsigned key, как `map::operator[]`
+    /// с последующей полной записью трёх значимых байт `tagPlayerQuest`.
+    pub(crate) fn add_quest_from_db(&mut self, quest_id: u16, complete: u8) {
+        self.player_quests.insert(
+            quest_id,
+            PlayerQuest {
+                quest_id,
+                complete,
+            },
+        );
     }
 
     /// Заменяет exact `m_lSilienceTime`, возвращая прежнее значение.
@@ -3066,7 +3103,7 @@ fn read_player_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CPlayer::SetFairyContainerEnabled
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:947
@@ -3074,13 +3111,14 @@ fn read_player_array<const N: usize>(
 // ADDRESS: 0045aeb0
 // PROTOTYPE: void __thiscall SetFairyContainerEnabled(bool param_1)
 //
+// `0x0045AEB0..0x0045AEBA` пишет один byte в `CPlayer+0x6B4`, то есть
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CPlayer::SetFosterNum
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:952
@@ -3088,13 +3126,14 @@ fn read_player_array<const N: usize>(
 // ADDRESS: 0045aec0
 // PROTOTYPE: void __thiscall SetFosterNum(ulong param_1)
 //
+// `0x0045AEC0..0x0045AEDC` подтверждает unsigned `cmp/jae` и clamp к `5`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CPlayer::SetHatcherNum
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:959
@@ -3102,6 +3141,7 @@ fn read_player_array<const N: usize>(
 // ADDRESS: 0045aee0
 // PROTOTYPE: void __thiscall SetHatcherNum(ulong param_1)
 //
+// `0x0045AEE0..0x0045AEFC` подтверждает тот же unsigned clamp к `5`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -3347,7 +3387,7 @@ fn read_player_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CPlayer::AddQuestFromDB
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:842
@@ -3355,6 +3395,9 @@ fn read_player_array<const N: usize>(
 // ADDRESS: 0045ea00
 // PROTOTYPE: void __thiscall AddQuestFromDB(ushort param_1, uchar param_2)
 //
+// `0x0045EA00..0x0045EA28` собирает `u16 quest + u8 complete`, получает
+// `map::operator[]` и перезаписывает mapped DWORD. Rust не хранит только
+// служебный padding-байт, который ни один serializer не выдаёт.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
