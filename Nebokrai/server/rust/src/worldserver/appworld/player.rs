@@ -1363,6 +1363,10 @@ impl CPlayer {
         self.move_shape_base.set_pos_xy(pos_x, pos_y);
     }
 
+    pub(crate) const fn set_direction(&mut self, direction: i32) -> bool {
+        self.move_shape_base.set_direction(direction)
+    }
+
     /// Ставит игрока в центр signed tile через унаследованный shape-owner.
     pub(crate) fn set_tile_xy(&mut self, tile_x: i32, tile_y: i32) {
         self.move_shape_base.set_tile_xy(tile_x, tile_y);

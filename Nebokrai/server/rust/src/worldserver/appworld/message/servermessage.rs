@@ -3,6 +3,7 @@
 //! Статус владельца: `IMPLEMENTED` для `gameserv_conn_log`,
 //! внутрипроцессного события `0x3FC03`,
 //! регистрации GameServer и reconnect player-data хвоста в `0x5FA01`,
+//! перехода игрока между GameServer `0x5FA02`,
 //! snapshot/cleanup хвоста `0x5FA03`, обычных opcode `0x4FC01..=0x4FC03`,
 //! `0x5FA04..=0x5FA07`, `0x5FA09`, `0x5FA0A..=0x5FA0D` и
 //! `0x5FA0F..=0x5FA10` из
@@ -216,6 +217,17 @@
 //! подавляет send после уже выполненных чтений. Все C-строки остаются
 //! byte-exact, результаты transport-а не управляют дальнейшими эффектами.
 //!
+//! `0x5FA02` сначала читает player/target-region, проверяет target GameServer
+//! и online-owner; все три отказа возвращают `0x7F802 + char 0 + player ID`
+//! тому же socket, не потребляя остальной payload. Успех читает tile X/Y,
+//! direction и два игнорируемых positional long, затем декодирует полный
+//! `CPlayer` и строго выполняет `SetRegionID -> SetTileXY -> SetDir ->
+//! RemoveOfflinePlayer -> RemoveOnlinePlayer -> AppendLoginPlayer`. Ответ
+//! `char 1 + player ID + target IP + port` уходит исходному socket до team
+//! callback-а. Exact disassembly `0x004AFEFE..0x004B016A` устраняет ошибочные
+//! имена stack-local из RAW. Rust не воспроизводит overread и неинициализированный
+//! target port: они остаются typed-границами в достигнутой позиции.
+//!
 //! `0x5FA05` читает signed type и имя `0x100`; type `1` затем читает signed
 //! integer, type `3` — строку `0x100`. Nullable общий `CVariableList` выполняет
 //! ASCII-only `_strcmpi` mutation и только при исходном success `1` World
@@ -336,8 +348,9 @@ use crate::worldserver::worldserver::game::{
     WorldInitialRegionSnapshot, WorldInitialRegionSnapshotBlock, WorldInitialRegionSnapshotKind,
     WorldOnlinePlayerAppendOutcome, WorldPingGameServerInfo, WorldReconnectedPlayerDecode,
     WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate, WorldRegionParamDecodeOutcome,
-    WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest, WorldServerSnapshotPlayerDecode,
-    WorldServerSnapshotPlayerOwner, prepare_save_thread_launch,
+    WorldRegionChangePlayerTransition, WorldRegionChangeTeamOwner,
+    WorldRegionChangeTeamUpdate, WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest,
+    WorldServerSnapshotPlayerDecode, WorldServerSnapshotPlayerOwner, prepare_save_thread_launch,
 };
 use crate::worldserver::worldserver::honorranks::{CHonorRanks, HonorRanksSerializationBlock};
 use crate::worldserver::worldserver::playerranks::{
@@ -389,6 +402,7 @@ pub(crate) enum WorldServerMessageOutcome {
     PlayerDataSynchronized(WorldPlayerDataSync),
     PlayerNameMessageRelayed(WorldPlayerNameMessageRelay),
     RegionParametersUpdated(WorldRegionParameterUpdate),
+    RegionChanged(WorldRegionChangeMessage),
     RegionMessageRelayed(WorldRegionMessageRelay),
 }
 
@@ -495,6 +509,68 @@ pub(crate) enum WorldGeneralVariableUpdateDisposition {
         mutation: VariableSetOutcome,
         message_type: i32,
         delivery: Result<i32, SendMessageError>,
+    },
+}
+
+/// Полный typed-итог server opcode `0x5FA02`.
+#[derive(Debug)]
+pub(crate) struct WorldRegionChangeMessage {
+    pub(crate) player_id: i32,
+    pub(crate) player_id_complete: bool,
+    pub(crate) target_region_id: i32,
+    pub(crate) target_region_complete: bool,
+    pub(crate) socket_id: i32,
+    pub(crate) disposition: WorldRegionChangeDisposition,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldRegionChangePrefix {
+    pub(crate) tile_x: i32,
+    pub(crate) tile_y: i32,
+    pub(crate) direction: i32,
+    pub(crate) use_goods: i32,
+    pub(crate) range: i32,
+    pub(crate) complete: [bool; 5],
+}
+
+#[derive(Debug)]
+pub(crate) enum WorldRegionChangeDisposition {
+    TargetUnavailable {
+        target_region_found: bool,
+        delivery: Result<i32, SendMessageError>,
+    },
+    OnlinePlayerMissing {
+        delivery: Result<i32, SendMessageError>,
+        operator_notice: bool,
+    },
+    DecodeBlocked {
+        prefix: WorldRegionChangePrefix,
+        cursor_before_decode: usize,
+        cursor_after_decode: usize,
+        error: PlayerCodecError,
+    },
+    OnlinePlayerDisappeared {
+        prefix: WorldRegionChangePrefix,
+    },
+    TargetPortUnavailable {
+        prefix: WorldRegionChangePrefix,
+        cursor_before_decode: usize,
+        cursor_after_decode: usize,
+        transition: WorldRegionChangePlayerTransition,
+        target_game_server_index: u32,
+    },
+    Changed {
+        prefix: WorldRegionChangePrefix,
+        cursor_before_decode: usize,
+        cursor_after_decode: usize,
+        transition: WorldRegionChangePlayerTransition,
+        target_game_server_index: u32,
+        target_ip: Vec<u8>,
+        target_port: u32,
+        message_type: i32,
+        delivery: Result<i32, SendMessageError>,
+        team_session_id: i32,
+        team_update: WorldRegionChangeTeamUpdate,
     },
 }
 
@@ -1561,16 +1637,21 @@ pub(crate) fn materialize_completed_save_response_snapshot(
 }
 
 /// Исполняет только уже восстановленные обычные ветви `OnServerMessage`.
-pub(crate) async fn on_server_message(
+pub(crate) async fn on_server_message<TeamOwner>(
     game: &mut CGame,
     mut message: CMessage,
     registry: &GoodsBasePropertiesRegistry,
     coefficients: &PlayerPropertyCoefficients,
+    organizing: &mut COrganizingCtrl,
+    team_owner: &mut TeamOwner,
     general_variables: Option<&mut CVariableList>,
     gods_battle: &mut CGodsBattleConf,
     rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
     mut gods_battle_database: Option<&mut WorldTdsClient>,
-) -> WorldServerMessageDispatch {
+) -> WorldServerMessageDispatch
+where
+    TeamOwner: WorldRegionChangeTeamOwner + ?Sized,
+{
     match message.message_type() {
         0x0004_FC01 => {
             let (cleared_responses, started_at_ms) = game.begin_game_server_ping();
@@ -1611,6 +1692,130 @@ pub(crate) async fn on_server_message(
         0x0005_FA01 => {
             WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::GameServerConnection(
                 on_game_server_connected(game, &mut message, None),
+            ))
+        }
+        0x0005_FA02 => {
+            let decoded_player_id = message.base_mut().get_long();
+            let player_id = decoded_player_id.unwrap_or(0);
+            let decoded_target_region = message.base_mut().get_long();
+            let target_region_id = decoded_target_region.unwrap_or(0);
+            let socket_id = message.socket_id();
+            let target_region_found = game.region(target_region_id).is_some();
+            let target_game_server = game
+                .get_region_game_server(target_region_id)
+                .filter(|server| server.connected)
+                .map(|server| (server.index, server.ip.clone(), server.port));
+
+            let disposition = if target_game_server.is_none() {
+                WorldRegionChangeDisposition::TargetUnavailable {
+                    target_region_found,
+                    delivery: send_region_change_failure(game, socket_id, player_id),
+                }
+            } else if game.online_player_by_id(player_id as u32).is_none() {
+                WorldRegionChangeDisposition::OnlinePlayerMissing {
+                    delivery: send_region_change_failure(game, socket_id, player_id),
+                    operator_notice: true,
+                }
+            } else {
+                let decoded = [
+                    message.base_mut().get_long(),
+                    message.base_mut().get_long(),
+                    message.base_mut().get_long(),
+                    message.base_mut().get_long(),
+                    message.base_mut().get_long(),
+                ];
+                let values = decoded.map(|value| value.unwrap_or(0));
+                let prefix = WorldRegionChangePrefix {
+                    tile_x: values[0],
+                    tile_y: values[1],
+                    direction: values[2],
+                    use_goods: values[3],
+                    range: values[4],
+                    complete: decoded.map(|value| value.is_some()),
+                };
+                let cursor_before_decode = message.base_mut().cursor();
+                let transition = {
+                    let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                    game.transition_online_player_region(
+                        organizing,
+                        player_id as u32,
+                        target_region_id,
+                        prefix.tile_x,
+                        prefix.tile_y,
+                        prefix.direction,
+                        source,
+                        cursor,
+                        registry,
+                        coefficients,
+                    )
+                };
+                let cursor_after_decode = message.base_mut().cursor();
+                match transition {
+                    Err(error) => WorldRegionChangeDisposition::DecodeBlocked {
+                        prefix,
+                        cursor_before_decode,
+                        cursor_after_decode,
+                        error,
+                    },
+                    Ok(None) => {
+                        WorldRegionChangeDisposition::OnlinePlayerDisappeared { prefix }
+                    }
+                    Ok(Some(transition)) => {
+                        let (target_game_server_index, target_ip, target_port) =
+                            target_game_server.expect("target проверен до player mutation");
+                        match target_port {
+                            None => WorldRegionChangeDisposition::TargetPortUnavailable {
+                                prefix,
+                                cursor_before_decode,
+                                cursor_after_decode,
+                                transition,
+                                target_game_server_index,
+                            },
+                            Some(target_port) => {
+                                let mut response = CMessage::new(0x0007_F802);
+                                response.base_mut().add_char(1);
+                                response.base_mut().add_long(player_id);
+                                add_legacy_c_string(response.base_mut(), &target_ip);
+                                response.base_mut().add_ulong(target_port);
+                                let sender = game.current_game_server_sender();
+                                let delivery =
+                                    response.send_to_socket(sender.as_ref(), socket_id);
+                                let team_session_id =
+                                    game.get_team_session_id(transition.team_id as u32);
+                                let team_update = team_owner.set_team_player_owner_region(
+                                    team_session_id,
+                                    transition.owner_type,
+                                    transition.owner_id,
+                                    transition.target_region_id,
+                                );
+                                WorldRegionChangeDisposition::Changed {
+                                    prefix,
+                                    cursor_before_decode,
+                                    cursor_after_decode,
+                                    transition,
+                                    target_game_server_index,
+                                    target_ip,
+                                    target_port,
+                                    message_type: 0x0007_F802,
+                                    delivery,
+                                    team_session_id,
+                                    team_update,
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+
+            WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::RegionChanged(
+                WorldRegionChangeMessage {
+                    player_id,
+                    player_id_complete: decoded_player_id.is_some(),
+                    target_region_id,
+                    target_region_complete: decoded_target_region.is_some(),
+                    socket_id,
+                    disposition,
+                },
             ))
         }
         0x0005_FA04 => {
@@ -3732,6 +3937,18 @@ fn add_legacy_c_string(message: &mut CBaseMessage, bytes: &[u8]) {
         .unwrap_or(bytes.len());
     message.add(&bytes[..end]);
     message.add_byte(0);
+}
+
+fn send_region_change_failure(
+    game: &CGame,
+    socket_id: i32,
+    player_id: i32,
+) -> Result<i32, SendMessageError> {
+    let mut response = CMessage::new(0x0007_F802);
+    response.base_mut().add_char(0);
+    response.base_mut().add_long(player_id);
+    let sender = game.current_game_server_sender();
+    response.send_to_socket(sender.as_ref(), socket_id)
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer

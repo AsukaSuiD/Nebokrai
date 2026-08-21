@@ -1826,6 +1826,24 @@ pub(crate) struct WorldOnlinePlayerRemoveOutcome {
     pub(crate) organizing: PlayerExitGameOutcome,
 }
 
+/// State-переход живого игрока из server opcode `0x5FA02`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldRegionChangePlayerTransition {
+    pub(crate) requested_player_id: u32,
+    pub(crate) decoded_player_id: u32,
+    pub(crate) target_region_id: i32,
+    pub(crate) tile_x: i32,
+    pub(crate) tile_y: i32,
+    pub(crate) direction: i32,
+    pub(crate) direction_applied: bool,
+    pub(crate) team_id: i32,
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) offline_removal_completed: bool,
+    pub(crate) online_removal: WorldOnlinePlayerRemoveOutcome,
+    pub(crate) login_time_ms: u32,
+}
+
 /// Безопасная граница достигнутого `CGame::SendCdkeyToLoginServer`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldCdkeySnapshotError {
@@ -2642,6 +2660,24 @@ pub(crate) trait WorldLoginTimeoutTeamOwner {
         owner_type: i32,
         owner_id: i32,
     ) -> WorldLoginTimeoutTeamExit;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldRegionChangeTeamUpdate {
+    SessionMissingOrNotTeam,
+    PlugMissing,
+    Updated,
+}
+
+/// Точная RTTI-цепочка `CTeam -> CTeamate::SetOwnerRegionID` после ответа.
+pub(crate) trait WorldRegionChangeTeamOwner {
+    fn set_team_player_owner_region(
+        &mut self,
+        session_id: i32,
+        owner_type: i32,
+        owner_id: i32,
+        region_id: i32,
+    ) -> WorldRegionChangeTeamUpdate;
 }
 
 /// Одна friend-ветвь после перевода просроченного игрока в offline-list.
@@ -8494,7 +8530,7 @@ impl CGame {
     /// остаются owned pending. Terminal
     /// actions применяются FIFO до следующего сообщения. Async TDS lookup
     /// `0x5FF12` завершается до следующего slot-а, как синхронный ADO EXE.
-    pub(crate) async fn process_message<TimerCallback: Copy>(
+    pub(crate) async fn process_message<TimerCallback, TeamOwner>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
         organizing: &mut COrganizingCtrl,
@@ -8517,6 +8553,7 @@ impl CGame {
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
         rs_player: &mut TiberiusRsPlayer,
         mut player_database: Option<&mut WorldTdsClient>,
+        team_owner: &mut TeamOwner,
         mut general_variables: Option<&mut CVariableList>,
         gods_battle: &mut CGodsBattleConf,
         mut rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
@@ -8526,7 +8563,11 @@ impl CGame {
         update_player: &mut dyn FnMut(i32),
         clear_city_war_country_warring: &mut dyn FnMut(u8),
         set_city_war_country_king_and_city: &mut dyn FnMut(u8, i32, i32),
-    ) -> Result<WorldProcessMessageOutcome, WorldProcessMessageError> {
+    ) -> Result<WorldProcessMessageOutcome, WorldProcessMessageError>
+    where
+        TimerCallback: Copy,
+        TeamOwner: WorldRegionChangeTeamOwner + ?Sized,
+    {
         let server_started_at = legacy_tick_ms();
         let mut server_remaining = self
             .net_server
@@ -8569,6 +8610,7 @@ impl CGame {
                             application_callbacks,
                             &mut *rs_player,
                             player_database.as_deref_mut(),
+                            &mut *team_owner,
                             general_variables.as_deref_mut(),
                             &mut *gods_battle,
                             rs_gods_battle.as_deref_mut(),
@@ -8630,6 +8672,7 @@ impl CGame {
                     application_callbacks,
                     &mut *rs_player,
                     player_database.as_deref_mut(),
+                    &mut *team_owner,
                     general_variables.as_deref_mut(),
                     &mut *gods_battle,
                     rs_gods_battle.as_deref_mut(),
@@ -8667,7 +8710,7 @@ impl CGame {
     ///
     /// Safe block не получает придуманных end/next-stage ticks и не меняет
     /// накопитель: исходный невозвратившийся путь их не достигал.
-    pub(crate) async fn process_message_main_loop_stage<TimerCallback, GetTick>(
+    pub(crate) async fn process_message_main_loop_stage<TimerCallback, TeamOwner, GetTick>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
         organizing: &mut COrganizingCtrl,
@@ -8690,6 +8733,7 @@ impl CGame {
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
         rs_player: &mut TiberiusRsPlayer,
         player_database: Option<&mut WorldTdsClient>,
+        team_owner: &mut TeamOwner,
         general_variables: Option<&mut CVariableList>,
         gods_battle: &mut CGodsBattleConf,
         rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
@@ -8707,6 +8751,7 @@ impl CGame {
     ) -> WorldProcessMessageStageReport
     where
         TimerCallback: Copy,
+        TeamOwner: WorldRegionChangeTeamOwner + ?Sized,
         GetTick: FnMut() -> u32,
     {
         let started_at_ms = get_tick();
@@ -8742,6 +8787,7 @@ impl CGame {
             application_callbacks,
             rs_player,
             player_database,
+            team_owner,
             general_variables,
             gods_battle,
             rs_gods_battle,
@@ -9632,7 +9678,7 @@ impl CGame {
         LeiTingContextOwner: LeiTingContext,
         DbMiscContextOwner: DbMiscContext,
         JjcContext: JjcRunContext,
-        TeamOwner: WorldLoginTimeoutTeamOwner,
+        TeamOwner: WorldLoginTimeoutTeamOwner + WorldRegionChangeTeamOwner,
     {
         let profile_initialization = initialize_main_loop_profile_if_needed(
             state.initialization,
@@ -9839,6 +9885,7 @@ impl CGame {
             &mut union_application_callbacks,
             owners.rs_player,
             owners.player_database.as_deref_mut(),
+            &mut *owners.team_owner,
             owners.general_variables.as_deref_mut(),
             owners.gods_battle,
             owners.rs_gods_battle.as_deref_mut(),
@@ -10821,6 +10868,62 @@ impl CGame {
         Ok(true)
     }
 
+    /// Выполняет state-часть `0x5FA02` после доказанных route/online gates.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "positional поля wire остаются видимыми у точного call-site"
+    )]
+    pub(crate) fn transition_online_player_region(
+        &mut self,
+        organizing: &mut COrganizingCtrl,
+        requested_player_id: u32,
+        target_region_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        direction: i32,
+        source: &[u8],
+        cursor: &mut usize,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<Option<WorldRegionChangePlayerTransition>, PlayerCodecError> {
+        if !self.online_players.contains(&requested_player_id) {
+            return Ok(None);
+        }
+        let Some(player) = self.players.get_mut(&requested_player_id) else {
+            return Ok(None);
+        };
+
+        let _ = player.decord_from_byte_array(source, cursor, true, registry, coefficients)?;
+        player.set_region_id(target_region_id);
+        player.set_tile_xy(tile_x, tile_y);
+        let direction_applied = player.set_direction(direction);
+        let decoded_player_id = player.get_id() as u32;
+        let team_id = player.get_team_id();
+        let owner_type = player.get_type();
+        let owner_id = player.get_id();
+
+        self.remove_offline_player(decoded_player_id);
+        let online_removal = self.remove_online_player(organizing, decoded_player_id);
+        let login_time_ms = legacy_tick_ms();
+        self.append_login_player(decoded_player_id, login_time_ms);
+
+        Ok(Some(WorldRegionChangePlayerTransition {
+            requested_player_id,
+            decoded_player_id,
+            target_region_id,
+            tile_x,
+            tile_y,
+            direction,
+            direction_applied,
+            team_id,
+            owner_type,
+            owner_id,
+            offline_removal_completed: true,
+            online_removal,
+            login_time_ms,
+        }))
+    }
+
     /// Декодирует LeiTing-хвост только у игрока из exact online-list.
     pub(crate) fn decode_online_player_lei_ting(
         &mut self,
@@ -11791,7 +11894,7 @@ pub(crate) async fn game_thread_func<Runtime: WorldGameThreadRuntime>(
     }
 }
 
-async fn process_world_message<TimerCallback: Copy>(
+async fn process_world_message<TimerCallback, TeamOwner>(
     game: &mut CGame,
     honor_ranks: &mut CHonorRanks,
     organizing: &mut COrganizingCtrl,
@@ -11814,6 +11917,7 @@ async fn process_world_message<TimerCallback: Copy>(
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     rs_player: &mut TiberiusRsPlayer,
     player_database: Option<&mut WorldTdsClient>,
+    team_owner: &mut TeamOwner,
     general_variables: Option<&mut CVariableList>,
     gods_battle: &mut CGodsBattleConf,
     rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
@@ -11825,7 +11929,11 @@ async fn process_world_message<TimerCallback: Copy>(
     set_city_war_country_king_and_city: &mut dyn FnMut(u8, i32, i32),
     source: WorldMessageSource,
     mut message: CMessage,
-) -> ProcessedWorldEvent {
+) -> ProcessedWorldEvent
+where
+    TimerCallback: Copy,
+    TeamOwner: WorldRegionChangeTeamOwner + ?Sized,
+{
     let message_type = message.message_type();
     let mut selector = WorldOwnerSelector {
         write_log_enabled: game.setup.use_log_system,
@@ -11839,6 +11947,8 @@ async fn process_world_message<TimerCallback: Copy>(
             message,
             registry,
             coefficients,
+            organizing,
+            team_owner,
             general_variables,
             gods_battle,
             rs_gods_battle,

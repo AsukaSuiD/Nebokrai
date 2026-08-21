@@ -2,7 +2,8 @@
 //!
 //! Статус достигнутого inherited `CBaseObject::GetName`,
 //! `CShape::GetRegionID` RVA `0x000530F0`, `CShape::SetRegionID` RVA
-//! `0x00053100`, `CShape::SetState` RVA `0x000531D0`, `CShape::SetPosXY` RVA
+//! `0x00053100`, `CShape::SetDir` RVA `0x00053170`, `CShape::SetState` RVA
+//! `0x000531D0`, `CShape::SetPosXY` RVA
 //! `0x00053200`, `CShape::GetTileX/GetTileY` RVA `0x000D5120/0x000D5150`,
 //! `CShape::SetTileXY` RVA `0x000D5290`,
 //! `CShape::AddToByteArray` RVA `0x000D5180`,
@@ -227,6 +228,15 @@ impl CShape {
         self.pos_y = pos_y;
     }
 
+    /// Сохраняет исходную проверку `0 <= direction < 8`.
+    pub(crate) const fn set_direction(&mut self, direction: i32) -> bool {
+        if direction < 0 || direction >= 8 {
+            return false;
+        }
+        self.direction = direction;
+        true
+    }
+
     /// Ставит shape в центр двух signed tile-координат.
     pub(crate) fn set_tile_xy(&mut self, tile_x: i32, tile_y: i32) {
         self.pos_x = tile_x as f32 + 0.5;
@@ -447,7 +457,7 @@ fn read_shape_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CShape::SetDir
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\shape.h:78
