@@ -150,6 +150,9 @@ use crate::nets::basemessage::CBaseMessage;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::networld::mynetclient::CMyNetClient;
 use crate::nets::servers::ServerCommandHandle;
+use crate::public::equipmentcomposelist::{
+    EquipmentComposeList, EquipmentComposeSerializeError,
+};
 use crate::setup::cbattlefairyexpconfig::{
     BattleFairyExpSerializeError, CBattleFairyExpConfig,
 };
@@ -480,6 +483,20 @@ pub(crate) enum WorldSynthesisConfigurationCompletion {
 pub(crate) struct WorldSynthesisConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldSynthesisConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после `EquipmentComposeList`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldEquipmentComposeConfigurationCompletion {
+    EquipmentCompose(EquipmentComposeSerializeError),
+    NewSkillMonsterConfigurationPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/0x30` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldEquipmentComposeConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldEquipmentComposeConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1388,6 +1405,35 @@ pub(crate) fn continue_game_server_synthesis_configuration(
         completion: WorldSynthesisConfigurationCompletion::EquipmentComposeConfigurationPending {
             socket_id,
         },
+    }
+}
+
+/// Кодирует и отправляет точный `EquipmentComposeList` initial-config packet.
+pub(crate) fn continue_game_server_equipment_compose_configuration(
+    game: &CGame,
+    socket_id: i32,
+    equipment_compose: &EquipmentComposeList,
+) -> WorldEquipmentComposeConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = equipment_compose.add_to_byte_array(&mut payload) {
+        return WorldEquipmentComposeConfigurationReport {
+            delivery: None,
+            completion: WorldEquipmentComposeConfigurationCompletion::EquipmentCompose(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldEquipmentComposeConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x30,
+            &payload,
+        )),
+        completion:
+            WorldEquipmentComposeConfigurationCompletion::NewSkillMonsterConfigurationPending {
+                socket_id,
+            },
     }
 }
 

@@ -52,6 +52,12 @@ pub(crate) mod date;
 
 #[allow(
     dead_code,
+    reason = "equipment-compose serializer подключён к initial-config до text loader-а"
+)]
+pub(crate) mod equipmentcomposelist;
+
+#[allow(
+    dead_code,
     reason = "CTimer подключён к World MainLoop до materialization всех registration callers"
 )]
 pub(crate) mod timer;
