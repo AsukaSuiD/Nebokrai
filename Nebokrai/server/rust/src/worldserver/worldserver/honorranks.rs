@@ -2,9 +2,9 @@
 //!
 //! Статус `CHonorRanks::GenerateSaveData` RVA `0x0001B090` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`; `AddToByteArray` RVA `0x0001A6F0`,
-//! accessors/clear RVA `0x0001A540..0x0001A890` и `CopyHonorRanks` RVA
-//! `0x0001AE20` — `IMPLEMENTED`. Остальные функции ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! accessors/clear RVA `0x0001A540..0x0001A890`, `UpdateRanksOnGameServer` RVA
+//! `0x0001ABD0` и `CopyHonorRanks` RVA `0x0001AE20` — `IMPLEMENTED`. Остальные
+//! функции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
@@ -51,6 +51,12 @@
 //! полной копии в history очищается; total history тоже заменяется копией, но
 //! current total намеренно остаётся накопительным. `Vec::clone/clear` заменяют
 //! только MSVC list allocation/cleanup, не меняя порядок записей.
+//!
+//! GameServer update проверяет mask-биты по порядку day/week/month/total и
+//! рассылает `0x7F801` subtype `0x27..0x2A`. Только total subtype сначала
+//! содержит полный исходный mask, затем тот же history payload. Транспорт
+//! использует готовый Rust network-owner; промежуточный MSVC vector для total
+//! не переносится, поскольку framing и порядок bytes сохраняются напрямую.
 
 use std::error::Error;
 use std::fmt;
@@ -61,6 +67,15 @@ use crate::dbaccess::worlddb::rsplayer::{
     HonorRankDbEntry, HonorRankDbLists, HonorRanksCopyTimeSnapshot, HonorRanksDbDataSnapshot,
     HonorRanksType,
 };
+use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::worldserver::worldserver::game::CGame;
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct HonorRanksGameServerUpdate {
+    pub(crate) rank_type: HonorRanksType,
+    pub(crate) subtype: i32,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
 
 /// Достигнутая save-часть process-static `CHonorRanks` state.
 #[derive(Default)]
@@ -164,6 +179,41 @@ impl CHonorRanks {
             }
         }
         true
+    }
+
+    /// Рассылает выбранные history-типы всем подключённым GameServer-ам.
+    pub(crate) fn update_ranks_on_game_server(
+        &self,
+        game: &CGame,
+        rank_mask: u32,
+    ) -> Result<Vec<HonorRanksGameServerUpdate>, HonorRanksSerializationBlock> {
+        let mut updates = Vec::new();
+        let sender = game.current_game_server_sender();
+        for (rank_type, bit, subtype) in [
+            (HonorRanksType::Day, 0x01, 0x27),
+            (HonorRanksType::Week, 0x02, 0x28),
+            (HonorRanksType::Month, 0x04, 0x29),
+            (HonorRanksType::Total, 0x08, 0x2A),
+        ] {
+            if rank_mask & bit == 0 {
+                continue;
+            }
+
+            let mut payload = Vec::new();
+            self.add_history_to_byte_array(&mut payload, rank_type, None)?;
+            let mut message = CMessage::new(0x0007_F801);
+            message.base_mut().add_long(subtype);
+            if rank_type == HonorRanksType::Total {
+                message.base_mut().add_ulong(rank_mask);
+            }
+            message.base_mut().add(&payload);
+            updates.push(HonorRanksGameServerUpdate {
+                rank_type,
+                subtype,
+                delivery: message.send_all(sender.as_ref()),
+            });
+        }
+        Ok(updates)
     }
 
     /// Повторяет `AddToByteArray(type, country)`; `None` соответствует `-1`.
@@ -966,7 +1016,7 @@ impl Error for HonorRanksSerializationBlock {}
 
 // ============================================================================
 // FUNCTION: CHonorRanks::UpdateRanksOnGameServer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp:147
@@ -974,6 +1024,7 @@ impl Error for HonorRanksSerializationBlock {}
 // ADDRESS: 0041abd0
 // PROTOTYPE: bool __cdecl UpdateRanksOnGameServer(ulong param_1)
 //
+// Реализовано выше через готовый Rust network-owner и точный subtype framing.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
