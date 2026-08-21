@@ -6,8 +6,8 @@
 //! `0x6012D`, region route `0x6012E`, city-gate route `0x6012F` и полный
 //! city-transfer ingress `0x60130`, admission-permit `0x60132`, city-war
 //! terminal `0x60133`, village-war application `0x60135`, её result ingress
-//! `0x60136` и city-war application `0x60137`; остальной owner —
-//! `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `0x60136`, city-war application `0x60137` и её result ingress `0x60138`;
+//! остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
@@ -155,13 +155,25 @@
 //! wire-ответа ingress не создаёт. Четвёртый параметр owner не читает. Timer,
 //! ownership, faction counters, `WS0290..WS0294`, top-info и `0x7FE32`
 //! остаются внутри уже подтверждённого concrete owner-а.
-//! Exact `0x004A8516..0x004A854E` для `0x60137` читает ровно `(player ID,
-//! city-war number, legacy money)`, вызывает полный
+//! Exact `0x004A8553..0x004A85A7` и общий leaf
+//! `0x004A84AA..0x004A84D4` для `0x60137` читают ровно `(player ID, city-war
+//! number, legacy money)`, вызывают полный
 //! `CAttackCitySys::OnPlayerDeclareWar` и только при true-result отвечает
 //! `0x7FE37(player ID, legacy money)` исходному `m_lMapID`. Owner не читает
 //! третий параметр; balance/online/route/tail gates отсутствуют. Заявка,
 //! `0x7FE35`, полная пересборка city-war enemy relations и `WS0145/WS0146`
 //! остаются в подтверждённом concrete owner-е.
+//! Exact `0x004A8516..0x004A854E` для `0x60138` читает четыре `Long` в порядке
+//! `(war number, city region ID, winner faction ID, reported union ID)` и без
+//! ingress-проверок вызывает полный `CAttackCitySys::OnFacWinCity`. Четвёртый
+//! параметр попадает только во входной diagnostic; owner заново вычисляет
+//! union победителя. Timer, завершение войны, ownership/country mutations,
+//! `WS0147..WS0153`, top-info и `0x7FE22` остаются внутри concrete owner-а.
+//! Два ещё сырых country-owner эффекта не подменены прямой записью в
+//! save-проекцию `CCountry`: `m_bIsWarring=false` и связка
+//! `SetKing(master)+m_lCityID=region` остаются явно переданными callback-ами.
+//! Это сохраняет место и порядок side effects, не объявляя сырой `SetKing`
+//! (включая его `DeposeKing` и `0x7FF05`) уже восстановленным.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -210,8 +222,10 @@ use crate::worldserver::appworld::organizingsystem::factionwarsys::{
     CFactionWarSys, FactionWarDeclarationBlock, FactionWarDeclarationOutcome,
 };
 use crate::worldserver::appworld::organizingsystem::attackcitysys::{
-    AttackCityApplicationContext, AttackCityApplicationReport, AttackCityEnemyRelationContext,
-    AttackCityWarResultFormatArgument, CAttackCitySys,
+    AttackCityApplicationContext, AttackCityApplicationReport, AttackCityCallbacks,
+    AttackCityEnemyRelationContext, AttackCityWarEndContext, AttackCityWarResultBlock,
+    AttackCityWarResultContext, AttackCityWarResultFaction, AttackCityWarResultFormatArgument,
+    AttackCityWarResultRegion, AttackCityWarResultReport, CAttackCitySys,
 };
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     AttackCityEndBlock, AttackCityEndEffects, AttackCityEndReport, COrganizingCtrl,
@@ -220,6 +234,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     CityTransferSessionRuntime, CityTransferStartBlock, CityTransferStartOutcome,
     CityTransferTerminal, DeclareWarFactionPage, DeclareWarFactionPageBlock,
     FactionMasterLookupBlock, FreeFactionLookup, FreePlayerLookup,
+    FactionBillboardStatBlock,
     OrganizingContributorBlock, OrganizingContributorOutcome,
     FactionUnionMembershipLookupBlock, OrganizingFactionExperienceMutation,
     OrganizingFactionMemberStateOutcome,
@@ -288,6 +303,7 @@ const APPLY_FOR_VILLAGE_WAR_RESPONSE_TYPE: i32 = 0x7FE34;
 const VILLAGE_WAR_RESULT_MESSAGE_TYPE: i32 = 0x60136;
 const APPLY_FOR_CITY_WAR_MESSAGE_TYPE: i32 = 0x60137;
 const APPLY_FOR_CITY_WAR_RESPONSE_TYPE: i32 = 0x7FE37;
+const CITY_WAR_RESULT_MESSAGE_TYPE: i32 = 0x60138;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -2936,6 +2952,483 @@ pub(crate) fn dispatch_city_war_application(
             response,
         }
     }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingCityWarResultContextBlock {
+    MissingRegionOwner { region_id: i32 },
+    MissingFactionForMutation {
+        faction_id: i32,
+        operation: &'static str,
+    },
+    MissingFactionMaster { faction_id: i32 },
+    MissingFactionCountry { faction_id: i32 },
+    NullUnion { map_key: i32 },
+    MissingEnemyOrganizing { organizing_id: i32 },
+    EnemyMutation {
+        organizing_id: i32,
+        enemy_organizing_id: i32,
+        source: FactionEnemyMutationBlock,
+    },
+    OwnedCity {
+        faction_id: i32,
+        operation: &'static str,
+        source: OwnedCityMutationBuildError,
+    },
+    VictorCount {
+        faction_id: i32,
+        operation: &'static str,
+        source: FactionInitialPropertyBlock,
+    },
+    Billboard(FactionBillboardStatBlock),
+    NoticeWouldOverflow {
+        string_id: &'static [u8],
+        visible_len: usize,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingCityWarResultDispatch {
+    pub(crate) war_number: i32,
+    pub(crate) war_region_id: i32,
+    pub(crate) winner_faction_id: i32,
+    pub(crate) reported_union_id: i32,
+    pub(crate) outcome: Result<
+        AttackCityWarResultReport,
+        AttackCityWarResultBlock<OrganizingCityWarResultContextBlock>,
+    >,
+}
+
+struct WorldAttackCityResultContext<
+    'game,
+    'organizing,
+    'country,
+    'callbacks,
+    'effects,
+    'update,
+    'country_effects,
+> {
+    game: &'game CGame,
+    organizing: &'organizing mut COrganizingCtrl,
+    country_handler: &'country CCountryHandler,
+    callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
+    update_player: &'update mut dyn FnMut(i32),
+    clear_country_warring: &'country_effects mut dyn FnMut(u8),
+    set_country_king_and_city: &'country_effects mut dyn FnMut(u8, i32, i32),
+}
+
+impl AttackCityEnemyRelationContext
+    for WorldAttackCityResultContext<'_, '_, '_, '_, '_, '_, '_>
+{
+    type Block = OrganizingCityWarResultContextBlock;
+
+    fn clear_all_city_faction_relations(&mut self) -> Result<(), Self::Block> {
+        self.organizing.clear_all_city_faction_relations();
+        Ok(())
+    }
+
+    fn city_owner_faction_id(
+        &mut self,
+        city_region_id: i32,
+    ) -> Result<Option<i32>, Self::Block> {
+        Ok(self.game.region_owned_faction_id(city_region_id))
+    }
+
+    fn expand_faction_organizings(
+        &mut self,
+        faction_id: i32,
+    ) -> Result<Vec<i32>, Self::Block> {
+        self.organizing
+            .expand_city_war_faction_organizings(faction_id)
+            .map_err(|FactionUnionMembershipLookupBlock { map_key }| {
+                OrganizingCityWarResultContextBlock::NullUnion { map_key }
+            })
+    }
+
+    fn add_city_war_enemy_organizing(
+        &mut self,
+        organizing_id: i32,
+        enemy_organizing_id: i32,
+    ) -> Result<(), Self::Block> {
+        let enemy_name = self
+            .organizing
+            .faction_by_id(enemy_organizing_id)
+            .map(|faction| legacy_c_string_prefix(faction.name()).to_vec())
+            .ok_or(OrganizingCityWarResultContextBlock::MissingEnemyOrganizing {
+                organizing_id: enemy_organizing_id,
+            })?;
+        let mut effects = CityWarEnemyMutationEffects {
+            enemy_id: enemy_organizing_id,
+            enemy_name,
+            callbacks: self.callbacks,
+        };
+        let found = self
+            .organizing
+            .add_city_war_enemy_organizing(
+                organizing_id,
+                enemy_organizing_id,
+                &mut effects,
+            )
+            .map_err(|source| OrganizingCityWarResultContextBlock::EnemyMutation {
+                organizing_id,
+                enemy_organizing_id,
+                source,
+            })?;
+        if !found {
+            return Err(
+                OrganizingCityWarResultContextBlock::MissingEnemyOrganizing { organizing_id },
+            );
+        }
+        Ok(())
+    }
+
+    fn set_all_city_faction_enemy_changed(
+        &mut self,
+        changed: bool,
+    ) -> Result<(), Self::Block> {
+        self.organizing
+            .set_all_city_faction_enemy_changed(changed);
+        Ok(())
+    }
+
+    fn update_all_city_enemy_faction_relations(&mut self) -> Result<(), Self::Block> {
+        let _ = self
+            .organizing
+            .update_all_city_enemy_faction_relations(self.game, self.update_player);
+        Ok(())
+    }
+}
+
+impl AttackCityWarEndContext
+    for WorldAttackCityResultContext<'_, '_, '_, '_, '_, '_, '_>
+{
+    fn clear_region_country_warring_if_present(
+        &mut self,
+        city_region_id: i32,
+    ) -> Result<(), Self::Block> {
+        let Some(country_id) = self.game.region_country_id(city_region_id) else {
+            return Ok(());
+        };
+        if self.country_handler.get_country(country_id).is_some() {
+            (self.clear_country_warring)(country_id);
+        }
+        Ok(())
+    }
+}
+
+impl AttackCityWarResultContext
+    for WorldAttackCityResultContext<'_, '_, '_, '_, '_, '_, '_>
+{
+    fn region(
+        &mut self,
+        region_id: i32,
+    ) -> Result<Option<AttackCityWarResultRegion>, Self::Block> {
+        Ok(match self.game.region_name(region_id) {
+            WorldRegionNameLookup::RegionNotFound
+            | WorldRegionNameLookup::NullRegionPointer => None,
+            WorldRegionNameLookup::Name(name) => Some(AttackCityWarResultRegion {
+                name: legacy_c_string_prefix(name).to_vec(),
+            }),
+        })
+    }
+
+    fn region_owner_faction_id(&mut self, region_id: i32) -> Result<i32, Self::Block> {
+        self.game.region_owned_faction_id(region_id).ok_or(
+            OrganizingCityWarResultContextBlock::MissingRegionOwner { region_id },
+        )
+    }
+
+    fn faction(
+        &mut self,
+        faction_id: i32,
+    ) -> Result<Option<AttackCityWarResultFaction>, Self::Block> {
+        Ok(self.organizing.faction_by_id(faction_id).map(|faction| {
+            AttackCityWarResultFaction {
+                name: legacy_c_string_prefix(faction.name()).to_vec(),
+            }
+        }))
+    }
+
+    fn faction_exists(&mut self, faction_id: i32) -> Result<bool, Self::Block> {
+        Ok(self.organizing.faction_by_id(faction_id).is_some())
+    }
+
+    fn union_for_faction(&mut self, faction_id: i32) -> Result<i32, Self::Block> {
+        match self.organizing.is_free_faction(faction_id) {
+            FreeFactionLookup::NoUnion => Ok(0),
+            FreeFactionLookup::Union(union_id) => Ok(union_id),
+            FreeFactionLookup::BlockedNullConfederation { map_key } => {
+                Err(OrganizingCityWarResultContextBlock::NullUnion { map_key })
+            }
+        }
+    }
+
+    fn refresh_owned_city_org(
+        &mut self,
+        region_id: i32,
+        faction_id: i32,
+        union_id: i32,
+    ) -> Result<(), Self::Block> {
+        (self.callbacks.refresh_owned_city)(region_id, faction_id, union_id);
+        Ok(())
+    }
+
+    fn add_owned_city(&mut self, faction_id: i32, region_id: i32) -> Result<(), Self::Block> {
+        let found = UnionOwnedCityMutationContext::faction_add_owned_city(
+            self.organizing,
+            faction_id,
+            self.game,
+            region_id,
+            self.update_player,
+        )
+        .map_err(|source| OrganizingCityWarResultContextBlock::OwnedCity {
+            faction_id,
+            operation: "AddOwnedCity",
+            source,
+        })?;
+        if !found {
+            return Err(
+                OrganizingCityWarResultContextBlock::MissingFactionForMutation {
+                    faction_id,
+                    operation: "AddOwnedCity",
+                },
+            );
+        }
+        Ok(())
+    }
+
+    fn clear_owned_city(&mut self, faction_id: i32) -> Result<(), Self::Block> {
+        let found = UnionOwnedCityMutationContext::faction_clear_owned_cities(
+            self.organizing,
+            faction_id,
+            self.game,
+            self.update_player,
+        )
+        .map_err(|source| OrganizingCityWarResultContextBlock::OwnedCity {
+            faction_id,
+            operation: "ClearOwnedCity",
+            source,
+        })?;
+        if !found {
+            return Err(
+                OrganizingCityWarResultContextBlock::MissingFactionForMutation {
+                    faction_id,
+                    operation: "ClearOwnedCity",
+                },
+            );
+        }
+        Ok(())
+    }
+
+    fn faction_master_id(&mut self, faction_id: i32) -> Result<i32, Self::Block> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .ok_or(
+                OrganizingCityWarResultContextBlock::MissingFactionForMutation {
+                    faction_id,
+                    operation: "GetMasterID",
+                },
+            )?
+            .master_id()
+            .ok_or(OrganizingCityWarResultContextBlock::MissingFactionMaster { faction_id })
+    }
+
+    fn add_defence_victor_count(&mut self, faction_id: i32) -> Result<(), Self::Block> {
+        let found = UnionFactionStateMutationContext::faction_add_defence_victor_count(
+            self.organizing,
+            faction_id,
+            self.game,
+        )
+            .map_err(|source| OrganizingCityWarResultContextBlock::VictorCount {
+                faction_id,
+                operation: "AddDefenceVictorCounts",
+                source,
+            })?;
+        if found.is_none() {
+            return Err(
+                OrganizingCityWarResultContextBlock::MissingFactionForMutation {
+                    faction_id,
+                    operation: "AddDefenceVictorCounts",
+                },
+            );
+        }
+        Ok(())
+    }
+
+    fn add_offense_victor_count(&mut self, faction_id: i32) -> Result<(), Self::Block> {
+        let found = UnionFactionStateMutationContext::faction_add_offense_victor_count(
+            self.organizing,
+            faction_id,
+            self.game,
+        )
+            .map_err(|source| OrganizingCityWarResultContextBlock::VictorCount {
+                faction_id,
+                operation: "AddOffenseVictorCounts",
+                source,
+            })?;
+        if found.is_none() {
+            return Err(
+                OrganizingCityWarResultContextBlock::MissingFactionForMutation {
+                    faction_id,
+                    operation: "AddOffenseVictorCounts",
+                },
+            );
+        }
+        Ok(())
+    }
+
+    fn stat_billboard(&mut self) -> Result<(), Self::Block> {
+        self.organizing
+            .stat_billboard()
+            .map_err(OrganizingCityWarResultContextBlock::Billboard)
+    }
+
+    fn faction_country(&mut self, faction_id: i32) -> Result<u8, Self::Block> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .ok_or(
+                OrganizingCityWarResultContextBlock::MissingFactionForMutation {
+                    faction_id,
+                    operation: "GetCountry",
+                },
+            )?
+            .country()
+            .ok_or(OrganizingCityWarResultContextBlock::MissingFactionCountry { faction_id })
+    }
+
+    fn country_exists(&mut self, country_id: u8) -> Result<bool, Self::Block> {
+        Ok(self.country_handler.get_country(country_id).is_some())
+    }
+
+    fn set_country_king_and_city(
+        &mut self,
+        country_id: u8,
+        master_id: i32,
+        city_region_id: i32,
+    ) -> Result<(), Self::Block> {
+        (self.set_country_king_and_city)(country_id, master_id, city_region_id);
+        Ok(())
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[AttackCityWarResultFormatArgument<'_>],
+    ) -> Result<Vec<u8>, Self::Block> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| match argument {
+                AttackCityWarResultFormatArgument::Text(text) => {
+                    UnionFormatArgument::Text(legacy_c_string_prefix(text))
+                }
+                AttackCityWarResultFormatArgument::Signed(value) => {
+                    UnionFormatArgument::Signed(*value)
+                }
+            })
+            .collect::<Vec<_>>();
+        let formatted = (self.callbacks.format_world_string)(string_id, &arguments);
+        let formatted = legacy_c_string_prefix(&formatted);
+        if formatted.len() >= 256 {
+            return Err(
+                OrganizingCityWarResultContextBlock::NoticeWouldOverflow {
+                    string_id,
+                    visible_len: formatted.len(),
+                },
+            );
+        }
+        Ok(formatted.to_vec())
+    }
+
+    fn send_organizing_info(&mut self, text: &[u8]) -> Result<(), Self::Block> {
+        let _ = COrganizingCtrl::send_organizing_info_to_all(
+            self.game,
+            text,
+            0xFFFF_FE92,
+            0xFFFF_0000,
+        );
+        Ok(())
+    }
+
+    fn write_war_log(&mut self, text: &[u8]) -> Result<(), Self::Block> {
+        (self.callbacks.put_war_log)(text);
+        Ok(())
+    }
+
+    fn send_top_info(
+        &mut self,
+        top_info_id: i32,
+        timer_flag: i32,
+        parameter: i32,
+        text: &[u8],
+    ) -> Result<(), Self::Block> {
+        let _ = self.organizing.send_top_info_to_client(
+            self.game,
+            top_info_id,
+            timer_flag,
+            parameter,
+            text,
+        );
+        Ok(())
+    }
+
+    fn send_all(&mut self, message: &CMessage) -> i32 {
+        message
+            .send_all(self.game.current_game_server_sender().as_ref())
+            .unwrap_or(0)
+    }
+}
+
+/// Выполняет exact `0x60138`: четыре legacy `Long` и полный result-owner.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "явные параметры сохраняют границы исходных singleton-owner-ов"
+)]
+pub(crate) fn dispatch_city_war_result<Callback: Copy>(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    country_handler: &CCountryHandler,
+    attack_city: &mut CAttackCitySys,
+    timer: &mut CTimer<Callback>,
+    attack_callbacks: AttackCityCallbacks<Callback>,
+    effects: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    update_player: &mut dyn FnMut(i32),
+    clear_country_warring: &mut dyn FnMut(u8),
+    set_country_king_and_city: &mut dyn FnMut(u8, i32, i32),
+) -> Option<OrganizingCityWarResultDispatch> {
+    if message.message_type() != CITY_WAR_RESULT_MESSAGE_TYPE {
+        return None;
+    }
+
+    let war_number = message.base_mut().get_long().unwrap_or(0);
+    let war_region_id = message.base_mut().get_long().unwrap_or(0);
+    let winner_faction_id = message.base_mut().get_long().unwrap_or(0);
+    let reported_union_id = message.base_mut().get_long().unwrap_or(0);
+    let mut context = WorldAttackCityResultContext {
+        game,
+        organizing,
+        country_handler,
+        callbacks: effects,
+        update_player,
+        clear_country_warring,
+        set_country_king_and_city,
+    };
+    let outcome = attack_city.on_faction_win_city(
+        war_number,
+        war_region_id,
+        winner_faction_id,
+        reported_union_id,
+        timer,
+        attack_callbacks,
+        &mut context,
+    );
+    Some(OrganizingCityWarResultDispatch {
+        war_number,
+        war_region_id,
+        winner_faction_id,
+        reported_union_id,
+        outcome,
+    })
 }
 
 #[derive(Debug, Eq, PartialEq)]
