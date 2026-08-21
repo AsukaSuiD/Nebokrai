@@ -1,7 +1,8 @@
 //! Межрегиональная таблица маршрутизации исторического Miracle.
 //!
 //! Статус World `CRegionRouter::AddToByteArray` RVA `0x000B24D0` и
-//! `CRegionRouter::ChageRegionRouter` RVA `0x000B4350`: `IMPLEMENTED`; loader,
+//! `CRegionRouter::LoadRouterSetup` RVA `0x000B3E10` и
+//! `CRegionRouter::ChageRegionRouter` RVA `0x000B4350`: `IMPLEMENTED`;
 //! singleton и Game decoder ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
@@ -28,11 +29,25 @@
 //! промежуточного региона выдаются entry и exit-to-next, для конечного — entry
 //! и запрошенные X/Y. Отсутствующий переход даёт `(0, 0)`, как value-initialized
 //! временный `tagPOINT` в EXE. `pOut` и out-range эта функция не читает.
+//!
+//! Loader сначала очищает owner даже при последующей ошибке открытия. Формат
+//! whitespace-token based: ignored label + unsigned 32-bit region count; для
+//! каждого региона — `label + region ID`, `label + entry X/Y`, `label + exit
+//! X/Y`, `label + out-range`, `label + unsigned next count`, затем next count
+//! троек `(next region ID, X, Y)` без labels. Хвост игнорируется. Оба MSVC map
+//! используют insert-only: первый duplicate key остаётся. `std::fs::read` и
+//! byte-token parser заменяют `CRFile + stringstream`. Malformed stream в C++
+//! продолжал читать неинициализированные locals; Rust прекращает загрузку с
+//! typed error, сохраняя уже подтверждённый prefix и исключая внутренний UB.
 
 use std::cmp::Reverse;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::error::Error;
 use std::fmt;
+use std::fs;
+use std::io;
+use std::path::Path;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct RegionRoutePoint {
@@ -76,6 +91,22 @@ pub(crate) enum RegionRouterChangeOutcome {
     Complete(Vec<RegionRouteStep>),
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RegionRouterLoadReport {
+    pub(crate) declared_regions: u32,
+    pub(crate) inserted_regions: u32,
+    pub(crate) duplicate_regions: u32,
+    pub(crate) duplicate_transitions: u32,
+    pub(crate) trailing_tokens: usize,
+}
+
+#[derive(Debug)]
+pub(crate) enum RegionRouterLoadError {
+    Io(io::Error),
+    MissingToken { field: &'static str },
+    InvalidInteger { field: &'static str, token: Vec<u8> },
+}
+
 impl RegionRouter {
     pub(crate) fn insert_node(
         &mut self,
@@ -87,6 +118,77 @@ impl RegionRouter {
 
     pub(crate) fn clear(&mut self) {
         self.nodes.clear();
+    }
+
+    /// Загружает exact World whitespace grammar `RegionRouter.ini`.
+    pub(crate) fn load_router_setup(
+        &mut self,
+        path: impl AsRef<Path>,
+    ) -> Result<RegionRouterLoadReport, RegionRouterLoadError> {
+        self.clear();
+        let bytes = fs::read(path).map_err(RegionRouterLoadError::Io)?;
+        let mut tokens = RegionRouterTokens::new(&bytes);
+        tokens.skip("region count label")?;
+        let declared_regions = tokens.read_u32("region count")?;
+        let mut report = RegionRouterLoadReport {
+            declared_regions,
+            ..RegionRouterLoadReport::default()
+        };
+
+        for _ in 0..declared_regions {
+            tokens.skip("region ID label")?;
+            let region_id = tokens.read_i32("region ID")?;
+            tokens.skip("entry point label")?;
+            let entry = RegionRoutePoint {
+                x: tokens.read_i32("entry X")?,
+                y: tokens.read_i32("entry Y")?,
+            };
+            tokens.skip("exit point label")?;
+            let exit = RegionRoutePoint {
+                x: tokens.read_i32("exit X")?,
+                y: tokens.read_i32("exit Y")?,
+            };
+            tokens.skip("exit range label")?;
+            let exit_range = tokens.read_i32("exit range")?;
+            tokens.skip("transition count label")?;
+            let transition_count = tokens.read_u32("transition count")?;
+            let mut next = BTreeMap::new();
+            for _ in 0..transition_count {
+                let next_region_id = tokens.read_i32("next region ID")?;
+                let transition = RegionNextNode {
+                    next_region_id,
+                    x: tokens.read_i32("transition X")?,
+                    y: tokens.read_i32("transition Y")?,
+                };
+                match next.entry(next_region_id) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(transition);
+                    }
+                    Entry::Occupied(_) => {
+                        report.duplicate_transitions += 1;
+                    }
+                }
+            }
+
+            let node = RegionRouterNode {
+                region_id,
+                entry,
+                exit,
+                exit_range,
+                next,
+            };
+            match self.nodes.entry(region_id) {
+                Entry::Vacant(entry) => {
+                    entry.insert(node);
+                    report.inserted_regions += 1;
+                }
+                Entry::Occupied(_) => {
+                    report.duplicate_regions += 1;
+                }
+            }
+        }
+        report.trailing_tokens = tokens.remaining();
+        Ok(report)
     }
 
     /// Восстанавливает exact World `ChageRegionRouter` с детерминированным
@@ -261,6 +363,88 @@ impl fmt::Display for RegionRouterSerializeError {
 
 impl Error for RegionRouterSerializeError {}
 
+impl fmt::Display for RegionRouterLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => write!(formatter, "не удалось прочитать RegionRouter: {error}"),
+            Self::MissingToken { field } => {
+                write!(formatter, "в RegionRouter отсутствует token поля {field}")
+            }
+            Self::InvalidInteger { field, token } => write!(
+                formatter,
+                "в RegionRouter поле {field} содержит нецелое значение {:?}",
+                String::from_utf8_lossy(token)
+            ),
+        }
+    }
+}
+
+impl Error for RegionRouterLoadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::MissingToken { .. } | Self::InvalidInteger { .. } => None,
+        }
+    }
+}
+
+struct RegionRouterTokens<'a> {
+    tokens: Vec<&'a [u8]>,
+    cursor: usize,
+}
+
+impl<'a> RegionRouterTokens<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self {
+            tokens: bytes
+                .split(|byte| byte.is_ascii_whitespace())
+                .filter(|token| !token.is_empty())
+                .collect(),
+            cursor: 0,
+        }
+    }
+
+    fn skip(&mut self, field: &'static str) -> Result<(), RegionRouterLoadError> {
+        self.next(field).map(|_| ())
+    }
+
+    fn read_i32(&mut self, field: &'static str) -> Result<i32, RegionRouterLoadError> {
+        self.read_integer(field)
+    }
+
+    fn read_u32(&mut self, field: &'static str) -> Result<u32, RegionRouterLoadError> {
+        self.read_integer(field)
+    }
+
+    fn read_integer<T>(&mut self, field: &'static str) -> Result<T, RegionRouterLoadError>
+    where
+        T: std::str::FromStr,
+    {
+        let token = self.next(field)?;
+        let value = std::str::from_utf8(token)
+            .ok()
+            .and_then(|value| value.parse().ok());
+        value.ok_or_else(|| RegionRouterLoadError::InvalidInteger {
+            field,
+            token: token.to_vec(),
+        })
+    }
+
+    fn next(&mut self, field: &'static str) -> Result<&'a [u8], RegionRouterLoadError> {
+        let token = self
+            .tokens
+            .get(self.cursor)
+            .copied()
+            .ok_or(RegionRouterLoadError::MissingToken { field })?;
+        self.cursor += 1;
+        Ok(token)
+    }
+
+    fn remaining(&self) -> usize {
+        self.tokens.len().saturating_sub(self.cursor)
+    }
+}
+
 fn write_count(
     destination: &mut Vec<u8>,
     count: usize,
@@ -272,8 +456,8 @@ fn write_count(
     Ok(())
 }
 
-// Сырой C++ ниже сохранён как локальная документация loader-а, singleton-а,
-// уже материализованного World route search и Game decoder-а.
+// Сырой C++ ниже сохранён как локальная документация уже материализованных
+// World loader/route search, singleton-а и Game decoder-а.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -392,7 +576,7 @@ fn write_count(
 
 // ============================================================================
 // FUNCTION: CRegionRouter::LoadRouterSetup
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\regionrouter.cpp:30
