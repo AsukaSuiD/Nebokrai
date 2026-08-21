@@ -58,6 +58,9 @@
 //! `mask & 2`, month только при `mask & 4`; накопительный total не меняется.
 //! Rust пишет уже подтверждённые wire-offsets вместо воспроизведения старого
 //! object-layout.
+//! `CHonorRanks::PushToRanks` читает из того же base-owner уровень,
+//! occupation и appellation ID; узкие getters публикуют значения без копии
+//! всего `tagBaseProperty` и без объявления Rust layout старым ABI.
 //!
 //! Деструктор сначала вызывает virtual slot `+0x24` у шестнадцати container-
 //! подобъектов. Точный PDB исправляет ошибочную первоначальную классификацию:
@@ -1306,6 +1309,18 @@ impl CPlayer {
     /// Возвращает полный восьмибитный уровень игрока.
     pub(crate) fn get_level(&self) -> u8 {
         self.base_property.read_u8(BASE_PROPERTY_LEVEL_OFFSET)
+    }
+
+    /// Возвращает occupation из exact base-property offset `+0x0E`.
+    pub(crate) fn get_occupation(&self) -> u8 {
+        self.base_property
+            .read_u8(BASE_PROPERTY_OCCUPATION_OFFSET)
+    }
+
+    /// Возвращает appellation ID из exact base-property offset `+0x154`.
+    pub(crate) fn get_appellation_id(&self) -> u32 {
+        self.base_property
+            .read_u32(BASE_PROPERTY_APPELLATION_OFFSET)
     }
 
     /// Повторяет прямые honor-eliminate записи `CGame` в player base-owner.

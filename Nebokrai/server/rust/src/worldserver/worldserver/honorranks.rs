@@ -5,7 +5,9 @@
 //! accessors/clear RVA `0x0001A540..0x0001A890`, `UpdateRanksOnWorldServer`
 //! RVA `0x0001A4C0`, `UpdateRanksOnGameServer` RVA `0x0001ABD0`,
 //! `CopyHonorRanks` RVA `0x0001AE20` и `OnNewDay` RVA `0x0001B280` —
-//! `IMPLEMENTED`. Остальные функции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `IMPLEMENTED`; `PushToRanks` RVA `0x0001B510` и `KilledOnePlayer` RVA
+//! `0x0001B680` также `IMPLEMENTED`. Остальные функции ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
@@ -66,6 +68,14 @@
 //! копии и не переставляет запись sort-day после успешной сериализации; Rust
 //! сохраняет машинный порядок, а отсутствие обязательного net-server выражает
 //! typed-блоком на месте прежнего null-dereference.
+//!
+//! `PushToRanks` RVA `0x0001B510` обновляет существующую запись без смены
+//! имени либо добавляет новый snapshot игрока, stable-сортирует по убыванию
+//! eliminate count, затем level, и удаляет хвост до десяти записей. Comparator
+//! и цикл обрезки подтверждены exact диапазонами `0x0041B204..0x0041B219` и
+//! `0x0041B629..0x0041B65E`. `Vec::sort_by` сохраняет прежний порядок полных
+//! ties. Два несемантических padding-байта новой записи обнуляются вместо
+//! публикации неопределённого stack-содержимого в DB blob.
 
 use std::error::Error;
 use std::fmt;
@@ -77,6 +87,7 @@ use crate::dbaccess::worlddb::rsplayer::{
     HonorRanksType,
 };
 use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::worldserver::appworld::player::CPlayer;
 use crate::worldserver::worldserver::game::{CGame, WorldLocalMessageQueueBlock};
 
 #[derive(Debug, Eq, PartialEq)]
@@ -108,6 +119,37 @@ pub(crate) enum HonorRanksNewDayBlock {
         sort_day: u32,
         rank_mask: u32,
         source: HonorRanksSerializationBlock,
+    },
+}
+
+/// Изменение одной current top-10 секции.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct HonorRankPushReport {
+    pub(crate) rank_type: HonorRanksType,
+    pub(crate) country: u8,
+    pub(crate) player_id: i32,
+    pub(crate) replaced_existing: bool,
+    pub(crate) retained_in_top_ten: bool,
+    pub(crate) removed_player_ids: Vec<i32>,
+    pub(crate) legacy_result: bool,
+}
+
+/// Полный четыре-типа проход `KilledOnePlayer` для допустимой страны.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct HonorRanksKilledPlayerReport {
+    pub(crate) country: u8,
+    pub(crate) updates: Vec<HonorRankPushReport>,
+}
+
+/// Safe-граница исходного `strcpy(tagHorRank::name[20], player-name)`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HonorRankPushBlock {
+    InvalidCountry {
+        country: u8,
+    },
+    NameTooLong {
+        player_id: i32,
+        visible_name_length: usize,
     },
 }
 
@@ -284,6 +326,119 @@ impl CHonorRanks {
         })
     }
 
+    /// Обновляет одну current top-10 секцию по exact `PushToRanks`.
+    pub(crate) fn push_to_ranks(
+        &mut self,
+        rank_type: HonorRanksType,
+        country: u8,
+        eliminate_num: u32,
+        player: &CPlayer,
+    ) -> Result<HonorRankPushReport, HonorRankPushBlock> {
+        if 4 <= country {
+            return Err(HonorRankPushBlock::InvalidCountry { country });
+        }
+        let ranks = &mut self.current[rank_type as usize][usize::from(country)];
+        let player_id = player.get_id();
+        let replaced_existing = if let Some(rank) = ranks
+            .iter_mut()
+            .find(|rank| rank.player_id == player_id)
+        {
+            rank.level = player.get_level();
+            rank.occupation_id = player.get_occupation();
+            rank.appellation_id = player.get_appellation_id();
+            rank.eliminate_num = eliminate_num;
+            true
+        } else {
+            let source_name = player.get_name();
+            let visible_name_length = source_name
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(source_name.len());
+            if 20 <= visible_name_length {
+                return Err(HonorRankPushBlock::NameTooLong {
+                    player_id,
+                    visible_name_length,
+                });
+            }
+            let mut name = [0; 20];
+            name[..visible_name_length]
+                .copy_from_slice(&source_name[..visible_name_length]);
+            ranks.push(HonorRankDbEntry {
+                player_id,
+                level: player.get_level(),
+                name,
+                occupation_id: player.get_occupation(),
+                legacy_padding: [0; 2],
+                appellation_id: player.get_appellation_id(),
+                eliminate_num,
+            });
+            false
+        };
+
+        ranks.sort_by(|left, right| {
+            right
+                .eliminate_num
+                .cmp(&left.eliminate_num)
+                .then_with(|| right.level.cmp(&left.level))
+        });
+        let mut removed_player_ids = Vec::new();
+        while 10 < ranks.len() {
+            removed_player_ids.push(
+                ranks
+                    .pop()
+                    .expect("длина honor ranks проверена перед удалением")
+                    .player_id,
+            );
+        }
+        let retained_in_top_ten = ranks.iter().any(|rank| rank.player_id == player_id);
+
+        Ok(HonorRankPushReport {
+            rank_type,
+            country,
+            player_id,
+            replaced_existing,
+            retained_in_top_ten,
+            removed_player_ids,
+            legacy_result: true,
+        })
+    }
+
+    /// Последовательно обновляет day/week/month/total для допустимой страны.
+    pub(crate) fn killed_one_player(
+        &mut self,
+        player: &CPlayer,
+        eliminate_counts: [u32; 4],
+    ) -> Result<Option<HonorRanksKilledPlayerReport>, HonorRankPushBlock> {
+        let Some(country) = player.country() else {
+            return Ok(None);
+        };
+        let Some(country_index) = country.checked_sub(1).filter(|country| *country < 4) else {
+            return Ok(None);
+        };
+
+        let mut updates = Vec::with_capacity(4);
+        for (rank_type, eliminate_num) in [
+            HonorRanksType::Day,
+            HonorRanksType::Week,
+            HonorRanksType::Month,
+            HonorRanksType::Total,
+        ]
+        .into_iter()
+        .zip(eliminate_counts)
+        {
+            updates.push(self.push_to_ranks(
+                rank_type,
+                country_index,
+                eliminate_num,
+                player,
+            )?);
+        }
+        Ok(Some(HonorRanksKilledPlayerReport {
+            country: country_index,
+            updates,
+        }))
+    }
+
     /// Рассылает выбранные history-типы всем подключённым GameServer-ам.
     pub(crate) fn update_ranks_on_game_server(
         &self,
@@ -442,6 +597,25 @@ impl Error for HonorRanksNewDayBlock {
         }
     }
 }
+
+impl fmt::Display for HonorRankPushBlock {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidCountry { country } => {
+                write!(formatter, "индекс страны honor ranks вне 0..3: {country}")
+            }
+            Self::NameTooLong {
+                player_id,
+                visible_name_length,
+            } => write!(
+                formatter,
+                "имя игрока {player_id} содержит {visible_name_length} видимых байт и переполняет tagHorRank::name[20] с NUL"
+            ),
+        }
+    }
+}
+
+impl Error for HonorRankPushBlock {}
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
@@ -1200,7 +1374,7 @@ impl Error for HonorRanksNewDayBlock {
 
 // ============================================================================
 // FUNCTION: CHonorRanks::PushToRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp:297
@@ -1208,13 +1382,14 @@ impl Error for HonorRanksNewDayBlock {
 // ADDRESS: 0041b510
 // PROTOTYPE: bool __cdecl PushToRanks(int param_1, int param_2, ulong param_3, CPlayer * param_4)
 //
+// Реализовано выше с exact stable comparator и top-10 tail cleanup.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CHonorRanks::KilledOnePlayer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp:285
@@ -1222,6 +1397,8 @@ impl Error for HonorRanksNewDayBlock {
 // ADDRESS: 0041b680
 // PROTOTYPE: void __cdecl KilledOnePlayer(CPlayer * param_1, ulong param_2, ulong param_3, ulong param_4, ulong param_5)
 //
+// Реализовано выше: country `1..4` преобразуется в индекс и четыре rank-типа
+// обновляются строго day/week/month/total.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
