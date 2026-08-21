@@ -24,6 +24,11 @@
 //! `CountrySaveSnapshot` заменяет отдельный heap-object без Windows ABI.
 //! Allocation failure не получает выдуманного продолжения старой null/UB
 //! ветви. Полный raw-блок generator-а и inlined STL traversal удалены.
+//! Для вложенного city-war вызова `CCountry::SetKing`, которому одновременно
+//! нужен mutable governance-контекст, owner временно снимается из существующего
+//! nullable slot и безусловно возвращается после вызова. Это устраняет raw
+//! alias `CCountry*`/singleton handler средствами ownership; map key, lifetime
+//! между сообщениями и наблюдаемый порядок country side effects не меняются.
 //!
 //! `AddOneTopInfo` использует отдельный process-static signed ID с exact
 //! initial `1` по `0x0056A9F0`, wrapping увеличивает его до clock-call, затем
@@ -302,6 +307,25 @@ impl CCountryHandler {
             return None;
         }
         self.countries.get_mut(&country_id)?.as_deref_mut()
+    }
+
+    /// Временно передаёт concrete country-owner координирующему контексту.
+    /// Это Rust-замена одновременного `CCountry*` и singleton handler alias.
+    pub(crate) fn take_country_owner(&mut self, country_id: u8) -> Option<Box<CCountry>> {
+        if country_id == 0 {
+            return None;
+        }
+        self.countries.get_mut(&country_id)?.take()
+    }
+
+    /// Возвращает ранее снятый owner в тот же существующий nullable slot.
+    pub(crate) fn restore_country_owner(&mut self, country_id: u8, owner: Box<CCountry>) {
+        let slot = self
+            .countries
+            .get_mut(&country_id)
+            .expect("временно снятая country сохраняет map-slot");
+        assert!(slot.is_none(), "country slot не заменяется во время owner-call");
+        *slot = Some(owner);
     }
 
     /// Пишет reached `m_lCountryWarRes`; miss/null сохраняет исходный no-op.

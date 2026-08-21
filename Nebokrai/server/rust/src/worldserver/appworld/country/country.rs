@@ -9,7 +9,8 @@
 //! `CCountry::CloneCountryData` RVA `0x000C9CE0` и
 //! `CCountry::CloneSaveData` RVA `0x000CC470`, `CCountry::AI` RVA
 //! `0x000CB710`, `GetMinister` RVA `0x000C6DE0`, `SendPrivateMsg` RVA
-//! `0x000C6870` и `SendCountryMsg` RVA `0x000C7090` — `IMPLEMENTED`; остальной
+//! `0x000C6870`, `SendCountryMsg` RVA `0x000C7090` и `SetKing` RVA
+//! `0x000CC290` — `IMPLEMENTED`; остальной
 //! корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -87,6 +88,10 @@
 //! итог вызывает `DeposeKing(4)`. `CCountryHandler::Run` сохраняет unsigned
 //! country-map order и теперь вызывает этот concrete owner через уже
 //! восстановленный governance context вместо сырого whole-AI callback-а.
+//! `SetKing` exact `0x004CC290..0x004CC313` без проверки результата вызывает
+//! `DeposeKing(3)`, пишет новый ID в `CKing+0x4`, строит
+//! `0x7FF05 {country:u8, player:i32}`, делает `SendAll` и возвращает player ID.
+//! City-war result подключает этот полный owner, а не повторяет scalar-записи.
 //! `GetMinister` exact `0x004C6DE0..0x004C6E30` принимает только job `2..=7`,
 //! дважды выполняет исходный map lookup и возвращает nullable minister-owner.
 //! Rust делает один стандартный `BTreeMap::get`, сохраняя gate и результат.
@@ -4477,7 +4482,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::SetKing
-// STATUS: IMPLEMENTED_SOURCE_REFERENCE
+// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:796

@@ -3067,8 +3067,6 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
         &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
     pub(crate) put_union_war_log: &'a mut dyn FnMut(&[u8]),
     pub(crate) refresh_union_owned_city: &'a mut dyn FnMut(i32, i32, i32),
-    /// Сырые `CCountry::SetKing(master)` и `m_lCityID=region` одним owner-call.
-    pub(crate) set_city_war_country_king_and_city: &'a mut dyn FnMut(u8, i32, i32),
     pub(crate) update_union_player: &'a mut dyn FnMut(i32),
     pub(crate) faction_level_log_enabled: bool,
     pub(crate) write_faction_level_log:
@@ -8914,7 +8912,6 @@ impl CGame {
         reload_context: &mut dyn WorldReloadContext,
         add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
         update_player: &mut dyn FnMut(i32),
-        set_city_war_country_king_and_city: &mut dyn FnMut(u8, i32, i32),
     ) -> Result<WorldProcessMessageOutcome, WorldProcessMessageError>
     where
         TimerCallback: Copy,
@@ -8978,7 +8975,6 @@ impl CGame {
                             &mut *reload_context,
                             &mut *add_log_text,
                             update_player,
-                            set_city_war_country_king_and_city,
                             WorldMessageSource::GameServer,
                             message,
                         )
@@ -9047,7 +9043,6 @@ impl CGame {
                     &mut *reload_context,
                     &mut *add_log_text,
                     update_player,
-                    set_city_war_country_king_and_city,
                     WorldMessageSource::LoginServer,
                     message,
                 )
@@ -9120,7 +9115,6 @@ impl CGame {
         get_log_local_time: &mut dyn FnMut() -> WorldLogLocalTime,
         put_log_info: &mut dyn FnMut(&[u8]),
         update_player: &mut dyn FnMut(i32),
-        set_city_war_country_king_and_city: &mut dyn FnMut(u8, i32, i32),
         clocks: &mut WorldMainLoopClockState,
         state: &mut WorldProcessMessageStageState,
         mut get_tick: GetTick,
@@ -9179,7 +9173,6 @@ impl CGame {
             reload_context,
             &mut add_log_text,
             update_player,
-            set_city_war_country_king_and_city,
         )
         .await
         {
@@ -10378,7 +10371,6 @@ impl CGame {
             &mut *callbacks.get_log_local_time,
             &mut *callbacks.put_log_info,
             &mut *callbacks.update_union_player,
-            &mut *callbacks.set_city_war_country_king_and_city,
             state.clocks,
             state.process_message,
             &mut *callbacks.get_tick,
@@ -13595,7 +13587,6 @@ async fn process_world_message<TimerCallback, TeamOwner>(
     reload_context: &mut dyn WorldReloadContext,
     add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     update_player: &mut dyn FnMut(i32),
-    set_city_war_country_king_and_city: &mut dyn FnMut(u8, i32, i32),
     source: WorldMessageSource,
     mut message: CMessage,
 ) -> ProcessedWorldEvent
@@ -14968,12 +14959,13 @@ where
             game,
             organizing,
             country_handler,
+            country_parameters,
             attack_city,
             timer,
             attack_city_callbacks,
             application_callbacks,
             update_player,
-            set_city_war_country_king_and_city,
+            globe_setup,
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,

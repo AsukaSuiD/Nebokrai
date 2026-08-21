@@ -173,10 +173,14 @@
 //! union победителя. Timer, завершение войны, ownership/country mutations,
 //! `WS0147..WS0153`, top-info и `0x7FE22` остаются внутри concrete owner-а.
 //! `m_bIsWarring=false` выполняется у живого `CCountry` напрямую после exact
-//! region/country lookup. Связка `SetKing(master)+m_lCityID=region` пока
-//! остаётся явно переданным callback-ом: это сохраняет место и порядок side
-//! effects, не объявляя ещё не подключённый здесь `SetKing` (включая его
-//! `DeposeKing` и `0x7FF05`) готовым через одну scalar-запись.
+//! region/country lookup. Связка `SetKing(master)+m_lCityID=region` также
+//! подключена к живому country-owner-у полным governance-контекстом. Exact EXE
+//! `0x00471D38..0x00471D43` игнорирует return `SetKing`, затем пишет region в
+//! `CCountry+0x20`; сам `SetKing` `0x004CC290..0x004CC313` вызывает
+//! `DeposeKing(3)`, назначает king, публикует `0x7FF05` и возвращает master ID.
+//! Rust временно передаёт `Box<CCountry>` из handler-а контексту, сохраняет все
+//! эти side effects и пишет city только после normal typed completion; это
+//! ownership-замена singleton/raw-pointer alias, а не новый lifecycle.
 //! Exact `0x004A88D1..0x004A8952` для `0x60139` сначала читает один operation
 //! `Long`. Только literal `2/0x11/0x12` читают второй `Long` и вызывают
 //! `DeleteOneMember/InsertOneFaction/AppendOneFaction2Count`; literal `4`
@@ -245,7 +249,14 @@ use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::regionrouter::{
     RegionRoutePoint, RegionRouter, RegionRouterChangeOutcome,
 };
+use crate::public::tools::put_string_to_file;
+use crate::worldserver::appworld::country::country::{
+    CountryAbsolveCounterReset, CountryExileMessageDelivery, CountryExileResultContext,
+    CountryExileTarget, CountryExileTextArgument, CountryFactionSnapshot,
+    CountryGovernanceContextBlock,
+};
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
+use crate::worldserver::appworld::country::countryparam::CCountryParam;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionCallbackOutcome};
 use crate::public::date::TagTime;
 use crate::public::timer::CTimer;
@@ -3087,6 +3098,11 @@ pub(crate) enum OrganizingCityWarResultContextBlock {
         string_id: &'static [u8],
         visible_len: usize,
     },
+    MissingCountryOwner { country_id: u8 },
+    CountryGovernance {
+        country_id: u8,
+        source: CountryGovernanceContextBlock,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -3108,14 +3124,15 @@ struct WorldAttackCityResultContext<
     'callbacks,
     'effects,
     'update,
-    'country_effects,
+    'configuration,
 > {
-    game: &'game CGame,
+    game: &'game mut CGame,
     organizing: &'organizing mut COrganizingCtrl,
     country_handler: &'country mut CCountryHandler,
+    country_parameters: &'configuration CCountryParam,
+    globe_setup: &'configuration GlobeSetupSnapshot,
     callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
     update_player: &'update mut dyn FnMut(i32),
-    set_country_king_and_city: &'country_effects mut dyn FnMut(u8, i32, i32),
 }
 
 impl AttackCityEnemyRelationContext
@@ -3214,6 +3231,127 @@ impl AttackCityWarEndContext
             country.is_warring = false;
         }
         Ok(())
+    }
+}
+
+impl CountryExileResultContext
+    for WorldAttackCityResultContext<'_, '_, '_, '_, '_, '_, '_>
+{
+    fn map_player_name(&mut self, player_id: i32) -> Option<Vec<u8>> {
+        self.game
+            .map_player(player_id as u32)
+            .map(|player| legacy_c_string_prefix(player.get_name()).to_vec())
+    }
+
+    fn online_player(&mut self, player_id: i32) -> Option<CountryExileTarget> {
+        self.game
+            .online_player_by_id(player_id as u32)
+            .map(|player| CountryExileTarget {
+                name: legacy_c_string_prefix(player.get_name()).to_vec(),
+                country: player.country(),
+                level: player.get_level(),
+                credit: player.credit(),
+                pk_count: player.pk_count(),
+                is_god: player.is_god(),
+            })
+    }
+
+    fn reset_online_player_murder_counters(
+        &mut self,
+        player_id: i32,
+    ) -> Option<CountryAbsolveCounterReset> {
+        self.game
+            .reset_online_player_murder_counters(player_id as u32)
+            .map(|reset| CountryAbsolveCounterReset {
+                previous_kill_count: reset.previous_kill_count,
+                previous_pk_count: reset.previous_pk_count,
+            })
+    }
+
+    fn faction_id_by_player(
+        &mut self,
+        player_id: i32,
+    ) -> Result<i32, CountryGovernanceContextBlock> {
+        match self.organizing.is_free_player(player_id) {
+            FreePlayerLookup::NoFaction => Ok(0),
+            FreePlayerLookup::Faction(faction_id) => Ok(faction_id),
+            FreePlayerLookup::BlockedNullFaction { .. } => {
+                Err(CountryGovernanceContextBlock::PlayerFactionLookup)
+            }
+        }
+    }
+
+    fn faction_snapshot(&mut self, faction_id: i32) -> Option<CountryFactionSnapshot> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(|faction| CountryFactionSnapshot {
+                faction_id: faction.faction_id(),
+                name: faction.name().to_vec(),
+                owned_cities: faction.owned_cities().iter().copied().collect(),
+            })
+    }
+
+    fn country_name(&mut self, country_id: u8) -> Vec<u8> {
+        self.globe_setup
+            .country_name(country_id)
+            .unwrap_or_default()
+            .to_vec()
+    }
+
+    fn country_identity_name(&mut self, identity: u8) -> Vec<u8> {
+        self.globe_setup
+            .country_identity_name(identity)
+            .unwrap_or_default()
+            .to_vec()
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| match argument {
+                CountryExileTextArgument::Text(text) => UnionFormatArgument::Text(text),
+                CountryExileTextArgument::Signed(value) => UnionFormatArgument::Signed(*value),
+            })
+            .collect::<Vec<_>>();
+        (self.callbacks.format_world_string)(string_id, &arguments)
+    }
+
+    fn game_server_number_by_player_id(&mut self, player_id: i32) -> i32 {
+        self.game.game_server_number_by_player_id(player_id)
+    }
+
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError> {
+        message.send_to_map_id(self.game.current_game_server_sender().as_ref(), map_id)
+    }
+
+    fn send_to_connected_game_servers(
+        &mut self,
+        message: &CMessage,
+    ) -> Vec<CountryExileMessageDelivery> {
+        let sender = self.game.current_game_server_sender();
+        self.game
+            .connected_game_server_indices()
+            .map(|map_id| CountryExileMessageDelivery {
+                map_id,
+                delivery: message.send_to_map_id(sender.as_ref(), map_id),
+            })
+            .collect()
+    }
+
+    fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError> {
+        message.send_all(self.game.current_game_server_sender().as_ref())
+    }
+
+    fn put_king_log(&mut self, text: &[u8]) {
+        put_string_to_file("king", text);
     }
 }
 
@@ -3407,8 +3545,23 @@ impl AttackCityWarResultContext
         master_id: i32,
         city_region_id: i32,
     ) -> Result<(), Self::Block> {
-        (self.set_country_king_and_city)(country_id, master_id, city_region_id);
-        Ok(())
+        let Some(mut country) = self.country_handler.take_country_owner(country_id) else {
+            return Err(OrganizingCityWarResultContextBlock::MissingCountryOwner {
+                country_id,
+            });
+        };
+        let set_king = country.set_king(master_id, self.country_parameters, self);
+        if set_king.is_ok() {
+            country.city_id = city_region_id;
+        }
+        self.country_handler
+            .restore_country_owner(country_id, country);
+        set_king
+            .map(|_| ())
+            .map_err(|source| OrganizingCityWarResultContextBlock::CountryGovernance {
+                country_id,
+                source,
+            })
     }
 
     fn format_world_string(
@@ -3486,15 +3639,16 @@ impl AttackCityWarResultContext
 )]
 pub(crate) fn dispatch_city_war_result<Callback: Copy>(
     message: &mut CMessage,
-    game: &CGame,
+    game: &mut CGame,
     organizing: &mut COrganizingCtrl,
     country_handler: &mut CCountryHandler,
+    country_parameters: &CCountryParam,
     attack_city: &mut CAttackCitySys,
     timer: &mut CTimer<Callback>,
     attack_callbacks: AttackCityCallbacks<Callback>,
     effects: &mut WorldUnionApplicationEffectCallbacks<'_>,
     update_player: &mut dyn FnMut(i32),
-    set_country_king_and_city: &mut dyn FnMut(u8, i32, i32),
+    globe_setup: &GlobeSetupSnapshot,
 ) -> Option<OrganizingCityWarResultDispatch> {
     if message.message_type() != CITY_WAR_RESULT_MESSAGE_TYPE {
         return None;
@@ -3508,9 +3662,10 @@ pub(crate) fn dispatch_city_war_result<Callback: Copy>(
         game,
         organizing,
         country_handler,
+        country_parameters,
+        globe_setup,
         callbacks: effects,
         update_player,
-        set_country_king_and_city,
     };
     let outcome = attack_city.on_faction_win_city(
         war_number,
