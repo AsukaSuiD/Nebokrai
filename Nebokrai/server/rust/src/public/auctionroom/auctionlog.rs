@@ -1,9 +1,9 @@
 //! Журнал аукциона исторического `WorldServer`.
 //!
 //! Статус `CAuctionLog`, destructor, `AddItem`, `ComputePage`,
-//! `AddByteAtCurPage`, `AddByteGoodsLog`, `CollectNoNotice` и
-//! `SendAuctionMsg2GS` — `IMPLEMENTED`; `LoadItem` и `UpdateAuctionBangDB`
-//! ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `AddByteAtCurPage`, `AddByteGoodsLog`, `CollectNoNotice`, `LoadItem` и
+//! `SendAuctionMsg2GS` — `IMPLEMENTED`; `UpdateAuctionBangDB` ниже остаётся
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -40,11 +40,34 @@
 //! Linux C++ донора меняли этот контракт и не перенесены. Формирование SQL,
 //! контейнеры и message storage используют стандартные Rust типы; тонкий
 //! queue-trait оставляет владельцу очереди только исходный порядок публикации.
+//!
+//! `LoadItem` открывает Log DB снаружи технического owner-а и потоково читает
+//! exact `AuctionLog` query. Уже прочитанные строки сразу добавляются в live
+//! multimap и остаются там при поздней ошибке; прежний журнал перед загрузкой
+//! не очищается. Только после успешного открытия второго query функция
+//! очищает `m_vecGoodsList`, затем публикует `auctionmostgoods` построчно.
+//! Ошибка второй строки поэтому оставляет prefix нового ranking-а, а ошибка
+//! открытия второго query — весь прежний ranking. Старый Linux C++ staging и
+//! swap делали обе части атомарными, добавляли schema-probe запросы и меняли
+//! этот exact порядок; они не перенесены.
+//!
+//! ADO recordset/VARIANT заменены потоковым Tiberius result, а `_bstr_t` ANSI
+//! conversion — Windows-1251, уже принятой русским серверным корпусом.
+//! Внешний init передаёт открытый Log DB connection, поскольку этот owner не
+//! владеет setup credentials/runtime. `strcpy(strDescri[256])` локализован
+//! typed-блоком; повреждённый GUID точной legacy-длины также не превращается в
+//! придуманный нулевой GUID. Exact create/query/type failures возвращают
+//! `false`; machine-код `0x0044BCBD..0x0044BD72` и catch `0x0044CBB1`
+//! подтверждают эти ветви, обычный полный проход возвращает исходный `true`.
 
 use std::collections::BTreeMap;
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
+use encoding_rs::WINDOWS_1251;
+use futures_util::TryStreamExt;
+use tiberius::Row;
 
+use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::servers::ServerCommandHandle;
 use crate::public::guid::CGuid;
@@ -245,6 +268,58 @@ pub(crate) struct AuctionNoticeCollection {
     pub(crate) record_count: usize,
 }
 
+/// Две recordset-стадии exact `LoadItem`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AuctionLogLoadStage {
+    History,
+    Ranking,
+}
+
+/// Причина исходного `false` без публикации credentials или SQL values.
+#[derive(Debug)]
+pub(crate) enum AuctionLogLoadFailure {
+    MissingConnection,
+    Database {
+        stage: AuctionLogLoadStage,
+        row_index: Option<usize>,
+        source: tiberius::error::Error,
+    },
+    MissingRequiredValue {
+        stage: AuctionLogLoadStage,
+        row_index: usize,
+        column: &'static str,
+    },
+}
+
+/// Локальная UB/partial-value граница одной history-строки.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AuctionLogLoadBlockSource {
+    DescriptionOverflow { encoded_length: usize },
+    MalformedGuid { column: &'static str },
+    CalendarOutsideSystemTime,
+}
+
+/// Уже достигнутый prefix перед безопасно неразрешимой строкой.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuctionLogLoadBlock {
+    pub(crate) row_index: usize,
+    pub(crate) source: AuctionLogLoadBlockSource,
+}
+
+/// Полный доказанный итог `CAuctionLog::LoadItem`.
+#[derive(Debug)]
+pub(crate) enum AuctionLogLoadOutcome {
+    ReturnedTrue,
+    ReturnedFalse(AuctionLogLoadFailure),
+    BlockedMissingFact(AuctionLogLoadBlock),
+}
+
+enum AuctionHistoryRowDecode {
+    Database(tiberius::error::Error),
+    MissingRequiredValue(&'static str),
+    Blocked(AuctionLogLoadBlockSource),
+}
+
 /// Owned-состояние исходного `CAuctionLog` без process-static singleton-а.
 pub(crate) struct CAuctionLog {
     /// Constructor не инициализировал это слово; оно становится известным
@@ -284,6 +359,149 @@ impl CAuctionLog {
     pub(crate) fn add_item(&mut self, item: AuctionLogNode) -> bool {
         self.log_list.entry(item.player_id).or_default().push(item);
         true
+    }
+
+    /// Потоково загружает live history, затем очищает и загружает ranking.
+    pub(crate) async fn load_item(
+        &mut self,
+        active_connection: Option<&mut WorldTdsClient>,
+        increment_log_days: u32,
+    ) -> AuctionLogLoadOutcome {
+        let Some(active_connection) = active_connection else {
+            return AuctionLogLoadOutcome::ReturnedFalse(
+                AuctionLogLoadFailure::MissingConnection,
+            );
+        };
+
+        let history_sql = format!(
+            "SELECT * FROM AuctionLog WHERE DATEDIFF(day,log_time,GETDATE())<={} ORDER BY PlayerID, log_time",
+            increment_log_days as i32,
+        );
+        let mut history = match active_connection.simple_query(history_sql).await {
+            Ok(history) => history,
+            Err(source) => {
+                return AuctionLogLoadOutcome::ReturnedFalse(
+                    AuctionLogLoadFailure::Database {
+                        stage: AuctionLogLoadStage::History,
+                        row_index: None,
+                        source,
+                    },
+                );
+            }
+        };
+        let mut history_row_index = 0usize;
+        loop {
+            let item = match history.try_next().await {
+                Ok(Some(item)) => item,
+                Ok(None) => break,
+                Err(source) => {
+                    return AuctionLogLoadOutcome::ReturnedFalse(
+                        AuctionLogLoadFailure::Database {
+                            stage: AuctionLogLoadStage::History,
+                            row_index: Some(history_row_index),
+                            source,
+                        },
+                    );
+                }
+            };
+            let Some(row) = item.into_row() else {
+                continue;
+            };
+            let node = match decode_auction_history_row(&row) {
+                Ok(node) => node,
+                Err(AuctionHistoryRowDecode::Database(source)) => {
+                    return AuctionLogLoadOutcome::ReturnedFalse(
+                        AuctionLogLoadFailure::Database {
+                            stage: AuctionLogLoadStage::History,
+                            row_index: Some(history_row_index),
+                            source,
+                        },
+                    );
+                }
+                Err(AuctionHistoryRowDecode::MissingRequiredValue(column)) => {
+                    return AuctionLogLoadOutcome::ReturnedFalse(
+                        AuctionLogLoadFailure::MissingRequiredValue {
+                            stage: AuctionLogLoadStage::History,
+                            row_index: history_row_index,
+                            column,
+                        },
+                    );
+                }
+                Err(AuctionHistoryRowDecode::Blocked(source)) => {
+                    return AuctionLogLoadOutcome::BlockedMissingFact(AuctionLogLoadBlock {
+                        row_index: history_row_index,
+                        source,
+                    });
+                }
+            };
+            let _legacy_result = self.add_item(node);
+            history_row_index += 1;
+        }
+        drop(history);
+
+        let mut ranking = match active_connection
+            .simple_query("SELECT * FROM auctionmostgoods ")
+            .await
+        {
+            Ok(ranking) => ranking,
+            Err(source) => {
+                return AuctionLogLoadOutcome::ReturnedFalse(
+                    AuctionLogLoadFailure::Database {
+                        stage: AuctionLogLoadStage::Ranking,
+                        row_index: None,
+                        source,
+                    },
+                );
+            }
+        };
+        self.goods_list.clear();
+        let mut ranking_row_index = 0usize;
+        loop {
+            let item = match ranking.try_next().await {
+                Ok(Some(item)) => item,
+                Ok(None) => break,
+                Err(source) => {
+                    return AuctionLogLoadOutcome::ReturnedFalse(
+                        AuctionLogLoadFailure::Database {
+                            stage: AuctionLogLoadStage::Ranking,
+                            row_index: Some(ranking_row_index),
+                            source,
+                        },
+                    );
+                }
+            };
+            let Some(row) = item.into_row() else {
+                continue;
+            };
+            let node = match decode_auction_bang_row(&row) {
+                Ok(node) => node,
+                Err(AuctionHistoryRowDecode::Database(source)) => {
+                    return AuctionLogLoadOutcome::ReturnedFalse(
+                        AuctionLogLoadFailure::Database {
+                            stage: AuctionLogLoadStage::Ranking,
+                            row_index: Some(ranking_row_index),
+                            source,
+                        },
+                    );
+                }
+                Err(AuctionHistoryRowDecode::MissingRequiredValue(column)) => {
+                    return AuctionLogLoadOutcome::ReturnedFalse(
+                        AuctionLogLoadFailure::MissingRequiredValue {
+                            stage: AuctionLogLoadStage::Ranking,
+                            row_index: ranking_row_index,
+                            column,
+                        },
+                    );
+                }
+                Err(AuctionHistoryRowDecode::Blocked(_)) => {
+                    unreachable!("ranking row не содержит локальных raw-buffer границ")
+                }
+            };
+            self.goods_list.push(node);
+            ranking_row_index += 1;
+        }
+
+        AuctionLogLoadOutcome::ReturnedTrue
     }
 
     /// Сохраняет exact переход page и исторически странный bool результата.
@@ -460,6 +678,105 @@ impl CAuctionLog {
     }
 }
 
+fn decode_auction_history_row(row: &Row) -> Result<AuctionLogNode, AuctionHistoryRowDecode> {
+    macro_rules! required {
+        ($type:ty, $column:literal) => {
+            match row.try_get::<$type, _>($column) {
+                Ok(Some(value)) => value,
+                Ok(None) => {
+                    return Err(AuctionHistoryRowDecode::MissingRequiredValue($column));
+                }
+                Err(error) => return Err(AuctionHistoryRowDecode::Database(error)),
+            }
+        };
+    }
+
+    let time = required!(NaiveDateTime, "log_time");
+    let year = u16::try_from(time.year())
+        .map_err(|_| AuctionHistoryRowDecode::Blocked(
+            AuctionLogLoadBlockSource::CalendarOutsideSystemTime,
+        ))?;
+    let time = AuctionLogSystemTime {
+        year,
+        month: u16::try_from(time.month()).expect("chrono month помещается в SYSTEMTIME"),
+        day_of_week: u16::try_from(time.weekday().num_days_from_sunday())
+            .expect("chrono weekday помещается в SYSTEMTIME"),
+        day: u16::try_from(time.day()).expect("chrono day помещается в SYSTEMTIME"),
+        hour: u16::try_from(time.hour()).expect("chrono hour помещается в SYSTEMTIME"),
+        minute: u16::try_from(time.minute()).expect("chrono minute помещается в SYSTEMTIME"),
+        second: u16::try_from(time.second()).expect("chrono second помещается в SYSTEMTIME"),
+        milliseconds: u16::try_from(time.nanosecond() / 1_000_000)
+            .expect("миллисекунды помещаются в SYSTEMTIME"),
+    };
+    let base_id = required!(i32, "dwbaseid");
+    let money_num = required!(i32, "moneynum");
+    let money_type = required!(i32, "moneytype");
+    let operation_type = required!(i32, "optType");
+    let player_id = required!(i32, "playerid");
+    let amount = required!(i32, "amount");
+    let fee = required!(i32, "sxf");
+    let notice = required!(i32, "bNotice");
+
+    let guid_text = row
+        .try_get::<&str, _>("guid")
+        .map_err(AuctionHistoryRowDecode::Database)?;
+    let guid = CGuid::from_legacy_text(guid_text)
+        .map_err(|_| AuctionHistoryRowDecode::Blocked(
+            AuctionLogLoadBlockSource::MalformedGuid { column: "guid" },
+        ))?;
+    let guid_key_text = row
+        .try_get::<&str, _>("guidKey")
+        .map_err(AuctionHistoryRowDecode::Database)?;
+    let guid_key = CGuid::from_legacy_text(guid_key_text)
+        .map_err(|_| AuctionHistoryRowDecode::Blocked(
+            AuctionLogLoadBlockSource::MalformedGuid { column: "guidKey" },
+        ))?;
+
+    let description_text = required!(&str, "strdescri");
+    let (description_text, _, _) = WINDOWS_1251.encode(description_text);
+    if description_text.len() >= AUCTION_LOG_DESCRIPTION_SIZE {
+        return Err(AuctionHistoryRowDecode::Blocked(
+            AuctionLogLoadBlockSource::DescriptionOverflow {
+                encoded_length: description_text.len(),
+            },
+        ));
+    }
+    let mut description = [0; AUCTION_LOG_DESCRIPTION_SIZE];
+    description[..description_text.len()].copy_from_slice(&description_text);
+
+    Ok(AuctionLogNode {
+        base_id,
+        operation_type,
+        money_type,
+        money_num,
+        player_id,
+        amount,
+        fee,
+        notice,
+        time,
+        description,
+        guid,
+        guid_key,
+    })
+}
+
+fn decode_auction_bang_row(row: &Row) -> Result<AuctionBangNode, AuctionHistoryRowDecode> {
+    fn required_i32(
+        row: &Row,
+        column: &'static str,
+    ) -> Result<i32, AuctionHistoryRowDecode> {
+        row.try_get::<i32, _>(column)
+            .map_err(AuctionHistoryRowDecode::Database)?
+            .ok_or(AuctionHistoryRowDecode::MissingRequiredValue(column))
+    }
+
+    Ok(AuctionBangNode {
+        base_id: required_i32(row, "dwbaseid")? as u32,
+        count: required_i32(row, "dwnum")? as u32,
+        operation: required_i32(row, "dwopt")? as u32,
+    })
+}
+
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
@@ -604,7 +921,7 @@ impl CAuctionLog {
 
 // ============================================================================
 // FUNCTION: CAuctionLog::LoadItem
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp:26
@@ -612,6 +929,8 @@ impl CAuctionLog {
 // ADDRESS: 0044bbb0
 // PROTOTYPE: bool __thiscall LoadItem(void)
 //
+// Реализовано выше потоковым Tiberius-проходом с exact partial publication.
+// Create/query/catch false-пути подтверждены machine-кодом.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

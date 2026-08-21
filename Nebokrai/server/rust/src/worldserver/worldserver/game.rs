@@ -280,8 +280,11 @@
 //! отдельных singleton-вызовов, сохраняет Appellation guard, nullable
 //! HonorRanks instance, strict day mismatch, точный tick/log/OnNewDay/log
 //! порядок и затем безусловно достигает AuctionBang daily gate. Сырые
-//! `CPlayerRanks`, `CHonorRanks` и `CAuctionLog` не притворяются готовыми:
-//! семь вызовов остаются локальным trait-контрактом их owners.
+//! PlayerRanks/AuctionBang DB-вызовы не притворяются готовыми и остаются
+//! локальным trait-контрактом своих owners; достигнутый `CHonorRanks` уже
+//! исполняется напрямую. Отдельный init-проход теперь так же напрямую вызывает
+//! потоковый `CAuctionLog::LoadItem`, сохраняет его partial publication и
+//! исходно продолжает инициализацию после `false`, меняя только текст лога.
 //! `AtomicBool` использует отдельные relaxed load/store, а не `swap`, сохраняя
 //! исходную границу между проверкой producer-флага и его очисткой.
 //!
@@ -917,6 +920,7 @@ use crate::nets::networld::message::{CMessage, SendMessageError, WorldMessageHan
 use crate::nets::networld::mynetclient::CMyNetClient;
 use crate::nets::networld::mynetserver::{CMyNetServer, WorldServerEvent};
 use crate::nets::servers::{ServerCommandHandle, ServerHostError};
+use crate::public::auctionlog::{AuctionLogLoadOutcome, CAuctionLog};
 use crate::public::date::TagTime;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
 use crate::public::readwrite::read_to;
@@ -1199,7 +1203,6 @@ pub(crate) enum WorldGameInitBooleanOwner {
     InitializeCountryHandler,
     InitializeCountryWar,
     LoadIncrementShopLog,
-    LoadAuctionLog,
 }
 
 /// Opaque результат одного старого `__beginthreadex` call-site.
@@ -1268,6 +1271,9 @@ pub(crate) enum WorldGameInitEvent {
         finished_at_ms: u32,
         elapsed_ms: u32,
         outcome: HonorRanksLoadOutcome,
+    },
+    AuctionLogLoaded {
+        outcome: AuctionLogLoadOutcome,
     },
     Log {
         payload: Vec<u8>,
@@ -1361,6 +1367,10 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn honor_ranks_database(
         &mut self,
     ) -> (&mut Self::PlayerDatabase, Option<&mut WorldTdsClient>);
+    /// Возвращает уже открытый Log DB connection техническому auction-owner-у.
+    fn auction_log_database(&mut self) -> Option<&mut WorldTdsClient>;
+    /// Exact `CGlobeSetup::m_stSetup.dwIncrementLogDays` для history query.
+    fn auction_increment_log_days(&mut self) -> u32;
     fn world_string_by_id(&mut self, string_id: &[u8]) -> Vec<u8>;
 
     /// Для write-worker сохраняет единственный handle, для load-worker
@@ -6555,6 +6565,7 @@ impl CGame {
         runtime_directory: &Path,
         context: &mut Context,
         honor_ranks: &mut CHonorRanks,
+        auction_log: &mut CAuctionLog,
         log: &mut WorldLogTextOwner,
         callbacks: &mut WorldGameInitCallbacks<'_>,
     ) -> WorldGameInitResult<Context::Block> {
@@ -6974,9 +6985,12 @@ impl CGame {
             },
         );
 
-        let owner = WorldGameInitBooleanOwner::LoadAuctionLog;
-        let succeeded = context.initialize_boolean_owner(owner);
-        events.push(WorldGameInitEvent::BooleanOwner { owner, succeeded });
+        let increment_log_days = context.auction_increment_log_days();
+        let outcome = auction_log
+            .load_item(context.auction_log_database(), increment_log_days)
+            .await;
+        let succeeded = matches!(&outcome, AuctionLogLoadOutcome::ReturnedTrue);
+        events.push(WorldGameInitEvent::AuctionLogLoaded { outcome });
         self.record_game_init_log(
             &mut events,
             log,
