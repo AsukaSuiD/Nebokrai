@@ -10,7 +10,8 @@
 //! `0x000C1F40`, обе перегрузки `GetMemberList` RVA
 //! `0x000C1BB0/0x000C2710`, `IsUsingPV/SetMemPV/AbolishMemPV` RVA
 //! `0x000C1D00/0x000C1D70/0x000C1DD0` и обе `CheckOperValidate` RVA
-//! `0x000C18D0/0x000C1970`, empty enemy-set getter-ы RVA `0x000C1C50`,
+//! `0x000C18D0/0x000C1970`, `ClearApplyList` RVA `0x000C1840`, empty
+//! enemy-set getter-ы RVA `0x000C1C50`,
 //! `IsOwnedCity/IsEnemyFaction/GetOwnedCities/IsHaveEnymyFaction/
 //! IsHaveCityEnemyFaction` RVA
 //! `0x000C2340/0x000C23A0/0x000C2650/0x000C2810/0x000C2870`, обе
@@ -34,7 +35,7 @@
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
 //! Исходные владельцы PDB:
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h`
-//! и `union.cpp:680,1442`.
+//! и `union.cpp:680,785,1442`.
 //!
 //! Точный PDB задаёт старый `CUnion` размером `0x50`: signed ID `+0x4`, имя
 //! `+0x8`, signed master ID `+0x24`, ordered member-map `+0x28`, `tagTime`
@@ -179,6 +180,12 @@
 //! Bool snapshot исходно игнорируется, что сохранено отдельно от typed safe-
 //! блокировок повреждённого state; внешние эффекты до такой границы не
 //! откатываются.
+//! `ClearApplyList` сначала через тот же virtual validation требует у manager-а
+//! право `PV_ConMem`; отказ не меняет заявку. Успех записывает literal `0` в
+//! `m_ApplyPerson` и возвращает `true`. Exact ASM
+//! `0x004C1840..0x004C1866` подтверждает аргумент, slot `+0x1AC`, purview `3`
+//! и отсутствие других эффектов; безаргументный helper Linux-донора не является
+//! контрактом этой функции.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -890,6 +897,26 @@ impl CUnion {
     /// Save-проекция не выдумывает transient apply-person; live `Initial` — 0.
     pub(crate) const fn apply_person(&self) -> Option<i32> {
         self.apply_person
+    }
+
+    /// Очищает единственную union-заявку только при праве `PV_ConMem`.
+    pub(crate) fn clear_apply_list<Context>(
+        &mut self,
+        manager_player_id: i32,
+        context: &Context,
+    ) -> Result<bool, Context::Block>
+    where
+        Context: UnionOperatorValidationContext,
+    {
+        if !self.check_operator_validate(
+            manager_player_id,
+            EPurview::ConMem as i32,
+            context,
+        )? {
+            return Ok(false);
+        }
+        self.apply_person = Some(0);
+        Ok(true)
     }
 
     /// Добавляет faction-member и выполняет полный исходный callback-порядок.
@@ -2305,20 +2332,6 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 
 
 // IMPLEMENTED выше: CUnion::SetChangeData RVA 0x000C17D0.
-
-// ============================================================================
-// FUNCTION: CUnion::ClearApplyList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:785
-// RVA: 0x000C1840
-// ADDRESS: 004c1840
-// PROTOTYPE: bool __thiscall ClearApplyList(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: `public:_virtual_bool___thiscall_CUnion::Invite(long,long)'::__l22::InviteJoinConfeder::InviteJoinConfeder
