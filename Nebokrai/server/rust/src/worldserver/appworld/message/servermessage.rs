@@ -135,7 +135,10 @@
 //! он также использует уже восстановленный schedule owner и нормализованный
 //! snapshot. Следующая граница — `CountryWarSys` subtype `0x1F`, причём её
 //! подтверждённый World-layout сохраняется даже при несовпадении с layout
-//! парного Game-декодера. Следующая граница — identity packet subtype `0x3B`.
+//! парного Game-декодера. Цепочку завершает identity packet subtype `0x3B`:
+//! signed LoginServer ID и unsigned world number без дополнительного framing.
+//! Если setup ещё не назначил исходно неинициализированный `dwNumber`, Rust не
+//! подставляет выдуманный ноль и не отправляет неполный packet.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -980,6 +983,18 @@ pub(crate) enum WorldCountryWarConfigurationCompletion {
 pub(crate) struct WorldCountryWarConfigurationReport {
     pub(crate) delivery: WorldInitialConfigurationDelivery,
     pub(crate) completion: WorldCountryWarConfigurationCompletion,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldGameServerIdentityCompletion {
+    InitialConfigurationComplete { socket_id: i32 },
+    MissingWorldNumber { socket_id: i32 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldGameServerIdentityReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldGameServerIdentityCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -2754,6 +2769,35 @@ pub(crate) fn continue_game_server_country_war_configuration(
             &payload,
         ),
         completion: WorldCountryWarConfigurationCompletion::GameServerIdentityPending {
+            socket_id,
+        },
+    }
+}
+
+/// Завершает initial chain packet-ом `0x3B + login ID + world number`.
+pub(crate) fn finish_game_server_initial_configuration(
+    game: &CGame,
+    socket_id: i32,
+) -> WorldGameServerIdentityReport {
+    let Some(world_number) = game.configured_world_number() else {
+        return WorldGameServerIdentityReport {
+            delivery: None,
+            completion: WorldGameServerIdentityCompletion::MissingWorldNumber { socket_id },
+        };
+    };
+
+    let mut payload = Vec::with_capacity(8);
+    payload.extend_from_slice(&game.login_server_id().to_le_bytes());
+    payload.extend_from_slice(&world_number.to_le_bytes());
+    let sender = game.current_game_server_sender();
+    WorldGameServerIdentityReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x3B,
+            &payload,
+        )),
+        completion: WorldGameServerIdentityCompletion::InitialConfigurationComplete {
             socket_id,
         },
     }

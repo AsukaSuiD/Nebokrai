@@ -9915,6 +9915,11 @@ impl CGame {
         std::mem::replace(&mut self.login_server_id, login_server_id)
     }
 
+    /// Возвращает signed LoginServer ID для финального initial packet `0x3B`.
+    pub(crate) const fn login_server_id(&self) -> i32 {
+        self.login_server_id
+    }
+
     fn close_and_remove_net_client(&mut self) {
         if let Some(client) = self.net_client.as_mut() {
             let _legacy_result = client.close();
