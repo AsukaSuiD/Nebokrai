@@ -14016,7 +14016,7 @@ fn resolve_first_local_ipv4() -> Option<Ipv4Addr> {
         })
 }
 
-fn legacy_tick_ms() -> u32 {
+pub(crate) fn legacy_tick_ms() -> u32 {
     let now = clock_gettime(ClockId::Boottime);
     let seconds_ms = (now.tv_sec as u64).wrapping_mul(1_000);
     let nanoseconds_ms = (now.tv_nsec as u64) / 1_000_000;

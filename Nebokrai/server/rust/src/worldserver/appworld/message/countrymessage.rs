@@ -2,8 +2,9 @@
 //!
 //! Dispatcher RVA `0x000A47F0` остаётся `IMPLEMENTED_PARTIAL`: country relays
 //! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, а также вход country victory
-//! `0x60318`, scalar-sync `0x60314` и quest-switch `0x60315` имеют статус
-//! `IMPLEMENTED`. Victory читает один unsigned country byte и вызывает исходно
+//! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315` и exile-time
+//! `0x60316 -> 0x7FF15` имеют статус `IMPLEMENTED`. Victory читает один
+//! unsigned country byte и вызывает исходно
 //! названный `CountryWarSys::on_flag_destory`; соседние opcodes helper не
 //! интерпретирует. Точная пара
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, исходник
@@ -23,6 +24,13 @@
 //! `_bQuestSwitch +0x25`. Строка `king`-лога сохраняет исходный raw switch и
 //! byte-exact хвост `A1 A3`; безопасный accessor `CGlobeSetup` заменяет только
 //! старое адресное вычисление country-name slot.
+//! Exact `0x004A4E43..0x004A4ED9` задаёт для `0x60316` signed player ID и
+//! country byte, вызов `GetExileResTime` до проверки online-player и общий
+//! ответ `0x7FF15 { remaining_seconds:i32, player_id:i32 }`. Exact
+//! `GetExileResTime` снимает tick до поиска `ExileMap`, использует wrapping
+//! signed 32-bit milliseconds, делит к нулю и зажимает отрицательный результат.
+//! `SuccessExiled` в точном EXE не наполняет map, хотя Linux-донор это исправил;
+//! dispatcher сохраняет машинную ошибку, а не принимает donor fix за контракт.
 //! Exact switch target `0x004A504E..0x004A5065` подтверждает, что `0x60318`
 //! читает один unsigned country byte и сразу передаёт его достигнутому
 //! `CountryWarSys`; конкретный region/country/localization/network context
@@ -32,13 +40,13 @@ use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::tools::put_string_to_file;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::worldserver::appworld::country::country::{
-    CountryQuestSwitchUpdate, CountryScalarUpdate,
+    CountryExileTimeLookup, CountryQuestSwitchUpdate, CountryScalarUpdate,
 };
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::country::countryparam::{
     CCountryParam, CountryParameterUnavailable,
 };
-use crate::worldserver::worldserver::game::CGame;
+use crate::worldserver::worldserver::game::{CGame, legacy_tick_ms};
 
 use super::super::country::countrywarsys::{
     CountryWarSys, CountryWarVictoryContext, CountryWarVictoryReport,
@@ -100,10 +108,34 @@ pub(crate) struct WorldCountryQuestSwitchSync {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldCountryExileTimeDisposition {
+    CountryMissing,
+    ParameterUnavailable(CountryParameterUnavailable),
+    PlayerMissing {
+        lookup: CountryExileTimeLookup,
+    },
+    Broadcast {
+        lookup: CountryExileTimeLookup,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldCountryExileTimeSync {
+    pub(crate) player_id: i32,
+    pub(crate) player_id_complete: bool,
+    pub(crate) country_id: u8,
+    pub(crate) country_id_complete: bool,
+    pub(crate) disposition: WorldCountryExileTimeDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryMessageOutcome {
     Relay(WorldCountryRelayOutcome),
     ScalarSynchronized(WorldCountryScalarSync),
     QuestSwitchSynchronized(WorldCountryQuestSwitchSync),
+    ExileTimeSynchronized(WorldCountryExileTimeSync),
     CountryWarVictory(WorldCountryWarVictorySync),
 }
 
@@ -193,6 +225,53 @@ pub(crate) fn on_country_message(
                     log,
                 },
             ),
+        );
+    }
+    if request_type == 0x0006_0316 {
+        let decoded_player_id = message.base_mut().get_long();
+        let player_id = decoded_player_id.unwrap_or(0);
+        let decoded_country_id = message.base_mut().get_byte();
+        let country_id = decoded_country_id.unwrap_or(0);
+
+        let disposition = match country_handler.get_country(country_id) {
+            None => WorldCountryExileTimeDisposition::CountryMissing,
+            Some(country) => {
+                let sampled_at_ms = legacy_tick_ms();
+                match country.exile_remaining_time(
+                    player_id,
+                    sampled_at_ms,
+                    country_parameters,
+                ) {
+                    Err(block) => {
+                        WorldCountryExileTimeDisposition::ParameterUnavailable(block)
+                    }
+                    Ok(lookup) if game.online_player_by_id(player_id as u32).is_none() => {
+                        WorldCountryExileTimeDisposition::PlayerMissing { lookup }
+                    }
+                    Ok(lookup) => {
+                        let mut response = CMessage::new(0x0007_FF15);
+                        response.base_mut().add_long(lookup.remaining_seconds);
+                        response.base_mut().add_long(player_id);
+                        let wire = response.as_wire_bytes().to_vec();
+                        let delivery =
+                            response.send_all(game.current_game_server_sender().as_ref());
+                        WorldCountryExileTimeDisposition::Broadcast {
+                            lookup,
+                            wire,
+                            delivery,
+                        }
+                    }
+                }
+            }
+        };
+        return WorldCountryMessageDispatch::Handled(
+            WorldCountryMessageOutcome::ExileTimeSynchronized(WorldCountryExileTimeSync {
+                player_id,
+                player_id_complete: decoded_player_id.is_some(),
+                country_id,
+                country_id_complete: decoded_country_id.is_some(),
+                disposition,
+            }),
         );
     }
     let response_type = match request_type {

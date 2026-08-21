@@ -15,7 +15,16 @@
 //!
 //! Exact PDB задаёт `CCountry` размером `0xB8`, country/treasury/power/tech
 //! поля по `+0x4..+0x18`, `CKing` по `+0x24`, minister-map по `+0x5C` и signed
-//! `m_lCountryWarRes` по `+0xA8`. Clone копирует country ID, treasury, power,
+//! `m_lCountryWarRes` по `+0xA8`, а `map<long,long> ExileMap` по `+0xAC`.
+//! `GetExileResTime` RVA `0x000C6D70` сначала снимает 32-битный
+//! `timeGetTime`, затем ищет signed player ID и считает
+//! `_exile_time - now + started_at` с машинным wrapping, делением на 1000 к
+//! нулю и нижней границей ноль. Точный `SuccessExiled`
+//! `0x004C7EE0..0x004C81C5` вызывает `timeGetTime`, но не использует результат
+//! и не наполняет `ExileMap`; Linux-донор добавлял `try_emplace`, то есть
+//! исправлял наблюдаемую ошибку оригинала. Rust сохраняет exact поведение и
+//! не выдумывает запись, пока её не подтвердит другой машинный owner.
+//! Clone копирует country ID, treasury, power,
 //! current/level-up tech exp, tech level, king identity/flags и war-result.
 //! Три king-point ограничиваются соответствующими максимумами `CCountryParam`.
 //! `COfficer::_bQuestSwitch` по exact PDB находится отдельно от
@@ -85,6 +94,16 @@ pub(crate) struct CCountry {
     pub(crate) king_quest_switch: bool,
     pub(crate) country_war_result: i32,
     pub(crate) ministers: BTreeMap<u8, CountryMinisterState>,
+    pub(crate) exile_started_at_ms: BTreeMap<i32, i32>,
+}
+
+/// Наблюдаемый результат exact `CCountry::GetExileResTime`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryExileTimeLookup {
+    pub(crate) started_at_ms: Option<i32>,
+    pub(crate) sampled_at_ms: u32,
+    pub(crate) remaining_ms: i32,
+    pub(crate) remaining_seconds: i32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -126,6 +145,39 @@ pub(crate) enum CountryScalarUpdate {
 }
 
 impl CCountry {
+    /// Повторяет signed 32-битную арифметику `GetExileResTime` после уже
+    /// снятого `timeGetTime`; отсутствие записи не требует `_exile_time`.
+    pub(crate) fn exile_remaining_time(
+        &self,
+        player_id: i32,
+        sampled_at_ms: u32,
+        parameters: &CCountryParam,
+    ) -> Result<CountryExileTimeLookup, CountryParameterUnavailable> {
+        let Some(&started_at_ms) = self.exile_started_at_ms.get(&player_id) else {
+            return Ok(CountryExileTimeLookup {
+                started_at_ms: None,
+                sampled_at_ms,
+                remaining_ms: 0,
+                remaining_seconds: 0,
+            });
+        };
+        let exile_time_ms = parameters
+            .exile_time_ms()
+            .ok_or(CountryParameterUnavailable {
+                field: "_exile_time",
+            })?;
+        let remaining_ms = exile_time_ms
+            .wrapping_sub(sampled_at_ms as i32)
+            .wrapping_add(started_at_ms);
+        let remaining_seconds = (remaining_ms / 1_000).max(0);
+        Ok(CountryExileTimeLookup {
+            started_at_ms: Some(started_at_ms),
+            sampled_at_ms,
+            remaining_ms,
+            remaining_seconds,
+        })
+    }
+
     /// Повторяет exact выбор `CKing` либо `GetMinister(2..=7)` opcode `0x60315`.
     pub(crate) fn set_quest_switch(
         &mut self,
@@ -465,7 +517,7 @@ impl Error for CountrySerializeError {}
 
 // ============================================================================
 // FUNCTION: CCountry::GetExileResTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1319
