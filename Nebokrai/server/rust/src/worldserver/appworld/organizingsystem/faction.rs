@@ -496,6 +496,15 @@
 //! заставляет `SetExp` вернуть MaximumLevel без списания faction experience.
 //! Goods catalog, inventory/money и DB-log остаются узким контекстом; charge и
 //! wire framing строятся существующим `CMessage`.
+//! `SetControbuter` допускает любого текущего member-а как requester-а, при
+//! включении проверяет signed maximum contributor-ов, затем меняет target flag.
+//! После мутации exact order: member `Update`, player refresh, форматированный
+//! `WS0227/WS0228(target name)`, broadcast с `WS0119`, типом `-1` и цветом
+//! `0x87A238`, затем dirty `2`. ASM `0x004B92F0..0x004B9509` подтверждает два
+//! разных requester/target ID, 256-байтовый `_sprintf` buffer и отсутствие
+//! отдельной purview-проверки. Локализация и player-owner остаются контекстом;
+//! нетерминированное имя и overflow заменены typed-границами после уже
+//! совершённых эффектов.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -542,6 +551,7 @@ const FACTION_DUB_OLD_TITLE_CAPACITY: usize = 32;
 const FACTION_PURVIEW_NOTICE_CAPACITY: usize = 100;
 const FACTION_MAXIMUM_MEMBERS_NOTICE_CAPACITY: usize = 256;
 const FACTION_UPGRADE_NOTICE_CAPACITY: usize = 256;
+const FACTION_CONTRIBUTOR_NOTICE_CAPACITY: usize = 256;
 const PRONOUNCE_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_CONTENT_CAPACITY: usize = 2048;
 const OTHER_FACTION_NAME_CAPACITY: usize = 20;
@@ -1251,6 +1261,46 @@ pub(crate) enum FactionUpgradeBlock {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionContributorRejection {
+    RequesterNotMember,
+    MaximumContributors,
+    TargetNotMember,
+    Unchanged,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionContributorProgress {
+    pub(crate) contributor_changed: bool,
+    pub(crate) member_update: Option<MemberUpdateReport>,
+    pub(crate) refreshed_player_ids: Vec<i32>,
+    pub(crate) member_information: Option<FactionMemberInfoReport>,
+    pub(crate) dirty_set: bool,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionContributorOutcome {
+    Rejected(FactionContributorRejection),
+    Updated(FactionContributorProgress),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionContributorBlock {
+    MemberUpdate {
+        source: MemberUpdateBuildError,
+        progress: FactionContributorProgress,
+    },
+    UnterminatedMemberName {
+        player_id: i32,
+        source: UnterminatedMemberField,
+        progress: FactionContributorProgress,
+    },
+    NoticeWouldOverflow {
+        formatted_len: usize,
+        progress: FactionContributorProgress,
+    },
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FactionLeaveWordUpdateBuildError {
     MissingLastLeaveWord,
@@ -1632,6 +1682,17 @@ pub(crate) trait FactionUpgradeContext: FactionLevelContext {
         master_id: i32,
         master_name: &[u8],
     );
+}
+
+/// Узкая граница локализации и player-owner для `SetControbuter`.
+pub(crate) trait FactionContributorContext: FactionOrganizingInfoContext {
+    fn format_contributor_string(
+        &mut self,
+        string_id: &'static [u8],
+        member_name: &[u8],
+    ) -> Vec<u8>;
+
+    fn update_player_faction_info(&mut self, player_id: i32);
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -5028,6 +5089,26 @@ impl CFaction {
         first_text: &'a [u8],
         second_text: &'a [u8],
         information_type: i32,
+        send_organizing_info: F,
+    ) -> FactionMemberInfoReport
+    where
+        F: FnMut(FactionMemberInfoRequest<'a>),
+    {
+        self.send_info_to_all_members_with_color(
+            first_text,
+            second_text,
+            information_type,
+            0xFFDA_EDFE,
+            send_organizing_info,
+        )
+    }
+
+    fn send_info_to_all_members_with_color<'a, F>(
+        &self,
+        first_text: &'a [u8],
+        second_text: &'a [u8],
+        information_type: i32,
+        color: u32,
         mut send_organizing_info: F,
     ) -> FactionMemberInfoReport
     where
@@ -5040,7 +5121,7 @@ impl CFaction {
                 first_text,
                 second_text,
                 information_type,
-                color: 0xFFDA_EDFE,
+                color,
                 trailing_value: 0,
             });
             recipient_player_ids.push(recipient_player_id);
@@ -5423,6 +5504,102 @@ impl CFaction {
                 count
             }
         })
+    }
+
+    /// Меняет contributor-флаг с исходным порядком публикации и dirty-state.
+    pub(crate) fn set_contributor<Context>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        requester_id: i32,
+        target_id: i32,
+        enabled: bool,
+        context: &mut Context,
+    ) -> Result<FactionContributorOutcome, FactionContributorBlock>
+    where
+        Context: FactionContributorContext,
+    {
+        if self.is_member(requester_id) == 0 {
+            return Ok(FactionContributorOutcome::Rejected(
+                FactionContributorRejection::RequesterNotMember,
+            ));
+        }
+        if enabled && parameters.maximum_contributors() <= self.contributor_count() {
+            return Ok(FactionContributorOutcome::Rejected(
+                FactionContributorRejection::MaximumContributors,
+            ));
+        }
+        let Some(target) = self.members.get_mut(&target_id) else {
+            return Ok(FactionContributorOutcome::Rejected(
+                FactionContributorRejection::TargetNotMember,
+            ));
+        };
+        if target.contribute == enabled {
+            return Ok(FactionContributorOutcome::Rejected(
+                FactionContributorRejection::Unchanged,
+            ));
+        }
+
+        target.contribute = enabled;
+        let mut progress = FactionContributorProgress {
+            contributor_changed: true,
+            member_update: None,
+            refreshed_player_ids: Vec::new(),
+            member_information: None,
+            dirty_set: false,
+        };
+        progress.member_update = Some(match self.update_member_info_to_client(
+            game,
+            target_id,
+            EOperator::Update,
+        ) {
+            Ok(report) => report,
+            Err(source) => {
+                return Err(FactionContributorBlock::MemberUpdate { source, progress });
+            }
+        });
+        progress.refreshed_player_ids =
+            self.update_player_faction_info(game, target_id, |player_id| {
+                context.update_player_faction_info(player_id);
+            });
+
+        let target = self
+            .members
+            .get(&target_id)
+            .expect("успешный target lookup и callbacks не удаляют member");
+        let target_name_wire = match target.name_wire_bytes() {
+            Ok(name) => name,
+            Err(source) => {
+                return Err(FactionContributorBlock::UnterminatedMemberName {
+                    player_id: target_id,
+                    source,
+                    progress,
+                });
+            }
+        };
+        let notice = context.format_contributor_string(
+            if enabled { b"WS0227" } else { b"WS0228" },
+            &target_name_wire[..target_name_wire.len() - 1],
+        );
+        let notice = legacy_c_string_visible_bytes(&notice);
+        if notice.len() >= FACTION_CONTRIBUTOR_NOTICE_CAPACITY {
+            return Err(FactionContributorBlock::NoticeWouldOverflow {
+                formatted_len: notice.len(),
+                progress,
+            });
+        }
+        let second_text = context.world_string(b"WS0119").unwrap_or_default();
+        progress.member_information = Some(self.send_info_to_all_members_with_color(
+            notice,
+            legacy_c_string_visible_bytes(&second_text),
+            -1,
+            0x0087_A238,
+            |request| context.send_organizing_info(request),
+        ));
+        self.set_change_data(2);
+        progress.dirty_set = true;
+
+        Ok(FactionContributorOutcome::Updated(progress))
     }
 
     /// Возвращает младшие 16 бит `lJobLvl` либо исходный `0` при miss.
@@ -6931,7 +7108,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetControbuter
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2468

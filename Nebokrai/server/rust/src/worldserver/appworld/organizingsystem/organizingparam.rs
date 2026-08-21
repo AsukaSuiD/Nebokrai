@@ -245,6 +245,10 @@ impl COrganizingParam {
         self.disband_faction_minutes
     }
 
+    pub(crate) const fn maximum_contributors(&self) -> i32 {
+        self.maximum_contributors
+    }
+
     pub(crate) const fn latest_tax_event_id(&self) -> Option<TimerId> {
         self.latest_tax_event_id
     }
