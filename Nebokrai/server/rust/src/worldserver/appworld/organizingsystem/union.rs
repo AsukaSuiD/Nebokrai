@@ -22,7 +22,7 @@
 //! `0x000C5770` и `UpdateEnemyFactionToClient/
 //! UpdateCityWarEnemyFactionToClient/UpdateOwnedCityToClient` RVA
 //! `0x000C5FF0/0x000C60D0/0x000C61B0` и `SendInfoToAllMember` RVA
-//! `0x000C6290` — `IMPLEMENTED`;
+//! `0x000C6290`, `DeleteOrgaToClient` RVA `0x000C5D20` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -122,6 +122,11 @@
 //! `find`, и для `operator[]`; найденная faction получает исходные text/title,
 //! information type и color без перестановки. Online-фильтра у union-owner-а
 //! нет: он остаётся внутри уже восстановленной faction-рассылки.
+//! `DeleteOrgaToClient` при положительном faction ID обходит только найденную
+//! faction, а при любом `<= 0` — все положительные union member ID. Внутри
+//! каждой faction member-player-ы идут в signed order; допускаются только
+//! online player с ненулевым GameServer ID и полученными faction data. Wire
+//! `0x7FE05` содержит recipient player ID, затем именно union ID.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -133,7 +138,10 @@ use super::faction::{
 use super::organizing::{
     EOperator, EPurview, EPurviewOwnState, MemberPurviewMutation, TagMemInfo, TagTimeValue,
 };
+use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::worldserver::game::CGame;
+
+const DELETE_UNION_ORGANIZING_MESSAGE_TYPE: i32 = 0x7FE05;
 
 /// Узкая read-only граница controller-wide `IsFactionMaster`.
 pub(crate) trait UnionOperatorValidationContext {
@@ -347,6 +355,25 @@ pub(crate) struct UnionFactionInfoFanout {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct UnionInfoFanoutReport {
     pub(crate) factions: Vec<UnionFactionInfoFanout>,
+}
+
+/// Read-only доступ к ordered faction member-player ID.
+pub(crate) trait UnionFactionMemberContext {
+    fn faction_member_player_ids(&self, faction_id: i32) -> Option<Vec<i32>>;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionDeleteOrganizingDelivery {
+    pub(crate) faction_id: i32,
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionDeleteOrganizingReport {
+    pub(crate) visited_faction_ids: Vec<i32>,
+    pub(crate) deliveries: Vec<UnionDeleteOrganizingDelivery>,
 }
 
 /// Поля `CUnion`, которые буквально копирует и читает save-цепочка.
@@ -1100,6 +1127,58 @@ impl CUnion {
             });
         }
         UnionInfoFanoutReport { factions }
+    }
+
+    /// Удаляет union-state у готовых клиентов одной либо всех member-фракций.
+    pub(crate) fn delete_organizing_to_client<Context>(
+        &self,
+        faction_id: i32,
+        context: &Context,
+        game: &CGame,
+    ) -> UnionDeleteOrganizingReport
+    where
+        Context: UnionFactionMemberContext,
+    {
+        let target_faction_ids: Vec<i32> = if faction_id > 0 {
+            vec![faction_id]
+        } else {
+            self.members.keys().copied().collect()
+        };
+        let mut visited_faction_ids = Vec::new();
+        let mut deliveries = Vec::new();
+        for target_faction_id in target_faction_ids {
+            if target_faction_id <= 0 {
+                continue;
+            }
+            let Some(recipient_player_ids) =
+                context.faction_member_player_ids(target_faction_id)
+            else {
+                continue;
+            };
+            visited_faction_ids.push(target_faction_id);
+            for recipient_player_id in recipient_player_ids {
+                let player = game.online_player_by_id(recipient_player_id as u32);
+                let game_server_id = game.game_server_number_by_player_id(recipient_player_id);
+                if player.is_none_or(|player| !player.faction_data_received())
+                    || game_server_id == 0
+                {
+                    continue;
+                }
+                let mut message = CMessage::new(DELETE_UNION_ORGANIZING_MESSAGE_TYPE);
+                message.base_mut().add_long(recipient_player_id);
+                message.base_mut().add_long(self.union_id);
+                deliveries.push(UnionDeleteOrganizingDelivery {
+                    faction_id: target_faction_id,
+                    recipient_player_id,
+                    game_server_id,
+                    result: game.send_msg_to_game_server(game_server_id, &message),
+                });
+            }
+        }
+        UnionDeleteOrganizingReport {
+            visited_faction_ids,
+            deliveries,
+        }
     }
 
     pub(crate) const fn change_data_type(&self) -> i32 {
@@ -1987,7 +2066,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::DeleteOrgaToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1305

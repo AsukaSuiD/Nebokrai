@@ -220,9 +220,10 @@ use super::faction::{
 use super::organizing::EOperator;
 use super::organizingparam::COrganizingParam;
 use super::union::{
-    CUnion, UnionClientSnapshotContext, UnionFactionStateMutationContext,
-    UnionMasterFactionQueryContext, UnionOperatorValidationContext,
-    UnionOwnedCityMutationContext, UnionPlayerRefreshContext, UnionSendInfoContext,
+    CUnion, UnionClientSnapshotContext, UnionFactionMemberContext,
+    UnionFactionStateMutationContext, UnionMasterFactionQueryContext,
+    UnionOperatorValidationContext, UnionOwnedCityMutationContext, UnionPlayerRefreshContext,
+    UnionSendInfoContext,
 };
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::appworld::player::{
@@ -1461,6 +1462,13 @@ impl UnionSendInfoContext for COrganizingCtrl {
                 send_organizing_info,
             )
         })
+    }
+}
+
+impl UnionFactionMemberContext for COrganizingCtrl {
+    fn faction_member_player_ids(&self, faction_id: i32) -> Option<Vec<i32>> {
+        self.faction_by_id(faction_id)
+            .map(|faction| faction.get_members().keys().copied().collect())
     }
 }
 
