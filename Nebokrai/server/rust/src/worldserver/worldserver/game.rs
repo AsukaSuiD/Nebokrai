@@ -1089,6 +1089,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingFactionListBlock, OrganizingFactionListDispatch,
     OrganizingFactionBillboardOutcome, OrganizingFactionContributorDispatch,
     OrganizingFactionExperienceDispatch, OrganizingFactionMemberStateDispatch,
+    OrganizingFactionDemiseBlock, OrganizingFactionDemiseDispatch,
     OrganizingFactionFireOutBlock, OrganizingFactionFireOutDispatch,
     OrganizingFactionExitBlock, OrganizingFactionExitDispatch,
     OrganizingUnionExitDispatch,
@@ -1117,6 +1118,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     dispatch_consumed_long, dispatch_declare_faction_war,
     dispatch_declare_war_faction_list, dispatch_faction_application,
     dispatch_faction_application_decision,
+    dispatch_faction_demise,
     dispatch_faction_fire_out,
     dispatch_faction_exit,
     dispatch_union_exit,
@@ -2196,6 +2198,12 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: Result<OrganizingUnionExitDispatch, OrganizingUnionExitBlock>,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingFactionDemise {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<OrganizingFactionDemiseDispatch, OrganizingFactionDemiseBlock>,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingUnionFireOut {
@@ -15370,6 +15378,53 @@ where
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingUnionExit {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        if let Some(outcome) = dispatch_faction_demise(
+            &mut message,
+            game,
+            organizing,
+            organizing_parameters,
+            &*country_handler,
+            &*attack_city,
+            &*goods_war,
+            game.setup.use_log_system && faction_master_log_enabled,
+            write_faction_master_log,
+            application_callbacks,
+            update_player,
+        ) {
+            let callbacks = WorldUnionApplicationEffectCallbacks {
+                random: &mut *application_callbacks.random,
+                world_string: &mut *application_callbacks.world_string,
+                format_world_string: &mut *application_callbacks.format_world_string,
+                put_war_log: &mut *application_callbacks.put_war_log,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
+            };
+            let mut effects = WorldUnionApplicationEffects::new(
+                game,
+                net_sessions,
+                application_runtime,
+                callbacks,
+            );
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingFactionDemise {
                 source,
                 legacy_run_result,
                 outcome,

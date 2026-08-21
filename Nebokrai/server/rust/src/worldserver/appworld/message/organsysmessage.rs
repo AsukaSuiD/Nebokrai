@@ -2,7 +2,8 @@
 //! включая список фракций страны `0x60107`, подачу заявки `0x60108`, отмену
 //! заявки `0x60109`, решение по заявке `0x6010A`, исключение участника
 //! `0x6010B`, исключение фракции из союза `0x6010C`, выход из фракции
-//! `0x6010D`, выход фракции из союза `0x6010E`, заявку союза `0x60118`,
+//! `0x6010D`, выход фракции из союза `0x6010E`, передачу главы фракции
+//! `0x6010F`, заявку союза `0x60118`,
 //! общий session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
@@ -76,6 +77,13 @@
 //! `+0x20`. Результат игнорируется: при member count `<= 1` вызывается
 //! `DisbandConferation(GetPlayerHeader(), union ID)`. Online/route/tail gates и
 //! прямой wire-ответ отсутствуют; Linux-проверки payload/route не перенесены.
+//! Exact `0x004A7232..0x004A727E` для `0x6010F` читает два полных `Long` как
+//! `(old master player ID, new master player ID)`, разрешает faction через
+//! `IsFreePlayer(old master)`, дважды выполняет один и тот же nullable
+//! `GetFactionOrganizing` и вызывает virtual `CFaction::Demise(old, new)` в
+//! slot `+0x44`. `char` второго аргумента в RAW — артефакт: ASM передаёт весь
+//! 32-битный ID. Между двумя lookup нет мутации, поэтому Rust удерживает один
+//! safe mutable owner. Route/online/tail gates и прямой wire-ответ отсутствуют.
 //! Exact диапазоны
 //! `0x004A74C6..0x004A7509` и `0x004A7511..0x004A7543` исправляют повреждённый
 //! RAW. Общий branch читает
@@ -333,7 +341,8 @@ use crate::worldserver::appworld::goodswarmember::{
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
     FactionApplyForJoinEffects, FactionApplyForJoinOutcome, FactionContributorContext,
-    FactionDoJoinEffects, FactionExitBlock, FactionExitContext, FactionExitOutcome,
+    FactionDemiseBlock, FactionDemiseContext, FactionDemiseOutcome, FactionDoJoinEffects,
+    FactionExitBlock, FactionExitContext, FactionExitOutcome,
     FactionFireOutBlock, FactionFireOutContext, FactionFireOutOutcome,
     current_local_member_time, goods_war_check_for_faction_id,
     FactionEnemyMutationBlock, FactionEnemyMutationContext,
@@ -414,6 +423,7 @@ const FACTION_FIRE_OUT_MESSAGE_TYPE: i32 = 0x6010B;
 const UNION_FIRE_OUT_MESSAGE_TYPE: i32 = 0x6010C;
 const FACTION_EXIT_MESSAGE_TYPE: i32 = 0x6010D;
 const UNION_EXIT_MESSAGE_TYPE: i32 = 0x6010E;
+const FACTION_DEMISE_MESSAGE_TYPE: i32 = 0x6010F;
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
@@ -1007,6 +1017,100 @@ impl FactionDoJoinEffects for WorldFactionDoJoinEffects<'_, '_, '_, '_, '_> {
             faction_id,
             faction_name,
             log_type,
+        );
+    }
+}
+
+/// Concrete war/country/Goods-War/string/player/log adapter faction `Demise`.
+struct WorldFactionDemiseEffects<'game, 'callbacks, 'effects, 'update, 'log> {
+    game: &'game CGame,
+    attack_city: &'game CAttackCitySys,
+    goods_war: &'game CGoodsWarMember,
+    country_handler: &'game CCountryHandler,
+    faction_master_log_enabled: bool,
+    callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
+    update_player: &'update mut dyn FnMut(i32),
+    write_faction_master_log:
+        &'log mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
+}
+
+impl FactionOrganizingInfoContext for WorldFactionDemiseEffects<'_, '_, '_, '_, '_> {
+    fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
+        Some((self.callbacks.world_string)(string_id))
+    }
+
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
+    }
+}
+
+impl FactionDemiseContext for WorldFactionDemiseEffects<'_, '_, '_, '_, '_> {
+    fn attack_city_system_declared(&self, faction_id: i32) -> bool {
+        self.attack_city.is_already_declared_for_war(faction_id)
+    }
+
+    fn goods_war_blocks_demise(&self, faction_id: i32, _old_master_id: i32) -> bool {
+        goods_war_check_for_faction_id(faction_id, |candidate| {
+            self.goods_war.contains_faction_id(candidate)
+        })
+    }
+
+    fn country_blocks_demise(&self, country: u8, old_master_id: i32) -> bool {
+        self.country_handler.get_country(country).is_some_and(|state| {
+            state.king.id == old_master_id && !state.demise_faction
+        })
+    }
+
+    fn format_demise_signed(
+        &mut self,
+        string_id: &'static [u8],
+        value: i32,
+    ) -> Vec<u8> {
+        (self.callbacks.format_world_string)(
+            string_id,
+            &[UnionFormatArgument::Signed(value)],
+        )
+    }
+
+    fn format_demise_change(
+        &mut self,
+        string_id: &'static [u8],
+        old_master_name: &[u8],
+        new_master_name: &[u8],
+    ) -> Vec<u8> {
+        (self.callbacks.format_world_string)(
+            string_id,
+            &[
+                UnionFormatArgument::Text(old_master_name),
+                UnionFormatArgument::Text(new_master_name),
+            ],
+        )
+    }
+
+    fn update_player_faction_info(&mut self, player_id: i32) {
+        (self.update_player)(player_id);
+    }
+
+    fn faction_master_log_enabled(&self) -> bool {
+        self.faction_master_log_enabled
+    }
+
+    fn write_faction_master_log(
+        &mut self,
+        old_master_id: i32,
+        old_master_name: &[u8],
+        new_master_id: i32,
+        new_master_name: &[u8],
+        faction_id: i32,
+        faction_name: &[u8],
+    ) {
+        (self.write_faction_master_log)(
+            old_master_id,
+            old_master_name,
+            new_master_id,
+            new_master_name,
+            faction_id,
+            faction_name,
         );
     }
 }
@@ -2350,6 +2454,103 @@ pub(crate) fn dispatch_union_exit(
         Err(source) => return Some(Err(source)),
     };
     Some(Ok(OrganizingUnionExitDispatch { player_id, outcome }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionDemiseOutcome {
+    FactionNotFound { faction_id: i32 },
+    Applied {
+        faction_id: i32,
+        outcome: FactionDemiseOutcome,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionDemiseBlock {
+    Membership { map_key: i32 },
+    Demise {
+        faction_id: i32,
+        source: FactionDemiseBlock,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionDemiseDispatch {
+    pub(crate) old_master_id: i32,
+    pub(crate) new_master_id: i32,
+    pub(crate) outcome: OrganizingFactionDemiseOutcome,
+}
+
+/// Выполняет exact `0x6010F`: два `Long`, faction lookup и virtual
+/// `CFaction::Demise` без route/tail/wire ingress-а.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn dispatch_faction_demise(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    parameters: &COrganizingParam,
+    country_handler: &CCountryHandler,
+    attack_city: &CAttackCitySys,
+    goods_war: &CGoodsWarMember,
+    faction_master_log_enabled: bool,
+    write_faction_master_log:
+        &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    update_player: &mut dyn FnMut(i32),
+) -> Option<Result<OrganizingFactionDemiseDispatch, OrganizingFactionDemiseBlock>> {
+    if message.message_type() != FACTION_DEMISE_MESSAGE_TYPE {
+        return None;
+    }
+
+    let old_master_id = message.base_mut().get_long().unwrap_or(0);
+    let new_master_id = message.base_mut().get_long().unwrap_or(0);
+    let faction_id = match organizing.is_free_player(old_master_id) {
+        FreePlayerLookup::NoFaction => 0,
+        FreePlayerLookup::Faction(faction_id) => faction_id,
+        FreePlayerLookup::BlockedNullFaction { map_key } => {
+            return Some(Err(OrganizingFactionDemiseBlock::Membership { map_key }));
+        }
+    };
+    let Some(faction) = organizing.faction_by_id_mut(faction_id) else {
+        return Some(Ok(OrganizingFactionDemiseDispatch {
+            old_master_id,
+            new_master_id,
+            outcome: OrganizingFactionDemiseOutcome::FactionNotFound { faction_id },
+        }));
+    };
+    let mut effects = WorldFactionDemiseEffects {
+        game,
+        attack_city,
+        goods_war,
+        country_handler,
+        faction_master_log_enabled,
+        callbacks,
+        update_player,
+        write_faction_master_log,
+    };
+    let outcome = match faction.demise(
+        game,
+        parameters,
+        old_master_id,
+        new_master_id,
+        &mut effects,
+    ) {
+        Ok(outcome) => OrganizingFactionDemiseOutcome::Applied {
+            faction_id,
+            outcome,
+        },
+        Err(source) => {
+            return Some(Err(OrganizingFactionDemiseBlock::Demise {
+                faction_id,
+                source,
+            }));
+        }
+    };
+    Some(Ok(OrganizingFactionDemiseDispatch {
+        old_master_id,
+        new_master_id,
+        outcome,
+    }))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
