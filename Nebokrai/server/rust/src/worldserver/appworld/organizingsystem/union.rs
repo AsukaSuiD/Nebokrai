@@ -33,6 +33,9 @@
 //! `0x000C3170`, `ApplyForJoin` RVA `0x000C2B90`, его локальные
 //! `PlayerApplyForJoinConfeder` constructor/`DoAsyncCall`/`OnAsyncCallback`
 //! RVA `0x000C19C0/0x000C1A70/0x000C2EA0`, `DoJoin` RVA `0x000C66A0` и
+//! `Invite` RVA `0x000C3660`, его локальные
+//! `InviteJoinConfeder` constructor/`DoAsyncCall` RVA
+//! `0x000C1870/0x000C39B0`,
 //! `Disband/FireOut` RVA `0x000C43F0/0x000C49D0` —
 //! `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
@@ -268,6 +271,13 @@
 //! только первое совпадение; union miss всё равно очищает list. Неверный erased
 //! Rust payload и недостигнутое malformed state останавливаются typed-блоком
 //! без чтения чужой памяти и без выдуманного terminal continuation.
+//! `Invite` использует тот же pending/reservation/member-limit/session-контракт,
+//! но направляет `0x7FE17` master-у приглашённой faction с kind `1` и именем
+//! приглашающей faction. Exact `OnPlayerInviteFaction` передаёт первым
+//! аргументом faction ID, а `Invite` передаёт его в `CheckOperValidate`, который
+//! интерпретирует значение как master-player ID; странный gate сохранён как
+//! наблюдаемая семантика. Offline и limit notices идут player-header первой
+//! faction как `WS0264/WS0265 + WS0193`; NetEx ID расходуется до limit gate.
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -797,6 +807,175 @@ pub(crate) trait UnionApplyForJoinEffects {
         &mut self,
         request: UnionApplicationSessionRequest,
     ) -> Result<Self::SessionReport, Self::SessionBlock>;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionInvitationSessionRequest {
+    pub(crate) union_id: i32,
+    pub(crate) inviter_faction_id: i32,
+    pub(crate) invited_faction_id: i32,
+    pub(crate) recipient_player_id: i32,
+    pub(crate) requested_session_id: i32,
+    pub(crate) timeout_ticks: u32,
+    pub(crate) inviter_faction_name: Vec<u8>,
+}
+
+pub(crate) trait UnionInvitationSessionRuntime: Send + Sync {
+    fn send_union_invitation_confirmation(
+        &self,
+        recipient_player_id: i32,
+        message: &CMessage,
+    );
+
+    fn finish_union_invitation(
+        &self,
+        union_id: i32,
+        inviter_faction_id: i32,
+        invited_faction_id: i32,
+        terminal: UnionApplicationTerminal,
+    );
+
+    fn block_union_invitation_endpoint(&self, block: UnionApplicationEndpointBlock);
+}
+
+pub(crate) struct InviteJoinConfeder {
+    union_id: i32,
+    inviter_faction_id: i32,
+    invited_faction_id: i32,
+    runtime: Arc<dyn UnionInvitationSessionRuntime>,
+}
+
+impl NetSessionEndpoint for InviteJoinConfeder {
+    fn do_async_call(&self, session_id: i64, cookie_second: i32, payload: &dyn Any) {
+        let Some(request) = payload.downcast_ref::<UnionInvitationSessionRequest>() else {
+            self.runtime.block_union_invitation_endpoint(
+                UnionApplicationEndpointBlock::BeginPayloadType,
+            );
+            return;
+        };
+
+        let mut message = CMessage::new(UNION_APPLICATION_CONFIRMATION_MESSAGE_TYPE);
+        message.base_mut().add_long(request.recipient_player_id);
+        message.base_mut().add_long(1);
+        message
+            .base_mut()
+            .add(legacy_c_string_visible_bytes(&request.inviter_faction_name));
+        message.base_mut().add_byte(0);
+        message.base_mut().add_long64(session_id);
+        message.base_mut().add_long(cookie_second);
+        self.runtime
+            .send_union_invitation_confirmation(request.recipient_player_id, &message);
+    }
+
+    fn on_async_callback(&self, result: NetSessionAsyncResult<'_>) {
+        let terminal = if result.kind == NetSessionAsyncResultKind::Result {
+            let Some(decision) = result
+                .payload
+                .and_then(|payload| payload.downcast_ref::<i32>())
+            else {
+                self.runtime.block_union_invitation_endpoint(
+                    UnionApplicationEndpointBlock::ResultPayloadType,
+                );
+                return;
+            };
+            if *decision == 1 {
+                UnionApplicationTerminal::Approved
+            } else {
+                UnionApplicationTerminal::Denied
+            }
+        } else {
+            UnionApplicationTerminal::NonResult { kind: result.kind }
+        };
+        self.runtime.finish_union_invitation(
+            self.union_id,
+            self.inviter_faction_id,
+            self.invited_faction_id,
+            terminal,
+        );
+    }
+}
+
+pub(crate) fn begin_union_invitation_session(
+    manager: &CNetSessionManager,
+    request: UnionInvitationSessionRequest,
+    runtime: Arc<dyn UnionInvitationSessionRuntime>,
+    random: impl FnMut(i32) -> i32,
+) -> Result<UnionApplicationSessionReport, UnionApplicationSessionBlock> {
+    let session = manager
+        .create_session(
+            request.recipient_player_id,
+            request.requested_session_id,
+            random,
+        )
+        .map_err(UnionApplicationSessionBlock::Create)?;
+    let endpoint = Box::new(InviteJoinConfeder {
+        union_id: request.union_id,
+        inviter_faction_id: request.inviter_faction_id,
+        invited_faction_id: request.invited_faction_id,
+        runtime,
+    });
+    manager
+        .set_callback_handle(session.id, endpoint)
+        .map_err(|source| UnionApplicationSessionBlock::SetCallback { session, source })?;
+    manager
+        .beging(session.id, request.timeout_ticks, &request)
+        .map_err(|source| UnionApplicationSessionBlock::Begin { session, source })?;
+    Ok(UnionApplicationSessionReport { session })
+}
+
+pub(crate) trait UnionInviteEffects {
+    type SessionReport;
+    type SessionBlock;
+
+    fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8>;
+    fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>);
+    fn begin_union_invitation_session(
+        &mut self,
+        request: UnionInvitationSessionRequest,
+    ) -> Result<Self::SessionReport, Self::SessionBlock>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UnionInviteRejection {
+    PendingApplication,
+    ZeroFactionId,
+    InvitedFactionReserved,
+    InviterNotPermitted,
+    InvitedAlreadyInUnion { union_id: i32 },
+    InviterFactionMissing,
+    InvitedFactionMissing,
+    InvitedMasterOffline { notice_sent: bool },
+    MemberLimit {
+        member_count: i32,
+        maximum: i32,
+        allocated_net_exchange_id: i32,
+        notice_sent: bool,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionInviteOutcome<SessionReport> {
+    Rejected(UnionInviteRejection),
+    Started {
+        invited_faction_id: i32,
+        net_exchange_id: i32,
+        session: SessionReport,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionInviteBlock<OperatorBlock, MembershipBlock, SessionBlock> {
+    PendingApplicationUninitialized,
+    Operator(OperatorBlock),
+    Membership(MembershipBlock),
+    FactionSnapshot(UnionApplicationFactionBlock),
+    Session {
+        source: SessionBlock,
+        invited_faction_id: i32,
+        net_exchange_id: i32,
+        application_assigned: bool,
+        establishment_reserved: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1685,6 +1864,134 @@ impl CUnion {
 
         Ok(UnionApplyForJoinOutcome::Started {
             applicant_faction_id,
+            net_exchange_id,
+            session,
+        })
+    }
+
+    /// Запускает подтверждение приглашения свободной faction в этот союз.
+    pub(crate) fn invite<Context, Effects>(
+        &mut self,
+        game: &CGame,
+        inviter_faction_id: i32,
+        invited_faction_id: i32,
+        context: &mut Context,
+        effects: &mut Effects,
+    ) -> Result<
+        UnionInviteOutcome<Effects::SessionReport>,
+        UnionInviteBlock<
+            <Context as UnionOperatorValidationContext>::Block,
+            <Context as UnionDoJoinContext>::FreeFactionBlock,
+            Effects::SessionBlock,
+        >,
+    >
+    where
+        Context: UnionOperatorValidationContext
+            + UnionApplyForJoinContext
+            + UnionDoJoinContext,
+        Effects: UnionInviteEffects,
+    {
+        let Some(pending_application) = self.apply_person else {
+            return Err(UnionInviteBlock::PendingApplicationUninitialized);
+        };
+        if pending_application > 0 {
+            return Ok(UnionInviteOutcome::Rejected(
+                UnionInviteRejection::PendingApplication,
+            ));
+        }
+        if inviter_faction_id == 0 || invited_faction_id == 0 {
+            return Ok(UnionInviteOutcome::Rejected(
+                UnionInviteRejection::ZeroFactionId,
+            ));
+        }
+        if context.union_application_is_reserved(invited_faction_id) {
+            return Ok(UnionInviteOutcome::Rejected(
+                UnionInviteRejection::InvitedFactionReserved,
+            ));
+        }
+
+        // Exact caller передаёт сюда faction ID, хотя validation owner
+        // интерпретирует аргумент как master-player ID. Наблюдаемый gate
+        // сохраняется без подмены исходным player ID ingress-а.
+        let permitted = self
+            .check_operator_validate(inviter_faction_id, EPurview::ConMem as i32, context)
+            .map_err(UnionInviteBlock::Operator)?;
+        if !permitted {
+            return Ok(UnionInviteOutcome::Rejected(
+                UnionInviteRejection::InviterNotPermitted,
+            ));
+        }
+
+        let existing_union_id = context
+            .union_id_for_joining_faction(invited_faction_id)
+            .map_err(UnionInviteBlock::Membership)?;
+        if existing_union_id > 0 {
+            return Ok(UnionInviteOutcome::Rejected(
+                UnionInviteRejection::InvitedAlreadyInUnion {
+                    union_id: existing_union_id,
+                },
+            ));
+        }
+
+        let inviter = context
+            .union_application_faction(inviter_faction_id)
+            .map_err(UnionInviteBlock::FactionSnapshot)?;
+        let Some(inviter) = inviter else {
+            return Ok(UnionInviteOutcome::Rejected(
+                UnionInviteRejection::InviterFactionMissing,
+            ));
+        };
+        let invited = context
+            .union_application_faction(invited_faction_id)
+            .map_err(UnionInviteBlock::FactionSnapshot)?;
+        let Some(invited) = invited else {
+            return Ok(UnionInviteOutcome::Rejected(
+                UnionInviteRejection::InvitedFactionMissing,
+            ));
+        };
+
+        let Some(invited_master) = game.online_player_by_id(invited.player_header as u32) else {
+            send_union_invitation_notice(effects, inviter.player_header, b"WS0264");
+            return Ok(UnionInviteOutcome::Rejected(
+                UnionInviteRejection::InvitedMasterOffline { notice_sent: true },
+            ));
+        };
+        let net_exchange_id = invited_master.get_net_exchange_id();
+        let member_count = self.members.len() as u32 as i32;
+        if member_count >= MAX_UNION_MEMBER_COUNT {
+            send_union_invitation_notice(effects, inviter.player_header, b"WS0265");
+            return Ok(UnionInviteOutcome::Rejected(
+                UnionInviteRejection::MemberLimit {
+                    member_count,
+                    maximum: MAX_UNION_MEMBER_COUNT,
+                    allocated_net_exchange_id: net_exchange_id,
+                    notice_sent: true,
+                },
+            ));
+        }
+
+        self.apply_person = Some(invited_faction_id);
+        context.reserve_union_application(invited_faction_id);
+        let session = effects
+            .begin_union_invitation_session(UnionInvitationSessionRequest {
+                union_id: self.union_id,
+                inviter_faction_id,
+                invited_faction_id,
+                recipient_player_id: invited.player_header,
+                requested_session_id: net_exchange_id,
+                timeout_ticks: 1_000,
+                inviter_faction_name: inviter.name,
+            })
+            .map_err(|source| UnionInviteBlock::Session {
+                source,
+                invited_faction_id,
+                net_exchange_id,
+                application_assigned: true,
+                establishment_reserved: true,
+            })?;
+
+        Ok(UnionInviteOutcome::Started {
+            invited_faction_id,
             net_exchange_id,
             session,
         })
@@ -3739,6 +4046,25 @@ fn send_union_application_notice<Effects>(
     });
 }
 
+fn send_union_invitation_notice<Effects>(
+    effects: &mut Effects,
+    recipient_player_id: i32,
+    text_id: &'static [u8],
+) where
+    Effects: UnionInviteEffects,
+{
+    let second_text = effects.world_string(b"WS0193");
+    let first_text = effects.world_string(text_id);
+    effects.send_organizing_info(FactionMemberInfoRequest {
+        recipient_player_id,
+        first_text: legacy_c_string_visible_bytes(&first_text),
+        second_text: legacy_c_string_visible_bytes(&second_text),
+        information_type: -1,
+        color: 0xFFDA_EDFE,
+        trailing_value: 0,
+    });
+}
+
 fn send_union_demise_notice<Effects>(
     effects: &mut Effects,
     recipient_player_id: i32,
@@ -3898,7 +4224,7 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: `public:_virtual_bool___thiscall_CUnion::Invite(long,long)'::__l22::InviteJoinConfeder::InviteJoinConfeder
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:847
@@ -3906,6 +4232,8 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 // ADDRESS: 004c1870
 // PROTOTYPE: undefined __thiscall InviteJoinConfeder(long param_1, long param_2, long param_3)
 //
+// IMPLEMENTED_OWNER: `InviteJoinConfeder` хранит inviter/invited/union ID;
+// `Box`/`Arc`/`Drop` заменяют два interface-subobject и ручной lifetime.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -4444,7 +4772,7 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CUnion::Invite
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:795
@@ -4452,13 +4780,15 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 // ADDRESS: 004c3660
 // PROTOTYPE: bool __thiscall Invite(long param_1, long param_2)
 //
+// IMPLEMENTED_OWNER: `CUnion::invite` сохраняет pending, reservation,
+// ошибочный faction-ID-as-player-ID permission gate, online/limit и session.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: `public:_virtual_bool___thiscall_CUnion::Invite(long,long)'::__l22::InviteJoinConfeder::DoAsyncCall
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:853
@@ -4466,6 +4796,7 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 // ADDRESS: 004c39b0
 // PROTOTYPE: void __thiscall DoAsyncCall(__int64 param_1, long param_2, char * param_3)
 //
+// IMPLEMENTED_OWNER: `InviteJoinConfeder::do_async_call` строит exact
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
