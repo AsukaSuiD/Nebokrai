@@ -8,6 +8,7 @@
 //! `UpdatePronounceToClient` RVA `0x000B56C0`,
 //! `SendInfoToAllMember/UpdateOtherFacInfoToClient` RVA
 //! `0x000B5890/0x000B58F0`,
+//! `Talk` RVA `0x000B5A50`,
 //! `AddMembersToByteArray` RVA `0x000B53D0`, PDB-inline
 //! `AddApplyPersonsToByteArray/AddLeaveWordsToByteArray` RVA
 //! `0x000B5D30/0x000B5DD0`,
@@ -331,6 +332,11 @@
 //! `0x7FE15`: `recipient, operator, other_faction_id, name\0`. Exact ASM
 //! `0x004B5890..0x004B5A44` подтверждает оба порядка и фильтр второй функции.
 //! Переполнение старого `strcpy` заменено typed-границей до recipient-прохода.
+//! `Talk` проверяет только ненулевой GameServer ID — без online lookup и
+//! faction-data gate — и отправляет `0x7FA02` как
+//! `recipient, 400, speaker_id, first_text\0, second_text\0`. Встроенный NUL в
+//! исходной `std::string` обрезает visible C-string. Exact ASM
+//! `0x004B5A50..0x004B5B63` подтверждает фильтр и порядок аргументов.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -350,6 +356,8 @@ use crate::worldserver::worldserver::game::{CGame, WorldRegionNameLookup};
 const MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0D;
 const PRONOUNCE_UPDATE_MESSAGE_TYPE: i32 = 0x7FE10;
 const OTHER_FACTION_UPDATE_MESSAGE_TYPE: i32 = 0x7FE15;
+const FACTION_TALK_MESSAGE_TYPE: i32 = 0x7FA02;
+const FACTION_TALK_CHANNEL: i32 = 400;
 const OWNED_CITY_UPDATE_MESSAGE_TYPE: i32 = 0x7FE13;
 const ENTER_REGION_BUFFER_CAPACITY: usize = 256;
 const ENEMY_WAR_LOG_BUFFER_CAPACITY: usize = 256;
@@ -592,6 +600,13 @@ pub(crate) struct FactionOtherInfoDelivery {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FactionOtherInfoBuildError {
     pub(crate) visible_name_len: usize,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionTalkDelivery {
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2123,18 +2138,13 @@ impl CFaction {
         other_faction_name: &[u8],
         operator: EOperator,
     ) -> Result<Vec<FactionOtherInfoDelivery>, FactionOtherInfoBuildError> {
-        let visible_name = match other_faction_name.iter().position(|byte| *byte == 0) {
-            Some(terminator) => &other_faction_name[..terminator],
-            None => other_faction_name,
-        };
-        if visible_name.len() >= OTHER_FACTION_NAME_CAPACITY {
+        let name_wire = legacy_c_string_wire_bytes(other_faction_name);
+        let visible_name_len = name_wire.len() - 1;
+        if visible_name_len >= OTHER_FACTION_NAME_CAPACITY {
             return Err(FactionOtherInfoBuildError {
-                visible_name_len: visible_name.len(),
+                visible_name_len,
             });
         }
-        let mut name_wire = Vec::with_capacity(visible_name.len() + 1);
-        name_wire.extend_from_slice(visible_name);
-        name_wire.push(0);
 
         let mut deliveries = Vec::new();
         for &recipient_player_id in self.members.keys() {
@@ -2156,6 +2166,38 @@ impl CFaction {
             });
         }
         Ok(deliveries)
+    }
+
+    /// Рассылает faction-talk всем member-ам с известным GameServer ID.
+    pub(crate) fn talk(
+        &self,
+        game: &CGame,
+        speaker_id: i32,
+        first_text: &[u8],
+        second_text: &[u8],
+    ) -> Vec<FactionTalkDelivery> {
+        let first_text = legacy_c_string_wire_bytes(first_text);
+        let second_text = legacy_c_string_wire_bytes(second_text);
+        let mut deliveries = Vec::new();
+        for &recipient_player_id in self.members.keys() {
+            let game_server_id = game.game_server_number_by_player_id(recipient_player_id);
+            if game_server_id == 0 {
+                continue;
+            }
+
+            let mut message = CMessage::new(FACTION_TALK_MESSAGE_TYPE);
+            message.base_mut().add_long(recipient_player_id);
+            message.base_mut().add_long(FACTION_TALK_CHANNEL);
+            message.base_mut().add_long(speaker_id);
+            message.base_mut().add(&first_text);
+            message.base_mut().add(&second_text);
+            deliveries.push(FactionTalkDelivery {
+                recipient_player_id,
+                game_server_id,
+                result: game.send_msg_to_game_server(game_server_id, &message),
+            });
+        }
+        deliveries
     }
 
     /// Clamp-ит и публикует faction experience с исходным порядком эффектов.
@@ -2967,6 +3009,17 @@ fn append_i32(output: &mut Vec<u8>, value: i32) {
     output.extend_from_slice(&value.to_le_bytes());
 }
 
+fn legacy_c_string_wire_bytes(value: &[u8]) -> Vec<u8> {
+    let visible = match value.iter().position(|byte| *byte == 0) {
+        Some(terminator) => &value[..terminator],
+        None => value,
+    };
+    let mut wire = Vec::with_capacity(visible.len() + 1);
+    wire.extend_from_slice(visible);
+    wire.push(0);
+    wire
+}
+
 fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
     output.extend_from_slice(&(values.len() as u32).to_le_bytes());
     for &value in values {
@@ -3265,7 +3318,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::Talk
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2776
