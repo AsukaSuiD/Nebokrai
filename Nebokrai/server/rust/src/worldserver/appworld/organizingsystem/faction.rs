@@ -513,6 +513,15 @@
 //! возвращает `false`. Exact ASM `0x004B8F30..0x004B92ED` подтверждает
 //! 256-байтовый `_sprintf` buffer и отсутствие иных эффектов. Локализация
 //! остаётся тонким контекстом, overflow старого buffer-а — typed-границей.
+//! `Disband` проверяет `CheckOperValidate(player, PV_Disband)`, отсутствие
+//! superior organizing, standard/village, city/attack и Goods War именно в
+//! этом порядке. War-отказы отправляют `WS0189/WS0190/ws0362` с `WS0121`, а
+//! country king получает silent false. Success последовательно удаляет Goods
+//! War members/count, очищает apply-persons и leave-words, затем вызывает
+//! `DeleteOrgaToClient(0)`; dirty-state функция не меняет. Exact ASM
+//! `0x004BFA00..0x004BFDE0` подтверждает vtable slots и порядок. Старый null
+//! country dereference заменён typed-границей, STL/allocator cleanup —
+//! безопасными Rust containers и `Drop`.
 //! `Demise` начинает с `IsMaster(old)` и `IsMember(new)`, затем дважды вызывает
 //! один и тот же `CAttackCitySys::IsAlreadyDeclarForWar`: после обычного и
 //! city enemy-set. Этот наблюдаемый quirk сохранён, как и literal `"???"` для
@@ -1357,6 +1366,46 @@ pub(crate) enum FactionUploadIconBlock {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionDisbandRejection {
+    OperatorNotPermitted,
+    HasSuperiorOrganizing,
+    StandardWar,
+    CityWar,
+    GoodsWar,
+    CountryKing,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FactionDisbandProgress {
+    pub(crate) goods_war_members_deleted: bool,
+    pub(crate) goods_war_faction_count_decremented: bool,
+    pub(crate) cleared_apply_persons: usize,
+    pub(crate) cleared_leave_words: usize,
+    pub(crate) delete_organizing: Option<FactionDeleteOrganizingOutcome>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionDisbandOutcome {
+    Rejected {
+        reason: FactionDisbandRejection,
+        notice_sent: bool,
+    },
+    Disbanded(FactionDisbandProgress),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionDisbandBlock {
+    MissingBaseProperty,
+    CountryMissing {
+        country: u8,
+    },
+    DeleteOrganizing {
+        source: FactionDeleteOrganizingBuildError,
+        progress: FactionDisbandProgress,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FactionDemiseRejection {
     SamePlayer,
     OldPlayerNotMaster,
@@ -1843,6 +1892,21 @@ pub(crate) trait FactionUploadIconContext: FactionOrganizingInfoContext {
         string_id: &'static [u8],
         interval_minutes: i32,
     ) -> Vec<u8>;
+}
+
+/// Узкая граница war/country/Goods-War owner-ов для `Disband`.
+pub(crate) trait FactionDisbandContext: FactionOrganizingInfoContext {
+    fn village_war_declared(&self, faction_id: i32) -> bool;
+
+    fn city_war_declared(&self, faction_id: i32) -> bool;
+
+    fn goods_war_blocks_disband(&self, faction_id: i32, player_id: i32) -> bool;
+
+    fn country_king_id(&self, country: u8) -> Option<i32>;
+
+    fn delete_goods_war_members_by_faction_id(&mut self, faction_id: i32);
+
+    fn decrement_goods_war_faction_count(&mut self, faction_id: i32);
 }
 
 /// Узкая граница war/country/localization/player-refresh/log для `Demise`.
@@ -5326,6 +5390,92 @@ impl CFaction {
         })
     }
 
+    /// Проверяет disband-контракт и очищает reached transient faction-state.
+    pub(crate) fn disband<Context>(
+        &mut self,
+        game: &CGame,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Result<FactionDisbandOutcome, FactionDisbandBlock>
+    where
+        Context: FactionDisbandContext,
+    {
+        if !self.check_operator_validate(player_id, EPurview::Disband as i32) {
+            return Ok(FactionDisbandOutcome::Rejected {
+                reason: FactionDisbandRejection::OperatorNotPermitted,
+                notice_sent: false,
+            });
+        }
+        let superior_organizing = self
+            .superior_organizing()
+            .ok_or(FactionDisbandBlock::MissingBaseProperty)?;
+        if superior_organizing > 0 {
+            return Ok(FactionDisbandOutcome::Rejected {
+                reason: FactionDisbandRejection::HasSuperiorOrganizing,
+                notice_sent: false,
+            });
+        }
+        if self.has_enemy_faction() || context.village_war_declared(self.faction_id) {
+            send_apply_join_information(context, player_id, b"WS0189", b"WS0121");
+            return Ok(FactionDisbandOutcome::Rejected {
+                reason: FactionDisbandRejection::StandardWar,
+                notice_sent: true,
+            });
+        }
+        if self.has_city_war_enemy_faction() || context.city_war_declared(self.faction_id) {
+            send_apply_join_information(context, player_id, b"WS0190", b"WS0121");
+            return Ok(FactionDisbandOutcome::Rejected {
+                reason: FactionDisbandRejection::CityWar,
+                notice_sent: true,
+            });
+        }
+        if context.goods_war_blocks_disband(self.faction_id, player_id) {
+            send_apply_join_information(context, player_id, b"ws0362", b"WS0121");
+            return Ok(FactionDisbandOutcome::Rejected {
+                reason: FactionDisbandRejection::GoodsWar,
+                notice_sent: true,
+            });
+        }
+
+        let country = self
+            .country()
+            .ok_or(FactionDisbandBlock::MissingBaseProperty)?;
+        let king_id = context
+            .country_king_id(country)
+            .ok_or(FactionDisbandBlock::CountryMissing { country })?;
+        if king_id == player_id {
+            return Ok(FactionDisbandOutcome::Rejected {
+                reason: FactionDisbandRejection::CountryKing,
+                notice_sent: false,
+            });
+        }
+
+        let mut progress = FactionDisbandProgress {
+            goods_war_members_deleted: false,
+            goods_war_faction_count_decremented: false,
+            cleared_apply_persons: 0,
+            cleared_leave_words: 0,
+            delete_organizing: None,
+        };
+        context.delete_goods_war_members_by_faction_id(self.faction_id);
+        progress.goods_war_members_deleted = true;
+        context.decrement_goods_war_faction_count(self.faction_id);
+        progress.goods_war_faction_count_decremented = true;
+
+        progress.cleared_apply_persons = self.apply_persons.len();
+        self.apply_persons.clear();
+        progress.cleared_leave_words = self.leave_words.len();
+        self.leave_words.clear();
+        progress.delete_organizing =
+            Some(match self.delete_organizing_to_client(game, 0, context) {
+                Ok(outcome) => outcome,
+                Err(source) => {
+                    return Err(FactionDisbandBlock::DeleteOrganizing { source, progress });
+                }
+            });
+        Ok(FactionDisbandOutcome::Disbanded(progress))
+    }
+
     /// Передаёт leadership с точными gates, member-state и порядком публикации.
     pub(crate) fn demise<Context>(
         &mut self,
@@ -8531,7 +8681,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::Disband
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1597

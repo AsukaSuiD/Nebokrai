@@ -4,8 +4,8 @@
 //! `SendTopInfoToClient` RVA `0x00033FC0` и
 //! `SendAllTopInfoToInfoToOneClient` RVA `0x000352C0` — `IMPLEMENTED`;
 //! полный `COrganizingCtrl::Run` RVA `0x0003A550` —
-//! `IMPLEMENTED/VERIFIED_DISASSEMBLY` с явной границей ещё сырого
-//! `DisbandFaction`;
+//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`, `DisbandFaction` RVA `0x00038550` и
+//! `UpdateOtherFacInfoToClient` RVA `0x00034980` — `IMPLEMENTED`;
 //! `IsFreePlayer` RVA `0x000343A0`, `IsFreeFaction` RVA `0x00034420`,
 //! `RemovePersonFromApplyFactionList/GetFactionByPlayerInApplyList` RVA
 //! `0x00034880/0x000348F0`,
@@ -20,7 +20,7 @@
 //! Исходные владельцы PDB:
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.h`
 //! и
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:73,164,242,1352,1641,1655,1952,1960,1970,1998`.
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:73,164,242,725,1352,1641,1655,1910,1952,1960,1970,1998`.
 //!
 //! `GenerateSaveData` проходит faction-map, затем union-map в signed key-order.
 //! `force_all=true` ставит bits `1/2/4/8` четырьмя virtual-вызовами; concrete
@@ -166,9 +166,22 @@
 //! в signed order, уменьшает только положительный `m_lDelRemainTime` через
 //! wrapping subtraction, собирает достигшие `<= 0` пары `(faction ID,
 //! master ID)` во временный ordered map и лишь после traversal вызывает
-//! `DisbandFaction(master, faction)`. Поскольку сам `DisbandFaction` ещё raw,
-//! Rust принимает его как явный callback-owner; это не меняет порядок и не
-//! выдаёт незавершённый downstream за готовый.
+//! `DisbandFaction(master, faction)`. `Run` принимает этот достигнутый вызов как
+//! явный callback, чтобы caller мог передать Game/context без самозаимствования
+//! controller-а; concrete `disband_faction` теперь материализован ниже.
+//!
+//! `UpdateOtherFacInfoToClient` проходит оставшиеся faction-owner-ы в signed
+//! map-order, пропускает null value и вызывает concrete update slot `+0x170`.
+//! `DisbandFaction` сначала повторяет standard/village и city/attack gates с
+//! собственными `WS0235/WS0236 + WS0121`, очищает city enemy-set и вызывает
+//! внутренний `CFaction::Disband`. После success exact order: erase map-owner,
+//! второй `DeleteOrgaToClient(0)`, append ID в `m_DeleteFactions`, broadcast
+//! empty-name `OP_Delete` оставшимся faction-ам, сброс player faction-data flag,
+//! optional log и virtual delete. Exact ASM `0x00438550..0x004389CA`
+//! подтверждает двойную delete-рассылку и исправляет raw dataflow: faction ID
+//! в update/log — второй аргумент, player ID — первый. Наблюдаемая дубликация
+//! сохранена; утечка 256-байтового SQL buffer при offline player устранена как
+//! чисто внутренний дефект, а DB/war/player owners оставлены узким context.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -176,10 +189,15 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use rustix::time::{ClockId, clock_gettime};
 
 use super::faction::{
-    CFaction, FactionCloneSaveBlock, FactionInitialPropertyBlock,
-    FactionPropertyDelivery, FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome,
+    CFaction, FactionCloneSaveBlock, FactionDeleteOrganizingBuildError,
+    FactionDeleteOrganizingOutcome, FactionDisbandBlock, FactionDisbandContext,
+    FactionDisbandOutcome, FactionDisbandProgress, FactionDisbandRejection,
+    FactionInitialPropertyBlock, FactionMemberInfoRequest, FactionOrganizingInfoContext,
+    FactionOtherInfoBuildError, FactionOtherInfoDelivery, FactionPropertyDelivery,
+    FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome,
     FactionSuperiorOrganizingBlock, MemberEnterOutcome, MemberExitOutcome,
 };
+use super::organizing::EOperator;
 use super::organizingparam::COrganizingParam;
 use super::union::CUnion;
 use crate::nets::networld::message::{CMessage, SendMessageError};
@@ -293,7 +311,7 @@ pub(crate) enum OrganizingRunBlock {
     MasterIdAbsent { map_key: i32, faction_id: i32 },
 }
 
-/// Один вызов ещё отдельного `DisbandFaction(master, faction)` owner-а.
+/// Один вызов отдельного `DisbandFaction(master, faction)` owner-а.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct OrganizingRunDisband {
     pub(crate) faction_id: i32,
@@ -410,6 +428,94 @@ pub(crate) struct UnionMemberDetachBlock {
     pub(crate) source: UnionMemberDetachBlockSource,
 }
 
+/// Один concrete faction-result controller-wide other-faction broadcast-а.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingOtherFactionUpdate {
+    pub(crate) map_key: i32,
+    pub(crate) deliveries: Vec<FactionOtherInfoDelivery>,
+}
+
+/// Safe-граница после уже выполненного prefix-а signed map traversal.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingOtherFactionUpdateBlock {
+    pub(crate) map_key: i32,
+    pub(crate) source: FactionOtherInfoBuildError,
+    pub(crate) completed: Vec<OrganizingOtherFactionUpdate>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingDisbandPlayer {
+    pub(crate) player_id: i32,
+    pub(crate) player_name: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingDisbandRejection {
+    FactionEntryMissing,
+    StandardWar,
+    CityWar,
+    Faction(FactionDisbandRejection),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingDisbandProgress {
+    pub(crate) cleared_city_war_enemies: usize,
+    pub(crate) faction: FactionDisbandProgress,
+    pub(crate) map_removed: bool,
+    pub(crate) second_delete_organizing: Option<FactionDeleteOrganizingOutcome>,
+    pub(crate) delete_faction_queued: bool,
+    pub(crate) other_faction_updates: Option<Vec<OrganizingOtherFactionUpdate>>,
+    pub(crate) player: Option<OrganizingDisbandPlayer>,
+    pub(crate) log_written: bool,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingDisbandOutcome {
+    Rejected {
+        reason: OrganizingDisbandRejection,
+        notice_sent: bool,
+        cleared_city_war_enemies: usize,
+    },
+    Disbanded(OrganizingDisbandProgress),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingDisbandBlock {
+    NullFaction {
+        faction_id: i32,
+    },
+    Faction {
+        source: FactionDisbandBlock,
+        cleared_city_war_enemies: usize,
+    },
+    SecondDeleteOrganizing {
+        source: FactionDeleteOrganizingBuildError,
+        progress: OrganizingDisbandProgress,
+    },
+    OtherFactionUpdate {
+        source: OrganizingOtherFactionUpdateBlock,
+        progress: OrganizingDisbandProgress,
+    },
+}
+
+/// Player/log continuation внешнего `COrganizingCtrl::DisbandFaction`.
+pub(crate) trait OrganizingDisbandContext: FactionDisbandContext {
+    fn clear_player_faction_data_received(
+        &mut self,
+        player_id: i32,
+    ) -> Option<OrganizingDisbandPlayer>;
+
+    fn faction_disband_log_enabled(&self) -> bool;
+
+    fn write_faction_disband_log(
+        &mut self,
+        faction_id: i32,
+        faction_name: &[u8],
+        player_id: i32,
+        player_name: &[u8],
+    );
+}
+
 /// Достигнутые faction-callback и top-info части исходного singleton owner-а.
 pub(crate) struct COrganizingCtrl {
     factions: BTreeMap<i32, Option<Box<CFaction>>>,
@@ -511,6 +617,158 @@ impl COrganizingCtrl {
     /// `nullptr`; caller сам сохраняет последующую pointer-семантику.
     pub(crate) fn faction_by_id(&self, faction_id: i32) -> Option<&CFaction> {
         self.factions.get(&faction_id).and_then(Option::as_deref)
+    }
+
+    /// Публикует одно other-faction изменение всем concrete faction-owner-ам.
+    pub(crate) fn update_other_faction_info_to_client(
+        &self,
+        game: &CGame,
+        faction_id: i32,
+        faction_name: &[u8],
+        operator: EOperator,
+    ) -> Result<Vec<OrganizingOtherFactionUpdate>, OrganizingOtherFactionUpdateBlock> {
+        let mut completed = Vec::new();
+        for (&map_key, faction) in &self.factions {
+            let Some(faction) = faction.as_deref() else {
+                continue;
+            };
+            let deliveries = match faction.update_other_faction_info_to_client(
+                game,
+                faction_id,
+                faction_name,
+                operator,
+            ) {
+                Ok(deliveries) => deliveries,
+                Err(source) => {
+                    return Err(OrganizingOtherFactionUpdateBlock {
+                        map_key,
+                        source,
+                        completed,
+                    });
+                }
+            };
+            completed.push(OrganizingOtherFactionUpdate {
+                map_key,
+                deliveries,
+            });
+        }
+        Ok(completed)
+    }
+
+    /// Выполняет оба исходных disband-слоя и удаляет concrete faction-owner.
+    pub(crate) fn disband_faction<Context>(
+        &mut self,
+        game: &CGame,
+        player_id: i32,
+        faction_id: i32,
+        context: &mut Context,
+    ) -> Result<OrganizingDisbandOutcome, OrganizingDisbandBlock>
+    where
+        Context: OrganizingDisbandContext,
+    {
+        let Some(faction) = self.factions.get_mut(&faction_id) else {
+            return Ok(OrganizingDisbandOutcome::Rejected {
+                reason: OrganizingDisbandRejection::FactionEntryMissing,
+                notice_sent: false,
+                cleared_city_war_enemies: 0,
+            });
+        };
+        let Some(faction) = faction.as_deref_mut() else {
+            return Err(OrganizingDisbandBlock::NullFaction { faction_id });
+        };
+
+        if faction.has_enemy_faction() || context.village_war_declared(faction_id) {
+            send_disband_information(context, player_id, b"WS0235");
+            return Ok(OrganizingDisbandOutcome::Rejected {
+                reason: OrganizingDisbandRejection::StandardWar,
+                notice_sent: true,
+                cleared_city_war_enemies: 0,
+            });
+        }
+        if faction.has_city_war_enemy_faction() || context.city_war_declared(faction_id) {
+            send_disband_information(context, player_id, b"WS0236");
+            return Ok(OrganizingDisbandOutcome::Rejected {
+                reason: OrganizingDisbandRejection::CityWar,
+                notice_sent: true,
+                cleared_city_war_enemies: 0,
+            });
+        }
+
+        let cleared_city_war_enemies = faction.city_war_enemy_factions().len();
+        faction.clear_city_war_enemy_factions();
+        let faction_progress = match faction.disband(game, player_id, context) {
+            Ok(FactionDisbandOutcome::Rejected {
+                reason,
+                notice_sent,
+            }) => {
+                return Ok(OrganizingDisbandOutcome::Rejected {
+                    reason: OrganizingDisbandRejection::Faction(reason),
+                    notice_sent,
+                    cleared_city_war_enemies,
+                });
+            }
+            Ok(FactionDisbandOutcome::Disbanded(progress)) => progress,
+            Err(source) => {
+                return Err(OrganizingDisbandBlock::Faction {
+                    source,
+                    cleared_city_war_enemies,
+                });
+            }
+        };
+
+        let faction = self
+            .factions
+            .remove(&faction_id)
+            .and_then(|faction| faction)
+            .expect("успешный faction Disband не меняет controller map");
+        let mut progress = OrganizingDisbandProgress {
+            cleared_city_war_enemies,
+            faction: faction_progress,
+            map_removed: true,
+            second_delete_organizing: None,
+            delete_faction_queued: false,
+            other_faction_updates: None,
+            player: None,
+            log_written: false,
+        };
+        progress.second_delete_organizing = Some(
+            match faction.delete_organizing_to_client(game, 0, context) {
+                Ok(outcome) => outcome,
+                Err(source) => {
+                    return Err(OrganizingDisbandBlock::SecondDeleteOrganizing {
+                        source,
+                        progress,
+                    });
+                }
+            },
+        );
+
+        self.delete_factions.push_back(faction.faction_id());
+        progress.delete_faction_queued = true;
+        progress.other_faction_updates = Some(
+            match self.update_other_faction_info_to_client(game, faction_id, b"", EOperator::Delete)
+            {
+                Ok(updates) => updates,
+                Err(source) => {
+                    return Err(OrganizingDisbandBlock::OtherFactionUpdate { source, progress });
+                }
+            },
+        );
+
+        progress.player = context.clear_player_faction_data_received(player_id);
+        if context.faction_disband_log_enabled()
+            && let Some(player) = progress.player.as_ref()
+        {
+            context.write_faction_disband_log(
+                faction_id,
+                legacy_c_string_prefix(faction.name()),
+                player.player_id,
+                legacy_c_string_prefix(&player.player_name),
+            );
+            progress.log_written = true;
+        }
+
+        Ok(OrganizingDisbandOutcome::Disbanded(progress))
     }
 
     /// Пересчитывает и публикует property всех concrete faction-owner-ов.
@@ -966,6 +1224,25 @@ impl PlayerOrganizingUpdater for COrganizingPlayerUpdater<'_> {
     }
 }
 
+fn send_disband_information<Context>(
+    context: &mut Context,
+    player_id: i32,
+    first_string_id: &'static [u8],
+) where
+    Context: FactionOrganizingInfoContext + ?Sized,
+{
+    let second_text = context.world_string(b"WS0121").unwrap_or_default();
+    let first_text = context.world_string(first_string_id).unwrap_or_default();
+    context.send_organizing_info(FactionMemberInfoRequest {
+        recipient_player_id: player_id,
+        first_text: legacy_c_string_prefix(&first_text),
+        second_text: legacy_c_string_prefix(&second_text),
+        information_type: -1,
+        color: 0xFFDA_EDFE,
+        trailing_value: 0,
+    });
+}
+
 fn top_info_message(
     player_id: i32,
     top_info_id: i32,
@@ -1345,7 +1622,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::UpdateOtherFacInfoToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1910
@@ -1695,7 +1972,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::DisbandFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:725
@@ -1806,8 +2083,8 @@ fn legacy_tick_ms() -> u32 {
 //
 
 // VERIFIED_DISASSEMBLY, IMPLEMENTED: полный `COrganizingCtrl::Run` RVA
-// `0x0003A550` находится выше; `DisbandFaction` остаётся явной downstream-
-// границей, заменённый temporary-map/STL traversal удалён.
+// `0x0003A550` находится выше; temporary-map/STL traversal заменён typed
+// callback к материализованному `DisbandFaction` owner-у.
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::OnPlayerInviteFaction
