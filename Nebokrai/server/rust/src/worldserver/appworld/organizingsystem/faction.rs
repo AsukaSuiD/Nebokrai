@@ -10,6 +10,7 @@
 //! `LeaveWord/LoadLeavewords` RVA `0x000BCA40/0x000BD3F0`,
 //! `UpdateAllApplyMemberToClient/UpdateApplyMemberToClient/RemoveApplyMember`
 //! RVA `0x000B60D0/0x000BEC80/0x000B9F50`,
+//! `ApplyForJoin` RVA `0x000BE520`,
 //! `SendInfoToAllMember/UpdateOtherFacInfoToClient` RVA
 //! `0x000B5890/0x000B58F0`,
 //! `Talk` RVA `0x000B5A50`,
@@ -205,7 +206,7 @@
 //!
 //! Для достигнутого `SaveAbility` наблюдаемы только signed keys ordered map
 //! `m_ApplyPersons`, а `AddApplyPersonsToByteArray` дополнительно подтверждает
-//! value: `strName[20], lLvl, lOccu`. Поэтому owner хранит полный
+//! полный PDB-value: `lID, strName[20], lOccu, lLvl`. Поэтому owner хранит
 //! `BTreeMap<i32, TagApplyPerson>`, не перенося MSVC tree-layout.
 //! PDB и `UpdatePronounceToClient` подтверждают полный `tagPronounceWord`:
 //! `lPlayerID +0x00`, `strName[20] +0x04`, `tagTime +0x18` и
@@ -322,8 +323,9 @@
 //! signed member keys в tree-order. Exact ASM `0x004B5530..0x004B5564` и
 //! `0x004B9E60..0x004B9EDE` подтверждает, что raw early-return после удаления
 //! старых nodes был ошибкой декомпиляции, а не условием пропуска заполнения.
-//! Apply snapshot имеет wire-порядок `count, id, name\0, level, occupation` в
-//! signed key-order. Leave-word snapshot сохраняет list-order и поля
+//! Apply snapshot имеет wire-порядок
+//! `count, record.id, name\0, occupation, level` в signed key-order.
+//! Leave-word snapshot сохраняет list-order и поля
 //! `count, id, player_id, time[0x10], content\0, name\0`. Exact ASM
 //! `0x004B5D30..0x004B5E3B` подтверждает offsets и порядок. Нетерминированные
 //! fixed C-строки локализованы typed-ошибками после уже записанного prefix,
@@ -396,12 +398,27 @@
 //! signed key-order. Точечный `UpdateApplyMemberToClient(id, operator)` создаёт
 //! нулевой local-record с заданным ID, заменяет его map-value при hit и шлёт
 //! только готовым member-ам с `PV_ConMem`. Оба используют `0x7FE0A` и wire
-//! `recipient, operator, candidate_id, name\0, level, occupation`; Linux-донор
-//! ошибочно переставлял два последних поля. `RemoveApplyMember` сначала стирает
-//! map-entry, затем публикует `OP_Delete` уже как ID + пустые поля, ставит
+//! `recipient, operator, record.id, name\0, occupation, level`; это совпадает
+//! с PDB-layout `tagApplyPerson[0x20]` и Linux-донором. `RemoveApplyMember`
+//! сначала стирает map-entry, затем публикует `OP_Delete` уже как ID + пустые
+//! поля, ставит
 //! dirty-бит `8` и возвращает faction ID; miss возвращает `0`. Exact ASM
 //! `0x004B60D0..0x004B61E2`, `0x004BEC80..0x004BEE2E` и
 //! `0x004B9F50..0x004B9FA7` подтверждает framing, фильтры и side effects.
+//! `ApplyForJoin` последовательно запрещает заявку при standard/village-war,
+//! city-war, полном member-limit и полном apply-limit `40`. Уже состоящий во
+//! faction player получает тихий `false`; затем старые заявки удаляются из
+//! всех faction и только после этого требуется online-player. Новый record
+//! копирует C-string имя через старый bounded `strncpy[20]`, occupation и level,
+//! отправляет заявителю `WS0166/WS0119`, публикует `OP_Add`, ставит dirty `8` и
+//! опционально пишет faction-log type `2`. Exact ASM
+//! `0x004BE520..0x004BEC6E` подтверждает short-circuit, signed member-limit,
+//! unsigned apply-limit, порядок мутаций и неиспользованные аргументы 2/3.
+//! War/controller/localization/log plumbing остаётся тонким контекстом; формат
+//! DB-записи может быть параметризован библиотекой без переноса старого SQL-
+//! буфера. Нетерминированное `char[20]` и переполнение 256-байтового `_sprintf`
+//! заменены typed-границами в точках прежнего UB с сохранением уже выполненных
+//! эффектов.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -422,6 +439,8 @@ use crate::worldserver::worldserver::game::{
 
 const MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0D;
 const APPLY_MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0A;
+const MAX_APPLY_PERSON_COUNT: u32 = 40;
+const APPLY_JOIN_NOTICE_CAPACITY: usize = 256;
 const PRONOUNCE_UPDATE_MESSAGE_TYPE: i32 = 0x7FE10;
 const LEAVE_WORD_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0F;
 const OTHER_FACTION_UPDATE_MESSAGE_TYPE: i32 = 0x7FE15;
@@ -683,6 +702,49 @@ pub(crate) enum FactionRemoveApplyMemberOutcome {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionApplyForJoinRejection {
+    StandardOrVillageWar,
+    CityWar,
+    MemberLimit,
+    ApplyListLimit,
+    PlayerAlreadyInFaction,
+    PlayerOffline,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionApplyForJoinOutcome {
+    Rejected(FactionApplyForJoinRejection),
+    Applied {
+        deliveries: Result<Vec<FactionApplyMemberDelivery>, FactionApplyMemberUpdateBuildError>,
+        log_written: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionApplyForJoinContextOperation {
+    PlayerMembershipLookup,
+    RemovePreviousApplications,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FactionApplyForJoinBlock<ContextBlock> {
+    MissingBaseProperty,
+    Context {
+        operation: FactionApplyForJoinContextOperation,
+        source: ContextBlock,
+    },
+    PlayerNameWouldOverflow {
+        player_id: i32,
+        visible_len: usize,
+    },
+    SuccessNoticeWouldOverflow {
+        player_id: i32,
+        formatted_len: usize,
+        application_inserted: bool,
+    },
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FactionLeaveWordUpdateBuildError {
     MissingLastLeaveWord,
@@ -857,6 +919,36 @@ pub(crate) trait FactionOrganizingInfoContext {
 
     /// Повторяет `COrganizingCtrl::SendOrgaInfoToClient`.
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>);
+}
+
+/// Узкая граница war-system, organizing-controller, локализации и apply-log.
+pub(crate) trait FactionApplyForJoinContext: FactionOrganizingInfoContext {
+    type Block;
+
+    fn already_declared_for_village_war(&self, faction_id: i32) -> bool;
+
+    fn already_declared_for_city_war(&self, faction_id: i32) -> bool;
+
+    fn player_already_in_faction(&self, player_id: i32) -> Result<bool, Self::Block>;
+
+    fn remove_previous_faction_applications(
+        &mut self,
+        game: &CGame,
+        player_id: i32,
+    ) -> Result<(), Self::Block>;
+
+    fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8>;
+
+    fn faction_apply_log_enabled(&self) -> bool;
+
+    fn write_faction_apply_log(
+        &mut self,
+        faction_id: i32,
+        faction_name: &[u8],
+        player_id: i32,
+        player_name: &[u8],
+        log_type: i32,
+    );
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1183,21 +1275,33 @@ impl Error for UnterminatedApplyPersonName {}
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub(crate) struct TagApplyPerson {
+    pub(crate) id: i32,
     pub(crate) name: [u8; APPLY_PERSON_NAME_CAPACITY],
-    pub(crate) level: i32,
     pub(crate) occupation: i32,
+    pub(crate) level: i32,
 }
 
 impl TagApplyPerson {
     pub(crate) const fn from_complete_fields(
+        id: i32,
         name: [u8; APPLY_PERSON_NAME_CAPACITY],
-        level: i32,
         occupation: i32,
+        level: i32,
     ) -> Self {
         Self {
+            id,
             name,
-            level,
             occupation,
+            level,
+        }
+    }
+
+    const fn empty_with_id(id: i32) -> Self {
+        Self {
+            id,
+            name: [0; APPLY_PERSON_NAME_CAPACITY],
+            occupation: 0,
+            level: 0,
         }
     }
 
@@ -1356,10 +1460,11 @@ impl TagLeaveWord {
 
 const _: () = {
     assert!(size_of::<FactionBaseProperty>() == FACTION_BASE_PROPERTY_SIZE);
-    assert!(size_of::<TagApplyPerson>() == 0x1C);
-    assert!(offset_of!(TagApplyPerson, name) == 0x00);
-    assert!(offset_of!(TagApplyPerson, level) == 0x14);
+    assert!(size_of::<TagApplyPerson>() == 0x20);
+    assert!(offset_of!(TagApplyPerson, id) == 0x00);
+    assert!(offset_of!(TagApplyPerson, name) == 0x04);
     assert!(offset_of!(TagApplyPerson, occupation) == 0x18);
+    assert!(offset_of!(TagApplyPerson, level) == 0x1C);
     assert!(size_of::<TagPronounceWord>() == PRONOUNCE_DATA_SIZE);
     assert!(offset_of!(TagPronounceWord, player_id) == 0x00);
     assert!(offset_of!(TagPronounceWord, name) == 0x04);
@@ -2388,10 +2493,10 @@ impl CFaction {
         }
 
         let mut deliveries = Vec::new();
-        for (&candidate_player_id, person) in &self.apply_persons {
+        for person in self.apply_persons.values() {
             let Some(name) = person.name_wire_bytes() else {
                 return Err(FactionApplyMemberUpdateBuildError {
-                    candidate_player_id,
+                    candidate_player_id: person.id,
                     recipient_player_id,
                     game_server_id,
                     completed_deliveries: deliveries,
@@ -2401,10 +2506,10 @@ impl CFaction {
             let mut message = CMessage::new(APPLY_MEMBER_UPDATE_MESSAGE_TYPE);
             message.base_mut().add_long(recipient_player_id);
             message.base_mut().add_long(EOperator::Add.wire_value());
-            message.base_mut().add_long(candidate_player_id);
+            message.base_mut().add_long(person.id);
             message.base_mut().add(name);
-            message.base_mut().add_long(person.level);
             message.base_mut().add_long(person.occupation);
+            message.base_mut().add_long(person.level);
             deliveries.push(FactionApplyMemberDelivery {
                 recipient_player_id,
                 game_server_id,
@@ -2421,7 +2526,11 @@ impl CFaction {
         candidate_player_id: i32,
         operator: EOperator,
     ) -> Result<Vec<FactionApplyMemberDelivery>, FactionApplyMemberUpdateBuildError> {
-        let person = self.apply_persons.get(&candidate_player_id);
+        let person = self
+            .apply_persons
+            .get(&candidate_player_id)
+            .copied()
+            .unwrap_or_else(|| TagApplyPerson::empty_with_id(candidate_player_id));
         let mut deliveries = Vec::new();
         for &recipient_player_id in self.members.keys() {
             let player = game.online_player_by_id(recipient_player_id as u32);
@@ -2436,24 +2545,18 @@ impl CFaction {
             let mut message = CMessage::new(APPLY_MEMBER_UPDATE_MESSAGE_TYPE);
             message.base_mut().add_long(recipient_player_id);
             message.base_mut().add_long(operator.wire_value());
-            message.base_mut().add_long(candidate_player_id);
-            if let Some(person) = person {
-                let Some(name) = person.name_wire_bytes() else {
-                    return Err(FactionApplyMemberUpdateBuildError {
-                        candidate_player_id,
-                        recipient_player_id,
-                        game_server_id,
-                        completed_deliveries: deliveries,
-                    });
-                };
-                message.base_mut().add(name);
-                message.base_mut().add_long(person.level);
-                message.base_mut().add_long(person.occupation);
-            } else {
-                message.base_mut().add(&[0]);
-                message.base_mut().add_long(0);
-                message.base_mut().add_long(0);
-            }
+            message.base_mut().add_long(person.id);
+            let Some(name) = person.name_wire_bytes() else {
+                return Err(FactionApplyMemberUpdateBuildError {
+                    candidate_player_id: person.id,
+                    recipient_player_id,
+                    game_server_id,
+                    completed_deliveries: deliveries,
+                });
+            };
+            message.base_mut().add(name);
+            message.base_mut().add_long(person.occupation);
+            message.base_mut().add_long(person.level);
             deliveries.push(FactionApplyMemberDelivery {
                 recipient_player_id,
                 game_server_id,
@@ -2480,6 +2583,129 @@ impl CFaction {
             faction_id: self.faction_id,
             deliveries,
         }
+    }
+
+    /// Создаёт заявку после полной исходной цепочки war/limit/member gates.
+    pub(crate) fn apply_for_join<Context>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        player_id: i32,
+        _legacy_second_parameter: i32,
+        _legacy_third_parameter: i32,
+        context: &mut Context,
+    ) -> Result<FactionApplyForJoinOutcome, FactionApplyForJoinBlock<Context::Block>>
+    where
+        Context: FactionApplyForJoinContext + ?Sized,
+    {
+        if self.has_enemy_faction() || context.already_declared_for_village_war(self.faction_id) {
+            send_apply_join_information(context, player_id, b"WS0162", b"WS0121");
+            return Ok(FactionApplyForJoinOutcome::Rejected(
+                FactionApplyForJoinRejection::StandardOrVillageWar,
+            ));
+        }
+        if self.has_city_war_enemy_faction()
+            || context.already_declared_for_city_war(self.faction_id)
+        {
+            send_apply_join_information(context, player_id, b"WS0163", b"WS0121");
+            return Ok(FactionApplyForJoinOutcome::Rejected(
+                FactionApplyForJoinRejection::CityWar,
+            ));
+        }
+
+        let level = self
+            .level()
+            .ok_or(FactionApplyForJoinBlock::MissingBaseProperty)?;
+        let maximum_members = parameters.get_max_number_by_level(level);
+        if self.members.len() as u32 as i32 >= maximum_members {
+            send_apply_join_information(context, player_id, b"WS0164", b"WS0121");
+            return Ok(FactionApplyForJoinOutcome::Rejected(
+                FactionApplyForJoinRejection::MemberLimit,
+            ));
+        }
+        if self.apply_persons.len() as u32 >= MAX_APPLY_PERSON_COUNT {
+            send_apply_join_information(context, player_id, b"WS0165", b"WS0121");
+            return Ok(FactionApplyForJoinOutcome::Rejected(
+                FactionApplyForJoinRejection::ApplyListLimit,
+            ));
+        }
+
+        if context
+            .player_already_in_faction(player_id)
+            .map_err(|source| FactionApplyForJoinBlock::Context {
+                operation: FactionApplyForJoinContextOperation::PlayerMembershipLookup,
+                source,
+            })?
+        {
+            return Ok(FactionApplyForJoinOutcome::Rejected(
+                FactionApplyForJoinRejection::PlayerAlreadyInFaction,
+            ));
+        }
+        context
+            .remove_previous_faction_applications(game, player_id)
+            .map_err(|source| FactionApplyForJoinBlock::Context {
+                operation: FactionApplyForJoinContextOperation::RemovePreviousApplications,
+                source,
+            })?;
+
+        let Some(player) = game.online_player_by_id(player_id as u32) else {
+            return Ok(FactionApplyForJoinOutcome::Rejected(
+                FactionApplyForJoinRejection::PlayerOffline,
+            ));
+        };
+        let player_name = legacy_c_string_visible_bytes(player.get_name());
+        if player_name.len() >= APPLY_PERSON_NAME_CAPACITY {
+            return Err(FactionApplyForJoinBlock::PlayerNameWouldOverflow {
+                player_id,
+                visible_len: player_name.len(),
+            });
+        }
+        let mut name = [0; APPLY_PERSON_NAME_CAPACITY];
+        name[..player_name.len()].copy_from_slice(player_name);
+        let person = TagApplyPerson::from_complete_fields(
+            player_id,
+            name,
+            i32::from(player.get_occupation()),
+            i32::from(player.get_level()),
+        );
+        self.apply_persons.insert(player_id, person);
+
+        let formatted =
+            context.format_world_string(b"WS0166", &[legacy_c_string_visible_bytes(&self.name)]);
+        let formatted = legacy_c_string_visible_bytes(&formatted);
+        if formatted.len() >= APPLY_JOIN_NOTICE_CAPACITY {
+            return Err(FactionApplyForJoinBlock::SuccessNoticeWouldOverflow {
+                player_id,
+                formatted_len: formatted.len(),
+                application_inserted: true,
+            });
+        }
+        let second_text = context.world_string(b"WS0119").unwrap_or_default();
+        context.send_organizing_info(FactionMemberInfoRequest {
+            recipient_player_id: player_id,
+            first_text: formatted,
+            second_text: legacy_c_string_visible_bytes(&second_text),
+            information_type: -1,
+            color: 0xFFDA_EDFE,
+            trailing_value: 0,
+        });
+
+        let deliveries = self.update_apply_member_to_client(game, player_id, EOperator::Add);
+        self.set_change_data(8);
+        let log_written = context.faction_apply_log_enabled();
+        if log_written {
+            context.write_faction_apply_log(
+                self.faction_id,
+                legacy_c_string_visible_bytes(&self.name),
+                player_id,
+                player_name,
+                2,
+            );
+        }
+        Ok(FactionApplyForJoinOutcome::Applied {
+            deliveries,
+            log_written,
+        })
     }
 
     /// Публикует удаление по переданному ID либо последний leave-word целиком.
@@ -3471,17 +3697,17 @@ impl CFaction {
         output: &mut Vec<u8>,
     ) -> Result<bool, UnterminatedApplyPersonName> {
         output.extend_from_slice(&(self.apply_persons.len() as u32).to_le_bytes());
-        for (completed_persons, (&player_id, person)) in self.apply_persons.iter().enumerate() {
-            append_i32(output, player_id);
+        for (completed_persons, person) in self.apply_persons.values().enumerate() {
+            append_i32(output, person.id);
             let Some(name) = person.name_wire_bytes() else {
                 return Err(UnterminatedApplyPersonName {
-                    player_id,
+                    player_id: person.id,
                     completed_persons,
                 });
             };
             output.extend_from_slice(name);
-            append_i32(output, person.level);
             append_i32(output, person.occupation);
+            append_i32(output, person.level);
         }
         Ok(true)
     }
@@ -3814,6 +4040,26 @@ fn legacy_c_string_wire_bytes(value: &[u8]) -> Vec<u8> {
     wire.extend_from_slice(visible);
     wire.push(0);
     wire
+}
+
+fn send_apply_join_information<Context>(
+    context: &mut Context,
+    recipient_player_id: i32,
+    first_string_id: &'static [u8],
+    second_string_id: &'static [u8],
+) where
+    Context: FactionOrganizingInfoContext + ?Sized,
+{
+    let second_text = context.world_string(second_string_id).unwrap_or_default();
+    let first_text = context.world_string(first_string_id).unwrap_or_default();
+    context.send_organizing_info(FactionMemberInfoRequest {
+        recipient_player_id,
+        first_text: legacy_c_string_visible_bytes(&first_text),
+        second_text: legacy_c_string_visible_bytes(&second_text),
+        information_type: -1,
+        color: 0xFFDA_EDFE,
+        trailing_value: 0,
+    });
 }
 
 fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
@@ -5248,7 +5494,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::ApplyForJoin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:813
