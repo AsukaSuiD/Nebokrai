@@ -2,7 +2,8 @@
 //!
 //! Dispatcher RVA `0x000A47F0` остаётся `IMPLEMENTED_PARTIAL`: country relays
 //! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, а также вход country victory
-//! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, absolve
+//! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, depose-minister
+//! `0x6030A -> 0x7FF04/0x7FF10/0x7FF07`, absolve
 //! `0x6030B -> 0x7FF10/0x7FF0C/0x7FF11`, silence
 //! `0x6030C -> 0x7FF10/0x7FF0D/0x7FF11`, exile
 //! `0x6030D -> 0x7FF0E`, `0x6030E -> 0x7FF15`, `0x60316 -> 0x7FF15`, war-declare
@@ -56,6 +57,9 @@
 //! рассылок. Source metadata и хвост также не проверяются.
 //! `0x6030B` декодирует тот же target/king/country wire, вызывает selector `3`
 //! и `Absolve`; donor payload/ownership gates в exact dispatcher отсутствуют.
+//! `0x6030A` дополнительно читает signed job-byte между target и king, затем
+//! вызывает selector `2`, exact `IsMinister` и mode `7`; source/tail/job-range
+//! gates старого Linux-донора не переносятся.
 //! Exact `0x004A4FC9..0x004A5049` задаёт `0x60317`: два signed long,
 //! синхронный `player_declare`, затем ответ `char accepted, player, target` в
 //! исходный `m_lMapID`. Проверок socket-owner и полного tail здесь нет; они
@@ -87,7 +91,8 @@ use crate::public::tools::put_string_to_file;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::worldserver::appworld::country::country::{
     CountryAbsolveReport, CountryCanAbsolveDisposition, CountryCanExileDisposition,
-    CountryCanSilenceDisposition, CountryExileRequestDisposition,
+    CountryCanDeposeMinisterDisposition, CountryCanSilenceDisposition,
+    CountryDeposeMinisterReport, CountryExileRequestDisposition,
     CountryExileResultContext, CountryExileTimeLookup, CountryQuestSwitchUpdate,
     CountryScalarUpdate, CountrySilenceReport, CountrySuccessExiledReport,
 };
@@ -293,6 +298,33 @@ pub(crate) struct WorldCountryAbsolveRequestSync {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldCountryDeposeMinisterDisposition {
+    CountryMissing,
+    KingRejected,
+    OperationRejected(CountryCanDeposeMinisterDisposition),
+    MinisterRejected,
+    Applied {
+        operation: CountryCanDeposeMinisterDisposition,
+        report: CountryDeposeMinisterReport,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldCountryDeposeMinisterSync {
+    pub(crate) source_map_id: i32,
+    pub(crate) source_socket_id: i32,
+    pub(crate) target_player_id: i32,
+    pub(crate) target_complete: bool,
+    pub(crate) job: u8,
+    pub(crate) job_complete: bool,
+    pub(crate) king_player_id: i32,
+    pub(crate) king_complete: bool,
+    pub(crate) country_id: u8,
+    pub(crate) country_complete: bool,
+    pub(crate) disposition: WorldCountryDeposeMinisterDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldCountryWarDeclarationSync {
     pub(crate) player_id: i32,
     pub(crate) player_id_complete: bool,
@@ -372,6 +404,7 @@ pub(crate) enum WorldCountryMessageOutcome {
     ExileResultSynchronized(WorldCountryExileResultSync),
     SilenceRequested(WorldCountrySilenceRequestSync),
     AbsolveRequested(WorldCountryAbsolveRequestSync),
+    MinisterDeposed(WorldCountryDeposeMinisterSync),
     CountryWarDeclared(WorldCountryWarDeclarationSync),
     CountryWarVictory(WorldCountryWarVictorySync),
     FourNationWarResult(WorldFourNationWarResultSync),
@@ -843,6 +876,59 @@ pub(crate) fn dispatch_country_absolve_request_message<
         source_socket_id,
         target_player_id,
         target_complete: decoded_target.is_some(),
+        king_player_id,
+        king_complete: decoded_king.is_some(),
+        country_id,
+        country_complete: decoded_country.is_some(),
+        disposition,
+    })
+}
+
+pub(crate) fn dispatch_country_depose_minister_message<
+    Context: CountryExileResultContext + ?Sized,
+>(
+    message: &mut CMessage,
+    country_handler: &mut CCountryHandler,
+    country_parameters: &CCountryParam,
+    context: &mut Context,
+) -> Option<WorldCountryDeposeMinisterSync> {
+    if message.message_type() != 0x6030a {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_target = message.base_mut().get_long();
+    let target_player_id = decoded_target.unwrap_or(0);
+    let decoded_job = message.base_mut().get_char();
+    let job = decoded_job.unwrap_or(0) as u8;
+    let decoded_king = message.base_mut().get_long();
+    let king_player_id = decoded_king.unwrap_or(0);
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+    let disposition = match country_handler.get_country_mut(country_id) {
+        None => WorldCountryDeposeMinisterDisposition::CountryMissing,
+        Some(country) if !country.authorize_king(king_player_id, context) => {
+            WorldCountryDeposeMinisterDisposition::KingRejected
+        }
+        Some(country) => {
+            let operation = country.can_depose_minister(country_parameters, context);
+            if !matches!(operation, CountryCanDeposeMinisterDisposition::Allowed) {
+                WorldCountryDeposeMinisterDisposition::OperationRejected(operation)
+            } else if !country.authorize_minister(target_player_id, job, context) {
+                WorldCountryDeposeMinisterDisposition::MinisterRejected
+            } else {
+                let report = country.depose_minister(job, 7, country_parameters, context);
+                WorldCountryDeposeMinisterDisposition::Applied { operation, report }
+            }
+        }
+    };
+    Some(WorldCountryDeposeMinisterSync {
+        source_map_id,
+        source_socket_id,
+        target_player_id,
+        target_complete: decoded_target.is_some(),
+        job,
+        job_complete: decoded_job.is_some(),
         king_player_id,
         king_complete: decoded_king.is_some(),
         country_id,

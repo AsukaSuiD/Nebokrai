@@ -1012,6 +1012,7 @@ use crate::worldserver::appworld::message::countrymessage::{
     WorldFourNationExploitDatabaseDisposition, WorldFourNationExploitSync,
     decode_four_nation_exploit_message,
     dispatch_country_absolve_request_message,
+    dispatch_country_depose_minister_message,
     dispatch_country_exile_result_message,
     dispatch_country_exile_request_message,
     dispatch_country_silence_request_message,
@@ -12124,6 +12125,13 @@ impl CountryExileResultContext for WorldCountryExileResultEffects<'_> {
             .to_vec()
     }
 
+    fn country_identity_name(&mut self, identity: u8) -> Vec<u8> {
+        self.globe_setup
+            .country_identity_name(identity)
+            .unwrap_or_default()
+            .to_vec()
+    }
+
     fn format_world_string(
         &mut self,
         string_id: &'static [u8],
@@ -12726,6 +12734,26 @@ where
                 source,
                 legacy_run_result,
                 outcome: WorldCountryMessageOutcome::AbsolveRequested(sync),
+            };
+        }
+        let depose_minister = {
+            let mut effects = WorldCountryExileResultEffects {
+                game,
+                globe_setup,
+                format_world_string: &mut *application_callbacks.format_world_string,
+            };
+            dispatch_country_depose_minister_message(
+                &mut message,
+                country_handler,
+                country_parameters,
+                &mut effects,
+            )
+        };
+        if let Some(sync) = depose_minister {
+            return ProcessedWorldEvent::CountryMessage {
+                source,
+                legacy_run_result,
+                outcome: WorldCountryMessageOutcome::MinisterDeposed(sync),
             };
         }
         let exile_request = {

@@ -50,9 +50,11 @@ const MAX_COUNTRY_POWER: usize = 2;
 const MAX_COUNTRY_TREASURY: usize = 4;
 const MAX_KING_CONTROL_POINT: usize = 10;
 const MIN_KING_CONTROL_POINT: usize = 11;
+const DEC_KING_CONTROL_POINT_DEMISE: usize = 17;
 const DEC_KING_CONTROL_POINT_SILENCE: usize = 18;
 const DEC_KING_CONTROL_POINT_EXILE: usize = 20;
 const DEC_KING_CONTROL_POINT_ABSOLVE: usize = 21;
+const DEC_KING_CONTROL_POINT_APPOINT: usize = 22;
 const MAX_KING_MATERIAL_POINT: usize = 26;
 const MAX_KING_WAR_POINT: usize = 28;
 const MAX_SILENCE_NUM: usize = 29;
@@ -297,6 +299,14 @@ impl CCountryParam {
     /// Возвращает exact `_dec_king_control_point_silence` без default-подстановки.
     pub(crate) const fn silence_control_point_cost(&self) -> Option<i32> {
         self.parameters[DEC_KING_CONTROL_POINT_SILENCE]
+    }
+
+    pub(crate) const fn demise_control_point_cost(&self) -> Option<i32> {
+        self.parameters[DEC_KING_CONTROL_POINT_DEMISE]
+    }
+
+    pub(crate) const fn appoint_control_point_cost(&self) -> Option<i32> {
+        self.parameters[DEC_KING_CONTROL_POINT_APPOINT]
     }
 
     pub(crate) const fn max_silence_count(&self) -> Option<i32> {
