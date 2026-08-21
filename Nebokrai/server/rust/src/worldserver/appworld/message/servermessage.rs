@@ -126,7 +126,9 @@
 //! восстановленный общий base-owner. Следующая граница —
 //! `CBattleFairyProperty` subtype `0x2D`, подключённый через его точный
 //! MSVC-SSO serializer. Следующая граница — объединённые `CCiQingSetup +
-//! CLingBaoSetup` subtype `0x35`.
+//! CLingBaoSetup` subtype `0x35`: два positional serializer-а дописывают один
+//! payload без дополнительного framing между ними. Следующая граница —
+//! `CTaoZhuangSetup` subtype `0x34`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -190,6 +192,7 @@ use crate::public::dupliregionsetup::{CDupliRegionSetup, DupliRegionSerializeErr
 use crate::public::equipmentcomposelist::{
     EquipmentComposeList, EquipmentComposeSerializeError,
 };
+use crate::public::ciqing::{CCiQingSetup, CiQingSerializationBlock};
 use crate::setup::cbattlefairyexpconfig::{
     BattleFairyExpSerializeError, CBattleFairyExpConfig,
 };
@@ -202,6 +205,7 @@ use crate::setup::godsbattleconf::{CGodsBattleConf, GodsBattleSerializeError};
 use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelSerializeError};
 use crate::setup::honorelimilateconfig::HonorElimilateConfig;
 use crate::setup::incrementshoplist::{CIncrementShopList, IncrementShopSerializeError};
+use crate::setup::lingbao::{CLingBaoSetup, LingBaoSerializationBlock};
 use crate::setup::logsystem::{CLogSystem, LogSystemSerializeError};
 use crate::setup::monsterlist::{
     MonsterDropRegistry, MonsterListSerializeError, MonsterRegistry, serialize_monster_list,
@@ -907,6 +911,19 @@ pub(crate) enum WorldBattleFairyPropertyConfigurationCompletion {
 pub(crate) struct WorldBattleFairyPropertyConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldBattleFairyPropertyConfigurationCompletion,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldCiQingLingBaoConfigurationCompletion {
+    CiQing(CiQingSerializationBlock),
+    LingBao(LingBaoSerializationBlock),
+    TaoZhuangConfigurationPending { socket_id: i32 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldCiQingLingBaoConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldCiQingLingBaoConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -2556,6 +2573,40 @@ pub(crate) fn continue_game_server_battle_fairy_property_configuration(
             WorldBattleFairyPropertyConfigurationCompletion::CiQingLingBaoConfigurationPending {
                 socket_id,
             },
+    }
+}
+
+/// Последовательно кодирует `CCiQingSetup + CLingBaoSetup` в subtype `0x35`.
+pub(crate) fn continue_game_server_ciqing_ling_bao_configuration(
+    game: &CGame,
+    socket_id: i32,
+    ciqing: &CCiQingSetup,
+    ling_bao: &CLingBaoSetup,
+) -> WorldCiQingLingBaoConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = ciqing.add_byte_to_array(&mut payload) {
+        return WorldCiQingLingBaoConfigurationReport {
+            delivery: None,
+            completion: WorldCiQingLingBaoConfigurationCompletion::CiQing(error),
+        };
+    }
+    if let Err(error) = ling_bao.add_byte_ling_bao(&mut payload) {
+        return WorldCiQingLingBaoConfigurationReport {
+            delivery: None,
+            completion: WorldCiQingLingBaoConfigurationCompletion::LingBao(error),
+        };
+    }
+    let sender = game.current_game_server_sender();
+    WorldCiQingLingBaoConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x35,
+            &payload,
+        )),
+        completion: WorldCiQingLingBaoConfigurationCompletion::TaoZhuangConfigurationPending {
+            socket_id,
+        },
     }
 }
 

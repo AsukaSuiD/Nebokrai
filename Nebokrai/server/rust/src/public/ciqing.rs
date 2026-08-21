@@ -1,6 +1,192 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Конфигурация CiQing исторического Miracle.
+//!
+//! Статус World `CCiQingSetup::AddByteToArray` RVA `0x00086080`:
+//! `IMPLEMENTED`; text loader, queries, RNG и Game runtime ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точные пары World/Game EXE+PDB подтверждают одинаковый
+//! serializer/decoder; World EXE SHA-256
+//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
+//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Исходный owner PDB: `e:\svn\fengyun_russia_dev\public\ciqing.cpp:139` и
+//! соседний `ciqing.h`.
+//!
+//! Wire содержит три insertion-order секции: make records по шесть `u32`,
+//! compose records и improve records по три `u32`; все counts signed `i32`.
+//! Compose точно передаёт `source_a` дважды, затем `source_b, money,
+//! probability, crystal, result_count` и пары `probability/result`. Это не
+//! исправлено как опечатка: exact World serializer и Game decoder совместно
+//! подтверждают наблюдаемый positional quirk. Rust хранит named поля и `Vec`,
+//! но пишет доказанный порядок явно little-endian. Declared result count
+//! остаётся частью owner-state, тогда как wire, как оригинал, берёт реальный
+//! размер result-vector. Невозможный signed count блокирует append до изменения
+//! destination. Точный text-loader остаётся отдельным проходом.
+
+use std::error::Error;
+use std::fmt;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CiQingMakeNode {
+    pub(crate) destination_base_index: u32,
+    pub(crate) equipment_position: u32,
+    pub(crate) source_a_base_index: u32,
+    pub(crate) source_a_count: u32,
+    pub(crate) source_b_base_index: u32,
+    pub(crate) source_b_count: u32,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CiQingComposeNode {
+    pub(crate) source_a_base_index: u32,
+    pub(crate) source_b_base_index: u32,
+    pub(crate) compose_probability: u32,
+    pub(crate) money: u32,
+    pub(crate) crystal_count: u32,
+    pub(crate) declared_result_count: u32,
+    pub(crate) results: Vec<(u32, u32)>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CiQingImproveNode {
+    pub(crate) level: u32,
+    pub(crate) base_index: u32,
+    pub(crate) probability: u32,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CCiQingSetup {
+    make: Vec<CiQingMakeNode>,
+    compose: Vec<CiQingComposeNode>,
+    improve: Vec<CiQingImproveNode>,
+}
+
+impl CCiQingSetup {
+    pub(crate) fn push_make(&mut self, node: CiQingMakeNode) {
+        self.make.push(node);
+    }
+
+    pub(crate) fn push_compose(&mut self, node: CiQingComposeNode) {
+        self.compose.push(node);
+    }
+
+    pub(crate) fn push_improve(&mut self, node: CiQingImproveNode) {
+        self.improve.push(node);
+    }
+
+    pub(crate) fn make(&self) -> &[CiQingMakeNode] {
+        &self.make
+    }
+
+    pub(crate) fn compose(&self) -> &[CiQingComposeNode] {
+        &self.compose
+    }
+
+    pub(crate) fn improve(&self) -> &[CiQingImproveNode] {
+        &self.improve
+    }
+
+    pub(crate) fn add_byte_to_array(
+        &self,
+        destination: &mut Vec<u8>,
+    ) -> Result<(), CiQingSerializationBlock> {
+        let mut payload = Vec::new();
+        write_ciqing_count(&mut payload, CiQingCountSection::Make, self.make.len())?;
+        for node in &self.make {
+            write_u32_fields(
+                &mut payload,
+                &[
+                    node.destination_base_index,
+                    node.equipment_position,
+                    node.source_a_base_index,
+                    node.source_a_count,
+                    node.source_b_base_index,
+                    node.source_b_count,
+                ],
+            );
+        }
+
+        write_ciqing_count(
+            &mut payload,
+            CiQingCountSection::Compose,
+            self.compose.len(),
+        )?;
+        for (compose_index, node) in self.compose.iter().enumerate() {
+            write_u32_fields(
+                &mut payload,
+                &[
+                    node.source_a_base_index,
+                    node.source_a_base_index,
+                    node.source_b_base_index,
+                    node.money,
+                    node.compose_probability,
+                    node.crystal_count,
+                ],
+            );
+            write_ciqing_count(
+                &mut payload,
+                CiQingCountSection::ComposeResults { compose_index },
+                node.results.len(),
+            )?;
+            for &(probability, result_base_index) in &node.results {
+                write_u32_fields(&mut payload, &[probability, result_base_index]);
+            }
+        }
+
+        write_ciqing_count(
+            &mut payload,
+            CiQingCountSection::Improve,
+            self.improve.len(),
+        )?;
+        for node in &self.improve {
+            write_u32_fields(
+                &mut payload,
+                &[node.level, node.base_index, node.probability],
+            );
+        }
+        destination.extend_from_slice(&payload);
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CiQingCountSection {
+    Make,
+    Compose,
+    ComposeResults { compose_index: usize },
+    Improve,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingSerializationBlock {
+    pub(crate) section: CiQingCountSection,
+    pub(crate) count: usize,
+}
+
+impl fmt::Display for CiQingSerializationBlock {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "CCiQingSetup {:?} содержит {} записей вне signed 32-битного диапазона",
+            self.section, self.count
+        )
+    }
+}
+
+impl Error for CiQingSerializationBlock {}
+
+fn write_ciqing_count(
+    destination: &mut Vec<u8>,
+    section: CiQingCountSection,
+    count: usize,
+) -> Result<(), CiQingSerializationBlock> {
+    let count = i32::try_from(count).map_err(|_| CiQingSerializationBlock { section, count })?;
+    destination.extend_from_slice(&count.to_le_bytes());
+    Ok(())
+}
+
+fn write_u32_fields(destination: &mut Vec<u8>, values: &[u32]) {
+    for value in values {
+        destination.extend_from_slice(&value.to_le_bytes());
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

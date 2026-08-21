@@ -44,6 +44,11 @@ pub(crate) mod honorelimilateconfig;
 pub(crate) mod incrementshoplist;
 #[allow(
     dead_code,
+    reason = "LingBao serializer подключён к combined initial-config до точного text loader-а"
+)]
+pub(crate) mod lingbao;
+#[allow(
+    dead_code,
     reason = "log-system serializer подключён к initial-config до text loader-а"
 )]
 pub(crate) mod logsystem;

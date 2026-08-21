@@ -2,6 +2,12 @@
 
 #[allow(
     dead_code,
+    reason = "CiQing serializer подключён к combined initial-config до точного text loader-а"
+)]
+pub(crate) mod ciqing;
+
+#[allow(
+    dead_code,
     reason = "CRC подключён до восстановления межсерверного envelope и ServerUpdate"
 )]
 pub(crate) mod crc32static;
