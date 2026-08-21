@@ -6,8 +6,8 @@
 //! `InsertOneFaction` `0x000A2960`, `MkOne` `0x000A2B60`, `FactionWin`
 //! `0x000A2BD0`, `DelOneFactionfCount` `0x000A1FA0` и
 //! `DeleteMembersByFactionId` `0x000A2850`, `IsInFactionIdList` `0x000A2760`
-//! и destructor `0x000A29C0` имеют статус `IMPLEMENTED`; DB reload и остальные
-//! mutations ниже пока `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! и destructor `0x000A29C0`, `reInitDB` `0x000A22E0` имеют статус
+//! `IMPLEMENTED`; остальные mutations ниже пока `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
@@ -47,28 +47,48 @@
 //! signed set; `BTreeSet::contains` заменяет только MSVC tree. Destructor exact
 //! `0x004A29C0..0x004A2A87` освобождает count-list, set и map; стандартный
 //! `Drop` их Rust-владельцев является полной технической заменой. Constructor
-//! не объявляется готовым: после пустой инициализации он вызывает сырой
-//! `reInitDB`, поэтому `with_reached_empty_state` остаётся только явным
-//! состоянием до DB reload, а не эквивалентом полного constructor-а.
+//! выражен связкой пустого safe owner-а и async DB-load в исходной позиции
+//! `CGame::Init`; синхронный COM I/O не скрывается внутри `Default`. Тот же
+//! lifecycle замкнут в исходной позиции `CGame::Release`: nullable-жизнь
+//! фиксирует отдельный bool, а collections очищаются стандартным `Drop` без
+//! прежнего opaque delete-callback-а.
+//! `reInitDB` exact `0x004A22E0..0x004A2742` форматирует literal `TOP 5`,
+//! не очищает прежний list и присоединяет строки в DB-order. Дубликаты имён и
+//! положительный count повторно не валидируются: это гарантирует сам SQL.
+//! Ошибка оставляет уже присоединённый prefix и только выдаёт старый error
+//! notice; init не прекращается. Tiberius заменяет ADO/COM, а переполнение
+//! исходного `strcpy` в `char[20]` блокирует конкретную строку до мутации как
+//! внутренний memory defect. Незаполненный хвост имени обнуляется вместо
+//! публикации allocator residue, как и в остальных count-owner-ах.
 //!
 //! Старый unbounded copy faction-name в `char[20]` мог перезаписать count и
 //! links. Это внутренний UB, а не протокол: Rust останавливает append при
 //! visible имени длиннее 19 bytes до изменения faction/count state. DB/ADO
-//! reload не имитируется и остаётся своим сырым owner-ом; достигнутая структура
-//! принимает уже загруженное состояние через обычные safe collections.
+//! заменены потоковым Tiberius owner-ом; list/map/set остаются обычными safe
+//! collections без переноса COM lifetime и intrusive links.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::OpenOptions;
 use std::io::Write;
 
 use chrono::{Datelike, Local, Timelike};
+use encoding_rs::WINDOWS_1251;
+use futures_util::TryStreamExt;
+use tiberius::Row;
 
+use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::CMessage;
 
 const GOODS_WAR_STATE_MESSAGE_TYPE: i32 = 0x7FF20;
 const GOODS_WAR_COUNT_MESSAGE_TYPE: i32 = 0x7FF21;
 const FACTION_NAME_CAPACITY: usize = 20;
 const MAX_PUBLISHED_COUNTS: usize = 5;
+const LOAD_GOODS_WAR_COUNTS_SQL: &str = concat!(
+    "SELECT TOP 5 Name,GoodsWarCount FROM CSL_FACTION_BaseProperty ",
+    "WHERE GoodsWarCount > 0 ",
+    "ORDER BY GoodsWarCount DESC, GoodsWarLastTime DESC",
+);
+const GOODS_WAR_DATABASE_ERROR_TEXT: &[u8] = b"ERR:  GoodsWarCount ....failed!";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GoodsWarFactionSnapshot {
@@ -144,6 +164,44 @@ pub(crate) struct GoodsWarRefreshReport {
     pub(crate) faction_ids_delivery: i32,
 }
 
+#[derive(Debug)]
+pub(crate) enum GoodsWarDatabaseLoadFailure {
+    MissingConnection,
+    Database {
+        row_index: Option<usize>,
+        source: tiberius::error::Error,
+    },
+    MissingRequiredValue {
+        row_index: usize,
+        column: &'static str,
+    },
+    NumericOutsideRange {
+        row_index: usize,
+        column: &'static str,
+        value: i64,
+    },
+    FactionNameWouldOverflow {
+        row_index: usize,
+        visible_len: usize,
+        capacity: usize,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum GoodsWarDatabaseLoadDisposition {
+    Complete,
+    Failed(GoodsWarDatabaseLoadFailure),
+}
+
+#[derive(Debug)]
+pub(crate) struct GoodsWarDatabaseLoadReport {
+    pub(crate) previous_count: usize,
+    pub(crate) appended_count: usize,
+    pub(crate) total_count: usize,
+    pub(crate) disposition: GoodsWarDatabaseLoadDisposition,
+    pub(crate) error_text: Option<&'static [u8]>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GoodsWarFactionWinAuditReport {
     pub(crate) environment_available: bool,
@@ -174,6 +232,7 @@ pub(crate) enum GoodsWarMemberBlock<ContextBlock> {
 /// Safe reached-state исходного `CGoodsWarMember` без pointer/list ABI.
 #[derive(Default)]
 pub(crate) struct CGoodsWarMember {
+    lifecycle_live: bool,
     members: BTreeMap<i32, i32>,
     faction_ids: BTreeSet<i32>,
     counts: Vec<GoodsWarFactionCount>,
@@ -182,9 +241,129 @@ pub(crate) struct CGoodsWarMember {
 impl CGoodsWarMember {
     pub(crate) const fn with_reached_empty_state() -> Self {
         Self {
+            lifecycle_live: false,
             members: BTreeMap::new(),
             faction_ids: BTreeSet::new(),
             counts: Vec::new(),
+        }
+    }
+
+    /// Публикует safe owner в позиции исходного успешного `new`.
+    pub(crate) const fn begin_lifecycle(&mut self) {
+        self.lifecycle_live = true;
+    }
+
+    /// Выполняет concrete destructor-state и возвращает прежнюю nullable-жизнь.
+    pub(crate) fn release_lifecycle(&mut self) -> bool {
+        let was_live = self.lifecycle_live;
+        *self = Self::with_reached_empty_state();
+        was_live
+    }
+
+    /// Потоково дописывает exact `TOP 5` count-list из World DB.
+    ///
+    /// Ошибка не откатывает уже прочитанный prefix: исходный COM catch также
+    /// завершал `reInitDB`, оставляя ранее присоединённые list-node-ы.
+    pub(crate) async fn reinitialize_database(
+        &mut self,
+        active_connection: Option<&mut WorldTdsClient>,
+    ) -> GoodsWarDatabaseLoadReport {
+        let previous_count = self.counts.len();
+        macro_rules! failed {
+            ($failure:expr) => {
+                return GoodsWarDatabaseLoadReport {
+                    previous_count,
+                    appended_count: self.counts.len() - previous_count,
+                    total_count: self.counts.len(),
+                    disposition: GoodsWarDatabaseLoadDisposition::Failed($failure),
+                    error_text: Some(GOODS_WAR_DATABASE_ERROR_TEXT),
+                }
+            };
+        }
+
+        let Some(active_connection) = active_connection else {
+            failed!(GoodsWarDatabaseLoadFailure::MissingConnection);
+        };
+        let mut rows = match active_connection
+            .simple_query(LOAD_GOODS_WAR_COUNTS_SQL)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(source) => failed!(GoodsWarDatabaseLoadFailure::Database {
+                row_index: None,
+                source,
+            }),
+        };
+        let mut row_index = 0usize;
+        loop {
+            let item = match rows.try_next().await {
+                Ok(Some(item)) => item,
+                Ok(None) => break,
+                Err(source) => failed!(GoodsWarDatabaseLoadFailure::Database {
+                    row_index: Some(row_index),
+                    source,
+                }),
+            };
+            let Some(row) = item.into_row() else {
+                continue;
+            };
+
+            let name = match row.try_get::<&str, _>("Name") {
+                Ok(Some(name)) => name,
+                Ok(None) => failed!(GoodsWarDatabaseLoadFailure::MissingRequiredValue {
+                    row_index,
+                    column: "Name",
+                }),
+                Err(source) => failed!(GoodsWarDatabaseLoadFailure::Database {
+                    row_index: Some(row_index),
+                    source,
+                }),
+            };
+            let (encoded_name, _, _) = WINDOWS_1251.encode(name);
+            let visible_name = legacy_c_string_prefix(encoded_name.as_ref());
+            if visible_name.len() >= FACTION_NAME_CAPACITY {
+                failed!(GoodsWarDatabaseLoadFailure::FactionNameWouldOverflow {
+                    row_index,
+                    visible_len: visible_name.len(),
+                    capacity: FACTION_NAME_CAPACITY,
+                });
+            }
+            let count = match read_ado_long(&row, "GoodsWarCount") {
+                Ok(Some(count)) => count,
+                Ok(None) => failed!(GoodsWarDatabaseLoadFailure::MissingRequiredValue {
+                    row_index,
+                    column: "GoodsWarCount",
+                }),
+                Err(ReadGoodsWarLongError::Database(source)) => {
+                    failed!(GoodsWarDatabaseLoadFailure::Database {
+                        row_index: Some(row_index),
+                        source,
+                    })
+                }
+                Err(ReadGoodsWarLongError::OutsideRange(value)) => {
+                    failed!(GoodsWarDatabaseLoadFailure::NumericOutsideRange {
+                        row_index,
+                        column: "GoodsWarCount",
+                        value,
+                    })
+                }
+            };
+
+            let mut stored_name = [0_u8; FACTION_NAME_CAPACITY];
+            stored_name[..visible_name.len()].copy_from_slice(visible_name);
+            self.counts.push(GoodsWarFactionCount {
+                name: stored_name,
+                count,
+            });
+            row_index += 1;
+        }
+
+        GoodsWarDatabaseLoadReport {
+            previous_count,
+            appended_count: self.counts.len() - previous_count,
+            total_count: self.counts.len(),
+            disposition: GoodsWarDatabaseLoadDisposition::Complete,
+            error_text: None,
         }
     }
 
@@ -457,6 +636,35 @@ impl CGoodsWarMember {
     }
 }
 
+enum ReadGoodsWarLongError {
+    Database(tiberius::error::Error),
+    OutsideRange(i64),
+}
+
+fn read_ado_long(
+    row: &Row,
+    column: &'static str,
+) -> Result<Option<i32>, ReadGoodsWarLongError> {
+    let first_error = match row.try_get::<i32, _>(column) {
+        Ok(value) => return Ok(value),
+        Err(error) => error,
+    };
+    if let Ok(value) = row.try_get::<u8, _>(column) {
+        return Ok(value.map(i32::from));
+    }
+    if let Ok(value) = row.try_get::<i16, _>(column) {
+        return Ok(value.map(i32::from));
+    }
+    if let Ok(value) = row.try_get::<i64, _>(column) {
+        return value
+            .map(|value| {
+                i32::try_from(value).map_err(|_| ReadGoodsWarLongError::OutsideRange(value))
+            })
+            .transpose();
+    }
+    Err(ReadGoodsWarLongError::Database(first_error))
+}
+
 fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
     &value[..value
         .iter()
@@ -659,7 +867,7 @@ fn append_faction_win_audit<Context: GoodsWarMemberContext + ?Sized>(
 
 // ============================================================================
 // FUNCTION: CGoodsWarMember::reInitDB
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goodswarmember.cpp:118
@@ -667,6 +875,8 @@ fn append_faction_win_audit<Context: GoodsWarMemberContext + ?Sized>(
 // ADDRESS: 004a22e0
 // PROTOTYPE: void __thiscall reInitDB(void)
 //
+// Реализовано выше как `reinitialize_database`; exact disassembly
+// `0x004A22E0..0x004A2742` подтверждает TOP 5, append и partial-prefix.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -777,7 +987,7 @@ fn append_faction_win_audit<Context: GoodsWarMemberContext + ?Sized>(
 
 // ============================================================================
 // FUNCTION: CGoodsWarMember::CGoodsWarMember
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_ASYNC_LIFECYCLE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goodswarmember.cpp:5
@@ -785,6 +995,9 @@ fn append_faction_win_audit<Context: GoodsWarMemberContext + ?Sized>(
 // ADDRESS: 004a2a90
 // PROTOTYPE: undefined __thiscall CGoodsWarMember(void)
 //
+// Пустая structural инициализация выражена `with_reached_empty_state`, а
+// синхронный вызов `reInitDB` перенесён в async `CGame::Init` без изменения
+// его позиции и non-fatal результата.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

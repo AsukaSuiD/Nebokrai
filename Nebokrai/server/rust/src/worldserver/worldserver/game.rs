@@ -1019,7 +1019,9 @@ use crate::worldserver::appworld::country::countrywarsys::{
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsOriginalNameIndex,
 };
-use crate::worldserver::appworld::goodswarmember::{CGoodsWarMember, GoodsWarMemberBlock};
+use crate::worldserver::appworld::goodswarmember::{
+    CGoodsWarMember, GoodsWarDatabaseLoadReport, GoodsWarMemberBlock,
+};
 use crate::worldserver::appworld::jjcsystem::{
     CJJcSystem, JjcRunBlock, JjcRunConfig, JjcRunContext, JjcRunReport,
 };
@@ -1440,6 +1442,7 @@ pub(crate) enum WorldGameInitEvent {
     DupliRegionSetupLoaded,
     DatabaseLayerInitialized,
     DatabaseOwnerCreated(WorldGameDatabaseOwner),
+    GoodsWarMemberLoaded(GoodsWarDatabaseLoadReport),
     RsSetupOwnerCreated(LoadedSetupIds),
     VoidOwner(WorldGameInitVoidOwner),
     JjcConfigurationLoaded,
@@ -1824,6 +1827,9 @@ pub(crate) trait WorldGameThreadRuntime: WorldGameReleaseContext {
     fn game_thread_exit_requested(&self) -> bool;
     fn run_main_loop(&mut self, game: &mut CGame) -> Result<i32, Self::MainLoopBlock>;
     fn wait_for_save_barrier(&mut self);
+    /// Временно передаёт concrete Goods War owner полному Release.
+    fn take_goods_war_member(&mut self) -> CGoodsWarMember;
+    fn restore_goods_war_member(&mut self, owner: CGoodsWarMember);
     fn signal_game_thread_exit(&mut self);
     fn request_window_close(&mut self);
 }
@@ -7553,6 +7559,10 @@ impl CGame {
     /// вместо resource manager, глобальных singleton-ов и process-global
     /// времени оригинала. Эти технические замены не меняют доказанный
     /// fail-fast порядок и вызов `SetNewDay` после успешной DB-load.
+    /// Goods War сохраняет отдельный соседний контракт constructor-а: exact
+    /// `reInitDB` выполняется между `DbCountry` и `DbMisc`, но собственный
+    /// DB-error поглощается после сохранения прочитанного prefix-а. Поэтому
+    /// typed load-report входит в event stream и не становится init block-ом.
     #[allow(
         clippy::too_many_arguments,
         reason = "прямые PlayerRanks/country/timer owners заменяют прежние opaque callbacks"
@@ -7571,6 +7581,8 @@ impl CGame {
         country_parameters: &mut CCountryParam,
         country_database: &mut CountryDatabase,
         country_database_connection: Option<&mut WorldTdsClient>,
+        goods_war: &mut CGoodsWarMember,
+        goods_war_database_connection: Option<&mut WorldTdsClient>,
         country_context: &mut CountryContext,
         country_war_system: &mut CountryWarSys,
         country_war_callbacks: CountryWarCallbacks<TimerCallback>,
@@ -7727,7 +7739,7 @@ impl CGame {
         self.apply_loaded_setup_ids(loaded_setup_ids);
         events.push(WorldGameInitEvent::RsSetupOwnerCreated(loaded_setup_ids));
 
-        const REMAINING_DATABASE_OWNERS: &[WorldGameDatabaseOwner] = &[
+        const DATABASE_OWNERS_BEFORE_GOODS_WAR: &[WorldGameDatabaseOwner] = &[
             WorldGameDatabaseOwner::RsGenVar,
             WorldGameDatabaseOwner::RsFaction,
             WorldGameDatabaseOwner::RsUnion,
@@ -7736,11 +7748,33 @@ impl CGame {
             WorldGameDatabaseOwner::RsCityWar,
             WorldGameDatabaseOwner::RsRegion,
             WorldGameDatabaseOwner::DbCountry,
+        ];
+        for &owner in DATABASE_OWNERS_BEFORE_GOODS_WAR {
+            if let Err(block) = context.create_database_owner(owner) {
+                stop!(WorldGameInitBlockReason::Context(block));
+            }
+            events.push(WorldGameInitEvent::DatabaseOwnerCreated(owner));
+        }
+
+        // Exact constructor ловил DB/COM error внутри `reInitDB`: owner
+        // оставался опубликованным, а CGame::Init продолжал следующий шаг.
+        // Замена прежнего Rust owner-а повторяет `new`; старый owner штатно
+        // освобождается Drop вместо исходной утечки при повторном Init.
+        *goods_war = CGoodsWarMember::with_reached_empty_state();
+        goods_war.begin_lifecycle();
+        let goods_war_report = goods_war
+            .reinitialize_database(goods_war_database_connection)
+            .await;
+        events.push(WorldGameInitEvent::DatabaseOwnerCreated(
             WorldGameDatabaseOwner::GoodsWarMember,
+        ));
+        events.push(WorldGameInitEvent::GoodsWarMemberLoaded(goods_war_report));
+
+        const DATABASE_OWNERS_AFTER_GOODS_WAR: &[WorldGameDatabaseOwner] = &[
             WorldGameDatabaseOwner::DbMisc,
             WorldGameDatabaseOwner::RsGodsBattle,
         ];
-        for &owner in REMAINING_DATABASE_OWNERS {
+        for &owner in DATABASE_OWNERS_AFTER_GOODS_WAR {
             if let Err(block) = context.create_database_owner(owner) {
                 stop!(WorldGameInitBlockReason::Context(block));
             }
@@ -8226,9 +8260,12 @@ impl CGame {
     }
 
     /// Выполняет полный `CGame::Release` до legacy result `1`.
+    /// Concrete Goods War owner освобождается между CityWar и RsRegion, как
+    /// exact pointer-owner, но его Rust collections использует обычный Drop.
     pub(crate) fn release<Context: WorldGameReleaseContext>(
         &mut self,
         context: &mut Context,
+        goods_war: &mut CGoodsWarMember,
     ) -> WorldGameReleaseResult {
         let mut events = Vec::new();
 
@@ -8364,7 +8401,14 @@ impl CGame {
             WorldGameReleaseDatabaseOwner::RsEnemyFactions,
             WorldGameReleaseDatabaseOwner::RsVillageWar,
             WorldGameReleaseDatabaseOwner::RsCityWar,
-            WorldGameReleaseDatabaseOwner::GoodsWarMember,
+        ] {
+            let released = context.release_database_owner(owner);
+            events.push(WorldGameReleaseEvent::DatabaseOwner { owner, released });
+        }
+        let owner = WorldGameReleaseDatabaseOwner::GoodsWarMember;
+        let released = goods_war.release_lifecycle();
+        events.push(WorldGameReleaseEvent::DatabaseOwner { owner, released });
+        for owner in [
             WorldGameReleaseDatabaseOwner::RsRegion,
             WorldGameReleaseDatabaseOwner::DbCountry,
             WorldGameReleaseDatabaseOwner::RsGodsBattle,
@@ -12353,13 +12397,15 @@ pub(crate) async fn game_thread_func<Runtime: WorldGameThreadRuntime>(
         },
     };
 
+    let mut goods_war = runtime.take_goods_war_member();
     let release = match game_slot
         .as_deref_mut()
         .expect("Release вызывается до DeleteGame")
-        .release(runtime)
+        .release(runtime, &mut goods_war)
     {
         Ok(release) => release,
         Err(block) => {
+            runtime.restore_goods_war_member(goods_war);
             return WorldGameThreadReport::BlockedRelease {
                 game: game_slot
                     .take()
@@ -12372,6 +12418,7 @@ pub(crate) async fn game_thread_func<Runtime: WorldGameThreadRuntime>(
             };
         }
     };
+    runtime.restore_goods_war_member(goods_war);
     let deletion = delete_game(&mut game_slot);
     runtime.signal_game_thread_exit();
     runtime.request_window_close();
