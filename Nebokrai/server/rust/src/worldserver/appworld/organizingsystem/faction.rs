@@ -36,6 +36,7 @@
 //! `UpdateEnemyFactionToClient/UpdateCityWarEnemyFactionToClient` RVA
 //! `0x000BA0F0/0x000BA210`,
 //! `UpdateOwnedCityToClient` RVA `0x000C0BF0`,
+//! `UpdatePlayerFactionInfo` RVA `0x000B5820`,
 //! `AddDefence/Offense/VillageWarVictorCounts` RVA
 //! `0x000BA3B0/0x000BA3D0/0x000BA3F0`,
 //! `ReInitialPropertyByLvl` RVA `0x000BA630`,
@@ -113,6 +114,10 @@
 //! использованного построения. Оба объявленных delta-аргумента не читаются.
 //! Recipient filter и игнорирование send-result совпадают с property/enemy
 //! update; Rust возвращает результаты и уже выполненный prefix явно.
+//! `UpdatePlayerFactionInfo(0)` обходит member keys в signed порядке и вызывает
+//! player-owner только для online entries; ненулевой ID проверяется один раз.
+//! Exact ASM подтверждает обе ветви. Rust принимает update callback явно,
+//! отделяя faction dispatch от ещё самостоятельного `CPlayer` owner-а.
 //! Experience-update `0x7FE14` получает только contributor либо master и несёт
 //! recipient/current/upgrade exp. `SetExp` ставит dirty-bit до этой рассылки.
 //! Простые query-owner-ы возвращают достигнутые scalar/property/member поля
@@ -1147,6 +1152,32 @@ impl CFaction {
             });
         }
         Ok(deliveries)
+    }
+
+    /// Диспетчеризует `CPlayer::UpdateFactionInfo` только online-игрокам.
+    pub(crate) fn update_player_faction_info<F>(
+        &self,
+        game: &CGame,
+        player_id: i32,
+        mut update_player: F,
+    ) -> Vec<i32>
+    where
+        F: FnMut(i32),
+    {
+        let mut updated_player_ids = Vec::new();
+        if player_id == 0 {
+            for &member_id in self.members.keys() {
+                if game.online_player_by_id(member_id as u32).is_none() {
+                    continue;
+                }
+                update_player(member_id);
+                updated_player_ids.push(member_id);
+            }
+        } else if game.online_player_by_id(player_id as u32).is_some() {
+            update_player(player_id);
+            updated_player_ids.push(player_id);
+        }
+        updated_player_ids
     }
 
     /// Возвращает faction ID, только если город есть в исходном list-order.
@@ -2324,7 +2355,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::UpdatePlayerFactionInfo
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:2613
