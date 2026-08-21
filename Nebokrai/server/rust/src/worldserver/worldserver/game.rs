@@ -324,9 +324,10 @@
 //! исходную границу между проверкой producer-флага и его очисткой.
 //!
 //! `CGame::AI` сначала обходит `s_mapRegionList` в signed-key порядке и зовёт
-//! virtual region `AI` только у ненулевого `tagRegion::pRegion`; callback
-//! получает `WorldRegionOwner`, поэтому raw virtual-граница сохраняет concrete
-//! subtype без object slicing. Затем ровно один
+//! virtual region `AI` только у ненулевого `tagRegion::pRegion`. Exact vtable
+//! slot всех поставочных subtype-ов ведёт в общий `0x00401000: ret`, поэтому
+//! `WorldRegionOwner::ai` сохраняет concrete dispatch как доказанный no-op без
+//! внешнего callback-а и object slicing. Затем ровно один
 //! `timeGetTime` задаёт секунды для всего ordered `m_listBroadcast`. Cadence
 //! использует wrapping `now - last` и строгое `interval < elapsed`;
 //! `random(100)` вызывается только после gate, а interval-random — только после
@@ -3059,7 +3060,6 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     pub(crate) start_largess_worker: &'a mut dyn FnMut(),
     pub(crate) launch_save_thread:
         &'a mut dyn FnMut(&WorldSaveThreadLaunchRequest) -> WorldSaveThreadHandleState,
-    pub(crate) region_ai: &'a mut dyn FnMut(&mut WorldRegionOwner),
     pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
     pub(crate) get_timer_local_time: &'a mut dyn FnMut() -> TagTime,
     pub(crate) world_string_by_id: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
@@ -4762,6 +4762,10 @@ impl WorldRegionOwner {
             Self::Country(region) => region.base_mut(),
         }
     }
+
+    /// Выполняет exact virtual AI всех поставочных World region owner-ов.
+    /// Их slot `+0x40` указывает на общий однокомандный `ret` `0x00401000`.
+    pub(crate) const fn ai(&mut self) {}
 
     fn add_full_initial_snapshot(
         &self,
@@ -8702,14 +8706,12 @@ impl CGame {
     /// ненулевого `pRegion`. После всего обхода снимается один общий broadcast
     /// tick; list cadence, оба random-вызова, wire-поля, send и последующие
     /// мутации сохраняют исходный порядок и wrapping 32-битную арифметику.
-    pub(crate) fn ai<RegionAi, GetTick, Random>(
+    pub(crate) fn ai<GetTick, Random>(
         &mut self,
-        region_ai: &mut RegionAi,
         get_tick: &mut GetTick,
         random: &mut Random,
     ) -> WorldGameAiReport
     where
-        RegionAi: FnMut(&mut WorldRegionOwner),
         GetTick: FnMut() -> u32,
         Random: FnMut(i32) -> i32,
     {
@@ -8718,7 +8720,7 @@ impl CGame {
             let Some(region) = assignment.region.as_mut() else {
                 continue;
             };
-            region_ai(region);
+            region.ai();
             region_ids_run.push(region_id);
         }
 
@@ -8808,16 +8810,14 @@ impl CGame {
     /// AI, внутренний tick принадлежит самому `CGame::AI`, четвёртый закрывает
     /// AI. Следующим исходным owner-ом остаётся готовый
     /// `process_message_main_loop_stage`.
-    pub(crate) fn run_main_loop_ai_stage<RegionAi, GetTick, Random>(
+    pub(crate) fn run_main_loop_ai_stage<GetTick, Random>(
         &mut self,
         clocks: &mut WorldMainLoopClockState,
         profile_state: &mut WorldMainLoopProfileState,
-        mut region_ai: RegionAi,
         mut get_tick: GetTick,
         mut random: Random,
     ) -> WorldMainLoopAiStageReport
     where
-        RegionAi: FnMut(&mut WorldRegionOwner),
         GetTick: FnMut() -> u32,
         Random: FnMut(i32) -> i32,
     {
@@ -8831,7 +8831,7 @@ impl CGame {
 
         let ai_started_at_ms = get_tick();
         clocks.stage_started_at_ms = ai_started_at_ms;
-        let ai = self.ai(&mut region_ai, &mut get_tick, &mut random);
+        let ai = self.ai(&mut get_tick, &mut random);
         let ai_finished_at_ms = get_tick();
         let ai_elapsed_ms = ai_finished_at_ms.wrapping_sub(clocks.stage_started_at_ms);
         profile_state.ai_time_ms = profile_state.ai_time_ms.wrapping_add(ai_elapsed_ms);
@@ -10331,7 +10331,6 @@ impl CGame {
         let ai = self.run_main_loop_ai_stage(
             state.clocks,
             state.profile,
-            &mut *callbacks.region_ai,
             &mut *callbacks.get_tick,
             &mut *callbacks.random,
         );

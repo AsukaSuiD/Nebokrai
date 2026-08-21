@@ -50,6 +50,12 @@
 //! и не выполняет object slicing. Достигнутые `CWorldVillageRegion`,
 //! `CWorldWarRegion`, load/serializer-часть `CWorldCityRegion` и
 //! `WorldCountryWarRegion` восстановлены отдельными владельцами.
+//! Virtual AI не наследует raw child-tree `CBaseObject::AI`: exact constructor
+//! vtable-адреса `0x0054434C/0x00549574/0x00544504/0x00544474/0x005443E4`
+//! у World/War/Village/City/Country вариантов содержат в slot `+0x40` общий
+//! `0x00401000`, чьё тело — единственный `ret`. Поэтому MainLoop выполняет
+//! доказанный no-op напрямую; Linux-донорская форма `pRegion->AI()` остаётся
+//! подсказкой к call-site, но не поводом материализовать недостижимое дерево.
 //!
 //! Proxy serializer не является сокращением обычного region serializer-а: он
 //! вызывает непосредственно `CBaseObject::AddToByteArray`, затем пишет country
