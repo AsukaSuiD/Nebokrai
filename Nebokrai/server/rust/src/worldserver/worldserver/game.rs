@@ -1099,7 +1099,7 @@ use crate::worldserver::appworld::worldcountrywarregion::{
 };
 use crate::worldserver::appworld::worldregion::{
     CWorldRegion, WorldRegionLoadError, WorldRegionLoadedCounts, WorldRegionResourceContext,
-    WorldRegionSerializationBlock, WorldRegionSetupSerializationBlock,
+    WorldRegionParamDecodeError, WorldRegionSerializationBlock, WorldRegionSetupSerializationBlock,
 };
 use crate::worldserver::appworld::worldvillageregion::CWorldVillageRegion;
 use crate::worldserver::appworld::worldwarregion::WorldWarRegionSerializationBlock;
@@ -4710,6 +4710,14 @@ pub(crate) enum WorldRegionParamUpdateOutcome {
     RegionNotFound,
     NullRegionPointer,
     Applied,
+}
+
+/// Результат virtual selective decoder-а `CWorldRegion` из server `0x5FA07`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WorldRegionParamDecodeOutcome {
+    RegionNotFound,
+    NullRegionPointer,
+    Decoded(Result<bool, WorldRegionParamDecodeError>),
 }
 
 /// Минимальная достигнутая часть исходного `CGame::tagGameServer`.
@@ -8428,7 +8436,7 @@ impl CGame {
     /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, other
     /// transport/cursor `0x5FD02/0x5FD06..0x5FD09/0x5FD0E`, copy-number
     /// `0x5FD0B`, LeiTing update `0x5FD10`, honor
-    /// `0x5FD0C/0x5FD0D`, server report-murderer `0x5FA06`, organizing session
+    /// `0x5FD0C/0x5FD0D`, server `0x5FA06/0x5FA07`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
     /// войны `0x6011E`, само объявление `0x6011F`, общий leaf
@@ -11047,6 +11055,26 @@ impl CGame {
             total_tax,
         );
         WorldRegionParamUpdateOutcome::Applied
+    }
+
+    /// Передаёт remaining wire и общий cursor точному region-param owner-у.
+    pub(crate) fn decode_region_param_from_game_server(
+        &mut self,
+        region_id: i32,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> WorldRegionParamDecodeOutcome {
+        let Some(assignment) = self.regions.get_mut(&region_id) else {
+            return WorldRegionParamDecodeOutcome::RegionNotFound;
+        };
+        let Some(region) = assignment.region.as_mut() else {
+            return WorldRegionParamDecodeOutcome::NullRegionPointer;
+        };
+        WorldRegionParamDecodeOutcome::Decoded(
+            region
+                .base_mut()
+                .decord_region_param_from_byte_array(source, cursor, true),
+        )
     }
 
     /// Сериализует initial-config регионы в signed map-order и передаёт каждый

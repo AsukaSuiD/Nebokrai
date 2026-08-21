@@ -4,7 +4,7 @@
 //! внутрипроцессного события `0x3FC03`,
 //! регистрации GameServer и reconnect player-data хвоста в `0x5FA01`,
 //! snapshot/cleanup хвоста `0x5FA03`, обычных opcode `0x4FC01..=0x4FC03`,
-//! `0x5FA06` и `0x5FA0A..=0x5FA0D` из
+//! `0x5FA06`, `0x5FA07` и `0x5FA0A..=0x5FA0D` из
 //! `OnServerMessage` RVA `0x000ADCF0`;
 //! остальные ветви остаются `UNKNOWN` (исследовательский декомпилят хранится локально) ниже. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
@@ -189,6 +189,12 @@
 //! если route отсутствовал вместе с online-owner-ом: безопасный Rust сохраняет
 //! все корректные эффекты, но сообщает `MissingOnlinePlayer` вместо UB/crash.
 //!
+//! `0x5FA07` читает signed region ID, затем только для живого region-owner-а
+//! передаёт тому же virtual selective decoder-у remaining wire и общий cursor.
+//! Готовый decoder потребляет ровно `0x24` bytes и меняет только current tax,
+//! total tax, today total tax и owned faction. Отсутствующие map/region owner-ы
+//! и короткий payload выражены typed-результатом без выдуманной мутации.
+//!
 //! Reached хвост `0x5FA03` после равенства response-count сначала уже сбросил
 //! `m_nDBResponsed`, затем выполняет полный `GenerateDBData` и строго
 //! `ClearMapPlayerForOffline -> ClearRestorePlayer -> ClearCreationPlayer ->
@@ -275,7 +281,8 @@ use crate::worldserver::worldserver::game::{
     WorldGenerateDbDataBlock, WorldGenerateDbDataReport, WorldGlobeVariablesDelivery,
     WorldInitialRegionSnapshot, WorldInitialRegionSnapshotBlock, WorldInitialRegionSnapshotKind,
     WorldOnlinePlayerAppendOutcome, WorldPingGameServerInfo, WorldReconnectedPlayerDecode,
-    WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest, prepare_save_thread_launch,
+    WorldRegionParamDecodeOutcome, WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest,
+    prepare_save_thread_launch,
 };
 use crate::worldserver::worldserver::honorranks::{CHonorRanks, HonorRanksSerializationBlock};
 use crate::worldserver::worldserver::playerranks::{
@@ -321,6 +328,7 @@ pub(crate) enum WorldServerMessageOutcome {
     LoginServerIdentityAssigned(WorldLoginServerIdentity),
     MurderReported(WorldMurderReport),
     OpaqueFieldsRead(WorldOpaqueServerFields),
+    RegionParametersUpdated(WorldRegionParameterUpdate),
     RegionMessageRelayed(WorldRegionMessageRelay),
 }
 
@@ -346,6 +354,16 @@ pub(crate) enum WorldMurderReportDisposition {
     CountersIncremented(PlayerMurderCounterUpdate),
     /// Safe-замена исходного null-dereference, не являвшегося контрактом.
     MissingOnlinePlayer,
+}
+
+/// Наблюдаемый итог selective region-param сообщения `0x5FA07`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldRegionParameterUpdate {
+    pub(crate) region_id: i32,
+    pub(crate) region_complete: bool,
+    pub(crate) cursor_before_decode: usize,
+    pub(crate) cursor_after_decode: usize,
+    pub(crate) outcome: WorldRegionParamDecodeOutcome,
 }
 
 /// Следующая точная позиция ветки `0x5FA01` после достигнутой начальной части.
@@ -1383,6 +1401,25 @@ pub(crate) fn on_server_message(
                     disposition,
                 },
             ))
+        }
+        0x0005_FA07 => {
+            let decoded_region = message.base_mut().get_long();
+            let region_id = decoded_region.unwrap_or(0);
+            let cursor_before_decode = message.base_mut().cursor();
+            let outcome = {
+                let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                game.decode_region_param_from_game_server(region_id, source, cursor)
+            };
+            let cursor_after_decode = message.base_mut().cursor();
+            WorldServerMessageDispatch::Handled(
+                WorldServerMessageOutcome::RegionParametersUpdated(WorldRegionParameterUpdate {
+                    region_id,
+                    region_complete: decoded_region.is_some(),
+                    cursor_before_decode,
+                    cursor_after_decode,
+                    outcome,
+                }),
+            )
         }
         0x0005_FA0A => {
             let decoded = message.base_mut().get_long();
