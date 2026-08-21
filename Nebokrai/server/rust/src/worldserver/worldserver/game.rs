@@ -969,7 +969,9 @@ use crate::worldserver::appworld::worldregion::{
 };
 use crate::worldserver::appworld::worldvillageregion::CWorldVillageRegion;
 use crate::worldserver::appworld::worldwarregion::WorldWarRegionSerializationBlock;
-use crate::worldserver::worldserver::honorranks::CHonorRanks;
+use crate::worldserver::worldserver::honorranks::{
+    CHonorRanks, HonorRanksNewDayBlock, HonorRanksNewDayReport,
+};
 use crate::worldserver::worldserver::savedb::{
     DoSaveDataLifecycleReport, SaveDataFinalDisposition, SaveDataLifecycleState, SaveDataLogEvent,
     SaveDataLogPublishBlock, SaveDataLogPublishDisposition, SaveDataLogSink, SaveDataLogTarget,
@@ -2216,6 +2218,7 @@ pub(crate) enum WorldMainLoopBlock<FactionContextBlock, LeiTingContextBlock> {
     Largess(WorldMainLoopLargessGateReport),
     Refresh(WorldMainLoopRefreshStageReport),
     Reload(WorldReloadProfilesReport),
+    Maintenance(WorldHonorRanksMaintenanceBlock),
     SaveAllOrganizations {
         block: OrganizingSaveDataBlock,
     },
@@ -2928,16 +2931,12 @@ impl WorldPlayerRanksRequestState {
     }
 }
 
-/// Операции трёх соседних maintenance owners в порядке MainLoop.
+/// Операции соседних PlayerRanks/AuctionBang owners в порядке MainLoop.
 pub(crate) trait WorldMainLoopMaintenanceOwners {
     /// Пересчитывает PlayerRanks.
     fn stat_player_ranks(&mut self);
     /// Публикует PlayerRanks подключённым GameServer.
     fn update_player_ranks_to_game_server(&mut self);
-    /// Возвращает день последнего HonorRanks sort либо отсутствие owner-а.
-    fn honor_sort_day(&mut self) -> Option<u32>;
-    /// Выполняет смену дня HonorRanks с переданным force-флагом.
-    fn honor_on_new_day(&mut self, force: bool);
     /// Возвращает сохранённый день месяца AuctionBang.
     fn auction_old_day(&mut self) -> i32;
     /// Присваивает сохранённый день месяца AuctionBang.
@@ -2957,9 +2956,6 @@ pub(crate) enum WorldPlayerRanksMaintenanceDisposition {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldHonorRanksMaintenanceDisposition {
     Disabled,
-    MissingOwner {
-        current_day: u32,
-    },
     AlreadyCurrent {
         current_day: u32,
         sort_day: u32,
@@ -2972,7 +2968,18 @@ pub(crate) enum WorldHonorRanksMaintenanceDisposition {
         elapsed_ms: u32,
         start_log: AddLogTextDisposition,
         complete_log: AddLogTextDisposition,
+        rollover: HonorRanksNewDayReport,
     },
+}
+
+/// Safe-граница реального `CHonorRanks::OnNewDay` внутри MainLoop.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldHonorRanksMaintenanceBlock {
+    pub(crate) current_day: u32,
+    pub(crate) previous_sort_day: u32,
+    pub(crate) started_at_ms: u32,
+    pub(crate) start_log: AddLogTextDisposition,
+    pub(crate) source: HonorRanksNewDayBlock,
 }
 
 /// Итог безусловно достигнутого AuctionBang day gate.
@@ -8629,12 +8636,17 @@ impl CGame {
             state.player_ranks_request,
             configuration.use_appellation_function,
             owners.maintenance,
+            owners.honor_ranks,
             owners.log,
             &mut callbacks.get_tick,
             &mut callbacks.get_log_local_time,
             &mut callbacks.get_auction_month_day,
             &mut callbacks.put_log_info,
         );
+        let maintenance = match maintenance {
+            Ok(maintenance) => maintenance,
+            Err(block) => return Err(Box::new(WorldMainLoopBlock::Maintenance(block))),
+        };
         let collect_player_data =
             self.materialize_collect_player_data_request(state.collect_player_data);
 
@@ -9014,12 +9026,13 @@ impl CGame {
         player_ranks_request: &WorldPlayerRanksRequestState,
         use_appellation_function: bool,
         owners: &mut Owners,
+        honor_ranks_owner: &mut CHonorRanks,
         log: &mut WorldLogTextOwner,
         get_tick: &mut GetTick,
         get_local_time: &mut GetLocalTime,
         get_auction_month_day: &mut GetAuctionMonthDay,
         put_log_info: &mut PutLogInfo,
-    ) -> WorldMainLoopMaintenanceReport
+    ) -> Result<WorldMainLoopMaintenanceReport, WorldHonorRanksMaintenanceBlock>
     where
         Owners: WorldMainLoopMaintenanceOwners,
         GetTick: FnMut() -> u32,
@@ -9039,15 +9052,14 @@ impl CGame {
             WorldHonorRanksMaintenanceDisposition::Disabled
         } else {
             let current_day = u32::from(get_local_time().day);
-            match owners.honor_sort_day() {
-                None => WorldHonorRanksMaintenanceDisposition::MissingOwner { current_day },
-                Some(sort_day) if sort_day == current_day => {
+            match honor_ranks_owner.sort_day() {
+                sort_day if sort_day == current_day => {
                     WorldHonorRanksMaintenanceDisposition::AlreadyCurrent {
                         current_day,
                         sort_day,
                     }
                 }
-                Some(previous_sort_day) => {
+                previous_sort_day => {
                     let started_at_ms = get_tick();
                     let start_log = log.add_log_text(
                         b"Start total HonorRankks!",
@@ -9056,7 +9068,15 @@ impl CGame {
                         &mut *get_local_time,
                         &mut *put_log_info,
                     );
-                    owners.honor_on_new_day(false);
+                    let rollover = honor_ranks_owner.on_new_day(self, false).map_err(|source| {
+                        WorldHonorRanksMaintenanceBlock {
+                            current_day,
+                            previous_sort_day,
+                            started_at_ms,
+                            start_log: start_log.clone(),
+                            source,
+                        }
+                    })?;
                     let finished_at_ms = get_tick();
                     let elapsed_ms = finished_at_ms.wrapping_sub(started_at_ms);
                     let complete_text = format!(
@@ -9079,6 +9099,7 @@ impl CGame {
                         elapsed_ms,
                         start_log,
                         complete_log,
+                        rollover,
                     }
                 }
             }
@@ -9122,11 +9143,11 @@ impl CGame {
             }
         };
 
-        WorldMainLoopMaintenanceReport {
+        Ok(WorldMainLoopMaintenanceReport {
             player_ranks,
             honor_ranks,
             auction_bang,
-        }
+        })
     }
 
     fn capture_refresh_info_current(
