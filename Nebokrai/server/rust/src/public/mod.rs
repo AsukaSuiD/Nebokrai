@@ -36,6 +36,12 @@ pub(crate) mod auctionnode;
 )]
 #[path = "auctionroom/auctionroom.rs"]
 pub(crate) mod auctionroom;
+#[allow(
+    dead_code,
+    reason = "CAuctionLog materialized before its World auction handler and LogDB loader"
+)]
+#[path = "auctionroom/auctionlog.rs"]
+pub(crate) mod auctionlog;
 
 pub(crate) mod md5;
 
