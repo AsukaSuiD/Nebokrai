@@ -23,6 +23,9 @@
 //! Kick-map `0x5FF0B` проходит ordered region map по фактическому
 //! `pRegion->ID` и сохраняет исходный многократный `SendToMapID`; null owners
 //! безопасно пропускаются вместо внутреннего UB старого разыменования.
+//! Silence `0x5FF0C` сначала меняет World `m_lSilienceTime`, затем маршрутизует
+//! `0x7FC0B`; отсутствие online-цели возвращает requester-у `0x7FC0C` с
+//! исходным string-table ключом `WS0114`.
 //!
 //! Rust `VecDeque::len` шире старого 32-битного `_Mysize`; значение вне
 //! legacy-range безопасно блокируется typed-исходом, а не молча обрезается.
@@ -124,6 +127,25 @@ pub(crate) enum WorldGmNamedPlayerRouteDisposition {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldGmSilienceDisposition {
+    TargetRouted {
+        previous_silience_time: i32,
+        target_game_server_id: i32,
+        response_type: i32,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+    RequesterFallback {
+        requester_game_server_id: i32,
+        response_type: i32,
+        notice: Vec<u8>,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+    RequesterUnroutable,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldGmOnlinePlayerCountOutcome {
     CountOutsideLegacyRange {
         request_id: i32,
@@ -183,6 +205,14 @@ pub(crate) enum WorldGmMessageOutcome {
         wire: Option<Vec<u8>>,
         deliveries: Vec<Result<i32, SendMessageError>>,
     },
+    Silience {
+        request_id: i32,
+        player_name: Vec<u8>,
+        silience_time: i32,
+        numeric_payload_complete: [bool; 2],
+        online_player_id: u32,
+        disposition: WorldGmSilienceDisposition,
+    },
     Transport(WorldGmTransportOutcome),
 }
 
@@ -195,6 +225,7 @@ pub(crate) enum WorldGmMessageDispatch {
 pub(crate) fn on_gm_message(
     game: &mut CGame,
     reload_context: &mut dyn WorldReloadContext,
+    world_string_by_id: &mut dyn FnMut(&[u8]) -> Vec<u8>,
     mut message: CMessage,
 ) -> WorldGmMessageDispatch {
     let decoded_request_id = message.base_mut().get_long();
@@ -512,6 +543,70 @@ pub(crate) fn on_gm_message(
                 scan,
                 wire,
                 deliveries,
+            })
+        }
+        0x0005_FF0C => {
+            let player_name = message
+                .base_mut()
+                .get_str_bytes(0x100)
+                .expect("literal 0x100 исключает zero-capacity GetStr");
+            let decoded_silience_time = message.base_mut().get_long();
+            let silience_time = decoded_silience_time.unwrap_or(0);
+            let online_player_id = game.online_player_id_by_name(&player_name);
+            let previous_silience_time = game
+                .replace_online_player_silience_time(online_player_id, silience_time);
+            let disposition = if let Some(previous_silience_time) = previous_silience_time {
+                message.set_message_type(0x0007_FC0B);
+                let target_game_server_id =
+                    game.game_server_number_by_player_id(online_player_id as i32);
+                let wire = message.as_wire_bytes().to_vec();
+                let delivery = message.send_to_map_id(
+                    game.current_game_server_sender().as_ref(),
+                    target_game_server_id,
+                );
+                WorldGmSilienceDisposition::TargetRouted {
+                    previous_silience_time,
+                    target_game_server_id,
+                    response_type: 0x0007_FC0B,
+                    wire,
+                    delivery,
+                }
+            } else {
+                let requester_game_server_id = game.game_server_number_by_player_id(request_id);
+                if requester_game_server_id == 0 {
+                    WorldGmSilienceDisposition::RequesterUnroutable
+                } else {
+                    let notice = world_string_by_id(b"WS0114");
+                    let mut response = CMessage::new(0x0007_FC0C);
+                    response.base_mut().add_long(request_id);
+                    add_c_string(&mut response, &player_name);
+                    response.base_mut().add_long(silience_time);
+                    response.base_mut().add_char(0);
+                    add_c_string(&mut response, &notice);
+                    let wire = response.as_wire_bytes().to_vec();
+                    let delivery = response.send_to_map_id(
+                        game.current_game_server_sender().as_ref(),
+                        requester_game_server_id,
+                    );
+                    WorldGmSilienceDisposition::RequesterFallback {
+                        requester_game_server_id,
+                        response_type: 0x0007_FC0C,
+                        notice,
+                        wire,
+                        delivery,
+                    }
+                }
+            };
+            WorldGmMessageDispatch::Handled(WorldGmMessageOutcome::Silience {
+                request_id,
+                player_name,
+                silience_time,
+                numeric_payload_complete: [
+                    decoded_request_id.is_some(),
+                    decoded_silience_time.is_some(),
+                ],
+                online_player_id,
+                disposition,
             })
         }
         0x0005_FF0D => handled_player_route(

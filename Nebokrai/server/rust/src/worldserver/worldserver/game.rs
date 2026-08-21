@@ -8419,7 +8419,7 @@ impl CGame {
     /// Поэтому typed reconnect из первой очереди заменяет owner до второго
     /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
     /// ветви server-owner-а, GMA `0x4FD01/0x4FD04/0x60401/0x60402`, GM
-    /// query/reload/transport ветви GM `0x5FF01..0B/0D..11/13..16`,
+    /// query/reload/state/transport ветви GM `0x5FF01..11/13..16`,
     /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, honor
     /// `0x5FD0C/0x5FD0D`, organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
@@ -10599,6 +10599,24 @@ impl CGame {
         self.map_player(player_id)
     }
 
+    /// Мутирует silence-поле только игрока, подтверждённого online-list.
+    pub(crate) fn replace_online_player_silience_time(
+        &mut self,
+        player_id: u32,
+        silience_time: i32,
+    ) -> Option<i32> {
+        if !self
+            .online_players
+            .iter()
+            .any(|&online_id| online_id == player_id)
+        {
+            return None;
+        }
+        self.players
+            .get_mut(&player_id)
+            .map(|player| player.replace_silience_time(silience_time))
+    }
+
     /// Декодирует player snapshot только после exact online-list lookup.
     pub(crate) fn decord_online_player_by_id(
         &mut self,
@@ -11607,7 +11625,12 @@ fn process_world_message<TimerCallback: Copy>(
     }
 
     if selector.owner == Some(WorldMessageOwner::Gm) {
-        match on_gm_message(game, reload_context, message) {
+        match on_gm_message(
+            game,
+            reload_context,
+            &mut *application_callbacks.world_string,
+            message,
+        ) {
             WorldGmMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::GmMessage {
                     source,

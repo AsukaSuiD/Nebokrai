@@ -1306,6 +1306,11 @@ impl CPlayer {
         self.move_shape_base.get_name()
     }
 
+    /// Заменяет exact `m_lSilienceTime`, возвращая прежнее значение.
+    pub(crate) fn replace_silience_time(&mut self, silience_time: i32) -> i32 {
+        std::mem::replace(&mut self.silience_time, silience_time)
+    }
+
     /// Возвращает region ID через унаследованный shape-owner.
     pub(crate) const fn get_region_id(&self) -> i32 {
         self.move_shape_base.get_region_id()
