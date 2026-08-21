@@ -106,8 +106,9 @@
 //! каждого назначенного региона выражен injected delay-callback-ом: wire-order
 //! и точка задержки сохранены без навязывания Rust-слою конкретного runtime-а.
 //! Общий `CRegionSetup` затем сохраняет signed count и ordered 12-байтные
-//! records в subtype `0x11`. Следующая граница — `CDupliRegionSetup` subtype
-//! `0x1A`.
+//! records в subtype `0x11`. `CDupliRegionSetup` следом передаёт insertion-order
+//! пары region/duplicate-region subtype `0x1A`. Следующая граница —
+//! `HonorElimilateConfig` subtype `0x26`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -166,6 +167,7 @@ use crate::nets::basemessage::CBaseMessage;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::networld::mynetclient::CMyNetClient;
 use crate::nets::servers::ServerCommandHandle;
+use crate::public::dupliregionsetup::{CDupliRegionSetup, DupliRegionSerializeError};
 use crate::public::equipmentcomposelist::{
     EquipmentComposeList, EquipmentComposeSerializeError,
 };
@@ -664,6 +666,20 @@ pub(crate) enum WorldRegionSetupConfigurationCompletion {
 pub(crate) struct WorldRegionSetupConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldRegionSetupConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после `CDupliRegionSetup`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldDupliRegionConfigurationCompletion {
+    DupliRegionSetup(DupliRegionSerializeError),
+    HonorEliminateConfigurationPending { socket_id: i32 },
+}
+
+/// Отчёт отправки `0x7F801/0x1A` новому GameServer.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldDupliRegionConfigurationReport {
+    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldDupliRegionConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1885,6 +1901,34 @@ pub(crate) fn continue_game_server_region_setup_configuration(
             &payload,
         )),
         completion: WorldRegionSetupConfigurationCompletion::DupliRegionSetupPending {
+            socket_id,
+        },
+    }
+}
+
+/// Кодирует и отправляет точный `CDupliRegionSetup` initial-config packet.
+pub(crate) fn continue_game_server_dupli_region_configuration(
+    game: &CGame,
+    socket_id: i32,
+    dupli_region_setup: &CDupliRegionSetup,
+) -> WorldDupliRegionConfigurationReport {
+    let mut payload = Vec::new();
+    if let Err(error) = dupli_region_setup.add_to_byte_array(&mut payload) {
+        return WorldDupliRegionConfigurationReport {
+            delivery: None,
+            completion: WorldDupliRegionConfigurationCompletion::DupliRegionSetup(error),
+        };
+    }
+
+    let sender = game.current_game_server_sender();
+    WorldDupliRegionConfigurationReport {
+        delivery: Some(send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x1A,
+            &payload,
+        )),
+        completion: WorldDupliRegionConfigurationCompletion::HonorEliminateConfigurationPending {
             socket_id,
         },
     }

@@ -1,6 +1,81 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Список дублирующих регионов исторического Miracle.
+//!
+//! Статус World `CDupliRegionSetup::AddToByteArray` RVA `0x000506B0`:
+//! `IMPLEMENTED`; loader, random selection и Game decoder ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
+//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
+//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Исходный owner PDB:
+//! `e:\svn\fengyun_russia_dev\public\dupliregionsetup.cpp:42`.
+//!
+//! Exact World/Game serializers подтверждают wire: signed 32-битный count и
+//! insertion-order records по восемь little-endian bytes (`region_id`,
+//! `duplicate_region_id`). `Vec` заменяет старый `std::list`, поскольку
+//! наблюдаемый контракт требует только порядка и размера. Typed поля исключают
+//! C++ layout/padding, а переполнение count возвращается до изменения buffer-а.
+//! Поведение повреждённого ini и связь `random()` с общим RNG пока не доказаны
+//! достаточно точно и намеренно не маскируются удобной новой семантикой.
+
+use std::error::Error;
+use std::fmt;
+
+/// Точный восьмибайтовый `CDupliRegionSetup::tagDupliRegion`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DupliRegionEntry {
+    pub(crate) region_id: i32,
+    pub(crate) duplicate_region_id: i32,
+}
+
+/// Value-owner вместо process-local `std::list`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CDupliRegionSetup {
+    entries: Vec<DupliRegionEntry>,
+}
+
+impl CDupliRegionSetup {
+    pub(crate) fn push(&mut self, entry: DupliRegionEntry) {
+        self.entries.push(entry);
+    }
+
+    pub(crate) fn entries(&self) -> &[DupliRegionEntry] {
+        &self.entries
+    }
+
+    /// Дописывает exact `count + insertion-order 8-byte records`.
+    pub(crate) fn add_to_byte_array(
+        &self,
+        destination: &mut Vec<u8>,
+    ) -> Result<(), DupliRegionSerializeError> {
+        let count = i32::try_from(self.entries.len()).map_err(|_| DupliRegionSerializeError {
+            count: self.entries.len(),
+        })?;
+        destination.extend_from_slice(&count.to_le_bytes());
+        for entry in &self.entries {
+            destination.extend_from_slice(&entry.region_id.to_le_bytes());
+            destination.extend_from_slice(&entry.duplicate_region_id.to_le_bytes());
+        }
+        Ok(())
+    }
+}
+
+/// Невозможный в исходном 32-битном `std::list` размер.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DupliRegionSerializeError {
+    pub(crate) count: usize,
+}
+
+impl fmt::Display for DupliRegionSerializeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "DupliRegionSetup содержит {} записей вне signed 32-битного диапазона",
+            self.count
+        )
+    }
+}
+
+impl Error for DupliRegionSerializeError {}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

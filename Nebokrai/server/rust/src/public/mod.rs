@@ -52,6 +52,12 @@ pub(crate) mod date;
 
 #[allow(
     dead_code,
+    reason = "duplicate-region serializer подключён к initial-config до точного loader-а и RNG"
+)]
+pub(crate) mod dupliregionsetup;
+
+#[allow(
+    dead_code,
     reason = "equipment-compose serializer подключён к initial-config до text loader-а"
 )]
 pub(crate) mod equipmentcomposelist;
