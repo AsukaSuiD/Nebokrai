@@ -18,6 +18,9 @@
 //! `0x000B5E40/0x000B5ED0`,
 //! `ClearEnemyFation/ClearCityWarEnemyFation` RVA `0x000B6030/0x000B6080`,
 //! `IsHaveEnymyFaction/IsHaveCityEnemyFaction` RVA `0x000B50F0/0x000B5100`,
+//! `ClearOwnedCity/DelOwnedCity` RVA `0x000B54C0/0x000B5F60`,
+//! оба `AddOwnedCity` RVA `0x000B9DE0/0x000BA650` и `SetOwnedCity` RVA
+//! `0x000C16A0`,
 //! `SetSuperiorOrganizing` RVA `0x000B5110`,
 //! `IsOwnedCity` RVA `0x000B5490`, `GetOwnedCities` RVA `0x000BD7D0`,
 //! `AddOwnedCitiesToByteArray` RVA `0x000BDD70`,
@@ -118,6 +121,12 @@
 //! player-owner только для online entries; ненулевой ID проверяется один раз.
 //! Exact ASM подтверждает обе ветви. Rust принимает update callback явно,
 //! отделяя faction dispatch от ещё самостоятельного `CPlayer` owner-а.
+//! Owned-city mutator-ы сохраняют list, а не set: одиночный add подавляет любой
+//! существующий duplicate, range-add дописывает значения и выполняет только
+//! adjacent `list::unique`, delete снимает первое совпадение. Clear/range-add/
+//! delete всегда делают `0x7FE13`, затем player refresh; single-add — только
+//! после фактической вставки, set — только `0x7FE13`. Exact ASM подтверждает,
+//! что delete при miss всё равно публикует и возвращает `true`.
 //! Experience-update `0x7FE14` получает только contributor либо master и несёт
 //! recipient/current/upgrade exp. `SetExp` ставит dirty-bit до этой рассылки.
 //! Простые query-owner-ы возвращают достигнутые scalar/property/member поля
@@ -480,6 +489,31 @@ pub(crate) enum FactionOwnedCityUpdateBuildError {
         game_server_id: i32,
         completed_deliveries: Vec<FactionOwnedCityDelivery>,
     },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OwnedCityMutationReport {
+    pub(crate) state_changed: bool,
+    pub(crate) deliveries: Vec<FactionOwnedCityDelivery>,
+    pub(crate) refreshed_player_ids: Vec<i32>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OwnedCityBooleanMutationReport {
+    pub(crate) legacy_result: bool,
+    pub(crate) mutation: OwnedCityMutationReport,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OwnedCityMutationBuildError {
+    pub(crate) state_changed: bool,
+    pub(crate) source: FactionOwnedCityUpdateBuildError,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OwnedCityAddOutcome {
+    AlreadyOwned,
+    Added(OwnedCityMutationReport),
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1178,6 +1212,133 @@ impl CFaction {
             updated_player_ids.push(player_id);
         }
         updated_player_ids
+    }
+
+    fn finish_owned_city_mutation<F>(
+        &self,
+        game: &CGame,
+        state_changed: bool,
+        update_player: F,
+    ) -> Result<OwnedCityMutationReport, OwnedCityMutationBuildError>
+    where
+        F: FnMut(i32),
+    {
+        let deliveries = self.update_owned_cities_to_client(game).map_err(|source| {
+            OwnedCityMutationBuildError {
+                state_changed,
+                source,
+            }
+        })?;
+        let refreshed_player_ids = self.update_player_faction_info(game, 0, update_player);
+        Ok(OwnedCityMutationReport {
+            state_changed,
+            deliveries,
+            refreshed_player_ids,
+        })
+    }
+
+    /// Очищает список, публикует snapshot и обновляет online member-ов.
+    pub(crate) fn clear_owned_cities<F>(
+        &mut self,
+        game: &CGame,
+        update_player: F,
+    ) -> Result<OwnedCityBooleanMutationReport, OwnedCityMutationBuildError>
+    where
+        F: FnMut(i32),
+    {
+        let state_changed = !self.owned_cities.is_empty();
+        self.owned_cities.clear();
+        let mutation = self.finish_owned_city_mutation(game, state_changed, update_player)?;
+        Ok(OwnedCityBooleanMutationReport {
+            legacy_result: true,
+            mutation,
+        })
+    }
+
+    /// Добавляет один город только при полном отсутствии такого ID.
+    pub(crate) fn add_owned_city<F>(
+        &mut self,
+        game: &CGame,
+        region_id: i32,
+        update_player: F,
+    ) -> Result<OwnedCityAddOutcome, OwnedCityMutationBuildError>
+    where
+        F: FnMut(i32),
+    {
+        if self.owned_cities.contains(&region_id) {
+            return Ok(OwnedCityAddOutcome::AlreadyOwned);
+        }
+        self.owned_cities.push_back(region_id);
+        let report = self.finish_owned_city_mutation(game, true, update_player)?;
+        Ok(OwnedCityAddOutcome::Added(report))
+    }
+
+    /// Дописывает range и повторяет только adjacent `std::list::unique`.
+    pub(crate) fn add_owned_city_list<F>(
+        &mut self,
+        game: &CGame,
+        region_ids: &VecDeque<i32>,
+        update_player: F,
+    ) -> Result<OwnedCityMutationReport, OwnedCityMutationBuildError>
+    where
+        F: FnMut(i32),
+    {
+        let previous_state = self.owned_cities.clone();
+        self.owned_cities.extend(region_ids.iter().copied());
+        let mut previous = None;
+        self.owned_cities.retain(|region_id| {
+            let keep = previous != Some(*region_id);
+            previous = Some(*region_id);
+            keep
+        });
+        let state_changed = self.owned_cities != previous_state;
+        self.finish_owned_city_mutation(game, state_changed, update_player)
+    }
+
+    /// Удаляет первое совпадение и публикует snapshot даже при miss.
+    pub(crate) fn delete_owned_city<F>(
+        &mut self,
+        game: &CGame,
+        region_id: i32,
+        update_player: F,
+    ) -> Result<OwnedCityBooleanMutationReport, OwnedCityMutationBuildError>
+    where
+        F: FnMut(i32),
+    {
+        let position = self
+            .owned_cities
+            .iter()
+            .position(|owned_region_id| *owned_region_id == region_id);
+        let state_changed = position.is_some();
+        if let Some(position) = position {
+            self.owned_cities.remove(position);
+        }
+        let mutation = self.finish_owned_city_mutation(game, state_changed, update_player)?;
+        Ok(OwnedCityBooleanMutationReport {
+            legacy_result: true,
+            mutation,
+        })
+    }
+
+    /// Заменяет список и публикует snapshot без player refresh.
+    pub(crate) fn set_owned_cities(
+        &mut self,
+        game: &CGame,
+        region_ids: &VecDeque<i32>,
+    ) -> Result<OwnedCityMutationReport, OwnedCityMutationBuildError> {
+        let state_changed = self.owned_cities != *region_ids;
+        self.owned_cities.clone_from(region_ids);
+        let deliveries = self.update_owned_cities_to_client(game).map_err(|source| {
+            OwnedCityMutationBuildError {
+                state_changed,
+                source,
+            }
+        })?;
+        Ok(OwnedCityMutationReport {
+            state_changed,
+            deliveries,
+            refreshed_player_ids: Vec::new(),
+        })
     }
 
     /// Возвращает faction ID, только если город есть в исходном list-order.
@@ -2271,7 +2432,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::ClearOwnedCity
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:504
@@ -2467,7 +2628,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::DelOwnedCity
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:490
@@ -2803,7 +2964,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::AddOwnedCity
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:471
@@ -2971,7 +3132,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::AddOwnedCity
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:481
@@ -3729,7 +3890,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::SetOwnedCity
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:513
