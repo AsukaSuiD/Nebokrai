@@ -92,6 +92,16 @@
 //! а terminal callback удаляет только первое совпадение. Проверку отсутствия
 //! перед push сохраняет вызывающий `CUnion::ApplyForJoin`; `VecDeque` заменяет
 //! только MSVC list nodes/allocator и не меняет порядок либо duplicates.
+//! Terminal owner сначала при положительном решении выполняет точный `DoJoin`
+//! найденного union, при отказе отправляет `WS0266/WS0193` на literal faction
+//! ID, затем на normal return сбрасывает pending application и удаляет первое
+//! совпадение из списка. Для безопасного split-borrow union временно извлекается
+//! из собственного map-slot и обязательно возвращается до terminal cleanup;
+//! результат предстоящего `IsFreeFaction(applicant)` снимается до извлечения и
+//! ровно на этот вызов передаётся `DoJoin`, поэтому даже уже оказавшийся в этом
+//! же union applicant или более ранний null/map match не теряется. Остальные
+//! достигнутые callbacks работают с faction-map либо получают union явно;
+//! ownership-замена не меняет их lookup и порядок эффектов.
 //!
 //! `RemovePersonFromApplyFactionList` вызывает `RemoveApplyMember(player)` у
 //! каждой faction в signed map-order, игнорирует все concrete return values и
@@ -218,6 +228,7 @@
 //! сохранена; утечка 256-байтового SQL buffer при offline player устранена как
 //! чисто внутренний дефект, а DB/war/player owners оставлены узким context.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -239,11 +250,12 @@ use super::faction::{
 use super::organizing::EOperator;
 use super::organizingparam::COrganizingParam;
 use super::union::{
-    CUnion, UnionApplicationFactionBlock, UnionApplicationFactionSnapshot,
-    UnionApplyForJoinContext, UnionClientSnapshotContext, UnionDoJoinContext,
+    CUnion, UnionAddFactionEffects, UnionApplicationFactionBlock,
+    UnionApplicationFactionSnapshot, UnionApplicationTerminal, UnionApplyForJoinContext,
+    UnionClientSnapshotContext, UnionDoJoinBlock, UnionDoJoinContext, UnionDoJoinOutcome,
     UnionFactionJoinContext, UnionFactionLevelBlock, UnionFactionMemberContext,
-    UnionFactionStateMutationContext, UnionInitialMutationContext,
-    UnionMasterFactionQueryContext, UnionMemberSnapshotBlock,
+    UnionFactionStateMutationContext, UnionInitialMutationContext, UnionMasterFactionQueryContext,
+    UnionMemberSnapshotBlock,
     UnionOperatorValidationContext, UnionOwnedCityMutationContext,
     UnionPlayerRefreshContext, UnionSendInfoContext,
 };
@@ -359,6 +371,41 @@ pub(crate) struct UnionPlayerHeaderLookupBlock {
 pub(crate) enum FactionMasterLookupBlock {
     NullFaction { map_key: i32 },
     MissingMasterId { map_key: i32 },
+}
+
+pub(crate) type OrganizingUnionApplicationJoinBlock = UnionDoJoinBlock<
+    FactionUnionMembershipLookupBlock,
+    FactionMasterLookupBlock,
+    AddUnionToFactionBlock,
+>;
+
+/// Normal-return terminal callback заявки на вступление в союз.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingUnionApplicationCallbackReport {
+    pub(crate) union_id: i32,
+    pub(crate) applicant_faction_id: i32,
+    pub(crate) union_found: bool,
+    pub(crate) rejection_notice_sent: bool,
+    pub(crate) join: Option<UnionDoJoinOutcome>,
+    pub(crate) application_cleared: bool,
+    pub(crate) establishment_reservation_removed: bool,
+}
+
+/// Safe-остановка callback-а в месте недостижимого старого malformed state.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingUnionApplicationCallbackBlock {
+    PlayerHeader {
+        union_id: i32,
+        applicant_faction_id: i32,
+        source: UnionPlayerHeaderLookupBlock,
+        rejection_notice_sent: bool,
+    },
+    DoJoin {
+        union_id: i32,
+        applicant_faction_id: i32,
+        source: OrganizingUnionApplicationJoinBlock,
+        rejection_notice_sent: bool,
+    },
 }
 
 /// Результат одного вызова `CFaction::RemoveApplyMember` в map-order.
@@ -633,6 +680,7 @@ pub(crate) struct COrganizingCtrl {
     delete_unions: VecDeque<i32>,
     top_infos: VecDeque<StTopInfo>,
     request_establishment_union_players: VecDeque<i32>,
+    detached_union_membership_lookup: Cell<Option<(i32, FreeFactionLookup)>>,
 }
 
 /// Разделённый borrow faction-map для union snapshot во время mutable union lookup.
@@ -656,6 +704,7 @@ impl COrganizingCtrl {
             delete_unions: VecDeque::new(),
             top_infos: VecDeque::new(),
             request_establishment_union_players: VecDeque::new(),
+            detached_union_membership_lookup: Cell::new(None),
         }
     }
 
@@ -1047,6 +1096,150 @@ impl COrganizingCtrl {
         true
     }
 
+    /// Завершает result/timeout локального `PlayerApplyForJoinConfeder`.
+    pub(crate) fn finish_union_application<Effects>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        union_id: i32,
+        applicant_faction_id: i32,
+        terminal: UnionApplicationTerminal,
+        effects: &mut Effects,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<
+        OrganizingUnionApplicationCallbackReport,
+        OrganizingUnionApplicationCallbackBlock,
+    >
+    where
+        Effects: UnionAddFactionEffects,
+    {
+        let rejection_notice_sent = if matches!(terminal, UnionApplicationTerminal::Denied) {
+            let recipient = if applicant_faction_id < 1 {
+                None
+            } else {
+                self.faction_by_id(applicant_faction_id)
+                    .map(CFaction::faction_id)
+            };
+            if let Some(recipient_player_id) = recipient {
+                let second_text = effects.world_string(b"WS0193");
+                let first_text = effects.world_string(b"WS0266");
+                effects.send_organizing_info(FactionMemberInfoRequest {
+                    recipient_player_id,
+                    first_text: legacy_c_string_prefix(&first_text),
+                    second_text: legacy_c_string_prefix(&second_text),
+                    information_type: -1,
+                    color: 0xFFDA_EDFE,
+                    trailing_value: 0,
+                });
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        let union_found = union_id > 0
+            && self
+                .confederations
+                .get(&union_id)
+                .is_some_and(Option::is_some);
+        if !union_found {
+            return Ok(OrganizingUnionApplicationCallbackReport {
+                union_id,
+                applicant_faction_id,
+                union_found: false,
+                rejection_notice_sent,
+                join: None,
+                application_cleared: false,
+                establishment_reservation_removed: self
+                    .remove_from_establishment_list(applicant_faction_id),
+            });
+        }
+
+        let detached_membership_lookup =
+            matches!(terminal, UnionApplicationTerminal::Approved { .. })
+                .then(|| self.is_free_faction(applicant_faction_id));
+        let mut union = self
+            .confederations
+            .get_mut(&union_id)
+            .and_then(Option::take)
+            .expect("union entry и pointer проверены до временного take");
+        let join = if let UnionApplicationTerminal::Approved { time } = terminal {
+            let manager_id = match union.player_header(|master_faction_id| {
+                let Some(faction) = self.faction_by_id(master_faction_id) else {
+                    return Ok(None);
+                };
+                faction
+                    .master_id()
+                    .map(Some)
+                    .ok_or(UnionPlayerHeaderLookupBlock { master_faction_id })
+            }) {
+                Ok(manager_id) => manager_id,
+                Err(source) => {
+                    *self
+                        .confederations
+                        .get_mut(&union_id)
+                        .expect("временный union slot не удаляется") = Some(union);
+                    return Err(OrganizingUnionApplicationCallbackBlock::PlayerHeader {
+                        union_id,
+                        applicant_faction_id,
+                        source,
+                        rejection_notice_sent,
+                    });
+                }
+            };
+            self.detached_union_membership_lookup
+                .set(detached_membership_lookup.map(|lookup| (applicant_faction_id, lookup)));
+            let join_result = union.do_join(
+                game,
+                parameters,
+                manager_id,
+                applicant_faction_id,
+                1,
+                time,
+                self,
+                effects,
+                update_player,
+            );
+            self.detached_union_membership_lookup.set(None);
+            match join_result {
+                Ok(outcome) => Some(outcome),
+                Err(source) => {
+                    *self
+                        .confederations
+                        .get_mut(&union_id)
+                        .expect("временный union slot не удаляется") = Some(union);
+                    return Err(OrganizingUnionApplicationCallbackBlock::DoJoin {
+                        union_id,
+                        applicant_faction_id,
+                        source,
+                        rejection_notice_sent,
+                    });
+                }
+            }
+        } else {
+            None
+        };
+
+        union.finish_union_application_callback();
+        *self
+            .confederations
+            .get_mut(&union_id)
+            .expect("временный union slot не удаляется") = Some(union);
+        let establishment_reservation_removed =
+            self.remove_from_establishment_list(applicant_faction_id);
+        Ok(OrganizingUnionApplicationCallbackReport {
+            union_id,
+            applicant_faction_id,
+            union_found: true,
+            rejection_notice_sent,
+            join,
+            application_cleared: true,
+            establishment_reservation_removed,
+        })
+    }
+
     /// Отправляет полный union snapshot каждому готовому клиенту одной faction.
     ///
     /// Нулевой union ID сначала разрешается через `IsFreeFaction`. Получатели
@@ -1425,7 +1618,15 @@ impl UnionDoJoinContext for COrganizingCtrl {
         &self,
         faction_id: i32,
     ) -> Result<i32, Self::FreeFactionBlock> {
-        match self.is_free_faction(faction_id) {
+        let cached = self.detached_union_membership_lookup.get();
+        let lookup = match cached {
+            Some((cached_faction_id, lookup)) if cached_faction_id == faction_id => {
+                self.detached_union_membership_lookup.set(None);
+                lookup
+            }
+            _ => self.is_free_faction(faction_id),
+        };
+        match lookup {
             FreeFactionLookup::NoUnion => Ok(0),
             FreeFactionLookup::Union(union_id) => Ok(union_id),
             FreeFactionLookup::BlockedNullConfederation { map_key } => {

@@ -27,8 +27,10 @@
 //! `UpdateMemberInfoToClient` RVA `0x000C5840`, `AddMembersToByteArray` RVA
 //! `0x000C21D0`, `AddToByteArray` RVA `0x000C6590`, public-конструктор RVA
 //! `0x000C64D0`, `Initial` RVA `0x000C1FE0` и `AddFaction` RVA
-//! `0x000C3170`, `ApplyForJoin` RVA `0x000C2B90`, `DoJoin` RVA
-//! `0x000C66A0` — `IMPLEMENTED`;
+//! `0x000C3170`, `ApplyForJoin` RVA `0x000C2B90`, его локальные
+//! `PlayerApplyForJoinConfeder` constructor/`DoAsyncCall`/`OnAsyncCallback`
+//! RVA `0x000C19C0/0x000C1A70/0x000C2EA0` и `DoJoin` RVA `0x000C66A0` —
+//! `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -36,7 +38,7 @@
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
 //! Исходные владельцы PDB:
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h`
-//! и `union.cpp:559,680,785,1442`.
+//! и `union.cpp:559,615,621,636,680,785,1442`.
 //!
 //! Точный PDB задаёт старый `CUnion` размером `0x50`: signed ID `+0x4`, имя
 //! `+0x8`, signed master ID `+0x24`, ordered member-map `+0x28`, `tagTime`
@@ -198,10 +200,23 @@
 //! третий входные `long` не читаются. Existing `CNetSessionManager` остаётся
 //! универсальным transport-owner-ом; Rust trait передаёт ему точный доменный
 //! request, а ошибки безопасной session-границы сохраняют уже выполненные
-//! assignment/list эффекты без выдуманного rollback. Локальные callback-owner-ы
-//! `DoAsyncCall/OnAsyncCallback` остаются следующим связанным RAW-проходом.
+//! assignment/list эффекты без выдуманного rollback. Локальный callback-owner
+//! хранит только union/applicant ID; `Box/Arc/Drop` заменяют два interface-
+//! под-объекта и ручной `Release`. `DoAsyncCall` строит exact `0x7FE17`:
+//! master player ID, literal confirmation kind `2`, applicant name как
+//! C-строку, signed session ID и второй cookie, после чего выбирает GameServer
+//! по master player и игнорирует send result. Result читает decision и только
+//! при literal `1` следующие `0x10` bytes времени; approval вызывает
+//! `DoJoin(GetPlayerHeader(), applicant, 1, time)`, отказ сообщает именно
+//! faction ID через `WS0266/WS0193`, а timeout/non-result не сообщает ничего.
+//! После normal return найденный union сбрасывает заявку и list-owner удаляет
+//! только первое совпадение; union miss всё равно очищает list. Неверный erased
+//! Rust payload и недостигнутое malformed state останавливаются typed-блоком
+//! без чтения чужой памяти и без выдуманного terminal continuation.
 
+use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 
 use super::faction::{
     current_local_member_time, FactionEnemyDelivery, FactionInitialPropertyBlock,
@@ -216,10 +231,18 @@ use super::organizing::{
 };
 use super::organizingparam::COrganizingParam;
 use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::public::netsession::{
+    NetSessionAsyncResult, NetSessionAsyncResultKind, NetSessionEndpoint,
+};
+use crate::public::netsessionmanager::{
+    CNetSessionManager, CreatedNetSession, NetSessionCreateBlock, NetSessionManagerBeginBlock,
+    NetSessionSetCallbackBlock,
+};
 use crate::worldserver::worldserver::game::CGame;
 
 const DELETE_UNION_ORGANIZING_MESSAGE_TYPE: i32 = 0x7FE05;
 const UNION_MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0E;
+const UNION_APPLICATION_CONFIRMATION_MESSAGE_TYPE: i32 = 0x7FE17;
 const MAX_UNION_MEMBER_COUNT: i32 = 50;
 
 /// Узкая read-only граница controller-wide `IsFactionMaster`.
@@ -449,6 +472,171 @@ pub(crate) struct UnionApplicationSessionRequest {
     pub(crate) timeout_ticks: u32,
     pub(crate) confirmation_kind: i32,
     pub(crate) applicant_faction_name: Vec<u8>,
+}
+
+/// Точный result payload: решение `long` и только для `1` следующие `tagTime`.
+#[derive(Clone, Copy)]
+pub(crate) struct UnionApplicationCallbackPayload {
+    pub(crate) decision: i32,
+    pub(crate) time: Option<TagTimeValue>,
+}
+
+/// Нормальные ветви локального `OnAsyncCallback` после typed decode.
+#[derive(Clone, Copy)]
+pub(crate) enum UnionApplicationTerminal {
+    Approved { time: TagTimeValue },
+    Denied,
+    NonResult { kind: NetSessionAsyncResultKind },
+}
+
+/// Ошибка erased payload на границе, где старый callback читал raw pointer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UnionApplicationEndpointBlock {
+    BeginPayloadType,
+    ResultPayloadType,
+    ApprovedTimeMissing,
+}
+
+/// Живые эффекты локального callback-owner-а, требующие interior synchronization.
+pub(crate) trait UnionApplicationSessionRuntime: Send + Sync {
+    /// Маршрутизирует сообщение через GameServer текущего online player-а.
+    fn send_union_application_confirmation(
+        &self,
+        recipient_player_id: i32,
+        message: &CMessage,
+    );
+
+    /// Немедленно выполняет terminal mutation organizing owner-а.
+    fn finish_union_application(
+        &self,
+        union_id: i32,
+        applicant_faction_id: i32,
+        terminal: UnionApplicationTerminal,
+    );
+
+    /// Фиксирует safe-остановку вместо чтения значения неверного Rust-типа.
+    fn block_union_application_endpoint(&self, block: UnionApplicationEndpointBlock);
+}
+
+/// Safe owner локального `PlayerApplyForJoinConfeder` с двумя старыми interface.
+pub(crate) struct PlayerApplyForJoinConfeder {
+    union_id: i32,
+    applicant_faction_id: i32,
+    runtime: Arc<dyn UnionApplicationSessionRuntime>,
+}
+
+impl PlayerApplyForJoinConfeder {
+    pub(crate) fn new(
+        union_id: i32,
+        applicant_faction_id: i32,
+        runtime: Arc<dyn UnionApplicationSessionRuntime>,
+    ) -> Self {
+        Self {
+            union_id,
+            applicant_faction_id,
+            runtime,
+        }
+    }
+}
+
+impl NetSessionEndpoint for PlayerApplyForJoinConfeder {
+    fn do_async_call(&self, session_id: i64, cookie_second: i32, payload: &dyn Any) {
+        let Some(request) = payload.downcast_ref::<UnionApplicationSessionRequest>() else {
+            self.runtime.block_union_application_endpoint(
+                UnionApplicationEndpointBlock::BeginPayloadType,
+            );
+            return;
+        };
+
+        let mut message = CMessage::new(UNION_APPLICATION_CONFIRMATION_MESSAGE_TYPE);
+        message.base_mut().add_long(request.recipient_player_id);
+        message.base_mut().add_long(request.confirmation_kind);
+        message
+            .base_mut()
+            .add(legacy_c_string_visible_bytes(&request.applicant_faction_name));
+        message.base_mut().add_byte(0);
+        message.base_mut().add_long64(session_id);
+        message.base_mut().add_long(cookie_second);
+        self.runtime
+            .send_union_application_confirmation(request.recipient_player_id, &message);
+    }
+
+    fn on_async_callback(&self, result: NetSessionAsyncResult<'_>) {
+        let terminal = if result.kind == NetSessionAsyncResultKind::Result {
+            let Some(payload) = result
+                .payload
+                .and_then(|payload| payload.downcast_ref::<UnionApplicationCallbackPayload>())
+            else {
+                self.runtime.block_union_application_endpoint(
+                    UnionApplicationEndpointBlock::ResultPayloadType,
+                );
+                return;
+            };
+            if payload.decision == 1 {
+                let Some(time) = payload.time else {
+                    self.runtime.block_union_application_endpoint(
+                        UnionApplicationEndpointBlock::ApprovedTimeMissing,
+                    );
+                    return;
+                };
+                UnionApplicationTerminal::Approved { time }
+            } else {
+                UnionApplicationTerminal::Denied
+            }
+        } else {
+            UnionApplicationTerminal::NonResult { kind: result.kind }
+        };
+        self.runtime.finish_union_application(
+            self.union_id,
+            self.applicant_faction_id,
+            terminal,
+        );
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UnionApplicationSessionReport {
+    pub(crate) session: CreatedNetSession,
+}
+
+pub(crate) enum UnionApplicationSessionBlock {
+    Create(NetSessionCreateBlock),
+    SetCallback {
+        session: CreatedNetSession,
+        source: NetSessionSetCallbackBlock,
+    },
+    Begin {
+        session: CreatedNetSession,
+        source: NetSessionManagerBeginBlock,
+    },
+}
+
+/// Связывает доменный request с уже восстановленным session manager в exact order.
+pub(crate) fn begin_union_application_session(
+    manager: &CNetSessionManager,
+    request: UnionApplicationSessionRequest,
+    runtime: Arc<dyn UnionApplicationSessionRuntime>,
+    random: impl FnMut(i32) -> i32,
+) -> Result<UnionApplicationSessionReport, UnionApplicationSessionBlock> {
+    let session = manager
+        .create_session(
+            request.recipient_player_id,
+            request.requested_session_id,
+            random,
+        )
+        .map_err(UnionApplicationSessionBlock::Create)?;
+    let endpoint = Box::new(PlayerApplyForJoinConfeder::new(
+        request.union_id,
+        request.applicant_faction_id,
+        runtime,
+    ));
+    manager
+        .set_callback_handle(session.id, endpoint)
+        .map_err(|source| UnionApplicationSessionBlock::SetCallback { session, source })?;
+    manager
+        .beging(session.id, request.timeout_ticks, &request)
+        .map_err(|source| UnionApplicationSessionBlock::Begin { session, source })?;
+    Ok(UnionApplicationSessionReport { session })
 }
 
 /// StringTable, client notice и адаптер уже восстановленного `CNetSessionManager`.
@@ -1002,6 +1190,11 @@ impl CUnion {
     /// Save-проекция не выдумывает transient apply-person; live `Initial` — 0.
     pub(crate) const fn apply_person(&self) -> Option<i32> {
         self.apply_person
+    }
+
+    /// Сбрасывает pending applicant после нормального terminal callback-а.
+    pub(crate) fn finish_union_application_callback(&mut self) {
+        self.apply_person = Some(0);
     }
 
     /// Запускает подтверждение заявки faction на вступление в союз.
@@ -2596,20 +2789,6 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 //
 
 // ============================================================================
-// FUNCTION: `public:_virtual_bool___thiscall_CUnion::ApplyForJoin(long,long,long)'::__l24::PlayerApplyForJoinConfeder::Release
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:618
-// RVA: 0x000C18A0
-// ADDRESS: 004c18a0
-// PROTOTYPE: void __thiscall Release(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CUnion::DubAndSetJobLvl
 // STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
@@ -2666,20 +2845,6 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 //
 
 // ============================================================================
-// FUNCTION: `public:_virtual_bool___thiscall_CUnion::ApplyForJoin(long,long,long)'::__l24::PlayerApplyForJoinConfeder::PlayerApplyForJoinConfeder
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:615
-// RVA: 0x000C19C0
-// ADDRESS: 004c19c0
-// PROTOTYPE: undefined __thiscall PlayerApplyForJoinConfeder(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CUnion::Save
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: WorldServer
@@ -2702,20 +2867,6 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 // RVA: 0x000C1A60
 // ADDRESS: 004c1a60
 // PROTOTYPE: void __thiscall GetEnemyList(list<COrganizing*,std::allocator<COrganizing*>_> param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: `public:_virtual_bool___thiscall_CUnion::ApplyForJoin(long,long,long)'::__l24::PlayerApplyForJoinConfeder::DoAsyncCall
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:621
-// RVA: 0x000C1A70
-// ADDRESS: 004c1a70
-// PROTOTYPE: void __thiscall DoAsyncCall(__int64 param_1, long param_2, char * param_3)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -3150,20 +3301,6 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 // RVA: 0x000C2B30
 // ADDRESS: 004c2b30
 // PROTOTYPE: bool __thiscall DelMember(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: `public:_virtual_bool___thiscall_CUnion::ApplyForJoin(long,long,long)'::__l24::PlayerApplyForJoinConfeder::OnAsyncCallback
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:636
-// RVA: 0x000C2EA0
-// ADDRESS: 004c2ea0
-// PROTOTYPE: void __thiscall OnAsyncCallback(tagAsyncResult * param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
