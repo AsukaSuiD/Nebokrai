@@ -2,9 +2,9 @@
 //!
 //! Dispatcher RVA `0x000A47F0` остаётся `IMPLEMENTED_PARTIAL`: country relays
 //! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, а также вход country victory
-//! `0x60318` и scalar-sync `0x60314` имеют статус `IMPLEMENTED`. Victory читает
-//! один unsigned country byte и вызывает исходно названный
-//! `CountryWarSys::on_flag_destory`; соседние opcodes helper не
+//! `0x60318`, scalar-sync `0x60314` и quest-switch `0x60315` имеют статус
+//! `IMPLEMENTED`. Victory читает один unsigned country byte и вызывает исходно
+//! названный `CountryWarSys::on_flag_destory`; соседние opcodes helper не
 //! интерпретирует. Точная пара
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, исходник
 //! `appworld/message/countrymessage.cpp`. Exact `0x004A4FA3..0x004A4FC4`
@@ -17,9 +17,19 @@
 //! снизу нулём и сверху максимумом, tech-exp только сверху, tech-level только
 //! снизу, king points только сверху. Вместо singleton `CCountryParam` Rust
 //! принимает уже принадлежащий main-loop параметр явно.
+//! Exact `0x004A4EF1..0x004A4F9E` и PDB layout `COfficer` подтверждают для
+//! `0x60315` три unsigned byte `country/job/raw switch`, выбор встроенного king
+//! при job `1`, `GetMinister` только для `2..=7` и запись именно
+//! `_bQuestSwitch +0x25`. Строка `king`-лога сохраняет исходный raw switch и
+//! byte-exact хвост `A1 A3`; безопасный accessor `CGlobeSetup` заменяет только
+//! старое адресное вычисление country-name slot.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
-use crate::worldserver::appworld::country::country::CountryScalarUpdate;
+use crate::public::tools::put_string_to_file;
+use crate::setup::globesetup::GlobeSetupSnapshot;
+use crate::worldserver::appworld::country::country::{
+    CountryQuestSwitchUpdate, CountryScalarUpdate,
+};
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::country::countryparam::{
     CCountryParam, CountryParameterUnavailable,
@@ -60,10 +70,36 @@ pub(crate) struct WorldCountryScalarSync {
     pub(crate) disposition: WorldCountryScalarDisposition,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldCountryQuestSwitchDisposition {
+    CountryMissing,
+    OfficerMissing,
+    Updated(CountryQuestSwitchUpdate),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldCountryQuestSwitchLog {
+    pub(crate) country_name_complete: bool,
+    pub(crate) line: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldCountryQuestSwitchSync {
+    pub(crate) country_id: u8,
+    pub(crate) country_id_complete: bool,
+    pub(crate) job: u8,
+    pub(crate) job_complete: bool,
+    pub(crate) raw_switch: u8,
+    pub(crate) raw_switch_complete: bool,
+    pub(crate) disposition: WorldCountryQuestSwitchDisposition,
+    pub(crate) log: Option<WorldCountryQuestSwitchLog>,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryMessageOutcome {
     Relay(WorldCountryRelayOutcome),
     ScalarSynchronized(WorldCountryScalarSync),
+    QuestSwitchSynchronized(WorldCountryQuestSwitchSync),
 }
 
 pub(crate) enum WorldCountryMessageDispatch {
@@ -76,6 +112,7 @@ pub(crate) fn on_country_message(
     game: &CGame,
     country_handler: &mut CCountryHandler,
     country_parameters: &CCountryParam,
+    globe_setup: &GlobeSetupSnapshot,
     mut message: CMessage,
 ) -> WorldCountryMessageDispatch {
     let request_type = message.message_type();
@@ -107,6 +144,52 @@ pub(crate) fn on_country_message(
             }),
         );
     }
+    if request_type == 0x0006_0315 {
+        let decoded_country_id = message.base_mut().get_byte();
+        let country_id = decoded_country_id.unwrap_or(0);
+        let decoded_job = message.base_mut().get_byte();
+        let job = decoded_job.unwrap_or(0);
+        let decoded_raw_switch = message.base_mut().get_byte();
+        let raw_switch = decoded_raw_switch.unwrap_or(0);
+
+        let update = country_handler
+            .get_country_mut(country_id)
+            .map(|country| country.set_quest_switch(job, raw_switch != 0));
+        let (disposition, log) = match update {
+            None => (WorldCountryQuestSwitchDisposition::CountryMissing, None),
+            Some(None) => (WorldCountryQuestSwitchDisposition::OfficerMissing, None),
+            Some(Some(update)) => {
+                let country_name = globe_setup.country_name(country_id);
+                let line = country_quest_switch_log_line(
+                    country_name.unwrap_or_default(),
+                    job,
+                    raw_switch,
+                );
+                put_string_to_file("king", &line);
+                (
+                    WorldCountryQuestSwitchDisposition::Updated(update),
+                    Some(WorldCountryQuestSwitchLog {
+                        country_name_complete: country_name.is_some(),
+                        line,
+                    }),
+                )
+            }
+        };
+        return WorldCountryMessageDispatch::Handled(
+            WorldCountryMessageOutcome::QuestSwitchSynchronized(
+                WorldCountryQuestSwitchSync {
+                    country_id,
+                    country_id_complete: decoded_country_id.is_some(),
+                    job,
+                    job_complete: decoded_job.is_some(),
+                    raw_switch,
+                    raw_switch_complete: decoded_raw_switch.is_some(),
+                    disposition,
+                    log,
+                },
+            ),
+        );
+    }
     let response_type = match request_type {
         COUNTRY_RELAY_FIRST => 0x0007_FF11,
         COUNTRY_RELAY_SECOND => 0x0007_FF12,
@@ -123,6 +206,18 @@ pub(crate) fn on_country_message(
             delivery,
         },
     ))
+}
+
+fn country_quest_switch_log_line(country_name: &[u8], job: u8, raw_switch: u8) -> Vec<u8> {
+    let mut line = Vec::with_capacity(country_name.len() + 40);
+    line.extend_from_slice(country_name);
+    line.extend_from_slice(b" : Country Task: ");
+    line.extend_from_slice(job.to_string().as_bytes());
+    line.extend_from_slice(b" ( ");
+    line.extend_from_slice(raw_switch.to_string().as_bytes());
+    line.extend_from_slice(b" )");
+    line.extend_from_slice(&[0xa1, 0xa3]);
+    line
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

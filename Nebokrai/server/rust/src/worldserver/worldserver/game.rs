@@ -12109,7 +12109,13 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::Country) {
-        match on_country_message(game, country_handler, country_parameters, message) {
+        match on_country_message(
+            game,
+            country_handler,
+            country_parameters,
+            globe_setup,
+            message,
+        ) {
             WorldCountryMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::CountryMessage {
                     source,

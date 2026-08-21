@@ -18,6 +18,9 @@
 //! `m_lCountryWarRes` по `+0xA8`. Clone копирует country ID, treasury, power,
 //! current/level-up tech exp, tech level, king identity/flags и war-result.
 //! Три king-point ограничиваются соответствующими максимумами `CCountryParam`.
+//! `COfficer::_bQuestSwitch` по exact PDB находится отдельно от
+//! `_bAppointed/_bSalary`; поэтому live quest-флаги короля и министров не
+//! смешиваются с их DB save-проекцией.
 //!
 //! Minister-map обходится в unsigned key-order, но ключ источника не копируется:
 //! максимум первые шесть non-null `CMinister` вставляются по собственному
@@ -65,6 +68,7 @@ pub(crate) struct CountryKingSaveLimits {
 #[derive(Clone, Debug)]
 pub(crate) struct CountryMinisterState {
     pub(crate) id_type: u8,
+    pub(crate) quest_switch: bool,
     pub(crate) snapshot: CountryMinisterSaveSnapshot,
 }
 
@@ -78,8 +82,22 @@ pub(crate) struct CCountry {
     pub(crate) tech_level_up_exp: i32,
     pub(crate) tech_level: i32,
     pub(crate) king: CountryKingSaveSnapshot,
+    pub(crate) king_quest_switch: bool,
     pub(crate) country_war_result: i32,
     pub(crate) ministers: BTreeMap<u8, CountryMinisterState>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryQuestSwitchTarget {
+    King,
+    Minister { job: u8 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryQuestSwitchUpdate {
+    pub(crate) target: CountryQuestSwitchTarget,
+    pub(crate) previous: bool,
+    pub(crate) applied: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -108,6 +126,34 @@ pub(crate) enum CountryScalarUpdate {
 }
 
 impl CCountry {
+    /// Повторяет exact выбор `CKing` либо `GetMinister(2..=7)` opcode `0x60315`.
+    pub(crate) fn set_quest_switch(
+        &mut self,
+        job: u8,
+        enabled: bool,
+    ) -> Option<CountryQuestSwitchUpdate> {
+        if job == 1 {
+            let previous = self.king_quest_switch;
+            self.king_quest_switch = enabled;
+            return Some(CountryQuestSwitchUpdate {
+                target: CountryQuestSwitchTarget::King,
+                previous,
+                applied: enabled,
+            });
+        }
+        if !(2..=7).contains(&job) {
+            return None;
+        }
+        let minister = self.ministers.get_mut(&job)?;
+        let previous = minister.quest_switch;
+        minister.quest_switch = enabled;
+        Some(CountryQuestSwitchUpdate {
+            target: CountryQuestSwitchTarget::Minister { job },
+            previous,
+            applied: enabled,
+        })
+    }
+
     /// Применяет selector server opcode `0x60314` к достигнутому live-state.
     pub(crate) fn apply_server_scalar(
         &mut self,
