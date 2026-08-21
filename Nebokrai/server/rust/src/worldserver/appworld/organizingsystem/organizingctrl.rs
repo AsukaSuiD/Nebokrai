@@ -209,7 +209,8 @@ use super::faction::{
     CFaction, FactionCloneSaveBlock, FactionDeleteOrganizingBuildError,
     FactionDeleteOrganizingOutcome, FactionDisbandBlock, FactionDisbandContext,
     FactionDisbandOutcome, FactionDisbandProgress, FactionDisbandRejection,
-    FactionEnemyDelivery, FactionInitialPropertyBlock, FactionMemberInfoRequest,
+    FactionEnemyDelivery, FactionInitialPropertyBlock, FactionMemberInfoReport,
+    FactionMemberInfoRequest,
     FactionOperationAuthorityContext, FactionOrganizingInfoContext, FactionOtherInfoBuildError,
     FactionOtherInfoDelivery, FactionOwnedCityDelivery, FactionOwnedCityUpdateBuildError,
     FactionPlayerHeaderContext, FactionPropertyDelivery, FactionPropertyReinitialization,
@@ -221,7 +222,7 @@ use super::organizingparam::COrganizingParam;
 use super::union::{
     CUnion, UnionClientSnapshotContext, UnionFactionStateMutationContext,
     UnionMasterFactionQueryContext, UnionOperatorValidationContext,
-    UnionOwnedCityMutationContext, UnionPlayerRefreshContext,
+    UnionOwnedCityMutationContext, UnionPlayerRefreshContext, UnionSendInfoContext,
 };
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::appworld::player::{
@@ -1438,6 +1439,28 @@ impl UnionClientSnapshotContext for COrganizingCtrl {
         self.faction_by_id(faction_id)
             .map(|faction| faction.update_owned_cities_to_client(game))
             .transpose()
+    }
+}
+
+impl UnionSendInfoContext for COrganizingCtrl {
+    fn faction_send_info_to_members<'a>(
+        &self,
+        faction_id: i32,
+        first_text: &'a [u8],
+        second_text: &'a [u8],
+        information_type: i32,
+        color: u32,
+        send_organizing_info: &mut dyn FnMut(FactionMemberInfoRequest<'a>),
+    ) -> Option<FactionMemberInfoReport> {
+        self.faction_by_id(faction_id).map(|faction| {
+            faction.send_info_to_all_members_with_color(
+                first_text,
+                second_text,
+                information_type,
+                color,
+                send_organizing_info,
+            )
+        })
     }
 }
 

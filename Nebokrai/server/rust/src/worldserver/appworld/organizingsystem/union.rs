@@ -21,7 +21,8 @@
 //! `0x000C29B0/0x000C2A30/0x000C2AB0`, `UpdatePlayerFactionInfo` RVA
 //! `0x000C5770` и `UpdateEnemyFactionToClient/
 //! UpdateCityWarEnemyFactionToClient/UpdateOwnedCityToClient` RVA
-//! `0x000C5FF0/0x000C60D0/0x000C61B0` — `IMPLEMENTED`;
+//! `0x000C5FF0/0x000C60D0/0x000C61B0` и `SendInfoToAllMember` RVA
+//! `0x000C6290` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -115,12 +116,19 @@
 //! concrete snapshot-owner-ы напрямую и сохраняет результаты всех send;
 //! owned-city serialization block останавливает обход после выполненного
 //! prefix-а вместо выдуманного продолжения после safe-границы.
+//! `SendInfoToAllMember` всегда проходит все положительные member-faction ID.
+//! Exact ASM `0x004C62B7..0x004C62FA` подтверждает, что повреждённый RAW
+//! `find(&param_3)` на самом деле использует сохранённый текущий member ID и для
+//! `find`, и для `operator[]`; найденная faction получает исходные text/title,
+//! information type и color без перестановки. Online-фильтра у union-owner-а
+//! нет: он остаётся внутри уже восстановленной faction-рассылки.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::faction::{
     FactionEnemyDelivery, FactionInitialPropertyBlock, FactionOwnedCityDelivery,
-    FactionOwnedCityUpdateBuildError, FactionPropertyDelivery, OwnedCityMutationBuildError,
+    FactionOwnedCityUpdateBuildError, FactionMemberInfoReport, FactionMemberInfoRequest,
+    FactionPropertyDelivery, OwnedCityMutationBuildError,
 };
 use super::organizing::{
     EOperator, EPurview, EPurviewOwnState, MemberPurviewMutation, TagMemInfo, TagTimeValue,
@@ -315,6 +323,30 @@ pub(crate) struct UnionOwnedCitySnapshotBlock {
     pub(crate) faction_id: i32,
     pub(crate) completed_factions: Vec<UnionOwnedCitySnapshotFactionReport>,
     pub(crate) source: FactionOwnedCityUpdateBuildError,
+}
+
+/// Read-only faction callback для organizing-info fan-out.
+pub(crate) trait UnionSendInfoContext {
+    fn faction_send_info_to_members<'a>(
+        &self,
+        faction_id: i32,
+        first_text: &'a [u8],
+        second_text: &'a [u8],
+        information_type: i32,
+        color: u32,
+        send_organizing_info: &mut dyn FnMut(FactionMemberInfoRequest<'a>),
+    ) -> Option<FactionMemberInfoReport>;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionFactionInfoFanout {
+    pub(crate) faction_id: i32,
+    pub(crate) recipient_player_ids: Vec<i32>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionInfoFanoutReport {
+    pub(crate) factions: Vec<UnionFactionInfoFanout>,
 }
 
 /// Поля `CUnion`, которые буквально копирует и читает save-цепочка.
@@ -1032,6 +1064,42 @@ impl CUnion {
             }
         }
         Ok(UnionOwnedCitySnapshotReport { factions })
+    }
+
+    /// Передаёт organizing-info всем найденным member-фракциям.
+    pub(crate) fn send_info_to_all_members<'a, Context>(
+        &self,
+        first_text: &'a [u8],
+        second_text: &'a [u8],
+        information_type: i32,
+        color: u32,
+        context: &Context,
+        send_organizing_info: &mut dyn FnMut(FactionMemberInfoRequest<'a>),
+    ) -> UnionInfoFanoutReport
+    where
+        Context: UnionSendInfoContext,
+    {
+        let mut factions = Vec::new();
+        for &faction_id in self.members.keys() {
+            if faction_id <= 0 {
+                continue;
+            }
+            let Some(report) = context.faction_send_info_to_members(
+                faction_id,
+                first_text,
+                second_text,
+                information_type,
+                color,
+                send_organizing_info,
+            ) else {
+                continue;
+            };
+            factions.push(UnionFactionInfoFanout {
+                faction_id,
+                recipient_player_ids: report.recipient_player_ids,
+            });
+        }
+        UnionInfoFanoutReport { factions }
     }
 
     pub(crate) const fn change_data_type(&self) -> i32 {
@@ -1975,7 +2043,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::SendInfoToAllMember
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1420

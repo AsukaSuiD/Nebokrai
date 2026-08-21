@@ -6126,7 +6126,7 @@ impl CFaction {
         )
     }
 
-    fn send_info_to_all_members_with_color<'a, F>(
+    pub(crate) fn send_info_to_all_members_with_color<'a, F>(
         &self,
         first_text: &'a [u8],
         second_text: &'a [u8],
