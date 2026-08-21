@@ -113,8 +113,9 @@
 //! positional ноль перед тем же rank payload. Nullable function/variable
 //! file-data следуют subtype `10/11` как `signed size + exact raw bytes`, без
 //! C-string преобразования. Nullable general `CVariableList` затем передаёт
-//! `count + payload length + tagged values` subtype `12`. Следующая граница —
-//! ordered script-file map subtype `13`.
+//! `count + payload length + tagged values` subtype `12`. Ordered script-file
+//! map следует отдельными subtype `13`: C-string path, signed `lstrlenA` data
+//! и C-string data. Следующая граница — `CQuestSystem` subtype `0x16`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -772,6 +773,32 @@ pub(crate) enum WorldGeneralVariableConfigurationCompletion {
 pub(crate) struct WorldGeneralVariableConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldGeneralVariableConfigurationCompletion,
+}
+
+/// Невозможная signed length одного `lstrlenA(script_data)`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldScriptFileConfigurationBlock {
+    pub(crate) path: Vec<u8>,
+    pub(crate) length: usize,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldScriptFileConfigurationDelivery {
+    pub(crate) path: Vec<u8>,
+    pub(crate) declared_length: i32,
+    pub(crate) delivery: WorldInitialConfigurationDelivery,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldScriptFilesConfigurationCompletion {
+    FileSize(WorldScriptFileConfigurationBlock),
+    QuestSystemPending { socket_id: i32 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldScriptFilesConfigurationReport {
+    pub(crate) deliveries: Vec<WorldScriptFileConfigurationDelivery>,
+    pub(crate) completion: WorldScriptFilesConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -2191,6 +2218,53 @@ pub(crate) fn continue_game_server_general_variable_configuration(
             &payload,
         )),
         completion: WorldGeneralVariableConfigurationCompletion::ScriptFilesPending { socket_id },
+    }
+}
+
+/// Отправляет ordered `m_mapScript_FileData` как отдельные subtype `0x0D`.
+pub(crate) fn continue_game_server_script_files_configuration(
+    game: &CGame,
+    socket_id: i32,
+) -> WorldScriptFilesConfigurationReport {
+    let sender = game.current_game_server_sender();
+    let mut deliveries = Vec::new();
+    for (path, data) in game.initial_script_files() {
+        let declared_length = match i32::try_from(data.len()) {
+            Ok(length) => length,
+            Err(_) => {
+                return WorldScriptFilesConfigurationReport {
+                    deliveries,
+                    completion: WorldScriptFilesConfigurationCompletion::FileSize(
+                        WorldScriptFileConfigurationBlock {
+                            path: path.to_vec(),
+                            length: data.len(),
+                        },
+                    ),
+                };
+            }
+        };
+        let mut message = CMessage::new(0x0007_F801);
+        message.base_mut().add_long(0x0D);
+        message.base_mut().add(path);
+        message.base_mut().add_byte(0);
+        message.base_mut().add_long(declared_length);
+        message.base_mut().add(data);
+        message.base_mut().add_byte(0);
+        deliveries.push(WorldScriptFileConfigurationDelivery {
+            path: path.to_vec(),
+            declared_length,
+            delivery: WorldInitialConfigurationDelivery {
+                subtype: 0x0D,
+                payload_length: path.len() + 1 + 4 + data.len() + 1,
+                target: WorldInitialConfigurationTarget::Socket(socket_id),
+                delivery: message.send_to_socket(sender.as_ref(), socket_id),
+            },
+        });
+    }
+
+    WorldScriptFilesConfigurationReport {
+        deliveries,
+        completion: WorldScriptFilesConfigurationCompletion::QuestSystemPending { socket_id },
     }
 }
 

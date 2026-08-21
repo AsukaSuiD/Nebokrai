@@ -4461,6 +4461,16 @@ impl CGame {
         self.variable_list_file_data.as_deref()
     }
 
+    /// Ordered C-string view initial-config `m_mapScript_FileData`.
+    pub(crate) fn initial_script_files(&self) -> impl Iterator<Item = (&[u8], &[u8])> + '_ {
+        self.script_file_data.iter().map(|(path, data)| {
+            (
+                legacy_c_string_prefix(path),
+                legacy_c_string_prefix(data),
+            )
+        })
+    }
+
     /// Загружает один script и заменяет прежний owner с тем же normalized key.
     pub(crate) fn load_one_script<Context: WorldReloadContext + ?Sized>(
         &mut self,
