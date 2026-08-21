@@ -3,7 +3,8 @@
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
 //! `0x6012A`, парные city-tax gate `0x6012B/0x6012C` и region-param update
-//! `0x6012D`, а также region route `0x6012E`; остальной owner —
+//! `0x6012D`, region route `0x6012E` и city-gate route `0x6012F`; остальной
+//! owner —
 //! `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
@@ -117,6 +118,12 @@
 //! исходного сообщения на `0x7FE2D` и вызывает `SendToMapID` с результатом
 //! lookup. Miss даёт literal route `0` и не отменяет send; payload остаётся
 //! исходным, дополнительных ownership/tail checks нет.
+//! Exact `0x004A7FB9..0x004A801D` для `0x6012F` читает `(player ID, region
+//! ID)`, разрешает faction через ordered `IsFreePlayer` и вызывает virtual
+//! `CFaction::OperatorCityGate(player, region)` в slot `+0x4C`. Только
+//! true-result меняет type исходного сообщения на `0x7FE2A`, получает route
+//! через `GetGameServerNumber_ByRegionID(region)` и безусловно вызывает
+//! `SendToMapID`, включая literal `0` при miss. War/online/tail gates нет.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -212,6 +219,8 @@ const UPDATE_REGION_PARAM_MESSAGE_TYPE: i32 = 0x6012D;
 const UPDATE_REGION_PARAM_RESPONSE_TYPE: i32 = 0x7FE2E;
 const ROUTE_REGION_MESSAGE_TYPE: i32 = 0x6012E;
 const ROUTE_REGION_RESPONSE_TYPE: i32 = 0x7FE2D;
+const OPERATE_CITY_GATE_MESSAGE_TYPE: i32 = 0x6012F;
+const OPERATE_CITY_GATE_RESPONSE_TYPE: i32 = 0x7FE2A;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -1813,6 +1822,110 @@ pub(crate) fn dispatch_region_route(
         wire,
         delivery,
     })
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingCityGateResponse {
+    pub(crate) game_server_number: i32,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingCityGateOutcome {
+    FactionNotFound,
+    Rejected {
+        faction_id: i32,
+        reason: FactionOperationRejection,
+    },
+    Authorized {
+        faction_id: i32,
+        response: OrganizingCityGateResponse,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingCityGateBlock {
+    Membership { map_key: i32 },
+    Operation {
+        faction_id: i32,
+        source: FactionOperationBlock<FactionUnionMembershipLookupBlock>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingCityGateDispatch {
+    pub(crate) player_id: i32,
+    pub(crate) region_id: i32,
+    pub(crate) outcome: OrganizingCityGateOutcome,
+}
+
+/// Выполняет `0x6012F`: `OperatorCityGate` и условный in-place region route.
+pub(crate) fn dispatch_city_gate(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &COrganizingCtrl,
+) -> Option<Result<OrganizingCityGateDispatch, OrganizingCityGateBlock>> {
+    if message.message_type() != OPERATE_CITY_GATE_MESSAGE_TYPE {
+        return None;
+    }
+
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let region_id = message.base_mut().get_long().unwrap_or(0);
+    let faction_id = match organizing.is_free_player(player_id) {
+        FreePlayerLookup::NoFaction => {
+            return Some(Ok(OrganizingCityGateDispatch {
+                player_id,
+                region_id,
+                outcome: OrganizingCityGateOutcome::FactionNotFound,
+            }));
+        }
+        FreePlayerLookup::Faction(faction_id) => faction_id,
+        FreePlayerLookup::BlockedNullFaction { map_key } => {
+            return Some(Err(OrganizingCityGateBlock::Membership { map_key }));
+        }
+    };
+    let operation = match organizing.operate_faction_city_gate(faction_id, player_id, region_id) {
+        Ok(Some(operation)) => operation,
+        Ok(None) => {
+            return Some(Ok(OrganizingCityGateDispatch {
+                player_id,
+                region_id,
+                outcome: OrganizingCityGateOutcome::FactionNotFound,
+            }));
+        }
+        Err(source) => {
+            return Some(Err(OrganizingCityGateBlock::Operation {
+                faction_id,
+                source,
+            }));
+        }
+    };
+    let outcome = match operation {
+        FactionOperationOutcome::Rejected(reason) => OrganizingCityGateOutcome::Rejected {
+            faction_id,
+            reason,
+        },
+        FactionOperationOutcome::Authorized => {
+            message.set_message_type(OPERATE_CITY_GATE_RESPONSE_TYPE);
+            let game_server_number = game.game_server_number_by_region_id(region_id);
+            let wire = message.as_wire_bytes().to_vec();
+            let delivery = game.send_msg_to_game_server(game_server_number, message);
+            OrganizingCityGateOutcome::Authorized {
+                faction_id,
+                response: OrganizingCityGateResponse {
+                    game_server_number,
+                    wire,
+                    delivery,
+                },
+            }
+        }
+    };
+    Some(Ok(OrganizingCityGateDispatch {
+        player_id,
+        region_id,
+        outcome,
+    }))
 }
 
 fn send_declare_war_faction_list_notice<Context>(

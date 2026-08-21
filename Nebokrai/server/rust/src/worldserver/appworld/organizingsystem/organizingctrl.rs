@@ -1403,6 +1403,24 @@ impl COrganizingCtrl {
             .map(Some)
     }
 
+    /// Выполняет конкретный `CFaction::OperatorCityGate` после faction lookup.
+    pub(crate) fn operate_faction_city_gate(
+        &self,
+        faction_id: i32,
+        player_id: i32,
+        region_id: i32,
+    ) -> Result<
+        Option<FactionOperationOutcome>,
+        FactionOperationBlock<FactionUnionMembershipLookupBlock>,
+    > {
+        let Some(faction) = self.faction_by_id(faction_id) else {
+            return Ok(None);
+        };
+        faction
+            .operator_city_gate(player_id, region_id, self)
+            .map(Some)
+    }
+
     fn add_billboard_to_byte_array(
         &self,
         output: &mut Vec<u8>,

@@ -210,7 +210,7 @@
 //! billboard `0x60125`, faction upgrade `0x60126`, upload-icon gate `0x60127`
 //! и contributor gate `0x60128`, faction-experience `0x60129`, а также
 //! member level/position callback `0x6012A`, city-tax gates `0x6012B/0x6012C`
-//! и region-param broadcast/route `0x6012D/0x6012E`
+//! и region-param broadcast/route `0x6012D/0x6012E`, city-gate `0x6012F`
 //! исполняются сразу. Остальные сообщения возвращаются owned вместе с
 //! выбранным сырым owner-ом и не выдаются за no-op исполнение. Session manager
 //! передаётся тому же
@@ -984,7 +984,8 @@ use crate::worldserver::appworld::message::othermessage::{
     WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
 };
 use crate::worldserver::appworld::message::organsysmessage::{
-    OrganizingConsumedLongDispatch, OrganizingDeclareFactionWarBlock,
+    OrganizingCityGateBlock, OrganizingCityGateDispatch, OrganizingConsumedLongDispatch,
+    OrganizingDeclareFactionWarBlock,
     OrganizingDeclareFactionWarDispatch, OrganizingDeclareWarFactionListBlock,
     OrganizingDeclareWarFactionListDispatch, OrganizingFactionBillboardBlock,
     OrganizingFactionBillboardOutcome, OrganizingFactionContributorDispatch,
@@ -1000,6 +1001,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     UnionApplicationConfirmationDelivery,
     WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects,
     WorldUnionApplicationRuntimeOwner, dispatch_consumed_long, dispatch_declare_faction_war,
+    dispatch_city_gate,
     dispatch_declare_war_faction_list, dispatch_faction_billboard, dispatch_faction_upgrade,
     dispatch_faction_contributor, dispatch_faction_experience, dispatch_faction_member_state,
     dispatch_faction_tax, dispatch_faction_upload_icon,
@@ -1974,6 +1976,12 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: OrganizingRegionRouteDispatch,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingCityGate {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<OrganizingCityGateDispatch, OrganizingCityGateBlock>,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingUnionApplication {
@@ -11638,6 +11646,22 @@ fn process_world_message(
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingRegionRoute {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        if let Some(outcome) = dispatch_city_gate(&mut message, game, organizing) {
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingCityGate {
                 source,
                 legacy_run_result,
                 outcome,
