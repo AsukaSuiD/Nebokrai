@@ -1,16 +1,21 @@
-//! Статус корпуса: `IMPLEMENTED_PARTIAL` для общего session-result dispatch
-//! opcode `0x60120/0x60122/0x60124`; остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Статус корпуса: `IMPLEMENTED_PARTIAL` для заявки союза `0x60118` и общего
+//! session-result dispatch; остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//! `OnOrgasysMessage` RVA `0x000A6110`. Exact диапазон
-//! `0x004A74C6..0x004A7509` исправляет повреждённый RAW: общий branch читает
+//! `OnOrgasysMessage` RVA `0x000A6110`. Exact диапазоны
+//! `0x004A74C6..0x004A7509` и `0x004A7511..0x004A7543` исправляют повреждённый
+//! RAW. Общий branch читает
 //! `GetLONG64`, `GetLong`, именно `GetChar`, затем `GetLong`, то есть
 //! `(session ID, cookie.second, result byte, cookie.first)`. `movzx` расширяет
 //! result как unsigned byte до 32 бит. Затем вызывается уже восстановленный
 //! `CNetSessionManager::OnSyncCallbackResult(session, first, second, &result)`;
 //! manager проверяет cookie, синхронно вызывает endpoint и удаляет session.
+//! Эту ветку разделяют opcode `0x60117/0x60119/0x60120/0x60122/0x60124/0x60131`.
+//! `0x60118` читает `(master player ID, applicant faction ID)`, разрешает union
+//! через `COrganizingCtrl::GetUnion(master player ID)` и при non-null вызывает
+//! virtual `ApplyForJoin(applicant faction ID, 0, master player ID)`.
 //!
 //! Legacy getters при нехватке возвращают ноль и не двигают cursor; Rust
 //! сохраняет это через `unwrap_or(0)`, а не добавляет отсутствовавший общий
@@ -21,8 +26,16 @@
 
 use crate::nets::networld::message::CMessage;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionCallbackOutcome};
+use crate::worldserver::appworld::organizingsystem::organizingctrl::{
+    COrganizingCtrl, OrganizingUnionApplyForJoinDispatchBlock,
+    OrganizingUnionApplyForJoinOutcome,
+};
+use crate::worldserver::appworld::organizingsystem::union::UnionApplyForJoinEffects;
+use crate::worldserver::worldserver::game::CGame;
 
-const SESSION_RESULT_MESSAGE_TYPES: [i32; 3] = [0x60120, 0x60122, 0x60124];
+const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
+    [0x60117, 0x60119, 0x60120, 0x60122, 0x60124, 0x60131];
+const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OrganizingSessionResultDispatch {
@@ -64,6 +77,52 @@ pub(crate) fn dispatch_organizing_session_result(
         result,
         outcome,
     }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingUnionApplicationDispatch<SessionReport> {
+    pub(crate) master_player_id: i32,
+    pub(crate) applicant_faction_id: i32,
+    pub(crate) outcome: OrganizingUnionApplyForJoinOutcome<SessionReport>,
+}
+
+/// Читает и выполняет точную producer-ветвь union application.
+pub(crate) fn dispatch_union_application<Effects>(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    effects: &mut Effects,
+) -> Option<
+    Result<
+        OrganizingUnionApplicationDispatch<Effects::SessionReport>,
+        OrganizingUnionApplyForJoinDispatchBlock<Effects::SessionBlock>,
+    >,
+>
+where
+    Effects: UnionApplyForJoinEffects,
+{
+    if message.message_type() != UNION_APPLICATION_MESSAGE_TYPE {
+        return None;
+    }
+
+    let master_player_id = message.base_mut().get_long().unwrap_or(0);
+    let applicant_faction_id = message.base_mut().get_long().unwrap_or(0);
+    Some(
+        organizing
+            .apply_for_union_join(
+                game,
+                master_player_id,
+                applicant_faction_id,
+                0,
+                master_player_id,
+                effects,
+            )
+            .map(|outcome| OrganizingUnionApplicationDispatch {
+                master_player_id,
+                applicant_faction_id,
+                outcome,
+            }),
+    )
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer

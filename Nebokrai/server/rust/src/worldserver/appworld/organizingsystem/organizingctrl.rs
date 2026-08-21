@@ -251,7 +251,8 @@ use super::organizing::{EOperator, TagTimeValue};
 use super::organizingparam::COrganizingParam;
 use super::union::{
     CUnion, UnionAddFactionEffects, UnionApplicationFactionBlock,
-    UnionApplicationFactionSnapshot, UnionApplicationTerminal, UnionApplyForJoinContext,
+    UnionApplicationFactionSnapshot, UnionApplicationTerminal, UnionApplyForJoinBlock,
+    UnionApplyForJoinContext, UnionApplyForJoinEffects, UnionApplyForJoinOutcome,
     UnionClientSnapshotContext, UnionDoJoinBlock, UnionDoJoinContext, UnionDoJoinOutcome,
     UnionFactionJoinContext, UnionFactionLevelBlock, UnionFactionMemberContext,
     UnionFactionStateMutationContext, UnionInitialMutationContext, UnionMasterFactionQueryContext,
@@ -382,6 +383,36 @@ pub(crate) struct UnionPlayerHeaderLookupBlock {
 pub(crate) enum FactionMasterLookupBlock {
     NullFaction { map_key: i32 },
     MissingMasterId { map_key: i32 },
+}
+
+/// Safe-границы точной цепочки `GetUnion(player ID)`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingUnionByMasterBlock {
+    FactionMaster(FactionMasterLookupBlock),
+    UnionMembership(FactionUnionMembershipLookupBlock),
+}
+
+pub(crate) type OrganizingUnionApplyForJoinBlock<SessionBlock> =
+    UnionApplyForJoinBlock<FactionUnionMembershipLookupBlock, SessionBlock>;
+
+/// Результат nullable `GetUnion` и последующего virtual `ApplyForJoin`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingUnionApplyForJoinOutcome<SessionReport> {
+    UnionNotFound,
+    Applied {
+        union_id: i32,
+        outcome: UnionApplyForJoinOutcome<SessionReport>,
+    },
+}
+
+/// Ошибка достигнутого lookup либо safe-остановка уже выбранного union-owner-а.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingUnionApplyForJoinDispatchBlock<SessionBlock> {
+    Lookup(OrganizingUnionByMasterBlock),
+    Apply {
+        union_id: i32,
+        source: OrganizingUnionApplyForJoinBlock<SessionBlock>,
+    },
 }
 
 pub(crate) type OrganizingUnionApplicationJoinBlock = UnionDoJoinBlock<
@@ -834,6 +865,85 @@ impl COrganizingCtrl {
             }
         }
         Ok(0)
+    }
+
+    /// Повторяет `GetUnion`: master-player -> faction -> union -> nullable owner.
+    pub(crate) fn union_id_by_master_player(
+        &self,
+        player_id: i32,
+    ) -> Result<Option<i32>, OrganizingUnionByMasterBlock> {
+        let faction_id = self
+            .faction_id_by_master_player(player_id)
+            .map_err(OrganizingUnionByMasterBlock::FactionMaster)?;
+        if faction_id < 1 {
+            return Ok(None);
+        }
+
+        let union_id = match self.is_free_faction(faction_id) {
+            FreeFactionLookup::NoUnion => return Ok(None),
+            FreeFactionLookup::Union(union_id) => union_id,
+            FreeFactionLookup::BlockedNullConfederation { map_key } => {
+                return Err(OrganizingUnionByMasterBlock::UnionMembership(
+                    FactionUnionMembershipLookupBlock { map_key },
+                ));
+            }
+        };
+        Ok(self.confederation_by_id(union_id).map(CUnion::union_id))
+    }
+
+    /// Выполняет exact virtual-call ветки `OnOrgasysMessage(0x60118)`.
+    pub(crate) fn apply_for_union_join<Effects>(
+        &mut self,
+        game: &CGame,
+        master_player_id: i32,
+        applicant_faction_id: i32,
+        second_parameter: i32,
+        third_parameter: i32,
+        effects: &mut Effects,
+    ) -> Result<
+        OrganizingUnionApplyForJoinOutcome<Effects::SessionReport>,
+        OrganizingUnionApplyForJoinDispatchBlock<Effects::SessionBlock>,
+    >
+    where
+        Effects: UnionApplyForJoinEffects,
+    {
+        let Some(union_id) = self
+            .union_id_by_master_player(master_player_id)
+            .map_err(OrganizingUnionApplyForJoinDispatchBlock::Lookup)?
+        else {
+            return Ok(OrganizingUnionApplyForJoinOutcome::UnionNotFound);
+        };
+
+        // `ApplyForJoin` повторно сканирует union-map по applicant. Временный
+        // safe take выбранного owner-а не должен менять результат этого scan.
+        let applicant_membership = self.is_free_faction(applicant_faction_id);
+        let mut union = self
+            .confederations
+            .get_mut(&union_id)
+            .and_then(Option::take)
+            .expect("GetUnion вернул живой owner из того же controller map");
+        self.detached_union_membership_lookup
+            .set(Some((applicant_faction_id, applicant_membership)));
+        let result = union.apply_for_join(
+            game,
+            applicant_faction_id,
+            second_parameter,
+            third_parameter,
+            self,
+            effects,
+        );
+        self.detached_union_membership_lookup.set(None);
+        *self
+            .confederations
+            .get_mut(&union_id)
+            .expect("временный union slot не удаляется") = Some(union);
+
+        result
+            .map(|outcome| OrganizingUnionApplyForJoinOutcome::Applied { union_id, outcome })
+            .map_err(|source| OrganizingUnionApplyForJoinDispatchBlock::Apply {
+                union_id,
+                source,
+            })
     }
 
     /// Публикует одно other-faction изменение всем concrete faction-owner-ам.
@@ -2770,17 +2880,15 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::GetUnion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1502
 // RVA: 0x00037AF0
 // ADDRESS: 00437af0
 // PROTOTYPE: COrganizing * __thiscall GetUnion(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED_OWNER: `union_id_by_master_player` сохраняет ordered lookup,
+// nullable result и safe-границы старых malformed null owner-ов.
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::GetCountryByFaction
