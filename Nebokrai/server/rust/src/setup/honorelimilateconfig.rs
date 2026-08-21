@@ -1,6 +1,33 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Ограничения начисления honor за убийство в историческом Miracle.
+//!
+//! Статус World `HonorElimilateConfig::AddToByteArray` RVA `0x0008A560`:
+//! `IMPLEMENTED`; singleton lifecycle, loader и Game decoder ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
+//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
+//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Исходный owner PDB:
+//! `e:\svn\fengyun_russia_dev\server\setup\honorelimilateconfig.cpp:50`.
+//!
+//! Exact World serializer и Game decoder подтверждают единственный wire:
+//! `level_difference`, затем `minimum_level`, оба signed little-endian `long`.
+//! Отдельные таблицы `CHonorRanks` сюда не входят и отправляются следующими
+//! subtype `0x27/0x28`. Два typed `i32` заменяют process-global singleton без
+//! изменения payload; неизвестный legacy return loader-а не выдумывается.
+
+/// Восьмибайтовый wire-value вместо singleton `HonorElimilateConfig`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct HonorElimilateConfig {
+    pub(crate) level_difference: i32,
+    pub(crate) minimum_level: i32,
+}
+
+impl HonorElimilateConfig {
+    pub(crate) fn add_to_byte_array(&self, destination: &mut Vec<u8>) {
+        destination.extend_from_slice(&self.level_difference.to_le_bytes());
+        destination.extend_from_slice(&self.minimum_level.to_le_bytes());
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

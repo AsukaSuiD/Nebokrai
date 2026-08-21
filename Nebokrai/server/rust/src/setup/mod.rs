@@ -29,6 +29,11 @@ pub(crate) mod godsbattleconf;
 pub(crate) mod hitlevelsetup;
 #[allow(
     dead_code,
+    reason = "honor-eliminate serializer подключён к initial-config до точного loader-а"
+)]
+pub(crate) mod honorelimilateconfig;
+#[allow(
+    dead_code,
     reason = "increment-shop serializer подключён к initial-config до LoadItems"
 )]
 pub(crate) mod incrementshoplist;

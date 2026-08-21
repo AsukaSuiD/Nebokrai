@@ -107,8 +107,9 @@
 //! и точка задержки сохранены без навязывания Rust-слою конкретного runtime-а.
 //! Общий `CRegionSetup` затем сохраняет signed count и ordered 12-байтные
 //! records в subtype `0x11`. `CDupliRegionSetup` следом передаёт insertion-order
-//! пары region/duplicate-region subtype `0x1A`. Следующая граница —
-//! `HonorElimilateConfig` subtype `0x26`.
+//! пары region/duplicate-region subtype `0x1A`. `HonorElimilateConfig` затем
+//! отправляет два signed scalar-а subtype `0x26`. Следующая граница — две
+//! выборки `CHonorRanks` subtype `0x27/0x28`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -180,6 +181,7 @@ use crate::setup::goodsdestructionconfig::{GoodsDestroySerializeError, GoodsDest
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::godsbattleconf::{CGodsBattleConf, GodsBattleSerializeError};
 use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelSerializeError};
+use crate::setup::honorelimilateconfig::HonorElimilateConfig;
 use crate::setup::incrementshoplist::{CIncrementShopList, IncrementShopSerializeError};
 use crate::setup::logsystem::{CLogSystem, LogSystemSerializeError};
 use crate::setup::monsterlist::{
@@ -680,6 +682,19 @@ pub(crate) enum WorldDupliRegionConfigurationCompletion {
 pub(crate) struct WorldDupliRegionConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldDupliRegionConfigurationCompletion,
+}
+
+/// Следующая позиция ветки после `HonorElimilateConfig`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldHonorEliminateConfigurationCompletion {
+    HonorRanksPending { socket_id: i32 },
+}
+
+/// Отчёт фиксированной отправки `HonorElimilateConfig` subtype `0x26`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldHonorEliminateConfigurationReport {
+    pub(crate) delivery: WorldInitialConfigurationDelivery,
+    pub(crate) completion: WorldHonorEliminateConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -1931,6 +1946,26 @@ pub(crate) fn continue_game_server_dupli_region_configuration(
         completion: WorldDupliRegionConfigurationCompletion::HonorEliminateConfigurationPending {
             socket_id,
         },
+    }
+}
+
+/// Кодирует и отправляет точный `HonorElimilateConfig` initial-config packet.
+pub(crate) fn continue_game_server_honor_eliminate_configuration(
+    game: &CGame,
+    socket_id: i32,
+    honor_eliminate: HonorElimilateConfig,
+) -> WorldHonorEliminateConfigurationReport {
+    let mut payload = Vec::with_capacity(8);
+    honor_eliminate.add_to_byte_array(&mut payload);
+    let sender = game.current_game_server_sender();
+    WorldHonorEliminateConfigurationReport {
+        delivery: send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x26,
+            &payload,
+        ),
+        completion: WorldHonorEliminateConfigurationCompletion::HonorRanksPending { socket_id },
     }
 }
 
