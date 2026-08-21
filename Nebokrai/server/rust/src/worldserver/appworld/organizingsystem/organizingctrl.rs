@@ -423,7 +423,8 @@ use super::union::{
     UnionApplicationFactionSnapshot, UnionApplicationTerminal, UnionApplyForJoinBlock,
     UnionApplyForJoinContext, UnionApplyForJoinEffects, UnionApplyForJoinOutcome,
     UnionClientSnapshotContext, UnionDoJoinBlock, UnionDoJoinContext, UnionDoJoinOutcome,
-    UnionDisbandBlock, UnionDisbandOutcome,
+    UnionDisbandBlock, UnionDisbandOutcome, UnionExitBlock, UnionExitContext,
+    UnionExitOutcome,
     UnionFireOutBlock, UnionFireOutContext, UnionFireOutEffects, UnionFireOutOutcome,
     UnionFactionFanoutReport, UnionFactionJoinContext, UnionFactionLevelBlock,
     UnionFactionMemberContext,
@@ -1193,6 +1194,13 @@ pub(crate) enum OrganizingUnionByMasterBlock {
     UnionMembership(FactionUnionMembershipLookupBlock),
 }
 
+/// Safe-границы exact `IsFreePlayer -> IsFreeFaction` lookup для `0x6010E`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingUnionByPlayerBlock {
+    PlayerMembership { map_key: i32 },
+    UnionMembership { map_key: i32 },
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum OrganizingUnionFireOutOutcome {
     UnionNotFound,
@@ -1213,6 +1221,36 @@ pub(crate) enum OrganizingUnionFireOutBlock {
     AutomaticDisband {
         union_id: i32,
         fire_out: UnionFireOutOutcome<UnionMemberDetachOutcome>,
+        source: OrganizingConfederationDisbandBlock,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingUnionExitOutcome {
+    UnionNotFound,
+    Applied {
+        union_id: i32,
+        outcome: UnionExitOutcome<UnionMemberDetachOutcome>,
+        automatic_disband: Option<OrganizingConfederationDisbandOutcome>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingUnionExitBlock {
+    Lookup(OrganizingUnionByPlayerBlock),
+    Exit {
+        union_id: i32,
+        source: UnionExitBlock<FactionMasterLookupBlock, UnionMemberDetachBlock>,
+    },
+    AutomaticPlayerHeader {
+        union_id: i32,
+        exit: UnionExitOutcome<UnionMemberDetachOutcome>,
+        source: UnionPlayerHeaderLookupBlock,
+    },
+    AutomaticDisband {
+        union_id: i32,
+        exit: UnionExitOutcome<UnionMemberDetachOutcome>,
+        player_header: i32,
         source: OrganizingConfederationDisbandBlock,
     },
 }
@@ -3543,6 +3581,28 @@ impl COrganizingCtrl {
         Ok(self.confederation_by_id(union_id).map(CUnion::union_id))
     }
 
+    /// Повторяет exact lookup `0x6010E`: любой player membership, затем union.
+    pub(crate) fn union_id_by_player_membership(
+        &self,
+        player_id: i32,
+    ) -> Result<Option<i32>, OrganizingUnionByPlayerBlock> {
+        let faction_id = match self.is_free_player(player_id) {
+            FreePlayerLookup::NoFaction => return Ok(None),
+            FreePlayerLookup::Faction(faction_id) => faction_id,
+            FreePlayerLookup::BlockedNullFaction { map_key } => {
+                return Err(OrganizingUnionByPlayerBlock::PlayerMembership { map_key });
+            }
+        };
+        let union_id = match self.is_free_faction(faction_id) {
+            FreeFactionLookup::NoUnion => return Ok(None),
+            FreeFactionLookup::Union(union_id) => union_id,
+            FreeFactionLookup::BlockedNullConfederation { map_key } => {
+                return Err(OrganizingUnionByPlayerBlock::UnionMembership { map_key });
+            }
+        };
+        Ok(self.confederation_by_id(union_id).map(CUnion::union_id))
+    }
+
     /// Выполняет exact virtual-call ветки `OnOrgasysMessage(0x60118)`.
     pub(crate) fn apply_for_union_join<Effects>(
         &mut self,
@@ -3661,6 +3721,104 @@ impl COrganizingCtrl {
             None
         };
         Ok(OrganizingUnionFireOutOutcome::Applied {
+            union_id,
+            outcome,
+            automatic_disband,
+        })
+    }
+
+    /// Выполняет exact controller-цепочку `0x6010E`, включая автоматический
+    /// disband через заново вычисленный `CUnion::GetPlayerHeader()`.
+    pub(crate) fn exit_union_by_player<Effects>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        player_id: i32,
+        effects: &mut Effects,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<OrganizingUnionExitOutcome, OrganizingUnionExitBlock>
+    where
+        Effects: UnionFireOutEffects,
+    {
+        let Some(union_id) = self
+            .union_id_by_player_membership(player_id)
+            .map_err(OrganizingUnionExitBlock::Lookup)?
+        else {
+            return Ok(OrganizingUnionExitOutcome::UnionNotFound);
+        };
+        let mut union = self
+            .confederations
+            .get_mut(&union_id)
+            .and_then(Option::take)
+            .expect("GetConfederationOrganizing вернул живой owner из того же controller map");
+        let result = union.exit(
+            game,
+            parameters,
+            player_id,
+            self,
+            effects,
+            update_player,
+        );
+        let should_disband = union.member_count() <= 1;
+        let outcome = match result {
+            Ok(outcome) => outcome,
+            Err(source) => {
+                *self
+                    .confederations
+                    .get_mut(&union_id)
+                    .expect("detached union slot не удаляется") = Some(union);
+                return Err(OrganizingUnionExitBlock::Exit { union_id, source });
+            }
+        };
+        let player_header = should_disband.then(|| {
+            union.player_header(|master_faction_id| {
+                let Some(faction) = self.faction_by_id(master_faction_id) else {
+                    return Ok(None);
+                };
+                faction
+                    .master_id()
+                    .map(Some)
+                    .ok_or(UnionPlayerHeaderLookupBlock { master_faction_id })
+            })
+        });
+        *self
+            .confederations
+            .get_mut(&union_id)
+            .expect("detached union slot не удаляется") = Some(union);
+
+        let automatic_disband = if let Some(player_header) = player_header {
+            let player_header = match player_header {
+                Ok(player_header) => player_header,
+                Err(source) => {
+                    return Err(OrganizingUnionExitBlock::AutomaticPlayerHeader {
+                        union_id,
+                        exit: outcome,
+                        source,
+                    });
+                }
+            };
+            match self.disband_confederation(
+                game,
+                parameters,
+                player_header,
+                union_id,
+                effects,
+                update_player,
+            ) {
+                Ok(outcome) => Some(outcome),
+                Err(source) => {
+                    return Err(OrganizingUnionExitBlock::AutomaticDisband {
+                        union_id,
+                        exit: outcome,
+                        player_header,
+                        source,
+                    });
+                }
+            }
+        } else {
+            None
+        };
+        Ok(OrganizingUnionExitOutcome::Applied {
             union_id,
             outcome,
             automatic_disband,
@@ -5309,6 +5467,20 @@ impl UnionFireOutContext for COrganizingCtrl {
     type DetachOutcome = UnionMemberDetachOutcome;
 
     fn detach_union_member_for_fire_out(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        faction_id: i32,
+    ) -> Result<Self::DetachOutcome, Self::DetachBlock> {
+        self.detach_union_member(game, parameters, faction_id)
+    }
+}
+
+impl UnionExitContext for COrganizingCtrl {
+    type DetachBlock = UnionMemberDetachBlock;
+    type DetachOutcome = UnionMemberDetachOutcome;
+
+    fn detach_union_member_for_exit(
         &mut self,
         game: &CGame,
         parameters: &COrganizingParam,

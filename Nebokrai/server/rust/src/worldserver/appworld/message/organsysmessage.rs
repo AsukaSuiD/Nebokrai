@@ -2,7 +2,7 @@
 //! включая список фракций страны `0x60107`, подачу заявки `0x60108`, отмену
 //! заявки `0x60109`, решение по заявке `0x6010A`, исключение участника
 //! `0x6010B`, исключение фракции из союза `0x6010C`, выход из фракции
-//! `0x6010D`, заявку союза `0x60118`,
+//! `0x6010D`, выход фракции из союза `0x6010E`, заявку союза `0x60118`,
 //! общий session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
@@ -70,6 +70,12 @@
 //! `CFaction::Exit(player ID)` в slot `+0x20`. `char` в RAW-прототипе является
 //! артефактом: ASM передаёт исходный 32-битный ID. Online/route/tail gates и
 //! прямой wire-ответ отсутствуют; проверки Linux-донора не перенесены.
+//! Exact `0x004A7580..0x004A75F6` для `0x6010E` читает один полный `Long`
+//! player ID, последовательно вызывает `IsFreePlayer`, `IsFreeFaction` и
+//! nullable `GetConfederationOrganizing`, затем virtual `CUnion::Exit` в slot
+//! `+0x20`. Результат игнорируется: при member count `<= 1` вызывается
+//! `DisbandConferation(GetPlayerHeader(), union ID)`. Online/route/tail gates и
+//! прямой wire-ответ отсутствуют; Linux-проверки payload/route не перенесены.
 //! Exact диапазоны
 //! `0x004A74C6..0x004A7509` и `0x004A7511..0x004A7543` исправляют повреждённый
 //! RAW. Общий branch читает
@@ -372,6 +378,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingNameCountryBlock, OrganizingNameKind, OrganizingNameLookupBlock,
     OrganizingNameMatch, OrganizingNamedUnionApplicationBlock,
     OrganizingFactionDoJoinBlock, OrganizingFactionDoJoinOutcome, begin_city_transfer_session,
+    OrganizingUnionExitBlock, OrganizingUnionExitOutcome,
     OrganizingUnionFireOutBlock, OrganizingUnionFireOutOutcome,
 };
 use crate::worldserver::appworld::organizingsystem::organizing::{
@@ -406,6 +413,7 @@ const FACTION_APPLICATION_DECISION_MESSAGE_TYPE: i32 = 0x6010A;
 const FACTION_FIRE_OUT_MESSAGE_TYPE: i32 = 0x6010B;
 const UNION_FIRE_OUT_MESSAGE_TYPE: i32 = 0x6010C;
 const FACTION_EXIT_MESSAGE_TYPE: i32 = 0x6010D;
+const UNION_EXIT_MESSAGE_TYPE: i32 = 0x6010E;
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
@@ -2307,6 +2315,41 @@ pub(crate) fn dispatch_faction_exit(
         }
     };
     Some(Ok(OrganizingFactionExitDispatch { player_id, outcome }))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingUnionExitDispatch {
+    pub(crate) player_id: i32,
+    pub(crate) outcome: OrganizingUnionExitOutcome,
+}
+
+/// Выполняет exact `0x6010E`: один `Long`, player/faction/union lookup,
+/// virtual `CUnion::Exit` и automatic disband через `GetPlayerHeader`.
+pub(crate) fn dispatch_union_exit(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    parameters: &COrganizingParam,
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    update_player: &mut dyn FnMut(i32),
+) -> Option<Result<OrganizingUnionExitDispatch, OrganizingUnionExitBlock>> {
+    if message.message_type() != UNION_EXIT_MESSAGE_TYPE {
+        return None;
+    }
+
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let mut effects = WorldUnionFireOutEffects { game, callbacks };
+    let outcome = match organizing.exit_union_by_player(
+        game,
+        parameters,
+        player_id,
+        &mut effects,
+        update_player,
+    ) {
+        Ok(outcome) => outcome,
+        Err(source) => return Some(Err(source)),
+    };
+    Some(Ok(OrganizingUnionExitDispatch { player_id, outcome }))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

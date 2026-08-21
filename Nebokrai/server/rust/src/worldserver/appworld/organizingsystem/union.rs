@@ -6,8 +6,8 @@
 //! `CUnion::DelMember` RVA `0x000C2B30`, inert virtual-ы
 //! `DubAndSetJobLvl/EditLeaveWord/OperatorTax/SetControbuter/Upgrade` RVA
 //! `0x000C18B0/0x000C1EC0/0x000C1ED0/0x000C1F20/0x000C1F30`,
-//! `GetEstablishedTime` RVA `0x000C1F00`, `Disband` RVA `0x000C43F0`,
-//! `FireOut` RVA `0x000C49D0` и
+//! `GetEstablishedTime` RVA `0x000C1F00`, `Exit` RVA `0x000C3DD0`,
+//! `Disband` RVA `0x000C43F0`, `FireOut` RVA `0x000C49D0` и
 //! compiler-owned destructor RVA
 //! `0x000C1F40`, обе перегрузки `GetMemberList` RVA
 //! `0x000C1BB0/0x000C2710`, `IsUsingPV/SetMemPV/AbolishMemPV` RVA
@@ -207,6 +207,17 @@
 //! фракций. Member-map сам concrete owner не очищает; его целиком уничтожает
 //! последующий controller delete. Snapshot `Vec` заменяет только небезопасную
 //! итерацию MSVC map поверх reentrant faction callbacks.
+//! `Exit` проверяет войны раньше права `PV_Exit`, используя отдельные
+//! `WS0246/WS0247` и общий title `WS0121`. После успешной проверки он повторно
+//! разрешает master-faction игрока, публикует `WS0273(leaving faction name)`
+//! всем ещё полным members и до мутаций при двух найденных faction-owner-ах
+//! пишет `WS0274(leaving name, leaving ID, union ID, master faction name)` в
+//! `war`. Затем строго идут `DelMember`, erase, `DeleteOrgaToClient`,
+//! `UpdateMemberInfoToClient(OP_Delete)`, dirty bit `2` и player refresh.
+//! Exact ASM `0x004C3DD0..0x004C43E9` подтверждает четыре log-аргумента:
+//! push master-name остаётся на стеке через virtual `GetID`, после чего идут
+//! union ID, leaving ID и leaving-name. Rust не повторяет ошибку RAW, который
+//! потерял последний аргумент из-за неверного восстановления thiscall/cdecl.
 //! `ClearApplyList` сначала через тот же virtual validation требует у manager-а
 //! право `PV_ConMem`; отказ не меняет заявку. Успех записывает literal `0` в
 //! `m_ApplyPerson` и возвращает `true`. Exact ASM
@@ -483,6 +494,25 @@ pub(crate) trait UnionFireOutContext:
     type DetachOutcome;
 
     fn detach_union_member_for_fire_out(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        faction_id: i32,
+    ) -> Result<Self::DetachOutcome, Self::DetachBlock>;
+}
+
+/// Controller callbacks, которые `CUnion::Exit` вызывал через singleton.
+pub(crate) trait UnionExitContext:
+    UnionOperatorValidationContext
+    + UnionMasterFactionQueryContext
+    + UnionSendInfoContext
+    + UnionFactionMemberContext
+    + UnionPlayerRefreshContext
+{
+    type DetachBlock;
+    type DetachOutcome;
+
+    fn detach_union_member_for_exit(
         &mut self,
         game: &CGame,
         parameters: &COrganizingParam,
@@ -950,6 +980,57 @@ pub(crate) enum UnionFireOutBlock<OperatorBlock, DetachBlock> {
         target_faction_id: i32,
         source: UnionMemberUpdateBlock,
         member_information: UnionInfoFanoutReport,
+        member_removed: bool,
+        delete_organizing: UnionDeleteOrganizingReport,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UnionExitRejection {
+    StandardWar,
+    CityWar,
+    OperatorValidationFailed,
+    FactionMasterNotFound,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionExitReport<DetachOutcome> {
+    pub(crate) leaving_faction_id: i32,
+    pub(crate) member_information: UnionInfoFanoutReport,
+    pub(crate) war_log: Option<Vec<u8>>,
+    pub(crate) detach: DetachOutcome,
+    pub(crate) member_removed: bool,
+    pub(crate) delete_organizing: UnionDeleteOrganizingReport,
+    pub(crate) member_update: UnionMemberUpdateReport,
+    pub(crate) player_refresh: UnionPlayerRefreshReport,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionExitOutcome<DetachOutcome> {
+    Rejected(UnionExitRejection),
+    Exited(UnionExitReport<DetachOutcome>),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionExitBlock<OperatorBlock, DetachBlock> {
+    OperatorValidation(OperatorBlock),
+    MasterLookup(OperatorBlock),
+    MissingLeavingMember { leaving_faction_id: i32 },
+    UnterminatedLeavingName {
+        leaving_faction_id: i32,
+        source: UnterminatedMemberField,
+    },
+    Detach {
+        leaving_faction_id: i32,
+        source: DetachBlock,
+        member_information: UnionInfoFanoutReport,
+        war_log: Option<Vec<u8>>,
+    },
+    MemberUpdate {
+        leaving_faction_id: i32,
+        source: UnionMemberUpdateBlock,
+        member_information: UnionInfoFanoutReport,
+        war_log: Option<Vec<u8>>,
         member_removed: bool,
         delete_organizing: UnionDeleteOrganizingReport,
     },
@@ -1946,6 +2027,168 @@ impl CUnion {
             member_update,
             player_refresh,
             war_log,
+        }))
+    }
+
+    /// Выводит member-faction в точном порядке `CUnion::Exit`.
+    pub(crate) fn exit<Context, Effects>(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        player_id: i32,
+        context: &mut Context,
+        effects: &mut Effects,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<
+        UnionExitOutcome<Context::DetachOutcome>,
+        UnionExitBlock<Context::Block, Context::DetachBlock>,
+    >
+    where
+        Context: UnionExitContext,
+        Effects: UnionFireOutEffects,
+    {
+        if self.has_enemy_faction(context) {
+            let first_text = effects.world_string(b"WS0246");
+            let second_text = effects.world_string(b"WS0121");
+            effects.send_organizing_info(FactionMemberInfoRequest {
+                recipient_player_id: player_id,
+                first_text: &first_text,
+                second_text: &second_text,
+                information_type: -1,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            });
+            return Ok(UnionExitOutcome::Rejected(UnionExitRejection::StandardWar));
+        }
+        if self.has_city_war_enemy_faction(context) {
+            let first_text = effects.world_string(b"WS0247");
+            let second_text = effects.world_string(b"WS0121");
+            effects.send_organizing_info(FactionMemberInfoRequest {
+                recipient_player_id: player_id,
+                first_text: &first_text,
+                second_text: &second_text,
+                information_type: -1,
+                color: 0xFFDA_EDFE,
+                trailing_value: 0,
+            });
+            return Ok(UnionExitOutcome::Rejected(UnionExitRejection::CityWar));
+        }
+
+        let operation_valid = self
+            .check_operator_validate(player_id, EPurview::Exit as i32, context)
+            .map_err(UnionExitBlock::OperatorValidation)?;
+        if !operation_valid {
+            return Ok(UnionExitOutcome::Rejected(
+                UnionExitRejection::OperatorValidationFailed,
+            ));
+        }
+
+        // Оригинал повторно вызывал IsFactionMaster после validation.
+        let leaving_faction_id = context
+            .faction_id_by_master_player(player_id)
+            .map_err(UnionExitBlock::MasterLookup)?;
+        if leaving_faction_id == 0 {
+            return Ok(UnionExitOutcome::Rejected(
+                UnionExitRejection::FactionMasterNotFound,
+            ));
+        }
+        let leaving = self.members.get(&leaving_faction_id).ok_or(
+            UnionExitBlock::MissingLeavingMember { leaving_faction_id },
+        )?;
+        let leaving_name_wire = leaving.name_wire_bytes().map_err(|source| {
+            UnionExitBlock::UnterminatedLeavingName {
+                leaving_faction_id,
+                source,
+            }
+        })?;
+        let leaving_name = leaving_name_wire[..leaving_name_wire.len() - 1].to_vec();
+        let information = effects.format_world_string(
+            b"WS0273",
+            &[UnionFormatArgument::Text(&leaving_name)],
+        );
+        let title = effects.world_string(b"WS0188");
+        let member_information = self.send_info_to_all_members(
+            legacy_c_string_visible_bytes(&information),
+            legacy_c_string_visible_bytes(&title),
+            -1,
+            0x0087_A238,
+            context,
+            &mut |request| effects.send_organizing_info(request),
+        );
+
+        let war_log = match (
+            context.faction_name(leaving_faction_id),
+            context.faction_name(self.master_id),
+        ) {
+            (Some(leaving_faction_name), Some(master_faction_name)) => {
+                let text = effects.format_world_string(
+                    b"WS0274",
+                    &[
+                        UnionFormatArgument::Text(legacy_c_string_visible_bytes(
+                            &leaving_faction_name,
+                        )),
+                        UnionFormatArgument::Signed(leaving_faction_id),
+                        UnionFormatArgument::Signed(self.union_id),
+                        UnionFormatArgument::Text(legacy_c_string_visible_bytes(
+                            &master_faction_name,
+                        )),
+                    ],
+                );
+                effects.put_war_log(&text);
+                Some(text)
+            }
+            _ => None,
+        };
+
+        let detach = match context.detach_union_member_for_exit(
+            game,
+            parameters,
+            leaving_faction_id,
+        ) {
+            Ok(detach) => detach,
+            Err(source) => {
+                return Err(UnionExitBlock::Detach {
+                    leaving_faction_id,
+                    source,
+                    member_information,
+                    war_log,
+                });
+            }
+        };
+        let member_removed = self.members.remove(&leaving_faction_id).is_some();
+        let delete_organizing =
+            self.delete_organizing_to_client(leaving_faction_id, context, game);
+        let member_update = match self.update_member_info_to_client(
+            game,
+            leaving_faction_id,
+            EOperator::Delete,
+            context,
+        ) {
+            Ok(member_update) => member_update,
+            Err(source) => {
+                return Err(UnionExitBlock::MemberUpdate {
+                    leaving_faction_id,
+                    source,
+                    member_information,
+                    war_log,
+                    member_removed,
+                    delete_organizing,
+                });
+            }
+        };
+        self.set_change_data(2);
+        let player_refresh =
+            self.update_player_faction_info(leaving_faction_id, context, game, update_player);
+
+        Ok(UnionExitOutcome::Exited(UnionExitReport {
+            leaving_faction_id,
+            member_information,
+            war_log,
+            detach,
+            member_removed,
+            delete_organizing,
+            member_update,
+            player_refresh,
         }))
     }
 
@@ -3787,7 +4030,8 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CUnion::Exit
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
+// IMPLEMENTED_OWNER: `CUnion::exit` выше.
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:914
