@@ -118,7 +118,10 @@
 //! и C-string data. `CQuestSystem` затем передаёт setup и ordered quest records
 //! subtype `0x16`. `CPlayerRanks` следом отправляет insertion-order рейтинг
 //! subtype `0x17`. `CGMList` затем передаёт два ordered name/level map-а и god
-//! passport subtype `9`. Следующая граница — GameServer index subtype `0x12`.
+//! passport subtype `9`. GameServer index следом передаётся subtype `0x12` как
+//! точный narrowing cast `u32 -> u8`; старшее содержимое исходного `dwIndex`
+//! отбрасывается, как в EXE. Следующая граница — `CFourNationWarSys` subtype
+//! `0x25`.
 //!
 //! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
 //! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
@@ -846,6 +849,17 @@ pub(crate) enum WorldGmListConfigurationCompletion {
 pub(crate) struct WorldGmListConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldGmListConfigurationCompletion,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldGameServerIndexConfigurationCompletion {
+    FourNationWarPending { socket_id: i32 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldGameServerIndexConfigurationReport {
+    pub(crate) delivery: WorldInitialConfigurationDelivery,
+    pub(crate) completion: WorldGameServerIndexConfigurationCompletion,
 }
 
 /// Один элемент reconnect-хвоста после обязательного packet type.
@@ -2390,6 +2404,26 @@ pub(crate) fn continue_game_server_gm_list_configuration(
         completion: WorldGmListConfigurationCompletion::GameServerIndexPending {
             socket_id,
             game_server_index,
+        },
+    }
+}
+
+/// Отправляет subtype `0x12` с точным однобайтовым cast-ом `dwIndex`.
+pub(crate) fn continue_game_server_index_configuration(
+    game: &CGame,
+    socket_id: i32,
+    game_server_index: u32,
+) -> WorldGameServerIndexConfigurationReport {
+    let sender = game.current_game_server_sender();
+    WorldGameServerIndexConfigurationReport {
+        delivery: send_initial_configuration_to_socket(
+            sender.as_ref(),
+            socket_id,
+            0x12,
+            &[game_server_index as u8],
+        ),
+        completion: WorldGameServerIndexConfigurationCompletion::FourNationWarPending {
+            socket_id,
         },
     }
 }
