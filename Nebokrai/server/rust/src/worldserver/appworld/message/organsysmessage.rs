@@ -3523,16 +3523,18 @@ impl AttackCityWarResultContext
     }
 
     fn faction_country(&mut self, faction_id: i32) -> Result<u8, Self::Block> {
-        self.organizing
-            .faction_by_id(faction_id)
-            .ok_or(
-                OrganizingCityWarResultContextBlock::MissingFactionForMutation {
-                    faction_id,
-                    operation: "GetCountry",
-                },
-            )?
-            .country()
-            .ok_or(OrganizingCityWarResultContextBlock::MissingFactionCountry { faction_id })
+        let country = self
+            .organizing
+            .country_by_faction(faction_id)
+            .map_err(|_| OrganizingCityWarResultContextBlock::MissingFactionCountry {
+                faction_id,
+            })?;
+        country.ok_or(
+            OrganizingCityWarResultContextBlock::MissingFactionForMutation {
+                faction_id,
+                operation: "GetCountry",
+            },
+        )
     }
 
     fn country_exists(&mut self, country_id: u8) -> Result<bool, Self::Block> {

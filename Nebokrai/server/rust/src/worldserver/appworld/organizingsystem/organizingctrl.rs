@@ -16,6 +16,7 @@
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`; `GenerateSaveData` RVA `0x00034A10` —
 //! `IMPLEMENTED`, `GetpFactionById` RVA `0x00034080` и
 //! `GetConfederationOrganizing` RVA `0x00036BF0`,
+//! `GetCountryByFaction` RVA `0x00037B20`,
 //! `IsFactionMaster` RVA `0x000344A0`, `ReInitialFacFactionByLvl` RVA
 //! `0x00034C80` и `AddUnionToClientByFactionID` RVA `0x00038010` —
 //! `IMPLEMENTED`; `PushToEstaList` RVA `0x000367C0` и оба overload-а
@@ -54,6 +55,13 @@
 //! ищет его в `m_ConfedeOrganizings` и возвращает сохранённый pointer либо
 //! null при miss/null value. Exact ASM `0x00436BF0..0x00436C37` исправляет
 //! повреждённое raw-имя key; Rust `confederation_by_id` сохраняет контракт.
+//! `GetCountryByFaction` сначала отбрасывает неположительный ID, затем делает
+//! тот же faction-map lookup и только для ненулевого owner-а вызывает virtual
+//! `GetCountry` slot `+0x190`. Exact ASM `0x00437B20..0x00437B6B`
+//! подтверждает key-dataflow и нулевой возврат для всех lookup-gate-ов. Rust
+//! отделяет этот нулевой miss от ещё не материализованного
+//! `CFaction::m_Property`: первый есть `Ok(None)`, второй остаётся typed
+//! safe-границей вместо выдуманной страны `0`.
 //! Через read-only `FactionOperationAuthorityContext` этот lookup и уже
 //! материализованный `IsFreeFaction` обслуживают faction tax/city-gate owner-ы;
 //! null во время membership scan остаётся typed-границей старого UB.
@@ -2134,6 +2142,20 @@ impl COrganizingCtrl {
         self.factions
             .get_mut(&faction_id)
             .and_then(Option::as_deref_mut)
+    }
+
+    /// Повторяет exact `GetCountryByFaction` без singleton и virtual ABI.
+    pub(crate) fn country_by_faction(
+        &self,
+        faction_id: i32,
+    ) -> Result<Option<u8>, FactionInitialPropertyBlock> {
+        if faction_id <= 0 {
+            return Ok(None);
+        }
+        let Some(faction) = self.faction_by_id(faction_id) else {
+            return Ok(None);
+        };
+        faction.country().map(Some).ok_or(FactionInitialPropertyBlock)
     }
 
     /// Узкий concrete dispatch достигнутого `CFaction::SetGoodsWarCount`.
@@ -5247,7 +5269,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::GetCountryByFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1514
@@ -5255,8 +5277,8 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00437b20
 // PROTOTYPE: uchar __thiscall GetCountryByFaction(long param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// Реализовано выше как `country_by_faction`; exact slot `+0x190`,
+// positive-ID/map/null gates и нулевой miss сохранены.
 //
 
 // ============================================================================
