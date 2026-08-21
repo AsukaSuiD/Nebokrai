@@ -830,6 +830,10 @@
 //! `DisbandFaction` вызывается concrete organizing owner-ом через живые
 //! Village/City/Goods War/country owners; player flag и optional log завершают
 //! его exact success-порядок сразу после удаления faction;
+//! та же finalization-последовательность обслуживает прямой message-ingress
+//! `0x60111`,
+//! поэтому retired owner не задерживается внутри event-report, а DB-log и
+//! player flag сохраняют общий машинный порядок;
 //! `CCountry::AI` выполняется concrete country owner-ом через governance context;
 //! при локальном blocked-path последующие эффекты не выдумываются.
 //! Сразу после этого `run_main_loop_bai_tan_jjc_stage` без нового clock-call
@@ -1090,6 +1094,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingFactionBillboardOutcome, OrganizingFactionContributorDispatch,
     OrganizingFactionExperienceDispatch, OrganizingFactionMemberStateDispatch,
     OrganizingFactionDemiseBlock, OrganizingFactionDemiseDispatch,
+    OrganizingFactionDisbandBlock, OrganizingFactionDisbandDispatch,
     OrganizingFactionFireOutBlock, OrganizingFactionFireOutDispatch,
     OrganizingFactionExitBlock, OrganizingFactionExitDispatch,
     OrganizingUnionDemiseDispatch,
@@ -1120,6 +1125,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     dispatch_declare_war_faction_list, dispatch_faction_application,
     dispatch_faction_application_decision,
     dispatch_faction_demise,
+    dispatch_faction_disband,
     dispatch_faction_fire_out,
     dispatch_faction_exit,
     dispatch_union_demise,
@@ -1137,6 +1143,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     dispatch_leave_word, dispatch_leave_word_edit,
     dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_pronounce,
     dispatch_region_param_update, dispatch_region_route, dispatch_union_application,
+    finalize_faction_disband_dispatch,
     dispatch_village_war_application, dispatch_village_war_result,
 };
 use crate::worldserver::appworld::message::servermessage::{
@@ -2212,6 +2219,12 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: Result<OrganizingUnionDemiseDispatch, OrganizingUnionDemiseBlock>,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    OrganizingFactionDisband {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<OrganizingFactionDisbandDispatch, OrganizingFactionDisbandBlock>,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingUnionFireOut {
@@ -9047,6 +9060,8 @@ impl CGame {
         faction_master_log_enabled: bool,
         write_faction_master_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
+        faction_disband_log_enabled: bool,
+        write_faction_disband_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
         rs_player: &mut TiberiusRsPlayer,
         mut player_database: Option<&mut WorldTdsClient>,
         save_thread_handle: &mut WorldSaveThreadHandleState,
@@ -9120,6 +9135,8 @@ impl CGame {
                             &mut *write_faction_fire_out_log,
                             faction_master_log_enabled,
                             &mut *write_faction_master_log,
+                            faction_disband_log_enabled,
+                            &mut *write_faction_disband_log,
                             &mut *rs_player,
                             player_database.as_deref_mut(),
                             &mut *save_thread_handle,
@@ -9196,6 +9213,8 @@ impl CGame {
                     &mut *write_faction_fire_out_log,
                     faction_master_log_enabled,
                     &mut *write_faction_master_log,
+                    faction_disband_log_enabled,
+                    &mut *write_faction_disband_log,
                     &mut *rs_player,
                     player_database.as_deref_mut(),
                     &mut *save_thread_handle,
@@ -9276,6 +9295,8 @@ impl CGame {
         faction_master_log_enabled: bool,
         write_faction_master_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
+        faction_disband_log_enabled: bool,
+        write_faction_disband_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
         rs_player: &mut TiberiusRsPlayer,
         player_database: Option<&mut WorldTdsClient>,
         save_thread_handle: &mut WorldSaveThreadHandleState,
@@ -9346,6 +9367,8 @@ impl CGame {
             write_faction_fire_out_log,
             faction_master_log_enabled,
             write_faction_master_log,
+            faction_disband_log_enabled,
+            write_faction_disband_log,
             rs_player,
             player_database,
             save_thread_handle,
@@ -10550,6 +10573,8 @@ impl CGame {
             &mut *callbacks.write_faction_fire_out_log,
             callbacks.faction_master_log_enabled,
             &mut *callbacks.write_faction_master_log,
+            callbacks.faction_disband_log_enabled,
+            &mut *callbacks.write_faction_disband_log,
             owners.rs_player,
             owners.player_database.as_deref_mut(),
             state.save_thread_handle,
@@ -13778,6 +13803,8 @@ async fn process_world_message<TimerCallback, TeamOwner>(
     faction_master_log_enabled: bool,
     write_faction_master_log:
         &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
+    faction_disband_log_enabled: bool,
+    write_faction_disband_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
     rs_player: &mut TiberiusRsPlayer,
     mut player_database: Option<&mut WorldTdsClient>,
     save_thread_handle: &mut WorldSaveThreadHandleState,
@@ -15474,6 +15501,69 @@ where
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingUnionDemise {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        let faction_disband = {
+            let mut effects = WorldOrganizingDisbandEffects {
+                game: &*game,
+                village_war: &*village_war,
+                attack_city: &*attack_city,
+                country_handler: &*country_handler,
+                goods_war: &mut *goods_war,
+                world_string: &mut *application_callbacks.world_string,
+            };
+            dispatch_faction_disband(&mut message, &*game, organizing, &mut effects)
+        };
+        if let Some(outcome) = faction_disband {
+            let faction_disband_log_enabled =
+                game.setup.use_log_system && faction_disband_log_enabled;
+            let outcome = outcome.map(|pending| {
+                finalize_faction_disband_dispatch(
+                    pending,
+                    faction_disband_log_enabled,
+                    |player_id| game.clear_disbanded_player_faction_data(player_id),
+                    |faction_id, faction_name, player_id, player_name| {
+                        write_faction_disband_log(
+                            faction_id,
+                            faction_name,
+                            player_id,
+                            player_name,
+                        );
+                    },
+                )
+            });
+            let callbacks = WorldUnionApplicationEffectCallbacks {
+                random: &mut *application_callbacks.random,
+                world_string: &mut *application_callbacks.world_string,
+                format_world_string: &mut *application_callbacks.format_world_string,
+                put_war_log: &mut *application_callbacks.put_war_log,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
+            };
+            let mut effects = WorldUnionApplicationEffects::new(
+                game,
+                net_sessions,
+                application_runtime,
+                callbacks,
+            );
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingFactionDisband {
                 source,
                 legacy_run_result,
                 outcome,

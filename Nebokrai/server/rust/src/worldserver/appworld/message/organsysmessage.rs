@@ -3,7 +3,8 @@
 //! заявки `0x60109`, решение по заявке `0x6010A`, исключение участника
 //! `0x6010B`, исключение фракции из союза `0x6010C`, выход из фракции
 //! `0x6010D`, выход фракции из союза `0x6010E`, передачу главы фракции
-//! `0x6010F`, передачу главы союза `0x60110`, заявку союза `0x60118`,
+//! `0x6010F`, передачу главы союза `0x60110`, роспуск фракции `0x60111`,
+//! заявку союза `0x60118`,
 //! общий session-result dispatch, billboard
 //! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
@@ -94,6 +95,15 @@
 //! публикации, `WS0281/WS0282`, общий player refresh и второй tick в момент
 //! успеха. Linux-донор ошибочно заменял первую публикацию на `(0, Delete)`;
 //! exact ASM передаёт old faction ID и literal `2`.
+//! Exact `0x004A72B8..0x004A72DC` для `0x60111` читает один полный `Long`
+//! player ID, разрешает faction через ordered `IsFreePlayer` и безусловно
+//! вызывает уже восстановленный `DisbandFaction(player, faction)`, включая
+//! literal faction `0` при membership miss. Bool-result игнорируется;
+//! online/route/tail gates и прямой wire-ответ отсутствуют. Concrete owner
+//! сохраняет war notices, двойную delete-публикацию, delete-очередь, сброс
+//! player faction-data, optional DB-log и немедленное уничтожение удалённого
+//! faction-owner-а. Linux-донорские exact-payload/ownership rejects не
+//! перенесены.
 //! Exact диапазоны
 //! `0x004A74C6..0x004A7509` и `0x004A7511..0x004A7543` исправляют повреждённый
 //! RAW. Общий branch читает
@@ -351,7 +361,8 @@ use crate::worldserver::appworld::goodswarmember::{
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
     FactionApplyForJoinEffects, FactionApplyForJoinOutcome, FactionContributorContext,
-    FactionDemiseBlock, FactionDemiseContext, FactionDemiseOutcome, FactionDoJoinEffects,
+    FactionDemiseBlock, FactionDemiseContext, FactionDemiseOutcome, FactionDisbandContext,
+    FactionDoJoinEffects,
     FactionExitBlock, FactionExitContext, FactionExitOutcome,
     FactionFireOutBlock, FactionFireOutContext, FactionFireOutOutcome,
     current_local_member_time, goods_war_check_for_faction_id,
@@ -386,6 +397,8 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     FactionMasterLookupBlock, FreeFactionLookup, FreePlayerLookup,
     FactionBillboardStatBlock,
     OrganizingContributorBlock, OrganizingContributorOutcome,
+    OrganizingDisbandBlock, OrganizingDisbandOutcome, OrganizingDisbandPlayer,
+    OrganizingDisbandProgress, OrganizingDisbandRejection,
     FactionUnionMembershipLookupBlock, OrganizingFactionExperienceMutation,
     OrganizingFactionMemberStateOutcome,
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock,
@@ -436,6 +449,7 @@ const FACTION_EXIT_MESSAGE_TYPE: i32 = 0x6010D;
 const UNION_EXIT_MESSAGE_TYPE: i32 = 0x6010E;
 const FACTION_DEMISE_MESSAGE_TYPE: i32 = 0x6010F;
 const UNION_DEMISE_MESSAGE_TYPE: i32 = 0x60110;
+const FACTION_DISBAND_MESSAGE_TYPE: i32 = 0x60111;
 const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
 const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
 const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
@@ -2605,6 +2619,135 @@ pub(crate) fn dispatch_union_demise(
         new_master_faction_id,
         outcome,
     }))
+}
+
+pub(crate) struct PendingOrganizingFactionDisbandDispatch {
+    player_id: i32,
+    faction_id: i32,
+    outcome: OrganizingDisbandOutcome,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionDisbandOutcome {
+    Rejected {
+        reason: OrganizingDisbandRejection,
+        notice_sent: bool,
+        cleared_city_war_enemies: usize,
+    },
+    Disbanded {
+        progress: OrganizingDisbandProgress,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionDisbandDispatch {
+    pub(crate) player_id: i32,
+    pub(crate) faction_id: i32,
+    pub(crate) outcome: OrganizingFactionDisbandOutcome,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionDisbandBlock {
+    Membership { map_key: i32 },
+    Disband {
+        faction_id: i32,
+        source: OrganizingDisbandBlock,
+    },
+}
+
+/// Выполняет exact synchronous prefix `0x60111`: один `Long`, ordered
+/// `IsFreePlayer` и безусловный `DisbandFaction(player, faction)`.
+pub(crate) fn dispatch_faction_disband<Context>(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    context: &mut Context,
+) -> Option<
+    Result<PendingOrganizingFactionDisbandDispatch, OrganizingFactionDisbandBlock>,
+>
+where
+    Context: FactionDisbandContext,
+{
+    if message.message_type() != FACTION_DISBAND_MESSAGE_TYPE {
+        return None;
+    }
+
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let faction_id = match organizing.is_free_player(player_id) {
+        FreePlayerLookup::NoFaction => 0,
+        FreePlayerLookup::Faction(faction_id) => faction_id,
+        FreePlayerLookup::BlockedNullFaction { map_key } => {
+            return Some(Err(OrganizingFactionDisbandBlock::Membership { map_key }));
+        }
+    };
+    let outcome = match organizing.disband_faction(game, player_id, faction_id, context) {
+        Ok(outcome) => outcome,
+        Err(source) => {
+            return Some(Err(OrganizingFactionDisbandBlock::Disband {
+                faction_id,
+                source,
+            }));
+        }
+    };
+    Some(Ok(PendingOrganizingFactionDisbandDispatch {
+        player_id,
+        faction_id,
+        outcome,
+    }))
+}
+
+/// Завершает exact controller continuation: player flag, optional DB-log и
+/// немедленный Drop удалённого faction-owner-а.
+pub(crate) fn finalize_faction_disband_dispatch<ClearPlayer, WriteLog>(
+    pending: PendingOrganizingFactionDisbandDispatch,
+    faction_disband_log_enabled: bool,
+    mut clear_player: ClearPlayer,
+    mut write_log: WriteLog,
+) -> OrganizingFactionDisbandDispatch
+where
+    ClearPlayer: FnMut(i32) -> Option<OrganizingDisbandPlayer>,
+    WriteLog: FnMut(i32, &[u8], i32, &[u8]),
+{
+    let PendingOrganizingFactionDisbandDispatch {
+        player_id,
+        faction_id,
+        outcome,
+    } = pending;
+    let outcome = match outcome {
+        OrganizingDisbandOutcome::Rejected {
+            reason,
+            notice_sent,
+            cleared_city_war_enemies,
+        } => OrganizingFactionDisbandOutcome::Rejected {
+            reason,
+            notice_sent,
+            cleared_city_war_enemies,
+        },
+        OrganizingDisbandOutcome::Disbanded {
+            mut progress,
+            retired_faction,
+        } => {
+            progress.player = clear_player(player_id);
+            if faction_disband_log_enabled
+                && let Some(player) = progress.player.as_ref()
+            {
+                write_log(
+                    faction_id,
+                    legacy_c_string_prefix(retired_faction.name()),
+                    player.player_id,
+                    legacy_c_string_prefix(&player.player_name),
+                );
+                progress.log_written = true;
+            }
+            drop(retired_faction);
+            OrganizingFactionDisbandOutcome::Disbanded { progress }
+        }
+    };
+    OrganizingFactionDisbandDispatch {
+        player_id,
+        faction_id,
+        outcome,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
