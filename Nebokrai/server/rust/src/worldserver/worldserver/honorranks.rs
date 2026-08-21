@@ -2,9 +2,10 @@
 //!
 //! Статус `CHonorRanks::GenerateSaveData` RVA `0x0001B090` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`; `AddToByteArray` RVA `0x0001A6F0`,
-//! accessors/clear RVA `0x0001A540..0x0001A890`, `UpdateRanksOnGameServer` RVA
-//! `0x0001ABD0` и `CopyHonorRanks` RVA `0x0001AE20` — `IMPLEMENTED`. Остальные
-//! функции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! accessors/clear RVA `0x0001A540..0x0001A890`, `UpdateRanksOnWorldServer`
+//! RVA `0x0001A4C0`, `UpdateRanksOnGameServer` RVA `0x0001ABD0`,
+//! `CopyHonorRanks` RVA `0x0001AE20` и `OnNewDay` RVA `0x0001B280` —
+//! `IMPLEMENTED`. Остальные функции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
@@ -57,6 +58,14 @@
 //! содержит полный исходный mask, затем тот же history payload. Транспорт
 //! использует готовый Rust network-owner; промежуточный MSVC vector для total
 //! не переносится, поскольку framing и порядок bytes сохраняются напрямую.
+//!
+//! Суточный rollover сначала записывает текущий день месяца, вычисляет mask
+//! `day|total`, добавляет month первого числа и week по понедельникам, затем
+//! строго выполняет copy → локальный `0x5FD0C` в receive FIFO → GameServer
+//! broadcasts. В отличие от старого Linux C++ донора, exact EXE не staging-ит
+//! копии и не переставляет запись sort-day после успешной сериализации; Rust
+//! сохраняет машинный порядок, а отсутствие обязательного net-server выражает
+//! typed-блоком на месте прежнего null-dereference.
 
 use std::error::Error;
 use std::fmt;
@@ -68,7 +77,7 @@ use crate::dbaccess::worlddb::rsplayer::{
     HonorRanksType,
 };
 use crate::nets::networld::message::{CMessage, SendMessageError};
-use crate::worldserver::worldserver::game::CGame;
+use crate::worldserver::worldserver::game::{CGame, WorldLocalMessageQueueBlock};
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct HonorRanksGameServerUpdate {
@@ -77,18 +86,59 @@ pub(crate) struct HonorRanksGameServerUpdate {
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
+/// Полный наблюдаемый результат одного `CHonorRanks::OnNewDay`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct HonorRanksNewDayReport {
+    pub(crate) sort_day: u32,
+    pub(crate) rank_mask: u32,
+    pub(crate) reset_message_queued: bool,
+    pub(crate) game_server_updates: Vec<HonorRanksGameServerUpdate>,
+    pub(crate) legacy_result: bool,
+}
+
+/// Первая безопасная граница уже начатого rollover-прохода.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum HonorRanksNewDayBlock {
+    LocalQueue {
+        sort_day: u32,
+        rank_mask: u32,
+        source: WorldLocalMessageQueueBlock,
+    },
+    Serialization {
+        sort_day: u32,
+        rank_mask: u32,
+        source: HonorRanksSerializationBlock,
+    },
+}
+
 /// Достигнутая save-часть process-static `CHonorRanks` state.
-#[derive(Default)]
 pub(crate) struct CHonorRanks {
     history: HonorRankDbLists,
     current: HonorRankDbLists,
     db_data: Option<HonorRanksDbDataSnapshot>,
+    sort_day: u32,
+}
+
+impl Default for CHonorRanks {
+    fn default() -> Self {
+        Self {
+            history: Default::default(),
+            current: Default::default(),
+            db_data: None,
+            sort_day: Local::now().day(),
+        }
+    }
 }
 
 impl CHonorRanks {
     /// Создаёт доказанные пустые live/DB list-массивы.
     pub(crate) fn with_reached_save_state() -> Self {
         Self::default()
+    }
+
+    /// Возвращает exact process-static `m_nSortDate`.
+    pub(crate) const fn sort_day(&self) -> u32 {
+        self.sort_day
     }
 
     /// Заменяет все 32 DB-list полными ordered-копиями и затем снимает время.
@@ -179,6 +229,59 @@ impl CHonorRanks {
             }
         }
         true
+    }
+
+    /// Ставит точный `0x5FD0C + mask` в World receive FIFO.
+    pub(crate) fn update_ranks_on_world_server(
+        game: &CGame,
+        rank_mask: u32,
+    ) -> Result<(), WorldLocalMessageQueueBlock> {
+        let mut message = CMessage::new(0x0005_FD0C);
+        message.base_mut().add_ulong(rank_mask);
+        game.queue_local_world_message(message)
+    }
+
+    /// Выполняет точный суточный rollover; `first_load` исходник не читал.
+    pub(crate) fn on_new_day(
+        &mut self,
+        game: &CGame,
+        _first_load: bool,
+    ) -> Result<HonorRanksNewDayReport, HonorRanksNewDayBlock> {
+        let now = Local::now();
+        let sort_day = now.day();
+        self.sort_day = sort_day;
+
+        let mut rank_mask = 0x09;
+        if sort_day == 1 {
+            rank_mask = 0x0D;
+        }
+        if now.weekday().num_days_from_sunday() == 1 {
+            rank_mask |= 0x02;
+        }
+
+        self.copy_honor_ranks(rank_mask);
+        Self::update_ranks_on_world_server(game, rank_mask).map_err(|source| {
+            HonorRanksNewDayBlock::LocalQueue {
+                sort_day,
+                rank_mask,
+                source,
+            }
+        })?;
+        let game_server_updates = self
+            .update_ranks_on_game_server(game, rank_mask)
+            .map_err(|source| HonorRanksNewDayBlock::Serialization {
+                sort_day,
+                rank_mask,
+                source,
+            })?;
+
+        Ok(HonorRanksNewDayReport {
+            sort_day,
+            rank_mask,
+            reset_message_queued: true,
+            game_server_updates,
+            legacy_result: true,
+        })
     }
 
     /// Рассылает выбранные history-типы всем подключённым GameServer-ам.
@@ -307,6 +410,38 @@ impl fmt::Display for HonorRanksSerializationBlock {
 }
 
 impl Error for HonorRanksSerializationBlock {}
+
+impl fmt::Display for HonorRanksNewDayBlock {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LocalQueue {
+                sort_day,
+                rank_mask,
+                source,
+            } => write!(
+                formatter,
+                "honor rollover дня {sort_day}, mask {rank_mask:#X}, остановлен на локальной FIFO: {source}"
+            ),
+            Self::Serialization {
+                sort_day,
+                rank_mask,
+                source,
+            } => write!(
+                formatter,
+                "honor rollover дня {sort_day}, mask {rank_mask:#X}, остановлен на GameServer payload: {source}"
+            ),
+        }
+    }
+}
+
+impl Error for HonorRanksNewDayBlock {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::LocalQueue { source, .. } => Some(source),
+            Self::Serialization { source, .. } => Some(source),
+        }
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
@@ -899,7 +1034,7 @@ impl Error for HonorRanksSerializationBlock {}
 
 // ============================================================================
 // FUNCTION: CHonorRanks::UpdateRanksOnWorldServer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp:137
@@ -907,6 +1042,7 @@ impl Error for HonorRanksSerializationBlock {}
 // ADDRESS: 0041a4c0
 // PROTOTYPE: bool __cdecl UpdateRanksOnWorldServer(ulong param_1)
 //
+// Реализовано выше через owned `CMessage` и ту же FIFO `CMyNetServer`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1049,7 +1185,7 @@ impl Error for HonorRanksSerializationBlock {}
 
 // ============================================================================
 // FUNCTION: CHonorRanks::OnNewDay
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp:81
@@ -1057,6 +1193,7 @@ impl Error for HonorRanksSerializationBlock {}
 // ADDRESS: 0041b280
 // PROTOTYPE: bool __cdecl OnNewDay(bool param_1)
 //
+// Реализовано выше с exact local-time mask и исходным порядком трёх вызовов.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

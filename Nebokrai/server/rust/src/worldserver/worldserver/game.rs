@@ -930,6 +930,9 @@ use crate::worldserver::appworld::jjcsystem::{
 use crate::worldserver::appworld::leiting::{
     CLeiTing, LeiTingBlock, LeiTingContext, LeiTingLocalTime, LeiTingRunReport,
 };
+use crate::worldserver::appworld::message::othermessage::{
+    WorldHonorEliminateReset, WorldOtherMessageDispatch, on_other_message,
+};
 use crate::worldserver::appworld::message::servermessage::{
     WorldLoginClientReplacement, WorldServerMessageDispatch, WorldServerMessageError,
     WorldServerMessageOutcome, on_login_client_reconnected, on_server_message,
@@ -1701,6 +1704,24 @@ pub(crate) enum WorldMessageOwner {
     MiscAuction,
 }
 
+/// Safe-граница обязательного `s_pNetServer` для локальных World-сообщений.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldLocalMessageQueueBlock {
+    pub(crate) message_type: i32,
+}
+
+impl fmt::Display for WorldLocalMessageQueueBlock {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "локальное World-сообщение {:#08X} не поставлено: s_pNetServer отсутствует",
+            self.message_type
+        )
+    }
+}
+
+impl Error for WorldLocalMessageQueueBlock {}
+
 /// Сообщение, для которого `Run` выбрал owner, но сам owner ещё не исполнен.
 pub(crate) struct RoutedWorldMessage {
     pub(crate) source: WorldMessageSource,
@@ -1732,6 +1753,11 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: WorldServerMessageOutcome,
+    },
+    OtherMessage {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: WorldHonorEliminateReset,
     },
     LoginClientReconnected(WorldLoginClientReplacement),
 }
@@ -9939,6 +9965,22 @@ impl CGame {
         true
     }
 
+    /// Публикует owned сообщение в исходную receive FIFO `s_pNetServer`.
+    pub(crate) fn queue_local_world_message(
+        &self,
+        message: CMessage,
+    ) -> Result<(), WorldLocalMessageQueueBlock> {
+        let message_type = message.message_type();
+        let Some(net_server) = self.net_server.as_ref() else {
+            // BLOCKED_MISSING_FACT: exact owner безусловно разыменовывал
+            // обязательный s_pNetServer. Safe Rust не подменяет этот путь
+            // прямым вызовом handler-а и сохраняет границу FIFO.
+            return Err(WorldLocalMessageQueueBlock { message_type });
+        };
+        net_server.publish_local_message(message);
+        Ok(())
+    }
+
     fn close_and_remove_net_client(&mut self) {
         if let Some(client) = self.net_client.as_mut() {
             let _legacy_result = client.close();
@@ -10151,6 +10193,19 @@ fn process_world_message(
                 };
             }
             WorldServerMessageDispatch::Pending(pending) => message = pending,
+        }
+    }
+
+    if selector.owner == Some(WorldMessageOwner::Other) {
+        match on_other_message(game, message) {
+            WorldOtherMessageDispatch::Handled(outcome) => {
+                return ProcessedWorldEvent::OtherMessage {
+                    source,
+                    legacy_run_result,
+                    outcome,
+                };
+            }
+            WorldOtherMessageDispatch::Pending(pending) => message = pending,
         }
     }
 

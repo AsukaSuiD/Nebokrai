@@ -117,6 +117,11 @@ pub(crate) mod appworld {
             reason = "узкий country victory dispatcher подключён перед остальными country opcodes"
         )]
         pub(crate) mod countrymessage;
+        #[allow(
+            dead_code,
+            reason = "подключён точный локальный honor-reset перед остальными other opcodes"
+        )]
+        pub(crate) mod othermessage;
         pub(crate) mod servermessage;
     }
     pub(crate) mod monster;

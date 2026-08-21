@@ -190,6 +190,11 @@ impl CMyNetServer {
             .push(WorldServerEvent::LoginClientReconnected(client));
     }
 
+    /// Ставит локально созданное сообщение в ту же FIFO, что и network receive.
+    pub(crate) fn publish_local_message(&self, message: CMessage) {
+        self.received_events.push(WorldServerEvent::Message(message));
+    }
+
     /// Сообщает, остались ли записи в исходном `m_Clients` map.
     pub(crate) fn has_clients(&self) -> bool {
         self.base.has_clients()
