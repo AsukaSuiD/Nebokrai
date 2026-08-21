@@ -155,6 +155,24 @@ pub(crate) struct TiberiusRsGodsBattle {
     notices: VecDeque<RsGodsBattleNotice>,
 }
 
+impl TiberiusRsGodsBattle {
+    /// Ставит границу notice-очереди перед отдельным synchronous owner-call.
+    pub(crate) fn notice_checkpoint(&self) -> usize {
+        self.notices.len()
+    }
+
+    /// Забирает только notices, созданные после checkpoint, сохраняя прежние.
+    pub(crate) fn drain_notices_after(
+        &mut self,
+        checkpoint: usize,
+    ) -> Vec<RsGodsBattleNotice> {
+        if checkpoint >= self.notices.len() {
+            return Vec::new();
+        }
+        self.notices.drain(checkpoint..).collect()
+    }
+}
+
 impl RsGodsBattleOwner for TiberiusRsGodsBattle {
     async fn save_faction_xyd(
         &mut self,

@@ -4,7 +4,8 @@
 //! внутрипроцессного события `0x3FC03`,
 //! регистрации GameServer и reconnect player-data хвоста в `0x5FA01`,
 //! snapshot/cleanup хвоста `0x5FA03`, обычных opcode `0x4FC01..=0x4FC03`,
-//! `0x5FA04`, `0x5FA06`, `0x5FA07`, `0x5FA09` и `0x5FA0A..=0x5FA0D` из
+//! `0x5FA04`, `0x5FA06`, `0x5FA07`, `0x5FA09`, `0x5FA0A..=0x5FA0D` и
+//! `0x5FA0F` из
 //! `OnServerMessage` RVA `0x000ADCF0`;
 //! остальные ветви остаются `UNKNOWN` (исследовательский декомпилят хранится локально) ниже. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
@@ -215,6 +216,15 @@
 //! подавляет send после уже выполненных чтений. Все C-строки остаются
 //! byte-exact, результаты transport-а не управляют дальнейшими эффектами.
 //!
+//! `0x5FA0F` всегда сначала читает signed subtype и создаёт временный response
+//! `0x7F80E`. Subtype `0` возвращает два текущих XYD; subtype `1` читает
+//! faction/XYD, применяет только faction `1/2`, добавляет однобайтовый маркер
+//! `1` и возвращает обновлённую пару тому же socket. Subtype `2` читает имя
+//! `0x80` и faction, меняет первую byte-exact NPC-запись и затем безусловно
+//! достигает nullable `CRSGodsBattle::SaveNpcFaction`; отсутствие совпадения
+//! не подавляет save. Rust использует готовый Tiberius owner и awaits его до
+//! следующего FIFO slot-а, сохраняя синхронный порядок старого ADO call-site.
+//!
 //! Reached хвост `0x5FA03` после равенства response-count сначала уже сбросил
 //! `m_nDBResponsed`, затем выполняет полный `GenerateDBData` и строго
 //! `ClearMapPlayerForOffline -> ClearRestorePlayer -> ClearCreationPlayer ->
@@ -228,6 +238,11 @@ use std::fmt;
 use std::net::Ipv4Addr;
 
 use crate::dbaccess::worlddb::rsplayer::HonorRanksType;
+use crate::dbaccess::worlddb::rsgodsbattle::{
+    GodsBattleNpcFactionSnapshot, RsGodsBattleNotice, RsGodsBattleOwner,
+    TiberiusRsGodsBattle,
+};
+use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::basemessage::CBaseMessage;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::networld::mynetclient::CMyNetClient;
@@ -246,7 +261,10 @@ use crate::setup::emotion::{CEmotion, EmotionSerializeError};
 use crate::setup::goodsdestructionconfig::{GoodsDestroySerializeError, GoodsDestroySetup};
 use crate::setup::gmlist::{CGMList, GmListSerializationBlock};
 use crate::setup::globesetup::GlobeSetupSnapshot;
-use crate::setup::godsbattleconf::{CGodsBattleConf, GodsBattleSerializeError};
+use crate::setup::godsbattleconf::{
+    CGodsBattleConf, GodsBattleFactionXydUpdate, GodsBattleNpcFactionUpdate,
+    GodsBattleSerializeError,
+};
 use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelSerializeError};
 use crate::setup::honorelimilateconfig::HonorElimilateConfig;
 use crate::setup::incrementshoplist::{CIncrementShopList, IncrementShopSerializeError};
@@ -339,12 +357,13 @@ pub(crate) struct WorldCompletedSaveResponseLaunchReport {
 }
 
 /// Результат исполненного обычного opcode `OnServerMessage`.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) enum WorldServerMessageOutcome {
     GameServerConnection(WorldGameServerConnectionReport),
     GameServerBroadcast(WorldGameServerBroadcast),
     GameServerPingResponseRecorded(WorldGameServerPingResponse),
     GameServerPingStarted(WorldGameServerPingStart),
+    GodsBattle(WorldGodsBattleMessage),
     LoginServerTupleRelay(WorldLoginServerTupleRelay),
     LoginServerIdentityAssigned(WorldLoginServerIdentity),
     MurderReported(WorldMurderReport),
@@ -353,6 +372,56 @@ pub(crate) enum WorldServerMessageOutcome {
     PlayerNameMessageRelayed(WorldPlayerNameMessageRelay),
     RegionParametersUpdated(WorldRegionParameterUpdate),
     RegionMessageRelayed(WorldRegionMessageRelay),
+}
+
+/// Полный typed-итог server opcode `0x5FA0F`.
+#[derive(Debug)]
+pub(crate) struct WorldGodsBattleMessage {
+    pub(crate) subtype: i8,
+    pub(crate) subtype_complete: bool,
+    pub(crate) disposition: WorldGodsBattleDisposition,
+}
+
+#[derive(Debug)]
+pub(crate) enum WorldGodsBattleDisposition {
+    Query {
+        faction_a_xyd: u32,
+        faction_b_xyd: u32,
+        message_type: i32,
+        socket_id: i32,
+        delivery: Result<i32, SendMessageError>,
+    },
+    UpdateFaction {
+        faction: i32,
+        faction_complete: bool,
+        xyd: u32,
+        xyd_complete: bool,
+        update: GodsBattleFactionXydUpdate,
+        faction_a_xyd: u32,
+        faction_b_xyd: u32,
+        response_marker: i8,
+        message_type: i32,
+        socket_id: i32,
+        delivery: Result<i32, SendMessageError>,
+    },
+    UpdateNpc {
+        name: Vec<u8>,
+        faction: i32,
+        faction_complete: bool,
+        update: Option<GodsBattleNpcFactionUpdate>,
+        save: WorldGodsBattleNpcSave,
+    },
+    Ignored,
+}
+
+#[derive(Debug)]
+pub(crate) enum WorldGodsBattleNpcSave {
+    DatabaseOwnerUnavailable,
+    Completed {
+        snapshot_records: usize,
+        save_returned: bool,
+        notices: Vec<RsGodsBattleNotice>,
+    },
 }
 
 /// Наблюдаемый результат REPORT_MURDERER `0x5FA06`.
@@ -1418,11 +1487,14 @@ pub(crate) fn materialize_completed_save_response_snapshot(
 }
 
 /// Исполняет только уже восстановленные обычные ветви `OnServerMessage`.
-pub(crate) fn on_server_message(
+pub(crate) async fn on_server_message(
     game: &mut CGame,
     mut message: CMessage,
     registry: &GoodsBasePropertiesRegistry,
     coefficients: &PlayerPropertyCoefficients,
+    gods_battle: &mut CGodsBattleConf,
+    rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
+    gods_battle_database: Option<&mut WorldTdsClient>,
 ) -> WorldServerMessageDispatch {
     match message.message_type() {
         0x0004_FC01 => {
@@ -1794,6 +1866,102 @@ pub(crate) fn on_server_message(
                     value,
                     numeric_complete: decoded.is_some(),
                     text,
+                },
+            ))
+        }
+        0x0005_FA0F => {
+            let decoded_subtype = message.base_mut().get_char();
+            let subtype = decoded_subtype.unwrap_or(0);
+            let socket_id = message.socket_id();
+            let disposition = match subtype {
+                0 => {
+                    let (faction_a_xyd, faction_b_xyd) = gods_battle.faction_xyd();
+                    let mut response = CMessage::new(0x0007_F80E);
+                    response.base_mut().add_ulong(faction_a_xyd);
+                    response.base_mut().add_ulong(faction_b_xyd);
+                    let sender = game.current_game_server_sender();
+                    let delivery = response.send_to_socket(sender.as_ref(), socket_id);
+                    WorldGodsBattleDisposition::Query {
+                        faction_a_xyd,
+                        faction_b_xyd,
+                        message_type: 0x0007_F80E,
+                        socket_id,
+                        delivery,
+                    }
+                }
+                1 => {
+                    let decoded_faction = message.base_mut().get_long();
+                    let faction = decoded_faction.unwrap_or(0);
+                    let decoded_xyd = message.base_mut().get_long();
+                    let xyd = decoded_xyd.unwrap_or(0) as u32;
+                    let update = gods_battle.set_faction_xyd(faction, xyd);
+                    let (faction_a_xyd, faction_b_xyd) = gods_battle.faction_xyd();
+                    let mut response = CMessage::new(0x0007_F80E);
+                    response.base_mut().add_char(1);
+                    response.base_mut().add_ulong(faction_a_xyd);
+                    response.base_mut().add_ulong(faction_b_xyd);
+                    let sender = game.current_game_server_sender();
+                    let delivery = response.send_to_socket(sender.as_ref(), socket_id);
+                    WorldGodsBattleDisposition::UpdateFaction {
+                        faction,
+                        faction_complete: decoded_faction.is_some(),
+                        xyd,
+                        xyd_complete: decoded_xyd.is_some(),
+                        update,
+                        faction_a_xyd,
+                        faction_b_xyd,
+                        response_marker: 1,
+                        message_type: 0x0007_F80E,
+                        socket_id,
+                        delivery,
+                    }
+                }
+                2 => {
+                    let name = message
+                        .base_mut()
+                        .get_str_bytes(0x80)
+                        .expect("ненулевая GetStr-граница задана точным owner-ом");
+                    let decoded_faction = message.base_mut().get_long();
+                    let faction = decoded_faction.unwrap_or(0);
+                    let update = gods_battle.set_npc_faction(&name, faction);
+                    let snapshots: Vec<_> = gods_battle
+                        .npc_names()
+                        .iter()
+                        .map(|npc| GodsBattleNpcFactionSnapshot {
+                            faction: npc.faction,
+                            name: npc.name.clone(),
+                        })
+                        .collect();
+                    let save = match rs_gods_battle {
+                        None => WorldGodsBattleNpcSave::DatabaseOwnerUnavailable,
+                        Some(database_owner) => {
+                            let notice_checkpoint = database_owner.notice_checkpoint();
+                            let save_returned = database_owner
+                                .save_npc_faction(&snapshots, gods_battle_database)
+                                .await;
+                            let notices = database_owner.drain_notices_after(notice_checkpoint);
+                            WorldGodsBattleNpcSave::Completed {
+                                snapshot_records: snapshots.len(),
+                                save_returned,
+                                notices,
+                            }
+                        }
+                    };
+                    WorldGodsBattleDisposition::UpdateNpc {
+                        name,
+                        faction,
+                        faction_complete: decoded_faction.is_some(),
+                        update,
+                        save,
+                    }
+                }
+                _ => WorldGodsBattleDisposition::Ignored,
+            };
+            WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::GodsBattle(
+                WorldGodsBattleMessage {
+                    subtype,
+                    subtype_complete: decoded_subtype.is_some(),
+                    disposition,
                 },
             ))
         }

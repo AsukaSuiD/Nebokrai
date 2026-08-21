@@ -940,6 +940,7 @@ use crate::dbaccess::worlddb::rsfaction::RsFactionOwner;
 use crate::dbaccess::worlddb::rsgenvar::RsGenVarOwner;
 use crate::dbaccess::worlddb::rsgodsbattle::{
     GodsBattleFactionXydSnapshot, GodsBattleNpcFactionSnapshot, RsGodsBattleOwner,
+    TiberiusRsGodsBattle,
 };
 use crate::dbaccess::worlddb::rsjjcsys::RsJjcSysOwner;
 use crate::dbaccess::worlddb::rsplayer::{
@@ -970,6 +971,7 @@ use crate::public::timer::{
     TimerRunReport,
 };
 use crate::setup::globesetup::GlobeSetupSnapshot;
+use crate::setup::godsbattleconf::CGodsBattleConf;
 use crate::setup::regionrouter::RegionRouter;
 use crate::public::tools::ini_decode;
 use crate::transport::bind_tcp_ipv4;
@@ -2777,6 +2779,9 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) player_ranks: &'a mut CPlayerRanks,
     pub(crate) rs_player: &'a mut TiberiusRsPlayer,
     pub(crate) player_database: Option<&'a mut WorldTdsClient>,
+    pub(crate) gods_battle: &'a mut CGodsBattleConf,
+    pub(crate) rs_gods_battle: Option<&'a mut TiberiusRsGodsBattle>,
+    pub(crate) gods_battle_database: Option<&'a mut WorldTdsClient>,
     pub(crate) auction_log: &'a mut CAuctionLog,
     pub(crate) auction_log_database: Option<&'a mut WorldTdsClient>,
     pub(crate) session_factory: &'a mut CSessionFactory,
@@ -8472,7 +8477,7 @@ impl CGame {
     /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, other
     /// transport/cursor `0x5FD02/0x5FD06..0x5FD09/0x5FD0E`, copy-number
     /// `0x5FD0B`, LeiTing update `0x5FD10`, honor
-    /// `0x5FD0C/0x5FD0D`, server `0x5FA04/0x5FA06/0x5FA07/0x5FA09`,
+    /// `0x5FD0C/0x5FD0D`, server `0x5FA04/0x5FA06/0x5FA07/0x5FA09/0x5FA0F`,
     /// organizing session
     /// result, union application `0x60118`, leave-word enable `0x6011A`, запись
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
@@ -8509,6 +8514,9 @@ impl CGame {
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
         rs_player: &mut TiberiusRsPlayer,
         mut player_database: Option<&mut WorldTdsClient>,
+        gods_battle: &mut CGodsBattleConf,
+        mut rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
+        mut gods_battle_database: Option<&mut WorldTdsClient>,
         reload_context: &mut dyn WorldReloadContext,
         add_gma_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
         update_player: &mut dyn FnMut(i32),
@@ -8557,6 +8565,9 @@ impl CGame {
                             application_callbacks,
                             &mut *rs_player,
                             player_database.as_deref_mut(),
+                            &mut *gods_battle,
+                            rs_gods_battle.as_deref_mut(),
+                            gods_battle_database.as_deref_mut(),
                             &mut *reload_context,
                             &mut *add_gma_log_text,
                             update_player,
@@ -8614,6 +8625,9 @@ impl CGame {
                     application_callbacks,
                     &mut *rs_player,
                     player_database.as_deref_mut(),
+                    &mut *gods_battle,
+                    rs_gods_battle.as_deref_mut(),
+                    gods_battle_database.as_deref_mut(),
                     &mut *reload_context,
                     &mut *add_gma_log_text,
                     update_player,
@@ -8670,6 +8684,9 @@ impl CGame {
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
         rs_player: &mut TiberiusRsPlayer,
         player_database: Option<&mut WorldTdsClient>,
+        gods_battle: &mut CGodsBattleConf,
+        rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
+        gods_battle_database: Option<&mut WorldTdsClient>,
         reload_context: &mut dyn WorldReloadContext,
         log: &mut WorldLogTextOwner,
         get_log_local_time: &mut dyn FnMut() -> WorldLogLocalTime,
@@ -8718,6 +8735,9 @@ impl CGame {
             application_callbacks,
             rs_player,
             player_database,
+            gods_battle,
+            rs_gods_battle,
+            gods_battle_database,
             reload_context,
             &mut add_gma_log_text,
             update_player,
@@ -9811,6 +9831,9 @@ impl CGame {
             &mut union_application_callbacks,
             owners.rs_player,
             owners.player_database.as_deref_mut(),
+            owners.gods_battle,
+            owners.rs_gods_battle.as_deref_mut(),
+            owners.gods_battle_database.as_deref_mut(),
             &mut *callbacks.reload_context,
             owners.log,
             &mut *callbacks.get_log_local_time,
@@ -11782,6 +11805,9 @@ async fn process_world_message<TimerCallback: Copy>(
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     rs_player: &mut TiberiusRsPlayer,
     player_database: Option<&mut WorldTdsClient>,
+    gods_battle: &mut CGodsBattleConf,
+    rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
+    gods_battle_database: Option<&mut WorldTdsClient>,
     reload_context: &mut dyn WorldReloadContext,
     add_gma_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     update_player: &mut dyn FnMut(i32),
@@ -11798,7 +11824,17 @@ async fn process_world_message<TimerCallback: Copy>(
     let legacy_run_result = message.run(&mut selector);
 
     if selector.owner == Some(WorldMessageOwner::Server) {
-        match on_server_message(game, message, registry, coefficients) {
+        match on_server_message(
+            game,
+            message,
+            registry,
+            coefficients,
+            gods_battle,
+            rs_gods_battle,
+            gods_battle_database,
+        )
+        .await
+        {
             WorldServerMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::ServerMessage {
                     source,

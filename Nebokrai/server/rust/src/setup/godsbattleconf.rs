@@ -1,8 +1,9 @@
 //! Конфигурация Gods Battle исторического Miracle.
 //!
-//! Статус World `CGodsBattleConf::AddByteToArray` RVA `0x0007E990`:
-//! `IMPLEMENTED`; loaders, persistence и runtime accessors ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Статус World `CGodsBattleConf::AddByteToArray` RVA `0x0007E990`, runtime
+//! accessors/mutations RVA `0x0007E460/0x0007E480/0x0007EC50` и два accessor-а
+//! RVA `0x000DEA50/0x000DEBA0`: `IMPLEMENTED`; loaders и persistence call-site
+//! ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
 //! SHA-256 PDB
@@ -19,6 +20,10 @@
 //! кодировку, а typed fields исключают C++ padding и raw-memory lifetime.
 //! Неизменяемая ссылка даёт serializer-у согласованный state; синхронизация
 //! общего runtime owner-а не встраивается в сам wire-value.
+//!
+//! Exact EXE подтверждает спорную decompiler-типизацию: `0x004DEA50` читает
+//! `[ecx+0x60]`, `0x004DEBA0` — `[ecx+0x64]`, а `SetFactionXYD` пишет те же
+//! offsets. Это `m_XYD[1]/m_XYD[2]`, а не отдельный `CShape` base-owner.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -82,6 +87,20 @@ pub(crate) struct CGodsBattleConf {
     die_back_positions: Vec<GodsBattleDieBackPosition>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GodsBattleFactionXydUpdate {
+    FactionA { previous: u32, current: u32 },
+    FactionB { previous: u32, current: u32 },
+    IgnoredFaction { faction: i32 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GodsBattleNpcFactionUpdate {
+    pub(crate) record_index: usize,
+    pub(crate) previous: i32,
+    pub(crate) current: i32,
+}
+
 impl CGodsBattleConf {
     pub(crate) fn push_npc(&mut self, npc: GodsBattleFactionNpcName) {
         self.npc_names.push(npc);
@@ -110,6 +129,60 @@ impl CGodsBattleConf {
     pub(crate) fn set_xyd_from_db(&mut self, faction_one: u32, faction_two: u32) {
         self.xyd[1] = faction_one;
         self.xyd[2] = faction_two;
+    }
+
+    /// Возвращает exact `m_XYD[1]/m_XYD[2]` пару server response-а.
+    pub(crate) const fn faction_xyd(&self) -> (u32, u32) {
+        (self.xyd[1], self.xyd[2])
+    }
+
+    /// Повторяет `SetFactionXYD`: только faction `1/2` меняют состояние.
+    pub(crate) fn set_faction_xyd(
+        &mut self,
+        faction: i32,
+        xyd: u32,
+    ) -> GodsBattleFactionXydUpdate {
+        match faction {
+            1 => {
+                let previous = std::mem::replace(&mut self.xyd[1], xyd);
+                GodsBattleFactionXydUpdate::FactionA {
+                    previous,
+                    current: xyd,
+                }
+            }
+            2 => {
+                let previous = std::mem::replace(&mut self.xyd[2], xyd);
+                GodsBattleFactionXydUpdate::FactionB {
+                    previous,
+                    current: xyd,
+                }
+            }
+            faction => GodsBattleFactionXydUpdate::IgnoredFaction { faction },
+        }
+    }
+
+    /// Меняет faction первой byte-exact NPC-name записи, как vector scan EXE.
+    pub(crate) fn set_npc_faction(
+        &mut self,
+        name: &[u8],
+        faction: i32,
+    ) -> Option<GodsBattleNpcFactionUpdate> {
+        let (record_index, npc) = self
+            .npc_names
+            .iter_mut()
+            .enumerate()
+            .find(|(_, npc)| npc.name == name)?;
+        let previous = std::mem::replace(&mut npc.faction, faction);
+        Some(GodsBattleNpcFactionUpdate {
+            record_index,
+            previous,
+            current: faction,
+        })
+    }
+
+    /// Заимствует ordered vector для достигнутого `CRSGodsBattle` snapshot-а.
+    pub(crate) fn npc_names(&self) -> &[GodsBattleFactionNpcName] {
+        &self.npc_names
     }
 
     pub(crate) fn push_die_back_position(&mut self, value: GodsBattleDieBackPosition) {
@@ -316,7 +389,7 @@ fn write_gods_battle_string(
 
 // ============================================================================
 // FUNCTION: CGodsBattleConf::SetXYDFrmDB
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:199
@@ -330,7 +403,7 @@ fn write_gods_battle_string(
 
 // ============================================================================
 // FUNCTION: CGodsBattleConf::SetFactionXYD
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:234
@@ -373,7 +446,7 @@ fn write_gods_battle_string(
 
 // ============================================================================
 // FUNCTION: CGodsBattleConf::SetNpcFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:247
@@ -429,7 +502,7 @@ fn write_gods_battle_string(
 
 // ============================================================================
 // FUNCTION: CShape::GetPos
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:217
@@ -443,7 +516,7 @@ fn write_gods_battle_string(
 
 // ============================================================================
 // FUNCTION: CGodsBattleConf::GetBFactionXYD
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:222
