@@ -3,7 +3,8 @@
 //! Dispatcher RVA `0x000A47F0` остаётся `IMPLEMENTED_PARTIAL`: country relays
 //! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, а также вход country victory
 //! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, exile-time
-//! `0x60316 -> 0x7FF15`, war-declare `0x60317 -> 0x7FF16` и four-nation result
+//! `0x6030E -> 0x7FF15`, `0x60316 -> 0x7FF15`, war-declare
+//! `0x60317 -> 0x7FF16` и four-nation result
 //! `0x60319 -> 0x7FE49`, `0x6031A -> 0x7FE46/DB`, no-op `0x6031B` и
 //! `0x6031C -> 0x7FE47`, `0x6031D -> 0x7FA04` имеют статус
 //! `IMPLEMENTED`. Victory читает один
@@ -34,6 +35,15 @@
 //! signed 32-bit milliseconds, делит к нулю и зажимает отрицательный результат.
 //! `SuccessExiled` в точном EXE не наполняет map, хотя Linux-донор это исправил;
 //! dispatcher сохраняет машинную ошибку, а не принимает donor fix за контракт.
+//! Exact `0x004A4C57..0x004A4E3E` задаёт `0x6030E`: signed player ID, два
+//! signed `char` success/country, ранний stop до чтения списка при отсутствующей
+//! стране, затем синхронный `SuccessExiled` и `0x7FF15 { country:u8,
+//! count:i32, player_ids:i32[] }`. Signed count `<= 0` не читает элементы, но
+//! всё равно публикуется; source metadata и хвост не проверяются. Для
+//! положительного count Rust требует фактически присутствующие DWORD: старый
+//! цикл дополнял оборванный inter-server payload нулями до заявленного размера
+//! и мог выделять до `INT_MAX` элементов, что является внутренним malformed-
+//! input дефектом, а не Miracle-протоколом.
 //! Exact `0x004A4FC9..0x004A5049` задаёт `0x60317`: два signed long,
 //! синхронный `player_declare`, затем ответ `char accepted, player, target` в
 //! исходный `m_lMapID`. Проверок socket-owner и полного tail здесь нет; они
@@ -64,7 +74,8 @@ use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::tools::put_string_to_file;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::worldserver::appworld::country::country::{
-    CountryExileTimeLookup, CountryQuestSwitchUpdate, CountryScalarUpdate,
+    CountryExileResultContext, CountryExileTimeLookup, CountryQuestSwitchUpdate,
+    CountryScalarUpdate, CountrySuccessExiledReport,
 };
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::country::countryparam::{
@@ -162,6 +173,39 @@ pub(crate) struct WorldCountryExileTimeSync {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldCountryExileResultDisposition {
+    CountryMissing,
+    PlayerListTruncated {
+        advertised_count: i32,
+        available_complete_ids: usize,
+    },
+    PlayerListAllocationBlocked {
+        advertised_count: i32,
+    },
+    Broadcast {
+        advertised_count: i32,
+        player_ids: Vec<i32>,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldCountryExileResultSync {
+    pub(crate) source_map_id: i32,
+    pub(crate) source_socket_id: i32,
+    pub(crate) player_id: i32,
+    pub(crate) player_id_complete: bool,
+    pub(crate) raw_success: i8,
+    pub(crate) success_complete: bool,
+    pub(crate) country_id: u8,
+    pub(crate) country_id_complete: bool,
+    pub(crate) country_report: Option<CountrySuccessExiledReport>,
+    pub(crate) count_complete: Option<bool>,
+    pub(crate) disposition: WorldCountryExileResultDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldCountryWarDeclarationSync {
     pub(crate) player_id: i32,
     pub(crate) player_id_complete: bool,
@@ -237,6 +281,7 @@ pub(crate) enum WorldCountryMessageOutcome {
     ScalarSynchronized(WorldCountryScalarSync),
     QuestSwitchSynchronized(WorldCountryQuestSwitchSync),
     ExileTimeSynchronized(WorldCountryExileTimeSync),
+    ExileResultSynchronized(WorldCountryExileResultSync),
     CountryWarDeclared(WorldCountryWarDeclarationSync),
     CountryWarVictory(WorldCountryWarVictorySync),
     FourNationWarResult(WorldFourNationWarResultSync),
@@ -436,6 +481,131 @@ pub(crate) struct WorldCountryWarVictorySync {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CountryWarVictoryDispatchError<ContextBlock> {
     pub(crate) source: ContextBlock,
+}
+
+pub(crate) fn dispatch_country_exile_result_message<
+    Context: CountryExileResultContext + ?Sized,
+>(
+    message: &mut CMessage,
+    country_handler: &mut CCountryHandler,
+    country_parameters: &CCountryParam,
+    context: &mut Context,
+) -> Option<WorldCountryExileResultSync> {
+    if message.message_type() != 0x6030e {
+        return None;
+    }
+
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_player_id = message.base_mut().get_long();
+    let player_id = decoded_player_id.unwrap_or(0);
+    let decoded_success = message.base_mut().get_char();
+    let raw_success = decoded_success.unwrap_or(0);
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+
+    let Some(country) = country_handler.get_country_mut(country_id) else {
+        return Some(WorldCountryExileResultSync {
+            source_map_id,
+            source_socket_id,
+            player_id,
+            player_id_complete: decoded_player_id.is_some(),
+            raw_success,
+            success_complete: decoded_success.is_some(),
+            country_id,
+            country_id_complete: decoded_country.is_some(),
+            country_report: None,
+            count_complete: None,
+            disposition: WorldCountryExileResultDisposition::CountryMissing,
+        });
+    };
+
+    let country_report = country.success_exiled(
+        player_id,
+        raw_success != 0,
+        country_parameters,
+        context,
+    );
+    let decoded_count = message.base_mut().get_long();
+    let advertised_count = decoded_count.unwrap_or(0);
+
+    let mut player_ids = Vec::new();
+    if advertised_count > 0 {
+        let cursor = message.base_mut().cursor();
+        let remaining_bytes = message.as_wire_bytes().len().saturating_sub(cursor);
+        let advertised_count_usize = advertised_count as usize;
+        let required_bytes = advertised_count_usize.saturating_mul(size_of::<i32>());
+        if required_bytes > remaining_bytes {
+            return Some(WorldCountryExileResultSync {
+                source_map_id,
+                source_socket_id,
+                player_id,
+                player_id_complete: decoded_player_id.is_some(),
+                raw_success,
+                success_complete: decoded_success.is_some(),
+                country_id,
+                country_id_complete: decoded_country.is_some(),
+                country_report: Some(country_report),
+                count_complete: Some(decoded_count.is_some()),
+                disposition: WorldCountryExileResultDisposition::PlayerListTruncated {
+                    advertised_count,
+                    available_complete_ids: remaining_bytes / size_of::<i32>(),
+                },
+            });
+        }
+        if player_ids.try_reserve_exact(advertised_count_usize).is_err() {
+            return Some(WorldCountryExileResultSync {
+                source_map_id,
+                source_socket_id,
+                player_id,
+                player_id_complete: decoded_player_id.is_some(),
+                raw_success,
+                success_complete: decoded_success.is_some(),
+                country_id,
+                country_id_complete: decoded_country.is_some(),
+                country_report: Some(country_report),
+                count_complete: Some(decoded_count.is_some()),
+                disposition: WorldCountryExileResultDisposition::PlayerListAllocationBlocked {
+                    advertised_count,
+                },
+            });
+        }
+        for _ in 0..advertised_count_usize {
+            player_ids.push(
+                message
+                    .base_mut()
+                    .get_long()
+                    .expect("полнота exile player-list проверена до декодирования"),
+            );
+        }
+    }
+
+    let mut response = CMessage::new(0x0007_FF15);
+    response.base_mut().add_byte(country_id);
+    response.base_mut().add_long(advertised_count);
+    for &exiled_player_id in &player_ids {
+        response.base_mut().add_long(exiled_player_id);
+    }
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = context.send_all(&response);
+    Some(WorldCountryExileResultSync {
+        source_map_id,
+        source_socket_id,
+        player_id,
+        player_id_complete: decoded_player_id.is_some(),
+        raw_success,
+        success_complete: decoded_success.is_some(),
+        country_id,
+        country_id_complete: decoded_country.is_some(),
+        country_report: Some(country_report),
+        count_complete: Some(decoded_count.is_some()),
+        disposition: WorldCountryExileResultDisposition::Broadcast {
+            advertised_count,
+            player_ids,
+            wire,
+            delivery,
+        },
+    })
 }
 
 pub(crate) fn dispatch_country_war_victory_message<Context: CountryWarVictoryContext + ?Sized>(

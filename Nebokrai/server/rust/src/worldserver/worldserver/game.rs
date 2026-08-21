@@ -978,7 +978,10 @@ use crate::setup::godsbattleconf::CGodsBattleConf;
 use crate::setup::regionrouter::RegionRouter;
 use crate::public::tools::{ini_decode, put_string_to_file};
 use crate::transport::bind_tcp_ipv4;
-use crate::worldserver::appworld::country::country::{CCountry, CountryKingSaveLimits};
+use crate::worldserver::appworld::country::country::{
+    CCountry, CountryExileMessageDelivery, CountryExileResultContext,
+    CountryExileTextArgument, CountryKingSaveLimits,
+};
 use crate::worldserver::appworld::country::countryhandler::{
     CCountryHandler, CountryInfoDeliveryContext, CountryRunBlock, CountryRunReport,
 };
@@ -1008,6 +1011,7 @@ use crate::worldserver::appworld::message::countrymessage::{
     WorldCountryMessageDispatch, WorldCountryMessageOutcome,
     WorldFourNationExploitDatabaseDisposition, WorldFourNationExploitSync,
     decode_four_nation_exploit_message,
+    dispatch_country_exile_result_message,
     dispatch_country_war_declaration_message, dispatch_country_war_victory_message,
     dispatch_four_nation_country_fail_message, dispatch_four_nation_war_result_message,
     dispatch_four_nation_war_time_message, on_country_message,
@@ -10698,6 +10702,14 @@ impl CGame {
             .fold(0_i32, |count, _| count.wrapping_add(1))
     }
 
+    /// Возвращает `dwIndex` подключённых GameServer в исходном map-order.
+    pub(crate) fn connected_game_server_indices(&self) -> impl Iterator<Item = i32> + '_ {
+        self.game_servers
+            .values()
+            .filter(|game_server| game_server.connected)
+            .map(|game_server| game_server.index as i32)
+    }
+
     /// Считает подключённые GameServer, кроме записи с `dwIndex == 5`.
     pub(crate) fn connected_game_server_count_ex(&self) -> i32 {
         self.game_servers
@@ -12023,6 +12035,13 @@ struct WorldCountryWarEffects<'a> {
         &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
 }
 
+struct WorldCountryExileResultEffects<'a> {
+    game: &'a CGame,
+    globe_setup: &'a GlobeSetupSnapshot,
+    format_world_string:
+        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+}
+
 struct WorldFourNationWarResultEffects<'a> {
     game: &'a CGame,
 }
@@ -12050,6 +12069,70 @@ impl FourNationWarResultContext for WorldFourNationWarResultEffects<'_> {
         map_id: i32,
     ) -> Result<i32, SendMessageError> {
         message.send_to_map_id(self.game.current_game_server_sender().as_ref(), map_id)
+    }
+}
+
+impl CountryExileResultContext for WorldCountryExileResultEffects<'_> {
+    fn map_player_name(&mut self, player_id: i32) -> Option<Vec<u8>> {
+        self.game
+            .map_player(player_id as u32)
+            .map(|player| legacy_c_string_prefix(player.get_name()).to_vec())
+    }
+
+    fn country_name(&mut self, country_id: u8) -> Vec<u8> {
+        self.globe_setup
+            .country_name(country_id)
+            .unwrap_or_default()
+            .to_vec()
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| match argument {
+                CountryExileTextArgument::Text(text) => UnionFormatArgument::Text(text),
+                CountryExileTextArgument::Signed(value) => UnionFormatArgument::Signed(*value),
+            })
+            .collect::<Vec<_>>();
+        (self.format_world_string)(string_id, &arguments)
+    }
+
+    fn game_server_number_by_player_id(&mut self, player_id: i32) -> i32 {
+        self.game.game_server_number_by_player_id(player_id)
+    }
+
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError> {
+        message.send_to_map_id(self.game.current_game_server_sender().as_ref(), map_id)
+    }
+
+    fn send_to_connected_game_servers(
+        &mut self,
+        message: &CMessage,
+    ) -> Vec<CountryExileMessageDelivery> {
+        let sender = self.game.current_game_server_sender();
+        self.game
+            .connected_game_server_indices()
+            .map(|map_id| CountryExileMessageDelivery {
+                map_id,
+                delivery: message.send_to_map_id(sender.as_ref(), map_id),
+            })
+            .collect()
+    }
+
+    fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError> {
+        message.send_all(self.game.current_game_server_sender().as_ref())
+    }
+
+    fn put_king_log(&mut self, text: &[u8]) {
+        put_string_to_file("king", text);
     }
 }
 
@@ -12545,6 +12628,26 @@ where
                         after_database,
                     },
                 ),
+            };
+        }
+        let exile_result = {
+            let mut effects = WorldCountryExileResultEffects {
+                game,
+                globe_setup,
+                format_world_string: &mut *application_callbacks.format_world_string,
+            };
+            dispatch_country_exile_result_message(
+                &mut message,
+                country_handler,
+                country_parameters,
+                &mut effects,
+            )
+        };
+        if let Some(sync) = exile_result {
+            return ProcessedWorldEvent::CountryMessage {
+                source,
+                legacy_run_result,
+                outcome: WorldCountryMessageOutcome::ExileResultSynchronized(sync),
             };
         }
         let four_nation_country_fail = {

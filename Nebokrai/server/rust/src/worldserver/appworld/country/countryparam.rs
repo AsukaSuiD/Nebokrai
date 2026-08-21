@@ -49,6 +49,7 @@ const COUNTRY_PARAMETER_COUNT: usize = 39;
 const MAX_COUNTRY_POWER: usize = 2;
 const MAX_COUNTRY_TREASURY: usize = 4;
 const MAX_KING_CONTROL_POINT: usize = 10;
+const DEC_KING_CONTROL_POINT_EXILE: usize = 20;
 const MAX_KING_MATERIAL_POINT: usize = 26;
 const MAX_KING_WAR_POINT: usize = 28;
 const EXILE_TIME: usize = 32;
@@ -279,6 +280,11 @@ impl CCountryParam {
     /// Возвращает достигнутый максимум king control point без default-подстановки.
     pub(crate) const fn max_king_control_point(&self) -> Option<i32> {
         self.parameters[MAX_KING_CONTROL_POINT]
+    }
+
+    /// Возвращает exact `_dec_king_control_point_exile` без default-подстановки.
+    pub(crate) const fn exile_control_point_cost(&self) -> Option<i32> {
+        self.parameters[DEC_KING_CONTROL_POINT_EXILE]
     }
 
     /// Возвращает достигнутый максимум king material point без default-подстановки.

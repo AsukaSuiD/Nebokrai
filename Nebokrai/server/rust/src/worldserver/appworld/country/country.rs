@@ -2,6 +2,7 @@
 //!
 //! Статус `CCountry::SetCountryPower/SetCountryTreasury/SetCountryTech` RVA
 //! `0x000A4750/0x000A4790/0x000A47D0`, `CCountry::AddToByteArray` RVA `0x000C6E30`,
+//! `CCountry::SuccessExiled` RVA `0x000C7EE0`,
 //! `CCountry::CloneCountryData` RVA `0x000C9CE0` и
 //! `CCountry::CloneSaveData` RVA `0x000CC470` — `IMPLEMENTED`; остальной корпус
 //! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
@@ -24,6 +25,13 @@
 //! и не наполняет `ExileMap`; Linux-донор добавлял `try_emplace`, то есть
 //! исправлял наблюдаемую ошибку оригинала. Rust сохраняет exact поведение и
 //! не выдумывает запись, пока её не подтвердит другой машинный owner.
+//! Успешная ветка сначала списывает king control point с исходным upper-only
+//! clamp, публикует `0x7FF10`, затем wrapping увеличивает `m_lExileNum`,
+//! форматирует `WS0077` и рассылает `0x7FF11` каждому connected GameServer.
+//! Отказ форматирует `WS0078` и пишет королю `0x7FF13`; отсутствующий map-player
+//! использует `WS0072`, причём порядок там обратный: king-log до private send.
+//! Старое переполнение `char[260]` не является протоколом: Rust сохраняет не
+//! более 259 видимых bytes и единственный wire-NUL.
 //! Clone копирует country ID, treasury, power,
 //! current/level-up tech exp, tech level, king identity/flags и war-result.
 //! Три king-point ограничиваются соответствующими максимумами `CCountryParam`.
@@ -61,11 +69,13 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::ffi::CString;
 use std::fmt;
 
 use crate::dbaccess::worlddb::dbcountry::{
     CountryKingSaveSnapshot, CountryMinisterSaveSnapshot, CountrySaveSnapshot,
 };
+use crate::nets::networld::message::{CMessage, SendMessageError};
 
 use super::countryparam::{CCountryParam, CountryParameterUnavailable};
 use super::king::{KingPointUpdate, set_control_point, set_material_point, set_war_point};
@@ -99,6 +109,7 @@ pub(crate) struct CCountry {
     pub(crate) king_quest_switch: bool,
     pub(crate) country_war_result: i32,
     pub(crate) ministers: BTreeMap<u8, CountryMinisterState>,
+    pub(crate) exile_count: i32,
     pub(crate) exile_started_at_ms: BTreeMap<i32, i32>,
 }
 
@@ -149,6 +160,73 @@ pub(crate) enum CountryScalarUpdate {
     KingPoint(KingPointUpdate),
 }
 
+/// Один аргумент exact `_sprintf` внутри `CCountry::SuccessExiled`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryExileTextArgument<'a> {
+    Text(&'a [u8]),
+    Signed(i32),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountryExileMessageDelivery {
+    pub(crate) map_id: i32,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+/// Узкая граница player/localization/network/log эффектов исходного owner-а.
+pub(crate) trait CountryExileResultContext {
+    fn map_player_name(&mut self, player_id: i32) -> Option<Vec<u8>>;
+    fn country_name(&mut self, country_id: u8) -> Vec<u8>;
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8>;
+    fn game_server_number_by_player_id(&mut self, player_id: i32) -> i32;
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError>;
+    fn send_to_connected_game_servers(
+        &mut self,
+        message: &CMessage,
+    ) -> Vec<CountryExileMessageDelivery>;
+    fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError>;
+    fn put_king_log(&mut self, text: &[u8]);
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum CountrySuccessExiledDisposition {
+    PlayerMissing {
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+    ParameterUnavailable {
+        block: CountryParameterUnavailable,
+        king_map_id: i32,
+        control_point_update: Option<KingPointUpdate>,
+        control_point_delivery: Option<CountryExileMessageDelivery>,
+    },
+    Successful {
+        control_point_update: KingPointUpdate,
+        control_point_delivery: CountryExileMessageDelivery,
+        previous_exile_count: i32,
+        applied_exile_count: i32,
+        country_deliveries: Vec<CountryExileMessageDelivery>,
+    },
+    Failed {
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CountrySuccessExiledReport {
+    pub(crate) player_id: i32,
+    pub(crate) success: bool,
+    pub(crate) text: Vec<u8>,
+    pub(crate) disposition: CountrySuccessExiledDisposition,
+}
+
 impl CCountry {
     /// Nonzero-ветка exact `IsKing`; caller отдельно сохраняет исходный log.
     pub(crate) fn has_king_id(&self, player_id: i32) -> bool {
@@ -161,6 +239,181 @@ impl CCountry {
         self.ministers
             .values()
             .any(|minister| minister.snapshot.id == player_id)
+    }
+
+    /// Исполняет exact `CCountry::SuccessExiled` без donor-записи в `ExileMap`.
+    pub(crate) fn success_exiled<Context: CountryExileResultContext + ?Sized>(
+        &mut self,
+        player_id: i32,
+        success: bool,
+        parameters: &CCountryParam,
+        context: &mut Context,
+    ) -> CountrySuccessExiledReport {
+        let Some(player_name) = context.map_player_name(player_id) else {
+            let text = legacy_country_text(context.format_world_string(b"WS0072", &[]));
+            context.put_king_log(&text);
+            let private_delivery = self.send_private_message(&text, 0, context);
+            return CountrySuccessExiledReport {
+                player_id,
+                success,
+                text,
+                disposition: CountrySuccessExiledDisposition::PlayerMissing {
+                    private_delivery,
+                },
+            };
+        };
+
+        if !success {
+            let text = legacy_country_text(context.format_world_string(
+                b"WS0078",
+                &[CountryExileTextArgument::Text(&player_name)],
+            ));
+            let private_delivery = self.send_private_message(&text, 0, context);
+            context.put_king_log(&text);
+            return CountrySuccessExiledReport {
+                player_id,
+                success,
+                text,
+                disposition: CountrySuccessExiledDisposition::Failed { private_delivery },
+            };
+        }
+
+        // EXE вычисляет маршрут короля до чтения country-параметров.
+        let king_map_id = context.game_server_number_by_player_id(self.king.id);
+        let Some(control_point_cost) = parameters.exile_control_point_cost() else {
+            return CountrySuccessExiledReport {
+                player_id,
+                success,
+                text: Vec::new(),
+                disposition: CountrySuccessExiledDisposition::ParameterUnavailable {
+                    block: CountryParameterUnavailable {
+                        field: "_dec_king_control_point_exile",
+                    },
+                    king_map_id,
+                    control_point_update: None,
+                    control_point_delivery: None,
+                },
+            };
+        };
+        let requested_control_point = self.king.control_point.wrapping_sub(control_point_cost);
+        let control_point_update = match set_control_point(
+            &mut self.king,
+            requested_control_point,
+            parameters,
+        ) {
+            Ok(update) => update,
+            Err(block) => {
+                return CountrySuccessExiledReport {
+                    player_id,
+                    success,
+                    text: Vec::new(),
+                    disposition: CountrySuccessExiledDisposition::ParameterUnavailable {
+                        block,
+                        king_map_id,
+                        control_point_update: None,
+                        control_point_delivery: None,
+                    },
+                };
+            }
+        };
+
+        let mut control_point_message = CMessage::new(0x0007_FF10);
+        control_point_message.base_mut().add_long(self.king.id);
+        control_point_message.base_mut().add_byte(self.country_id);
+        control_point_message
+            .base_mut()
+            .add_long(self.king.control_point);
+        let control_point_delivery = CountryExileMessageDelivery {
+            map_id: king_map_id,
+            delivery: context.send_to_map_id(&control_point_message, king_map_id),
+        };
+
+        let Some(exile_time_ms) = parameters.exile_time_ms() else {
+            return CountrySuccessExiledReport {
+                player_id,
+                success,
+                text: Vec::new(),
+                disposition: CountrySuccessExiledDisposition::ParameterUnavailable {
+                    block: CountryParameterUnavailable {
+                        field: "_exile_time",
+                    },
+                    king_map_id,
+                    control_point_update: Some(control_point_update),
+                    control_point_delivery: Some(control_point_delivery),
+                },
+            };
+        };
+
+        // Исходный timeGetTime здесь вызывался, но результат не сохранялся и
+        // `ExileMap` не менялся. Чисто технический пустой вызов Rust не имитирует.
+        let previous_exile_count = self.exile_count;
+        self.exile_count = self.exile_count.wrapping_add(1);
+        let country_name = context.country_name(self.country_id);
+        let text = legacy_country_text(context.format_world_string(
+            b"WS0077",
+            &[
+                CountryExileTextArgument::Text(&country_name),
+                CountryExileTextArgument::Text(&player_name),
+                CountryExileTextArgument::Signed(exile_time_ms / 60_000),
+            ],
+        ));
+        let country_deliveries = self.send_country_message(&text, context);
+        context.put_king_log(&text);
+        CountrySuccessExiledReport {
+            player_id,
+            success,
+            text,
+            disposition: CountrySuccessExiledDisposition::Successful {
+                control_point_update,
+                control_point_delivery,
+                previous_exile_count,
+                applied_exile_count: self.exile_count,
+                country_deliveries,
+            },
+        }
+    }
+
+    fn send_private_message<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        text: &[u8],
+        player_id: i32,
+        context: &mut Context,
+    ) -> Option<CountryExileMessageDelivery> {
+        if text.is_empty() {
+            return None;
+        }
+        let target_player_id = if player_id == 0 {
+            self.king.id
+        } else {
+            player_id
+        };
+        let map_id = context.game_server_number_by_player_id(target_player_id);
+        if map_id == 0 {
+            return None;
+        }
+        let text = CString::new(text).expect("legacy country text не содержит NUL");
+        let mut message = CMessage::new(0x0007_FF13);
+        message.base_mut().add_long(target_player_id);
+        message.base_mut().add_str(Some(&text));
+        Some(CountryExileMessageDelivery {
+            map_id,
+            delivery: context.send_to_map_id(&message, map_id),
+        })
+    }
+
+    fn send_country_message<Context: CountryExileResultContext + ?Sized>(
+        &self,
+        text: &[u8],
+        context: &mut Context,
+    ) -> Vec<CountryExileMessageDelivery> {
+        if text.is_empty() {
+            return Vec::new();
+        }
+        let text = CString::new(text).expect("legacy country text не содержит NUL");
+        let mut message = CMessage::new(0x0007_FF11);
+        message.base_mut().add_byte(self.country_id);
+        message.base_mut().add_str(Some(&text));
+        context.send_to_connected_game_servers(&message)
     }
 
     /// Повторяет signed 32-битную арифметику `GetExileResTime` после уже
@@ -399,6 +652,16 @@ impl fmt::Display for CountrySerializeError {
 }
 
 impl Error for CountrySerializeError {}
+
+fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
+    if let Some(terminator) = text.iter().position(|byte| *byte == 0) {
+        text.truncate(terminator);
+    }
+    // Старый `_sprintf` писал в `char[260]`; переполнение и последующий
+    // overread были внутренним UB, а не Miracle wire-контрактом.
+    text.truncate(259);
+    text
+}
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
@@ -650,7 +913,7 @@ impl Error for CountrySerializeError {}
 
 // ============================================================================
 // FUNCTION: CCountry::SuccessExiled
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_SOURCE_REFERENCE
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1254
@@ -658,6 +921,7 @@ impl Error for CountrySerializeError {}
 // ADDRESS: 004c7ee0
 // PROTOTYPE: bool __thiscall SuccessExiled(long param_1, bool param_2)
 //
+// Реализовано выше; тело ниже сохранено как машинная source-reference.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
