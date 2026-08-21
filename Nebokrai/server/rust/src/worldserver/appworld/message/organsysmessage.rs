@@ -7,8 +7,8 @@
 //! city-transfer ingress `0x60130`, admission-permit `0x60132`, city-war
 //! terminal `0x60133`, village-war application `0x60135`, её result ingress
 //! `0x60136`, city-war application `0x60137`, её result ingress `0x60138` и
-//! Goods War command `0x60139` и faction-win `0x6013A`; остальной owner —
-//! `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Goods War command `0x60139`, faction-win `0x6013A` и player quest routes
+//! `0x6013B/0x6013C`; остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
@@ -189,6 +189,12 @@
 //! Уже существующие player keys не переназначаются; отрицательный master —
 //! только wire sentinel. Donor-очистка с удалением прежних записей и
 //! обязательной вставкой `-master` в map машине противоречит и не перенесена.
+//! Exact `0x004A873F..0x004A87F2` для `0x6013B/0x6013C` в обеих ветвях
+//! читает `(player ID: Long, quest ID: Short)`, разрешает route через
+//! `GetGameServerNumber_ByPlayerID` и при literal zero молча выходит. Иначе
+//! общий leaf отправляет в route `0x7FE38/0x7FE39` соответственно с теми же
+//! `Long + Short`. Donor заменил map-route на socket и добавил tail/ownership
+//! gates; в EXE их нет, поэтому они не перенесены.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -327,6 +333,10 @@ const APPLY_FOR_CITY_WAR_RESPONSE_TYPE: i32 = 0x7FE37;
 const CITY_WAR_RESULT_MESSAGE_TYPE: i32 = 0x60138;
 const GOODS_WAR_COMMAND_MESSAGE_TYPE: i32 = 0x60139;
 const GOODS_WAR_FACTION_WIN_MESSAGE_TYPE: i32 = 0x6013A;
+const PLAYER_ADD_QUEST_MESSAGE_TYPE: i32 = 0x6013B;
+const PLAYER_REMOVE_QUEST_MESSAGE_TYPE: i32 = 0x6013C;
+const GAME_ADD_QUEST_MESSAGE_TYPE: i32 = 0x7FE38;
+const GAME_REMOVE_QUEST_MESSAGE_TYPE: i32 = 0x7FE39;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -3645,6 +3655,56 @@ pub(crate) fn dispatch_goods_war_faction_win(
         faction_found: true,
         report: Some(report),
     }))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingPlayerQuestCommandKind {
+    Add,
+    Remove,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingPlayerQuestCommandDispatch {
+    pub(crate) kind: OrganizingPlayerQuestCommandKind,
+    pub(crate) player_id: i32,
+    pub(crate) quest_id: i16,
+    pub(crate) game_server_id: i32,
+    pub(crate) delivery: Option<Result<i32, SendMessageError>>,
+}
+
+/// Маршрутизирует exact парные `Long + Short` ветви `0x6013B/0x6013C`.
+pub(crate) fn dispatch_player_quest_command(
+    message: &mut CMessage,
+    game: &CGame,
+    sender: Option<&ServerCommandHandle>,
+) -> Option<OrganizingPlayerQuestCommandDispatch> {
+    let (kind, response_type) = match message.message_type() {
+        PLAYER_ADD_QUEST_MESSAGE_TYPE => {
+            (OrganizingPlayerQuestCommandKind::Add, GAME_ADD_QUEST_MESSAGE_TYPE)
+        }
+        PLAYER_REMOVE_QUEST_MESSAGE_TYPE => (
+            OrganizingPlayerQuestCommandKind::Remove,
+            GAME_REMOVE_QUEST_MESSAGE_TYPE,
+        ),
+        _ => return None,
+    };
+
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let quest_id = message.base_mut().get_short().unwrap_or(0);
+    let game_server_id = game.game_server_number_by_player_id(player_id);
+    let delivery = (game_server_id != 0).then(|| {
+        let mut response = CMessage::new(response_type);
+        response.base_mut().add_long(player_id);
+        response.base_mut().add_short(quest_id);
+        response.send_to_map_id(sender, game_server_id)
+    });
+    Some(OrganizingPlayerQuestCommandDispatch {
+        kind,
+        player_id,
+        quest_id,
+        game_server_id,
+        delivery,
+    })
 }
 
 #[derive(Debug, Eq, PartialEq)]
