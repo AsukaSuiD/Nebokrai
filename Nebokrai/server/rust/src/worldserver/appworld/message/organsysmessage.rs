@@ -4,8 +4,9 @@
 //! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
 //! `0x6012A`, парные city-tax gate `0x6012B/0x6012C` и region-param update
 //! `0x6012D`, region route `0x6012E`, city-gate route `0x6012F` и полный
-//! city-transfer ingress `0x60130`, admission-permit `0x60132` и city-war
-//! terminal `0x60133`; остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! city-transfer ingress `0x60130`, admission-permit `0x60132`, city-war
+//! terminal `0x60133` и village-war application `0x60135`; остальной owner —
+//! `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
@@ -138,6 +139,15 @@
 //! region ID, attacker player ID, defender faction ID)` и без route/tail
 //! проверок вызывает полный `COrganizingCtrl::OnAttackCityEnd`; прямого
 //! wire-ответа ingress не создаёт, сообщения войны рождает concrete owner.
+//! Exact `0x004A8456..0x004A84D4` для `0x60135` читает ровно `(player ID,
+//! village-war number, legacy money)`, вызывает готовый
+//! `CVillageWarSys::ApplyForVillageWar` и только при true-result строит
+//! `0x7FE34(player ID, legacy money)`, направленный в исходный `m_lMapID`.
+//! Третий параметр owner не использует: EXE лишь возвращает его GameServer-у.
+//! Сам owner подтверждён в `0x0046CCF0..0x0046D0D7`: после gates публикует
+//! `0x7FE36`, форматирует `WS0289` в 500-byte границе, отправляет общий
+//! organizing-info с kind `-366`, цветом `0xFFFF0000` и пишет war log.
+//! Balance/online/route/tail gates старого Linux-донора в машине отсутствуют.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -187,7 +197,8 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     CityTransferEffects, CityTransferEndpointBlock,
     CityTransferSessionBlock, CityTransferSessionReport, CityTransferSessionRequest,
     CityTransferSessionRuntime, CityTransferStartBlock, CityTransferStartOutcome,
-    CityTransferTerminal, DeclareWarFactionPage, DeclareWarFactionPageBlock, FreePlayerLookup,
+    CityTransferTerminal, DeclareWarFactionPage, DeclareWarFactionPageBlock,
+    FactionMasterLookupBlock, FreeFactionLookup, FreePlayerLookup,
     OrganizingContributorBlock, OrganizingContributorOutcome,
     FactionUnionMembershipLookupBlock, OrganizingFactionExperienceMutation,
     OrganizingFactionMemberStateOutcome,
@@ -208,9 +219,13 @@ use crate::worldserver::appworld::organizingsystem::union::{
     UnionApplicationTerminal, UnionApplyForJoinEffects, UnionFormatArgument,
     begin_union_application_session,
 };
-use crate::worldserver::appworld::organizingsystem::villagewarsys::CVillageWarSys;
+use crate::worldserver::appworld::organizingsystem::villagewarsys::{
+    CVillageWarSys, VillageWarApplicationContext, VillageWarApplicationReport,
+};
 use crate::worldserver::appworld::player::{PlayerCodecError, PlayerPropertyCoefficients};
-use crate::worldserver::worldserver::game::{CGame, WorldRegionParamUpdateOutcome};
+use crate::worldserver::worldserver::game::{
+    CGame, WorldRegionNameLookup, WorldRegionParamUpdateOutcome,
+};
 
 const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
     [0x60117, 0x60119, 0x60120, 0x60122, 0x60124, 0x60131];
@@ -244,6 +259,8 @@ const OPERATE_CITY_GATE_RESPONSE_TYPE: i32 = 0x7FE2A;
 const TRANSFER_CITY_OWNER_MESSAGE_TYPE: i32 = 0x60130;
 const SET_FACTION_ADMISSION_PERMIT_MESSAGE_TYPE: i32 = 0x60132;
 const ATTACK_CITY_END_MESSAGE_TYPE: i32 = 0x60133;
+const APPLY_FOR_VILLAGE_WAR_MESSAGE_TYPE: i32 = 0x60135;
+const APPLY_FOR_VILLAGE_WAR_RESPONSE_TYPE: i32 = 0x7FE34;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -2263,6 +2280,224 @@ where
         attacker_player_id,
         defender_faction_id,
         outcome,
+    }))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingVillageWarApplicationBlock {
+    FactionMaster(FactionMasterLookupBlock),
+    MissingFaction { faction_id: i32 },
+    MissingFactionLevel { faction_id: i32 },
+    NullUnion { map_key: i32 },
+    MissingRegionOwner { region_id: i32 },
+    MissingRegionName { region_id: i32 },
+    NoticeWouldOverflow { visible_len: usize },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingVillageWarApplicationDispatch {
+    pub(crate) player_id: i32,
+    pub(crate) war_number: i32,
+    pub(crate) legacy_third_parameter: i32,
+    pub(crate) outcome: VillageWarApplicationReport,
+    pub(crate) response: Option<Result<i32, SendMessageError>>,
+}
+
+/// Живой adapter достигнутых organizing/region/string owner-ов заявки.
+struct WorldVillageWarApplicationContext<'game, 'callbacks, 'effects> {
+    game: &'game CGame,
+    organizing: &'game COrganizingCtrl,
+    organizing_parameters: &'game COrganizingParam,
+    attack_city: &'game CAttackCitySys,
+    callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
+}
+
+impl VillageWarApplicationContext for WorldVillageWarApplicationContext<'_, '_, '_> {
+    type Block = OrganizingVillageWarApplicationBlock;
+
+    fn faction_master_for_player(&mut self, player_id: i32) -> Result<i32, Self::Block> {
+        self.organizing
+            .faction_id_by_master_player(player_id)
+            .map_err(OrganizingVillageWarApplicationBlock::FactionMaster)
+    }
+
+    fn faction_exists(&mut self, faction_id: i32) -> Result<bool, Self::Block> {
+        Ok(self.organizing.faction_by_id(faction_id).is_some())
+    }
+
+    fn region_exists(&mut self, region_id: i32) -> Result<bool, Self::Block> {
+        Ok(self.game.has_materialized_region(region_id))
+    }
+
+    fn attack_village_min_level(&mut self) -> Result<i32, Self::Block> {
+        Ok(self.organizing_parameters.attack_village_minimum_level())
+    }
+
+    fn faction_level(&mut self, faction_id: i32) -> Result<i32, Self::Block> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .ok_or(OrganizingVillageWarApplicationBlock::MissingFaction { faction_id })?
+            .level()
+            .ok_or(OrganizingVillageWarApplicationBlock::MissingFactionLevel { faction_id })
+    }
+
+    fn region_owner_faction_id(&mut self, region_id: i32) -> Result<i32, Self::Block> {
+        self.game.region_owned_faction_id(region_id).ok_or(
+            OrganizingVillageWarApplicationBlock::MissingRegionOwner { region_id },
+        )
+    }
+
+    fn union_for_faction(&mut self, faction_id: i32) -> Result<i32, Self::Block> {
+        match self.organizing.is_free_faction(faction_id) {
+            FreeFactionLookup::NoUnion => Ok(0),
+            FreeFactionLookup::Union(union_id) => Ok(union_id),
+            FreeFactionLookup::BlockedNullConfederation { map_key } => {
+                Err(OrganizingVillageWarApplicationBlock::NullUnion { map_key })
+            }
+        }
+    }
+
+    fn faction_owned_city_count(&mut self, faction_id: i32) -> Result<usize, Self::Block> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(|faction| faction.owned_cities().len())
+            .ok_or(OrganizingVillageWarApplicationBlock::MissingFaction { faction_id })
+    }
+
+    fn already_declared_for_city_war(&mut self, faction_id: i32) -> Result<bool, Self::Block> {
+        Ok(self.attack_city.is_already_declared_for_war(faction_id))
+    }
+
+    fn faction_name(&mut self, faction_id: i32) -> Result<Vec<u8>, Self::Block> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(|faction| legacy_c_string_prefix(faction.name()).to_vec())
+            .ok_or(OrganizingVillageWarApplicationBlock::MissingFaction { faction_id })
+    }
+
+    fn region_name(&mut self, region_id: i32) -> Result<Vec<u8>, Self::Block> {
+        match self.game.region_name(region_id) {
+            WorldRegionNameLookup::Name(name) => Ok(legacy_c_string_prefix(name).to_vec()),
+            WorldRegionNameLookup::RegionNotFound
+            | WorldRegionNameLookup::NullRegionPointer => Err(
+                OrganizingVillageWarApplicationBlock::MissingRegionName { region_id },
+            ),
+        }
+    }
+
+    fn send_level_rejection(
+        &mut self,
+        player_id: i32,
+        title_string_id: &'static [u8],
+        text_string_id: &'static [u8],
+    ) -> Result<(), Self::Block> {
+        let title = (self.callbacks.world_string)(title_string_id);
+        let text = (self.callbacks.world_string)(text_string_id);
+        let _ = COrganizingCtrl::send_organizing_info_to_client(
+            self.game,
+            FactionMemberInfoRequest {
+                recipient_player_id: player_id,
+                first_text: legacy_c_string_prefix(&text),
+                second_text: legacy_c_string_prefix(&title),
+                information_type: -1,
+                color: 0xFFFF_0000,
+                trailing_value: u32::MAX,
+            },
+        );
+        Ok(())
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[&[u8]],
+    ) -> Result<Vec<u8>, Self::Block> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| UnionFormatArgument::Text(legacy_c_string_prefix(argument)))
+            .collect::<Vec<_>>();
+        let formatted = (self.callbacks.format_world_string)(string_id, &arguments);
+        let formatted = legacy_c_string_prefix(&formatted);
+        if formatted.len() >= 500 {
+            return Err(
+                OrganizingVillageWarApplicationBlock::NoticeWouldOverflow {
+                    visible_len: formatted.len(),
+                },
+            );
+        }
+        Ok(formatted.to_vec())
+    }
+
+    fn send_organizing_info(&mut self, text: &[u8]) -> Result<(), Self::Block> {
+        let _ = COrganizingCtrl::send_organizing_info_to_all(
+            self.game,
+            text,
+            0xFFFF_FE92,
+            0xFFFF_0000,
+        );
+        Ok(())
+    }
+
+    fn write_war_log(&mut self, text: &[u8]) -> Result<(), Self::Block> {
+        (self.callbacks.put_war_log)(text);
+        Ok(())
+    }
+
+    fn send_all(&mut self, message: &CMessage) -> i32 {
+        message
+            .send_all(self.game.current_game_server_sender().as_ref())
+            .unwrap_or(0)
+    }
+}
+
+/// Выполняет exact `0x60135` и при true-result отвечает исходному map-owner-у.
+pub(crate) fn dispatch_village_war_application(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &COrganizingCtrl,
+    organizing_parameters: &COrganizingParam,
+    attack_city: &CAttackCitySys,
+    village_war: &mut CVillageWarSys,
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    sender: Option<&ServerCommandHandle>,
+) -> Option<
+    Result<OrganizingVillageWarApplicationDispatch, OrganizingVillageWarApplicationBlock>,
+> {
+    if message.message_type() != APPLY_FOR_VILLAGE_WAR_MESSAGE_TYPE {
+        return None;
+    }
+
+    let source_map_id = message.map_id();
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let war_number = message.base_mut().get_long().unwrap_or(0);
+    let legacy_third_parameter = message.base_mut().get_long().unwrap_or(0);
+    let mut context = WorldVillageWarApplicationContext {
+        game,
+        organizing,
+        organizing_parameters,
+        attack_city,
+        callbacks,
+    };
+    let outcome = village_war.apply_for_village_war(
+        player_id,
+        war_number,
+        legacy_third_parameter,
+        &mut context,
+    );
+    Some(outcome.map(|outcome| {
+        let response = outcome.accepted.then(|| {
+            let mut response = CMessage::new(APPLY_FOR_VILLAGE_WAR_RESPONSE_TYPE);
+            response.base_mut().add_long(player_id);
+            response.base_mut().add_long(legacy_third_parameter);
+            response.send_to_map_id(sender, source_map_id)
+        });
+        OrganizingVillageWarApplicationDispatch {
+            player_id,
+            war_number,
+            legacy_third_parameter,
+            outcome,
+            response,
+        }
     }))
 }
 

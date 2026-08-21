@@ -996,6 +996,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     OrganizingFactionTaxBlock, OrganizingFactionTaxDispatch, OrganizingFactionUpgradeBlock,
     OrganizingFactionUpgradeDispatch, OrganizingFactionUploadIconDispatch,
     OrganizingRegionParamDispatch, OrganizingRegionRouteDispatch,
+    OrganizingVillageWarApplicationBlock, OrganizingVillageWarApplicationDispatch,
     OrganizingLeaveWordDispatch,
     OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEnableDispatch,
     OrganizingPronounceDispatch, OrganizingSessionResultDispatch,
@@ -1013,6 +1014,7 @@ use crate::worldserver::appworld::message::organsysmessage::{
     dispatch_leave_word, dispatch_leave_word_edit,
     dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_pronounce,
     dispatch_region_param_update, dispatch_region_route, dispatch_union_application,
+    dispatch_village_war_application,
 };
 use crate::worldserver::appworld::message::servermessage::{
     WorldLoginClientReplacement, WorldServerMessageDispatch, WorldServerMessageError,
@@ -2021,6 +2023,15 @@ pub(crate) enum ProcessedWorldEvent {
         outcome: Result<OrganizingAttackCityEndDispatch, AttackCityEndBlock>,
         runtime: WorldUnionApplicationRuntimeReport,
     },
+    OrganizingVillageWarApplication {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: Result<
+            OrganizingVillageWarApplicationDispatch,
+            OrganizingVillageWarApplicationBlock,
+        >,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
     OrganizingUnionApplication {
         source: WorldMessageSource,
         legacy_run_result: i32,
@@ -2635,7 +2646,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) timer: &'a mut CTimer<TimerCallback>,
     pub(crate) faction_war: &'a mut CFactionWarSys,
     pub(crate) attack_city: &'a CAttackCitySys,
-    pub(crate) village_war: &'a CVillageWarSys,
+    pub(crate) village_war: &'a mut CVillageWarSys,
     pub(crate) lei_ting: &'a mut CLeiTing,
     pub(crate) db_misc: &'a mut CDbMisc,
     pub(crate) net_sessions: &'a CNetSessionManager,
@@ -8259,9 +8270,9 @@ impl CGame {
     /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
     /// войны `0x6011E`, само объявление `0x6011F`, общий leaf
     /// `0x60121/0x60123`, передача города `0x60130`, admission permit
-    /// `0x60132` и terminal войны за город `0x60133` исполняются; остальные
-    /// остаются owned pending. Terminal actions применяются FIFO до следующего
-    /// сообщения.
+    /// `0x60132`, terminal войны за город `0x60133` и заявка village-war
+    /// `0x60135` исполняются; остальные остаются owned pending. Terminal
+    /// actions применяются FIFO до следующего сообщения.
     pub(crate) fn process_message(
         &mut self,
         honor_ranks: &mut CHonorRanks,
@@ -8270,7 +8281,7 @@ impl CGame {
         country_handler: &CCountryHandler,
         faction_war_sys: &mut CFactionWarSys,
         attack_city: &CAttackCitySys,
-        village_war: &CVillageWarSys,
+        village_war: &mut CVillageWarSys,
         registry: &GoodsBasePropertiesRegistry,
         original_name_index: &GoodsOriginalNameIndex,
         coefficients: &PlayerPropertyCoefficients,
@@ -8393,7 +8404,7 @@ impl CGame {
         country_handler: &CCountryHandler,
         faction_war_sys: &mut CFactionWarSys,
         attack_city: &CAttackCitySys,
-        village_war: &CVillageWarSys,
+        village_war: &mut CVillageWarSys,
         registry: &GoodsBasePropertiesRegistry,
         original_name_index: &GoodsOriginalNameIndex,
         coefficients: &PlayerPropertyCoefficients,
@@ -10748,6 +10759,20 @@ impl CGame {
         WorldRegionNameLookup::Name(region.get_name())
     }
 
+    /// Проверяет обе ступени исходного `GetRegion -> tagRegion::pRegion`.
+    pub(crate) fn has_materialized_region(&self, region_id: i32) -> bool {
+        self.region(region_id)
+            .and_then(|assignment| assignment.region.as_ref())
+            .is_some()
+    }
+
+    /// Возвращает владельца только для materialized `tagRegion::pRegion`.
+    pub(crate) fn region_owned_faction_id(&self, region_id: i32) -> Option<i32> {
+        self.region(region_id)
+            .and_then(|assignment| assignment.region.as_ref())
+            .map(|region| region.base().get_owned_city_faction())
+    }
+
     /// Находит назначенный региону GameServer через две исходные map-ступени.
     pub(crate) fn get_region_game_server(&self, region_id: i32) -> Option<&WorldGameServerEntry> {
         let region = self.region(region_id)?;
@@ -11175,7 +11200,7 @@ fn process_world_message(
     country_handler: &CCountryHandler,
     faction_war_sys: &mut CFactionWarSys,
     attack_city: &CAttackCitySys,
-    village_war: &CVillageWarSys,
+    village_war: &mut CVillageWarSys,
     registry: &GoodsBasePropertiesRegistry,
     original_name_index: &GoodsOriginalNameIndex,
     coefficients: &PlayerPropertyCoefficients,
@@ -11656,6 +11681,50 @@ fn process_world_message(
                 update_player,
             );
             return ProcessedWorldEvent::OrganizingRegionParamUpdate {
+                source,
+                legacy_run_result,
+                outcome,
+                runtime,
+            };
+        }
+        if let Some(outcome) = dispatch_village_war_application(
+            &mut message,
+            game,
+            organizing,
+            organizing_parameters,
+            attack_city,
+            village_war,
+            application_callbacks,
+            game_server_sender.as_ref(),
+        ) {
+            let callbacks = WorldUnionApplicationEffectCallbacks {
+                random: &mut *application_callbacks.random,
+                world_string: &mut *application_callbacks.world_string,
+                format_world_string: &mut *application_callbacks.format_world_string,
+                put_war_log: &mut *application_callbacks.put_war_log,
+                refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+                faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+                write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
+            };
+            let mut effects = WorldUnionApplicationEffects::new(
+                game,
+                net_sessions,
+                application_runtime,
+                callbacks,
+            );
+            let runtime = drain_union_application_runtime(
+                game,
+                organizing,
+                organizing_parameters,
+                application_runtime,
+                &mut effects,
+                update_player,
+            );
+            return ProcessedWorldEvent::OrganizingVillageWarApplication {
                 source,
                 legacy_run_result,
                 outcome,
