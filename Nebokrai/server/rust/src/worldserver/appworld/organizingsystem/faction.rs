@@ -14,6 +14,7 @@
 //! `InitialPropertyByLvl` RVA `0x000B4BA0`,
 //! `AddEnemyFactionsToByteArray/AddCityWarEnemyFactionsToByteArray` RVA
 //! `0x000B5E40/0x000B5ED0`,
+//! `ClearEnemyFation/ClearCityWarEnemyFation` RVA `0x000B6030/0x000B6080`,
 //! `IsHaveEnymyFaction/IsHaveCityEnemyFaction` RVA `0x000B50F0/0x000B5100`,
 //! `SetSuperiorOrganizing` RVA `0x000B5110`,
 //! `IsOwnedCity` RVA `0x000B5490`, `GetOwnedCities` RVA `0x000BD7D0`,
@@ -36,6 +37,8 @@
 //! `ReInitialPropertyByLvl` RVA `0x000BA630`,
 //! `IsUsingPV/SetMemPV/AbolishMemPV` RVA
 //! `0x000BA700/0x000BA760/0x000C1DD0`,
+//! set-copy getter-ы `GetEnemyList/GetCityWarEnemyList` RVA
+//! `0x000BA6A0/0x000BA6D0` и legacy `IsEnemyFaction` RVA `0x000C1830`,
 //! `IsSuperiorOrganizing` RVA `0x000BD780`, `IsMaster` RVA `0x000C1EE0` и
 //! `OnMemberEnterGame` RVA `0x000C0A10` — `IMPLEMENTED`; спорные ключи lookup
 //! имеют статус `VERIFIED_DISASSEMBLY`.
@@ -85,6 +88,11 @@
 //! Enemy-update сообщения передают полный set, а не delta: `0x7FE11/0x7FE12`,
 //! recipient ID, 32-битный count и signed IDs в tree-order. Объявленные
 //! `enemy_id/operator` исходные функции не читали и в Rust-интерфейс не входят.
+//! Value-getter-ы обоих enemy-set создают независимые копии. Clear всегда
+//! очищает set, но выставляет соответствующий changed-флаг только если до
+//! очистки он был непустым. Отдельный virtual `IsEnemyFaction` в этой версии
+//! является подтверждённым stub и всегда возвращает `0`; membership дают
+//! другие owner-ы, поэтому эти контракты намеренно не объединены.
 //! Experience-update `0x7FE14` получает только contributor либо master и несёт
 //! recipient/current/upgrade exp. `SetExp` ставит dirty-bit до этой рассылки.
 //! Простые query-owner-ы возвращают достигнутые scalar/property/member поля
@@ -940,6 +948,19 @@ impl CFaction {
         &self.enemy_factions
     }
 
+    /// Возвращает независимую value-копию исходного `std::set<long>`.
+    pub(crate) fn enemy_factions_snapshot(&self) -> BTreeSet<i32> {
+        self.enemy_factions.clone()
+    }
+
+    /// Очищает standard enemy-set и отмечает только фактическое изменение.
+    pub(crate) fn clear_enemy_factions(&mut self) {
+        if !self.enemy_factions.is_empty() {
+            self.enemy_factions_changed = Some(true);
+        }
+        self.enemy_factions.clear();
+    }
+
     /// Сохраняет exact `set::_Mysize != 0` без зависимости от MSVC layout.
     pub(crate) fn has_enemy_faction(&self) -> bool {
         !self.enemy_factions.is_empty()
@@ -950,9 +971,27 @@ impl CFaction {
         &self.city_war_enemy_factions
     }
 
+    /// Возвращает независимую value-копию city-war `std::set<long>`.
+    pub(crate) fn city_war_enemy_factions_snapshot(&self) -> BTreeSet<i32> {
+        self.city_war_enemy_factions.clone()
+    }
+
+    /// Очищает city-war enemy-set и отмечает только фактическое изменение.
+    pub(crate) fn clear_city_war_enemy_factions(&mut self) {
+        if !self.city_war_enemy_factions.is_empty() {
+            self.city_war_enemy_factions_changed = Some(true);
+        }
+        self.city_war_enemy_factions.clear();
+    }
+
     /// Сохраняет exact `set::_Mysize != 0` для city-war enemy-set.
     pub(crate) fn has_city_war_enemy_faction(&self) -> bool {
         !self.city_war_enemy_factions.is_empty()
+    }
+
+    /// Сохраняет отдельный исторический stub, не подменяя его membership-check.
+    pub(crate) const fn is_enemy_faction(&self, _faction_id: i32) -> i32 {
+        0
     }
 
     /// Дописывает полный standard enemy-set в исходном wire-формате.
@@ -2120,7 +2159,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::ClearEnemyFation
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:675
@@ -2134,7 +2173,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::ClearCityWarEnemyFation
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:683
@@ -2610,7 +2649,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetEnemyList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:539
@@ -2624,7 +2663,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::GetCityWarEnemyList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:545
@@ -3382,7 +3421,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::IsEnemyFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:464
