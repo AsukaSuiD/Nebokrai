@@ -1,7 +1,8 @@
 //! Статус корпуса: `IMPLEMENTED_PARTIAL` для достигнутых organizing opcode,
 //! включая заявку союза `0x60118`, общий session-result dispatch, billboard
-//! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127` и выбор
-//! вкладчика `0x60128`; остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
+//! вкладчика `0x60128` и вклад опыта `0x60129`; остальной owner —
+//! `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
@@ -77,6 +78,16 @@
 //! `SetControbuter(requester, target, enabled)`. Online-player ownership,
 //! payload decoder и wire-ответ отсутствуют. Linux-донор верно подсказал форму
 //! трёх полей, но его exact-tail/ownership проверки в EXE не подтверждаются.
+//! Exact `0x004A82CD..0x004A83DB` для `0x60129` читает `(faction ID,
+//! player ID, experience delta)`, разрешает faction, проверяет virtual
+//! `IsControbute(player ID)` в slot `+0x124`, дважды читает прежний опыт через
+//! `+0x68` и передаёт в `SetExp` (`+0x6C`) их машинную 32-битную сумму с delta.
+//! Результат `SetExp` не влияет на дальнейший log gate. При включённых setup и
+//! faction-exp флагах online-player даёт фактические ID/name для SQL
+//! `faction_experience_log`; колонки `before_exp/exp` получают старый опыт и
+//! именно delta. Wire-ответ отсутствует. Rust callback передаёт typed поля
+//! владельцу DB-очереди вместо `_sprintf` в 256-байтовый heap-buffer и тем
+//! самым устраняет внутренние overflow/leak, не меняя DB-контракт.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -108,8 +119,8 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsOriginalNameIndex, query_goods_name,
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
-    FactionContributorContext, FactionLevelContext, FactionMemberInfoRequest,
-    FactionOrganizingInfoContext,
+    FactionContributorContext, FactionExperienceBlock, FactionExperienceUpdate,
+    FactionLevelContext, FactionMemberInfoRequest, FactionOrganizingInfoContext,
     FactionUpgradeBlock, FactionUpgradeContext, FactionUpgradeFormatArgument,
     FactionUpgradeOutcome, FactionUploadIconBlock, FactionUploadIconContext,
     FactionUploadIconOutcome,
@@ -120,6 +131,7 @@ use crate::worldserver::appworld::organizingsystem::factionwarsys::{
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     COrganizingCtrl, DeclareWarFactionPage, DeclareWarFactionPageBlock, FreePlayerLookup,
     OrganizingContributorBlock, OrganizingContributorOutcome,
+    OrganizingFactionExperienceMutation,
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock,
     OrganizingLeaveWordEditOutcome, OrganizingLeaveWordEnableBlock,
     OrganizingFactionWarDeclarationBlock, WorldFactionWarDeclarationEffects,
@@ -155,6 +167,7 @@ const FACTION_BILLBOARD_RESPONSE_TYPE: i32 = 0x7FE1D;
 const UPGRADE_FACTION_MESSAGE_TYPE: i32 = 0x60126;
 const UPLOAD_FACTION_ICON_MESSAGE_TYPE: i32 = 0x60127;
 const SET_FACTION_CONTRIBUTOR_MESSAGE_TYPE: i32 = 0x60128;
+const ADD_FACTION_EXPERIENCE_MESSAGE_TYPE: i32 = 0x60129;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -268,6 +281,9 @@ pub(crate) struct WorldUnionApplicationEffectCallbacks<'a> {
     pub(crate) faction_level_log_enabled: bool,
     pub(crate) write_faction_level_log:
         &'a mut dyn FnMut(i32, &[u8], i32, i32, &[u8]),
+    pub(crate) faction_experience_log_enabled: bool,
+    pub(crate) write_faction_experience_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, i32),
 }
 
 /// Тонкий concrete adapter готовых string/transport/session owners.
@@ -1372,6 +1388,101 @@ pub(crate) fn dispatch_faction_contributor(
                 outcome,
             }),
     )
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionExperienceOutcome {
+    FactionMissing,
+    PlayerNotContributor,
+    Applied {
+        before_experience: i32,
+        update: FactionExperienceUpdate,
+        log_written: bool,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingFactionExperienceDispatch {
+    pub(crate) faction_id: i32,
+    pub(crate) player_id: i32,
+    pub(crate) experience_delta: i32,
+    pub(crate) outcome: OrganizingFactionExperienceOutcome,
+}
+
+/// Выполняет `0x60129`: contributor gate, wrapping delta и optional DB-log.
+pub(crate) fn dispatch_faction_experience(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    use_log_system: bool,
+    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+) -> Option<Result<OrganizingFactionExperienceDispatch, FactionExperienceBlock>> {
+    if message.message_type() != ADD_FACTION_EXPERIENCE_MESSAGE_TYPE {
+        return None;
+    }
+
+    let faction_id = message.base_mut().get_long().unwrap_or(0);
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let experience_delta = message.base_mut().get_long().unwrap_or(0);
+    let mutation = match organizing.add_contributor_experience(
+        game,
+        faction_id,
+        player_id,
+        experience_delta,
+    ) {
+        Ok(mutation) => mutation,
+        Err(source) => return Some(Err(source)),
+    };
+    let (actual_faction_id, faction_name, before_experience, update) = match mutation {
+        OrganizingFactionExperienceMutation::FactionNotFound => {
+            return Some(Ok(OrganizingFactionExperienceDispatch {
+                faction_id,
+                player_id,
+                experience_delta,
+                outcome: OrganizingFactionExperienceOutcome::FactionMissing,
+            }));
+        }
+        OrganizingFactionExperienceMutation::PlayerNotContributor => {
+            return Some(Ok(OrganizingFactionExperienceDispatch {
+                faction_id,
+                player_id,
+                experience_delta,
+                outcome: OrganizingFactionExperienceOutcome::PlayerNotContributor,
+            }));
+        }
+        OrganizingFactionExperienceMutation::Applied {
+            faction_id,
+            faction_name,
+            before_experience,
+            update,
+        } => (faction_id, faction_name, before_experience, update),
+    };
+
+    let mut log_written = false;
+    if use_log_system && callbacks.faction_experience_log_enabled {
+        if let Some(player) = game.online_player_by_id(player_id as u32) {
+            (callbacks.write_faction_experience_log)(
+                actual_faction_id,
+                &faction_name,
+                player.get_id(),
+                player.get_name(),
+                before_experience,
+                experience_delta,
+            );
+            log_written = true;
+        }
+    }
+
+    Some(Ok(OrganizingFactionExperienceDispatch {
+        faction_id,
+        player_id,
+        experience_delta,
+        outcome: OrganizingFactionExperienceOutcome::Applied {
+            before_experience,
+            update,
+            log_written,
+        },
+    }))
 }
 
 fn send_declare_war_faction_list_notice<Context>(

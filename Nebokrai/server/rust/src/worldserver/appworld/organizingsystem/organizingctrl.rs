@@ -272,6 +272,7 @@ use super::faction::{
     FactionContributorOutcome, FactionDeleteOrganizingBuildError,
     FactionDeleteOrganizingOutcome, FactionDisbandBlock, FactionDisbandContext,
     FactionDisbandOutcome, FactionDisbandProgress, FactionDisbandRejection,
+    FactionExperienceBlock, FactionExperienceUpdate,
     FactionEditLeaveWordOutcome, FactionEnemyDelivery, FactionEnemyMutationBlock,
     FactionEnemyMutationContext, FactionEnemyWarLogArgument, FactionFeatureFunctionUpdate,
     FactionInitialPropertyBlock,
@@ -783,6 +784,18 @@ pub(crate) enum OrganizingContributorOutcome {
 pub(crate) enum OrganizingContributorBlock {
     Membership { map_key: i32 },
     Contributor(FactionContributorBlock),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingFactionExperienceMutation {
+    FactionNotFound,
+    PlayerNotContributor,
+    Applied {
+        faction_id: i32,
+        faction_name: Vec<u8>,
+        before_experience: i32,
+        update: FactionExperienceUpdate,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1299,6 +1312,38 @@ impl COrganizingCtrl {
         Ok(OrganizingContributorOutcome::Applied {
             faction_id,
             outcome,
+        })
+    }
+
+    /// Применяет wrapping experience delta после exact contributor gate.
+    pub(crate) fn add_contributor_experience(
+        &mut self,
+        game: &CGame,
+        faction_id: i32,
+        player_id: i32,
+        experience_delta: i32,
+    ) -> Result<OrganizingFactionExperienceMutation, FactionExperienceBlock> {
+        let Some(faction) = self.faction_by_id_mut(faction_id) else {
+            return Ok(OrganizingFactionExperienceMutation::FactionNotFound);
+        };
+        if !faction.is_contribute(player_id) {
+            return Ok(OrganizingFactionExperienceMutation::PlayerNotContributor);
+        }
+        let before_experience = faction
+            .experience()
+            .ok_or(FactionExperienceBlock::MissingBaseProperty)?;
+        let current_experience = faction
+            .experience()
+            .ok_or(FactionExperienceBlock::MissingBaseProperty)?;
+        let update = faction.set_experience(
+            game,
+            current_experience.wrapping_add(experience_delta),
+        )?;
+        Ok(OrganizingFactionExperienceMutation::Applied {
+            faction_id: faction.faction_id(),
+            faction_name: faction.name().to_vec(),
+            before_experience,
+            update,
         })
     }
 
