@@ -11,6 +11,7 @@
 //! `UpdateMemberInfoToClient` RVA `0x000BA7C0`, а также
 //! оба `CheckOperValidate` RVA `0x000B4CE0/0x000C17F0`,
 //! `OnMemberExitGame` RVA `0x000B64D0`,
+//! `ClearApplyList/IsInApplyMembers` RVA `0x000B6450/0x000B6760`,
 //! `InitialPropertyByLvl` RVA `0x000B4BA0`,
 //! `AddEnemyFactionsToByteArray/AddCityWarEnemyFactionsToByteArray` RVA
 //! `0x000B5E40/0x000B5ED0`,
@@ -83,6 +84,9 @@
 //! индекс. `SetMemPV` в EXE единственный не проверял индекс и мог писать за
 //! `listPV`; safe Rust явно отклоняет недопустимое значение. Это исправление
 //! внутреннего memory bug, а не новая Miracle-семантика допустимых прав.
+//! Apply-list clear проверяет право `ConMem = 3`, при отказе не меняет set и
+//! возвращает `false`. Membership exact ASM ищет входной player ID, а не
+//! ошибочную подстановку this в декомпиляте, и при hit возвращает faction ID.
 //! Трёхаргументный `CheckOperValidate` проверяет право requester и запрещает
 //! ему управлять target с тем же правом, кроме случая requester-master; exact
 //! ASM подтверждает, что финальный `IsMaster` получает requester.
@@ -1541,6 +1545,24 @@ impl CFaction {
         &self.apply_person_ids
     }
 
+    /// Возвращает faction ID при наличии player-key в `m_ApplyPersons`.
+    pub(crate) fn is_in_apply_members(&self, player_id: i32) -> i32 {
+        if self.apply_person_ids.contains(&player_id) {
+            self.faction_id
+        } else {
+            0
+        }
+    }
+
+    /// Очищает apply-list только при точном состоянии права `ConMem`.
+    pub(crate) fn clear_apply_list(&mut self, operator_id: i32) -> bool {
+        if !self.is_using_purview(operator_id, EPurview::ConMem as i32) {
+            return false;
+        }
+        self.apply_person_ids.clear();
+        true
+    }
+
     /// Дописывает byte-exact `m_Pronounce` в исходный output-vector.
     pub(crate) fn get_pronounce_data(&self, output: &mut Vec<u8>) -> bool {
         output.extend_from_slice(&self.pronounce_data);
@@ -2298,7 +2320,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::ClearApplyList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:1520
@@ -2340,7 +2362,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::IsInApplyMembers
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:791
