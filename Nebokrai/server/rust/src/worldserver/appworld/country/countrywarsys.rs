@@ -107,6 +107,12 @@
 //! очищается целиком. В конце observable `operator[]` вставляет нулевой schedule
 //! для отсутствующего war ID и, если `ClearTime > now`, публикует `WS0094` тем
 //! же минутно-секундным duration, `AddOneTopInfo` и exact `0x7FA04` owner-ом.
+//! Девять callback-token-ов, зарегистрированных `initialize`, теперь
+//! распознаются `WorldTimerHandler` по тем же значениям и исполняются внутри
+//! `CTimer::Run`; входной signed parameter остаётся war ID. Это заменяет только
+//! глобальные static function/singleton lookup: неизвестные callback-и по-
+//! прежнему передаются внешнему dispatcher-у, а country-war события остаются
+//! one-shot без выдуманной повторной регистрации.
 //!
 //! Snapshot намеренно сохраняет layout World EXE: `state_clear + 3 bytes
 //! padding`, затем defender и attacker. Парный Game EXE RVA `0x000EBD60`
@@ -133,6 +139,47 @@ pub(crate) struct CountryWarCallbacks<Callback> {
     pub(crate) end: Callback,
     pub(crate) start_info: Callback,
     pub(crate) end_info: Callback,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarCallbackKind {
+    Clear,
+    DeclareBegin,
+    DeclareEnd,
+    PrepareBegin,
+    PrepareEnd,
+    Start,
+    End,
+    StartInfo,
+    EndInfo,
+}
+
+impl<Callback: PartialEq> CountryWarCallbacks<Callback> {
+    /// Сопоставляет invocation с тем же typed token, который был передан при
+    /// регистрации; `PartialEq` заменяет только сравнение callback pointer-а.
+    pub(crate) fn kind(&self, callback: Callback) -> Option<CountryWarCallbackKind> {
+        if callback == self.clear {
+            Some(CountryWarCallbackKind::Clear)
+        } else if callback == self.declare_begin {
+            Some(CountryWarCallbackKind::DeclareBegin)
+        } else if callback == self.declare_end {
+            Some(CountryWarCallbackKind::DeclareEnd)
+        } else if callback == self.prepare_begin {
+            Some(CountryWarCallbackKind::PrepareBegin)
+        } else if callback == self.prepare_end {
+            Some(CountryWarCallbackKind::PrepareEnd)
+        } else if callback == self.start {
+            Some(CountryWarCallbackKind::Start)
+        } else if callback == self.end {
+            Some(CountryWarCallbackKind::End)
+        } else if callback == self.start_info {
+            Some(CountryWarCallbackKind::StartInfo)
+        } else if callback == self.end_info {
+            Some(CountryWarCallbackKind::EndInfo)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

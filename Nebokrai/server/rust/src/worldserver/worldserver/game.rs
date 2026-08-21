@@ -1007,9 +1007,12 @@ use crate::worldserver::appworld::country::countryparam::{
     CCountryParam, CountryParamLoadError, CountryParamLoadReport,
 };
 use crate::worldserver::appworld::country::countrywarsys::{
-    CountryWarCallbacks, CountryWarDeclarationAuthority, CountryWarDeclarationContext,
-    CountryWarDeclarationPlayer, CountryWarLoadError, CountryWarLoadReport,
-    CountryWarReloadBlock, CountryWarSys, CountryWarTopInfoContext,
+    CountryWarCallbackKind, CountryWarCallbacks, CountryWarDeclarationAuthority,
+    CountryWarDeclarationContext, CountryWarDeclarationPlayer, CountryWarFinishBlock,
+    CountryWarFinishReport, CountryWarLoadError, CountryWarLoadReport, CountryWarPhase,
+    CountryWarPhaseBlock, CountryWarPhaseContext, CountryWarPhaseReport, CountryWarReloadBlock,
+    CountryWarStartBlock, CountryWarStartReport, CountryWarSys, CountryWarTopInfoBlock,
+    CountryWarTopInfoContext, CountryWarTopInfoKind, CountryWarTopInfoReport,
     CountryWarVictoryContext, CountryWarVictoryRegion,
 };
 use crate::worldserver::appworld::goods::cgoodsfactory::{
@@ -2504,9 +2507,39 @@ pub(crate) enum PlayerRanksTimerRefreshBlock {
 }
 
 #[derive(Debug)]
+pub(crate) enum CountryWarTimerReport {
+    Phase {
+        callback: CountryWarCallbackKind,
+        war_id: i32,
+        report: CountryWarPhaseReport,
+    },
+    Start {
+        war_id: i32,
+        report: CountryWarStartReport,
+    },
+    End {
+        war_id: i32,
+        report: CountryWarFinishReport,
+    },
+    TopInfo {
+        callback: CountryWarCallbackKind,
+        report: CountryWarTopInfoReport,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum CountryWarTimerBlock {
+    Phase(CountryWarPhaseBlock<Infallible>),
+    Start(CountryWarStartBlock<Infallible>),
+    End(CountryWarFinishBlock<Infallible>),
+    TopInfo(CountryWarTopInfoBlock<Infallible>),
+}
+
+#[derive(Debug)]
 pub(crate) enum WorldTimerCallbackBlock {
     PlayerRanks(PlayerRanksTimerRefreshBlock),
     OrganizingTax(OrganizingTaxScheduleBlock),
+    CountryWar(CountryWarTimerBlock),
 }
 
 /// Выполненный prefix `CTimer::Run` перед domain callback safe-границей.
@@ -2522,14 +2555,19 @@ pub(crate) struct WorldMainLoopTimerStageReport {
     pub(crate) timer: TimerRunReport,
     pub(crate) player_ranks: Vec<PlayerRanksTimerRefreshReport>,
     pub(crate) organizing_taxes: Vec<OrganizingTodayTaxRefreshReport>,
+    pub(crate) country_wars: Vec<CountryWarTimerReport>,
     pub(crate) finished_at_ms: u32,
     pub(crate) elapsed_ms: u32,
     pub(crate) accumulated_time_ms: u32,
     pub(crate) next_stage_started_at_ms: u32,
 }
 
-struct WorldTimerHandler<'a> {
+struct WorldTimerHandler<'a, Callback> {
     game: &'a CGame,
+    country_war: &'a mut CountryWarSys,
+    country_handler: &'a mut CCountryHandler,
+    country_war_callbacks: CountryWarCallbacks<Callback>,
+    globe_setup: &'a GlobeSetupSnapshot,
     organizing_parameters: &'a mut COrganizingParam,
     player_ranks: &'a mut CPlayerRanks,
     rs_player: &'a mut TiberiusRsPlayer,
@@ -2539,17 +2577,20 @@ struct WorldTimerHandler<'a> {
     get_log_local_time: &'a mut dyn FnMut() -> WorldLogLocalTime,
     put_log_info: &'a mut dyn FnMut(&[u8]),
     world_string_by_id: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
+    format_world_string:
+        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
     refreshes: Vec<PlayerRanksTimerRefreshReport>,
     tax_refreshes: Vec<OrganizingTodayTaxRefreshReport>,
+    country_wars: Vec<CountryWarTimerReport>,
     pending_player_ranks_registration: Option<usize>,
     pending_tax_registration: Option<PreparedTodayTaxRefresh>,
 }
 
 impl<Callback, GetTick, GetTimerLocalTime>
     AsyncTimerCallbackHandler<Callback, GetTick, GetTimerLocalTime>
-    for WorldTimerHandler<'_>
+    for WorldTimerHandler<'_, Callback>
 where
-    Callback: Copy,
+    Callback: Copy + PartialEq,
     GetTick: FnMut() -> u32,
     GetTimerLocalTime: FnMut() -> TagTime,
 {
@@ -2592,52 +2633,126 @@ where
             TimerCallbackSource::Calendar(event_id)
                 if self.player_ranks.stat_event_id() == Some(event_id)
         );
-        if !is_player_ranks_event {
-            return Ok(AsyncTimerCallbackDisposition::PassThrough);
+        if is_player_ranks_event {
+            let stat = self
+                .game
+                .stat_player_ranks(
+                    self.player_ranks,
+                    self.rs_player,
+                    self.player_database.as_deref_mut(),
+                    self.organizing,
+                    self.log,
+                    get_tick,
+                    &mut *self.get_log_local_time,
+                    &mut *self.put_log_info,
+                )
+                .await
+                .map_err(PlayerRanksTimerRefreshBlock::Stat)
+                .map_err(WorldTimerCallbackBlock::PlayerRanks)?;
+            let sender = self.game.current_game_server_sender();
+            let publication = self
+                .player_ranks
+                .update_ranks_to_game_server(sender.as_ref())
+                .map_err(PlayerRanksTimerRefreshBlock::Serialization)
+                .map_err(WorldTimerCallbackBlock::PlayerRanks)?;
+            let current_time = get_timer_local_time();
+            let next_time = self
+                .player_ranks
+                .next_stat_time(current_time)
+                .map_err(PlayerRanksTimerRefreshBlock::Schedule)
+                .map_err(WorldTimerCallbackBlock::PlayerRanks)?;
+            let refresh_index = self.refreshes.len();
+            self.refreshes.push(PlayerRanksTimerRefreshReport {
+                stat,
+                publication,
+                next_time,
+                next_event_id: None,
+            });
+            self.pending_player_ranks_registration = Some(refresh_index);
+
+            return Ok(AsyncTimerCallbackDisposition::Handled {
+                next_calendar_event: Some(CalendarTimerRegistration {
+                    time: next_time,
+                    callback: invocation.callback,
+                    parameter: 0,
+                }),
+            });
         }
 
-        let stat = self
-            .game
-            .stat_player_ranks(
-                self.player_ranks,
-                self.rs_player,
-                self.player_database.as_deref_mut(),
-                self.organizing,
-                self.log,
-                get_tick,
-                &mut *self.get_log_local_time,
-                &mut *self.put_log_info,
-            )
-            .await
-            .map_err(PlayerRanksTimerRefreshBlock::Stat)
-            .map_err(WorldTimerCallbackBlock::PlayerRanks)?;
-        let sender = self.game.current_game_server_sender();
-        let publication = self
-            .player_ranks
-            .update_ranks_to_game_server(sender.as_ref())
-            .map_err(PlayerRanksTimerRefreshBlock::Serialization)
-            .map_err(WorldTimerCallbackBlock::PlayerRanks)?;
-        let current_time = get_timer_local_time();
-        let next_time = self
-            .player_ranks
-            .next_stat_time(current_time)
-            .map_err(PlayerRanksTimerRefreshBlock::Schedule)
-            .map_err(WorldTimerCallbackBlock::PlayerRanks)?;
-        let refresh_index = self.refreshes.len();
-        self.refreshes.push(PlayerRanksTimerRefreshReport {
-            stat,
-            publication,
-            next_time,
-            next_event_id: None,
-        });
-        self.pending_player_ranks_registration = Some(refresh_index);
-
+        let Some(callback) = self.country_war_callbacks.kind(invocation.callback) else {
+            return Ok(AsyncTimerCallbackDisposition::PassThrough);
+        };
+        let mut effects = WorldCountryWarEffects {
+            game: self.game,
+            country_handler: &mut *self.country_handler,
+            globe_setup: self.globe_setup,
+            world_string: &mut *self.world_string_by_id,
+            format_world_string: &mut *self.format_world_string,
+        };
+        let report = match callback {
+            CountryWarCallbackKind::Clear
+            | CountryWarCallbackKind::DeclareBegin
+            | CountryWarCallbackKind::DeclareEnd
+            | CountryWarCallbackKind::PrepareBegin
+            | CountryWarCallbackKind::PrepareEnd => {
+                let phase = match callback {
+                    CountryWarCallbackKind::Clear => CountryWarPhase::Clear,
+                    CountryWarCallbackKind::DeclareBegin => CountryWarPhase::DeclareBegin,
+                    CountryWarCallbackKind::DeclareEnd => CountryWarPhase::DeclareEnd,
+                    CountryWarCallbackKind::PrepareBegin => CountryWarPhase::PrepareBegin,
+                    CountryWarCallbackKind::PrepareEnd => CountryWarPhase::PrepareEnd,
+                    _ => unreachable!("ветка ограничена phase callbacks"),
+                };
+                let report = self
+                    .country_war
+                    .run_phase(phase, invocation.parameter, &mut effects)
+                    .map_err(CountryWarTimerBlock::Phase)
+                    .map_err(WorldTimerCallbackBlock::CountryWar)?;
+                CountryWarTimerReport::Phase {
+                    callback,
+                    war_id: invocation.parameter,
+                    report,
+                }
+            }
+            CountryWarCallbackKind::Start => CountryWarTimerReport::Start {
+                war_id: invocation.parameter,
+                report: self
+                    .country_war
+                    .run_war_start(invocation.parameter, &mut effects)
+                    .map_err(CountryWarTimerBlock::Start)
+                    .map_err(WorldTimerCallbackBlock::CountryWar)?,
+            },
+            CountryWarCallbackKind::End => {
+                let now = get_timer_local_time();
+                CountryWarTimerReport::End {
+                    war_id: invocation.parameter,
+                    report: self
+                        .country_war
+                        .run_war_end(invocation.parameter, now, get_tick, &mut effects)
+                        .map_err(CountryWarTimerBlock::End)
+                        .map_err(WorldTimerCallbackBlock::CountryWar)?,
+                }
+            }
+            CountryWarCallbackKind::StartInfo | CountryWarCallbackKind::EndInfo => {
+                let kind = match callback {
+                    CountryWarCallbackKind::StartInfo => CountryWarTopInfoKind::Start,
+                    CountryWarCallbackKind::EndInfo => CountryWarTopInfoKind::End,
+                    _ => unreachable!("ветка ограничена top-info callbacks"),
+                };
+                let now = get_timer_local_time();
+                CountryWarTimerReport::TopInfo {
+                    callback,
+                    report: self
+                        .country_war
+                        .run_top_info(kind, invocation.parameter, now, get_tick, &mut effects)
+                        .map_err(CountryWarTimerBlock::TopInfo)
+                        .map_err(WorldTimerCallbackBlock::CountryWar)?,
+                }
+            }
+        };
+        self.country_wars.push(report);
         Ok(AsyncTimerCallbackDisposition::Handled {
-            next_calendar_event: Some(CalendarTimerRegistration {
-                time: next_time,
-                callback: invocation.callback,
-                parameter: 0,
-            }),
+            next_calendar_event: None,
         })
     }
 
@@ -2870,7 +2985,7 @@ pub(crate) struct WorldMainLoopStateOwners<'a> {
     pub(crate) save_thread_handle: &'a mut WorldSaveThreadHandleState,
 }
 
-/// Доменные owners и точные ещё сырые callback-контексты полного MainLoop.
+/// Доменные owners и точные callback-контексты полного MainLoop.
 pub(crate) struct WorldMainLoopOwners<
     'a,
     TimerCallback,
@@ -9334,6 +9449,10 @@ impl CGame {
     >(
         &self,
         timer: &mut CTimer<Callback>,
+        country_war: &mut CountryWarSys,
+        country_handler: &mut CCountryHandler,
+        country_war_callbacks: CountryWarCallbacks<Callback>,
+        globe_setup: &GlobeSetupSnapshot,
         clocks: &mut WorldMainLoopClockState,
         profile_state: &mut WorldMainLoopProfileState,
         organizing_parameters: &mut COrganizingParam,
@@ -9347,16 +9466,22 @@ impl CGame {
         get_log_local_time: &mut dyn FnMut() -> WorldLogLocalTime,
         put_log_info: &mut dyn FnMut(&[u8]),
         world_string_by_id: &mut dyn FnMut(&[u8]) -> Vec<u8>,
+        format_world_string:
+            &mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
         dispatch: &mut Dispatch,
     ) -> Result<WorldMainLoopTimerStageReport, WorldMainLoopTimerStageBlock>
     where
-        Callback: Copy,
+        Callback: Copy + PartialEq,
         GetTick: FnMut() -> u32 + ?Sized,
         GetTimerLocalTime: FnMut() -> TagTime + ?Sized,
         Dispatch: FnMut(&mut CTimer<Callback>, TimerCallbackInvocation<Callback>) + ?Sized,
     {
         let mut handler = WorldTimerHandler {
             game: self,
+            country_war,
+            country_handler,
+            country_war_callbacks,
+            globe_setup,
             organizing_parameters,
             player_ranks,
             rs_player,
@@ -9366,8 +9491,10 @@ impl CGame {
             get_log_local_time,
             put_log_info,
             world_string_by_id,
+            format_world_string,
             refreshes: Vec::new(),
             tax_refreshes: Vec::new(),
+            country_wars: Vec::new(),
             pending_player_ranks_registration: None,
             pending_tax_registration: None,
         };
@@ -9388,6 +9515,7 @@ impl CGame {
         };
         let player_ranks = handler.refreshes;
         let organizing_taxes = handler.tax_refreshes;
+        let country_wars = handler.country_wars;
         let finished_at_ms = get_tick();
         let elapsed_ms = finished_at_ms.wrapping_sub(clocks.stage_started_at_ms);
         profile_state.timer_time_ms = profile_state.timer_time_ms.wrapping_add(elapsed_ms);
@@ -9397,6 +9525,7 @@ impl CGame {
             timer: timer_report,
             player_ranks,
             organizing_taxes,
+            country_wars,
             finished_at_ms,
             elapsed_ms,
             accumulated_time_ms: profile_state.timer_time_ms,
@@ -9898,7 +10027,7 @@ impl CGame {
         callbacks: &mut WorldMainLoopCallbacks<'_, TimerCallback>,
     ) -> WorldMainLoopResult<FactionContext::Block, LeiTingContextOwner::Block>
     where
-        TimerCallback: Copy,
+        TimerCallback: Copy + PartialEq,
         FactionContext: FactionWarStopContext,
         LeiTingContextOwner: LeiTingContext,
         DbMiscContextOwner: DbMiscContext,
@@ -10165,6 +10294,10 @@ impl CGame {
         let timer = self
             .run_main_loop_timer_stage(
                 owners.timer,
+                owners.country_war,
+                owners.country,
+                owners.country_war_callbacks,
+                owners.globe_setup,
                 state.clocks,
                 state.profile,
                 owners.organizing_parameters,
@@ -10178,6 +10311,7 @@ impl CGame {
                 &mut *callbacks.get_log_local_time,
                 &mut *callbacks.put_log_info,
                 &mut *callbacks.world_string_by_id,
+                &mut *callbacks.format_union_world_string,
                 &mut *callbacks.dispatch_timer,
             )
             .await
@@ -13096,6 +13230,44 @@ impl CountryWarVictoryContext for WorldCountryWarEffects<'_> {
         // Нормальный output сохраняется byte-exact; переполнение старого
         // 256-byte `_sprintf` было внутренним UB, поэтому safe adapter
         // оставляет место под C-string NUL вместо чтения за stack-buffer.
+        Ok(visible[..visible.len().min(0xff)].to_vec())
+    }
+
+    fn send_country_info(
+        &mut self,
+        text: &[u8],
+        title: u32,
+        color: u32,
+    ) -> Result<i32, Self::Block> {
+        let text = CString::new(legacy_c_string_prefix(text))
+            .expect("legacy C-string prefix не содержит внутреннего NUL");
+        let mut delivery = WorldCountryInfoDelivery { game: self.game };
+        Ok(self
+            .country_handler
+            .send_info_to_client(&text, title, color, &mut delivery))
+    }
+}
+
+impl CountryWarPhaseContext for WorldCountryWarEffects<'_> {
+    type Block = Infallible;
+
+    fn reset_country_war_result_if_present(
+        &mut self,
+        country: u8,
+    ) -> Result<bool, Self::Block> {
+        Ok(self.country_handler.set_country_war_result(country, 0))
+    }
+
+    fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError> {
+        message.send_all(self.game.current_game_server_sender().as_ref())
+    }
+
+    fn format_phase_notice(
+        &mut self,
+        string_id: &'static [u8],
+    ) -> Result<Vec<u8>, Self::Block> {
+        let formatted = (self.format_world_string)(string_id, &[]);
+        let visible = legacy_c_string_prefix(&formatted);
         Ok(visible[..visible.len().min(0xff)].to_vec())
     }
 
