@@ -437,7 +437,7 @@
 //! `Exit` использует те же standard/village и city-war gates. В отличие от
 //! Linux-донора, Goods War после `WS0162/WS0121` не завершает функцию: exact
 //! ASM продолжает к `PV_Exit`. После уведомления `WS0187(name)/WS0188` старым
-//! членам идут `DelMember`, delete faction-state вышедшему, player refresh,
+//! членам идут `DelMember`, player refresh, delete faction-state вышедшему,
 //! member `OP_Delete`, dirty `2`, опциональный quit-log type `3` и безусловное
 //! удаление из Goods War. Диапазон `0x004BAAB0..0x004BB131` подтверждает этот
 //! порядок и старый `true` только после полного success-prefix. Linux-донор
@@ -447,8 +447,8 @@
 //! `FireOut` в отличие от `Exit` действительно завершает Goods War gate после
 //! `WS0363 ` (ID содержит trailing space). Затем он делает трёхаргументный
 //! `CheckOperValidate(manager, target, PV_FireOut)`, `WS0192(name)/WS0119`
-//! старым членам и эффекты в машинном порядке: `DelMember`, player refresh,
-//! member `OP_Delete`, delete faction-state, dirty `2`, fire-log type `1`,
+//! старым членам и эффекты в машинном порядке: `DelMember`, delete
+//! faction-state, member `OP_Delete`, player refresh, dirty `2`, fire-log type `1`,
 //! Goods War delete и локальное fixed-frame сообщение `0x60508` как
 //! `target_id + faction_name[32]`. Exact ASM `0x004BB140..0x004BB897`
 //! подтверждает порядок, framing и игнорирование send/queue результатов;
@@ -908,6 +908,7 @@ pub(crate) enum FactionExitBlock {
         goods_war_notice_sent: bool,
         member_information: FactionMemberInfoReport,
         member_removal: Option<FactionDelMemberReport>,
+        refreshed_player_ids: Vec<i32>,
     },
 }
 
@@ -925,9 +926,9 @@ pub(crate) enum FactionFireOutOutcome {
     Fired {
         member_information: FactionMemberInfoReport,
         member_removal: Option<FactionDelMemberReport>,
-        refreshed_player_ids: Vec<i32>,
-        member_update: Result<MemberUpdateReport, MemberUpdateBuildError>,
         delete_organizing: FactionDeleteOrganizingOutcome,
+        member_update: Result<MemberUpdateReport, MemberUpdateBuildError>,
+        refreshed_player_ids: Vec<i32>,
         log_written: bool,
         local_message: Result<(), WorldLocalMessageQueueBlock>,
     },
@@ -952,8 +953,6 @@ pub(crate) enum FactionFireOutBlock {
         source: FactionDeleteOrganizingBuildError,
         member_information: FactionMemberInfoReport,
         member_removal: Option<FactionDelMemberReport>,
-        refreshed_player_ids: Vec<i32>,
-        member_update: Result<MemberUpdateReport, MemberUpdateBuildError>,
     },
     UnterminatedManagerName {
         manager_id: i32,
@@ -3103,6 +3102,10 @@ impl CFaction {
                 });
             }
         };
+        let refreshed_player_ids =
+            self.update_player_faction_info(game, player_id, |player_id| {
+                context.update_player_faction_info(player_id);
+            });
         let delete_organizing = match self.delete_organizing_to_client(game, player_id, context) {
             Ok(outcome) => outcome,
             Err(source) => {
@@ -3111,13 +3114,10 @@ impl CFaction {
                     goods_war_notice_sent,
                     member_information,
                     member_removal,
+                    refreshed_player_ids,
                 });
             }
         };
-        let refreshed_player_ids =
-            self.update_player_faction_info(game, player_id, |player_id| {
-                context.update_player_faction_info(player_id);
-            });
         let member_update = self.update_member_info_to_client(game, player_id, EOperator::Delete);
         self.set_change_data(2);
 
@@ -3220,11 +3220,6 @@ impl CFaction {
                 });
             }
         };
-        let refreshed_player_ids =
-            self.update_player_faction_info(game, target_id, |player_id| {
-                context.update_player_faction_info(player_id);
-            });
-        let member_update = self.update_member_info_to_client(game, target_id, EOperator::Delete);
         let delete_organizing = match self.delete_organizing_to_client(game, target_id, context) {
             Ok(outcome) => outcome,
             Err(source) => {
@@ -3232,11 +3227,14 @@ impl CFaction {
                     source,
                     member_information,
                     member_removal,
-                    refreshed_player_ids,
-                    member_update,
                 });
             }
         };
+        let member_update = self.update_member_info_to_client(game, target_id, EOperator::Delete);
+        let refreshed_player_ids =
+            self.update_player_faction_info(game, target_id, |player_id| {
+                context.update_player_faction_info(player_id);
+            });
         self.set_change_data(2);
 
         let log_written = context.faction_fire_out_log_enabled();
@@ -3281,9 +3279,9 @@ impl CFaction {
         Ok(FactionFireOutOutcome::Fired {
             member_information,
             member_removal,
-            refreshed_player_ids,
-            member_update,
             delete_organizing,
+            member_update,
+            refreshed_player_ids,
             log_written,
             local_message,
         })
