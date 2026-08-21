@@ -7288,7 +7288,7 @@ where
     inside_time_window && is_in_faction_id_list(faction.faction_id())
 }
 
-fn current_local_member_time() -> TagTimeValue {
+pub(crate) fn current_local_member_time() -> TagTimeValue {
     let now = Local::now();
     TagTimeValue {
         year: now.year() as u16,

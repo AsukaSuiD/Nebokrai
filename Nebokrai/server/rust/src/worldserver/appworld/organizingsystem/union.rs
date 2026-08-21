@@ -22,7 +22,8 @@
 //! `0x000C5770` и `UpdateEnemyFactionToClient/
 //! UpdateCityWarEnemyFactionToClient/UpdateOwnedCityToClient` RVA
 //! `0x000C5FF0/0x000C60D0/0x000C61B0` и `SendInfoToAllMember` RVA
-//! `0x000C6290`, `DeleteOrgaToClient` RVA `0x000C5D20` — `IMPLEMENTED`;
+//! `0x000C6290`, `DeleteOrgaToClient` RVA `0x000C5D20` и
+//! `UpdateMemberInfoToClient` RVA `0x000C5840` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -127,21 +128,31 @@
 //! каждой faction member-player-ы идут в signed order; допускаются только
 //! online player с ненулевым GameServer ID и полученными faction data. Wire
 //! `0x7FE05` содержит recipient player ID, затем именно union ID.
+//! `UpdateMemberInfoToClient` RVA `0x000C5840` использует `0x7FE0E`.
+//! Delete-ветвь рассылает только `recipient/OP_Delete/target faction`; любой
+//! non-delete сначала требует target key в union map, обновляет cached level
+//! через target faction и снимает один local `tagTime`. Перед каждым реальным
+//! send level ещё раз разрешается через `tagMemInfo::lID`, после чего wire идёт
+//! как `recipient/operator/target/name/level/occupation/job/title/0x2C PV/`
+//! пустая region C-строка/тот же `0x10` time. Stored region, contribute и
+//! LastOnlineTime этот union-owner не отправляет.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::faction::{
-    FactionEnemyDelivery, FactionInitialPropertyBlock, FactionOwnedCityDelivery,
-    FactionOwnedCityUpdateBuildError, FactionMemberInfoReport, FactionMemberInfoRequest,
-    FactionPropertyDelivery, OwnedCityMutationBuildError,
+    current_local_member_time, FactionEnemyDelivery, FactionInitialPropertyBlock,
+    FactionMemberInfoReport, FactionMemberInfoRequest, FactionOwnedCityDelivery,
+    FactionOwnedCityUpdateBuildError, FactionPropertyDelivery, OwnedCityMutationBuildError,
 };
 use super::organizing::{
     EOperator, EPurview, EPurviewOwnState, MemberPurviewMutation, TagMemInfo, TagTimeValue,
+    UnterminatedMemberField,
 };
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::worldserver::game::CGame;
 
 const DELETE_UNION_ORGANIZING_MESSAGE_TYPE: i32 = 0x7FE05;
+const UNION_MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0E;
 
 /// Узкая read-only граница controller-wide `IsFactionMaster`.
 pub(crate) trait UnionOperatorValidationContext {
@@ -360,6 +371,16 @@ pub(crate) struct UnionInfoFanoutReport {
 /// Read-only доступ к ordered faction member-player ID.
 pub(crate) trait UnionFactionMemberContext {
     fn faction_member_player_ids(&self, faction_id: i32) -> Option<Vec<i32>>;
+
+    fn faction_level(
+        &self,
+        faction_id: i32,
+    ) -> Result<Option<i32>, UnionFactionLevelBlock>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UnionFactionLevelBlock {
+    pub(crate) faction_id: i32,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -374,6 +395,38 @@ pub(crate) struct UnionDeleteOrganizingDelivery {
 pub(crate) struct UnionDeleteOrganizingReport {
     pub(crate) visited_faction_ids: Vec<i32>,
     pub(crate) deliveries: Vec<UnionDeleteOrganizingDelivery>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionMemberUpdateDelivery {
+    pub(crate) recipient_faction_id: i32,
+    pub(crate) recipient_player_id: i32,
+    pub(crate) game_server_id: i32,
+    pub(crate) result: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct UnionMemberUpdateReport {
+    pub(crate) target_found: Option<bool>,
+    pub(crate) target_level: Option<i32>,
+    pub(crate) deliveries: Vec<UnionMemberUpdateDelivery>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UnionMemberUpdateBlock {
+    MissingFactionLevel {
+        source: UnionFactionLevelBlock,
+        target_level: i32,
+        completed_deliveries: Vec<UnionMemberUpdateDelivery>,
+    },
+    UnterminatedField {
+        field: UnterminatedMemberField,
+        target_level: i32,
+        recipient_faction_id: i32,
+        recipient_player_id: i32,
+        game_server_id: i32,
+        completed_deliveries: Vec<UnionMemberUpdateDelivery>,
+    },
 }
 
 /// Поля `CUnion`, которые буквально копирует и читает save-цепочка.
@@ -1181,9 +1234,162 @@ impl CUnion {
         }
     }
 
+    /// Публикует delete либо полный union member-faction record всем клиентам.
+    pub(crate) fn update_member_info_to_client<Context>(
+        &mut self,
+        game: &CGame,
+        target_faction_id: i32,
+        operator: EOperator,
+        context: &Context,
+    ) -> Result<UnionMemberUpdateReport, UnionMemberUpdateBlock>
+    where
+        Context: UnionFactionMemberContext,
+    {
+        let update_time = if operator == EOperator::Delete {
+            None
+        } else {
+            let Some(current_level) = self.members.get(&target_faction_id).map(|member| member.level)
+            else {
+                return Ok(UnionMemberUpdateReport {
+                    target_found: Some(false),
+                    target_level: None,
+                    deliveries: Vec::new(),
+                });
+            };
+            match context.faction_level(target_faction_id) {
+                Ok(Some(level)) => {
+                    self.members
+                        .get_mut(&target_faction_id)
+                        .expect("target key проверен до faction lookup")
+                        .level = level;
+                }
+                Ok(None) => {}
+                Err(source) => {
+                    return Err(UnionMemberUpdateBlock::MissingFactionLevel {
+                        source,
+                        target_level: current_level,
+                        completed_deliveries: Vec::new(),
+                    });
+                }
+            }
+            Some(current_local_member_time())
+        };
+
+        let recipient_faction_ids: Vec<i32> = self.members.keys().copied().collect();
+        let mut deliveries = Vec::new();
+        for recipient_faction_id in recipient_faction_ids {
+            if recipient_faction_id <= 0 {
+                continue;
+            }
+            let Some(recipient_player_ids) =
+                context.faction_member_player_ids(recipient_faction_id)
+            else {
+                continue;
+            };
+            for recipient_player_id in recipient_player_ids {
+                let player = game.online_player_by_id(recipient_player_id as u32);
+                let game_server_id = game.game_server_number_by_player_id(recipient_player_id);
+                if player.is_none_or(|player| !player.faction_data_received())
+                    || game_server_id == 0
+                {
+                    continue;
+                }
+
+                let mut message = CMessage::new(UNION_MEMBER_UPDATE_MESSAGE_TYPE);
+                message.base_mut().add_long(recipient_player_id);
+                message.base_mut().add_long(operator.wire_value());
+                message.base_mut().add_long(target_faction_id);
+
+                if let Some(update_time) = update_time {
+                    let member_faction_id = self
+                        .members
+                        .get(&target_faction_id)
+                        .expect("non-delete target существует до recipient-прохода")
+                        .id;
+                    if member_faction_id > 0 {
+                        let current_level = self
+                            .members
+                            .get(&target_faction_id)
+                            .expect("target существует до level refresh")
+                            .level;
+                        match context.faction_level(member_faction_id) {
+                            Ok(Some(level)) => {
+                                self.members
+                                    .get_mut(&target_faction_id)
+                                    .expect("target существует до level assignment")
+                                    .level = level;
+                            }
+                            Ok(None) => {}
+                            Err(source) => {
+                                return Err(UnionMemberUpdateBlock::MissingFactionLevel {
+                                    source,
+                                    target_level: current_level,
+                                    completed_deliveries: deliveries,
+                                });
+                            }
+                        }
+                    }
+
+                    let target = self
+                        .members
+                        .get(&target_faction_id)
+                        .expect("non-delete target существует до wire build");
+                    let mut fields = Vec::new();
+                    if let Err(field) =
+                        append_union_member_update_fields(&mut fields, target, update_time)
+                    {
+                        return Err(UnionMemberUpdateBlock::UnterminatedField {
+                            field,
+                            target_level: target.level,
+                            recipient_faction_id,
+                            recipient_player_id,
+                            game_server_id,
+                            completed_deliveries: deliveries,
+                        });
+                    }
+                    message.base_mut().add(&fields);
+                }
+
+                deliveries.push(UnionMemberUpdateDelivery {
+                    recipient_faction_id,
+                    recipient_player_id,
+                    game_server_id,
+                    result: game.send_msg_to_game_server(game_server_id, &message),
+                });
+            }
+        }
+
+        Ok(UnionMemberUpdateReport {
+            target_found: (operator != EOperator::Delete).then_some(true),
+            target_level: (operator != EOperator::Delete).then(|| {
+                self.members
+                    .get(&target_faction_id)
+                    .expect("non-delete target существует после recipient-прохода")
+                    .level
+            }),
+            deliveries,
+        })
+    }
+
     pub(crate) const fn change_data_type(&self) -> i32 {
         self.change_data_type
     }
+}
+
+fn append_union_member_update_fields(
+    output: &mut Vec<u8>,
+    member: &TagMemInfo,
+    update_time: TagTimeValue,
+) -> Result<(), UnterminatedMemberField> {
+    output.extend_from_slice(member.name_wire_bytes()?);
+    output.extend_from_slice(&member.level.to_le_bytes());
+    output.extend_from_slice(&member.occupation.to_le_bytes());
+    output.extend_from_slice(&member.job_level.to_le_bytes());
+    output.extend_from_slice(member.title_wire_bytes()?);
+    output.extend_from_slice(&member.purview_wire_bytes());
+    output.push(0);
+    output.extend_from_slice(&update_time.wire_bytes());
+    Ok(())
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
@@ -2052,7 +2258,7 @@ impl CUnion {
 
 // ============================================================================
 // FUNCTION: CUnion::UpdateMemberInfoToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:1217

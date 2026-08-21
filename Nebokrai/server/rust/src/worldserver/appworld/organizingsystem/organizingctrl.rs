@@ -221,9 +221,9 @@ use super::organizing::EOperator;
 use super::organizingparam::COrganizingParam;
 use super::union::{
     CUnion, UnionClientSnapshotContext, UnionFactionMemberContext,
-    UnionFactionStateMutationContext, UnionMasterFactionQueryContext,
-    UnionOperatorValidationContext, UnionOwnedCityMutationContext, UnionPlayerRefreshContext,
-    UnionSendInfoContext,
+    UnionFactionLevelBlock, UnionFactionStateMutationContext, UnionMasterFactionQueryContext,
+    UnionOperatorValidationContext, UnionOwnedCityMutationContext,
+    UnionPlayerRefreshContext, UnionSendInfoContext,
 };
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::appworld::player::{
@@ -1469,6 +1469,19 @@ impl UnionFactionMemberContext for COrganizingCtrl {
     fn faction_member_player_ids(&self, faction_id: i32) -> Option<Vec<i32>> {
         self.faction_by_id(faction_id)
             .map(|faction| faction.get_members().keys().copied().collect())
+    }
+
+    fn faction_level(
+        &self,
+        faction_id: i32,
+    ) -> Result<Option<i32>, UnionFactionLevelBlock> {
+        let Some(faction) = self.faction_by_id(faction_id) else {
+            return Ok(None);
+        };
+        faction
+            .level()
+            .map(Some)
+            .ok_or(UnionFactionLevelBlock { faction_id })
     }
 }
 
