@@ -2122,6 +2122,16 @@ impl COrganizingCtrl {
             .and_then(Option::as_deref_mut)
     }
 
+    /// Узкий concrete dispatch достигнутого `CFaction::SetGoodsWarCount`.
+    pub(crate) fn set_faction_goods_war_count(
+        &mut self,
+        faction_id: i32,
+        count: i32,
+    ) -> Option<i32> {
+        self.faction_by_id_mut(faction_id)
+            .map(|faction| faction.set_goods_war_count(count))
+    }
+
     /// Повторяет nullable `GetConfederationOrganizing` для положительного ID.
     pub(crate) fn confederation_by_id(&self, union_id: i32) -> Option<&CUnion> {
         if union_id < 1 {

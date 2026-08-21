@@ -6,8 +6,8 @@
 //! `0x6012D`, region route `0x6012E`, city-gate route `0x6012F` и полный
 //! city-transfer ingress `0x60130`, admission-permit `0x60132`, city-war
 //! terminal `0x60133`, village-war application `0x60135`, её result ingress
-//! `0x60136`, city-war application `0x60137` и её result ingress `0x60138`;
-//! остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `0x60136`, city-war application `0x60137`, её result ingress `0x60138` и
+//! Goods War command `0x60139`; остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
@@ -174,6 +174,12 @@
 //! `SetKing(master)+m_lCityID=region` остаются явно переданными callback-ами.
 //! Это сохраняет место и порядок side effects, не объявляя сырой `SetKing`
 //! (включая его `DeposeKing` и `0x7FF05`) уже восстановленным.
+//! Exact `0x004A88D1..0x004A8952` для `0x60139` сначала читает один operation
+//! `Long`. Только literal `2/0x11/0x12` читают второй `Long` и вызывают
+//! `DeleteOneMember/InsertOneFaction/AppendOneFaction2Count`; literal `4`
+//! вызывает `RefreshAll` без второго поля. Все остальные значения являются
+//! no-op и не потребляют хвост. Прямого ingress-ответа нет: concrete Goods War
+//! owner при фактических mutations публикует свои `0x7FF20/0x7FF21`.
 //!
 //! Старый callback держал singleton-указатели и мутировал organizing state
 //! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
@@ -206,6 +212,10 @@ use crate::public::date::TagTime;
 use crate::public::timer::CTimer;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsOriginalNameIndex, query_goods_name,
+};
+use crate::worldserver::appworld::goodswarmember::{
+    CGoodsWarMember, GoodsWarFactionSnapshot, GoodsWarMemberBlock, GoodsWarMemberContext,
+    GoodsWarMutationReport, GoodsWarRefreshReport,
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
     FactionContributorContext, FactionEnemyMutationBlock, FactionEnemyMutationContext,
@@ -304,6 +314,7 @@ const VILLAGE_WAR_RESULT_MESSAGE_TYPE: i32 = 0x60136;
 const APPLY_FOR_CITY_WAR_MESSAGE_TYPE: i32 = 0x60137;
 const APPLY_FOR_CITY_WAR_RESPONSE_TYPE: i32 = 0x7FE37;
 const CITY_WAR_RESULT_MESSAGE_TYPE: i32 = 0x60138;
+const GOODS_WAR_COMMAND_MESSAGE_TYPE: i32 = 0x60139;
 const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
 const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
@@ -3429,6 +3440,122 @@ pub(crate) fn dispatch_city_war_result<Callback: Copy>(
         reported_union_id,
         outcome,
     })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingGoodsWarContextBlock {
+    pub(crate) faction_id: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingGoodsWarCommandOutcome {
+    DeleteOneMember {
+        player_id: i32,
+        report: GoodsWarMutationReport,
+    },
+    RefreshAll(GoodsWarRefreshReport),
+    InsertOneFaction {
+        faction_id: i32,
+        report: GoodsWarMutationReport,
+    },
+    AppendOneFactionToCount {
+        faction_id: i32,
+        report: GoodsWarMutationReport,
+    },
+    Ignored,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingGoodsWarCommandDispatch {
+    pub(crate) operation: i32,
+    pub(crate) outcome: OrganizingGoodsWarCommandOutcome,
+}
+
+struct WorldGoodsWarMemberContext<'game, 'organizing> {
+    game: &'game CGame,
+    organizing: &'organizing mut COrganizingCtrl,
+}
+
+impl GoodsWarMemberContext for WorldGoodsWarMemberContext<'_, '_> {
+    type Block = OrganizingGoodsWarContextBlock;
+
+    fn faction_snapshot(
+        &mut self,
+        faction_id: i32,
+    ) -> Result<Option<GoodsWarFactionSnapshot>, Self::Block> {
+        Ok(self.organizing.faction_by_id(faction_id).map(|faction| {
+            GoodsWarFactionSnapshot {
+                name: legacy_c_string_prefix(faction.name()).to_vec(),
+                goods_war_count: faction.goods_war_count(),
+            }
+        }))
+    }
+
+    fn set_faction_goods_war_count(
+        &mut self,
+        faction_id: i32,
+        count: i32,
+    ) -> Result<i32, Self::Block> {
+        self.organizing
+            .set_faction_goods_war_count(faction_id, count)
+            .ok_or(OrganizingGoodsWarContextBlock { faction_id })
+    }
+
+    fn send_all(&mut self, message: &CMessage) -> i32 {
+        message
+            .send_all(self.game.current_game_server_sender().as_ref())
+            .unwrap_or(0)
+    }
+}
+
+/// Выполняет exact внутренний switch `0x60139`, потребляя только нужные поля.
+pub(crate) fn dispatch_goods_war_command(
+    message: &mut CMessage,
+    game: &CGame,
+    organizing: &mut COrganizingCtrl,
+    goods_war: &mut CGoodsWarMember,
+) -> Option<
+    Result<
+        OrganizingGoodsWarCommandDispatch,
+        GoodsWarMemberBlock<OrganizingGoodsWarContextBlock>,
+    >,
+> {
+    if message.message_type() != GOODS_WAR_COMMAND_MESSAGE_TYPE {
+        return None;
+    }
+
+    let operation = message.base_mut().get_long().unwrap_or(0);
+    let mut context = WorldGoodsWarMemberContext { game, organizing };
+    let outcome = match operation {
+        2 => {
+            let player_id = message.base_mut().get_long().unwrap_or(0);
+            OrganizingGoodsWarCommandOutcome::DeleteOneMember {
+                player_id,
+                report: goods_war.delete_one_member(player_id, &mut context),
+            }
+        }
+        4 => OrganizingGoodsWarCommandOutcome::RefreshAll(
+            goods_war.refresh_all(&mut context),
+        ),
+        0x11 => {
+            let faction_id = message.base_mut().get_long().unwrap_or(0);
+            let report = match goods_war.insert_one_faction(faction_id, &mut context) {
+                Ok(report) => report,
+                Err(block) => return Some(Err(block)),
+            };
+            OrganizingGoodsWarCommandOutcome::InsertOneFaction { faction_id, report }
+        }
+        0x12 => {
+            let faction_id = message.base_mut().get_long().unwrap_or(0);
+            let report = match goods_war.append_one_faction_to_count(faction_id, &mut context) {
+                Ok(report) => report,
+                Err(block) => return Some(Err(block)),
+            };
+            OrganizingGoodsWarCommandOutcome::AppendOneFactionToCount { faction_id, report }
+        }
+        _ => OrganizingGoodsWarCommandOutcome::Ignored,
+    };
+    Some(Ok(OrganizingGoodsWarCommandDispatch { operation, outcome }))
 }
 
 #[derive(Debug, Eq, PartialEq)]

@@ -101,6 +101,11 @@ pub(crate) mod appworld {
         pub(crate) mod cgoodsbaseproperties;
         pub(crate) mod cgoodsfactory;
     }
+    #[allow(
+        dead_code,
+        reason = "Goods War runtime-owner подключён к organizing ingress до DB reload и FactionWin"
+    )]
+    pub(crate) mod goodswarmember;
     pub(crate) mod jjcsystem;
     pub(crate) mod leiting;
     #[allow(
