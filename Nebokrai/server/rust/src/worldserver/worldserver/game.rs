@@ -1009,7 +1009,8 @@ use crate::worldserver::appworld::country::countryparam::{
 use crate::worldserver::appworld::country::countrywarsys::{
     CountryWarCallbacks, CountryWarDeclarationAuthority, CountryWarDeclarationContext,
     CountryWarDeclarationPlayer, CountryWarLoadError, CountryWarLoadReport,
-    CountryWarReloadBlock, CountryWarSys, CountryWarVictoryContext, CountryWarVictoryRegion,
+    CountryWarReloadBlock, CountryWarSys, CountryWarTopInfoContext,
+    CountryWarVictoryContext, CountryWarVictoryRegion,
 };
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsOriginalNameIndex,
@@ -13110,6 +13111,47 @@ impl CountryWarVictoryContext for WorldCountryWarEffects<'_> {
         Ok(self
             .country_handler
             .send_info_to_client(&text, title, color, &mut delivery))
+    }
+}
+
+impl CountryWarTopInfoContext for WorldCountryWarEffects<'_> {
+    type Block = Infallible;
+
+    fn format_top_info_notice(
+        &mut self,
+        string_id: &'static [u8],
+    ) -> Result<Vec<u8>, Self::Block> {
+        let formatted = (self.format_world_string)(string_id, &[]);
+        let visible = legacy_c_string_prefix(&formatted);
+        Ok(visible[..visible.len().min(0xff)].to_vec())
+    }
+
+    fn add_top_info(
+        &mut self,
+        timer_flag: i32,
+        duration_ms: i32,
+        text: &[u8],
+        get_tick: &mut dyn FnMut() -> u32,
+    ) -> i32 {
+        self.country_handler
+            .add_one_top_info(timer_flag, duration_ms, text, get_tick)
+    }
+
+    fn send_top_info(
+        &mut self,
+        top_info_id: i32,
+        timer_flag: i32,
+        duration_ms: i32,
+        text: &[u8],
+    ) -> i32 {
+        let mut delivery = WorldCountryInfoDelivery { game: self.game };
+        self.country_handler.send_top_info_to_client(
+            top_info_id,
+            timer_flag,
+            duration_ms,
+            text,
+            &mut delivery,
+        )
     }
 }
 

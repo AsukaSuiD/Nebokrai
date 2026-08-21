@@ -2,7 +2,8 @@
 //!
 //! Статус `CCountryHandler::GetCountry` RVA `0x00036C40`,
 //! `AddToByteArray` RVA `0x000449F0`,
-//! `send_info_to_client` RVA `0x00044760`, `GenerateSaveData` RVA `0x00044970`,
+//! `send_info_to_client` RVA `0x00044760`, `SendTopInfoToClient` RVA
+//! `0x00044800`, `GenerateSaveData` RVA `0x00044970`,
 //! `SetNewDay` RVA `0x00044A70`, `Initialize` RVA `0x00044B10`,
 //! `Append` RVA `0x000452B0`,
 //! `AddOneTopInfo` RVA `0x00045130` и полный `Run` RVA `0x00045040` —
@@ -36,6 +37,9 @@
 //! `send_info_to_client` строит `0x7FA03` из четырёх consecutive unsigned long
 //! и C-строки; один overload target `0x00423C00` для обоих нулей/title/color
 //! подтверждён exact EXE.
+//! `SendTopInfoToClient` тем же сетевым owner-ом строит `0x7FA04` из нулевого
+//! player ID, signed top-info ID, timer flag, parameter и C-строки; return
+//! исходный void игнорировал, typed delivery сохраняется вызывающим adapter-ом.
 //! `SetNewDay` exact `0x00444A70..0x00444B04` проходит unsigned country-key
 //! map-order, пропускает null values и вызывает `CCountry::SetNewDay` с тем же
 //! signed day. `BTreeMap` заменяет только MSVC tree traversal.
@@ -57,7 +61,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::fmt;
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -318,6 +322,31 @@ impl CCountryHandler {
         context.send_all(&message)
     }
 
+    /// Строит exact `0x7FA04`: нулевой player ID, top-info ID, timer flag,
+    /// parameter и C-string, затем синхронный `SendAll`.
+    pub(crate) fn send_top_info_to_client<Context: CountryInfoDeliveryContext + ?Sized>(
+        &self,
+        top_info_id: i32,
+        timer_flag: i32,
+        param: i32,
+        info: &[u8],
+        context: &mut Context,
+    ) -> i32 {
+        let end = info
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(info.len());
+        let info = CString::new(&info[..end])
+            .expect("legacy C-string prefix не содержит внутреннего NUL");
+        let mut message = CMessage::new(0x7fa04);
+        message.base_mut().add_long(0);
+        message.base_mut().add_long(top_info_id);
+        message.base_mut().add_long(timer_flag);
+        message.base_mut().add_long(param);
+        message.base_mut().add_str(Some(&info));
+        context.send_all(&message)
+    }
+
     /// Дописывает отдельную save-копию каждой живой страны в DB-list.
     pub(crate) fn generate_save_data(&self, game: &CGame, limits: CountryKingSaveLimits) {
         for country in self.countries.values().flatten() {
@@ -439,7 +468,7 @@ impl CCountryHandler {
 
 // ============================================================================
 // FUNCTION: CCountryHandler::SendTopInfoToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countryhandler.cpp:166
@@ -447,6 +476,7 @@ impl CCountryHandler {
 // ADDRESS: 00444800
 // PROTOTYPE: void __thiscall SendTopInfoToClient(long param_1, long param_2, long param_3, char * param_4)
 //
+// Реализовано выше: exact `0x7FA04` wire-order и SendAll context.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

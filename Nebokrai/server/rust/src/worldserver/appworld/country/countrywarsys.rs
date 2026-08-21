@@ -1,7 +1,7 @@
 //! WorldServer-владелец country-war state `CountryWarSys`.
 //!
 //! `AddToByteArray` RVA `0x0008F800`, `player_declare` RVA `0x00091B00`,
-//! `on_war_start` RVA `0x00090EC0`,
+//! `on_war_start/on_war_end` RVA `0x00090EC0/0x00091100`,
 //! `end_war` RVA `0x0008F890`, пять phase callbacks RVA
 //! `0x0008F490/0x0008FA00/0x0008FB40/0x0008FC80/0x00091530`,
 //! `on_flag_destory` (исходное PDB-написание) RVA `0x00091E00`, `initialize`
@@ -87,8 +87,8 @@
 //! `(difference.minute * 60 + difference.second) * 1000` с 32-битным
 //! wrapping и намеренно игнорирует hour/day. После `WS0099/WS0100` lookup и
 //! форматирования concrete `CCountryHandler::AddOneTopInfo(2, duration, text)`
-//! вызывается до сырого `SendTopInfoToClient` с возвращённым ID. Уже добавленная
-//! запись не откатывается при block внешней send-границы.
+//! вызывается до concrete `SendTopInfoToClient` с возвращённым ID. Exact wire
+//! `0x7FA04` теперь принадлежит `CCountryHandler`, а delivery сохранён в report.
 //!
 //! `on_war_start` подтверждён exact `0x00490EC0..0x004910F7`: сначала
 //! безусловный `0x7FF1B`, затем map-order обход записей с двумя ненулевыми
@@ -99,6 +99,14 @@
 //! передавались именно `szCountryName[country][0x40]`, поэтому concrete
 //! adapter теперь форматирует именами стран, а не их числовыми ID. Старый
 //! 256-byte overflow безопасно ограничен 255 видимыми байтами.
+//!
+//! `on_war_end` подтверждён exact `0x00491100..0x0049152B`. После `0x7FF1C`
+//! он обрабатывает только `state_clear && defend != 0 && attack != 0`: живой
+//! region получает `WS0093`, затем результаты существующих defender и attacker
+//! сбрасываются в этом порядке. Независимо от region lookup запись после этого
+//! очищается целиком. В конце observable `operator[]` вставляет нулевой schedule
+//! для отсутствующего war ID и, если `ClearTime > now`, публикует `WS0094` тем
+//! же минутно-секундным duration, `AddOneTopInfo` и exact `0x7FA04` owner-ом.
 //!
 //! Snapshot намеренно сохраняет layout World EXE: `state_clear + 3 bytes
 //! padding`, затем defender и attacker. Парный Game EXE RVA `0x000EBD60`
@@ -113,7 +121,6 @@ use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::date::{TagTime, TagTimeArithmeticBlock, TagTimeParseBlock};
 use crate::public::readwrite::read_to;
 use crate::public::timer::{CTimer, TimerId};
-use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CountryWarCallbacks<Callback> {
@@ -357,6 +364,52 @@ pub(crate) enum CountryWarStartBlock<ContextBlock> {
     },
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct CountryWarFinishReport {
+    pub(crate) broadcast_delivery: i32,
+    pub(crate) active_regions: usize,
+    pub(crate) ended_regions: Vec<i32>,
+    pub(crate) formatted_notices: usize,
+    pub(crate) reset_country_results: Vec<u8>,
+    pub(crate) info_deliveries: Vec<i32>,
+    pub(crate) clear_top_info: Option<CountryWarTopInfoReport>,
+}
+
+#[derive(Debug)]
+pub(crate) enum CountryWarFinishBlock<ContextBlock> {
+    Region {
+        region_id: i32,
+        report: CountryWarFinishReport,
+        source: ContextBlock,
+    },
+    FormatNotice {
+        region_id: i32,
+        report: CountryWarFinishReport,
+        source: ContextBlock,
+    },
+    SendInfo {
+        region_id: i32,
+        report: CountryWarFinishReport,
+        source: ContextBlock,
+    },
+    CountryExists {
+        region_id: i32,
+        country: u8,
+        report: CountryWarFinishReport,
+        source: ContextBlock,
+    },
+    ResetCountry {
+        region_id: i32,
+        country: u8,
+        report: CountryWarFinishReport,
+        source: ContextBlock,
+    },
+    ClearTopInfo {
+        report: CountryWarFinishReport,
+        source: CountryWarTopInfoBlock<ContextBlock>,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CountryWarDeclarationAuthority {
     CountryMissing,
@@ -491,6 +544,7 @@ pub(crate) enum CountryWarPhaseBlock<ContextBlock> {
 pub(crate) enum CountryWarTopInfoKind {
     Start,
     End,
+    Clear,
 }
 
 impl CountryWarTopInfoKind {
@@ -498,6 +552,7 @@ impl CountryWarTopInfoKind {
         match self {
             Self::Start => b"WS0099",
             Self::End => b"WS0100",
+            Self::Clear => b"WS0094",
         }
     }
 }
@@ -511,15 +566,23 @@ pub(crate) trait CountryWarTopInfoContext {
         string_id: &'static [u8],
     ) -> Result<Vec<u8>, Self::Block>;
 
-    /// Повторяет ещё сырой `CCountryHandler::SendTopInfoToClient` после уже
-    /// выполненного concrete `AddOneTopInfo`.
+    /// Вызывает concrete `CCountryHandler::AddOneTopInfo`.
+    fn add_top_info(
+        &mut self,
+        timer_flag: i32,
+        duration_ms: i32,
+        text: &[u8],
+        get_tick: &mut dyn FnMut() -> u32,
+    ) -> i32;
+
+    /// Вызывает concrete `CCountryHandler::SendTopInfoToClient`.
     fn send_top_info(
         &mut self,
         top_info_id: i32,
         timer_flag: i32,
         duration_ms: i32,
         text: &[u8],
-    ) -> Result<(), Self::Block>;
+    ) -> i32;
 }
 
 #[derive(Debug)]
@@ -533,7 +596,7 @@ pub(crate) struct CountryWarTopInfoReport {
     pub(crate) duration_ms: Option<i32>,
     pub(crate) text: Option<Vec<u8>>,
     pub(crate) top_info_id: Option<i32>,
-    pub(crate) sent: bool,
+    pub(crate) delivery: Option<i32>,
 }
 
 #[derive(Debug)]
@@ -543,10 +606,6 @@ pub(crate) enum CountryWarTopInfoBlock<ContextBlock> {
         source: TagTimeArithmeticBlock,
     },
     FormatNotice {
-        report: CountryWarTopInfoReport,
-        source: ContextBlock,
-    },
-    Send {
         report: CountryWarTopInfoReport,
         source: ContextBlock,
     },
@@ -923,13 +982,139 @@ impl CountryWarSys {
         Ok(report)
     }
 
+    /// Выполняет exact World `on_war_end`: завершает только начатые войны,
+    /// сбрасывает их стороны и затем публикует отсчёт до `ClearTime`.
+    pub(crate) fn run_war_end<Context, GetTick>(
+        &mut self,
+        war_id: i32,
+        now: TagTime,
+        mut get_tick: GetTick,
+        context: &mut Context,
+    ) -> Result<
+        CountryWarFinishReport,
+        CountryWarFinishBlock<<Context as CountryWarVictoryContext>::Block>,
+    >
+    where
+        Context: CountryWarVictoryContext
+            + CountryWarTopInfoContext<Block = <Context as CountryWarVictoryContext>::Block>
+            + ?Sized,
+        GetTick: FnMut() -> u32,
+    {
+        let message = CMessage::new(0x7ff1c);
+        let mut report = CountryWarFinishReport {
+            broadcast_delivery: CountryWarVictoryContext::send_all(context, &message),
+            ..CountryWarFinishReport::default()
+        };
+
+        for (&region_id, state) in &mut self.war_regions {
+            if !state.state_clear
+                || state.defend_country == 0
+                || state.attack_country == 0
+            {
+                continue;
+            }
+            report.active_regions += 1;
+            let defend_country = state.defend_country;
+            let attack_country = state.attack_country;
+
+            let region = match context.region(region_id) {
+                Ok(region) => region,
+                Err(source) => {
+                    return Err(CountryWarFinishBlock::Region {
+                        region_id,
+                        report,
+                        source,
+                    });
+                }
+            };
+            if let Some(region) = region {
+                let notice = match context.format_victory_notice(
+                    b"WS0093",
+                    attack_country,
+                    defend_country,
+                    &region.name,
+                ) {
+                    Ok(notice) => notice,
+                    Err(source) => {
+                        return Err(CountryWarFinishBlock::FormatNotice {
+                            region_id,
+                            report,
+                            source,
+                        });
+                    }
+                };
+                report.formatted_notices += 1;
+                let delivery = match context.send_country_info(
+                    &notice,
+                    0xffff_fe92,
+                    0xffff_0000,
+                ) {
+                    Ok(delivery) => delivery,
+                    Err(source) => {
+                        return Err(CountryWarFinishBlock::SendInfo {
+                            region_id,
+                            report,
+                            source,
+                        });
+                    }
+                };
+                report.info_deliveries.push(delivery);
+
+                for country in [defend_country as u8, attack_country as u8] {
+                    let exists = match context.country_exists(country) {
+                        Ok(exists) => exists,
+                        Err(source) => {
+                            return Err(CountryWarFinishBlock::CountryExists {
+                                region_id,
+                                country,
+                                report,
+                                source,
+                            });
+                        }
+                    };
+                    if !exists {
+                        continue;
+                    }
+                    if let Err(source) = context.set_country_war_result(country, 0) {
+                        return Err(CountryWarFinishBlock::ResetCountry {
+                            region_id,
+                            country,
+                            report,
+                            source,
+                        });
+                    }
+                    report.reset_country_results.push(country);
+                }
+            }
+
+            state.state_clear = false;
+            state.defend_country = 0;
+            state.attack_country = 0;
+            report.ended_regions.push(region_id);
+        }
+
+        let clear_top_info = match self.run_top_info(
+            CountryWarTopInfoKind::Clear,
+            war_id,
+            now,
+            &mut get_tick,
+            context,
+        ) {
+            Ok(clear_top_info) => clear_top_info,
+            Err(source) => {
+                return Err(CountryWarFinishBlock::ClearTopInfo { report, source });
+            }
+        };
+        report.clear_top_info = Some(clear_top_info);
+        Ok(report)
+    }
+
     /// Выполняет `on_war_start_info/on_war_end_info` поверх живого top-info owner-а.
     pub(crate) fn run_top_info<Context, GetTick>(
         &mut self,
         kind: CountryWarTopInfoKind,
         war_id: i32,
         now: TagTime,
-        country_handler: &mut CCountryHandler,
         mut get_tick: GetTick,
         context: &mut Context,
     ) -> Result<CountryWarTopInfoReport, CountryWarTopInfoBlock<Context::Block>>
@@ -945,6 +1130,7 @@ impl CountryWarSys {
         let target_time = match kind {
             CountryWarTopInfoKind::Start => schedule.start_time,
             CountryWarTopInfoKind::End => schedule.end_time,
+            CountryWarTopInfoKind::Clear => schedule.clear_time,
         };
         let mut report = CountryWarTopInfoReport {
             kind,
@@ -956,7 +1142,7 @@ impl CountryWarSys {
             duration_ms: None,
             text: None,
             top_info_id: None,
-            sent: false,
+            delivery: None,
         };
         if target_time.legacy_le(now) {
             return Ok(report);
@@ -980,22 +1166,19 @@ impl CountryWarSys {
             }
         };
         report.text = Some(text);
-        let top_info_id = country_handler.add_one_top_info(
+        let top_info_id = context.add_top_info(
             2,
             duration_ms,
             report.text.as_deref().unwrap_or_default(),
             &mut get_tick,
         );
         report.top_info_id = Some(top_info_id);
-        if let Err(source) = context.send_top_info(
+        report.delivery = Some(context.send_top_info(
             top_info_id,
             2,
             duration_ms,
             report.text.as_deref().unwrap_or_default(),
-        ) {
-            return Err(CountryWarTopInfoBlock::Send { report, source });
-        }
-        report.sent = true;
+        ));
         Ok(report)
     }
 
@@ -1612,7 +1795,7 @@ where
 
 // ============================================================================
 // FUNCTION: CountryWarSys::on_war_end
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:409
@@ -1620,6 +1803,8 @@ where
 // ADDRESS: 00491100
 // PROTOTYPE: void __stdcall on_war_end(long param_1)
 //
+// Реализовано выше через `run_war_end`; exact disassembly
+// `0x00491100..0x0049152B` подтверждает region reset и ClearTime top-info.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
