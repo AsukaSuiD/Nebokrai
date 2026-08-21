@@ -205,10 +205,16 @@
 //! под-объекта и ручной `Release`. `DoAsyncCall` строит exact `0x7FE17`:
 //! master player ID, literal confirmation kind `2`, applicant name как
 //! C-строку, signed session ID и второй cookie, после чего выбирает GameServer
-//! по master player и игнорирует send result. Result читает decision и только
-//! при literal `1` следующие `0x10` bytes времени; approval вызывает
-//! `DoJoin(GetPlayerHeader(), applicant, 1, time)`, отказ сообщает именно
-//! faction ID через `WS0266/WS0193`, а timeout/non-result не сообщает ничего.
+//! по master player и игнорирует send result. Result читает decision; approval
+//! вызывает `DoJoin(GetPlayerHeader(), applicant, 1, time)`, отказ сообщает
+//! именно faction ID через `WS0266/WS0193`, а timeout/non-result не сообщает
+//! ничего.
+//! Exact ingress `0x004A74C6..0x004A7509` читает только однобайтовый result и
+//! старый manager передаёт адрес своего 4-байтового stack-slot. Поэтому
+//! последующее копирование `0x10` bytes в callback-е захватывало соседний
+//! технический стек; `DoJoin` этот time не читает. Rust устраняет внутреннее
+//! out-of-bounds чтение и передаёт нулевой технический `TagTimeValue`, не меняя
+//! ни одного достигнутого эффекта.
 //! После normal return найденный union сбрасывает заявку и list-owner удаляет
 //! только первое совпадение; union miss всё равно очищает list. Неверный erased
 //! Rust payload и недостигнутое malformed state останавливаются typed-блоком
@@ -474,17 +480,10 @@ pub(crate) struct UnionApplicationSessionRequest {
     pub(crate) applicant_faction_name: Vec<u8>,
 }
 
-/// Точный result payload: решение `long` и только для `1` следующие `tagTime`.
-#[derive(Clone, Copy)]
-pub(crate) struct UnionApplicationCallbackPayload {
-    pub(crate) decision: i32,
-    pub(crate) time: Option<TagTimeValue>,
-}
-
 /// Нормальные ветви локального `OnAsyncCallback` после typed decode.
 #[derive(Clone, Copy)]
 pub(crate) enum UnionApplicationTerminal {
-    Approved { time: TagTimeValue },
+    Approved,
     Denied,
     NonResult { kind: NetSessionAsyncResultKind },
 }
@@ -494,7 +493,6 @@ pub(crate) enum UnionApplicationTerminal {
 pub(crate) enum UnionApplicationEndpointBlock {
     BeginPayloadType,
     ResultPayloadType,
-    ApprovedTimeMissing,
 }
 
 /// Живые эффекты локального callback-owner-а, требующие interior synchronization.
@@ -563,23 +561,17 @@ impl NetSessionEndpoint for PlayerApplyForJoinConfeder {
 
     fn on_async_callback(&self, result: NetSessionAsyncResult<'_>) {
         let terminal = if result.kind == NetSessionAsyncResultKind::Result {
-            let Some(payload) = result
+            let Some(decision) = result
                 .payload
-                .and_then(|payload| payload.downcast_ref::<UnionApplicationCallbackPayload>())
+                .and_then(|payload| payload.downcast_ref::<i32>())
             else {
                 self.runtime.block_union_application_endpoint(
                     UnionApplicationEndpointBlock::ResultPayloadType,
                 );
                 return;
             };
-            if payload.decision == 1 {
-                let Some(time) = payload.time else {
-                    self.runtime.block_union_application_endpoint(
-                        UnionApplicationEndpointBlock::ApprovedTimeMissing,
-                    );
-                    return;
-                };
-                UnionApplicationTerminal::Approved { time }
+            if *decision == 1 {
+                UnionApplicationTerminal::Approved
             } else {
                 UnionApplicationTerminal::Denied
             }

@@ -247,7 +247,7 @@ use super::faction::{
     FactionSuperiorOrganizingBlock, MemberEnterOutcome, MemberExitOutcome,
     OwnedCityMutationBuildError,
 };
-use super::organizing::EOperator;
+use super::organizing::{EOperator, TagTimeValue};
 use super::organizingparam::COrganizingParam;
 use super::union::{
     CUnion, UnionAddFactionEffects, UnionApplicationFactionBlock,
@@ -268,6 +268,17 @@ use crate::worldserver::worldserver::game::CGame;
 const TOP_INFO_MESSAGE_TYPE: i32 = 0x7FA04;
 const UNION_INITIAL_MESSAGE_TYPE: i32 = 0x7FE04;
 const EXPIRING_TIMER_FLAG: i32 = 2;
+
+const UNUSED_UNION_APPLICATION_TIME: TagTimeValue = TagTimeValue {
+    year: 0,
+    month: 0,
+    day_of_week: 0,
+    day: 0,
+    hour: 0,
+    minute: 0,
+    second: 0,
+    milliseconds: 0,
+};
 
 static NEXT_TOP_INFO_ID: AtomicI32 = AtomicI32::new(1);
 
@@ -1158,14 +1169,14 @@ impl COrganizingCtrl {
         }
 
         let detached_membership_lookup =
-            matches!(terminal, UnionApplicationTerminal::Approved { .. })
+            matches!(terminal, UnionApplicationTerminal::Approved)
                 .then(|| self.is_free_faction(applicant_faction_id));
         let mut union = self
             .confederations
             .get_mut(&union_id)
             .and_then(Option::take)
             .expect("union entry и pointer проверены до временного take");
-        let join = if let UnionApplicationTerminal::Approved { time } = terminal {
+        let join = if let UnionApplicationTerminal::Approved = terminal {
             let manager_id = match union.player_header(|master_faction_id| {
                 let Some(faction) = self.faction_by_id(master_faction_id) else {
                     return Ok(None);
@@ -1197,7 +1208,7 @@ impl COrganizingCtrl {
                 manager_id,
                 applicant_faction_id,
                 1,
-                time,
+                UNUSED_UNION_APPLICATION_TIME,
                 self,
                 effects,
                 update_player,

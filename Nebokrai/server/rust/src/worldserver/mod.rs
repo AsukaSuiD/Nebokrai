@@ -114,6 +114,11 @@ pub(crate) mod appworld {
     pub(crate) mod message {
         #[allow(
             dead_code,
+            reason = "общий organizing session-result branch подключён перед остальными organizing opcodes"
+        )]
+        pub(crate) mod organsysmessage;
+        #[allow(
+            dead_code,
             reason = "узкий country victory dispatcher подключён перед остальными country opcodes"
         )]
         pub(crate) mod countrymessage;

@@ -206,8 +206,12 @@
 //! virtual deleting destructor, а два wrapping millisecond аккумулятора
 //! сохраняют `g_lGSMessageTime/g_lLSMessageTime`. Обычный `CMessage::Run`
 //! выполняет точный numeric selector; готовые ветви server-owner
-//! `0x4FC01..=0x4FC03` исполняются сразу, а остальные сообщения возвращаются
-//! owned вместе с выбранным сырым owner-ом и не выдаются за no-op исполнение.
+//! `0x4FC01..=0x4FC03`, other honor и organizing session-result
+//! `0x60120/0x60122/0x60124` исполняются сразу, а остальные сообщения
+//! возвращаются owned вместе с выбранным сырым owner-ом и не выдаются за no-op
+//! исполнение. Session manager передаётся тому же `ProcessMessage` явно вместо
+//! process-global singleton-а; cookie/result и terminal removal остаются у
+//! уже восстановленного manager-owner-а.
 //! Внешний MainLoop call-site теперь также готов: отдельный tick снимается до
 //! `ProcessMessage`, следующий после успешного возврата даёт wrapping elapsed
 //! для `DAT_0056e514`, а третий становится start tick следующей SessionFactory-
@@ -971,6 +975,9 @@ use crate::worldserver::appworld::leiting::{
 };
 use crate::worldserver::appworld::message::othermessage::{
     WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
+};
+use crate::worldserver::appworld::message::organsysmessage::{
+    OrganizingSessionResultDispatch, dispatch_organizing_session_result,
 };
 use crate::worldserver::appworld::message::servermessage::{
     WorldLoginClientReplacement, WorldServerMessageDispatch, WorldServerMessageError,
@@ -1829,6 +1836,11 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: WorldOtherMessageOutcome,
+    },
+    OrganizingSessionResult {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: OrganizingSessionResultDispatch,
     },
     LoginClientReconnected(WorldLoginClientReplacement),
 }
@@ -8007,11 +8019,12 @@ impl CGame {
     /// заново читается текущий Login client и фиксируется его число сообщений.
     /// Поэтому typed reconnect из первой очереди заменяет owner до второго
     /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
-    /// ветви server-owner-а и honor `0x5FD0C/0x5FD0D` исполняются, остальные
-    /// остаются owned pending.
+    /// ветви server-owner-а, honor `0x5FD0C/0x5FD0D` и organizing session
+    /// result исполняются, остальные остаются owned pending.
     pub(crate) fn process_message(
         &mut self,
         honor_ranks: &mut CHonorRanks,
+        net_sessions: &CNetSessionManager,
     ) -> Result<WorldProcessMessageOutcome, WorldProcessMessageError> {
         let server_started_at = legacy_tick_ms();
         let mut server_remaining = self
@@ -8035,6 +8048,7 @@ impl CGame {
                         events.push(process_world_message(
                             self,
                             honor_ranks,
+                            net_sessions,
                             WorldMessageSource::GameServer,
                             message,
                         ));
@@ -8066,6 +8080,7 @@ impl CGame {
                 events.push(process_world_message(
                     self,
                     honor_ranks,
+                    net_sessions,
                     WorldMessageSource::LoginServer,
                     message,
                 ));
@@ -8096,6 +8111,7 @@ impl CGame {
     pub(crate) fn process_message_main_loop_stage<GetTick>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
+        net_sessions: &CNetSessionManager,
         clocks: &mut WorldMainLoopClockState,
         state: &mut WorldProcessMessageStageState,
         mut get_tick: GetTick,
@@ -8104,7 +8120,7 @@ impl CGame {
         GetTick: FnMut() -> u32,
     {
         let started_at_ms = get_tick();
-        let outcome = match self.process_message(honor_ranks) {
+        let outcome = match self.process_message(honor_ranks, net_sessions) {
             Ok(outcome) => outcome,
             Err(error) => {
                 return WorldProcessMessageStageReport::Blocked {
@@ -9128,6 +9144,7 @@ impl CGame {
         );
         let process_message = match self.process_message_main_loop_stage(
             owners.honor_ranks,
+            owners.net_sessions,
             state.clocks,
             state.process_message,
             &mut *callbacks.get_tick,
@@ -10735,6 +10752,7 @@ pub(crate) async fn game_thread_func<Runtime: WorldGameThreadRuntime>(
 fn process_world_message(
     game: &mut CGame,
     honor_ranks: &mut CHonorRanks,
+    net_sessions: &CNetSessionManager,
     source: WorldMessageSource,
     mut message: CMessage,
 ) -> ProcessedWorldEvent {
@@ -10768,6 +10786,19 @@ fn process_world_message(
                 };
             }
             WorldOtherMessageDispatch::Pending(pending) => message = pending,
+        }
+    }
+
+    if selector.owner == Some(WorldMessageOwner::OrganizingSystem) {
+        match dispatch_organizing_session_result(&mut message, net_sessions) {
+            OrganizingSessionResultDispatch::NotHandled => {}
+            outcome => {
+                return ProcessedWorldEvent::OrganizingSessionResult {
+                    source,
+                    legacy_run_result,
+                    outcome,
+                };
+            }
         }
     }
 
