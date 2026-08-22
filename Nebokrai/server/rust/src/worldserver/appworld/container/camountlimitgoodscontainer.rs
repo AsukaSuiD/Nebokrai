@@ -137,7 +137,9 @@ use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, create_goods, query_goods_base_properties, unserialize_goods,
 };
-use super::cgoodscontainer::CGoodsContainerState;
+use super::cgoodscontainer::{
+    CGoodsContainerState, GoodsContainerPositionStorage, remove_from_position,
+};
 use super::ccontainer::{ContainerGuidStorage, find_by_object_guid};
 
 /// Ошибка безопасной границы amount-container codec-а.
@@ -208,6 +210,16 @@ impl ContainerGuidStorage for CAmountLimitGoodsContainer {
     }
 
     fn remove_by_guid(&mut self, ex_id: &CGuid) -> Option<Self::Removed> {
+        self.remove(ex_id)
+    }
+}
+
+impl GoodsContainerPositionStorage for CAmountLimitGoodsContainer {
+    fn goods_at(&mut self, position: u32) -> Option<&mut CGoods> {
+        self.get_goods_mut(position)
+    }
+
+    fn remove_by_guid(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
         self.remove(ex_id)
     }
 }
@@ -317,38 +329,17 @@ impl CAmountLimitGoodsContainer {
     where
         Random: FnMut(i32) -> i32,
     {
-        let Some(goods) = self.get_goods(position) else {
-            return Ok(None);
-        };
-        if amount == 0 {
-            return Ok(None);
-        }
-
-        let current_amount = goods.get_amount();
-        if current_amount > amount {
-            if goods.get_max_stack_number(registry)? <= 1 {
-                return Ok(None);
-            }
-            let index = goods
-                .get_base_properties_index()
-                .ok_or(GoodsCodecError::MissingBasePropertiesIndex)?;
-            let ex_id = *goods.get_ex_id();
-            let Some(mut removed) = create_goods(registry, index, random) else {
-                return Ok(None);
-            };
-            removed.set_amount(amount);
-            let Some(stored) = self.goods_mut(&ex_id) else {
-                return Ok(None);
-            };
-            stored.set_amount(stored.get_amount().wrapping_sub(amount));
-            return Ok(Some(removed));
-        }
-
-        if current_amount == amount {
-            let ex_id = *goods.get_ex_id();
-            return Ok(self.remove(&ex_id));
-        }
-        Ok(None)
+        let mut create = |index| create_goods(registry, index, random);
+        let mut no_op_listener = |_: &CGoods| {};
+        remove_from_position(
+            self,
+            position,
+            amount,
+            registry,
+            &mut create,
+            &mut no_op_listener,
+        )
+        .map_err(Into::into)
     }
 
     /// Очищает goods/locked storage, сохраняя owner и limit.
