@@ -40,6 +40,7 @@
 //! `CGame::AppendOfflinePlayer` RVA `0x00010DF0`,
 //! `CGame::AppendLoginPlayer` RVA `0x00010E50`,
 //! numeric `CGame::GetRegion(long)` RVA `0x00011F20`,
+//! name-overload `CGame::GetRegion(char const*)` RVA `0x00008680`,
 //! достигнутой связи `CGame::tagRegion::pRegion` с `CWorldRegion` и его
 //! унаследованным именем,
 //! `CGame::GetRegionGameServer` RVA `0x00013AC0`,
@@ -121,6 +122,15 @@
 //! эти добавления старого Linux-донора не перенесены. `BTreeMap`, typed region
 //! owner и готовый `CMessage::send_all` заменяют только STL, virtual ABI и
 //! сетевую инфраструктуру; ignored send-result остаётся наблюдаемым отчётом.
+//!
+//! Name-overload `GetRegion` обходит `s_mapRegionList` в signed key-order и
+//! возвращает первый `tagRegion`, чей `pRegion->m_strName` равен входной
+//! C-строке через case-sensitive `strcmp`. Точная дизассемблировка
+//! `0x00408680..0x00408741` не содержит map lookup по имени или fallback-а.
+//! `named_region_lookup` сохраняет порядок и first-match, а также возвращает
+//! достигнутый route snapshot вместо сырого указателя. Null `pRegion` в EXE
+//! разыменовывался; Rust считает его повреждённым внутренним состоянием,
+//! пропускает и явно считает, не приписывая падению игровую семантику.
 //!
 //! `LoadSetup` сначала пробует обычный `setup.ini`, а только при ошибке
 //! открытия — декодированный `setup.dat`. Поток читает пары `label + value`,
@@ -14805,6 +14815,9 @@ impl CGame {
     }
 
     /// Повторяет ordered `GetRegion(char const*)` с case-sensitive `strcmp`.
+    ///
+    /// Route-поля являются typed snapshot найденного `tagRegion`, а не новой
+    /// ступенью поиска; null owner безопасно учитывается вместо старого UB.
     pub(crate) fn named_region_lookup(&self, name: &[u8]) -> WorldNamedRegionLookup {
         let name = legacy_c_string_prefix(name);
         let mut skipped_null_owners = 0;
@@ -20156,19 +20169,9 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 //
 //
 
-// ============================================================================
-// FUNCTION: CGame::GetRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4299
-// RVA: 0x00008680
-// ADDRESS: 00408680
-// PROTOTYPE: tagRegion * __thiscall GetRegion(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: name-overload `CGame::GetRegion` RVA `0x00008680` находится
+// выше как `named_region_lookup`; exact traversal/strcmp подтверждены, а raw
+// MSVC tree plumbing удалён.
 
 // ============================================================================
 // IMPLEMENTED: `CGame::SaveCityRegion` RVA `0x00008750` находится выше; signed map-order и type `2` сохранены, две UB-границы локализованы.
