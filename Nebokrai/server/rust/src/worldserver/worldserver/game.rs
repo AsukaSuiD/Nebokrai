@@ -1015,7 +1015,9 @@ use crate::dbaccess::worlddb::dbmisc::{
     CDbMisc, DbMiscContext, DbMiscDoneInReport, DbMiscDoneOutBlock, DbMiscDoneOutReport,
     DbMiscLoadAuctionReport,
 };
-use crate::dbaccess::worlddb::largess::{LargessOwner, LoadLargessReport};
+use crate::dbaccess::worlddb::largess::{
+    LargessOwner, LoadLargessBlock, LoadLargessReport, TiberiusLargess,
+};
 use crate::dbaccess::worlddb::playerdataqueue::{
     CPlayerDataQueue, PlayerDataQueueEntry,
 };
@@ -3010,6 +3012,12 @@ pub(crate) struct WorldPlayerLoadWorkerBlock {
     pub(crate) completed_batches: u32,
     pub(crate) drained_records: u32,
     pub(crate) source: WorldPlayerLoadBatchBlock,
+}
+
+#[derive(Debug)]
+pub(crate) struct WorldPlayerLargessLoadReport {
+    pub(crate) load: LoadLargessReport,
+    pub(crate) write_log_queue_length: Option<usize>,
 }
 
 /// Профилированная `DAT_0056e524` стадия перед `CTimer::Run`.
@@ -6318,6 +6326,39 @@ impl CGame {
     ) -> Option<usize> {
         report.write_log.take().map(|record| {
             self.push_write_log_command(WorldWriteLogCommand::LargessLog(record))
+        })
+    }
+
+    /// Выполняет доменную выдачу и сразу публикует её optional log в общий FIFO.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn load_player_largess<Random, Upgrade>(
+        &self,
+        largess: &TiberiusLargess,
+        player: &mut CPlayer,
+        registry: &GoodsBasePropertiesRegistry,
+        gold_coin_index: u32,
+        gold_coin_limit: u32,
+        use_log_system: bool,
+        random: &mut Random,
+        upgrade_equipment: &mut Upgrade,
+    ) -> Result<WorldPlayerLargessLoadReport, LoadLargessBlock>
+    where
+        Random: FnMut(i32) -> i32 + ?Sized,
+        Upgrade: FnMut(&mut CGoods, i32) + ?Sized,
+    {
+        let mut load = largess.load_largess(
+            player,
+            registry,
+            gold_coin_index,
+            gold_coin_limit,
+            use_log_system,
+            random,
+            upgrade_equipment,
+        )?;
+        let write_log_queue_length = self.publish_largess_load_log(&mut load);
+        Ok(WorldPlayerLargessLoadReport {
+            load,
+            write_log_queue_length,
         })
     }
 
