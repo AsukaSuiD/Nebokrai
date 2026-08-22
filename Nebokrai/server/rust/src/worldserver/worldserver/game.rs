@@ -459,6 +459,12 @@
 //! итоговый `0/1` сохраняют исходный порядок. Exact
 //! `0x004176D5..0x0041771D` кладёт zero-extended bool reload-owner-а в общий
 //! return slot `CGame::ReLoad`, что исправляет прежний потерянный Rust-result.
+//! FourNationWar следует той же concrete main-loop границе: она передаёт
+//! живые `CFourNationWarSys`, `CTimer`, девять callback-ключей, country-name
+//! snapshot и resource-context. Обычный dispatcher без этих owner-ов сообщает
+//! `FourNationWarOwnerRequired`; при success exact payload `0x25` строится из
+//! того же live owner-а, а legacy failure-log остаётся после active-war gate
+//! либо запрета отправки.
 //! Результат `SendAll(0x7FF1D)`
 //! старый код игнорировал; Rust хранит его как `Result` только в typed report,
 //! не назначая искусственный legacy error code.
@@ -1326,7 +1332,8 @@ use crate::worldserver::appworld::jjcsystem::{
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
     CFourNationWarSys, FourNationCountryFailContext, FourNationExploitContext,
     FourNationExploitLoadedDisposition, FourNationWarCallbacks, FourNationWarLoadError,
-    FourNationWarLoadReport, FourNationWarResultContext,
+    FourNationWarLoadReport, FourNationWarReloadDisposition,
+    FourNationWarResultContext, FourNationWarSerializationBlock,
 };
 use crate::worldserver::appworld::leiting::{
     CLeiTing, LeiTingBlock, LeiTingContext, LeiTingLocalTime, LeiTingRunReport,
@@ -1997,8 +2004,6 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn load_region_parameters(&mut self, game: &mut CGame) -> bool;
     fn country_parameter_source(&mut self) -> Option<Vec<u8>>;
     fn country_war_source(&mut self) -> Option<Vec<u8>>;
-    /// Пять source-слотов `CGlobeSetup::szCountryName` для snapshot FourNation.
-    fn four_nation_country_names(&mut self) -> [Vec<u8>; 5];
     fn use_appellation_function(&mut self) -> bool;
     /// Возвращает достигнутый player DB-owner и его текущий caller-connection.
     fn player_database(
@@ -4028,6 +4033,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) country_war: &'a mut CountryWarSys,
     pub(crate) country_war_callbacks: CountryWarCallbacks<TimerCallback>,
     pub(crate) four_nation_war: &'a mut CFourNationWarSys,
+    pub(crate) four_nation_war_callbacks: FourNationWarCallbacks<TimerCallback>,
     pub(crate) honor_ranks: &'a mut CHonorRanks,
     pub(crate) organizing_parameters: &'a mut COrganizingParam,
     pub(crate) player_ranks: &'a mut CPlayerRanks,
@@ -4321,7 +4327,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     PlayerGmList,
     RegionLevelSetup,
     AttackCity,
-    FourNationWar,
     TimeToReturn,
     GodsBattle,
 }
@@ -4351,7 +4356,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     RegionLevelSetup,
     AttackCity,
     VillageWar,
-    FourNationWar,
     Quest,
     GodsBattle,
 }
@@ -4417,6 +4421,8 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn query_goods_id_by_original_name(&mut self, original_name: &[u8]) -> u32;
     /// Concrete display-name lookup того же `CGoodsFactory`.
     fn query_goods_name(&mut self, goods_id: u32) -> Option<Vec<u8>>;
+    /// Пять source-слотов `CGlobeSetup::szCountryName` для snapshot FourNation.
+    fn four_nation_country_names(&mut self) -> [Vec<u8>; 5];
     fn add_log_text(&mut self, payload: &[u8]);
     fn notify_reload_operator(&mut self, title: &[u8], message: &[u8]);
 
@@ -6018,6 +6024,8 @@ pub(crate) enum WorldReloadBlock {
     ContributeSerialization(ContributeSetupSerializeError),
     CountryWarOwnerRequired,
     CountryWar(CountryWarReloadBlock),
+    FourNationWarOwnerRequired,
+    FourNationWarSerialization(FourNationWarSerializationBlock),
 }
 
 pub(crate) type WorldReloadResult = Result<i32, WorldReloadBlock>;
@@ -7737,6 +7745,56 @@ impl CGame {
         Ok(i32::from(succeeded))
     }
 
+    /// Выполняет concrete `CFourNationWarSys::ReLoad` для main-loop профиля.
+    fn reload_four_nation_war<Context, TimerCallback>(
+        &mut self,
+        context: &mut Context,
+        four_nation_war: &mut CFourNationWarSys,
+        timer: &mut CTimer<TimerCallback>,
+        callbacks: FourNationWarCallbacks<TimerCallback>,
+        now: TagTime,
+        send_to_game_servers: bool,
+        reload_server_resources: bool,
+    ) -> WorldReloadResult
+    where
+        Context: WorldReloadContext + ?Sized,
+        TimerCallback: Copy,
+    {
+        if reload_server_resources {
+            context.load_reload_server_resources(self);
+        }
+        let country_names = context.four_nation_country_names();
+        let source = context.read_resource(b"setup/FourNationWarSys.ini");
+        let context_cell = std::cell::RefCell::new(&mut *context);
+        let disposition = four_nation_war.reload(
+            country_names,
+            source.as_deref(),
+            now,
+            timer,
+            callbacks,
+            |region_id| {
+                let path = format!("regions/{region_id}.nation");
+                context_cell.borrow_mut().read_resource(path.as_bytes())
+            },
+            |payload| context_cell.borrow_mut().add_log_text(payload),
+        );
+        if !matches!(disposition, FourNationWarReloadDisposition::Reloaded(_))
+            || !send_to_game_servers
+        {
+            context.add_log_text(b"Reload the time of FourNationWar...Fail! Please examine wheather did reloading operation when the war was still on!!");
+            return Ok(0);
+        }
+
+        let mut payload = Vec::new();
+        four_nation_war
+            .add_to_byte_array(&mut payload)
+            .map_err(WorldReloadBlock::FourNationWarSerialization)?;
+        let legacy_result = payload.len() as u32 as i32;
+        self.send_reload_payload(0x25, &payload);
+        context.add_log_text(b"Reload file FourNationWarSys.ini...ok!");
+        Ok(legacy_result)
+    }
+
     /// Выполняет полный case-insensitive dispatcher `CGame::ReLoad`.
     pub(crate) fn reload<Context: WorldReloadContext + ?Sized>(
         &mut self,
@@ -8214,20 +8272,7 @@ impl CGame {
                 context.add_log_text(b"Load VilWarPara...OK!");
             }
             WorldReloadProfile::FourNationWar => {
-                let succeeded =
-                    context.call_boolean_owner(WorldReloadBooleanOwner::FourNationWar) != 0;
-                if !succeeded || !send_to_game_servers {
-                    context.add_log_text(b"Reload the time of FourNationWar...Fail! Please examine wheather did reloading operation when the war was still on!!");
-                } else {
-                    self.serialize_reload_owner(
-                        context,
-                        WorldReloadSerializationOwner::FourNationWar,
-                        0x25,
-                        true,
-                        &mut legacy_result,
-                    );
-                    context.add_log_text(b"Reload file FourNationWarSys.ini...ok!");
-                }
+                return Err(WorldReloadBlock::FourNationWarOwnerRequired);
             }
             WorldReloadProfile::CityWar => {
                 context.call_void_owner(WorldReloadVoidOwner::AttackCityUnchecked);
@@ -13237,6 +13282,8 @@ impl CGame {
             owners.country_war,
             owners.timer,
             owners.country_war_callbacks,
+            owners.four_nation_war,
+            owners.four_nation_war_callbacks,
             &mut *callbacks.get_timer_local_time,
         );
         let reload = match reload {
@@ -20503,6 +20550,8 @@ pub(crate) fn reload_profiles<Context, GetLocalTime, GetTimerLocalTime, TimerCal
     country_war: &mut CountryWarSys,
     timer: &mut CTimer<TimerCallback>,
     country_war_callbacks: CountryWarCallbacks<TimerCallback>,
+    four_nation_war: &mut CFourNationWarSys,
+    four_nation_war_callbacks: FourNationWarCallbacks<TimerCallback>,
     mut get_timer_local_time: GetTimerLocalTime,
 ) -> WorldReloadProfilesReport
 where
@@ -20534,6 +20583,16 @@ where
                     timer,
                     country_war_callbacks,
                     get_timer_local_time(),
+                    action.second_option,
+                )
+            } else if action.reload_profile == b"FourNationWar" {
+                game.reload_four_nation_war(
+                    context,
+                    four_nation_war,
+                    timer,
+                    four_nation_war_callbacks,
+                    get_timer_local_time(),
+                    action.first_option,
                     action.second_option,
                 )
             } else {
