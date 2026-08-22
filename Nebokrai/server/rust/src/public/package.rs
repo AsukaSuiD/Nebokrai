@@ -165,8 +165,17 @@ impl PackageArchive {
         Ok(Some((index.clone(), payload)))
     }
 
-    /// Восстанавливает LZO/zlib ветви `rfOpen` с исходной верхней границей.
-    pub(crate) fn extract_decoded(&self, name: &[u8]) -> Result<Option<Vec<u8>>, PackageReadError> {
+    /// Восстанавливает LZO/zlib ветви `rfOpen`.
+    ///
+    /// Тип сжатия принадлежит записи пакета, а верхняя граница результата —
+    /// связанной записи `FilesInfo::tagFileInfo::dwOrginSize`. Эти два owner-а
+    /// намеренно не подменяют друг друга: именно так `rfOpen` передаёт их в
+    /// `DeCompressData`/`DeCompress`.
+    pub(crate) fn extract_decoded(
+        &self,
+        name: &[u8],
+        output_capacity: u32,
+    ) -> Result<Option<Vec<u8>>, PackageReadError> {
         let Some((index, compressed)) = self.extract_compressed(name, u32::MAX)? else {
             return Ok(None);
         };
@@ -175,7 +184,7 @@ impl PackageArchive {
         if index.compress_type & 1 != 0 {
             return Ok(Some(compressed));
         }
-        let capacity = index.origin_size as usize;
+        let capacity = output_capacity as usize;
         let mut output = vec![0; capacity];
         if index.compress_type & 4 == 0 {
             let written = lzo::decompress_into(&compressed, &mut output)

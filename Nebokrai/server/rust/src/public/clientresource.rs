@@ -378,6 +378,8 @@ impl ClientResource {
 
     /// Достижимая package-ветвь `rfOpen`: loose-файлы здесь намеренно не
     /// выбираются, потому что их current-folder/open error owner отдельный.
+    /// `compress_type` берёт `PackageArchive`, но выходной предел распаковки
+    /// передаётся из связанной записи `FilesInfo`, как в исходном `rfOpen`.
     pub(crate) fn read_packaged(
         &self,
         path: &[u8],
@@ -404,7 +406,7 @@ impl ClientResource {
                     package_type: info.package_type(),
                 })?;
         package
-            .extract_decoded(&normalized)
+            .extract_decoded(&normalized, info.origin_size())
             .map_err(ClientResourceReadError::Package)
     }
 
