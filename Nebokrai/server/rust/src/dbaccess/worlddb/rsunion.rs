@@ -1,9 +1,10 @@
 //! DB-владелец `CRsUnion` исторического WorldServer из `rsunion.cpp`.
 //!
 //! Статус `DelConfederation` RVA `0x000F7EF0`, `SaveConfeMembers` RVA
-//! `0x000F7FE0` и `SaveConfederation` RVA `0x000F81C0` — `IMPLEMENTED`;
-//! constructor, destructor и остальные функции ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `0x000F7FE0`, `SaveConfederation` RVA `0x000F81C0`,
+//! `GetUnionMemInfo` RVA `0x000F8500`, `LoadConfeMembers` RVA `0x000F8860`
+//! и `LoadAllConfederation` RVA `0x000F93A0` — `IMPLEMENTED`; constructor и
+//! destructor ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
@@ -60,18 +61,38 @@
 //! чтения union pointer. Напротив, null union при живом connection исходно
 //! немедленно разыменовывался; его неизвестная UB-реакция не заменяется
 //! безопасным `false` и остаётся отдельной блокирующей границей.
+//!
+//! Load-цепочка открывает самостоятельное World DB connection, буквально
+//! читает `CSL_UNION_BaseProperty` в recordset-order и для каждого base-row
+//! читает `CSL_UNION_Members WHERE UnionID= %d`. Затем для каждого member
+//! отдельный `GetUnionMemInfo` читает faction `Name` из
+//! `CSL_FACTION_BaseProperty`. Отказ base/member recordset либо его field
+//! прекращает проход, не отменяя уже сформированный prefix; отдельный отказ
+//! `GetUnionMemInfo` только пропускает текущий member и продолжает цикл.
+//! `CUnion` создаётся и публикуется следующим owner-ом
+//! `COrganizingCtrl::Initialize`: этот DB owner возвращает именно безопасную
+//! data-проекцию, поэтому не подменяет ещё не реконструированный парный
+//! `CRsFaction` частичным init-вызовом.
+//! Старые copy/stack lifetime и неинициализированные region/last-online bytes
+//! заменены полностью определёнными Rust-полями; Title и faction Name всё ещё
+//! получают исходное правило short-copy: видимый ANSI prefix короче 21 байта,
+//! иначе пустое поле. Неизвестный numeric `listPV` не materialize-ится как
+//! invalid Rust enum: проход останавливается typed notice, а не создаёт UB.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
 use std::fmt;
 
 use encoding_rs::WINDOWS_1251;
-use tiberius::Query;
+use tiberius::{Query, Row};
 
-use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
-use crate::worldserver::appworld::organizingsystem::organizing::{
-    TagMemInfo, UnterminatedMemberField,
+use crate::dbaccess::worlddb::rssetup::{
+    WorldDatabaseConnectionError, WorldDatabaseSettings, WorldTdsClient,
 };
+use crate::worldserver::appworld::organizingsystem::organizing::{
+    EPurviewOwnState, TagMemInfo, UnterminatedMemberField,
+};
+use crate::worldserver::appworld::organizingsystem::faction::current_local_member_time;
 use crate::worldserver::appworld::organizingsystem::union::CUnion;
 
 const UNION_BASE_SELECT_SQL: &str = "SELECT TOP 1 ID FROM CSL_UNION_BaseProperty WHERE ID = @P1";
@@ -80,6 +101,23 @@ const UNION_BASE_UPDATE_SQL: &str =
 const UNION_MEMBER_INSERT_PREFIX: &[u8] = b"INSERT INTO CSL_UNION_Members (UnionID,FactionID,MemberLvl,Title,bControbute,\t\t\t\t\t\t PV_Disband,PV_Exit,PV_DubJobLvl,PV_ConMem,PV_FireOut,PV_Pronounce,PV_LeaveWord,\t\t\t\t\t\t PV_EditLeaveWord,PV_ObtainTax,PV_OperCityGate,PV_EndueROR)\t\t\t\t\t\t VALUES (";
 const UNION_BASE_INSERT_CAPACITY: usize = 256;
 const UNION_MEMBER_INSERT_CAPACITY: usize = 500;
+const LOAD_ALL_CONFEDERATIONS_SQL: &str = "SELECT * FROM CSL_UNION_BaseProperty";
+
+/// Безопасный результат одного base-row `LoadAllConfederation` до публикации
+/// concrete `CUnion` у следующего owner-а.
+pub(crate) struct UnionDatabaseLoadRecord {
+    pub(crate) union_id: i32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) master_id: i32,
+    pub(crate) members: BTreeMap<i32, TagMemInfo>,
+}
+
+/// Результат `LoadAllConfederation`; `records` всегда содержит уже завершённый
+/// prefix, как исходные записи в controller-map до первого отказа.
+pub(crate) enum UnionLoadOutcome {
+    ReturnedTrue { records: Vec<UnionDatabaseLoadRecord> },
+    ReturnedFalse { records: Vec<UnionDatabaseLoadRecord> },
+}
 
 /// Caller-owned save-копия `CUnion`, созданная исходным `CloneSaveData`.
 pub(crate) struct UnionSaveSnapshot<'union> {
@@ -188,6 +226,9 @@ pub(crate) struct RsUnionNotice {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum RsUnionOperation {
+    LoadAllConfederation,
+    LoadConfederationMembers,
+    LoadUnionMemberInfo,
     SaveConfederation,
     DeleteConfederation,
     DeleteConfederationMembers,
@@ -198,6 +239,11 @@ pub(crate) enum RsUnionOperation {
 pub(crate) enum RsUnionSaveError {
     Database(RsUnionDatabaseError),
     MissingConnection,
+    MissingSettings,
+    Connection(WorldDatabaseConnectionError),
+    MissingRequiredValue(&'static str),
+    InvalidPurview { column: &'static str, value: i32 },
+    MissingFaction { faction_id: i32 },
 }
 
 impl fmt::Display for RsUnionSaveError {
@@ -205,6 +251,17 @@ impl fmt::Display for RsUnionSaveError {
         match self {
             Self::Database(error) => error.fmt(formatter),
             Self::MissingConnection => write!(formatter, "не передано соединение World union DB"),
+            Self::MissingSettings => write!(formatter, "не заданы параметры World union DB"),
+            Self::Connection(error) => error.fmt(formatter),
+            Self::MissingRequiredValue(column) => {
+                write!(formatter, "в union DB отсутствует обязательное поле {column}")
+            }
+            Self::InvalidPurview { column, value } => {
+                write!(formatter, "недопустимое union-право {column}={value}")
+            }
+            Self::MissingFaction { faction_id } => {
+                write!(formatter, "не найдена faction {faction_id} для union member")
+            }
         }
     }
 }
@@ -213,7 +270,12 @@ impl Error for RsUnionSaveError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Database(error) => Some(error),
+            Self::Connection(error) => Some(error),
             Self::MissingConnection => None,
+            Self::MissingSettings
+            | Self::MissingRequiredValue(_)
+            | Self::InvalidPurview { .. }
+            | Self::MissingFaction { .. } => None,
         }
     }
 }
@@ -241,6 +303,10 @@ impl From<tiberius::error::Error> for RsUnionDatabaseError {
 
 /// Узкая объектная граница достигнутой стадии исходного `CRsUnion`.
 pub(crate) trait RsUnionOwner {
+    /// Открывает самостоятельное World DB connection и возвращает готовый
+    /// prefix base/member rows в точном исходном порядке.
+    async fn load_all_confederations(&mut self) -> UnionLoadOutcome;
+
     /// Сохраняет base-row и ordered member-map внутри caller-транзакции.
     async fn save_confederation(
         &mut self,
@@ -269,10 +335,98 @@ pub(crate) trait RsUnionOwner {
 /// Linux/TDS-замена достигнутой части исходного `CRsUnion`.
 #[derive(Default)]
 pub(crate) struct TiberiusRsUnion {
+    settings: Option<WorldDatabaseSettings>,
     notices: VecDeque<RsUnionNotice>,
 }
 
+impl TiberiusRsUnion {
+    pub(crate) fn new(settings: WorldDatabaseSettings) -> Self {
+        Self {
+            settings: Some(settings),
+            notices: VecDeque::new(),
+        }
+    }
+
+    fn load_failed(
+        &mut self,
+        operation: RsUnionOperation,
+        error: UnionLoadReadError,
+        records: Vec<UnionDatabaseLoadRecord>,
+    ) -> UnionLoadOutcome {
+        self.notices.push_back(RsUnionNotice {
+            operation,
+            error: error.into(),
+        });
+        UnionLoadOutcome::ReturnedFalse { records }
+    }
+}
+
 impl RsUnionOwner for TiberiusRsUnion {
+    async fn load_all_confederations(&mut self) -> UnionLoadOutcome {
+        let Some(settings) = self.settings.clone() else {
+            self.notices.push_back(RsUnionNotice {
+                operation: RsUnionOperation::LoadAllConfederation,
+                error: RsUnionSaveError::MissingSettings,
+            });
+            return UnionLoadOutcome::ReturnedFalse { records: Vec::new() };
+        };
+        let mut connection = match settings.connect().await {
+            Ok(connection) => connection,
+            Err(error) => {
+                self.notices.push_back(RsUnionNotice {
+                    operation: RsUnionOperation::LoadAllConfederation,
+                    error: RsUnionSaveError::Connection(error),
+                });
+                return UnionLoadOutcome::ReturnedFalse { records: Vec::new() };
+            }
+        };
+        let stream = match Query::new(LOAD_ALL_CONFEDERATIONS_SQL)
+            .query(&mut connection)
+            .await
+        {
+            Ok(stream) => stream,
+            Err(error) => {
+                self.notices.push_back(RsUnionNotice {
+                    operation: RsUnionOperation::LoadAllConfederation,
+                    error: RsUnionSaveError::Database(error.into()),
+                });
+                return UnionLoadOutcome::ReturnedFalse { records: Vec::new() };
+            }
+        };
+        let rows = match stream.into_first_result().await {
+            Ok(rows) => rows,
+            Err(error) => {
+                self.notices.push_back(RsUnionNotice {
+                    operation: RsUnionOperation::LoadAllConfederation,
+                    error: RsUnionSaveError::Database(error.into()),
+                });
+                return UnionLoadOutcome::ReturnedFalse { records: Vec::new() };
+            }
+        };
+
+        let mut records = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let union_id = match read_legacy_i32(row, "ID") {
+                Ok(value) => value,
+                Err(error) => return self.load_failed(RsUnionOperation::LoadAllConfederation, error, records),
+            };
+            let name = match read_legacy_text(row, "Name") {
+                Ok(value) => value,
+                Err(error) => return self.load_failed(RsUnionOperation::LoadAllConfederation, error, records),
+            };
+            let master_id = match read_legacy_i32(row, "MasterID") {
+                Ok(value) => value,
+                Err(error) => return self.load_failed(RsUnionOperation::LoadAllConfederation, error, records),
+            };
+            let members = match load_confe_members(&mut connection, union_id, &mut self.notices).await {
+                Ok(members) => members,
+                Err(error) => return self.load_failed(RsUnionOperation::LoadConfederationMembers, error, records),
+            };
+            records.push(UnionDatabaseLoadRecord { union_id, name, master_id, members });
+        }
+        UnionLoadOutcome::ReturnedTrue { records }
+    }
+
     async fn save_confederation(
         &mut self,
         snapshot: Option<&UnionSaveSnapshot<'_>>,
@@ -419,6 +573,170 @@ impl TiberiusRsUnion {
             error: RsUnionSaveError::Database(error.into()),
         });
     }
+}
+
+/// Ошибка одного exact field/query шага load-цепочки до преобразования в
+/// operator-visible notice. Она не содержит runtime SQL либо DB values.
+#[derive(Debug)]
+enum UnionLoadReadError {
+    Database(tiberius::error::Error),
+    MissingRequiredValue(&'static str),
+    InvalidPurview { column: &'static str, value: i32 },
+    MissingFaction { faction_id: i32 },
+}
+
+impl From<UnionLoadReadError> for RsUnionSaveError {
+    fn from(error: UnionLoadReadError) -> Self {
+        match error {
+            UnionLoadReadError::Database(error) => Self::Database(error.into()),
+            UnionLoadReadError::MissingRequiredValue(column) => Self::MissingRequiredValue(column),
+            UnionLoadReadError::InvalidPurview { column, value } => {
+                Self::InvalidPurview { column, value }
+            }
+            UnionLoadReadError::MissingFaction { faction_id } => Self::MissingFaction { faction_id },
+        }
+    }
+}
+
+fn read_legacy_i32(row: &Row, column: &'static str) -> Result<i32, UnionLoadReadError> {
+    match row.try_get::<i32, _>(column) {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => Err(UnionLoadReadError::MissingRequiredValue(column)),
+        Err(error) => Err(UnionLoadReadError::Database(error)),
+    }
+}
+
+fn read_legacy_bool(row: &Row, column: &'static str) -> Result<bool, UnionLoadReadError> {
+    match row.try_get::<bool, _>(column) {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => Err(UnionLoadReadError::MissingRequiredValue(column)),
+        Err(error) => Err(UnionLoadReadError::Database(error)),
+    }
+}
+
+fn read_legacy_text(row: &Row, column: &'static str) -> Result<Vec<u8>, UnionLoadReadError> {
+    match row.try_get::<&str, _>(column) {
+        Ok(Some(value)) => {
+            let (encoded, _, _) = WINDOWS_1251.encode(value);
+            Ok(encoded.into_owned())
+        }
+        Ok(None) => Err(UnionLoadReadError::MissingRequiredValue(column)),
+        Err(error) => Err(UnionLoadReadError::Database(error)),
+    }
+}
+
+async fn load_confe_members(
+    connection: &mut WorldTdsClient,
+    union_id: i32,
+    notices: &mut VecDeque<RsUnionNotice>,
+) -> Result<BTreeMap<i32, TagMemInfo>, UnionLoadReadError> {
+    // Literal сохраняет исходный пробел перед signed `%d`; значение заведомо
+    // вмещалось в `char[512]` старого owner-а.
+    let sql = format!("SELECT * FROM CSL_UNION_Members WHERE UnionID= {union_id}");
+    let rows = connection
+        .simple_query(sql)
+        .await
+        .map_err(UnionLoadReadError::Database)?
+        .into_first_result()
+        .await
+        .map_err(UnionLoadReadError::Database)?;
+    let member_time = current_local_member_time();
+    let mut members = BTreeMap::new();
+    for row in &rows {
+        let faction_id = read_legacy_i32(row, "FactionID")?;
+        let job_level = read_legacy_i32(row, "MemberLvl")?;
+        let title = read_legacy_text(row, "Title")?;
+        let contribute = read_legacy_bool(row, "bControbute")?;
+        let purview = read_union_purview(row)?;
+        let name = match load_union_member_name(connection, faction_id).await {
+            Ok(name) => name,
+            Err(error) => {
+                // Exact `LoadConfeMembers` не проверяет false
+                // `GetUnionMemInfo`: его собственный PrintErr уже случился,
+                // current member не вставляется, следующий record читается.
+                notices.push_back(RsUnionNotice {
+                    operation: RsUnionOperation::LoadUnionMemberInfo,
+                    error: error.into(),
+                });
+                continue;
+            }
+        };
+        let member = TagMemInfo::from_complete_fields(
+            faction_id,
+            copy_legacy_short_field(&name),
+            0,
+            0,
+            job_level,
+            copy_legacy_short_field(&title),
+            purview,
+            [0; 64],
+            member_time,
+            contribute,
+        );
+        // `map::operator[]` перезаписывал duplicate key последней строкой.
+        members.insert(faction_id, member);
+    }
+    Ok(members)
+}
+
+async fn load_union_member_name(
+    connection: &mut WorldTdsClient,
+    faction_id: i32,
+) -> Result<Vec<u8>, UnionLoadReadError> {
+    let sql = format!("SELECT * FROM CSL_FACTION_BaseProperty WHERE ID={faction_id}");
+    let rows = connection
+        .simple_query(sql)
+        .await
+        .map_err(UnionLoadReadError::Database)?
+        .into_first_result()
+        .await
+        .map_err(UnionLoadReadError::Database)?;
+    let Some(row) = rows.first() else {
+        return Err(UnionLoadReadError::MissingFaction { faction_id });
+    };
+    read_legacy_text(row, "Name")
+}
+
+fn read_union_purview(
+    row: &Row,
+) -> Result<[EPurviewOwnState; 11], UnionLoadReadError> {
+    const COLUMNS: [&str; 11] = [
+        "PV_Disband",
+        "PV_Exit",
+        "PV_DubJobLvl",
+        "PV_ConMem",
+        "PV_FireOut",
+        "PV_Pronounce",
+        "PV_LeaveWord",
+        "PV_EditLeaveWord",
+        "PV_ObtainTax",
+        "PV_OperCityGate",
+        "PV_EndueROR",
+    ];
+    let mut output = [EPurviewOwnState::No; 11];
+    for (index, column) in COLUMNS.into_iter().enumerate() {
+        let value = read_legacy_i32(row, column)?;
+        output[index] = match value {
+            0 => EPurviewOwnState::No,
+            1 => EPurviewOwnState::Forbid,
+            2 => EPurviewOwnState::Permit,
+            _ => return Err(UnionLoadReadError::InvalidPurview { column, value }),
+        };
+    }
+    Ok(output)
+}
+
+fn copy_legacy_short_field<const CAPACITY: usize>(source: &[u8]) -> [u8; CAPACITY] {
+    let visible = source
+        .iter()
+        .position(|byte| *byte == 0)
+        .map_or(source, |end| &source[..end]);
+    let mut output = [0; CAPACITY];
+    // Exact сравнивал длину с 0x15, хотя destination Title/Name больше.
+    if visible.len() < 0x15 && visible.len() < CAPACITY {
+        output[..visible.len()].copy_from_slice(visible);
+    }
+    output
 }
 
 fn build_union_base_insert(
