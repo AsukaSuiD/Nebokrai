@@ -186,6 +186,10 @@ pub(crate) trait FourNationWarStartContext {
     fn enter_end_notice(&mut self, region_name: &[u8]) -> Vec<u8>;
     fn enter_end_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8>;
     fn sign_up_end_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8>;
+    fn current_time(&mut self) -> TagTime;
+    fn war_end_info_text(&mut self) -> Vec<u8>;
+    fn add_timed_top_info(&mut self, timer_flag: i32, milliseconds: i32, text: &[u8]) -> i32;
+    fn send_timed_top_info(&mut self, info_id: i32, timer_flag: i32, milliseconds: i32, text: &[u8]);
 }
 
 impl From<TagTimeArithmeticBlock> for FourNationWarLoadError {
@@ -560,6 +564,27 @@ impl CFourNationWarSys {
         let Some(region_name) = context.region_name(region_id) else { return Ok(()); };
         let log = context.sign_up_end_log(index, &region_name);
         context.put_war_log(&log);
+        Ok(())
+    }
+
+    /// `OnWarEndInfo`: `0x7FE42`, затем `XBWS0031` до EndTime в CIS_Fight.
+    pub(crate) fn on_war_end_info<Context: FourNationWarStartContext + ?Sized>(
+        &self,
+        index: i32,
+        context: &mut Context,
+    ) -> Result<(), FourNationWarRegionIndexBlock> {
+        let mut message = CMessage::new(0x7FE42);
+        message.base_mut().add_long(index);
+        context.send_all(&message);
+        let setup = self.setups.get(usize::try_from(index).map_err(|_| FourNationWarRegionIndexBlock { index, setup_count: self.setups.len() })?)
+            .ok_or(FourNationWarRegionIndexBlock { index, setup_count: self.setups.len() })?;
+        let current_time = context.current_time();
+        if setup.region_id == 0 || setup.region_state != 3 || !current_time.legacy_lt(setup.end_time) { return Ok(()); }
+        let difference = setup.end_time.get_time_difference(current_time).map_err(|_| FourNationWarRegionIndexBlock { index, setup_count: self.setups.len() })?;
+        let milliseconds = ((i32::from(difference.minute) * 60) + i32::from(difference.second)) * 1000;
+        let text = context.war_end_info_text();
+        let info_id = context.add_timed_top_info(2, milliseconds, &text);
+        context.send_timed_top_info(info_id, 2, milliseconds, &text);
         Ok(())
     }
     /// Сохраняет единственный внешний контракт exact `OneCountrySignUp`.
@@ -1271,7 +1296,7 @@ fn next_war_i32<'a>(
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::OnWarEndInfo
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:525
@@ -1279,6 +1304,7 @@ fn next_war_i32<'a>(
 // ADDRESS: 00495b80
 // PROTOTYPE: void __stdcall OnWarEndInfo(long param_1)
 //
+// IMPLEMENTED_OWNER: `CFourNationWarSys::on_war_end_info` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
