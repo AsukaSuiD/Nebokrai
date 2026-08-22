@@ -1,7 +1,7 @@
 //! WorldServer dispatcher-owner `OnMSG_S2W_AUCTION`.
 //!
 //! Статус владельца: `IMPLEMENTED` для relay/DB queue/BaiTan/auction-bang
-//! ветвей `0x60801..07/09..0F..14`; `0x60808/0A` остаются owned `Pending`
+//! ветвей `0x60801..09/0B..14`; `0x6080A` остаётся owned `Pending`
 //! до concrete GlobeSetup, SQL-load, auction notice и player-virtual
 //! владельцев. Точная пара: `WorldServer/Nworldserver.exe +
 //! WorldServer/WorldServer.pdb`, исходный owner
@@ -26,6 +26,9 @@
 //! `0x6080E` читает unsigned player ID и декодирует полный player-wire с
 //! текущего cursor только у online owner-а; virtual/CRT plumbing заменён
 //! существующим безопасным codec-ом без нового wire-формата.
+//! `0x60808` строит `0x80403` с signed long `0/1`: единица возможна только
+//! для подключённого GameServer `5` и `CGlobeSetup::bAuction != 0`; `Update`
+//! перед source-map send отсутствует и намеренно не добавляется.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::dbaccess::worlddb::dbmisc::{CDbMisc, DbNote, OperatorType};
@@ -35,6 +38,7 @@ use crate::public::auctionlog::{
 };
 use crate::public::auctionnode::{GoodsNodeSerializeError, GoodsNodeUnserializeError, GoodsState};
 use crate::public::guid::CGuid;
+use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use crate::worldserver::appworld::message::writelogmessage::WorldWriteLogCommand;
 use crate::worldserver::appworld::player::{PlayerCodecError, PlayerPropertyCoefficients};
@@ -44,6 +48,7 @@ const AUCTION_GAME_SERVER: u32 = 5;
 const INSERT_AUCTION_ITEM: i32 = 0x0006_0801;
 const MODIFY_AUCTION_STATE: i32 = 0x0006_0804;
 const MODIFY_AUCTION_SALE: i32 = 0x0006_0806;
+const REQUEST_AUCTION_STATE: i32 = 0x0006_0808;
 const REQUEST_AUCTION_HISTORY: i32 = 0x0006_080B;
 const REQUEST_AUCTION_GOODS_LOG: i32 = 0x0006_080C;
 const COLLECT_AUCTION_NOTICE: i32 = 0x0006_080D;
@@ -124,6 +129,11 @@ pub(crate) enum WorldServerAuctionMessageOutcome {
         decode: Result<bool, PlayerCodecError>,
         cursor_after: usize,
     },
+    AuctionState {
+        auction_enabled: bool,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
     BaiTanRequestAdded {
         ip: u32,
         player_id: i32,
@@ -181,6 +191,7 @@ pub(crate) fn on_msg_s2w_auction(
     game: &mut CGame,
     auction_log: &mut CAuctionLog,
     db_misc: &CDbMisc,
+    globe_setup: &GlobeSetupSnapshot,
     registry: &GoodsBasePropertiesRegistry,
     coefficients: &PlayerPropertyCoefficients,
     mut message: CMessage,
@@ -339,6 +350,26 @@ pub(crate) fn on_msg_s2w_auction(
                 request_type,
                 operation: OperatorType::OT_IN_MODIFY_STATE_A2S,
             })
+        }
+        REQUEST_AUCTION_STATE => {
+            let auction_enabled = game
+                .game_server(AUCTION_GAME_SERVER)
+                .is_some_and(|game_server| game_server.connected)
+                && globe_setup.auction_enabled();
+            let mut response = CMessage::new(0x0008_0403);
+            response.base_mut().add_long(i32::from(auction_enabled));
+            let wire = response.as_wire_bytes().to_vec();
+            let delivery = response.send_to_map_id(
+                game.current_game_server_sender().as_ref(),
+                message.map_id(),
+            );
+            WorldServerAuctionMessageDispatch::Handled(
+                WorldServerAuctionMessageOutcome::AuctionState {
+                    auction_enabled,
+                    wire,
+                    delivery,
+                },
+            )
         }
         REQUEST_AUCTION_HISTORY => {
             let player_id = message.base_mut().get_long().unwrap_or(0);

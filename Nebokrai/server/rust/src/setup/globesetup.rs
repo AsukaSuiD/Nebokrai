@@ -41,6 +41,10 @@
 //! `GetOptMoneyJin` exact `0x0040225E..0x004022D2` читает
 //! `fSxfJinMax/fSxfJinMin/fAuctionFactorC` по `+0xC98/+0xCA0/+0xCB0`;
 //! typed accessors ниже лишь накладывают эти PDB-offsets на тот же snapshot.
+//! PDB/raw-owner называет соседний one-byte `bAuction`; сохранённая schema
+//! предыдущего прохода помещает его по `+0xC87`, что согласуется с этими
+//! auction-полями. Accessor ниже использует только `byte != 0`, как exact
+//! условие `OnMSG_S2W_AUCTION::0x60808`, не выдавая Rust layout за MSVC ABI.
 
 use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 
@@ -60,6 +64,7 @@ const BASE_RP_LEVEL_2_OFFSET: usize = 0x3F2;
 const BASE_MAX_RP_LEVEL_1_OFFSET: usize = 0x3F4;
 const BASE_MAX_RP_LEVEL_2_OFFSET: usize = 0x3F6;
 const PLAYER_SPEED_OFFSET: usize = 0x7F8;
+const AUCTION_ENABLED_OFFSET: usize = 0xC87;
 const AUCTION_FEE_MAXIMUM_OFFSET: usize = 0xC98;
 const AUCTION_FEE_MINIMUM_OFFSET: usize = 0xCA0;
 const AUCTION_FACTOR_C_OFFSET: usize = 0xCB0;
@@ -98,6 +103,11 @@ impl GlobeSetupSnapshot {
     /// Возвращает bit-exact `fPlayerSpeed` по PDB-offset `+0x7F8`.
     pub(crate) fn player_speed(&self) -> f32 {
         self.read_f32(PLAYER_SPEED_OFFSET)
+    }
+
+    /// Возвращает `m_stSetup.bAuction` из подтверждённого raw snapshot-а.
+    pub(crate) const fn auction_enabled(&self) -> bool {
+        self.bytes[AUCTION_ENABLED_OFFSET] != 0
     }
 
     /// Возвращает exact `fSxfJinMax`, используемый комиссией аукциона.
