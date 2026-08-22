@@ -952,6 +952,13 @@
 //! замена для параметризованного Tiberius worker-а: packet-поля, enqueue
 //! position и исходный enqueue-before-live-Add сохраняются, а временные
 //! `_sprintf/CheckPoint` buffers и SQL injection не воспроизводятся.
+//! Consumer batch также достигнут: exact `DoSaveLog` сначала снимал размер,
+//! затем удалял каждый SQL до Execute и после failure восстанавливал connection,
+//! не повторяя потерянную запись. `WorldWriteLogWorkerSpec::process_batch`
+//! сохраняет этот observable data-loss/FIFO контракт и продолжимый snapshot-
+//! checkpoint; typed Execute и connection open находятся в соседнем
+//! `writelogworker`.
+//! Внешние thread/exit/poll/reconnect-delay owners пока остаются RAW.
 //!
 //! `ResetHonorElimilateInfo` RVA `0x00014390` проходит `m_mPlayer` в map-order,
 //! сбрасывает достигнутые day/week/month counters по исходной mask-семантике,
@@ -1198,8 +1205,8 @@ use crate::worldserver::appworld::message::teammessage::{
     WorldTeamMessageOutcome, on_team_message,
 };
 use crate::worldserver::appworld::message::writelogmessage::{
-    WorldIncrementLogMessageOutcome, WorldWriteLogCommand,
-    WorldWriteLogMessageDispatch, on_write_log_message,
+    WorldIncrementLogMessageOutcome, WorldWriteLogCommand, WorldWriteLogMessageDispatch,
+    on_write_log_message,
 };
 use crate::worldserver::appworld::incrementlog::incrementlog::{
     CIncrementLog, IncrementLogLoadOutcome,
@@ -1286,6 +1293,9 @@ use crate::worldserver::worldserver::savedb::{
 use crate::worldserver::worldserver::worldserver::{
     AddLogTextDisposition, WorldLogLocalTime, WorldLogTextOwner, WorldRefreshInfoCurrent,
     WorldRefreshInfoHighWater, WorldRefreshInfoReport, WorldRefreshSaveState, refresh_info_text,
+};
+use crate::worldserver::worldserver::writelogworker::{
+    WorldWriteLogQueue, WorldWriteLogWorkerSpec,
 };
 
 /// Источник, который исходный World `LoadSetup` смог открыть первым.
@@ -1721,8 +1731,12 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn auction_log_database(&mut self) -> Option<&mut WorldTdsClient>;
     /// Exact `CGlobeSetup::m_stSetup.dwIncrementLogDays` для обеих history query.
     fn increment_log_days(&mut self) -> u32;
-    /// Для write-worker сохраняет единственный handle, для load-worker
-    /// добавляет даже пустой handle в исходный ordered owner.
+    /// Получает concrete Log DB setup/FIFO и сохраняет единственный handle.
+    fn start_write_log_worker(
+        &mut self,
+        worker: WorldWriteLogWorkerSpec,
+    ) -> WorldGameInitWorkerHandleState;
+    /// Для load-worker добавляет даже пустой handle в исходный ordered owner.
     fn start_worker(&mut self, kind: WorldGameInitWorkerKind) -> WorldGameInitWorkerHandleState;
 }
 
@@ -5805,7 +5819,7 @@ pub(crate) struct CGame {
     game_servers: BTreeMap<u32, WorldGameServerEntry>,
     system_broadcasts: VecDeque<WorldSystemBroadcast>,
     goods_links: VecDeque<WorldGoodsLink>,
-    write_log_queue: VecDeque<WorldWriteLogCommand>,
+    write_log_queue: WorldWriteLogQueue,
     player_data_queue: CPlayerDataQueue,
     players: BTreeMap<u32, Box<CPlayer>>,
     team_session_ids: BTreeMap<u32, i32>,
@@ -5864,7 +5878,7 @@ impl CGame {
             goods_links: std::iter::repeat_with(WorldGoodsLink::placeholder)
                 .take(INITIAL_GOODS_LINK_PLACEHOLDERS)
                 .collect(),
-            write_log_queue: VecDeque::new(),
+            write_log_queue: WorldWriteLogQueue::default(),
             player_data_queue: CPlayerDataQueue::new(),
             players: BTreeMap::new(),
             team_session_ids: BTreeMap::new(),
@@ -6037,17 +6051,23 @@ impl CGame {
     }
 
     /// Ставит структурированную DB-команду в хвост исходного write-log FIFO.
-    pub(crate) fn push_write_log_command(&mut self, command: WorldWriteLogCommand) -> usize {
-        self.write_log_queue.push_back(command);
-        self.write_log_queue.len()
+    pub(crate) fn push_write_log_command(&self, command: WorldWriteLogCommand) -> usize {
+        self.write_log_queue.push(command)
     }
 
-    #[allow(
-        dead_code,
-        reason = "typed dequeue является границей отдельного write-log worker-а, runtime которого ещё RAW"
-    )]
-    pub(crate) fn pop_write_log_command(&mut self) -> Option<WorldWriteLogCommand> {
-        self.write_log_queue.pop_front()
+    /// Копирует четыре credential-поля отдельного Log DB connection-owner-а.
+    fn write_log_worker_spec(&self) -> WorldWriteLogWorkerSpec {
+        let settings = WorldDatabaseSettings::from_parts(WorldDatabaseSettingsParts {
+            host: self.setup.log_system_server.clone(),
+            database: self.setup.log_system_database.clone(),
+            user: self.setup.log_system_user.clone(),
+            password: self.setup.log_system_password.clone(),
+        });
+        WorldWriteLogWorkerSpec::new(
+            self.setup.use_log_system,
+            settings,
+            self.write_log_queue.clone(),
+        )
     }
 
     /// Возвращает первое совпадение в list-order, включая constructor-ный
@@ -8899,7 +8919,7 @@ impl CGame {
         ));
 
         let kind = WorldGameInitWorkerKind::WriteLog;
-        let handle = context.start_worker(kind);
+        let handle = context.start_write_log_worker(self.write_log_worker_spec());
         events.push(WorldGameInitEvent::WorkerStarted { kind, handle });
         for worker_index in 0..player_load_thread_count {
             let kind = WorldGameInitWorkerKind::LoadPlayerData { worker_index };
@@ -18572,6 +18592,8 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 004095e0
 // PROTOTYPE: void __cdecl DoSaveLog(void)
 //
+// IMPLEMENTED_OWNER: exact GetSize/Pop/Execute batch и connection-open находятся
+// выше и в `writelogworker.rs`; outer polling, exit и reconnect-delay остаются RAW.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -18654,6 +18676,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 0040d770
 // PROTOTYPE: uint __stdcall ProcessWriteLogDataFunc(void * param_1)
 //
+// IMPLEMENTED_OWNER: DB/batch core достигнут; thread/COM/exit adapter остаётся RAW.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

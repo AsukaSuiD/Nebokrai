@@ -9,3 +9,8 @@ pub(crate) mod honorranks;
 pub(crate) mod playerranks;
 pub(crate) mod savedb;
 pub(crate) mod worldserver;
+#[allow(
+    dead_code,
+    reason = "typed DB/batch consumer готов; внешний thread/reconnect lifecycle ещё RAW"
+)]
+pub(crate) mod writelogworker;
