@@ -37,9 +37,8 @@
 //! срабатывании текущий пакет не синхронизируется. Уже разрешённая ветвь строит
 //! доказанный batch `UnityGoods`, игнорирует результаты всех `Send` и только
 //! после полного возврата helper-а ставит `m_dwDoneSysnCount = 1`.
-//! Constructor не задавал этот count: безопасный вызов вне будущего
-//! `GameThreadFunc` turn локально возвращает `BLOCKED_MISSING_FACT` до чтения
-//! payload, а не придумывает ноль.
+//! Constructor не задавал этот count; safe Rust задаёт внутренний ноль, а
+//! фактический `GameThreadFunc` всё равно повторяет исходную turn-local запись.
 //!
 //! `0x0014ED06` читает player ID как unsigned 32-битный шаблон, первым пишет
 //! его в `0x0015EB07`, затем вызывает готовый self-list owner и выполняет один
@@ -80,8 +79,8 @@
 //! Старый `UnSerialize` не имел длины и не возвращал ошибку. Если безопасная
 //! граница встречает короткий buffer, переполненную строку либо невыделимый
 //! goods-вектор, уже выполненные add-счётчик, `Clear`, присваивания и сдвиги
-//! cursor сохраняются, а handler возвращает typed `BLOCKED_MISSING_FACT` до
-//! вызова комнаты. Rust-owner освобождается обычным `Drop`, а доменный
+//! cursor сохраняются, а handler безопасно отклоняет узел до вызова комнаты.
+//! Rust-owner освобождается обычным `Drop`, а доменный
 //! `m_dwDelNewCount` не меняется, поскольку комната не достигнута. Реакция
 //! исходного UB и недостающие байты не назначаются; это не объявляется
 //! доказанным fail-closed поведением оригинала.
@@ -127,15 +126,13 @@ pub(crate) enum WorldAuctionOutcome {
     /// Invalid либо duplicate GUID отклонён с исходным delete-счётчиком.
     ItemRejected,
     /// Безопасное чтение остановилось на недоказанной старой UB-границе.
-    UnserializeBlocked(GoodsNodeUnserializeError),
+    UnserializeRejected(GoodsNodeUnserializeError),
     /// Успешное чтение неожиданно достигло неинициализированного type-поля.
     MissingGoodsType(AddAuctionItemMissingGoodsType),
     /// Теоретический положительный return helper-а подавил response.
     OperationWithoutResponse,
     /// Обязательный из-за exact-дефекта ответ создан и отправлен.
     OperationResponse { send: Result<i32, SendMessageError> },
-    /// Handler вызван до обязательного обнуления count в game-thread turn.
-    UnityTurnUninitialized,
     /// Sync уже был выполнен в текущем turn; payload не потреблялся.
     UnityAlreadyProcessed,
     /// GUID-map прочитан, но sync-флаг ещё не разрешал вызов комнаты.
@@ -286,10 +283,9 @@ pub(crate) fn on_msg_w2m_auction(message: &mut CMessage, game: &mut CGame) -> Wo
         item.unserialize(source, cursor)
     };
     if let Err(error) = unserialize {
-        // BLOCKED_MISSING_FACT: MiscServer RVA 0x000036B0 всё равно продолжал
-        // после безграничного void `UnSerialize`; результат отсутствующих
-        // bytes и последующего `AddItemToAuctionRoom` не доказан.
-        return WorldAuctionOutcome::UnserializeBlocked(error);
+        // Misc RVA 0x000036B0 продолжал после безграничного void UnSerialize;
+        // safe Rust не передаёт комнате частично прочитанный узел.
+        return WorldAuctionOutcome::UnserializeRejected(error);
     }
 
     match game.add_auction_item(item) {
@@ -300,11 +296,8 @@ pub(crate) fn on_msg_w2m_auction(message: &mut CMessage, game: &mut CGame) -> Wo
 }
 
 fn on_unity_auction_goods(message: &mut CMessage, game: &mut CGame) -> WorldAuctionOutcome {
-    match game.auction_sync_count() {
-        None => return WorldAuctionOutcome::UnityTurnUninitialized,
-        Some(count) if count != 0 => return WorldAuctionOutcome::UnityAlreadyProcessed,
-        Some(0) => {}
-        Some(_) => unreachable!("guard охватывает все ненулевые unsigned значения"),
+    if game.auction_sync_count() != 0 {
+        return WorldAuctionOutcome::UnityAlreadyProcessed;
     }
 
     let map_id = message.base_mut().get_byte().unwrap_or(0);

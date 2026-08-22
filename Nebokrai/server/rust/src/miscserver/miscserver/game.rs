@@ -60,8 +60,8 @@
 //! `m_dwDoneSysnCount: unsigned long` по `0x84`. Constructor ставит только
 //! первый флаг в `false` и снимает `timeGetTime` в start-time. Sync-count он не
 //! инициализирует: `GameThreadFunc` обнуляет его в начале каждого turn перед
-//! `ProcessMessage`. Поэтому Rust хранит его как `Option<u32>` и требует явного
-//! `begin_auction_sync_turn`; недостигнутый turn не получает придуманного нуля.
+//! `ProcessMessage`. Rust задаёт безопасный constructor-ноль и повторяет
+//! обязательную запись в начале каждого runtime turn.
 //! `CLOCK_BOOTTIME` уже является совместимой suspend-aware заменой
 //! `timeGetTime`, а преобразование в `u32` сохраняет wrapping миллисекунд.
 //!
@@ -122,9 +122,8 @@
 //! следующей cadence не позднее очередной паузы `50 ms`.
 //!
 //! Ошибка раннего `debug.txt` оставляла `m_bClientClose` неинициализированным.
-//! Доказанные refresh/AI/message стадии первого turn выполняются, но safe Rust
-//! останавливается ровно на чтении этого поля с
-//! `BLOCKED_MISSING_FACT`: выбирать reconnect либо continue за старый UB нельзя.
+//! Это внутренний lifecycle-дефект: safe Rust не входит в main-loop после
+//! неуспешного Init и не читает неопределённое состояние.
 //! Внешний shutdown является технической owned-заменой global exit flag и может
 //! отменить ожидающий connect/I/O turn. После любой достигнутой границы
 //! сохраняется `2005 ms -> exit notice -> CAuctionRoom::Clear`; `exit(0)` стал
@@ -348,13 +347,6 @@ pub(crate) struct MiscGameThreadTurn {
     pub(crate) reconnect: Option<MiscReconnectTurn>,
 }
 
-/// Недоказанная safe-граница внешнего main-loop.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MiscGameThreadRuntimeError {
-    /// `Init` не записал старое поле после ошибки создания `debug.txt`.
-    ClientCloseUninitializedReactionUnknown,
-}
-
 /// Выполненный общий tail оригинального `GameThreadFunc`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MiscGameThreadRelease {
@@ -368,7 +360,6 @@ pub(crate) struct MiscGameThreadRelease {
 pub(crate) struct MiscGameThreadReport {
     pub(crate) initialization: MiscInitializationReport,
     pub(crate) completed_turns: u64,
-    pub(crate) runtime_error: Option<MiscGameThreadRuntimeError>,
     pub(crate) release: MiscGameThreadRelease,
 }
 
@@ -377,14 +368,14 @@ pub(crate) struct CGame {
     setup: CSetup,
     auction_room: CAuctionRoom<CGoodsNode>,
     net_client: Option<CMyNetClient>,
-    client_close: Option<bool>,
+    client_close: bool,
     current_message: u32,
     message_record: BTreeMap<i32, i32>,
     add_new_count: u32,
     deleted_new_count: u32,
     done_sync_message: bool,
     sync_start_time: u32,
-    done_sync_count: Option<u32>,
+    done_sync_count: u32,
     last_log_refresh_time: u32,
 }
 
@@ -395,14 +386,14 @@ impl CGame {
             setup,
             auction_room: CAuctionRoom::new(),
             net_client: None,
-            client_close: None,
+            client_close: false,
             current_message: 0,
             message_record: BTreeMap::new(),
             add_new_count: 0,
             deleted_new_count: 0,
             done_sync_message: false,
             sync_start_time: legacy_tick_ms(),
-            done_sync_count: None,
+            done_sync_count: 0,
             last_log_refresh_time: 0,
         }
     }
@@ -450,7 +441,7 @@ impl CGame {
         };
         drop(debug_file);
 
-        self.client_close = Some(true);
+        self.client_close = true;
         let setup = self.setup.load_setup(runtime_directory.join("setup.ini"));
         let mut attempts = Vec::new();
 
@@ -494,7 +485,7 @@ impl CGame {
     }
 
     /// Сообщает достигнутое значение старого `m_bClientClose`.
-    pub(crate) const fn client_close(&self) -> Option<bool> {
+    pub(crate) const fn client_close(&self) -> bool {
         self.client_close
     }
 
@@ -534,11 +525,11 @@ impl CGame {
 
     /// Воспроизводит запись `m_dwDoneSysnCount = 0` в начале game-thread turn.
     pub(crate) fn begin_auction_sync_turn(&mut self) {
-        self.done_sync_count = Some(0);
+        self.done_sync_count = 0;
     }
 
     /// Возвращает turn-local sync-count либо неинициализированную границу.
-    pub(crate) const fn auction_sync_count(&self) -> Option<u32> {
+    pub(crate) const fn auction_sync_count(&self) -> u32 {
         self.done_sync_count
     }
 
@@ -559,12 +550,12 @@ impl CGame {
 
     /// Отмечает единственный выполненный sync текущего game-thread turn.
     pub(crate) fn finish_auction_sync_turn(&mut self) {
-        self.done_sync_count = Some(1);
+        self.done_sync_count = 1;
     }
 
     /// Ставит исходный `m_bClientClose` перед блокирующим `ReConnect`.
     pub(crate) fn mark_client_closed(&mut self) {
-        self.client_close = Some(true);
+        self.client_close = true;
     }
 
     /// Возвращает текущий nullable WorldServer client.
@@ -734,7 +725,7 @@ impl CGame {
     /// Выполняет доказанный порядок одного `GameThreadFunc` turn до `Sleep(50)`.
     pub(crate) async fn run_game_thread_turn(
         &mut self,
-    ) -> Result<MiscGameThreadTurn, MiscGameThreadRuntimeError> {
+    ) -> MiscGameThreadTurn {
         self.begin_auction_sync_turn();
 
         let now = legacy_tick_ms();
@@ -758,9 +749,7 @@ impl CGame {
             self.auction_room.ai(sender)
         };
         let messages = self.process_message().await;
-        let reconnect = match self.client_close {
-            Some(false) => None,
-            Some(true) => {
+        let reconnect = if self.client_close {
                 let connection = self.reconnect().await;
                 let sender = self
                     .net_client
@@ -772,24 +761,17 @@ impl CGame {
                     connection,
                     confirmation,
                 })
-            }
-            None => {
-                // BLOCKED_MISSING_FACT: при ошибке `fopen(debug.txt, "wb")`
-                // Init RVA 0x00001690 не записывает `m_bClientClose`, а
-                // GameThreadFunc RVA 0x00002870 читает байт `CGame+0x7C` после
-                // уже выполненных refresh/AI/ProcessMessage. Наблюдаемая ветвь
-                // старого неинициализированного значения неизвестна.
-                return Err(MiscGameThreadRuntimeError::ClientCloseUninitializedReactionUnknown);
-            }
+        } else {
+            None
         };
 
-        Ok(MiscGameThreadTurn {
+        MiscGameThreadTurn {
             network,
             refresh,
             auction,
             messages,
             reconnect,
-        })
+        }
     }
 
     async fn connect_world(
@@ -842,7 +824,7 @@ impl CGame {
         let initial_sync =
             send_initial_sync.then(|| CMessage::new(INITIAL_SYNC_TYPE).send(Some(&client), false));
 
-        self.client_close = Some(false);
+        self.client_close = false;
         self.net_client = Some(client);
         MiscClientConnectOutcome::Connected {
             endpoint,
@@ -955,26 +937,18 @@ where
     let mut game = CGame::new();
     tokio::pin!(shutdown);
     let initialization = game.initialize(runtime_directory, shutdown.as_mut()).await;
-    let init_cancelled = matches!(&initialization.end, MiscInitializationEnd::Cancelled);
+    let initialized = matches!(&initialization.end, MiscInitializationEnd::Connected);
     let mut completed_turns = 0_u64;
-    let mut runtime_error = None;
 
-    if !init_cancelled {
+    if initialized {
         'main_loop: loop {
             let turn = tokio::select! {
                 biased;
                 () = shutdown.as_mut() => break 'main_loop,
                 result = game.run_game_thread_turn() => result,
             };
-            match turn {
-                Ok(_outcome) => {
-                    completed_turns = completed_turns.wrapping_add(1);
-                }
-                Err(error) => {
-                    runtime_error = Some(error);
-                    break;
-                }
-            }
+            drop(turn);
+            completed_turns = completed_turns.wrapping_add(1);
             tokio::select! {
                 biased;
                 () = shutdown.as_mut() => break 'main_loop,
@@ -993,7 +967,6 @@ where
     MiscGameThreadReport {
         initialization,
         completed_turns,
-        runtime_error,
         release,
     }
 }

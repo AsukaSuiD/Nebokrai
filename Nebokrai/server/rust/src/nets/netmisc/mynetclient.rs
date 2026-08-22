@@ -43,11 +43,10 @@
 //!
 //! Для длины с установленным sign bit, `total_len < 12` и `13..27` исходный код
 //! мог перейти к unsigned `total_len - 12` либо передать внутренний буфер короче
-//! 16 байт в `CreateMessageWithoutRLE`. Наблюдаемая реакция не доказана.
+//! 16 байт в `CreateMessageWithoutRLE`.
 //! `total_len == 12` отличается: нулевая длина внутреннего сообщения доказанно
 //! возвращает `nullptr`, после чего вход очищается. Безопасный Rust локально
-//! отвергает неизвестные случаи отдельной ошибкой и не выдаёт это решение за
-//! поведение оригинального процесса.
+//! отвергает malformed случаи до unsafe arithmetic/read.
 //!
 //! `CBaseMessage` deleting-destructor, vector cleanup `$L77738`, vtable,
 //! allocator и exception plumbing классифицированы как compiler/library noise.
@@ -83,10 +82,8 @@ const CLOSE_MESSAGE_TYPE: i32 = 0x0016_EA01;
 pub(crate) enum ReceiveError {
     /// CRC little-endian слова `total_len` не совпал со вторым словом envelope.
     LengthChecksumMismatch { expected: u32, actual: u32 },
-    /// Signed-ветвление оригинала не задаёт безопасную реакцию на этот размер.
-    SignedFrameLengthReactionUnknown { declared: u32 },
-    /// Длина `0..11` либо `13..27` ведёт в недоказанное короткое сообщение.
-    ShortFrameReactionUnknown { declared: u32 },
+    /// Длина меньше полного frame либо не представима положительным long.
+    InvalidFrameLength { declared: u32 },
     /// Создание нормализованного внутреннего сообщения завершилось ошибкой.
     Message(CreateMessageError),
     /// CRC нормализованного сообщения не совпал с третьим словом envelope.
@@ -96,7 +93,7 @@ pub(crate) enum ReceiveError {
         actual: u32,
     },
     /// Размер накопителя вышел за signed 32-битную границу исходного `m_nSize`.
-    PendingSizeOverflowReactionUnknown,
+    PendingSizeOutsideLegacyRange,
 }
 
 /// Результат одного Linux read/send ожидания исходящего Misc-клиента.
@@ -282,9 +279,7 @@ impl CMyNetClient {
             .checked_add(received.len())
             .filter(|size| *size <= i32::MAX as usize);
         let Some(pending_size) = pending_size else {
-            // BLOCKED_MISSING_FACT: исходный signed `m_nSize` не задаёт
-            // пригодную реакцию на арифметическое переполнение накопителя.
-            return self.discard_pending(ReceiveError::PendingSizeOverflowReactionUnknown);
+            return self.discard_pending(ReceiveError::PendingSizeOutsideLegacyRange);
         };
         self.receive_buffer
             .reserve(pending_size - self.receive_buffer.len());
@@ -312,14 +307,8 @@ impl CMyNetClient {
                 });
             }
 
-            // BLOCKED_MISSING_FACT, VERIFIED_DISASSEMBLY: MiscServer RVA
-            // 0x00012820 сравнивает `total_len > m_nSize` через signed `jg` и
-            // лишь внутри этой ветки проверяет `total_len >= 0`. Для значения
-            // с sign bit условие `jg` при нормальном положительном m_nSize не
-            // выполняется, после чего машинный код вычисляет `total_len - 12`.
             if (declared as i32) < 0 {
-                return self
-                    .discard_pending(ReceiveError::SignedFrameLengthReactionUnknown { declared });
+                return self.discard_pending(ReceiveError::InvalidFrameLength { declared });
             }
 
             let frame_len = declared as usize;
@@ -330,11 +319,7 @@ impl CMyNetClient {
                 return self.discard_pending(ReceiveError::Message(CreateMessageError::EmptyInput));
             }
             if frame_len < MIN_SERVER_FRAME_LEN {
-                // BLOCKED_MISSING_FACT: при `total_len < 12` исходный unsigned
-                // `total_len - 12` переполняется; при 13..27 внутренний buffer
-                // короче header, а CreateMessageWithoutRLE проверяет лишь ноль
-                // и затем читает все 16 байт.
-                return self.discard_pending(ReceiveError::ShortFrameReactionUnknown { declared });
+                return self.discard_pending(ReceiveError::InvalidFrameLength { declared });
             }
 
             let expected_content_crc = u32::from_le_bytes(

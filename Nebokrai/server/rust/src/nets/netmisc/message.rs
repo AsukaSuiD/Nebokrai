@@ -26,8 +26,8 @@
 //! RLE-путь сохраняет исходные capacity: `0x100000` для сжатого входа короче
 //! `0x20001`, иначе `compressed_len * 8`. Нулевой результат декодирования
 //! отвергался. Вход короче 16 байт в обоих create-путях приводил к чтению за
-//! границей либо unsigned-underflow `len - 16`; безопасный Rust возвращает
-//! отдельную ошибку и не выдаёт её за доказанную реакцию процесса.
+//! границей либо unsigned-underflow `len - 16`; safe Rust отклоняет такой вход
+//! до чтения header.
 //!
 //! `Send` строит межсерверный envelope `[total_len, crc(total_len),
 //! crc(message), message]`, где все три слова little-endian, а CRC — IEEE из
@@ -73,12 +73,12 @@ static SEND_SERIALIZER: Mutex<()> = Mutex::new(());
 pub(crate) enum CreateMessageError {
     /// Исходный nullable/нулевой вход доказанно не создавал сообщение.
     EmptyInput,
-    /// Реакция C++ на ненулевой буфер короче header не была безопасно задана.
-    HeaderTooShortReactionUnknown,
+    /// Внутренний wire-буфер короче обязательного header.
+    HeaderTooShort { actual: usize },
     /// Размер не представим 32-битным `unsigned long` исходного API.
     InputOutsideLegacyRange,
-    /// Умножение большой RLE-длины на восемь переполняло 32-битную арифметику.
-    RleCapacityOverflowReactionUnknown,
+    /// Требуемая RLE-capacity не представима в 32-битном исходном диапазоне.
+    RleCapacityOutsideLegacyRange,
     /// Декодер отклонил поток либо встретил локально неизвестную malformed-границу.
     Rle(RleDecodeError),
 }
@@ -142,7 +142,7 @@ impl CMessage {
                 .len()
                 .checked_mul(8)
                 .filter(|capacity| *capacity <= u32::MAX as usize)
-                .ok_or(CreateMessageError::RleCapacityOverflowReactionUnknown)?
+                .ok_or(CreateMessageError::RleCapacityOutsideLegacyRange)?
         };
         let decoded = decode_rle(compressed, output_capacity).map_err(CreateMessageError::Rle)?;
         Self::create_without_rle(&decoded, recv_time_ms)
@@ -160,11 +160,7 @@ impl CMessage {
             return Err(CreateMessageError::InputOutsideLegacyRange);
         }
         if wire.len() < MESSAGE_HEADER_LEN {
-            // BLOCKED_MISSING_FACT: MiscServer RVA 0x00010920 проверяет только
-            // `param_2 != 0`, затем читает header[0..16] и вызывает
-            // `Add(param_1 + 0x10, param_2 - 0x10)`. Наблюдаемая реакция для
-            // длины 1..15 не доказана и не заменяется автоматическим fail-closed.
-            return Err(CreateMessageError::HeaderTooShortReactionUnknown);
+            return Err(CreateMessageError::HeaderTooShort { actual: wire.len() });
         }
 
         let header = wire[..MESSAGE_HEADER_LEN]
