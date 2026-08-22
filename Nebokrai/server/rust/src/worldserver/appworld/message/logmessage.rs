@@ -1,24 +1,34 @@
 //! WorldServer dispatcher-owner `OnLogMessage`.
 //!
-//! Корпус остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме restore-role leaf `0x4FB03` со
-//! статусом `IMPLEMENTED`. Точная пара:
+//! Корпус остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме restore-role leaf `0x4FB03` и
+//! account login-cleanup leaf `0x4FB06` со статусом `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\logmessage.cpp:30`.
 //! Exact `0x004B1692..0x004B171F` читает account через `GetStr(..., 0x14)`,
 //! затем signed player ID, удаляет первое совпадение из live deletion-list,
 //! добавляет уникальный ID в хвост restore-list и посылает в текущий
 //! LoginServer `0x1FF04 + char(0x15) + player_id + account\0` без priority.
+//! Exact `0x004B0F78..0x004B1069` читает account через `GetStr(..., 0x100)`,
+//! находит первое `_strcmpi` совпадение в login-list и строго выполняет
+//! `team exit -> RemovePlayerLoadData -> RemoveLoginPlayer ->
+//! AppendOfflinePlayer`.
 //! Добавленные Linux-донором peer/ownership/DB-preflight gates в EXE
-//! отсутствуют и не перенесены. `VecDeque` заменяет только старые list-nodes,
-//! а существующая client FIFO — WinSock transport без изменения wire/order.
+//! отсутствуют и не перенесены; как и account-wide cancellation/in-flight
+//! lifecycle из его очереди. `VecDeque` заменяет только старые list/deque
+//! nodes, а существующая client FIFO — WinSock transport без изменения
+//! wire/order.
 //!
 //! Декомпилятор: Ghidra 12.1.2. Сырой C++ ниже сохранён как локальная
 //! документация, а не как Rust-реализация.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
-use crate::worldserver::worldserver::game::CGame;
+use crate::worldserver::appworld::session::csessionfactory::CSessionFactory;
+use crate::worldserver::worldserver::game::{
+    CGame, WorldLoginTimeoutTeamExit,
+};
 
 const RESTORE_ROLE_REQUEST: i32 = 0x0004_FB03;
+const ACCOUNT_LOGIN_CLEANUP_REQUEST: i32 = 0x0004_FB06;
 const RESTORE_ROLE_RESPONSE: i32 = 0x0001_FF04;
 const RESTORE_ROLE_STATUS: i8 = 0x15;
 
@@ -34,8 +44,26 @@ pub(crate) struct WorldRestoreRoleOutcome {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldAccountLoginCleanupOutcome {
+    NotFound {
+        account: Vec<u8>,
+    },
+    Cleaned {
+        account: Vec<u8>,
+        player_id: u32,
+        team_id: i32,
+        team_session_id: i32,
+        team_exit: WorldLoginTimeoutTeamExit,
+        player_load_removed: bool,
+        login_removed: bool,
+        offline_inserted: bool,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldLogMessageOutcome {
     RestoreRole(WorldRestoreRoleOutcome),
+    AccountLoginCleanup(WorldAccountLoginCleanupOutcome),
 }
 
 pub(crate) enum WorldLogMessageDispatch {
@@ -45,12 +73,19 @@ pub(crate) enum WorldLogMessageDispatch {
 
 pub(crate) fn on_log_message(
     game: &mut CGame,
-    mut message: CMessage,
+    session_factory: &mut CSessionFactory,
+    message: CMessage,
 ) -> WorldLogMessageDispatch {
-    if message.message_type() != RESTORE_ROLE_REQUEST {
-        return WorldLogMessageDispatch::Pending(message);
+    match message.message_type() {
+        RESTORE_ROLE_REQUEST => restore_role(game, message),
+        ACCOUNT_LOGIN_CLEANUP_REQUEST => {
+            account_login_cleanup(game, session_factory, message)
+        }
+        _ => WorldLogMessageDispatch::Pending(message),
     }
+}
 
+fn restore_role(game: &mut CGame, mut message: CMessage) -> WorldLogMessageDispatch {
     let account = message
         .base_mut()
         .get_str_bytes(0x14)
@@ -80,6 +115,49 @@ pub(crate) fn on_log_message(
             status: RESTORE_ROLE_STATUS,
             wire,
             delivery,
+        },
+    ))
+}
+
+fn account_login_cleanup(
+    game: &mut CGame,
+    session_factory: &mut CSessionFactory,
+    mut message: CMessage,
+) -> WorldLogMessageDispatch {
+    let account = message
+        .base_mut()
+        .get_str_bytes(0x100)
+        .expect("literal 0x100 исключает zero-capacity GetStr");
+    let Some(player) = game.login_player_by_account(&account) else {
+        return WorldLogMessageDispatch::Handled(
+            WorldLogMessageOutcome::AccountLoginCleanup(
+                WorldAccountLoginCleanupOutcome::NotFound { account },
+            ),
+        );
+    };
+
+    let team_session_id = game.get_team_session_id(player.team_id as u32);
+    let team_exit = game.exit_team_player(
+        session_factory,
+        team_session_id,
+        player.owner_type,
+        player.owner_id,
+    );
+    let player_id = player.owner_id as u32;
+    let player_load_removed = game.remove_player_load_data(player.owner_id);
+    let login_removed = game.remove_login_player(player_id);
+    let offline_inserted = game.append_offline_player_id(player_id);
+
+    WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::AccountLoginCleanup(
+        WorldAccountLoginCleanupOutcome::Cleaned {
+            account,
+            player_id,
+            team_id: player.team_id,
+            team_session_id,
+            team_exit,
+            player_load_removed,
+            login_removed,
+            offline_inserted,
         },
     ))
 }

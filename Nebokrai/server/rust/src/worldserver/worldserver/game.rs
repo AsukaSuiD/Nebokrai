@@ -995,6 +995,7 @@ use crate::dbaccess::worlddb::dbmisc::{
 };
 use crate::dbaccess::worlddb::largess::LargessOwner;
 use crate::dbaccess::worlddb::playerdataqueue::CPlayerDataQueue;
+use crate::dbaccess::worlddb::playerloadqueue::CPlayerLoadQueue;
 use crate::dbaccess::worlddb::rsenemyfactions::{EnemyFactionSaveSnapshot, RsEnemyFactionsOwner};
 use crate::dbaccess::worlddb::rsfaction::RsFactionOwner;
 use crate::dbaccess::worlddb::rsgenvar::RsGenVarOwner;
@@ -3544,7 +3545,6 @@ pub(crate) struct WorldMainLoopRefreshInitialization {
 pub(crate) struct WorldRefreshExternalCounts {
     pub(crate) team_sessions: i32,
     pub(crate) largess_entries: u32,
-    pub(crate) player_load_queue: u32,
     pub(crate) reback_messages: i32,
 }
 
@@ -5447,6 +5447,14 @@ struct WorldLoginPlayerEntry {
     login_time_ms: u32,
 }
 
+/// Снимок первого login-list игрока, чей mapped account совпал с запросом.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldLoginAccountPlayer {
+    pub(crate) team_id: i32,
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+}
+
 /// Владеющая копия точного 8-байтного `CGame::tagDeletionPlayer`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DeletionPlayerSnapshot {
@@ -5832,6 +5840,7 @@ pub(crate) struct CGame {
     goods_links: VecDeque<WorldGoodsLink>,
     write_log_queue: WorldWriteLogQueue,
     player_data_queue: CPlayerDataQueue,
+    player_load_queue: CPlayerLoadQueue,
     players: BTreeMap<u32, Box<CPlayer>>,
     team_session_ids: BTreeMap<u32, i32>,
     creation_players: VecDeque<i32>,
@@ -5891,6 +5900,7 @@ impl CGame {
                 .collect(),
             write_log_queue: WorldWriteLogQueue::default(),
             player_data_queue: CPlayerDataQueue::new(),
+            player_load_queue: CPlayerLoadQueue::new(),
             players: BTreeMap::new(),
             team_session_ids: BTreeMap::new(),
             creation_players: VecDeque::new(),
@@ -11955,7 +11965,7 @@ impl CGame {
             team_sessions: external.team_sessions,
             largess_entries: external.largess_entries,
             write_log_queue,
-            player_load_queue: external.player_load_queue,
+            player_load_queue: self.player_load_queue.get_size(),
             reback_messages: external.reback_messages,
         }))
     }
@@ -13074,7 +13084,7 @@ impl CGame {
         let _ = self.append_offline_player_id(player.get_id() as u32);
     }
 
-    fn append_offline_player_id(&mut self, player_id: u32) -> bool {
+    pub(crate) fn append_offline_player_id(&mut self, player_id: u32) -> bool {
         if self.offline_players.contains(&player_id) {
             return false;
         }
@@ -13108,16 +13118,47 @@ impl CGame {
         });
     }
 
+    /// Возвращает первый mapped player в порядке login-list с `_strcmpi`
+    /// совпавшим account, не переставляя и не очищая отсутствующие map-owner-ы.
+    pub(crate) fn login_player_by_account(
+        &self,
+        account: &[u8],
+    ) -> Option<WorldLoginAccountPlayer> {
+        let account = legacy_c_string_prefix(account);
+        for login in &self.login_players {
+            let Some(player) = self.map_player(login.player_id) else {
+                continue;
+            };
+            if !legacy_c_string_prefix(player.get_account()).eq_ignore_ascii_case(account) {
+                continue;
+            }
+            return Some(WorldLoginAccountPlayer {
+                team_id: player.get_team_id(),
+                owner_type: player.get_type(),
+                owner_id: player.get_id(),
+            });
+        }
+        None
+    }
+
+    /// Удаляет первый ожидающий DB-load record и синхронно пишет exact log.
+    pub(crate) fn remove_player_load_data(&self, player_id: i32) -> bool {
+        self.player_load_queue
+            .remove_player_load_data(player_id)
+            .is_some()
+    }
+
     /// Удаляет первую login-запись с указанным ID либо сохраняет список.
-    pub(crate) fn remove_login_player(&mut self, player_id: u32) {
+    pub(crate) fn remove_login_player(&mut self, player_id: u32) -> bool {
         let Some(index) = self
             .login_players
             .iter()
             .position(|login_player| login_player.player_id == player_id)
         else {
-            return;
+            return false;
         };
         let _ = self.login_players.remove(index);
+        true
     }
 
     /// Возвращает регион по signed numeric ID либо старый `nullptr` как `None`.
@@ -14913,7 +14954,7 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::Log) {
-        match on_log_message(game, message) {
+        match on_log_message(game, session_factory, message) {
             WorldLogMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::LogMessage {
                     source,

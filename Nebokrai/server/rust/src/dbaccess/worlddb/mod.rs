@@ -37,6 +37,11 @@ pub(crate) mod largess;
 pub(crate) mod playerdataqueue;
 #[allow(
     dead_code,
+    reason = "CPlayerLoadQueue подключена к CGame и account-cleanup 0x4FB06; DB-load producer/consumer достигаются следующими проходами"
+)]
+pub(crate) mod playerloadqueue;
+#[allow(
+    dead_code,
     reason = "CRsEnemyFactions::SaveAllEnemyFactions подключён к EnemyFactions transaction"
 )]
 pub(crate) mod rsenemyfactions;
