@@ -1,8 +1,9 @@
 //! WorldServer dispatcher-owner `OnWriteLogMessage`.
 //!
 //! Весь dispatcher RVA `0x000A8AB0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме
-//! increment-shop `0x6020D`, carriage `0x6020E` и plain player log `0x6020F`
-//! producers со статусом `IMPLEMENTED`. Точная пара:
+//! increment-shop `0x6020D`, carriage `0x6020E`, plain player log `0x6020F`,
+//! reserved no-op `0x60211..0x60213` и ciqing `0x60218` со статусом
+//! `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\writelogmessage.cpp:18`.
 //!
@@ -32,6 +33,11 @@
 //! штатное значение без ручного escaping. Donor-truncation `32/32/255` в
 //! машине отсутствует и не перенесена. Неэкранированные name/account оригинала
 //! также bind-ятся как данные: SQL breakage/injection не является контрактом.
+//! Exact outer jump-table VA `0x004AACA8` направляет все три wire ID
+//! `0x60211..0x60213` прямо в epilogue `0x004AAC87`; Rust поэтому считает их
+//! обработанными no-op, не создавая ложный pending owner. Ветка `0x60218` по
+//! `0x004AAC26..0x004AAC82` читает пять signed long и без иных side effects
+//! ставит `ciqinglog` INSERT в тот же FIFO.
 //!
 //! Rust хранит параметризуемую DB-команду вместо SQL-строки: будущий Tiberius
 //! worker не должен повторять `_sprintf`, ручное quoting и stack buffers.
@@ -52,6 +58,9 @@ use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 const INCREMENT_LOG_MESSAGE: i32 = 0x0006_020D;
 const CARRIAGE_LOG_MESSAGE: i32 = 0x0006_020E;
 const PLAIN_LOG_MESSAGE: i32 = 0x0006_020F;
+const RESERVED_WRITE_LOG_MESSAGES: std::ops::RangeInclusive<i32> =
+    0x0006_0211..=0x0006_0213;
+const CIQING_LOG_MESSAGE: i32 = 0x0006_0218;
 
 /// Параметры одной исходной INSERT-команды без самодельного SQL quoting.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,12 +98,22 @@ pub(crate) struct WorldPlainLogWrite {
     pub(crate) log_type: i32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldCiqingLogWrite {
+    pub(crate) player_id: i32,
+    pub(crate) in_out: i32,
+    pub(crate) entry_type: i32,
+    pub(crate) base_index: i32,
+    pub(crate) amount: i32,
+}
+
 /// Typed очередь сохраняет старый FIFO, но оставляет SQL transport Tiberius-у.
 #[derive(Clone, Debug)]
 pub(crate) enum WorldWriteLogCommand {
     IncrementLog(WorldIncrementLogWrite),
     CarriageLog(WorldCarriageLogWrite),
     PlainLog(WorldPlainLogWrite),
+    CiqingLog(WorldCiqingLogWrite),
 }
 
 #[derive(Debug)]
@@ -133,10 +152,19 @@ pub(crate) struct WorldPlainLogMessageOutcome {
 }
 
 #[derive(Debug)]
+pub(crate) struct WorldCiqingLogMessageOutcome {
+    pub(crate) record: WorldCiqingLogWrite,
+    pub(crate) payload_complete: [bool; 5],
+    pub(crate) queue_length_after: usize,
+}
+
+#[derive(Debug)]
 pub(crate) enum WorldWriteLogMessageOutcome {
     IncrementLog(WorldIncrementLogMessageOutcome),
     CarriageLog(WorldCarriageLogMessageOutcome),
     PlainLog(WorldPlainLogMessageOutcome),
+    CiqingLog(WorldCiqingLogMessageOutcome),
+    ReservedNoOp { message_type: i32 },
 }
 
 pub(crate) enum WorldWriteLogMessageDispatch {
@@ -144,13 +172,25 @@ pub(crate) enum WorldWriteLogMessageDispatch {
     Pending(CMessage),
 }
 
-/// Исполняет достигнутые increment-shop, carriage и plain-log ветки.
+/// Исполняет достигнутые write-log ветки и exact reserved no-op IDs.
 pub(crate) fn on_write_log_message(
     game: &mut CGame,
     increment_log: &mut CIncrementLog,
     add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     mut message: CMessage,
 ) -> WorldWriteLogMessageDispatch {
+    if RESERVED_WRITE_LOG_MESSAGES.contains(&message.message_type()) {
+        return WorldWriteLogMessageDispatch::Handled(
+            WorldWriteLogMessageOutcome::ReservedNoOp {
+                message_type: message.message_type(),
+            },
+        );
+    }
+    if message.message_type() == CIQING_LOG_MESSAGE {
+        return WorldWriteLogMessageDispatch::Handled(WorldWriteLogMessageOutcome::CiqingLog(
+            on_ciqing_log_message(game, message),
+        ));
+    }
     if message.message_type() == PLAIN_LOG_MESSAGE {
         return WorldWriteLogMessageDispatch::Handled(WorldWriteLogMessageOutcome::PlainLog(
             on_plain_log_message(game, message),
@@ -262,6 +302,35 @@ pub(crate) fn on_write_log_message(
             live_published,
         },
     ))
+}
+
+fn on_ciqing_log_message(game: &CGame, mut message: CMessage) -> WorldCiqingLogMessageOutcome {
+    let player_id = message.base_mut().get_long();
+    let in_out = message.base_mut().get_long();
+    let entry_type = message.base_mut().get_long();
+    let base_index = message.base_mut().get_long();
+    let amount = message.base_mut().get_long();
+    let payload_complete = [
+        player_id.is_some(),
+        in_out.is_some(),
+        entry_type.is_some(),
+        base_index.is_some(),
+        amount.is_some(),
+    ];
+    let record = WorldCiqingLogWrite {
+        player_id: player_id.unwrap_or(0),
+        in_out: in_out.unwrap_or(0),
+        entry_type: entry_type.unwrap_or(0),
+        base_index: base_index.unwrap_or(0),
+        amount: amount.unwrap_or(0),
+    };
+    let queue_length_after =
+        game.push_write_log_command(WorldWriteLogCommand::CiqingLog(record.clone()));
+    WorldCiqingLogMessageOutcome {
+        record,
+        payload_complete,
+        queue_length_after,
+    }
 }
 
 fn on_plain_log_message(game: &CGame, mut message: CMessage) -> WorldPlainLogMessageOutcome {
