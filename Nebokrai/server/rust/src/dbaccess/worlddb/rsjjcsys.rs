@@ -1,7 +1,10 @@
 //! DB-владелец `CRsJJcSys` исторического WorldServer из `rsjjcsys.cpp`.
 //!
-//! Статус `LoadJJcData` RVA `0x00115CC0` и `SaveJJcData` RVA `0x00116990` —
-//! `IMPLEMENTED`; остальные функции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Статус `LoadJJcData` RVA `0x00115CC0`, `SaveJJcData` RVA `0x00116990`,
+//! private `DbJJC` RVA `0x00116D30`, `JJcWeekClear` RVA `0x00117190`,
+//! `JJcSeasonClear` RVA `0x001171C0` и no-op `LoadJJcRank` RVA `0x00117460`
+//! — `IMPLEMENTED`; технические catch/cleanup ниже остаются документацией.
+//! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
@@ -45,6 +48,17 @@
 //! `Clear JJc week data failed`; typed notice сохраняет именно эту операцию,
 //! не публикуя credentials или player values. ADO Command/Parameters, COM/SEH
 //! cleanup заменены закреплённым `tiberius` и безопасным владением Rust.
+//!
+//! Exact `DbJJC` выполняет `sp_JJcWeek_BAKE` и только после его успеха
+//! закрывает это соединение, открывает новое и выполняет `sp_JJcWeekClear`.
+//! `JJcWeekClear` наблюдаемо возвращает только результат старого
+//! `_beginthreadex`, а не DB execution; поэтому системный JJC callback всё
+//! ещё владеет запуском, тогда как `run_jjc_week_clear_database` точно
+//! реализует тело worker-а. `JJcSeasonClear` открывает одно самостоятельное
+//! соединение и выполняет `sp_JJcSeasonClear`. В обоих случаях ADO Command,
+//! COM cleanup и Win32 thread заменены Tiberius/Rust lifetime и уже внешним
+//! worker-ом; последовательность procedures и самостоятельные границы
+//! соединений сохранены.
 
 use std::collections::VecDeque;
 use std::error::Error;
@@ -59,6 +73,9 @@ use super::rssetup::{WorldDatabaseSettings, WorldTdsClient};
 use crate::worldserver::appworld::player::CPlayer;
 
 const SAVE_JJC_DATA_SQL: &str = "EXEC sp_JJccUpdatePlayer @id=@P1, @jjcLevel=@P2, @jjcScore=@P3, @weekJoin=@P4, @weekWin=@P5, @weekLose=@P6, @weekTie=@P7, @seasonJoin=@P8, @seasonWin=@P9, @seasonLose=@P10, @seasonTie=@P11";
+const JJC_WEEK_BAKE_SQL: &str = "EXEC sp_JJcWeek_BAKE";
+const JJC_WEEK_CLEAR_SQL: &str = "EXEC sp_JJcWeekClear";
+const JJC_SEASON_CLEAR_SQL: &str = "EXEC sp_JJcSeasonClear";
 
 type JjcTdsClient = Client<Compat<TcpStream>>;
 
@@ -79,10 +96,20 @@ pub(crate) struct PlayerJjcDataSnapshot {
     pub(crate) season_tie: u16,
 }
 
-/// Структурированная замена catch `Clear JJc week data failed`.
+/// Структурированная замена достигнутых DB-catch `CRsJJcSys`.
 #[derive(Debug)]
 pub(crate) struct RsJjcSysNotice {
+    pub(crate) operation: RsJjcSysOperation,
     pub(crate) error: RsJjcSysDatabaseError,
+}
+
+/// DB operation, которой принадлежал исходный `PrintErr`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RsJjcSysOperation {
+    SavePlayer,
+    WeekBake,
+    WeekClear,
+    SeasonClear,
 }
 
 /// Ошибка отдельной connection/procedure-границы без runtime значений.
@@ -128,8 +155,21 @@ pub(crate) trait RsJjcSysOwner {
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> PlayerJjcLoadOutcome;
 
+    /// Exact `LoadJJcRank` этой пары EXE/PDB не менял vector и возвращал
+    /// успех. Обобщённый vector не скрывает JJC layout: он вообще не читается.
+    fn load_jjc_rank<Rank>(&mut self, _ranks: &mut Vec<Rank>) -> bool {
+        true
+    }
+
     /// Открывает отдельное соединение и выполняет одну исходную procedure.
     async fn save_jjc_data(&mut self, snapshot: &PlayerJjcDataSnapshot) -> bool;
+
+    /// Выполняет тело detached weekly worker-а: BAKE, затем Clear на новом
+    /// соединении. Результат не подменяет bool `JJcWeekClear` thread-start.
+    async fn run_jjc_week_clear_database(&mut self) -> bool;
+
+    /// Выполняет отдельный сезонный reset и возвращает исходный bool owner-а.
+    async fn clear_jjc_season(&mut self) -> bool;
 
     /// Забирает следующий `Clear JJc week data failed`-эквивалент.
     fn pop_notice(&mut self) -> Option<RsJjcSysNotice>;
@@ -211,6 +251,22 @@ impl TiberiusRsJjcSys {
         ];
         client.execute(SAVE_JJC_DATA_SQL, &parameters).await?;
         Ok(())
+    }
+
+    /// Выполняет один ADO Command без параметров на новом самостоятельном DB
+    /// соединении; Drop закрывает client до следующей операции DbJJC.
+    async fn execute_maintenance(
+        config: Config,
+        statement: &'static str,
+    ) -> Result<(), RsJjcSysDatabaseError> {
+        let mut client = Self::connect(config).await?;
+        client.simple_query(statement).await?.into_results().await?;
+        Ok(())
+    }
+
+    fn maintenance_failure(&mut self, operation: RsJjcSysOperation, error: RsJjcSysDatabaseError) -> bool {
+        self.notices.push_back(RsJjcSysNotice { operation, error });
+        false
     }
 }
 
@@ -311,10 +367,24 @@ impl RsJjcSysOwner for TiberiusRsJjcSys {
     async fn save_jjc_data(&mut self, snapshot: &PlayerJjcDataSnapshot) -> bool {
         match Self::execute_save(self.config.clone(), snapshot).await {
             Ok(()) => true,
-            Err(error) => {
-                self.notices.push_back(RsJjcSysNotice { error });
-                false
-            }
+            Err(error) => self.maintenance_failure(RsJjcSysOperation::SavePlayer, error),
+        }
+    }
+
+    async fn run_jjc_week_clear_database(&mut self) -> bool {
+        if let Err(error) = Self::execute_maintenance(self.config.clone(), JJC_WEEK_BAKE_SQL).await {
+            return self.maintenance_failure(RsJjcSysOperation::WeekBake, error);
+        }
+        match Self::execute_maintenance(self.config.clone(), JJC_WEEK_CLEAR_SQL).await {
+            Ok(()) => true,
+            Err(error) => self.maintenance_failure(RsJjcSysOperation::WeekClear, error),
+        }
+    }
+
+    async fn clear_jjc_season(&mut self) -> bool {
+        match Self::execute_maintenance(self.config.clone(), JJC_SEASON_CLEAR_SQL).await {
+            Ok(()) => true,
+            Err(error) => self.maintenance_failure(RsJjcSysOperation::SeasonClear, error),
         }
     }
 
@@ -334,7 +404,7 @@ impl RsJjcSysOwner for TiberiusRsJjcSys {
 
 // ============================================================================
 // FUNCTION: CRsJJcSys::GetInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsjjcsys.cpp:11
@@ -392,7 +462,7 @@ impl RsJjcSysOwner for TiberiusRsJjcSys {
 
 // ============================================================================
 // FUNCTION: CRsJJcSys::DbJJC
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsjjcsys.cpp:146
@@ -400,6 +470,10 @@ impl RsJjcSysOwner for TiberiusRsJjcSys {
 // ADDRESS: 00516d30
 // PROTOTYPE: uint __stdcall DbJJC(void * param_1)
 //
+// IMPLEMENTED_OWNER: `RsJjcSysOwner::run_jjc_week_clear_database` строго
+// выполняет `sp_JJcWeek_BAKE`, закрывает первый TDS client и только затем
+// открывает второй для `sp_JJcWeekClear`. Win32 thread entry/COM lifetime
+// заменены async body и Rust Drop; JJC runtime владеет самим scheduling.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -448,7 +522,7 @@ impl RsJjcSysOwner for TiberiusRsJjcSys {
 
 // ============================================================================
 // FUNCTION: CRsJJcSys::JJcWeekClear
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsjjcsys.cpp:188
@@ -462,7 +536,7 @@ impl RsJjcSysOwner for TiberiusRsJjcSys {
 
 // ============================================================================
 // FUNCTION: CRsJJcSys::JJcSeasonClear
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsjjcsys.cpp:199
@@ -470,6 +544,8 @@ impl RsJjcSysOwner for TiberiusRsJjcSys {
 // ADDRESS: 005171c0
 // PROTOTYPE: bool __thiscall JJcSeasonClear(void)
 //
+// IMPLEMENTED_OWNER: `RsJjcSysOwner::clear_jjc_season` открывает отдельный
+// TDS client и выполняет literal `sp_JJcSeasonClear`, возвращая bool owner-а.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -504,7 +580,7 @@ impl RsJjcSysOwner for TiberiusRsJjcSys {
 
 // ============================================================================
 // FUNCTION: CRsJJcSys::LoadJJcRank
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsjjcsys.cpp:18
@@ -512,6 +588,8 @@ impl RsJjcSysOwner for TiberiusRsJjcSys {
 // ADDRESS: 00517460
 // PROTOTYPE: bool __thiscall LoadJJcRank(vector<tagJJcRank,std::allocator<tagJJcRank>_> * param_1)
 //
+// IMPLEMENTED_OWNER: default `RsJjcSysOwner::load_jjc_rank` оставляет vector
+// нетронутым и возвращает true, как exact единственный security-cookie tail.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
