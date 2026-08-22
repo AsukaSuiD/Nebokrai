@@ -1368,7 +1368,8 @@ use crate::worldserver::appworld::goodswarmember::{
 };
 use crate::worldserver::appworld::jjcsystem::{
     CJJcSystem, JJC_CONFIG_PATH, JJC_LEVEL_LIST_PATH, JJC_REGION_LIST_PATH,
-    JjcConfigurationLoadReport, JjcRunBlock, JjcRunConfig, JjcRunContext, JjcRunReport,
+    JjcConfigurationLoadReport, JjcLocalTime, JjcLogEvent, JjcRank, JjcRunBlock, JjcRunConfig,
+    JjcRunContext, JjcRunReport, JjcSystemTime,
 };
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
     CFourNationWarSys, FourNationCountryFailContext, FourNationExploitContext,
@@ -1632,6 +1633,9 @@ use crate::worldserver::worldserver::loginreconnectworker::{
 };
 use crate::worldserver::worldserver::leitingresetworker::{
     WorldLeiTingResetWorker, WorldLeiTingResetWorkerEvent,
+};
+use crate::worldserver::worldserver::jjcmaintenanceworker::{
+    WorldJjcWeekClearWorker, WorldJjcWeekClearWorkerEvent,
 };
 use crate::worldserver::worldserver::writelogworker::WorldWriteLogWorkerSpec;
 
@@ -4214,6 +4218,68 @@ pub(crate) struct WorldMainLoopConfiguration {
     pub(crate) jjc: JjcRunConfig,
 }
 
+/// Platform/log дополнение для concrete weekly JJC DB worker-а.
+pub(crate) trait WorldJjcRuntimeContext: JjcRunContext {
+    fn on_week_clear_spawn_failed(&mut self, error: io::Error);
+    fn on_week_clear_worker_event(&mut self, event: WorldJjcWeekClearWorkerEvent);
+}
+
+struct WorldJjcWorkerContext<'a, Context> {
+    context: &'a mut Context,
+    worker: &'a WorldJjcWeekClearWorker,
+    runtime: tokio::runtime::Handle,
+}
+
+impl<Context: WorldJjcRuntimeContext> JjcRunContext for WorldJjcWorkerContext<'_, Context> {
+    fn current_time_seconds(&mut self) -> i32 {
+        self.context.current_time_seconds()
+    }
+
+    fn local_time(&mut self, timestamp: i32) -> JjcLocalTime {
+        self.context.local_time(timestamp)
+    }
+
+    fn system_time(&mut self) -> JjcSystemTime {
+        self.context.system_time()
+    }
+
+    fn tick_count_ms(&mut self) -> u32 {
+        self.context.tick_count_ms()
+    }
+
+    fn load_jjc_rank(&mut self, ranks: &mut Vec<JjcRank>) -> bool {
+        self.context.load_jjc_rank(ranks)
+    }
+
+    fn start_jjc_week_clear(&mut self) -> bool {
+        match self.worker.dispatch(self.runtime.clone()) {
+            Ok(()) => true,
+            Err(error) => {
+                self.context.on_week_clear_spawn_failed(error);
+                false
+            }
+        }
+    }
+
+    fn clear_jjc_season(&mut self) -> bool {
+        self.worker.clear_season(self.runtime.clone())
+    }
+
+    fn write_private_profile_string(
+        &mut self,
+        section: &[u8],
+        key: &[u8],
+        value: &[u8],
+    ) -> bool {
+        self.context
+            .write_private_profile_string(section, key, value)
+    }
+
+    fn log(&mut self, event: JjcLogEvent) {
+        self.context.log(event);
+    }
+}
+
 /// Platform/log дополнение к `LeiTingContext`, необходимое concrete DB-worker-у.
 /// Сам доменный `CLeiTing` по-прежнему не знает о Tokio либо system threads.
 pub(crate) trait WorldLeiTingRuntimeContext: LeiTingContext {
@@ -4354,6 +4420,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) net_sessions: &'a CNetSessionManager,
     pub(crate) union_application_runtime: &'a WorldUnionApplicationRuntimeOwner,
     pub(crate) jjc: &'a mut CJJcSystem,
+    pub(crate) jjc_week_clear_worker: &'a WorldJjcWeekClearWorker,
     pub(crate) faction_context: &'a mut FactionContext,
     pub(crate) lei_ting_context: &'a mut LeiTingContextOwner,
     pub(crate) db_misc_context: &'a mut DbMiscContextOwner,
@@ -13918,14 +13985,29 @@ impl CGame {
     }
 
     /// Завершает BaiTan batch и без промежуточного clock-call запускает JJC.
-    pub(crate) fn run_main_loop_bai_tan_jjc_stage<Context: JjcRunContext>(
+    pub(crate) fn run_main_loop_bai_tan_jjc_stage<Context: WorldJjcRuntimeContext>(
         &mut self,
         jjc_system: &mut CJJcSystem,
         jjc_config: JjcRunConfig,
         context: &mut Context,
+        week_clear_worker: &WorldJjcWeekClearWorker,
+        runtime: tokio::runtime::Handle,
     ) -> Result<WorldMainLoopBaiTanJjcStageReport, JjcRunBlock> {
+        while let Some(event) = week_clear_worker.try_next_event() {
+            context.on_week_clear_worker_event(event);
+        }
         let bai_tan = self.done_bai_tan_list();
-        let jjc = jjc_system.run(self, jjc_config, context)?;
+        let jjc = {
+            let mut worker_context = WorldJjcWorkerContext {
+                context,
+                worker: week_clear_worker,
+                runtime,
+            };
+            jjc_system.run(self, jjc_config, &mut worker_context)?
+        };
+        while let Some(event) = week_clear_worker.try_next_event() {
+            context.on_week_clear_worker_event(event);
+        }
         Ok(WorldMainLoopBaiTanJjcStageReport { bai_tan, jjc })
     }
 
@@ -14248,7 +14330,7 @@ impl CGame {
         FactionContext: FactionWarStopContext,
         LeiTingContextOwner: WorldLeiTingRuntimeContext,
         DbMiscContextOwner: DbMiscContext,
-        JjcContext: JjcRunContext,
+        JjcContext: WorldJjcRuntimeContext,
     {
         let profile_initialization = initialize_main_loop_profile_if_needed(
             state.initialization,
@@ -14676,7 +14758,13 @@ impl CGame {
             )
             .map_err(|block| Box::new(WorldMainLoopBlock::Minute(block)))?;
         let bai_tan_jjc = self
-            .run_main_loop_bai_tan_jjc_stage(owners.jjc, configuration.jjc, owners.jjc_context)
+            .run_main_loop_bai_tan_jjc_stage(
+                owners.jjc,
+                configuration.jjc,
+                owners.jjc_context,
+                owners.jjc_week_clear_worker,
+                owners.tokio_runtime.clone(),
+            )
             .map_err(|block| Box::new(WorldMainLoopBlock::Jjc(block)))?;
         let tail = self.run_main_loop_tail_stage(
             state.tail_clocks,

@@ -2,6 +2,7 @@
 
 pub(crate) mod game;
 pub(crate) mod honorranks;
+pub(crate) mod jjcmaintenanceworker;
 #[allow(
     dead_code,
     reason = "LeiTing DB worker готов для concrete LeiTingContext runtime-owner"
