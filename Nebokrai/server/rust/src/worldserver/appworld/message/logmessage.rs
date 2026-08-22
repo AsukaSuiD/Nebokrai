@@ -1,10 +1,10 @@
 //! WorldServer dispatcher-owner `OnLogMessage`.
 //!
-//! Корпус остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме player lifecycle leaf-ов
-//! `0x5FB01/0x5FB02`, player-list leaf `0x4FB01`, delete-role leaf `0x4FB02`,
-//! restore-role leaf `0x4FB03`, create-role leaf `0x4FB04`, select-player leaf
-//! `0x4FB05` и account cleanup leaf-ов `0x4FB06/0x4FB07` со статусом
-//! `IMPLEMENTED`.
+//! Все достигнутые ветви dispatcher-а реализованы: player lifecycle
+//! `0x5FB01/0x5FB02`, player-list `0x4FB01`, delete-role `0x4FB02`,
+//! restore-role `0x4FB03`, create-role `0x4FB04`, select-player `0x4FB05` и
+//! account cleanup `0x4FB06/0x4FB07`. Неизвестный opcode остаётся
+//! `Pending` для общего маршрутизатора, как исходная default-ветвь.
 //! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\logmessage.cpp:30`.
@@ -2096,7 +2096,7 @@ fn account_disconnect(
 
 // ============================================================================
 // FUNCTION: OnLogMessage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\logmessage.cpp:30
