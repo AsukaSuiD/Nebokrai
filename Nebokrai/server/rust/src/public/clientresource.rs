@@ -9,6 +9,13 @@ use std::collections::BTreeMap;
 
 use crate::public::filesinfo::{FileInfo, FilesInfo};
 use crate::public::package::PackageArchive;
+use crate::public::package::PackageReadError;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ClientResourceReadError {
+    MissingPackage { package_type: u32 },
+    Package(PackageReadError),
+}
 
 /// Связанный read-side owner одного World resource набора.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -48,6 +55,22 @@ impl ClientResource {
 
     pub(crate) fn is_file_exist(&self, path: &[u8]) -> bool {
         self.file_info(path).is_some()
+    }
+
+    /// Достижимая package-ветвь `rfOpen`: loose-файлы здесь намеренно не
+    /// выбираются, потому что их current-folder/open error owner отдельный.
+    pub(crate) fn read_packaged(&self, path: &[u8]) -> Result<Option<Vec<u8>>, ClientResourceReadError> {
+        let mut normalized = path.to_vec();
+        for byte in &mut normalized {
+            byte.make_ascii_lowercase();
+            if *byte == b'/' { *byte = b'\\'; }
+        }
+        if normalized.first() != Some(&b'\\') { normalized.insert(0, b'\\'); }
+        let Some(info) = self.files_info.file_info_by_text(&normalized) else { return Ok(None); };
+        if info.package_type() & 1 != 0 { return Ok(None); }
+        let package = self.package(info.package_type())
+            .ok_or(ClientResourceReadError::MissingPackage { package_type: info.package_type() })?;
+        package.extract_decoded(&normalized).map_err(ClientResourceReadError::Package)
     }
 }
 
