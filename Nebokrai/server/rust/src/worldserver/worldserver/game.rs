@@ -2052,6 +2052,35 @@ pub(crate) struct WorldServerSnapshotPlayerDecode {
     pub(crate) owner: WorldServerSnapshotPlayerOwner,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldReturnedPlayerDecodeOwner {
+    Existing,
+    Created {
+        replaced_existing_decoded_id: bool,
+        login_removed: bool,
+        online_removal: WorldOnlinePlayerRemoveOutcome,
+        offline_inserted: bool,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldReturnedPlayerDecode {
+    pub(crate) requested_player_id: u32,
+    pub(crate) decoded_player_id: i32,
+    pub(crate) owner: WorldReturnedPlayerDecodeOwner,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldReturnedPlayerSnapshot {
+    pub(crate) account: Vec<u8>,
+    pub(crate) name: Vec<u8>,
+    pub(crate) level: u8,
+    pub(crate) team_id: i32,
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) friend_names: Vec<Vec<u8>>,
+}
+
 /// Состояние `m_nDBResponsed` после одного server opcode `0x5FA03`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldPlayerSaveResponseProgress {
@@ -12780,6 +12809,71 @@ impl CGame {
             owner: WorldServerSnapshotPlayerOwner::Created {
                 replaced_existing_decoded_id,
             },
+        })
+    }
+
+    /// Принимает subtype `1` из `0x5FB02`, очищает transient pet vector и
+    /// выполняет ранний offline-переход только для вновь созданного owner-а.
+    pub(crate) fn decord_returned_player(
+        &mut self,
+        organizing: &mut COrganizingCtrl,
+        requested_player_id: u32,
+        source: &[u8],
+        cursor: &mut usize,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<WorldReturnedPlayerDecode, PlayerCodecError> {
+        if let Some(player) = self.players.get_mut(&requested_player_id) {
+            let _ = player.decord_from_byte_array(source, cursor, true, registry, coefficients)?;
+            player.clear_uncreated_pets();
+            player.set_faction_data_received(false);
+            return Ok(WorldReturnedPlayerDecode {
+                requested_player_id,
+                decoded_player_id: player.get_id(),
+                owner: WorldReturnedPlayerDecodeOwner::Existing,
+            });
+        }
+
+        let mut player = Box::new(CPlayer::with_clone_decode_constructor_state());
+        let _ = player.decord_from_byte_array(source, cursor, true, registry, coefficients)?;
+        player.clear_uncreated_pets();
+        player.set_faction_data_received(false);
+        let decoded_player_id = player.get_id();
+        let decoded_key = decoded_player_id as u32;
+        let replaced_existing_decoded_id = self.players.remove(&decoded_key).is_some();
+        self.players.insert(decoded_key, player);
+        let login_removed = self.remove_login_player(decoded_key);
+        let online_removal = self.remove_online_player(organizing, decoded_key);
+        let offline_inserted = self.append_offline_player_id(decoded_key);
+        Ok(WorldReturnedPlayerDecode {
+            requested_player_id,
+            decoded_player_id,
+            owner: WorldReturnedPlayerDecodeOwner::Created {
+                replaced_existing_decoded_id,
+                login_removed,
+                online_removal,
+                offline_inserted,
+            },
+        })
+    }
+
+    pub(crate) fn returned_player_snapshot(
+        &self,
+        player_id: u32,
+    ) -> Option<WorldReturnedPlayerSnapshot> {
+        let player = self.map_player(player_id)?;
+        Some(WorldReturnedPlayerSnapshot {
+            account: legacy_c_string_prefix(player.get_account()).to_vec(),
+            name: legacy_c_string_prefix(player.get_name()).to_vec(),
+            level: player.get_level(),
+            team_id: player.get_team_id(),
+            owner_type: player.get_type(),
+            owner_id: player.get_id(),
+            friend_names: (0..player.friend_count())
+                .filter_map(|index| player.friend_name(index))
+                .map(legacy_c_string_prefix)
+                .map(<[u8]>::to_vec)
+                .collect(),
         })
     }
 

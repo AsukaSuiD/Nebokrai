@@ -1,8 +1,8 @@
 //! WorldServer dispatcher-owner `OnLogMessage`.
 //!
-//! Корпус остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме player-detail leaf `0x5FB01`,
-//! restore-role leaf `0x4FB03` и account cleanup leaf-ов `0x4FB06/0x4FB07`
-//! со статусом `IMPLEMENTED`. Точная пара:
+//! Корпус остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме player lifecycle leaf-ов
+//! `0x5FB01/0x5FB02`, restore-role leaf `0x4FB03` и account cleanup leaf-ов
+//! `0x4FB06/0x4FB07` со статусом `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\logmessage.cpp:30`.
 //! Exact `0x004B1692..0x004B171F` читает account через `GetStr(..., 0x14)`,
@@ -26,6 +26,11 @@
 //! Linux-донор объявил forwarded body как `long + char + long`; строгий
 //! 12-байтный donor-gate не перенесён, а исходный payload в success-ответе
 //! остаётся byte-exact независимо от результата безопасных ignored reads.
+//! Exact `0x004B20D2..0x004B23BB` принимает optional subtype-`1` snapshot,
+//! очищает transient pet-вектор и faction-data flag, затем посылает LoginServer
+//! `0x1FF06 + account\0 + name\0 + level`, выполняет login/online/offline и
+//! team переходы и уведомляет каждого достигнутого online-друга через
+//! `0x7F905 + friend_id + returned_name\0` в исходном list-порядке.
 //! Добавленные Linux-донором peer/ownership/DB-preflight gates в EXE
 //! отсутствуют и не перенесены; как и account-wide cancellation/in-flight
 //! lifecycle из его очереди. `VecDeque` заменяет только старые list/deque
@@ -42,11 +47,12 @@ use crate::worldserver::appworld::player::{PlayerCodecError, PlayerPropertyCoeff
 use crate::worldserver::appworld::session::csessionfactory::CSessionFactory;
 use crate::worldserver::worldserver::game::{
     CGame, WorldLoginTimeoutTeamExit, WorldOnlinePlayerAppendOutcome,
-    WorldOnlinePlayerRemoveOutcome,
+    WorldOnlinePlayerRemoveOutcome, WorldReturnedPlayerDecode,
 };
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
 const PLAYER_DETAIL_REQUEST: i32 = 0x0005_FB01;
+const PLAYER_RETURN_REQUEST: i32 = 0x0005_FB02;
 const RESTORE_ROLE_REQUEST: i32 = 0x0004_FB03;
 const ACCOUNT_LOGIN_CLEANUP_REQUEST: i32 = 0x0004_FB06;
 const ACCOUNT_DISCONNECT_REQUEST: i32 = 0x0004_FB07;
@@ -55,6 +61,7 @@ const RESTORE_ROLE_STATUS: i8 = 0x15;
 const ACCOUNT_DISCONNECT_GAME_RESPONSE: i32 = 0x0007_F903;
 const ACCOUNT_DISCONNECT_LOGIN_RESPONSE: i32 = 0x0001_FF06;
 const PLAYER_DETAIL_RESPONSE: i32 = 0x0007_F901;
+const PLAYER_FRIEND_OFFLINE_RESPONSE: i32 = 0x0007_F905;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldRestoreRoleOutcome {
@@ -158,11 +165,39 @@ pub(crate) enum WorldPlayerDetailOutcome {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldReturnedPlayerFriendOutcome {
+    pub(crate) friend_player_id: u32,
+    pub(crate) game_server_index: i32,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldPlayerReturnOutcome {
+    PlayerOnlyOnWorld { player_id: u32 },
+    DecodeBlocked { player_id: u32, error: PlayerCodecError },
+    PlayerMissing { player_id: u32, subtype: i32 },
+    Released {
+        player_id: u32,
+        subtype: i32,
+        decode: Option<WorldReturnedPlayerDecode>,
+        login_wire: Vec<u8>,
+        login_delivery: Result<i32, SendMessageError>,
+        login_removed: bool,
+        online_removal: WorldOnlinePlayerRemoveOutcome,
+        offline_inserted: bool,
+        team_exit: Option<WorldLoginTimeoutTeamExit>,
+        friends: Vec<WorldReturnedPlayerFriendOutcome>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldLogMessageOutcome {
     RestoreRole(WorldRestoreRoleOutcome),
     AccountLoginCleanup(WorldAccountLoginCleanupOutcome),
     AccountDisconnect(WorldAccountDisconnectOutcome),
     PlayerDetail(WorldPlayerDetailOutcome),
+    PlayerReturn(WorldPlayerReturnOutcome),
 }
 
 pub(crate) enum WorldLogMessageDispatch {
@@ -188,6 +223,15 @@ pub(crate) fn on_log_message(
             add_error_log_text,
             message,
         ),
+        PLAYER_RETURN_REQUEST => player_return(
+            game,
+            organizing,
+            session_factory,
+            registry,
+            coefficients,
+            add_error_log_text,
+            message,
+        ),
         RESTORE_ROLE_REQUEST => restore_role(game, message),
         ACCOUNT_LOGIN_CLEANUP_REQUEST => {
             account_login_cleanup(game, session_factory, message)
@@ -195,6 +239,120 @@ pub(crate) fn on_log_message(
         ACCOUNT_DISCONNECT_REQUEST => account_disconnect(game, session_factory, message),
         _ => WorldLogMessageDispatch::Pending(message),
     }
+}
+
+fn player_return(
+    game: &mut CGame,
+    organizing: &mut COrganizingCtrl,
+    session_factory: &mut CSessionFactory,
+    registry: &GoodsBasePropertiesRegistry,
+    coefficients: &PlayerPropertyCoefficients,
+    add_error_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
+    mut message: CMessage,
+) -> WorldLogMessageDispatch {
+    let player_id = message.base_mut().get_long().unwrap_or(0) as u32;
+    let subtype = message.base_mut().get_long().unwrap_or(0);
+    let decode = if subtype == 1 {
+        let decoded = {
+            let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+            game.decord_returned_player(
+                organizing,
+                player_id,
+                source,
+                cursor,
+                registry,
+                coefficients,
+            )
+        };
+        match decoded {
+            Ok(decoded) => Some(decoded),
+            Err(error) => {
+                return WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::PlayerReturn(
+                    WorldPlayerReturnOutcome::DecodeBlocked { player_id, error },
+                ));
+            }
+        }
+    } else {
+        if subtype == 0 {
+            let line = format!("Player {} Only On WorldServer!", player_id);
+            let _ = add_error_log_text(line.as_bytes());
+        }
+        None
+    };
+
+    let Some(player) = game.returned_player_snapshot(player_id) else {
+        return WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::PlayerReturn(
+            if subtype == 0 {
+                WorldPlayerReturnOutcome::PlayerOnlyOnWorld { player_id }
+            } else {
+                WorldPlayerReturnOutcome::PlayerMissing { player_id, subtype }
+            },
+        ));
+    };
+
+    let mut login = CMessage::new(ACCOUNT_DISCONNECT_LOGIN_RESPONSE);
+    login.base_mut().add(&player.account);
+    login.base_mut().add_char(0);
+    login.base_mut().add(&player.name);
+    login.base_mut().add_char(0);
+    login.base_mut().add_byte(player.level);
+    let login_wire = login.as_wire_bytes().to_vec();
+    let login_delivery = login.send(
+        game.current_login_client().map(|client| client.send_queue()),
+        false,
+    );
+
+    let owner_id = player.owner_id as u32;
+    let login_removed = game.remove_login_player(owner_id);
+    let online_removal = game.remove_online_player(organizing, owner_id);
+    let offline_inserted = game.append_offline_player_id(owner_id);
+    let team_exit = if player.team_id == 0 {
+        None
+    } else {
+        let session_id = game.get_team_session_id(player.team_id as u32);
+        Some(game.exit_team_player(
+            session_factory,
+            session_id,
+            player.owner_type,
+            player.owner_id,
+        ))
+    };
+
+    let mut friends = Vec::new();
+    for friend_name in player.friend_names {
+        let friend_player_id = game.online_player_id_by_name(&friend_name);
+        if friend_player_id == 0 {
+            continue;
+        }
+        let game_server_index = game.game_server_number_by_player_id(friend_player_id as i32);
+        let mut presence = CMessage::new(PLAYER_FRIEND_OFFLINE_RESPONSE);
+        presence.base_mut().add_ulong(friend_player_id);
+        presence.base_mut().add(&player.name);
+        presence.base_mut().add_char(0);
+        let wire = presence.as_wire_bytes().to_vec();
+        let delivery = game.send_msg_to_game_server(game_server_index, &presence);
+        friends.push(WorldReturnedPlayerFriendOutcome {
+            friend_player_id,
+            game_server_index,
+            wire,
+            delivery,
+        });
+    }
+
+    WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::PlayerReturn(
+        WorldPlayerReturnOutcome::Released {
+            player_id,
+            subtype,
+            decode,
+            login_wire,
+            login_delivery,
+            login_removed,
+            online_removal,
+            offline_inserted,
+            team_exit,
+            friends,
+        },
+    ))
 }
 
 fn player_detail(

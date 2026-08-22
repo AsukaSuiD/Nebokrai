@@ -1511,6 +1511,11 @@ impl CPlayer {
         self.faction_data_received.set(received);
     }
 
+    /// Уничтожает transient pet-information после принятого World snapshot-а.
+    pub(crate) fn clear_uncreated_pets(&mut self) {
+        self.uncreated_pets.clear();
+    }
+
     /// Возвращает exact transient-флаг, блокирующий смену главы faction.
     pub(crate) const fn faction_war_operator(&self) -> bool {
         self.faction_war_operator
