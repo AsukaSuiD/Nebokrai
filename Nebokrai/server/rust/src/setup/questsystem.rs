@@ -18,6 +18,11 @@
 //! display, хотя PDB layout размещал effect раньше координат. Typed поля и
 //! owned bytes устраняют C++ layout/lifetime; NUL/count ошибки блокируются до
 //! изменения destination. Точная parser-семантика двух ini остаётся отдельной.
+//! `FilesInfo.ril` подтверждает resource-границу loader-а: `Data/Quest.ini`
+//! берётся из `patch01.pak/data/quest.ini`, где после `MaxQuestNum` есть
+//! `maxlvldiff 130`; `Data/QuestEx.ini` отсутствует в package-index и
+//! открывается как loose resource. Одноимённый loose `quest.ini` без
+//! `maxlvldiff` устарел и не задаёт контракт `0x00467AA0`.
 
 use std::collections::BTreeMap;
 use std::error::Error;
