@@ -81,6 +81,7 @@ use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsbaseproperties::GOODS_TYPE_EQUIPMENT;
 use super::super::goods::cgoodsfactory::{GoodsBasePropertiesRegistry, unserialize_goods};
 use super::camountlimitgoodscontainer::AmountContainerCodecError;
+use super::ccontainer::ContainerGuidStorage;
 use super::cgoodscontainer::CGoodsContainerState;
 use super::cvolumelimitgoodscontainer::{CVolumeLimitGoodsContainer, VolumeContainerCodecError};
 
@@ -213,6 +214,29 @@ pub(crate) struct CEquipmentContainer {
     equipment: BTreeMap<EquipmentColumn, Box<CGoods>>,
 }
 
+/// Numeric map-order остаётся concrete target-ом inherited GUID slots
+/// `CContainer`; поиск и извлечение выбирают первое полное совпадение GUID.
+impl ContainerGuidStorage for CEquipmentContainer {
+    type Object = CGoods;
+    type Removed = Box<CGoods>;
+
+    fn find_by_guid(&self, ex_id: &CGuid) -> Option<&Self::Object> {
+        self.equipment
+            .values()
+            .map(Box::as_ref)
+            .find(|goods| goods.get_ex_id() == ex_id)
+    }
+
+    fn remove_by_guid(&mut self, ex_id: &CGuid) -> Option<Self::Removed> {
+        let column = self
+            .equipment
+            .iter()
+            .find(|(_, goods)| goods.get_ex_id() == ex_id)
+            .map(|(column, _)| *column)?;
+        self.equipment.remove(&column)
+    }
+}
+
 impl CEquipmentContainer {
     /// Создаёт exact пустое состояние constructor-а с base-owner `0/0`.
     pub(crate) const fn with_constructor_defaults() -> Self {
@@ -311,12 +335,7 @@ impl CEquipmentContainer {
 
     /// Вынимает первое GUID-совпадение и передаёт ownership вызывающему.
     pub(crate) fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
-        let column = self
-            .equipment
-            .iter()
-            .find(|(_, goods)| goods.get_ex_id() == ex_id)
-            .map(|(column, _)| *column)?;
-        self.equipment.remove(&column)
+        <Self as ContainerGuidStorage>::remove_by_guid(self, ex_id)
     }
 
     /// Очищает map после no-op removed callbacks, исправляя внутреннюю leak.
@@ -376,10 +395,7 @@ impl CEquipmentContainer {
 
     /// Ищет первый товар с полным 16-байтовым GUID в numeric map-order.
     pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
-        self.equipment
-            .values()
-            .map(Box::as_ref)
-            .find(|goods| goods.get_ex_id() == ex_id)
+        <Self as ContainerGuidStorage>::find_by_guid(self, ex_id)
     }
 
     /// Возвращает numeric column по exact object identity.

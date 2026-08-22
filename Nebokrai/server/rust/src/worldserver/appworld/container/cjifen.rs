@@ -55,6 +55,7 @@
 use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsfactory::{GoodsBasePropertiesRegistry, unserialize_goods};
 use super::super::listener::ccontainerlistener::{CContainerListener, TraversedContainerObject};
+use super::ccontainer::{ContainerGuidStorage, find_by_object_guid};
 use super::cwallet::CWallet;
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
 use crate::public::guid::CGuid;
@@ -262,26 +263,17 @@ impl CWallet {
 
     /// Ищет единственный товар по полному 16-байтовому legacy GUID.
     pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
-        self.gold_coins
-            .as_deref()
-            .filter(|goods| goods.get_ex_id() == ex_id)
+        <Self as ContainerGuidStorage>::find_by_guid(self, ex_id)
     }
 
     /// Передаёт ownership единственного совпавшего товара вызывающему.
     pub(crate) fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
-        if self
-            .gold_coins
-            .as_deref()
-            .is_some_and(|goods| goods.get_ex_id() == ex_id)
-        {
-            return self.gold_coins.take();
-        }
-        None
+        <Self as ContainerGuidStorage>::remove_by_guid(self, ex_id)
     }
 
     /// Запрашивает позицию non-null объекта через его GUID, как exact virtual call.
     pub(crate) fn query_goods_position_by_object(&self, goods: Option<&CGoods>) -> Option<u32> {
-        self.query_goods_position(goods?.get_ex_id())
+        find_by_object_guid(self, goods.map(CGoods::get_ex_id)).map(|_| 0)
     }
 
     /// Возвращает единственную позицию `0` при полном GUID-совпадении.

@@ -46,15 +46,41 @@
 //! bank lock.
 
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
+use crate::public::guid::CGuid;
 
 use super::super::goods::cgoods::{CGoods, GoodsCodecError, GoodsDbSnapshotBlock};
 use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
+use super::ccontainer::ContainerGuidStorage;
 use super::cgoodscontainer::{CGoodsContainerState, add_to_occupied_position};
 
 /// Достигнутое состояние исходного `CWallet`, не копия его 32-битного ABI.
 pub(crate) struct CWallet {
     pub(super) container_base: CGoodsContainerState,
     pub(super) gold_coins: Option<Box<CGoods>>,
+}
+
+/// Единственный wallet-slot является concrete target-ом inherited GUID slots
+/// `CContainer`: полное равенство GUID, без currency-index фильтра.
+impl ContainerGuidStorage for CWallet {
+    type Object = CGoods;
+    type Removed = Box<CGoods>;
+
+    fn find_by_guid(&self, ex_id: &CGuid) -> Option<&Self::Object> {
+        self.gold_coins
+            .as_deref()
+            .filter(|goods| goods.get_ex_id() == ex_id)
+    }
+
+    fn remove_by_guid(&mut self, ex_id: &CGuid) -> Option<Self::Removed> {
+        if self
+            .gold_coins
+            .as_deref()
+            .is_some_and(|goods| goods.get_ex_id() == ex_id)
+        {
+            return self.gold_coins.take();
+        }
+        None
+    }
 }
 
 impl CWallet {
