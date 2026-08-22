@@ -9,7 +9,7 @@
 //! RVA `0x00103D40/0x00103FC0/0x00104470`, `LoadQuestData` RVA `0x00104790`,
 //! `LoadCiQingField/LoadSkillField/LoadThingField/LoadFriendField` RVA
 //! `0x0010EFF0/0x0010F8E0/0x00110260/0x00111050`, `SaveQuestData` RVA
-//! `0x00106270`,
+//! `0x00106270`, полный query-owner `LoadQuestData` RVA `0x00104790`,
 //! `CreatePlayerAbilities` RVA `0x00106CE0`, внешний
 //! `CreatePlayer` RVA `0x0010ED40`, внешний `SavePlayer` RVA `0x0010EE70`,
 //! `GetPlayerID` RVA `0x00102080`, `GetCDKey` RVA `0x0010EA20`,
@@ -485,6 +485,7 @@ use crate::dbaccess::worlddb::dbgoods::{
 use crate::dbaccess::worlddb::goodslistener::GoodsTraversalBlock;
 use crate::dbaccess::worlddb::rsjjcsys::{PlayerJjcDataSnapshot, RsJjcSysOwner};
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
+use crate::public::date::{TagTime, TagTimeArithmeticBlock};
 use crate::setup::leitingsetup::CThingSetup;
 use crate::worldserver::appworld::player::CPlayer;
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
@@ -2284,6 +2285,7 @@ pub(crate) enum PlayerAbilityRowLoadFailure {
         field: PlayerAbilityBinaryField,
         source: PlayerAbilityBlobDecodeBlock,
     },
+    HonorTime(TagTimeArithmeticBlock),
 }
 
 #[derive(Debug)]
@@ -2299,6 +2301,19 @@ pub(crate) enum PlayerAbilityQueryLoadOutcome {
     ReturnedTrue,
     ReturnedFalse(PlayerAbilityQueryLoadFailure),
     BlockedMalformed(PlayerAbilityRowLoadFailure),
+}
+
+#[derive(Debug)]
+pub(crate) enum PlayerQuestQueryLoadFailure {
+    ZeroPlayerId,
+    MissingConnection,
+    Database(tiberius::error::Error),
+}
+
+#[derive(Debug)]
+pub(crate) enum PlayerQuestQueryLoadOutcome {
+    ReturnedTrue { quest_count: usize },
+    ReturnedFalse(PlayerQuestQueryLoadFailure),
 }
 
 fn required_ability_integer(
@@ -2532,7 +2547,7 @@ pub(crate) fn materialize_player_ability_binary_row(
     row: &Row,
     player: &mut CPlayer,
     thing_setup: &CThingSetup,
-    get_week_day: impl FnMut() -> u16,
+    get_week_day: &mut impl FnMut() -> u16,
 ) -> Result<(), PlayerAbilityRowLoadFailure> {
     let hot_keys_blob = ability_blob(row, PlayerAbilityBinaryField::HotKey)?;
     let hot_keys = load_hot_key_field(&hot_keys_blob).map_err(|source| {
@@ -2603,7 +2618,7 @@ impl TiberiusRsPlayer {
         player: &mut CPlayer,
         active_transaction: Option<&mut WorldTdsClient>,
         thing_setup: &CThingSetup,
-        get_week_day: impl FnMut() -> u16,
+        mut get_week_day: impl FnMut() -> u16,
     ) -> PlayerAbilityQueryLoadOutcome {
         let player_id = player.get_id();
         if player_id == 0 {
@@ -2646,11 +2661,104 @@ impl TiberiusRsPlayer {
             return PlayerAbilityQueryLoadOutcome::BlockedMalformed(source);
         }
         if let Err(source) =
-            materialize_player_ability_binary_row(&row, player, thing_setup, get_week_day)
+            materialize_player_ability_binary_row(&row, player, thing_setup, &mut get_week_day)
         {
             return PlayerAbilityQueryLoadOutcome::BlockedMalformed(source);
         }
+
+        let lei_ting_now = Local::now();
+        let _ = player.reset_loaded_lei_ting_if_needed(
+            lei_ting_now.day() as u16,
+            || Local::now().timestamp() as u32,
+            thing_setup,
+            &mut get_week_day,
+        );
+
+        let has_save_time = row
+            .columns()
+            .iter()
+            .any(|column| column.name().eq_ignore_ascii_case("SaveTime"));
+        if !has_save_time {
+            return PlayerAbilityQueryLoadOutcome::BlockedMalformed(
+                PlayerAbilityRowLoadFailure::MissingRequiredValue { column: "SaveTime" },
+            );
+        }
+        let save_time = match row.try_get::<NaiveDateTime, _>("SaveTime") {
+            Ok(Some(value)) => TagTime::from_fields([
+                value.year() as u16,
+                value.month() as u16,
+                value.weekday().num_days_from_sunday() as u16,
+                value.day() as u16,
+                value.hour() as u16,
+                value.minute() as u16,
+                value.second() as u16,
+                value.and_utc().timestamp_subsec_millis() as u16,
+            ]),
+            Ok(None) | Err(_) => TagTime::local_now(),
+        };
+        if let Err(source) = player.reset_honor_eliminate_num(save_time, TagTime::local_now()) {
+            return PlayerAbilityQueryLoadOutcome::BlockedMalformed(
+                PlayerAbilityRowLoadFailure::HonorTime(source),
+            );
+        }
         PlayerAbilityQueryLoadOutcome::ReturnedTrue
+    }
+
+    /// Повторяет отдельный `LoadQuestData`; EOF означает пустой успешный owner.
+    pub(crate) async fn load_player_quest_data(
+        &mut self,
+        player: &mut CPlayer,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> PlayerQuestQueryLoadOutcome {
+        let player_id = player.get_id();
+        if player_id == 0 {
+            return PlayerQuestQueryLoadOutcome::ReturnedFalse(
+                PlayerQuestQueryLoadFailure::ZeroPlayerId,
+            );
+        }
+        let Some(active_transaction) = active_transaction else {
+            return PlayerQuestQueryLoadOutcome::ReturnedFalse(
+                PlayerQuestQueryLoadFailure::MissingConnection,
+            );
+        };
+
+        let mut query =
+            Query::new("SELECT * FROM CSL_PLAYER_QUEST_EX WHERE PlayerID=@P1");
+        query.bind(player_id);
+        let row = match query.query(active_transaction).await {
+            Ok(stream) => match stream.into_row().await {
+                Ok(row) => row,
+                Err(source) => {
+                    return PlayerQuestQueryLoadOutcome::ReturnedFalse(
+                        PlayerQuestQueryLoadFailure::Database(source),
+                    );
+                }
+            },
+            Err(source) => {
+                return PlayerQuestQueryLoadOutcome::ReturnedFalse(
+                    PlayerQuestQueryLoadFailure::Database(source),
+                );
+            }
+        };
+        let Some(row) = row else {
+            return PlayerQuestQueryLoadOutcome::ReturnedTrue { quest_count: 0 };
+        };
+        let blob = match row.try_get::<&[u8], _>("QuestData") {
+            Ok(Some(blob)) => blob,
+            Ok(None) => &[],
+            Err(source) => {
+                return PlayerQuestQueryLoadOutcome::ReturnedFalse(
+                    PlayerQuestQueryLoadFailure::Database(source),
+                );
+            }
+        };
+        let quests = load_quest_data(blob);
+        for quest in &quests {
+            player.add_quest_from_db(quest.quest_id, quest.complete);
+        }
+        PlayerQuestQueryLoadOutcome::ReturnedTrue {
+            quest_count: quests.len(),
+        }
     }
 }
 
@@ -4659,7 +4767,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadQuestData
-// STATUS: IMPLEMENTED_PARTIAL
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2741
@@ -4667,8 +4775,9 @@ async fn execute_batch(
 // ADDRESS: 00504790
 // PROTOTYPE: bool __thiscall LoadQuestData(CPlayer * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
 //
-// IMPLEMENTED_OWNER: binary `load_quest_data` выше; DB query остаётся частью
-// полного `LoadPlayer` owner-прохода.
+// IMPLEMENTED_OWNER: `TiberiusRsPlayer::load_player_quest_data` и binary
+// `load_quest_data` выше; Tiberius заменяет ADO, а трёхбайтовые записи,
+// игнорирование неполного хвоста и успешный EOF сохранены.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

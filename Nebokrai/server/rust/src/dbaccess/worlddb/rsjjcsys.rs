@@ -1,7 +1,7 @@
 //! DB-владелец `CRsJJcSys` исторического WorldServer из `rsjjcsys.cpp`.
 //!
-//! Статус `SaveJJcData` RVA `0x00116990` — `IMPLEMENTED`; остальные функции
-//! ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Статус `LoadJJcData` RVA `0x00115CC0` и `SaveJJcData` RVA `0x00116990` —
+//! `IMPLEMENTED`; остальные функции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
@@ -13,6 +13,10 @@
 //! сам подобъект лежит в `CPlayer+0x992`. `dwJJcLevel/dwJJcScore` находятся в
 //! `tagBaseProperty` по `+0x174/+0x178`, то есть в `CPlayer+0x70C/+0x710`, а
 //! inherited signed ID читается по `CPlayer+8`.
+//! `LoadJJcData` сохраняет исходный успешный no-op при отсутствии DB-строки:
+//! exact `0x005163B9` выставляет `AL=1`, а catch-path `0x005163FF` — `AL=0`.
+//! Tiberius заменяет только ADO recordset; parameter binding исключает старую
+//! строковую подстановку ID, не меняя выбор строки и порядок восьми счётчиков.
 //!
 //! Функция вызывает `sp_JJccUpdatePlayer` с параметрами `@id`, `@jjcLevel`,
 //! `@jjcScore`, четырьмя week- и четырьмя season-счётчиками. Все параметры
@@ -47,11 +51,12 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 
-use tiberius::{Client, Config, ToSql};
+use tiberius::{Client, Config, Query, Row, ToSql};
 use tokio::net::TcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
-use super::rssetup::WorldDatabaseSettings;
+use super::rssetup::{WorldDatabaseSettings, WorldTdsClient};
+use crate::worldserver::appworld::player::CPlayer;
 
 const SAVE_JJC_DATA_SQL: &str = "EXEC sp_JJccUpdatePlayer @id=@P1, @jjcLevel=@P2, @jjcScore=@P3, @weekJoin=@P4, @weekWin=@P5, @weekLose=@P6, @weekTie=@P7, @seasonJoin=@P8, @seasonWin=@P9, @seasonLose=@P10, @seasonTie=@P11";
 
@@ -114,8 +119,15 @@ impl From<tiberius::error::Error> for RsJjcSysDatabaseError {
     }
 }
 
-/// Узкая объектная граница достигнутого `CRsJJcSys::SaveJJcData`.
+/// Узкая объектная граница достигнутых load/save-операций `CRsJJcSys`.
 pub(crate) trait RsJjcSysOwner {
+    /// Загружает caller-строку JJC; отсутствие строки остаётся успешным no-op.
+    async fn load_jjc_data(
+        &mut self,
+        player: &mut CPlayer,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> PlayerJjcLoadOutcome;
+
     /// Открывает отдельное соединение и выполняет одну исходную procedure.
     async fn save_jjc_data(&mut self, snapshot: &PlayerJjcDataSnapshot) -> bool;
 
@@ -123,7 +135,26 @@ pub(crate) trait RsJjcSysOwner {
     fn pop_notice(&mut self) -> Option<RsJjcSysNotice>;
 }
 
-/// Linux/TDS-замена достигнутой save-части исходного singleton-а.
+#[derive(Debug)]
+pub(crate) enum PlayerJjcLoadFailure {
+    ZeroPlayerId,
+    MissingConnection,
+    Database(tiberius::error::Error),
+    MissingRequiredValue { column: &'static str },
+    NumericOutsideLegacyRange {
+        column: &'static str,
+        value: i64,
+        target: &'static str,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum PlayerJjcLoadOutcome {
+    ReturnedTrue { row_found: bool },
+    ReturnedFalse(PlayerJjcLoadFailure),
+}
+
+/// Linux/TDS-замена достигнутых load/save-частей исходного singleton-а.
 pub(crate) struct TiberiusRsJjcSys {
     config: Config,
     notices: VecDeque<RsJjcSysNotice>,
@@ -183,7 +214,100 @@ impl TiberiusRsJjcSys {
     }
 }
 
+fn read_jjc_integer(
+    row: &Row,
+    column: &'static str,
+) -> Result<i64, PlayerJjcLoadFailure> {
+    let first_error = match row.try_get::<i32, _>(column) {
+        Ok(Some(value)) => return Ok(i64::from(value)),
+        Ok(None) => return Err(PlayerJjcLoadFailure::MissingRequiredValue { column }),
+        Err(source) => source,
+    };
+    if let Ok(Some(value)) = row.try_get::<u8, _>(column) {
+        return Ok(i64::from(value));
+    }
+    if let Ok(Some(value)) = row.try_get::<i16, _>(column) {
+        return Ok(i64::from(value));
+    }
+    if let Ok(Some(value)) = row.try_get::<i64, _>(column) {
+        return Ok(value);
+    }
+    Err(PlayerJjcLoadFailure::Database(first_error))
+}
+
 impl RsJjcSysOwner for TiberiusRsJjcSys {
+    async fn load_jjc_data(
+        &mut self,
+        player: &mut CPlayer,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> PlayerJjcLoadOutcome {
+        macro_rules! integer {
+            ($row:expr, $column:literal, $target:ty) => {{
+                let value = match read_jjc_integer($row, $column) {
+                    Ok(value) => value,
+                    Err(failure) => return PlayerJjcLoadOutcome::ReturnedFalse(failure),
+                };
+                match <$target>::try_from(value) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return PlayerJjcLoadOutcome::ReturnedFalse(
+                            PlayerJjcLoadFailure::NumericOutsideLegacyRange {
+                                column: $column,
+                                value,
+                                target: stringify!($target),
+                            },
+                        );
+                    }
+                }
+            }};
+        }
+
+        let player_id = player.get_id();
+        if player_id == 0 {
+            return PlayerJjcLoadOutcome::ReturnedFalse(PlayerJjcLoadFailure::ZeroPlayerId);
+        }
+        let Some(active_transaction) = active_transaction else {
+            return PlayerJjcLoadOutcome::ReturnedFalse(
+                PlayerJjcLoadFailure::MissingConnection,
+            );
+        };
+        let mut query = Query::new("select * from csl_player_jjc where id = @P1");
+        query.bind(player_id);
+        let row = match query.query(active_transaction).await {
+            Ok(stream) => match stream.into_row().await {
+                Ok(row) => row,
+                Err(source) => {
+                    return PlayerJjcLoadOutcome::ReturnedFalse(
+                        PlayerJjcLoadFailure::Database(source),
+                    );
+                }
+            },
+            Err(source) => {
+                return PlayerJjcLoadOutcome::ReturnedFalse(
+                    PlayerJjcLoadFailure::Database(source),
+                );
+            }
+        };
+        let Some(row) = row else {
+            return PlayerJjcLoadOutcome::ReturnedTrue { row_found: false };
+        };
+
+        let jjc_level = integer!(&row, "JjcLevel", u32);
+        let jjc_score = integer!(&row, "JjcScore", u32);
+        let counters = [
+            integer!(&row, "weekJoinCnt", u16),
+            integer!(&row, "weekWinCnt", u16),
+            integer!(&row, "weekLoseCnt", u16),
+            integer!(&row, "weekTieCnt", u16),
+            integer!(&row, "seasonJoinCnt", u16),
+            integer!(&row, "seasonWinCnt", u16),
+            integer!(&row, "seasonLoseCnt", u16),
+            integer!(&row, "seasonTieCnt", u16),
+        ];
+        player.apply_loaded_jjc_data(jjc_level, jjc_score, counters);
+        PlayerJjcLoadOutcome::ReturnedTrue { row_found: true }
+    }
+
     async fn save_jjc_data(&mut self, snapshot: &PlayerJjcDataSnapshot) -> bool {
         match Self::execute_save(self.config.clone(), snapshot).await {
             Ok(()) => true,
@@ -224,7 +348,7 @@ impl RsJjcSysOwner for TiberiusRsJjcSys {
 
 // ============================================================================
 // FUNCTION: CRsJJcSys::LoadJJcData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsjjcsys.cpp:103
@@ -232,6 +356,8 @@ impl RsJjcSysOwner for TiberiusRsJjcSys {
 // ADDRESS: 00515cc0
 // PROTOTYPE: bool __thiscall LoadJJcData(CPlayer * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
 //
+// IMPLEMENTED_OWNER: `RsJjcSysOwner::load_jjc_data` выше; отсутствие строки
+// успешно, DB/типовые ошибки возвращают false, как подтверждает AL-tail EXE.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

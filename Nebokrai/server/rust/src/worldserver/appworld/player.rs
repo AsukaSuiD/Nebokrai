@@ -11,6 +11,7 @@
 //! `CPlayer::UpdateFactionInfo` RVA `0x0005C1D0`,
 //! `CPlayer::LoadData` RVA `0x0005E390`,
 //! `CPlayer::LoadDefaultProperty` RVA `0x0005E560`,
+//! `CPlayer::ReSetHonorElimilateNum` RVA `0x0005B260`,
 //! `CPlayer::ClearOwnedRegion` RVA `0x00033B50` и
 //! `CPlayer::AddOwnedRegion` RVA `0x0005DD10`
 //! accessors для level/friends и inherited `CShape::SetState`,
@@ -366,6 +367,7 @@ use crate::dbaccess::worlddb::rsplayer::{
 };
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::public::date::{TagTime, TagTimeArithmeticBlock};
 use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::public::guid::CGuid;
 use crate::setup::globesetup::GlobeSetupSnapshot;
@@ -840,6 +842,20 @@ pub(crate) struct PlayerLeiTingUpdateReport {
     pub(crate) stamp_replaced: bool,
     pub(crate) daily_list_replaced: bool,
     pub(crate) daily_thing_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerLoadedLeiTingResetReport {
+    pub(crate) reset: bool,
+    pub(crate) resulting_stamp: u32,
+    pub(crate) daily_thing_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerHonorEliminateResetReport {
+    pub(crate) day_reset: bool,
+    pub(crate) week_reset: bool,
+    pub(crate) month_reset: bool,
 }
 
 /// Точный четырёхбайтовый value `CPlayer::tagSkill`.
@@ -2422,6 +2438,22 @@ impl CPlayer {
         self.jjc_data = counters;
     }
 
+    /// Публикует найденную DB-строку `csl_player_jjc`, не меняя player level.
+    pub(crate) fn apply_loaded_jjc_data(
+        &mut self,
+        jjc_level: u32,
+        jjc_score: u32,
+        counters: [u16; 8],
+    ) {
+        self.base_property
+            .write_u32(BASE_PROPERTY_JJC_LEVEL_OFFSET, jjc_level);
+        self.base_property
+            .write_u32(BASE_PROPERTY_JJC_SCORE_OFFSET, jjc_score);
+        for (destination, counter) in self.jjc_data.chunks_exact_mut(2).zip(counters) {
+            destination.copy_from_slice(&counter.to_le_bytes());
+        }
+    }
+
     /// Возвращает exact unsigned `m_BaseProperty.dwCredit`.
     pub(crate) fn credit(&self) -> u32 {
         self.base_property.read_u32(BASE_PROPERTY_CREDIT_OFFSET)
@@ -2437,6 +2469,91 @@ impl CPlayer {
     pub(crate) fn get_appellation_id(&self) -> u32 {
         self.base_property
             .read_u32(BASE_PROPERTY_APPELLATION_OFFSET)
+    }
+
+    /// Повторяет post-`ListThing` reset первого числа месяца.
+    pub(crate) fn reset_loaded_lei_ting_if_needed(
+        &mut self,
+        local_day: u16,
+        get_reset_timestamp: impl FnOnce() -> u32,
+        thing_setup: &CThingSetup,
+        get_week_day: impl FnMut() -> u16,
+    ) -> PlayerLoadedLeiTingResetReport {
+        let up_60_count = self
+            .base_property
+            .read_u16(BASE_PROPERTY_LT_UP_60_COUNT_OFFSET);
+        let reset = local_day == 1 && up_60_count > 1;
+        if reset {
+            let reset_timestamp = get_reset_timestamp();
+            self.base_property
+                .write_u32(BASE_PROPERTY_FY_ENERGY_OFFSET, 0);
+            self.base_property
+                .write_u32(BASE_PROPERTY_FY_ENABLE_FLAGS_OFFSET, 0);
+            self.base_property
+                .write_u16(BASE_PROPERTY_LT_UP_60_COUNT_OFFSET, 0);
+            self.base_property
+                .write_u32(BASE_PROPERTY_LT_60_STAMP_OFFSET, reset_timestamp);
+            self.apply_loaded_things(true, Vec::new(), 0, thing_setup, get_week_day);
+        }
+        PlayerLoadedLeiTingResetReport {
+            reset,
+            resulting_stamp: self
+                .base_property
+                .read_u32(BASE_PROPERTY_LT_60_STAMP_OFFSET),
+            daily_thing_count: self.daily_things.len(),
+        }
+    }
+
+    /// Повторяет `ReSetHonorElimilateNum` для caller-снимка local time.
+    pub(crate) fn reset_honor_eliminate_num(
+        &mut self,
+        mut save_time: TagTime,
+        mut current_time: TagTime,
+    ) -> Result<PlayerHonorEliminateResetReport, TagTimeArithmeticBlock> {
+        current_time.hour = 0;
+        current_time.minute = 0;
+        current_time.second = 0;
+        current_time.milliseconds = 0;
+
+        let day_reset = save_time.legacy_lt(current_time);
+        if day_reset {
+            self.base_property
+                .write_u32(BASE_PROPERTY_DAYS_HONOR_OFFSET, 0);
+        }
+
+        let mut week_reset = false;
+        let mut month_reset = false;
+        save_time.add_day(1)?;
+        save_time.day_of_week = save_time.day_of_week.wrapping_add(1);
+        if save_time.day_of_week == 7 {
+            save_time.day_of_week = 0;
+        }
+        while save_time.legacy_le(current_time) {
+            if !week_reset && save_time.day_of_week == 1 {
+                self.base_property
+                    .write_u32(BASE_PROPERTY_WEEKS_HONOR_OFFSET, 0);
+                week_reset = true;
+            }
+            if !month_reset && save_time.day == 1 {
+                self.base_property
+                    .write_u32(BASE_PROPERTY_MONTHS_HONOR_OFFSET, 0);
+                month_reset = true;
+            }
+            if week_reset && month_reset {
+                break;
+            }
+            save_time.add_day(1)?;
+            save_time.day_of_week = save_time.day_of_week.wrapping_add(1);
+            if save_time.day_of_week == 7 {
+                save_time.day_of_week = 0;
+            }
+        }
+
+        Ok(PlayerHonorEliminateResetReport {
+            day_reset,
+            week_reset,
+            month_reset,
+        })
     }
 
     /// Повторяет прямые honor-eliminate записи `CGame` в player base-owner.
@@ -4005,7 +4122,7 @@ fn read_player_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CPlayer::ReSetHonorElimilateNum
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:1009
@@ -4013,6 +4130,8 @@ fn read_player_array<const N: usize>(
 // ADDRESS: 0045b260
 // PROTOTYPE: bool __thiscall ReSetHonorElimilateNum(tagTime param_1)
 //
+// IMPLEMENTED_OWNER: `CPlayer::reset_honor_eliminate_num` выше; local-time
+// снимок передаётся caller-ом, а календарный обход сохраняет исходные границы.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
