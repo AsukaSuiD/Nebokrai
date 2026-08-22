@@ -4,7 +4,7 @@
 //! пути PDB: `e:\svn\fengyun_russia_dev\public\filesinfo.cpp/.h`.
 //! Материализована read-side проекция подтверждённых полей `tagFileInfo`,
 //! grammar корректного `.ril` и lookup
-//! `GetFileInfoByText`/`FindChildFileInfoByText`. Массивы,
+//! `GetFileInfoByText`/`FindChildFileInfoByText` и `FindFileList`. Массивы,
 //! деревья и владение C++ заменены `Vec`/`BTreeMap` без изменения порядка
 //! package-записей и побайтовых ключей пути.
 //!
@@ -206,6 +206,55 @@ impl FilesInfo {
         }
         Some(current)
     }
+
+    /// Точный `CFilesInfo::FindFileList(root, extension, output)`.
+    ///
+    /// Public overload lowercases только `root`; extension передаётся в
+    /// leaf-comparison без нормализации. Поэтому `".script"` на lowercased
+    /// `.ril` именах находит файлы, а иной регистр extension не получает
+    /// неявный compatibility fallback. `BTreeMap` сохраняет `std::map`
+    /// key-order рекурсивного обхода, а каждый результат начинается с `\\`.
+    pub(crate) fn find_file_list(&self, root: &[u8], extension: &[u8]) -> Vec<Vec<u8>> {
+        let root = lowercase_ascii(root);
+        let Some(root) = self.file_info_by_text(&root) else {
+            return Vec::new();
+        };
+        let mut files = Vec::new();
+        let mut path = Vec::new();
+        find_file_list(root, extension, &mut path, &mut files);
+        files
+    }
+}
+
+fn find_file_list(
+    file: &FileInfo,
+    extension: &[u8],
+    parent_path: &mut Vec<u8>,
+    files: &mut Vec<Vec<u8>>,
+) {
+    let path_length = parent_path.len();
+    if !file.name.is_empty() {
+        parent_path.push(b'\\');
+        parent_path.extend_from_slice(&file.name);
+    }
+
+    if file.children.is_empty() {
+        if !file.folder && file_extension(&file.name) == extension {
+            files.push(parent_path.clone());
+        }
+    } else {
+        for child in file.children.values() {
+            find_file_list(child, extension, parent_path, files);
+        }
+    }
+    parent_path.truncate(path_length);
+}
+
+/// Соответствует `find_last_of(".")` плюс `erase(0, position)`.
+fn file_extension(name: &[u8]) -> &[u8] {
+    name.iter()
+        .rposition(|byte| *byte == b'.')
+        .map_or(&[], |position| &name[position..])
 }
 
 fn read_folder(
@@ -830,7 +879,7 @@ impl<'a> RilTokens<'a> {
 
 // ============================================================================
 // FUNCTION: CFilesInfo::FindFileList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / ASCII_CONTRACT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\filesinfo.cpp:1122
@@ -872,7 +921,7 @@ impl<'a> RilTokens<'a> {
 
 // ============================================================================
 // FUNCTION: CFilesInfo::FindFileList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / ASCII_CONTRACT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\filesinfo.cpp:1102

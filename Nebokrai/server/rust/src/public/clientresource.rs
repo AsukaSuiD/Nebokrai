@@ -156,6 +156,17 @@ impl DefaultClientResourceOwner {
         file.read_data(&mut data).then_some(data)
     }
 
+    /// Возвращает package-backed file list, если текущий default owner имеет
+    /// загруженный индекс. `None` отличает unavailable `LoadEx` от пустого
+    /// списка и оставляет caller-у exact loose fallback.
+    pub(crate) fn find_file_list(&self, root: &[u8], extension: &[u8]) -> Option<Vec<Vec<u8>>> {
+        self.installed
+            .as_ref()?
+            .resource
+            .as_ref()
+            .map(|resource| resource.find_file_list(root, extension))
+    }
+
     /// Exact Release удаляет global pointer только если он был установлен.
     pub(crate) fn clear(&mut self) -> bool {
         self.installed.take().is_some()
@@ -271,6 +282,11 @@ impl ClientResource {
 
     pub(crate) fn is_file_exist(&self, path: &[u8]) -> bool {
         self.file_info(path).is_some()
+    }
+
+    /// Связывает `CClientResource::FindFileList` с owned `.ril` tree.
+    pub(crate) fn find_file_list(&self, root: &[u8], extension: &[u8]) -> Vec<Vec<u8>> {
+        self.files_info.find_file_list(root, extension)
     }
 
     /// Достижимая package-ветвь `rfOpen`: loose-файлы здесь намеренно не
@@ -536,7 +552,7 @@ fn package_path(root: &Path, file_name: &[u8]) -> PathBuf {
 
 // ============================================================================
 // FUNCTION: CClientResource::FindFileList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / ASCII_CONTRACT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\clientresource.cpp:1878
