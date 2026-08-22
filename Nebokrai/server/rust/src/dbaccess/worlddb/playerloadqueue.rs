@@ -73,6 +73,11 @@ impl PlayerLoadQueueEntry {
 }
 
 /// Исходный bool различал duplicate (`true`) и новую очередь (`false`).
+///
+/// `Duplicate` сохраняет incoming record до границы вызывающего owner-а:
+/// `CRsPlayer::GetPlayerData` немедленно освобождал его только на этой ветви,
+/// а queued record становился собственностью FIFO. Rust затем автоматически
+/// освобождает это значение у producer-а; ручной `operator_delete` не нужен.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerLoadPushOutcome {
     Queued,
@@ -166,7 +171,9 @@ fn format_player_load_log(entry: &PlayerLoadQueueEntry, suffix: &[u8]) -> Vec<u8
 }
 
 // IMPLEMENTED_OWNER: четыре owner-а выше сохраняют exact FIFO, first-match,
-// duplicate bool-смысл и синхронные `PutStringToFile` эффекты. Локальные STL,
+// duplicate bool-смысл и синхронные `PutStringToFile` эффекты. Для `Clear`
+// verified EXE удаляет все records под одним lock; ложный ранний return
+// Ghidra ниже является артефактом декомпиляции и не перенесён. Локальные STL,
 // allocator и Win32 lock internals заменены безопасными библиотечными типами.
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
@@ -177,7 +184,7 @@ fn format_player_load_log(entry: &PlayerLoadQueueEntry, suffix: &[u8]) -> Vec<u8
 
 // ============================================================================
 // FUNCTION: CPlayerLoadQueue::Clear
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\playerloadqueue.cpp:105
@@ -191,7 +198,7 @@ fn format_player_load_log(entry: &PlayerLoadQueueEntry, suffix: &[u8]) -> Vec<u8
 
 // ============================================================================
 // FUNCTION: CPlayerLoadQueue::~CPlayerLoadQueue
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\playerloadqueue.cpp:17
@@ -205,7 +212,7 @@ fn format_player_load_log(entry: &PlayerLoadQueueEntry, suffix: &[u8]) -> Vec<u8
 
 // ============================================================================
 // FUNCTION: CPlayerLoadQueue::RemovePlayerLoadData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\playerloadqueue.cpp:56
@@ -219,7 +226,7 @@ fn format_player_load_log(entry: &PlayerLoadQueueEntry, suffix: &[u8]) -> Vec<u8
 
 // ============================================================================
 // FUNCTION: CPlayerLoadQueue::PushPlayerLoadData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\playerloadqueue.cpp:23
@@ -233,7 +240,7 @@ fn format_player_load_log(entry: &PlayerLoadQueueEntry, suffix: &[u8]) -> Vec<u8
 
 // ============================================================================
 // FUNCTION: CPlayerLoadQueue::PopPlayerLoadDataToList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\playerloadqueue.cpp:78
