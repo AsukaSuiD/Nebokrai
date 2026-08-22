@@ -1163,7 +1163,9 @@
 //! сохраняет этот observable data-loss/FIFO контракт и продолжимый snapshot-
 //! checkpoint; typed Execute и connection open находятся в соседнем
 //! `writelogworker`.
-//! Внешние thread/exit/poll/reconnect-delay owners пока остаются RAW.
+//! Внешние thread/exit/poll owners пока остаются RAW. `ConnectLoginServerFunc`
+//! уже выражен awaitable retry-loop с exact 8-sec cadence; создание Win32
+//! thread handle остаётся отдельным owner-ом.
 //!
 //! `ResetHonorElimilateInfo` RVA `0x00014390` проходит `m_mPlayer` в map-order,
 //! сбрасывает достигнутые day/week/month counters по исходной mask-семантике,
@@ -2309,6 +2311,24 @@ pub(crate) trait WorldGameThreadRuntime: WorldGameReleaseContext {
 pub(crate) struct WorldLoginReconnect {
     /// Первый IPv4 endpoint, к которому подключён переданный FIFO client.
     pub(crate) endpoint: SocketAddrV4,
+}
+
+/// Итог awaitable-замены `ConnectLoginServerFunc`.
+///
+/// Причина неуспешных попыток исходной функцией не публиковалась: она знала
+/// только `ReConnectLoginServer == 1`, поэтому report сохраняет лишь число
+/// попыток и terminal state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldLoginReconnectWorkerOutcome {
+    /// Stop-флаг уже был установлен до первой паузы.
+    StoppedBeforeRetry,
+    /// Stop замечен после неуспешной попытки, как в условии старого цикла.
+    StoppedAfterFailedRetry { attempts: u32 },
+    /// Новое Login-соединение передано в World FIFO.
+    Reconnected {
+        attempts: u32,
+        reconnect: WorldLoginReconnect,
+    },
 }
 
 /// Успешно построенный и поставленный World CD-key snapshot.
@@ -11584,6 +11604,37 @@ impl CGame {
         server.publish_reconnected_login_client(client);
 
         Ok(WorldLoginReconnect { endpoint })
+    }
+
+    /// Выполняет точный retry-loop свободного `ConnectLoginServerFunc`.
+    ///
+    /// После начального stop-check каждая попытка всегда следует за полной
+    /// восьмисекундной паузой. Stop, пришедший во время паузы, намеренно не
+    /// отменяет следующую попытку: EXE проверял флаг только после её failure.
+    /// `ReConnectLoginServer`-ошибки остаются внутренней причиной следующего
+    /// retry и не получают нового observable error mapping.
+    pub(crate) async fn connect_login_server_func(
+        &mut self,
+        connect_thread_exit: &AtomicBool,
+    ) -> WorldLoginReconnectWorkerOutcome {
+        if connect_thread_exit.load(Ordering::Relaxed) {
+            return WorldLoginReconnectWorkerOutcome::StoppedBeforeRetry;
+        }
+
+        let mut attempts = 0_u32;
+        loop {
+            tokio::time::sleep(Duration::from_secs(8)).await;
+            attempts = attempts.wrapping_add(1);
+            if let Ok(reconnect) = self.reconnect_login_server().await {
+                return WorldLoginReconnectWorkerOutcome::Reconnected {
+                    attempts,
+                    reconnect,
+                };
+            }
+            if connect_thread_exit.load(Ordering::Relaxed) {
+                return WorldLoginReconnectWorkerOutcome::StoppedAfterFailedRetry { attempts };
+            }
+        }
     }
 
     /// Ставит LoginServer полный snapshot аккаунтов в порядке online-list.
@@ -21415,7 +21466,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: ConnectLoginServerFunc
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4883
@@ -21423,6 +21474,9 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 004033b0
 // PROTOTYPE: uint __stdcall ConnectLoginServerFunc(void * param_1)
 //
+// IMPLEMENTED_OWNER: `CGame::connect_login_server_func` выше. Tokio sleep
+// заменяет только `Sleep(8000)`, а AtomicBool — process-global exit flag;
+// initial/after-failure проверки, cadence и условие успеха сохранены.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
