@@ -43,7 +43,10 @@ use tokio::net::TcpStream;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 use crate::dbaccess::worlddb::rssetup::{WorldDatabaseSettings, WorldTdsClient};
-use crate::worldserver::appworld::message::writelogmessage::WorldWriteLogCommand;
+use crate::public::date::TagTime;
+use crate::worldserver::appworld::message::writelogmessage::{
+    WorldFairyLogEvent, WorldWriteLogCommand,
+};
 
 const INSERT_INCREMENT_LOG_SQL: &str = "INSERT INTO increment_log(\
     context_id,type,money,description,player_id,player_acc,player_lel,item_name,item_amount,ip_addr\
@@ -57,6 +60,23 @@ const INSERT_PLAIN_LOG_SQL: &str = "INSERT INTO log(\
 const INSERT_CIQING_LOG_SQL: &str = "INSERT INTO ciqinglog(\
     dwplayerid,dwInOut,dwType,dwBaseIndex,dwAmount\
 ) VALUES(@P1,@P2,@P3,@P4,@P5)";
+const INSERT_FAIRY_GROW_LOG_SQL: &str = "INSERT INTO fairy_grow_log(\
+    playerid,IsJingPo,goodsid,goodsname,curlevel,growtime\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6)";
+const INSERT_FAIRY_TAKE_LOG_SQL: &str = "INSERT INTO fairy_take_log(\
+    player_id,goodsid,goodsname,cur_level,grow_rate,main_fetch,combinatedTimes,timer\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8)";
+const INSERT_FAIRY_IMPLANTATION_LOG_SQL: &str = "INSERT INTO fairy_implantation_log(\
+    playerid,goodsid,goodsname,prelevel,curlevel,westdiamond,im_time\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7)";
+const INSERT_FAIRY_INCUBATE_LOG_SQL: &str = "INSERT INTO fairy_incubate_log(\
+    playerid,goodsid,goodsname,inc_time\
+) VALUES(@P1,@P2,@P3,@P4)";
+const INSERT_FAIRY_SYNCRETIZE_LOG_SQL: &str = "INSERT INTO fairy_syncretize_log(\
+    playerid,main_goodsid,main_goodsname,main_level,main_grow_rate,sec_goodsid,\
+    sec_goodsname,sec_level,sec_grow_rate,west_patch,child_main_ability,child_goodsid,\
+    child_goodsname,child_sy_times,child_row_rate,sy_time\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11,@P12,@P13,@P14,@P15,@P16)";
 
 /// Cloneable FIFO-owner для producer-а главного цикла и отдельного DB worker-а.
 ///
@@ -279,15 +299,7 @@ pub(crate) async fn execute_world_write_log_command(
             query.bind(i32::from(record.coordinate_x));
             query.bind(i32::from(record.coordinate_y));
             query.bind(record.event_type);
-            query.bind(format!(
-                "{}-{}-{} {}:{}:{}",
-                record.event_time.year,
-                record.event_time.day_of_week,
-                record.event_time.day,
-                record.event_time.hour,
-                record.event_time.minute,
-                record.event_time.second,
-            ));
+            query.bind(legacy_log_event_time(record.event_time));
             query.execute(connection).await?;
             Ok(())
         }
@@ -311,7 +323,127 @@ pub(crate) async fn execute_world_write_log_command(
             query.execute(connection).await?;
             Ok(())
         }
+        WorldWriteLogCommand::FairyLog(record) => {
+            let event_time = legacy_log_event_time(record.event_time);
+            match &record.event {
+                WorldFairyLogEvent::Grow {
+                    is_jing_po,
+                    goods_id,
+                    goods_name,
+                    current_level,
+                } => {
+                    let mut query = Query::new(INSERT_FAIRY_GROW_LOG_SQL);
+                    query.bind(record.player_id);
+                    query.bind(*is_jing_po);
+                    query.bind(decode_legacy_text(goods_id));
+                    query.bind(decode_legacy_text(goods_name));
+                    query.bind(*current_level);
+                    query.bind(event_time);
+                    query.execute(connection).await?;
+                }
+                WorldFairyLogEvent::Take {
+                    goods_id,
+                    goods_name,
+                    current_level,
+                    grow_rate_raw,
+                    main_fetch,
+                    combined_times,
+                } => {
+                    let mut query = Query::new(INSERT_FAIRY_TAKE_LOG_SQL);
+                    query.bind(record.player_id);
+                    query.bind(goods_id.to_string());
+                    query.bind(decode_legacy_text(goods_name));
+                    query.bind(*current_level);
+                    query.bind(legacy_fairy_rate(*grow_rate_raw));
+                    query.bind(*main_fetch);
+                    query.bind(*combined_times);
+                    query.bind(event_time);
+                    query.execute(connection).await?;
+                }
+                WorldFairyLogEvent::Implantation {
+                    goods_name,
+                    goods_id,
+                    previous_level,
+                    current_level,
+                    west_diamond,
+                } => {
+                    let mut query = Query::new(INSERT_FAIRY_IMPLANTATION_LOG_SQL);
+                    query.bind(record.player_id);
+                    query.bind(goods_id.to_string());
+                    query.bind(decode_legacy_text(goods_name));
+                    query.bind(*previous_level);
+                    query.bind(*current_level);
+                    query.bind(*west_diamond);
+                    query.bind(event_time);
+                    query.execute(connection).await?;
+                }
+                WorldFairyLogEvent::Incubate {
+                    goods_id,
+                    goods_name,
+                } => {
+                    let mut query = Query::new(INSERT_FAIRY_INCUBATE_LOG_SQL);
+                    query.bind(record.player_id);
+                    query.bind(goods_id.to_string());
+                    query.bind(decode_legacy_text(goods_name));
+                    query.bind(event_time);
+                    query.execute(connection).await?;
+                }
+                WorldFairyLogEvent::Syncretize {
+                    main_goods_id,
+                    main_goods_name,
+                    main_level,
+                    main_grow_rate_raw,
+                    secondary_goods_id,
+                    secondary_goods_name,
+                    secondary_level,
+                    secondary_grow_rate_raw,
+                    west_patch,
+                    child_goods_id,
+                    child_goods_name,
+                    child_main_ability,
+                    child_syncretize_times,
+                    child_grow_rate_raw,
+                } => {
+                    let mut query = Query::new(INSERT_FAIRY_SYNCRETIZE_LOG_SQL);
+                    query.bind(record.player_id);
+                    query.bind(main_goods_id.to_string());
+                    query.bind(decode_legacy_text(main_goods_name));
+                    query.bind(*main_level);
+                    query.bind(legacy_fairy_rate(*main_grow_rate_raw));
+                    query.bind(secondary_goods_id.to_string());
+                    query.bind(decode_legacy_text(secondary_goods_name));
+                    query.bind(*secondary_level);
+                    query.bind(legacy_fairy_rate(*secondary_grow_rate_raw));
+                    query.bind(*west_patch);
+                    query.bind(*child_main_ability);
+                    query.bind(child_goods_id.to_string());
+                    query.bind(decode_legacy_text(child_goods_name));
+                    query.bind(*child_syncretize_times);
+                    query.bind(legacy_fairy_rate(*child_grow_rate_raw));
+                    query.bind(event_time);
+                    query.execute(connection).await?;
+                }
+            }
+            Ok(())
+        }
     }
+}
+
+/// Повторяет ошибочную подстановку `wDayOfWeek` на месте месяца.
+fn legacy_log_event_time(time: TagTime) -> String {
+    format!(
+        "{}-{}-{} {}:{}:{}",
+        time.year, time.day_of_week, time.day, time.hour, time.minute, time.second,
+    )
+}
+
+/// Машина трактовала wire-long как unsigned, умножала на single `0.0001` и
+/// печатала `%10.4f`; bind получает то же числовое значение после округления.
+fn legacy_fairy_rate(raw: u32) -> f64 {
+    let single = (f64::from(raw) * f64::from(0.0001_f32)) as f32;
+    format!("{single:.4}")
+        .parse()
+        .expect("фиксированный формат конечного f32 обязан разбираться как f64")
 }
 
 fn decode_legacy_text(bytes: &[u8]) -> String {
@@ -324,5 +456,6 @@ fn world_write_log_command_name(command: &WorldWriteLogCommand) -> &'static str 
         WorldWriteLogCommand::CarriageLog(_) => "CarriageLog",
         WorldWriteLogCommand::PlainLog(_) => "PlainLog",
         WorldWriteLogCommand::CiqingLog(_) => "CiqingLog",
+        WorldWriteLogCommand::FairyLog(_) => "FairyLog",
     }
 }

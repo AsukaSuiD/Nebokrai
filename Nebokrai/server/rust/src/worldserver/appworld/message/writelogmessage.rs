@@ -2,8 +2,8 @@
 //!
 //! Весь dispatcher RVA `0x000A8AB0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме
 //! increment-shop `0x6020D`, carriage `0x6020E`, plain player log `0x6020F`,
-//! reserved no-op `0x60211..0x60213` и ciqing `0x60218` со статусом
-//! `IMPLEMENTED`. Точная пара:
+//! fairy `0x60210`, reserved no-op `0x60211..0x60213` и ciqing `0x60218` со
+//! статусом `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\writelogmessage.cpp:18`.
 //!
@@ -33,6 +33,16 @@
 //! штатное значение без ручного escaping. Donor-truncation `32/32/255` в
 //! машине отсутствует и не перенесена. Неэкранированные name/account оригинала
 //! также bind-ятся как данные: SQL breakage/injection не является контрактом.
+//! Ветка fairy `0x60210` по exact `0x004AA20C..0x004AA850` снимает время до
+//! заголовка, затем читает type/player и до subtype payload требует online
+//! player. Ошибки сохраняют исходные тексты `err:palyerid:%d is not online` и
+//! `fairy log ! err type:%d`; unsigned jump-table принимает только type `0..4`.
+//! Пять вариантов grow/take/implantation/incubate/syncretize сохраняют exact
+//! wire-порядок, GUID marker и границы строк `0x40/0x20`. Grow-rate читается как
+//! unsigned 32-bit, умножается на single `0.0001` и попадает в SQL с четырьмя
+//! знаками. Fairy-time сохраняет тот же наблюдаемый weekday-вместо-month quirk,
+//! что carriage. `CheckPoint` и неэкранированный grow goods-id заменены bind:
+//! SQL injection/breakage были внутренним дефектом, не контрактом Miracle.
 //! Exact outer jump-table VA `0x004AACA8` направляет все три wire ID
 //! `0x60211..0x60213` прямо в epilogue `0x004AAC87`; Rust поэтому считает их
 //! обработанными no-op, не создавая ложный pending owner. Ветка `0x60218` по
@@ -50,6 +60,7 @@ use std::net::Ipv4Addr;
 
 use crate::nets::networld::message::CMessage;
 use crate::public::date::TagTime;
+use crate::public::guid::CGuid;
 use crate::public::tools::put_string_to_file;
 use crate::worldserver::appworld::incrementlog::incrementlog::CIncrementLog;
 use crate::worldserver::worldserver::game::CGame;
@@ -58,6 +69,7 @@ use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 const INCREMENT_LOG_MESSAGE: i32 = 0x0006_020D;
 const CARRIAGE_LOG_MESSAGE: i32 = 0x0006_020E;
 const PLAIN_LOG_MESSAGE: i32 = 0x0006_020F;
+const FAIRY_LOG_MESSAGE: i32 = 0x0006_0210;
 const RESERVED_WRITE_LOG_MESSAGES: std::ops::RangeInclusive<i32> =
     0x0006_0211..=0x0006_0213;
 const CIQING_LOG_MESSAGE: i32 = 0x0006_0218;
@@ -107,6 +119,58 @@ pub(crate) struct WorldCiqingLogWrite {
     pub(crate) amount: i32,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct WorldFairyLogWrite {
+    pub(crate) player_id: i32,
+    pub(crate) event_time: TagTime,
+    pub(crate) event: WorldFairyLogEvent,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum WorldFairyLogEvent {
+    Grow {
+        is_jing_po: i32,
+        goods_id: Vec<u8>,
+        goods_name: Vec<u8>,
+        current_level: i32,
+    },
+    Take {
+        goods_id: CGuid,
+        goods_name: Vec<u8>,
+        current_level: i32,
+        grow_rate_raw: u32,
+        main_fetch: i32,
+        combined_times: i32,
+    },
+    Implantation {
+        goods_name: Vec<u8>,
+        goods_id: CGuid,
+        previous_level: i32,
+        current_level: i32,
+        west_diamond: i32,
+    },
+    Incubate {
+        goods_id: CGuid,
+        goods_name: Vec<u8>,
+    },
+    Syncretize {
+        main_goods_id: CGuid,
+        main_goods_name: Vec<u8>,
+        main_level: i32,
+        main_grow_rate_raw: u32,
+        secondary_goods_id: CGuid,
+        secondary_goods_name: Vec<u8>,
+        secondary_level: i32,
+        secondary_grow_rate_raw: u32,
+        west_patch: i32,
+        child_goods_id: CGuid,
+        child_goods_name: Vec<u8>,
+        child_main_ability: i32,
+        child_syncretize_times: i32,
+        child_grow_rate_raw: u32,
+    },
+}
+
 /// Typed очередь сохраняет старый FIFO, но оставляет SQL transport Tiberius-у.
 #[derive(Clone, Debug)]
 pub(crate) enum WorldWriteLogCommand {
@@ -114,6 +178,7 @@ pub(crate) enum WorldWriteLogCommand {
     CarriageLog(WorldCarriageLogWrite),
     PlainLog(WorldPlainLogWrite),
     CiqingLog(WorldCiqingLogWrite),
+    FairyLog(WorldFairyLogWrite),
 }
 
 #[derive(Debug)]
@@ -159,11 +224,45 @@ pub(crate) struct WorldCiqingLogMessageOutcome {
 }
 
 #[derive(Debug)]
+pub(crate) enum WorldFairyPayloadCompleteness {
+    Grow([bool; 4]),
+    Take([bool; 6]),
+    Implantation([bool; 5]),
+    Incubate([bool; 2]),
+    Syncretize([bool; 14]),
+}
+
+#[derive(Debug)]
+pub(crate) enum WorldFairyLogMessageOutcome {
+    Queued {
+        record: WorldFairyLogWrite,
+        header_complete: [bool; 2],
+        payload_complete: WorldFairyPayloadCompleteness,
+        queue_length_after: usize,
+    },
+    PlayerOffline {
+        fairy_type: i32,
+        player_id: i32,
+        event_time: TagTime,
+        header_complete: [bool; 2],
+        operator_log: AddLogTextDisposition,
+    },
+    InvalidType {
+        fairy_type: i32,
+        player_id: i32,
+        event_time: TagTime,
+        header_complete: [bool; 2],
+        operator_log: AddLogTextDisposition,
+    },
+}
+
+#[derive(Debug)]
 pub(crate) enum WorldWriteLogMessageOutcome {
     IncrementLog(WorldIncrementLogMessageOutcome),
     CarriageLog(WorldCarriageLogMessageOutcome),
     PlainLog(WorldPlainLogMessageOutcome),
     CiqingLog(WorldCiqingLogMessageOutcome),
+    FairyLog(WorldFairyLogMessageOutcome),
     ReservedNoOp { message_type: i32 },
 }
 
@@ -189,6 +288,11 @@ pub(crate) fn on_write_log_message(
     if message.message_type() == CIQING_LOG_MESSAGE {
         return WorldWriteLogMessageDispatch::Handled(WorldWriteLogMessageOutcome::CiqingLog(
             on_ciqing_log_message(game, message),
+        ));
+    }
+    if message.message_type() == FAIRY_LOG_MESSAGE {
+        return WorldWriteLogMessageDispatch::Handled(WorldWriteLogMessageOutcome::FairyLog(
+            on_fairy_log_message(game, add_log_text, message),
         ));
     }
     if message.message_type() == PLAIN_LOG_MESSAGE {
@@ -304,6 +408,193 @@ pub(crate) fn on_write_log_message(
     ))
 }
 
+fn on_fairy_log_message(
+    game: &CGame,
+    add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
+    mut message: CMessage,
+) -> WorldFairyLogMessageOutcome {
+    let event_time = TagTime::local_now();
+    let decoded_type = message.base_mut().get_long();
+    let decoded_player_id = message.base_mut().get_long();
+    let fairy_type = decoded_type.unwrap_or(0);
+    let player_id = decoded_player_id.unwrap_or(0);
+    let header_complete = [decoded_type.is_some(), decoded_player_id.is_some()];
+
+    if game.map_player(player_id as u32).is_none() {
+        let text = format!("err:palyerid:{player_id} is not online").into_bytes();
+        return WorldFairyLogMessageOutcome::PlayerOffline {
+            fairy_type,
+            player_id,
+            event_time,
+            header_complete,
+            operator_log: add_log_text(&text),
+        };
+    }
+
+    let (event, payload_complete) = match fairy_type {
+        0 => {
+            let is_jing_po = message.base_mut().get_long();
+            let (goods_id, goods_id_complete) = get_limited_string(&mut message, 0x40);
+            let (goods_name, goods_name_complete) = get_limited_string(&mut message, 0x20);
+            let current_level = message.base_mut().get_long();
+            (
+                WorldFairyLogEvent::Grow {
+                    is_jing_po: is_jing_po.unwrap_or(0),
+                    goods_id,
+                    goods_name,
+                    current_level: current_level.unwrap_or(0),
+                },
+                WorldFairyPayloadCompleteness::Grow([
+                    is_jing_po.is_some(),
+                    goods_id_complete,
+                    goods_name_complete,
+                    current_level.is_some(),
+                ]),
+            )
+        }
+        1 => {
+            let (goods_id, goods_id_complete) = get_guid(&mut message);
+            let (goods_name, goods_name_complete) = get_limited_string(&mut message, 0x20);
+            let current_level = message.base_mut().get_long();
+            let grow_rate = message.base_mut().get_long();
+            let main_fetch = message.base_mut().get_long();
+            let combined_times = message.base_mut().get_long();
+            (
+                WorldFairyLogEvent::Take {
+                    goods_id,
+                    goods_name,
+                    current_level: current_level.unwrap_or(0),
+                    grow_rate_raw: grow_rate.unwrap_or(0) as u32,
+                    main_fetch: main_fetch.unwrap_or(0),
+                    combined_times: combined_times.unwrap_or(0),
+                },
+                WorldFairyPayloadCompleteness::Take([
+                    goods_id_complete,
+                    goods_name_complete,
+                    current_level.is_some(),
+                    grow_rate.is_some(),
+                    main_fetch.is_some(),
+                    combined_times.is_some(),
+                ]),
+            )
+        }
+        2 => {
+            let (goods_name, goods_name_complete) = get_limited_string(&mut message, 0x20);
+            let (goods_id, goods_id_complete) = get_guid(&mut message);
+            let previous_level = message.base_mut().get_long();
+            let current_level = message.base_mut().get_long();
+            let west_diamond = message.base_mut().get_long();
+            (
+                WorldFairyLogEvent::Implantation {
+                    goods_name,
+                    goods_id,
+                    previous_level: previous_level.unwrap_or(0),
+                    current_level: current_level.unwrap_or(0),
+                    west_diamond: west_diamond.unwrap_or(0),
+                },
+                WorldFairyPayloadCompleteness::Implantation([
+                    goods_name_complete,
+                    goods_id_complete,
+                    previous_level.is_some(),
+                    current_level.is_some(),
+                    west_diamond.is_some(),
+                ]),
+            )
+        }
+        3 => {
+            let (goods_id, goods_id_complete) = get_guid(&mut message);
+            let (goods_name, goods_name_complete) = get_limited_string(&mut message, 0x20);
+            (
+                WorldFairyLogEvent::Incubate {
+                    goods_id,
+                    goods_name,
+                },
+                WorldFairyPayloadCompleteness::Incubate([
+                    goods_id_complete,
+                    goods_name_complete,
+                ]),
+            )
+        }
+        4 => {
+            let (main_goods_id, main_goods_id_complete) = get_guid(&mut message);
+            let (main_goods_name, main_goods_name_complete) =
+                get_limited_string(&mut message, 0x20);
+            let main_level = message.base_mut().get_long();
+            let main_grow_rate = message.base_mut().get_long();
+            let (secondary_goods_id, secondary_goods_id_complete) = get_guid(&mut message);
+            let (secondary_goods_name, secondary_goods_name_complete) =
+                get_limited_string(&mut message, 0x20);
+            let secondary_level = message.base_mut().get_long();
+            let secondary_grow_rate = message.base_mut().get_long();
+            let west_patch = message.base_mut().get_long();
+            let (child_goods_id, child_goods_id_complete) = get_guid(&mut message);
+            let (child_goods_name, child_goods_name_complete) =
+                get_limited_string(&mut message, 0x20);
+            let child_main_ability = message.base_mut().get_long();
+            let child_syncretize_times = message.base_mut().get_long();
+            let child_grow_rate = message.base_mut().get_long();
+            (
+                WorldFairyLogEvent::Syncretize {
+                    main_goods_id,
+                    main_goods_name,
+                    main_level: main_level.unwrap_or(0),
+                    main_grow_rate_raw: main_grow_rate.unwrap_or(0) as u32,
+                    secondary_goods_id,
+                    secondary_goods_name,
+                    secondary_level: secondary_level.unwrap_or(0),
+                    secondary_grow_rate_raw: secondary_grow_rate.unwrap_or(0) as u32,
+                    west_patch: west_patch.unwrap_or(0),
+                    child_goods_id,
+                    child_goods_name,
+                    child_main_ability: child_main_ability.unwrap_or(0),
+                    child_syncretize_times: child_syncretize_times.unwrap_or(0),
+                    child_grow_rate_raw: child_grow_rate.unwrap_or(0) as u32,
+                },
+                WorldFairyPayloadCompleteness::Syncretize([
+                    main_goods_id_complete,
+                    main_goods_name_complete,
+                    main_level.is_some(),
+                    main_grow_rate.is_some(),
+                    secondary_goods_id_complete,
+                    secondary_goods_name_complete,
+                    secondary_level.is_some(),
+                    secondary_grow_rate.is_some(),
+                    west_patch.is_some(),
+                    child_goods_id_complete,
+                    child_goods_name_complete,
+                    child_main_ability.is_some(),
+                    child_syncretize_times.is_some(),
+                    child_grow_rate.is_some(),
+                ]),
+            )
+        }
+        _ => {
+            let text = format!("fairy log ! err type:{fairy_type}").into_bytes();
+            return WorldFairyLogMessageOutcome::InvalidType {
+                fairy_type,
+                player_id,
+                event_time,
+                header_complete,
+                operator_log: add_log_text(&text),
+            };
+        }
+    };
+
+    let record = WorldFairyLogWrite {
+        player_id,
+        event_time,
+        event,
+    };
+    let queue_length_after =
+        game.push_write_log_command(WorldWriteLogCommand::FairyLog(record.clone()));
+    WorldFairyLogMessageOutcome::Queued {
+        record,
+        header_complete,
+        payload_complete,
+        queue_length_after,
+    }
+}
+
 fn on_ciqing_log_message(game: &CGame, mut message: CMessage) -> WorldCiqingLogMessageOutcome {
     let player_id = message.base_mut().get_long();
     let in_out = message.base_mut().get_long();
@@ -413,6 +704,22 @@ fn get_limited_string(message: &mut CMessage, maximum: usize) -> (Vec<u8>, bool)
         .base_mut()
         .get_str_bytes(maximum)
         .unwrap_or_default();
+    (value, complete)
+}
+
+fn get_guid(message: &mut CMessage) -> (CGuid, bool) {
+    let complete = {
+        let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+        match wire.get(*cursor).copied() {
+            Some(0) => true,
+            Some(_) => wire.len().saturating_sub(*cursor) >= 17,
+            None => false,
+        }
+    };
+    let value = message
+        .base_mut()
+        .get_guid()
+        .unwrap_or(CGuid::GUID_INVALID);
     (value, complete)
 }
 
