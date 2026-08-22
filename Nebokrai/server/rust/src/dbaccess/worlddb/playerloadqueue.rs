@@ -55,6 +55,11 @@ impl PlayerLoadQueueEntry {
         Some(&self.cdkey[..end])
     }
 
+    /// Копирует весь exact fixed buffer для следующего queue-record owner-а.
+    pub(crate) const fn fixed_cdkey(&self) -> [u8; PLAYER_LOAD_CDKEY_CAPACITY] {
+        self.cdkey
+    }
+
     pub(crate) const fn player_id(&self) -> i32 {
         self.player_id
     }

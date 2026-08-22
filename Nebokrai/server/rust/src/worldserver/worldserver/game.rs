@@ -68,6 +68,7 @@
 //! `CGame::GeterateRegionDBData` RVA `0x00012860`,
 //! `SaveThreadFunc` RVA `0x00001E30`, полный `CGame::AI` RVA `0x000148A0`,
 //! полный `CGame::ProcessPlayerDataQueue` RVA `0x00013BD0`,
+//! worker `LoadPlayerDataFromDB` RVA `0x000092C0`,
 //! `CGame::ProcessTimeOutLoginPlayer` RVA `0x00014A60` и весь достигнутый
 //! `CGame::MainLoop` RVA `0x00019A00` — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
@@ -807,6 +808,17 @@
 //! Record с `szCdkey[20]` без NUL блокируется сразу после pop: исходные
 //! `CBaseMessage::Add(char*)` читали бы за fixed buffer, а наблюдаемая реакция
 //! такого повреждённого producer-state не доказана.
+//! `LoadPlayerDataFromDB` проверяет game-exit перед player-load-exit, делает
+//! `Sleep(1)`, атомарно дренирует всю load FIFO и последовательно обрабатывает
+//! каждый non-null record с ненулевым ID. Успех и DB-failure одинаково создают
+//! data-record; failure несёт nullable player и поэтому позднее даёт `0x1C`.
+//! Largess вызывается после DB-load и до публикации в data FIFO, start/end logs
+//! используют два отдельных `timeGetTime` с wrapping elapsed. Exact
+//! disassembly `0x0040952F..0x00409544` восстановил скрытый переход к следующей
+//! list-записи, а `0x0040958B..0x00409599` — внешний polling-loop; Ghidra
+//! ошибочно считала оба `operator delete` call-site терминаторами. Rust Drop
+//! исправляет только утечки invalid/raw-pointer records, Tokio timer заменяет
+//! `Sleep`, а async DB-load остаётся явным соседним owner-контрактом.
 //! MainLoop использует назначенный предыдущей стадией shared tick, добавляет
 //! wrapping elapsed в `DAT_0056e524` и отдельным tick начинает сырой
 //! `CTimer::Run`; при safe block эти недостигнутые clock-эффекты не создаются.
@@ -990,6 +1002,7 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::time::Duration;
 
 use parking_lot::Mutex;
 use rustix::system::uname;
@@ -1003,7 +1016,9 @@ use crate::dbaccess::worlddb::dbmisc::{
     DbMiscLoadAuctionReport,
 };
 use crate::dbaccess::worlddb::largess::LargessOwner;
-use crate::dbaccess::worlddb::playerdataqueue::CPlayerDataQueue;
+use crate::dbaccess::worlddb::playerdataqueue::{
+    CPlayerDataQueue, PlayerDataQueueEntry,
+};
 use crate::dbaccess::worlddb::playerloadqueue::{
     CPlayerLoadQueue, PLAYER_LOAD_CDKEY_CAPACITY, PlayerLoadPushOutcome,
     PlayerLoadQueueEntry,
@@ -2881,6 +2896,67 @@ pub(crate) struct WorldPlayerLoadRequestBlock {
 pub(crate) enum WorldPlayerLoadRequestOutcome {
     Queued,
     Duplicate,
+}
+
+/// Async DB-owner, которому worker передаёт уже инициализированный `CPlayer`.
+pub(crate) trait WorldPlayerDataLoadOwner {
+    fn load_player_data<'a>(
+        &'a mut self,
+        player: &'a mut CPlayer,
+    ) -> impl Future<Output = bool> + 'a;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldPlayerLoadBatchRecordOutcome {
+    SkippedZeroPlayerId,
+    Loaded,
+    LoadFailed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerLoadBatchRecordReport {
+    pub(crate) player_id: i32,
+    pub(crate) client_ip: u32,
+    pub(crate) started_at_ms: Option<u32>,
+    pub(crate) finished_at_ms: Option<u32>,
+    pub(crate) elapsed_ms: Option<u32>,
+    pub(crate) outcome: WorldPlayerLoadBatchRecordOutcome,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerLoadBatchReport {
+    pub(crate) worker_index: u32,
+    pub(crate) drained_records: usize,
+    pub(crate) records: Vec<WorldPlayerLoadBatchRecordReport>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerLoadBatchBlock {
+    pub(crate) worker_index: u32,
+    pub(crate) player_id: i32,
+    pub(crate) processed_records: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldPlayerLoadWorkerExit {
+    GameThread,
+    PlayerLoadThreads,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerLoadWorkerReport {
+    pub(crate) worker_index: u32,
+    pub(crate) completed_batches: u32,
+    pub(crate) drained_records: u32,
+    pub(crate) exit: WorldPlayerLoadWorkerExit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerLoadWorkerBlock {
+    pub(crate) worker_index: u32,
+    pub(crate) completed_batches: u32,
+    pub(crate) drained_records: u32,
+    pub(crate) source: WorldPlayerLoadBatchBlock,
 }
 
 /// Профилированная `DAT_0056e524` стадия перед `CTimer::Run`.
@@ -13724,6 +13800,179 @@ impl CGame {
         })
     }
 
+    /// Выполняет один точный drain/process batch фонового DB-load worker-а.
+    ///
+    /// Несколько worker-ов конкурируют только за атомарный drain очереди; один
+    /// победитель последовательно обрабатывает весь полученный FIFO-list.
+    pub(crate) async fn process_player_load_batch<Loader, LoadLargess, GetTick>(
+        &self,
+        worker_index: u32,
+        loader: &mut Loader,
+        load_largess: &mut LoadLargess,
+        mut get_tick: GetTick,
+    ) -> Result<WorldPlayerLoadBatchReport, WorldPlayerLoadBatchBlock>
+    where
+        Loader: WorldPlayerDataLoadOwner + ?Sized,
+        LoadLargess: FnMut(&mut CPlayer) + ?Sized,
+        GetTick: FnMut() -> u32,
+    {
+        let mut drained = self.player_load_queue.pop_player_load_data_to_list();
+        let drained_records = drained.len();
+        if drained_records != 0 {
+            put_string_to_file(
+                "TemptLoadDataLog",
+                format!(
+                    "Thread {} Need To Process {} DB Request.",
+                    worker_index as i32,
+                    drained_records as u32 as i32,
+                )
+                .as_bytes(),
+            );
+        }
+
+        let mut records = Vec::with_capacity(drained_records);
+        while let Some(entry) = drained.pop_front() {
+            let player_id = entry.player_id();
+            let client_ip = entry.client_ip();
+            if player_id == 0 {
+                records.push(WorldPlayerLoadBatchRecordReport {
+                    player_id,
+                    client_ip,
+                    started_at_ms: None,
+                    finished_at_ms: None,
+                    elapsed_ms: None,
+                    outcome: WorldPlayerLoadBatchRecordOutcome::SkippedZeroPlayerId,
+                });
+                continue;
+            }
+            let Some(account) = entry.cdkey().map(<[u8]>::to_vec) else {
+                return Err(WorldPlayerLoadBatchBlock {
+                    worker_index,
+                    player_id,
+                    processed_records: records.len(),
+                });
+            };
+
+            let started_at_ms = get_tick();
+            put_string_to_file(
+                "TemptLoadDataLog",
+                format!(
+                    "{} Request Read DB Start. (PID:{})",
+                    player_id, worker_index as i32,
+                )
+                .as_bytes(),
+            );
+
+            let mut player = Box::new(CPlayer::with_clone_decode_constructor_state());
+            player.set_database_load_identity(player_id, &account);
+            let loaded = loader.load_player_data(&mut player).await;
+            let mut player = if loaded {
+                Some(player)
+            } else {
+                put_string_to_file(
+                    "debug-DB",
+                    format!("Read Player DB Error. (ID:{player_id})").as_bytes(),
+                );
+                None
+            };
+
+            if let Some(player) = player.as_deref_mut() {
+                load_largess(player);
+            }
+            let fixed_account = entry.fixed_cdkey();
+            let _ = self.player_data_queue.push_player_data(PlayerDataQueueEntry::new(
+                fixed_account,
+                player_id as u32,
+                client_ip,
+                player,
+            ));
+
+            let finished_at_ms = get_tick();
+            let elapsed_ms = finished_at_ms.wrapping_sub(started_at_ms);
+            put_string_to_file(
+                "TemptLoadDataLog",
+                format!(
+                    "{} Read DB End. (PID:{}) (time:{})",
+                    player_id, worker_index as i32, elapsed_ms,
+                )
+                .as_bytes(),
+            );
+            records.push(WorldPlayerLoadBatchRecordReport {
+                player_id,
+                client_ip,
+                started_at_ms: Some(started_at_ms),
+                finished_at_ms: Some(finished_at_ms),
+                elapsed_ms: Some(elapsed_ms),
+                outcome: if loaded {
+                    WorldPlayerLoadBatchRecordOutcome::Loaded
+                } else {
+                    WorldPlayerLoadBatchRecordOutcome::LoadFailed
+                },
+            });
+        }
+
+        Ok(WorldPlayerLoadBatchReport {
+            worker_index,
+            drained_records,
+            records,
+        })
+    }
+
+    /// Повторяет polling-loop `LoadPlayerDataFromDB` до одного из двух flags.
+    pub(crate) async fn run_player_load_worker<Loader, LoadLargess, GetTick>(
+        &self,
+        worker_index: u32,
+        game_thread_exit: &AtomicBool,
+        player_load_threads_exit: &AtomicBool,
+        loader: &mut Loader,
+        load_largess: &mut LoadLargess,
+        mut get_tick: GetTick,
+    ) -> Result<WorldPlayerLoadWorkerReport, WorldPlayerLoadWorkerBlock>
+    where
+        Loader: WorldPlayerDataLoadOwner + ?Sized,
+        LoadLargess: FnMut(&mut CPlayer) + ?Sized,
+        GetTick: FnMut() -> u32,
+    {
+        let mut completed_batches = 0_u32;
+        let mut drained_records = 0_u32;
+        loop {
+            if game_thread_exit.load(Ordering::Relaxed) {
+                return Ok(WorldPlayerLoadWorkerReport {
+                    worker_index,
+                    completed_batches,
+                    drained_records,
+                    exit: WorldPlayerLoadWorkerExit::GameThread,
+                });
+            }
+            if player_load_threads_exit.load(Ordering::Relaxed) {
+                return Ok(WorldPlayerLoadWorkerReport {
+                    worker_index,
+                    completed_batches,
+                    drained_records,
+                    exit: WorldPlayerLoadWorkerExit::PlayerLoadThreads,
+                });
+            }
+
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            let batch = self
+                .process_player_load_batch(
+                    worker_index,
+                    loader,
+                    load_largess,
+                    &mut get_tick,
+                )
+                .await
+                .map_err(|source| WorldPlayerLoadWorkerBlock {
+                    worker_index,
+                    completed_batches,
+                    drained_records,
+                    source,
+                })?;
+            completed_batches = completed_batches.wrapping_add(1);
+            drained_records = drained_records.wrapping_add(batch.drained_records as u32);
+        }
+    }
+
     /// Удаляет первую login-запись с указанным ID либо сохраняет список.
     pub(crate) fn remove_login_player(&mut self, player_id: u32) -> bool {
         let Some(index) = self
@@ -19288,7 +19537,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: LoadPlayerDataFromDB
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5119
@@ -19296,6 +19545,9 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 004092c0
 // PROTOTYPE: uint __stdcall LoadPlayerDataFromDB(void * param_1)
 //
+// Реализация находится в `run_player_load_worker` и
+// `process_player_load_batch` выше; `CPlayer::LoadData` передан отдельному
+// async owner-у и не подменён заглушкой.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

@@ -1837,6 +1837,13 @@ impl CPlayer {
             .write_u32(BASE_PROPERTY_JJC_LEVEL_OFFSET, 1000);
     }
 
+    /// Применяет две записи worker-а перед обязательным `LoadData`.
+    pub(crate) fn set_database_load_identity(&mut self, player_id: i32, account: &[u8]) {
+        self.set_id(player_id);
+        self.base_property.account.clear();
+        self.base_property.account.extend_from_slice(account);
+    }
+
     /// Повторяет `CPlayer::GetMoney` RVA `0x0005AEA0` через wallet-owner.
     pub(crate) const fn money(&self) -> u32 {
         self.wallet.get_gold_coins_amount()
