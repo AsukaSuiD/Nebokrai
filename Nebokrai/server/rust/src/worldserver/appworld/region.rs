@@ -38,6 +38,14 @@
 //! World EXE и не переносится. Rust сохраняет exact порядок уже применённых
 //! base/scalar-изменений и cursor; чтение за концом input либо небезопасная
 //! размерная арифметика остаётся typed safe-границей.
+//! `Save` строит relative path `regions/{signed ID}.rgn`, открывает его в
+//! truncate/write-режиме и только после удачного открытия присваивает это имя
+//! region-у. Результаты всех legacy `fwrite` игнорируются, поэтому Rust также
+//! выполняет все записи и сохраняет result `1` после успешного открытия; сбой
+//! создания файла возвращает `0`. Явный runtime directory заменяет process
+//! current directory, не меняя самого relative path и file-layout.
+//! Число switches, невозможное для 32-bit `int`, останавливается typed
+//! границей до открытия файла; legacy не мог материализовать такой vector.
 //! `GetRandomPosInRange` сохраняет сначала 1000 случайных попыток, затем scan
 //! X-снаружи/Y-внутри и расширение прямоугольника на 10 клеток с каждой
 //! стороны. `VERIFIED_DISASSEMBLY` по `0x004D6BA3/0x004D6C14` подтверждает, что
@@ -49,6 +57,10 @@
 //! размеры или координатная арифметика останавливают только safe-границу с
 //! локальным `BLOCKED_MISSING_FACT`. CRT/STL allocation и cleanup-noise выражены
 //! владением Rust и отдельно не восстанавливаются.
+
+use std::fs::File;
+use std::io::Write;
+use std::path::Path;
 
 use super::baseobject::{BaseObjectDecodeError, CBaseObject};
 
@@ -248,6 +260,42 @@ impl CRegion {
             }
         }
         Ok(true)
+    }
+
+    /// Сохраняет exact resource-layout в `regions/{signed ID}.rgn`.
+    ///
+    /// Возвращает legacy `0` только если файл не удалось открыть; ошибки
+    /// отдельных записей намеренно не меняют result после успешного открытия.
+    pub(crate) fn save_to_resource_directory(
+        &mut self,
+        runtime_directory: &Path,
+    ) -> Result<i32, RegionSerializationBlock> {
+        let switch_count = i32::try_from(self.switches.len()).map_err(|_| {
+            RegionSerializationBlock::TooManySwitches {
+                count: self.switches.len(),
+            }
+        })?;
+        let relative_path = format!("regions/{}.rgn", self.get_id());
+        let path = runtime_directory.join(&relative_path);
+        let Ok(mut file) = File::create(path) else {
+            return Ok(0);
+        };
+
+        self.file_name.clear();
+        self.file_name.extend_from_slice(relative_path.as_bytes());
+        let _ = file.write_all(REGION_RESOURCE_HEADER);
+        let _ = file.write_all(&REGION_RESOURCE_VERSION.to_le_bytes());
+        let _ = file.write_all(&self.region_type.to_le_bytes());
+        let _ = file.write_all(&self.width.to_le_bytes());
+        let _ = file.write_all(&self.height.to_le_bytes());
+        for cell in &self.cells {
+            let _ = file.write_all(cell);
+        }
+        let _ = file.write_all(&switch_count.to_le_bytes());
+        for region_switch in &self.switches {
+            let _ = file.write_all(region_switch);
+        }
+        Ok(1)
     }
 
     /// Дописывает полный region-base wire после унаследованного `CBaseObject`.
@@ -587,7 +635,7 @@ fn read_region_bytes<'a>(
 
 // ============================================================================
 // FUNCTION: CRegion::Save
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\region.cpp:85
