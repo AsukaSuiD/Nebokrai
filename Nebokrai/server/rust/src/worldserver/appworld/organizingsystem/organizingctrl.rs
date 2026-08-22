@@ -45,6 +45,7 @@
 //! `ReInitialFacFactionByLvl` RVA
 //! `0x00034C80` и `AddUnionToClientByFactionID` RVA `0x00038010` —
 //! `IMPLEMENTED`; `PushToEstaList` RVA `0x000367C0` и оба overload-а
+//! `Release` RVA `0x00036F40` — `IMPLEMENTED`;
 //! `SendOrgaInfoToClient` RVA `0x00033750/0x00033840`, billboard serializer-ы
 //! RVA `0x000339D0/0x00033A50/0x00033AD0/0x00033CC0`, три stat-owner-а
 //! RVA `0x0003AC70/0x0003B050/0x0003B430`, `TransferIOwnerCity` RVA
@@ -3278,6 +3279,16 @@ impl COrganizingCtrl {
             new_day_time: TagTime::from_fields([0, 0, 0, 0, 14, 15, 0, 0]),
             new_day_event_id: None,
         }
+    }
+
+    /// Безопасный lifecycle-эквивалент `COrganizingCtrl::Release`.
+    ///
+    /// Raw сначала удалял все ненулевые faction/union pointer-ы, затем удалял
+    /// собственный singleton. Потребление `self` даёт тот же конец владения и
+    /// освобождает также пустые очереди/снимки через `Drop`, не оставляя
+    /// висячий singleton или повторный `Release` после self-delete.
+    pub(crate) fn release(self) {
+        drop(self);
     }
 
     /// Ставит первый `OnNewDay` на ближайшую полночь exact `Initialize`.
@@ -9194,7 +9205,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::Release
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:143
@@ -9202,6 +9213,9 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00436f40
 // PROTOTYPE: void __thiscall Release(void)
 //
+// IMPLEMENTED_OWNER: `COrganizingCtrl::release` выше. Rust потребляет owner,
+// а `Drop` освобождает все map/list owner-ы; raw self-delete и dangling
+// singleton устранены как внутренние lifetime-дефекты.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
