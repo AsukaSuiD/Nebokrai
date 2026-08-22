@@ -5,9 +5,11 @@
 //! `0x000A2090/0x000A21D0/0x000A22C0`, `DeleteOneMember` `0x000A27A0` и
 //! `InsertOneFaction` `0x000A2960`, `MkOne` `0x000A2B60`, `FactionWin`
 //! `0x000A2BD0`, `DelOneFactionfCount` `0x000A1FA0` и
-//! `DeleteMembersByFactionId` `0x000A2850`, `IsInFactionIdList` `0x000A2760`
-//! и destructor `0x000A29C0`, `reInitDB` `0x000A22E0` имеют статус
-//! `IMPLEMENTED`; остальные mutations ниже пока `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `DeleteMembersByFactionId` `0x000A2850`, `IsInFactionIdList` `0x000A2760`,
+//! destructor `0x000A29C0`, `reInitDB` `0x000A22E0` и все достигнутые
+//! mutation/refresh/faction-win маршруты имеют статус `IMPLEMENTED`.
+//! Оставшийся `UNKNOWN` (исследовательский декомпилят хранится локально) относится только к COM/SEH cleanup-фрагментам,
+//! не образующим самостоятельного игрового owner-а.
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 //!
