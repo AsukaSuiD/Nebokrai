@@ -388,22 +388,19 @@ pub(crate) fn on_msg_s2w_auction(
             let requested_goods = message.base_mut().get_long().unwrap_or(0);
             let money_limit = message.base_mut().get_long().unwrap_or(0);
 
-            let loaded_back = db_misc_context.load_owner_auction_goods(
-                owner_id,
-                GoodsState::BACK.raw(),
-                requested_goods,
-            );
+            let loaded_back =
+                db_misc.load_owner_back_goods(db_misc_context, owner_id, requested_goods);
             let (loaded_undo, loaded_succeeded) = if loaded_back < requested_goods {
                 let remaining_after_back = requested_goods - loaded_back;
-                let loaded_undo = db_misc_context.load_owner_auction_goods(
+                let loaded_undo = db_misc.load_owner_undo_goods(
+                    db_misc_context,
                     owner_id,
-                    GoodsState::UNDO.raw(),
                     remaining_after_back,
                 );
                 let loaded_succeeded = (loaded_undo < remaining_after_back).then(|| {
-                    db_misc_context.load_owner_auction_goods(
+                    db_misc.load_owner_succ_goods(
+                        db_misc_context,
                         owner_id,
-                        GoodsState::SUCESSED.raw(),
                         remaining_after_back - loaded_undo,
                     )
                 });
@@ -411,7 +408,7 @@ pub(crate) fn on_msg_s2w_auction(
             } else {
                 (None, None)
             };
-            db_misc_context.load_owner_auction_money(owner_id, money_limit);
+            db_misc.load_money_by_id(db_misc_context, owner_id, money_limit);
 
             WorldServerAuctionMessageDispatch::Handled(
                 WorldServerAuctionMessageOutcome::AuctionReturnsLoaded {

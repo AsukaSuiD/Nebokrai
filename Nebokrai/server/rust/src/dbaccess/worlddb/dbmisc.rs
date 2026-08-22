@@ -3,7 +3,9 @@
 //! Статус владельца: `IMPLEMENTED` для `DbNote`, constructor/lifecycle очередей,
 //! `PushItemToListIn/Out`, `PopItemFromListIn/Out`, трёх
 //! `DoneOT_IN_*`, `DoneListIn`, `DoneOutList`, `PopPlayerList` и достигнутой
-//! части `LoadAuction`; остальные SQL/load-функции ниже остаются
+//! части `LoadAuction`, а также caller-контрактов `LoadOwnerBackGoods`,
+//! `LoadOwnerUndoGoods`, `LoadOwnerSuccGoods` и `LoadMoneyById`; остальные
+//! SQL/load-функции ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально).
 //!
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
@@ -52,6 +54,11 @@
 //! аналогично возвращают весь ещё не обработанный batch вызывающему. Lock,
 //! allocation, COM AddRef, deleting destructors и STL cleanup выражены
 //! владением Rust и узкими callbacks, а не отдельной имитацией библиотек.
+//! `LoadOwner*Goods` остаются тонкими переходами к одному concrete DB context:
+//! они не переупорядочивают SQL read, не интерпретируют join-строки и передают
+//! назад именно число `CGoodsNode`, которое необходимо caller-у для следующего
+//! остатка лимита. `LoadMoneyById` намеренно не возвращает значение, поскольку
+//! его исходный caller его не использует.
 
 use std::collections::VecDeque;
 
@@ -531,6 +538,61 @@ impl CDbMisc {
         DbMiscLoadAuctionReport::RefilledOwners {
             count: self.auction_batch.len(),
         }
+    }
+
+    /// Exact общий owner-read, которому принадлежат state и limit аргументы.
+    ///
+    /// Materialization строк `Auction/AuctionGoods` и публикация output note
+    /// остаются в concrete DB context; `CDbMisc` сохраняет сам caller-contract
+    /// и число созданных `CGoodsNode`.
+    pub(crate) fn load_goods_by_owner_id(
+        &self,
+        context: &mut impl DbMiscContext,
+        owner_id: i32,
+        state: GoodsState,
+        limit: i32,
+    ) -> i32 {
+        context.load_owner_auction_goods(owner_id, state.raw(), limit)
+    }
+
+    /// Exact `LoadOwnerBackGoods(owner, limit)`, state `3`.
+    pub(crate) fn load_owner_back_goods(
+        &self,
+        context: &mut impl DbMiscContext,
+        owner_id: i32,
+        limit: i32,
+    ) -> i32 {
+        self.load_goods_by_owner_id(context, owner_id, GoodsState::BACK, limit)
+    }
+
+    /// Exact `LoadOwnerUndoGoods(owner, limit)`, state `4`.
+    pub(crate) fn load_owner_undo_goods(
+        &self,
+        context: &mut impl DbMiscContext,
+        owner_id: i32,
+        limit: i32,
+    ) -> i32 {
+        self.load_goods_by_owner_id(context, owner_id, GoodsState::UNDO, limit)
+    }
+
+    /// Exact `LoadOwnerSuccGoods(owner, limit)`, state `2`.
+    pub(crate) fn load_owner_succ_goods(
+        &self,
+        context: &mut impl DbMiscContext,
+        owner_id: i32,
+        limit: i32,
+    ) -> i32 {
+        self.load_goods_by_owner_id(context, owner_id, GoodsState::SUCESSED, limit)
+    }
+
+    /// Exact `LoadMoneyById`; original caller намеренно игнорировал return.
+    pub(crate) fn load_money_by_id(
+        &self,
+        context: &mut impl DbMiscContext,
+        owner_id: i32,
+        money_limit: i32,
+    ) {
+        context.load_owner_auction_money(owner_id, money_limit);
     }
 }
 
