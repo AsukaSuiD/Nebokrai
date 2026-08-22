@@ -2681,6 +2681,30 @@ const _: () = {
     assert!(offset_of!(TagLeaveWord, content) == 0x2C);
 };
 
+/// Поля одной строки `CSL_FACTION_BaseProperty`, которые exact
+/// `CRsFaction::LoadFactionProperty` присваивает после public-конструктора
+/// `CFaction`.
+pub(crate) struct FactionDatabaseBaseState {
+    pub(crate) faction_id: i32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) master_id: i32,
+    pub(crate) established_time: TagTimeValue,
+    pub(crate) level: i32,
+    pub(crate) experience: i32,
+    pub(crate) offense_victor_counts: i32,
+    pub(crate) defence_victor_counts: i32,
+    pub(crate) village_war_victor_counts: i32,
+    pub(crate) member_count: i32,
+    pub(crate) union_id: i32,
+    pub(crate) permit: bool,
+    pub(crate) property_1: i32,
+    pub(crate) property_2: i32,
+    pub(crate) delete_remain_time: i32,
+    pub(crate) country: u8,
+    pub(crate) goods_war_count: i32,
+    pub(crate) goods_war_last_win_time: String,
+}
+
 /// Достигнутая member-state часть исходного `CFaction`.
 pub(crate) struct CFaction {
     faction_id: i32,
@@ -2827,6 +2851,48 @@ impl CFaction {
         let _ = faction
             .initial_property_by_level(parameters)
             .expect("for_creation всегда материализует полный base property");
+        Ok(faction)
+    }
+
+    /// Материализует base-row в точном порядке `LoadFactionProperty`.
+    ///
+    /// Public constructor уже выполняет `Initial` до DB assignments. Поэтому
+    /// этот owner начинает с `for_creation`, сохраняя fallback master-member и
+    /// constructor-derived property bytes, и заменяет только поля row. Полные
+    /// member/leave/ability/apply данные принадлежат следующим DB owner-ам.
+    pub(crate) fn from_database_base_state(
+        state: FactionDatabaseBaseState,
+        master_title: &[u8],
+        game: &CGame,
+        parameters: &COrganizingParam,
+    ) -> Result<Self, FactionInitialBlock> {
+        let mut faction = Self::for_creation(
+            state.faction_id,
+            state.master_id,
+            state.established_time,
+            &state.name,
+            master_title,
+            game,
+            parameters,
+        )?;
+        let property = faction
+            .base_property
+            .as_mut()
+            .expect("for_creation всегда назначает полный base property");
+        property.write_signed(0x00, state.level);
+        property.write_signed(0x04, state.experience);
+        property.write_signed(0x08, state.offense_victor_counts);
+        property.write_signed(0x0C, state.defence_victor_counts);
+        property.write_signed(0x10, state.village_war_victor_counts);
+        property.write_signed(0x14, state.member_count);
+        property.write_signed(0x18, state.union_id);
+        property.set_permit(state.permit);
+        property.write_signed(0x30, state.property_1);
+        property.write_signed(0x34, state.property_2);
+        faction.delete_remain_time = Some(state.delete_remain_time);
+        faction.goods_war_count = state.goods_war_count;
+        faction.goods_war_last_win_time = state.goods_war_last_win_time;
+        faction.change_data_type = 0;
         Ok(faction)
     }
 
