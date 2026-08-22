@@ -76,7 +76,10 @@ impl ClientResource {
     /// Loose fallback `rfOpen` для absent index либо установленного bit 0.
     pub(crate) fn read_loose(&self, root: &Path, path: &[u8]) -> io::Result<Option<Vec<u8>>> {
         let mut normalized = path.to_vec();
-        for byte in &mut normalized { if *byte == b'/' { *byte = b'\\'; } }
+        for byte in &mut normalized {
+            byte.make_ascii_lowercase();
+            if *byte == b'/' { *byte = b'\\'; }
+        }
         if normalized.first() != Some(&b'\\') { normalized.insert(0, b'\\'); }
         if self.files_info.file_info_by_text(&normalized).is_some_and(|info| info.package_type() & 1 == 0) { return Ok(None); }
         let mut file = root.to_path_buf();
