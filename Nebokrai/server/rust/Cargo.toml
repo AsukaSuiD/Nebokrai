@@ -10,8 +10,12 @@ rust-version = "1.97.1"
 publish = false
 
 [[bin]]
-name = "miracle-server"
-path = "src/main.rs"
+name = "authserver"
+path = "src/bin/authserver.rs"
+
+[[bin]]
+name = "billingserver"
+path = "src/bin/billingserver.rs"
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
