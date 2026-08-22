@@ -59,6 +59,11 @@ impl CNpc {
         self.move_shape_base.set_name(name);
     }
 
+    /// Заимствует унаследованное byte-exact имя без завершающего NUL.
+    pub(crate) fn get_name(&self) -> &[u8] {
+        self.move_shape_base.get_name()
+    }
+
     /// Присваивает унаследованный signed graphics ID.
     pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
         self.move_shape_base.set_graphics_id(graphics_id);

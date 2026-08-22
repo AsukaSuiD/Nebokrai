@@ -9,10 +9,12 @@
 //! `CBaseObject::CBaseObject` RVA `0x000D5790` — `IMPLEMENTED`. Контракт
 //! child-tree, destructor-а и передачи factory-результата внутри
 //! `CreateChildObject` RVA `0x000D58B0` восстановлен по raw/PDB и точечно
-//! проверен в EXE. `CreateChildObject` materialизован безопасной границей с
-//! явными callback-ами attachment и `Load`; сами owner-ы child-tree и его
-//! destructor пока остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Статический `CreateObject` RVA
-//! `0x000D5470` materialизован отдельным tagged factory-result без erased
+//! проверен в EXE. `CreateChildObject`, `AddObject`, `RemoveObject`, обе
+//! перегрузки `FindChildObject`, обе `RecursiveFindObject` и обе
+//! `DeleteChildObject`, а также `DeleteAllChildObject` materialизованы
+//! безопасным child-tree owner-ом; `BoardCast`, `DgFindObjectsByTypes`, `AI`
+//! и final destructor остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Статический `CreateObject`
+//! RVA `0x000D5470` materialизован отдельным tagged factory-result без erased
 //! pointer/vtable. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
 //! SHA-256 EXE
@@ -432,6 +434,58 @@ impl BaseObjectTreeNode {
         })
     }
 
+    /// Повторяет preorder `RecursiveFindObject(type, c_string_name)`.
+    pub(crate) fn recursive_find_by_type_and_name(
+        root: &SharedBaseObjectFactoryObject,
+        object_type: i32,
+        name: &[u8],
+    ) -> Option<SharedBaseObjectFactoryObject> {
+        let name = legacy_c_string_prefix(name);
+        Self::recursive_find(root, &mut |object| {
+            object.object_type() == object_type && object.object_name() == name
+        })
+    }
+
+    /// Выполняет default `DeleteChildObject(child)`: сначала remove всех
+    /// совпадений, затем отпускает parent ownership. Существующий внешний
+    /// `Rc` сохраняет безопасный живой alias вместо старого dangling pointer.
+    pub(crate) fn delete_child(
+        parent: &SharedBaseObjectFactoryObject,
+        child: &SharedBaseObjectFactoryObject,
+    ) {
+        Self::remove_child(parent, child);
+    }
+
+    /// Выполняет `DeleteChildObject(type, id, ignored_guid)` через первый
+    /// list-order hit; отсутствие child остаётся no-op.
+    pub(crate) fn delete_child_by_type_and_id(
+        parent: &SharedBaseObjectFactoryObject,
+        object_type: i32,
+        object_id: i32,
+    ) {
+        if let Some(child) = Self::find_child_by_type_and_id(parent, object_type, object_id) {
+            Self::delete_child(parent, &child);
+        }
+    }
+
+    /// Выполняет `DeleteAllChildObject(exception)` по snapshot исходного list.
+    ///
+    /// Каждый неравный exception child проходит default delete в исходном
+    /// порядке. Snapshot не удерживает удалённое дерево после возврата, а
+    /// возможные внешние safe aliases не превращаются в dangling pointers.
+    pub(crate) fn delete_all_children_except(
+        parent: &SharedBaseObjectFactoryObject,
+        exception: Option<&SharedBaseObjectFactoryObject>,
+    ) {
+        let children = parent.borrow().children.clone();
+        for child in children {
+            if exception.is_some_and(|exception| Rc::ptr_eq(&child, exception)) {
+                continue;
+            }
+            Self::delete_child(parent, &child);
+        }
+    }
+
     fn contains_node(
         root: &SharedBaseObjectFactoryObject,
         sought: &SharedBaseObjectFactoryObject,
@@ -508,6 +562,16 @@ impl BaseObjectFactoryObject {
             Self::Npc(object) => object.set_name(name),
             Self::Monster(object) => object.set_name(name),
             Self::Goods(object) => object.set_name(name),
+        }
+    }
+
+    fn object_name(&self) -> &[u8] {
+        match self {
+            Self::Region(object) => object.get_name(),
+            Self::Player(object) => object.get_name(),
+            Self::Npc(object) => object.get_name(),
+            Self::Monster(object) => object.get_name(),
+            Self::Goods(object) => object.get_goods_name(),
         }
     }
 
@@ -694,12 +758,9 @@ impl CBaseObject {
 
     /// Копирует байты имени только до первого NUL.
     pub(crate) fn set_name(&mut self, name: &[u8]) {
-        let prefix_len = name
-            .iter()
-            .position(|byte| *byte == 0)
-            .unwrap_or(name.len());
+        let prefix = legacy_c_string_prefix(name);
         self.name.clear();
-        self.name.extend_from_slice(&name[..prefix_len]);
+        self.name.extend_from_slice(prefix);
     }
 
     /// Дописывает базовые поля в legacy byte-array и всегда сообщает успех.
@@ -796,6 +857,15 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
     }
 }
 
+/// Возвращает значимую C-string часть входного безопасного byte-slice.
+fn legacy_c_string_prefix(name: &[u8]) -> &[u8] {
+    let prefix_len = name
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(name.len());
+    &name[..prefix_len]
+}
+
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
@@ -809,7 +879,7 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 
 // ============================================================================
 // FUNCTION: CBaseObject::DeleteChildObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:280
@@ -817,13 +887,16 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 // ADDRESS: 004d5420
 // PROTOTYPE: void __thiscall DeleteChildObject(CBaseObject * param_1)
 //
+// Реализовано `BaseObjectTreeNode::delete_child`: сначала удаляются все
+// pointer-equal entries parent-list, затем parent отпускает strong ownership.
+// Безопасный внешний `Rc` не становится dangling alias старого delete.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CBaseObject::DeleteChildObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:291
@@ -831,6 +904,8 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 // ADDRESS: 004d5440
 // PROTOTYPE: void __thiscall DeleteChildObject(long param_1, long param_2, CGUID * param_3)
 //
+// Реализовано `BaseObjectTreeNode::delete_child_by_type_and_id`: exact lookup
+// читает только type/ID, затем вызывает pointer-вариант для первого list hit.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -905,7 +980,7 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 
 // ============================================================================
 // FUNCTION: CBaseObject::RecursiveFindObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:136
@@ -913,6 +988,8 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 // ADDRESS: 004d56d0
 // PROTOTYPE: CBaseObject * __thiscall RecursiveFindObject(long param_1, char * param_2)
 //
+// Реализовано `BaseObjectTreeNode::recursive_find_by_type_and_name`: сравнение
+// выполняется по C-string prefix, затем по exact preorder tree.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1024,7 +1101,7 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 
 // ============================================================================
 // FUNCTION: CBaseObject::DeleteAllChildObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:303
@@ -1032,6 +1109,8 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 // ADDRESS: 004d5b90
 // PROTOTYPE: void __thiscall DeleteAllChildObject(CBaseObject * param_1)
 //
+// Реализовано `BaseObjectTreeNode::delete_all_children_except`: snapshot
+// children и порядок default delete сохранены; safe aliases не инвалидируются.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
