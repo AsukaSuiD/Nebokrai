@@ -1295,6 +1295,7 @@ use crate::worldserver::appworld::organizingsystem::villagewarsys::{
 };
 use crate::worldserver::appworld::player::{
     CPlayer, PlayerCodecError, PlayerCountryChangeReport, PlayerExploitUpdate,
+    PlayerDbProjectionBlock, PlayerEquipmentWireSnapshot,
     PlayerFactionInfoContext, PlayerFactionInfoDelivery, PlayerFactionInfoUpdateBlock,
     PlayerFactionInfoUpdateReport,
     PlayerLoadDataOutcome, PlayerLoadDataOwner,
@@ -6704,6 +6705,18 @@ impl CGame {
     /// placeholder для индекса `0`.
     pub(crate) fn find_goods_link(&self, index: u32) -> Option<&WorldGoodsLink> {
         self.goods_links.iter().find(|link| link.index == index)
+    }
+
+    /// Возвращает exact appearance snapshot экипировки игрока.
+    ///
+    /// Rust-ссылка исключает недоказанный null-вызов; EXE без проверок проходит
+    /// slots `0,1,3,4,2,9,10,12,13,14,15`, оставляет нули для пустых slots и
+    /// сужает signed `GAP_WEAPON_LEVEL` до младшего байта.
+    pub(crate) fn get_player_equip_id(
+        &self,
+        player: &CPlayer,
+    ) -> Result<PlayerEquipmentWireSnapshot, PlayerDbProjectionBlock> {
+        player.equipment_wire_snapshot()
     }
 
     /// Вычисляет комиссию и остаток продавца по exact World auction-контракту.
@@ -19504,7 +19517,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::GetPlayerEquipID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4602
@@ -19512,6 +19525,9 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 00401b50
 // PROTOTYPE: void __thiscall GetPlayerEquipID(CPlayer * param_1, ulong * param_2, ulong * param_3, ulong * param_4, ulong * param_5, ulong * param_6, ulong * param_7, ulong * param_8, ulong * param_9, ulong * param_10, ulong * param_11, ulong * param_12, uchar * param_13, uchar * param_14, uchar * param_15, uchar * param_16, uchar * param_17, uchar * param_18, uchar * param_19, uchar * param_20, uchar * param_21, uchar * param_22, uchar * param_23)
 //
+// IMPLEMENTED_OWNER: `CGame::get_player_equip_id` делегирует достигнутому
+// `CPlayer::equipment_wire_snapshot`; один typed snapshot заменяет 22 output-
+// ссылки, не меняя порядок slots и byte-cast уровней.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

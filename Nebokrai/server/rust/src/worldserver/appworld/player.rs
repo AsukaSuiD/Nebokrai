@@ -1157,6 +1157,16 @@ pub(crate) struct PlayerBaseWireSnapshot {
     pub(crate) region_id: i32,
 }
 
+/// Одиннадцать пар ID/уровень из exact `CGame::GetPlayerEquipID`.
+///
+/// Порядок является частью World wire/DB-контракта и намеренно не совпадает с
+/// числовым порядком equipment slots.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerEquipmentWireSnapshot {
+    pub(crate) ids: [u32; 11],
+    pub(crate) levels: [u8; 11],
+}
+
 impl From<GoodsDbSnapshotBlock> for PlayerDbProjectionBlock {
     fn from(block: GoodsDbSnapshotBlock) -> Self {
         Self::Goods(block)
@@ -1575,6 +1585,17 @@ impl CPlayer {
         Ok((ids, levels))
     }
 
+    /// Материализует точные output-поля `CGame::GetPlayerEquipID`.
+    pub(crate) fn equipment_wire_snapshot(
+        &self,
+    ) -> Result<PlayerEquipmentWireSnapshot, PlayerDbProjectionBlock> {
+        let (ids, levels) = self.base_equipment_fields()?;
+        Ok(PlayerEquipmentWireSnapshot {
+            ids,
+            levels: levels.map(|level| level as u8),
+        })
+    }
+
     /// Материализует только exact-поля одного `OpenPlayerBaseInDB/InMem` row.
     pub(crate) fn player_base_wire_snapshot(
         &self,
@@ -1584,7 +1605,7 @@ impl CPlayer {
             .ok_or(PlayerDbProjectionBlock::UninitializedField {
                 field: "m_btCountry",
             })?;
-        let (equipment_ids, equipment_levels) = self.base_equipment_fields()?;
+        let equipment = self.equipment_wire_snapshot()?;
         Ok(PlayerBaseWireSnapshot {
             id: self.get_id(),
             name: self.get_name().to_vec(),
@@ -1595,8 +1616,8 @@ impl CPlayer {
             sex: self.base_property.read_u8(BASE_PROPERTY_SEX_OFFSET),
             country,
             head: self.base_property.read_u8(BASE_PROPERTY_HEAD_PIC_OFFSET),
-            equipment_ids,
-            equipment_levels: equipment_levels.map(|level| level as u8),
+            equipment_ids: equipment.ids,
+            equipment_levels: equipment.levels,
             region_id: self.get_region_id(),
         })
     }
