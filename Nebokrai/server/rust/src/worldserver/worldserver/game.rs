@@ -1637,7 +1637,10 @@ use crate::worldserver::worldserver::leitingresetworker::{
 use crate::worldserver::worldserver::jjcmaintenanceworker::{
     WorldJjcWeekClearWorker, WorldJjcWeekClearWorkerEvent,
 };
-use crate::worldserver::worldserver::writelogworker::WorldWriteLogWorkerSpec;
+use crate::worldserver::worldserver::playerloadworker::WorldPlayerLoadWorkerPool;
+use crate::worldserver::worldserver::writelogworker::{
+    WorldWriteLogWorker, WorldWriteLogWorkerSpec,
+};
 
 /// Источник, который исходный World `LoadSetup` смог открыть первым.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2055,6 +2058,9 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     type GeneralVariableDatabase: RsGenVarOwner;
     type UnionDatabase: RsUnionOwner;
     type FactionDatabase: RsFactionOwner;
+    type PlayerLoadDatabase: WorldPlayerDataLoadOwner + Send + 'static;
+    type PlayerLoadLargess: FnMut(&mut CPlayer) + Send + 'static;
+    type PlayerLoadClock: FnMut() -> u32 + Send + 'static;
 
     fn install_crash_reporter(&mut self);
     fn current_time_seconds(&mut self) -> i64;
@@ -2098,18 +2104,19 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn register_clear_copy_number_time(
         &mut self,
     ) -> Result<CopyNumberScheduleReport, CopyNumberScheduleBlock>;
-    /// Получает concrete Log DB setup/FIFO и сохраняет единственный handle.
-    fn start_write_log_worker(
+    /// Даёт каждому concrete worker-у собственные Send-owner-ы; handle остаётся
+    /// внутри единственного `CGame` и освобождается его Release.
+    fn player_load_worker_runtime(
         &mut self,
-        worker: WorldWriteLogWorkerSpec,
-    ) -> WorldGameInitWorkerHandleState;
-    /// Для load-worker передаёт cloneable queue-owner и добавляет даже пустой
-    /// handle в исходный ordered owner.
-    fn start_player_load_worker(
-        &mut self,
-        worker: WorldPlayerLoadWorkerSpec,
         worker_index: u32,
-    ) -> WorldGameInitWorkerHandleState;
+    ) -> (
+        tokio::runtime::Handle,
+        Self::PlayerLoadDatabase,
+        Self::PlayerLoadLargess,
+        Self::PlayerLoadClock,
+    );
+    fn write_log_worker_runtime(&mut self) -> tokio::runtime::Handle;
+    fn report_worker_spawn_error(&mut self, kind: WorldGameInitWorkerKind, error: &io::Error);
 }
 
 /// Clock/log и узкий player-refresh adapters полного Init.
@@ -2275,10 +2282,6 @@ pub(crate) trait WorldGameReleaseContext {
 
     /// Ждёт и закрывает даже исходный пустой `g_hSavingThread`, затем обнуляет owner.
     fn join_save_worker(&mut self) -> WorldSaveThreadHandleState;
-    /// Ждёт/закрывает write-log handle после публикации exit-флага.
-    fn join_write_log_worker(&mut self) -> WorldGameInitWorkerHandleState;
-    /// Останавливает и закрывает все handles в исходном vector-order.
-    fn stop_player_load_workers(&mut self) -> u32;
 }
 
 /// Создание нового `g_pGame` запрещено поверх ещё опубликованного owner-а.
@@ -7214,6 +7217,8 @@ pub(crate) struct CGame {
     contribute_setup: CContributeSetup,
     quest_system: CQuestSystem,
     connect_login_worker: Option<WorldLoginReconnectWorker>,
+    write_log_worker: Option<WorldWriteLogWorker>,
+    player_load_workers: WorldPlayerLoadWorkerPool,
     net_client: Option<CMyNetClient>,
     net_server: Option<CMyNetServer>,
     regions: BTreeMap<i32, WorldRegionAssignment>,
@@ -7352,6 +7357,8 @@ impl CGame {
             contribute_setup: CContributeSetup::default(),
             quest_system: CQuestSystem::default(),
             connect_login_worker: None,
+            write_log_worker: None,
+            player_load_workers: WorldPlayerLoadWorkerPool::new(),
             net_client: None,
             net_server: None,
             regions: BTreeMap::new(),
@@ -11783,12 +11790,37 @@ impl CGame {
         ));
 
         let kind = WorldGameInitWorkerKind::WriteLog;
-        let handle = context.start_write_log_worker(self.write_log_worker_spec());
+        let handle = match WorldWriteLogWorker::start(
+            self.write_log_worker_spec(),
+            context.write_log_worker_runtime(),
+        ) {
+            Ok(worker) => {
+                self.write_log_worker = Some(worker);
+                WorldGameInitWorkerHandleState::Open
+            }
+            Err(error) => {
+                context.report_worker_spawn_error(kind, &error);
+                self.write_log_worker = None;
+                WorldGameInitWorkerHandleState::Empty
+            }
+        };
         events.push(WorldGameInitEvent::WorkerStarted { kind, handle });
         for worker_index in 0..player_load_thread_count {
             let kind = WorldGameInitWorkerKind::LoadPlayerData { worker_index };
-            let handle = context
-                .start_player_load_worker(self.player_load_worker_spec(), worker_index);
+            let (runtime, database, load_largess, get_tick) =
+                context.player_load_worker_runtime(worker_index);
+            let worker_spec = self.player_load_worker_spec();
+            let (handle, error) = self.player_load_workers.start(
+                worker_spec,
+                worker_index,
+                runtime,
+                database,
+                load_largess,
+                get_tick,
+            );
+            if let Some(error) = error.as_ref() {
+                context.report_worker_spawn_error(kind, error);
+            }
             events.push(WorldGameInitEvent::WorkerStarted { kind, handle });
         }
 
@@ -12073,15 +12105,26 @@ impl CGame {
             WorldGameReleaseVoidOwner::CleanupSocket,
             WorldGameReleaseVoidOwner::ReleaseBaseMessage,
             WorldGameReleaseVoidOwner::ReleaseNetSessionManager,
-            WorldGameReleaseVoidOwner::RequestWriteLogWorkerExit,
         ] {
             context.release_void_owner(owner);
             events.push(WorldGameReleaseEvent::VoidOwner(owner));
         }
+        if let Some(worker) = self.write_log_worker.as_ref() {
+            worker.request_exit();
+        }
+        events.push(WorldGameReleaseEvent::VoidOwner(
+            WorldGameReleaseVoidOwner::RequestWriteLogWorkerExit,
+        ));
 
-        let previous_handle = context.join_write_log_worker();
+        let previous_handle = match self.write_log_worker.take() {
+            Some(mut worker) => {
+                let _completion = worker.join();
+                WorldGameInitWorkerHandleState::Open
+            }
+            None => WorldGameInitWorkerHandleState::Empty,
+        };
         events.push(WorldGameReleaseEvent::WriteLogWorkerJoined { previous_handle });
-        let workers = context.stop_player_load_workers();
+        let workers = self.player_load_workers.stop().len() as u32;
         events.push(WorldGameReleaseEvent::PlayerLoadWorkersStopped { workers });
 
         for owner in [
