@@ -1112,6 +1112,9 @@ use crate::worldserver::appworld::message::gmamessage::{
 use crate::worldserver::appworld::message::gmmessage::{
     WorldGmMessageDispatch, WorldGmMessageOutcome, on_gm_message,
 };
+use crate::worldserver::appworld::message::logmessage::{
+    WorldLogMessageDispatch, WorldLogMessageOutcome, on_log_message,
+};
 use crate::worldserver::appworld::message::playermessage::{
     WorldPlayerMessageDispatch, WorldPlayerMessageOutcome, on_player_message,
 };
@@ -2259,6 +2262,11 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: WorldServerMessageOutcome,
+    },
+    LogMessage {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: WorldLogMessageOutcome,
     },
     OtherMessage {
         source: WorldMessageSource,
@@ -14901,6 +14909,19 @@ where
                 };
             }
             WorldServerMessageDispatch::Pending(pending) => message = pending,
+        }
+    }
+
+    if selector.owner == Some(WorldMessageOwner::Log) {
+        match on_log_message(game, message) {
+            WorldLogMessageDispatch::Handled(outcome) => {
+                return ProcessedWorldEvent::LogMessage {
+                    source,
+                    legacy_run_result,
+                    outcome,
+                };
+            }
+            WorldLogMessageDispatch::Pending(pending) => message = pending,
         }
     }
 

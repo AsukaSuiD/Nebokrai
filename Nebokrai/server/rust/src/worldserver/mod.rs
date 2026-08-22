@@ -131,6 +131,11 @@ pub(crate) mod appworld {
         pub(crate) mod jjcsysmessage;
         #[allow(
             dead_code,
+            reason = "restore-role 0x4FB03 подключён перед остальными log opcodes"
+        )]
+        pub(crate) mod logmessage;
+        #[allow(
+            dead_code,
             reason = "общий organizing session-result branch подключён перед остальными organizing opcodes"
         )]
         pub(crate) mod organsysmessage;
