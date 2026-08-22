@@ -1,8 +1,9 @@
 //! Узкий process-global owner суточного номера копии ShengSiShiSu.
 //!
-//! `GetCopyNum` RVA `0x000A0DC0` и `AddCopyNum` RVA `0x000A0DD0` имеют статус
-//! `IMPLEMENTED`; timer-owned reset/registration ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Exact `GetCopyNum` читает signed DWORD по VA `0x0056B5E8`,
+//! `GetCopyNum` RVA `0x000A0DC0`, `AddCopyNum` RVA `0x000A0DD0`,
+//! `ClearCopyNum` RVA `0x000A0DE0` и
+//! `RegisterClearShengSiShiSuCopyNumTime` RVA `0x000A0E50` имеют статус
+//! `IMPLEMENTED`. Exact `GetCopyNum` читает signed DWORD по VA `0x0056B5E8`,
 //! а PE `.data` содержит initial bytes `01 00 00 00`. `AddCopyNum` выполняет
 //! обычное 32-битное сложение с единицей без overflow gate; `AtomicI32`
 //! заменяет только возможную межпоточную data race и сохраняет wrapping bits.
@@ -11,8 +12,19 @@
 //!
 //! Поздний Rust-донор верно определил начальное значение и назначение owner-а,
 //! но его fail-closed overflow был новым поведением и здесь не перенесён.
+//! Первое событие ставится на следующий день с часом/минутой/секундой `0`, но
+//! сохраняет текущие milliseconds: exact `0x004A0EB0..0x004A0EBF` обнуляет
+//! три WORD `hour/minute/second`, но не соседний `milliseconds`. Callback
+//! сначала возвращает номер к `1`,
+//! затем одним новым local-time snapshot ставит следующее событие ровно через
+//! `AddDay(1)`, уже сохраняя фактическое время срабатывания. Generic `CTimer`
+//! заменяет function pointer/tree plumbing, но parameter `0`, выдача ID и
+//! порядок reset-before-reschedule остаются исходными.
 
 use std::sync::atomic::{AtomicI32, Ordering};
+
+use crate::public::date::{TagTime, TagTimeArithmeticBlock};
+use crate::public::timer::{CTimer, TimerId};
 
 static COPY_NUMBER: AtomicI32 = AtomicI32::new(1);
 
@@ -24,6 +36,89 @@ pub(crate) fn get_copy_num() -> i32 {
 /// Увеличивает номер с exact 32-битным wrapping оригинала.
 pub(crate) fn add_copy_num() -> i32 {
     COPY_NUMBER.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
+}
+
+/// Состояние единственной calendar-цепочки суточного reset-а.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CopyNumberTimerState {
+    event_id: Option<TimerId>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CopyNumberScheduleReport {
+    pub(crate) scheduled_time: TagTime,
+    pub(crate) event_id: TimerId,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CopyNumberResetReport {
+    pub(crate) previous_number: i32,
+    pub(crate) scheduled_time: TagTime,
+    pub(crate) next_event_id: Option<TimerId>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CopyNumberScheduleBlock {
+    DateArithmetic(TagTimeArithmeticBlock),
+}
+
+impl CopyNumberTimerState {
+    pub(crate) const fn event_id(&self) -> Option<TimerId> {
+        self.event_id
+    }
+
+    pub(crate) const fn is_event(&self, event_id: TimerId) -> bool {
+        matches!(self.event_id, Some(current) if current.get() == event_id.get())
+    }
+
+    /// Ставит первое событие на ближайшую следующую legacy-полночь.
+    pub(crate) fn register<Callback: Copy>(
+        &mut self,
+        current_time: TagTime,
+        timer: &mut CTimer<Callback>,
+        callback: Callback,
+    ) -> Result<CopyNumberScheduleReport, CopyNumberScheduleBlock> {
+        let mut scheduled_time = current_time;
+        scheduled_time
+            .add_day(1)
+            .map_err(CopyNumberScheduleBlock::DateArithmetic)?;
+        scheduled_time.hour = 0;
+        scheduled_time.minute = 0;
+        scheduled_time.second = 0;
+        let event_id = timer.set_time_event(scheduled_time, callback, 0);
+        self.event_id = Some(event_id);
+        Ok(CopyNumberScheduleReport {
+            scheduled_time,
+            event_id,
+        })
+    }
+
+    /// Выполняет reset до вычисления следующего события, как `ClearCopyNum`.
+    pub(crate) fn prepare_reset(
+        &self,
+        current_time: TagTime,
+    ) -> Result<CopyNumberResetReport, CopyNumberScheduleBlock> {
+        let previous_number = COPY_NUMBER.swap(1, Ordering::Relaxed);
+        let mut scheduled_time = current_time;
+        scheduled_time
+            .add_day(1)
+            .map_err(CopyNumberScheduleBlock::DateArithmetic)?;
+        Ok(CopyNumberResetReport {
+            previous_number,
+            scheduled_time,
+            next_event_id: None,
+        })
+    }
+
+    /// Фиксирует exact результат повторного `SetTimeEvent` callback-а.
+    pub(crate) fn finish_reset(
+        &mut self,
+        report: &mut CopyNumberResetReport,
+        event_id: TimerId,
+    ) {
+        self.event_id = Some(event_id);
+        report.next_event_id = Some(event_id);
+    }
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
@@ -62,7 +157,7 @@ pub(crate) fn add_copy_num() -> i32 {
 
 // ============================================================================
 // FUNCTION: ClearCopyNum
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\misc.cpp:19
@@ -70,13 +165,15 @@ pub(crate) fn add_copy_num() -> i32 {
 // ADDRESS: 004a0de0
 // PROTOTYPE: void __stdcall ClearCopyNum(long param_1)
 //
+// IMPLEMENTED_OWNER: `CopyNumberTimerState::prepare_reset/finish_reset` выше;
+// reset предшествует `AddDay(1)` и повторной регистрации с parameter `0`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: RegisterClearShengSiShiSuCopyNumTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\misc.cpp:33
@@ -84,6 +181,8 @@ pub(crate) fn add_copy_num() -> i32 {
 // ADDRESS: 004a0e50
 // PROTOTYPE: void __cdecl RegisterClearShengSiShiSuCopyNumTime(void)
 //
+// IMPLEMENTED_OWNER: `CopyNumberTimerState::register` выше; milliseconds
+// намеренно сохраняются, поскольку exact обнуляет только WORD секунд.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

@@ -1246,6 +1246,10 @@ use crate::worldserver::appworld::message::writelogmessage::{
     WorldWriteLogCommand, WorldWriteLogMessageDispatch, WorldWriteLogMessageOutcome,
     on_write_log_message,
 };
+use crate::worldserver::appworld::misc::{
+    CopyNumberResetReport, CopyNumberScheduleBlock, CopyNumberScheduleReport,
+    CopyNumberTimerState,
+};
 use crate::worldserver::appworld::incrementlog::incrementlog::{
     CIncrementLog, IncrementLogLoadOutcome,
 };
@@ -1536,7 +1540,6 @@ pub(crate) enum WorldGameInitVoidOwner {
     LoadGeneralVariableData,
     InitializeBaseMessage,
     InitializeSocket,
-    RegisterClearShengSiShiSuCopyNumTime,
 }
 
 /// Boolean initialization calls с доказанным caller-решением.
@@ -1636,6 +1639,7 @@ pub(crate) enum WorldGameInitEvent {
     NetworkClientInitialized(WorldClientInitialization),
     NetworkServerInitialized,
     PlayerDataQueueCleared,
+    CopyNumberResetScheduled(CopyNumberScheduleReport),
     WorkerStarted {
         kind: WorldGameInitWorkerKind,
         handle: WorldGameInitWorkerHandleState,
@@ -1708,6 +1712,7 @@ pub(crate) enum WorldGameInitBlockReason<ContextBlock> {
     PlayerRanksStat(PlayerRanksStatRunBlock),
     NetworkClient(WorldClientInitializationError),
     NetworkServer(WorldNetworkInitializationError),
+    CopyNumberSchedule(CopyNumberScheduleBlock),
 }
 
 /// Completed prefix и точная причина, по которой Init не вернул legacy `1`.
@@ -1770,6 +1775,10 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn auction_log_database(&mut self) -> Option<&mut WorldTdsClient>;
     /// Exact `CGlobeSetup::m_stSetup.dwIncrementLogDays` для обеих history query.
     fn increment_log_days(&mut self) -> u32;
+    /// Регистрирует exact calendar-цепочку `ClearCopyNum` на owned timer-е.
+    fn register_clear_copy_number_time(
+        &mut self,
+    ) -> Result<CopyNumberScheduleReport, CopyNumberScheduleBlock>;
     /// Получает concrete Log DB setup/FIFO и сохраняет единственный handle.
     fn start_write_log_worker(
         &mut self,
@@ -3273,6 +3282,7 @@ pub(crate) enum CountryWarTimerBlock {
 
 #[derive(Debug)]
 pub(crate) enum WorldTimerCallbackBlock {
+    CopyNumber(CopyNumberScheduleBlock),
     PlayerRanks(PlayerRanksTimerRefreshBlock),
     OrganizingTax(OrganizingTaxScheduleBlock),
     CountryWar(CountryWarTimerBlock),
@@ -3289,6 +3299,7 @@ pub(crate) struct WorldMainLoopTimerStageBlock {
 #[derive(Debug)]
 pub(crate) struct WorldMainLoopTimerStageReport {
     pub(crate) timer: TimerRunReport,
+    pub(crate) copy_number_resets: Vec<CopyNumberResetReport>,
     pub(crate) player_ranks: Vec<PlayerRanksTimerRefreshReport>,
     pub(crate) organizing_taxes: Vec<OrganizingTodayTaxRefreshReport>,
     pub(crate) country_wars: Vec<CountryWarTimerReport>,
@@ -3309,15 +3320,18 @@ struct WorldTimerHandler<'a, Callback> {
     rs_player: &'a mut TiberiusRsPlayer,
     player_database: Option<&'a mut WorldTdsClient>,
     organizing: &'a COrganizingCtrl,
+    copy_number_timer: &'a mut CopyNumberTimerState,
     log: &'a mut WorldLogTextOwner,
     get_log_local_time: &'a mut dyn FnMut() -> WorldLogLocalTime,
     put_log_info: &'a mut dyn FnMut(&[u8]),
     world_string_by_id: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
     format_world_string:
         &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+    copy_number_resets: Vec<CopyNumberResetReport>,
     refreshes: Vec<PlayerRanksTimerRefreshReport>,
     tax_refreshes: Vec<OrganizingTodayTaxRefreshReport>,
     country_wars: Vec<CountryWarTimerReport>,
+    pending_copy_number_registration: Option<usize>,
     pending_player_ranks_registration: Option<usize>,
     pending_tax_registration: Option<PreparedTodayTaxRefresh>,
 }
@@ -3338,6 +3352,30 @@ where
         get_tick: &mut GetTick,
         get_timer_local_time: &mut GetTimerLocalTime,
     ) -> Result<AsyncTimerCallbackDisposition<Callback>, Self::Block> {
+        let copy_number_event = matches!(
+            invocation.source,
+            TimerCallbackSource::Calendar(event_id)
+                if self.copy_number_timer.is_event(event_id)
+        );
+        if copy_number_event {
+            let current_time = get_timer_local_time();
+            let report = self
+                .copy_number_timer
+                .prepare_reset(current_time)
+                .map_err(WorldTimerCallbackBlock::CopyNumber)?;
+            let next_time = report.scheduled_time;
+            let report_index = self.copy_number_resets.len();
+            self.copy_number_resets.push(report);
+            self.pending_copy_number_registration = Some(report_index);
+            return Ok(AsyncTimerCallbackDisposition::Handled {
+                next_calendar_event: Some(CalendarTimerRegistration {
+                    time: next_time,
+                    callback: invocation.callback,
+                    parameter: 0,
+                }),
+            });
+        }
+
         let tax_event_id = match invocation.source {
             TimerCallbackSource::Calendar(event_id)
                 if self.organizing_parameters.is_tax_event(event_id) => Some(event_id),
@@ -3497,6 +3535,14 @@ where
         _invocation: TimerCallbackInvocation<Callback>,
         event_id: TimerId,
     ) {
+        if let Some(report_index) = self.pending_copy_number_registration.take() {
+            self.copy_number_timer.finish_reset(
+                &mut self.copy_number_resets[report_index],
+                event_id,
+            );
+            return;
+        }
+
         if let Some(prepared) = self.pending_tax_registration.take() {
             let report = self.organizing_parameters.finish_today_tax_refresh(
                 prepared,
@@ -3690,6 +3736,7 @@ pub(crate) struct WorldMainLoopStateOwners<'a> {
     pub(crate) login_release: &'a mut WorldMainLoopLoginReleaseState,
     pub(crate) largess: &'a mut WorldMainLoopLargessState,
     pub(crate) profile: &'a mut WorldMainLoopProfileState,
+    pub(crate) copy_number_timer: &'a mut CopyNumberTimerState,
     pub(crate) process_message: &'a mut WorldProcessMessageStageState,
     pub(crate) refresh_high_water: &'a mut WorldRefreshInfoHighWater,
     pub(crate) collect_player_data: &'a mut WorldCollectPlayerDataRequestState,
@@ -9452,9 +9499,12 @@ impl CGame {
 
         self.player_data_queue.clear();
         events.push(WorldGameInitEvent::PlayerDataQueueCleared);
-        context.initialize_void_owner(WorldGameInitVoidOwner::RegisterClearShengSiShiSuCopyNumTime);
-        events.push(WorldGameInitEvent::VoidOwner(
-            WorldGameInitVoidOwner::RegisterClearShengSiShiSuCopyNumTime,
+        let copy_number_schedule = match context.register_clear_copy_number_time() {
+            Ok(schedule) => schedule,
+            Err(error) => stop!(WorldGameInitBlockReason::CopyNumberSchedule(error)),
+        };
+        events.push(WorldGameInitEvent::CopyNumberResetScheduled(
+            copy_number_schedule,
         ));
 
         let kind = WorldGameInitWorkerKind::WriteLog;
@@ -11088,6 +11138,7 @@ impl CGame {
         globe_setup: &GlobeSetupSnapshot,
         clocks: &mut WorldMainLoopClockState,
         profile_state: &mut WorldMainLoopProfileState,
+        copy_number_timer: &mut CopyNumberTimerState,
         organizing_parameters: &mut COrganizingParam,
         player_ranks: &mut CPlayerRanks,
         rs_player: &mut TiberiusRsPlayer,
@@ -11120,14 +11171,17 @@ impl CGame {
             rs_player,
             player_database,
             organizing,
+            copy_number_timer,
             log,
             get_log_local_time,
             put_log_info,
             world_string_by_id,
             format_world_string,
+            copy_number_resets: Vec::new(),
             refreshes: Vec::new(),
             tax_refreshes: Vec::new(),
             country_wars: Vec::new(),
+            pending_copy_number_registration: None,
             pending_player_ranks_registration: None,
             pending_tax_registration: None,
         };
@@ -11146,6 +11200,7 @@ impl CGame {
                 return Err(WorldMainLoopTimerStageBlock { timer, source });
             }
         };
+        let copy_number_resets = handler.copy_number_resets;
         let player_ranks = handler.refreshes;
         let organizing_taxes = handler.tax_refreshes;
         let country_wars = handler.country_wars;
@@ -11156,6 +11211,7 @@ impl CGame {
         clocks.stage_started_at_ms = next_stage_started_at_ms;
         Ok(WorldMainLoopTimerStageReport {
             timer: timer_report,
+            copy_number_resets,
             player_ranks,
             organizing_taxes,
             country_wars,
@@ -12114,6 +12170,7 @@ impl CGame {
                 owners.globe_setup,
                 state.clocks,
                 state.profile,
+                state.copy_number_timer,
                 owners.organizing_parameters,
                 owners.player_ranks,
                 owners.rs_player,
