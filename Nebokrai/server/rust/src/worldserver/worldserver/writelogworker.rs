@@ -754,6 +754,13 @@ pub(crate) async fn execute_world_write_log_command(
             }
             Ok(())
         }
+        WorldWriteLogCommand::AuctionNoticeSql(sql) => {
+            // `CollectNoNotice` кладёт в общий FIFO уже собранный точный
+            // UPDATE. Строка создаётся только owner-ом из CGuid/opttype, а
+            // worker сохраняет его отдельный порядок и failure contract.
+            Query::new(sql.as_str()).execute(connection).await?;
+            Ok(())
+        }
         WorldWriteLogCommand::PlayerProgressLog(write) => {
             match &write.event {
                 WorldPlayerProgressLogEvent::Level {
@@ -1061,6 +1068,7 @@ fn world_write_log_command_name(command: &WorldWriteLogCommand) -> &'static str 
         WorldWriteLogCommand::FairyLog(_) => "FairyLog",
         WorldWriteLogCommand::AuctionLog(_) => "AuctionLog",
         WorldWriteLogCommand::AuctionSaleLog(_) => "AuctionSaleLog",
+        WorldWriteLogCommand::AuctionNoticeSql(_) => "AuctionNoticeSql",
         WorldWriteLogCommand::PlayerProgressLog(_) => "PlayerProgressLog",
         WorldWriteLogCommand::PlayerRelationLog(_) => "PlayerRelationLog",
         WorldWriteLogCommand::GoodsTradeLog(_) => "GoodsTradeLog",

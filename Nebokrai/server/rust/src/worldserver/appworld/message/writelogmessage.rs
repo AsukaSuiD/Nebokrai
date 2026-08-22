@@ -459,6 +459,9 @@ pub(crate) enum WorldWriteLogCommand {
     FairyLog(WorldFairyLogWrite),
     AuctionLog(WorldAuctionLogWrite),
     AuctionSaleLog(WorldAuctionSaleLogWrite),
+    /// SQL `CAuctionLog::CollectNoNotice`, созданный только из typed GUID и
+    /// opttype аукционного журнала; сохраняет exact FIFO-публикацию owner-а.
+    AuctionNoticeSql(String),
     PlayerProgressLog(WorldPlayerProgressLogWrite),
     PlayerRelationLog(WorldPlayerRelationLogWrite),
     GoodsTradeLog(WorldGoodsTradeLogWrite),
