@@ -1164,9 +1164,12 @@
 //! сохраняет этот observable data-loss/FIFO контракт и продолжимый snapshot-
 //! checkpoint; typed Execute и connection open находятся в соседнем
 //! `writelogworker`.
-//! Внешние thread/exit/poll owners пока остаются RAW. `ConnectLoginServerFunc`
-//! уже выражен awaitable retry-loop с exact 8-sec cadence; создание Win32
-//! thread handle остаётся отдельным owner-ом.
+//! `WorldLoginReconnectWorker` завершает внешний owner
+//! `CreateConnectLoginThread`: он хранит только snapshot setup и отправитель
+//! общей World FIFO, поэтому не передаёт `&mut CGame` системному потоку.
+//! Exact stop/join/start порядок и 8-sec cadence сохранены; Win32 handle,
+//! CRT thread и process-global pointer заменены `JoinHandle`, `AtomicBool` и
+//! безопасным ownership.
 //!
 //! `ResetHonorElimilateInfo` RVA `0x00014390` проходит `m_mPlayer` в map-order,
 //! сбрасывает достигнутые day/week/month counters по исходной mask-семантике,
@@ -1238,7 +1241,9 @@ use crate::nets::clients::{ClientConnectError, ClientSendQueue};
 use crate::nets::mysocket::{DEFAULT_SOCKET_TYPE, legacy_ipv4_word};
 use crate::nets::networld::message::{CMessage, SendMessageError, WorldMessageHandlers};
 use crate::nets::networld::mynetclient::CMyNetClient;
-use crate::nets::networld::mynetserver::{CMyNetServer, WorldServerEvent};
+use crate::nets::networld::mynetserver::{
+    CMyNetServer, WorldServerEvent, WorldServerEventSender,
+};
 use crate::nets::servers::{ServerCommandHandle, ServerHostError};
 use crate::public::auctionlog::{
     AuctionBangUpdateOutcome, AuctionLogLoadOutcome, CAuctionLog,
@@ -1589,6 +1594,9 @@ use crate::worldserver::worldserver::savedb::{
 use crate::worldserver::worldserver::worldserver::{
     AddLogTextDisposition, WorldLogLocalTime, WorldLogTextOwner, WorldRefreshInfoCurrent,
     WorldRefreshInfoHighWater, WorldRefreshInfoReport, WorldRefreshSaveState, refresh_info_text,
+};
+use crate::worldserver::worldserver::loginreconnectworker::{
+    WorldLoginReconnectWorker, WorldLoginReconnectWorkerCompletion,
 };
 use crate::worldserver::worldserver::writelogworker::WorldWriteLogWorkerSpec;
 
@@ -2335,6 +2343,43 @@ pub(crate) enum WorldLoginReconnectWorkerOutcome {
         attempts: u32,
         reconnect: WorldLoginReconnect,
     },
+}
+
+/// Snapshot, достаточный для одной попытки reconnect вне mutable `CGame`.
+///
+/// Optional-поля намеренно переносятся без ранней валидации: исходный worker
+/// создавался всегда, а ошибка setup/server-owner обнаруживалась уже после
+/// bind/connect в каждой конкретной попытке.
+#[derive(Clone)]
+pub(crate) struct WorldLoginReconnectSpec {
+    login_ip: Vec<u8>,
+    login_port: Option<u32>,
+    event_sender: Option<WorldServerEventSender>,
+}
+
+impl WorldLoginReconnectSpec {
+    /// Выполняет одну попытку в прежнем bind/resolve/connect/publish порядке.
+    pub(crate) async fn reconnect_once(
+        &self,
+    ) -> Result<WorldLoginReconnect, WorldLoginReconnectError> {
+        CGame::reconnect_login_server_from_spec(self).await
+    }
+}
+
+/// Итог попытки создать новый системный reconnect-worker.
+#[derive(Debug)]
+pub(crate) enum WorldLoginReconnectThreadStart {
+    Started,
+    SpawnFailed(io::Error),
+}
+
+/// Наблюдаемая внутренняя последовательность `CreateConnectLoginThread`.
+#[derive(Debug)]
+pub(crate) struct WorldLoginReconnectThreadRestart {
+    /// Предыдущий handle всегда полностью joined до старта следующего.
+    pub(crate) previous_completion: Option<WorldLoginReconnectWorkerCompletion>,
+    /// Новый worker либо точная ошибка создания Linux system thread.
+    pub(crate) started: WorldLoginReconnectThreadStart,
 }
 
 /// Успешно построенный и поставленный World CD-key snapshot.
@@ -6907,6 +6952,7 @@ pub(crate) struct CGame {
     prison_conf: PrisonConf,
     contribute_setup: CContributeSetup,
     quest_system: CQuestSystem,
+    connect_login_worker: Option<WorldLoginReconnectWorker>,
     net_client: Option<CMyNetClient>,
     net_server: Option<CMyNetServer>,
     regions: BTreeMap<i32, WorldRegionAssignment>,
@@ -7044,6 +7090,7 @@ impl CGame {
             prison_conf: PrisonConf::default(),
             contribute_setup: CContributeSetup::default(),
             quest_system: CQuestSystem::default(),
+            connect_login_worker: None,
             net_client: None,
             net_server: None,
             regions: BTreeMap::new(),
@@ -11370,6 +11417,12 @@ impl CGame {
         context.release_void_owner(owner);
         events.push(WorldGameReleaseEvent::VoidOwner(owner));
 
+        // Background reconnect может владеть только producer FIFO, но перед
+        // разрушением transport-owner-а он обязан завершиться. Это устраняет
+        // внутренний dangling-lifetime старого process-global worker-а; sleep
+        // не прерывается, как у его обычного stop/join owner-а.
+        let _connect_login_completion = self.stop_connect_login_thread();
+
         if let Some(client) = self.net_client.take() {
             drop(client);
             events.push(WorldGameReleaseEvent::NetworkClientReleased);
@@ -11584,7 +11637,72 @@ impl CGame {
     /// control-send: его включит только будущая обработка typed handoff в
     /// исходной позиции `0x3FC03` после замены и постановки регистрации.
     pub(crate) async fn reconnect_login_server(
+        &self,
+    ) -> Result<WorldLoginReconnect, WorldLoginReconnectError> {
+        self.login_reconnect_spec().reconnect_once().await
+    }
+
+    /// Отделяет ровно те данные, которые свободный reconnect-worker читал из
+    /// process-global `g_pGame`: login endpoint и producer World FIFO.
+    fn login_reconnect_spec(&self) -> WorldLoginReconnectSpec {
+        WorldLoginReconnectSpec {
+            login_ip: self.setup.login_ip.clone(),
+            login_port: self.setup.login_port,
+            event_sender: self.net_server.as_ref().map(CMyNetServer::event_sender),
+        }
+    }
+
+    /// Выполняет exact stop/wait/start owner вместо Win32 thread handle.
+    ///
+    /// Если старый worker спит, stop не будит его: `WaitForSingleObject` также
+    /// ждал завершения полного `Sleep(8000)`. Ошибка создания не оставляет
+    /// выдуманный handle и сообщается caller-у отдельным typed итогом.
+    pub(crate) fn create_connect_login_thread(
         &mut self,
+        runtime: tokio::runtime::Handle,
+    ) -> WorldLoginReconnectThreadRestart {
+        let previous_completion = self
+            .connect_login_worker
+            .as_mut()
+            .and_then(WorldLoginReconnectWorker::stop);
+        self.connect_login_worker = None;
+
+        let started = match WorldLoginReconnectWorker::start(
+            self.login_reconnect_spec(),
+            runtime,
+        ) {
+            Ok(worker) => {
+                self.connect_login_worker = Some(worker);
+                WorldLoginReconnectThreadStart::Started
+            }
+            Err(error) => WorldLoginReconnectThreadStart::SpawnFailed(error),
+        };
+
+        WorldLoginReconnectThreadRestart {
+            previous_completion,
+            started,
+        }
+    }
+
+    /// Останавливает активный reconnect-owner в точной stop/join-последовательности.
+    pub(crate) fn stop_connect_login_thread(
+        &mut self,
+    ) -> Option<WorldLoginReconnectWorkerCompletion> {
+        let completion = self
+            .connect_login_worker
+            .as_mut()
+            .and_then(WorldLoginReconnectWorker::stop);
+        self.connect_login_worker = None;
+        completion
+    }
+
+    /// Подключает один новый LoginServer client и передаёт его World FIFO.
+    ///
+    /// Здесь сохраняется публичный owner-метод для caller-ов `CGame`; его
+    /// фактическая попытка живёт в cloneable spec и потому может выполняться
+    /// без передачи mutable `CGame` системному worker-у.
+    async fn reconnect_login_server_from_spec(
+        spec: &WorldLoginReconnectSpec,
     ) -> Result<WorldLoginReconnect, WorldLoginReconnectError> {
         // RVA 0x00003280 держал новый CMyNetClient только в локальном pointer.
         let mut client = CMyNetClient::new();
@@ -11595,7 +11713,7 @@ impl CGame {
                 return Err(WorldLoginReconnectError::Bind(error));
             }
         };
-        let login_port = match self.setup.login_port {
+        let login_port = match spec.login_port {
             Some(port) => port,
             None => {
                 // BLOCKED_MISSING_FACT: старый dwLoginPort здесь был
@@ -11604,7 +11722,7 @@ impl CGame {
                 return Err(WorldLoginReconnectError::MissingSetupField("dwLoginPort"));
             }
         };
-        let endpoint = match resolve_login_endpoint(&self.setup.login_ip, login_port) {
+        let endpoint = match resolve_login_endpoint(&spec.login_ip, login_port) {
             Ok(endpoint) => endpoint,
             Err(error) => {
                 let _legacy_result = client.close();
@@ -11617,7 +11735,7 @@ impl CGame {
             return Err(WorldLoginReconnectError::Connect(error));
         }
 
-        let server = match self.net_server.as_ref() {
+        let event_sender = match spec.event_sender.as_ref() {
             Some(server) => server,
             None => {
                 // BLOCKED_MISSING_FACT: исходник после успешного connect
@@ -11627,7 +11745,7 @@ impl CGame {
                 return Err(WorldLoginReconnectError::MissingNetworkServerOwner);
             }
         };
-        server.publish_reconnected_login_client(client);
+        event_sender.publish_reconnected_login_client(client);
 
         Ok(WorldLoginReconnect { endpoint })
     }
@@ -21524,7 +21642,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::CreateConnectLoginThread
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:2246
@@ -21532,6 +21650,14 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 00404320
 // PROTOTYPE: void __thiscall CreateConnectLoginThread(void)
 //
+// IMPLEMENTED_OWNER: `CGame::create_connect_login_thread` и
+// `WorldLoginReconnectWorker` сначала выставляют exit предыдущего worker-а,
+// затем полностью join-ят его и лишь потом создают следующий. Новый worker
+// получает snapshot setup и отправитель общей World FIFO, а не `CGame*`; его
+// 8-sec pause, одна попытка после pause и after-failure stop-check совпадают
+// с `ConnectLoginServerFunc`. `JoinHandle` освобождается ownership-ом вместо
+// `CloseHandle`; ошибку создания Rust возвращает typed-результатом, не создавая
+// фиктивный null HANDLE.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

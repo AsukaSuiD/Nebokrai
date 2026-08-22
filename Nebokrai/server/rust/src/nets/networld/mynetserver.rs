@@ -43,6 +43,7 @@
 //! состоянием и не получает фиктивного Rust-поля только ради старого layout.
 
 use std::net::{Ipv4Addr, SocketAddrV4};
+use std::sync::Arc;
 
 use tokio::net::TcpStream;
 
@@ -68,10 +69,28 @@ pub(crate) enum WorldServerEvent {
     LoginClientReconnected(CMyNetClient),
 }
 
+/// Клонируемый отправитель единственной World FIFO.
+///
+/// Сетевые обратные вызовы и reconnect-worker LoginServer публикуют события
+/// через один mutex-защищённый хвост. Отправитель не открывает доступ к
+/// `CServer` и не позволяет обойти доменный snapshot `CGame::process_message`.
+#[derive(Clone)]
+pub(crate) struct WorldServerEventSender {
+    events: Arc<CMsgQueue<WorldServerEvent>>,
+}
+
+impl WorldServerEventSender {
+    /// Передаёт FIFO владение новым подключённым LoginServer client.
+    pub(crate) fn publish_reconnected_login_client(&self, client: CMyNetClient) {
+        self.events
+            .push(WorldServerEvent::LoginClientReconnected(client));
+    }
+}
+
 /// Владелец общего `CServer` и FIFO событий принятых GameServer.
 pub(crate) struct CMyNetServer {
     base: CServer,
-    received_events: CMsgQueue<WorldServerEvent>,
+    event_sender: WorldServerEventSender,
 }
 
 impl CMyNetServer {
@@ -84,7 +103,9 @@ impl CMyNetServer {
         );
         Self {
             base,
-            received_events: CMsgQueue::new(),
+            event_sender: WorldServerEventSender {
+                events: Arc::new(CMsgQueue::new()),
+            },
         }
     }
 
@@ -164,7 +185,7 @@ impl CMyNetServer {
         now_ms: u32,
     ) -> ServerSnapshot<GameServerReceiveError> {
         let mut callbacks = WorldNetworkCallbacks {
-            events: &self.received_events,
+            events: self.event_sender.events.as_ref(),
         };
         self.base.process_command_snapshot(&mut callbacks, now_ms)
     }
@@ -176,23 +197,27 @@ impl CMyNetServer {
 
     /// Возвращает число событий, ожидающих доменного snapshot-прохода.
     pub(crate) fn pending_events(&self) -> i32 {
-        self.received_events.get_size()
+        self.event_sender.events.get_size()
     }
 
     /// Передаёт старейшее World-событие фактическому владельцу `CGame`.
     pub(crate) fn pop_received_event(&self) -> Option<WorldServerEvent> {
-        self.received_events.pop()
+        self.event_sender.events.pop()
+    }
+
+    /// Возвращает producer для фонового owner-а повторного подключения.
+    pub(crate) fn event_sender(&self) -> WorldServerEventSender {
+        self.event_sender.clone()
     }
 
     /// Передаёт FIFO владение новым подключённым LoginServer client.
     pub(crate) fn publish_reconnected_login_client(&self, client: CMyNetClient) {
-        self.received_events
-            .push(WorldServerEvent::LoginClientReconnected(client));
+        self.event_sender.publish_reconnected_login_client(client);
     }
 
     /// Ставит локально созданное сообщение в ту же FIFO, что и network receive.
     pub(crate) fn publish_local_message(&self, message: CMessage) {
-        self.received_events.push(WorldServerEvent::Message(message));
+        self.event_sender.events.push(WorldServerEvent::Message(message));
     }
 
     /// Сообщает, остались ли записи в исходном `m_Clients` map.
