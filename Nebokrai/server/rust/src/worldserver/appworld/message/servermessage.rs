@@ -302,7 +302,7 @@ use crate::setup::godsbattleconf::{
 };
 use crate::setup::hitlevelsetup::HitLevelSerializeError;
 use crate::setup::honorelimilateconfig::HonorElimilateConfig;
-use crate::setup::incrementshoplist::{CIncrementShopList, IncrementShopSerializeError};
+use crate::setup::incrementshoplist::IncrementShopSerializeError;
 use crate::setup::lingbao::{CLingBaoSetup, LingBaoSerializationBlock};
 use crate::setup::leitingsetup::ThingSetupCodecError;
 use crate::setup::logsystem::{CLogSystem, LogSystemSerializeError};
@@ -2971,10 +2971,9 @@ pub(crate) fn continue_game_server_trade_list_configuration(
 pub(crate) fn continue_game_server_increment_shop_configuration(
     game: &CGame,
     socket_id: i32,
-    increment_shop: &CIncrementShopList,
 ) -> WorldIncrementShopConfigurationReport {
     let mut payload = Vec::new();
-    if let Err(error) = increment_shop.add_to_byte_array(&mut payload) {
+    if let Err(error) = game.increment_shop_list().add_to_byte_array(&mut payload) {
         return WorldIncrementShopConfigurationReport {
             delivery: None,
             completion: WorldIncrementShopConfigurationCompletion::IncrementShop(error),

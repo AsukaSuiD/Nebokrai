@@ -181,6 +181,14 @@
 //! config использует этот же owner. Прежние HitLevel boolean/serialization
 //! callbacks и внешний snapshot удалены.
 //!
+//! `CIncrementShopList` также принадлежит `CGame`: dispatcher читает
+//! `setup/incrementshoplist.ini`, сохраняет bool load-result в legacy
+//! return-slot и при success + send-флаге публикует subtype `4`. Loader
+//! последовательно резолвит original/display names через тот же `CGoodsFactory`,
+//! сохраняет частичное state при ошибке разбора и отдельно загружает affiche.
+//! Initial-config и Release используют тот же owner; прежние IncrementShop
+//! boolean/serialization/release callbacks и внешний snapshot удалены.
+//!
 //! `CContributeSetup` теперь owned `CGame`: dispatcher
 //! `0x004171CA..0x004172B1` читает `data/ContributeSetup.ini`, сохраняет bool
 //! load-result в legacy return-slot и при success + send-флаге публикует
@@ -1152,6 +1160,10 @@ use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelFormatError, HitLevelS
 use crate::setup::contributesetup::{
     CContributeSetup, ContributeSetupFormatError, ContributeSetupSerializeError,
 };
+use crate::setup::incrementshoplist::{
+    CIncrementShopList, IncrementShopGoodsQuery, IncrementShopGoodsResult,
+    IncrementShopSerializeError,
+};
 use crate::public::mystringtable::MyStringTable;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
 use crate::public::wordsfilter::CWordsFilter;
@@ -1918,7 +1930,6 @@ pub(crate) enum WorldGameReleaseLiveList {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldGameReleaseVoidOwner {
     ReleaseGoodsLinks,
-    ReleaseIncrementShopList,
     UninitializeTimeToReturn,
     UninitializeIncrementLog,
     ReleaseCountryHandler,
@@ -4184,7 +4195,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     RegionLevelSetup,
     AttackCity,
     FourNationWar,
-    IncrementShop,
     Prison,
     TimeToReturn,
     PreciousBox,
@@ -4231,7 +4241,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     VillageWar,
     FourNationWar,
     Quest,
-    IncrementShop,
     Prison,
     PreciousBox,
     FairyExp,
@@ -4277,6 +4286,8 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn serialize_owner(&mut self, owner: WorldReloadSerializationOwner) -> Vec<u8>;
     /// Concrete lookup уже загруженного World `CGoodsFactory`.
     fn query_goods_id_by_original_name(&mut self, original_name: &[u8]) -> u32;
+    /// Concrete display-name lookup того же `CGoodsFactory`.
+    fn query_goods_name(&mut self, goods_id: u32) -> Option<Vec<u8>>;
     fn add_log_text(&mut self, payload: &[u8]);
     fn notify_reload_operator(&mut self, title: &[u8], message: &[u8]);
 
@@ -5854,6 +5865,7 @@ pub(crate) enum WorldReloadBlock {
     TaoZhuangSerialization(TaoZhuangSerializationBlock),
     HitLevelFormat(HitLevelFormatError),
     HitLevelSerialization(HitLevelSerializeError),
+    IncrementShopSerialization(IncrementShopSerializeError),
     ContributeFormat(ContributeSetupFormatError),
     ContributeSerialization(ContributeSetupSerializeError),
     CountryWarOwnerRequired,
@@ -6622,6 +6634,7 @@ pub(crate) struct CGame {
     ci_qing_setup: CCiQingSetup,
     tao_zhuang_setup: CTaoZhuangSetup,
     hit_level_setup: CHitLevelSetup,
+    increment_shop_list: CIncrementShopList,
     contribute_setup: CContributeSetup,
     net_client: Option<CMyNetClient>,
     net_server: Option<CMyNetServer>,
@@ -6709,6 +6722,10 @@ impl CGame {
         &self.hit_level_setup
     }
 
+    pub(crate) fn increment_shop_list(&self) -> &CIncrementShopList {
+        &self.increment_shop_list
+    }
+
     pub(crate) fn contribute_setup(&self) -> &CContributeSetup {
         &self.contribute_setup
     }
@@ -6733,6 +6750,7 @@ impl CGame {
             ci_qing_setup: CCiQingSetup::default(),
             tao_zhuang_setup: CTaoZhuangSetup::default(),
             hit_level_setup: CHitLevelSetup::default(),
+            increment_shop_list: CIncrementShopList::default(),
             contribute_setup: CContributeSetup::default(),
             net_client: None,
             net_server: None,
@@ -7918,17 +7936,62 @@ impl CGame {
                 });
             }
             WorldReloadProfile::IncrementShop => {
-                self.reload_simple_serialized(
-                    context,
-                    WorldReloadBooleanOwner::IncrementShop,
-                    WorldReloadSerializationOwner::IncrementShop,
-                    4,
-                    b"Load IncrementShopList...OK!",
-                    b"Load IncrementShopList...FAILED!",
-                    send_to_game_servers,
-                    true,
-                    &mut legacy_result,
-                );
+                const PATH: &[u8] = b"setup/incrementshoplist.ini";
+                let loaded = match context.read_resource(PATH) {
+                    Some(source) => {
+                        let result = self.increment_shop_list.load_from_bytes(
+                            &source,
+                            &mut |query| match query {
+                                IncrementShopGoodsQuery::OriginalName(name) => {
+                                    IncrementShopGoodsResult::Id(
+                                        context.query_goods_id_by_original_name(name),
+                                    )
+                                }
+                                IncrementShopGoodsQuery::DisplayName(goods_id) => {
+                                    IncrementShopGoodsResult::Name(
+                                        context.query_goods_name(goods_id),
+                                    )
+                                }
+                            },
+                        );
+                        match result {
+                            Ok(report) => {
+                                for warning in report.warnings {
+                                    context.add_log_text(&warning);
+                                }
+                                true
+                            }
+                            Err(error) => {
+                                let diagnostic = error.log_payload();
+                                if !diagnostic.is_empty() {
+                                    context.add_log_text(&diagnostic);
+                                }
+                                false
+                            }
+                        }
+                    }
+                    None => {
+                        self.increment_shop_list.release();
+                        let mut message = b"IncShopList : file '".to_vec();
+                        message.extend_from_slice(PATH);
+                        message.extend_from_slice(b"' can't found!");
+                        context.add_log_text(&message);
+                        false
+                    }
+                };
+                legacy_result = i32::from(loaded);
+                context.add_log_text(if loaded {
+                    b"Load IncrementShopList...OK!"
+                } else {
+                    b"Load IncrementShopList...FAILED!"
+                });
+                if loaded && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    self.increment_shop_list
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::IncrementShopSerialization)?;
+                    self.send_reload_payload(4, &payload);
+                }
             }
             WorldReloadProfile::Contribute => {
                 const PATH: &[u8] = b"data/ContributeSetup.ini";
@@ -10205,10 +10268,8 @@ impl CGame {
         let released = context.release_optional_owner(owner);
         events.push(WorldGameReleaseEvent::OptionalOwner { owner, released });
 
-        for owner in [
-            WorldGameReleaseVoidOwner::ReleaseIncrementShopList,
-            WorldGameReleaseVoidOwner::UninitializeTimeToReturn,
-        ] {
+        self.increment_shop_list.release();
+        for owner in [WorldGameReleaseVoidOwner::UninitializeTimeToReturn] {
             context.release_void_owner(owner);
             events.push(WorldGameReleaseEvent::VoidOwner(owner));
         }

@@ -1,8 +1,8 @@
 //! Increment-shop initial configuration исторического Miracle.
 //!
-//! Статус World `AddToByteArray` RVA `0x0003BA60` и безопасной замены
-//! `Release` RVA `0x0003BB30`: `IMPLEMENTED`; `LoadItems`, singleton plumbing и
-//! Game decoder ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Статус World `AddToByteArray` RVA `0x0003BA60`, `Release` RVA
+//! `0x0003BB30` и `LoadItems` RVA `0x0003C230`: `IMPLEMENTED`; singleton
+//! plumbing и Game decoder ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
 //! SHA-256 PDB
@@ -20,13 +20,22 @@
 //! четыре `u32` и icon: два байта после category и три после icon оставались
 //! heap-мусором. Точный Game decoder пропускает эти reserved-позиции. Rust
 //! сохраняет размер/layout, но пишет нули, устраняя внутреннюю утечку без
-//! изменения принимаемых полей. Safe owner не допускает null Item slot-ов и
+//! изменения принимаемых полей. `LoadItems` сначала освобождает прежнее
+//! состояние, затем для каждой `#`-позиции читает восемь whitespace-полей.
+//! Page/category вне `0..=255`, неразрешённый основной товар, ненулевой
+//! неразрешённый товар скидки, пустое описание либо отсутствующее отображаемое
+//! имя завершают load с уже внесённой частичной картой. Overlap менее `1`
+//! заменяется на `1`; price/icon сохраняют сужение signed long до legacy
+//! `u32/u8`. Второй проход между `<AfficheStart>` и `<AfficheEnd>` добавляет
+//! каждую целую строку с `\n`. Safe owner не допускает null Item slot-ов и
 //! освобождает весь registry через `Drop`, а не воспроизводит ошибочный ручной
 //! lifetime.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+
+use crate::public::readwrite::read_to;
 
 const ITEM_WIRE_LENGTH: usize = 0x18;
 
@@ -50,6 +59,61 @@ pub(crate) struct CIncrementShopList {
     affiche: Vec<u8>,
 }
 
+/// Единственная serial lookup-граница `CGoodsFactory` loader-а.
+pub(crate) enum IncrementShopGoodsQuery<'name> {
+    OriginalName(&'name [u8]),
+    DisplayName(u32),
+}
+
+pub(crate) enum IncrementShopGoodsResult {
+    Id(u32),
+    Name(Option<Vec<u8>>),
+}
+
+/// Результат загрузки: предупреждения original `AddLogText` до success-log.
+pub(crate) struct IncrementShopLoadReport {
+    pub(crate) warnings: Vec<Vec<u8>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum IncrementShopLoadError {
+    UnexpectedEnd,
+    InvalidTotalSort(i32),
+    InvalidSubSort(i32),
+    GoodsNotFound(Vec<u8>),
+    DiKouGoodsNotFound(Vec<u8>),
+    ItemDescriptionNotFound(Vec<u8>),
+    ItemNameNotFound(Vec<u8>),
+}
+
+impl IncrementShopLoadError {
+    pub(crate) fn log_payload(&self) -> Vec<u8> {
+        match self {
+            Self::UnexpectedEnd => Vec::new(),
+            Self::InvalidTotalSort(value) => {
+                let mut payload = value.to_string().into_bytes();
+                payload.extend_from_slice(b" Total Sort INVALID, Ignore This Setup.");
+                payload
+            }
+            Self::InvalidSubSort(value) => {
+                let mut payload = value.to_string().into_bytes();
+                payload.extend_from_slice(b" Sub Sort INVALID, Ignore This Setup.");
+                payload
+            }
+            Self::GoodsNotFound(token) => with_suffix(token, b" Goods Not Found, Ignore This Setup."),
+            Self::DiKouGoodsNotFound(token) => {
+                with_suffix(token, b" DiKouGoods Not Found, Ignore This Setup.")
+            }
+            Self::ItemDescriptionNotFound(token) => {
+                with_suffix(token, b" item desc Not Found. ignore this item!")
+            }
+            Self::ItemNameNotFound(token) => {
+                with_suffix(token, b" item name Not Found. ignore this item!")
+            }
+        }
+    }
+}
+
 impl CIncrementShopList {
     /// Эквивалент multimap insertion в конец диапазона равного page-key.
     pub(crate) fn insert(&mut self, page: u8, item: IncrementShopItem) {
@@ -65,6 +129,129 @@ impl CIncrementShopList {
     pub(crate) fn release(&mut self) {
         self.affiche.clear();
         self.items.clear();
+    }
+
+    /// Загружает точный formatted stream `incrementshoplist.ini`.
+    ///
+    /// Две ветви lookup принадлежат уже загруженному `CGoodsFactory`. Result
+    /// передаёт исходный bool и отложенные `AddLogText`, не скрывая уже
+    /// применённую часть state.
+    pub(crate) fn load_from_bytes<ResolveGoods>(
+        &mut self,
+        source: &[u8],
+        resolve_goods: &mut ResolveGoods,
+    ) -> Result<IncrementShopLoadReport, IncrementShopLoadError>
+    where
+        ResolveGoods: for<'name> FnMut(IncrementShopGoodsQuery<'name>) -> IncrementShopGoodsResult,
+    {
+        self.release();
+        let mut warnings = Vec::new();
+        let mut tokens = source
+            .split(u8::is_ascii_whitespace)
+            .filter(|token| !token.is_empty())
+            .peekable();
+
+        while read_to(&mut tokens, b"#") {
+            let Some(page) = read_signed_long(&mut tokens) else {
+                return Err(IncrementShopLoadError::UnexpectedEnd);
+            };
+            if !(0..=u8::MAX as i32).contains(&page) {
+                return Err(IncrementShopLoadError::InvalidTotalSort(page));
+            }
+
+            let Some(category) = read_signed_long(&mut tokens) else {
+                return Err(IncrementShopLoadError::UnexpectedEnd);
+            };
+            if !(0..=u8::MAX as i32).contains(&category) {
+                return Err(IncrementShopLoadError::InvalidSubSort(category));
+            }
+
+            let Some(mut overlapped_amount) = read_signed_long(&mut tokens) else {
+                return Err(IncrementShopLoadError::UnexpectedEnd);
+            };
+            if overlapped_amount < 1 {
+                let mut message = overlapped_amount.to_string().into_bytes();
+                message.extend_from_slice(b" Overlapped Num INVALID, set 1 compulsively.");
+                // Loader пишет это предупреждение, но продолжает с единицей.
+                warnings.push(message);
+                overlapped_amount = 1;
+            }
+
+            let Some(goods_original_name) = tokens.next() else {
+                return Err(IncrementShopLoadError::UnexpectedEnd);
+            };
+            let goods_id = query_goods_id(resolve_goods, goods_original_name);
+            if goods_id == 0 {
+                return Err(IncrementShopLoadError::GoodsNotFound(goods_original_name.to_vec()));
+            }
+
+            let Some(yuan_bao_price) = read_signed_long(&mut tokens) else {
+                return Err(IncrementShopLoadError::UnexpectedEnd);
+            };
+            let Some(deduction_original_name) = tokens.next() else {
+                return Err(IncrementShopLoadError::UnexpectedEnd);
+            };
+            let deduction_goods_id = query_goods_id(resolve_goods, deduction_original_name);
+            if deduction_original_name != b"0" && deduction_goods_id == 0 {
+                return Err(IncrementShopLoadError::DiKouGoodsNotFound(
+                    deduction_original_name.to_vec(),
+                ));
+            }
+
+            let Some(icon_id) = read_signed_long(&mut tokens) else {
+                return Err(IncrementShopLoadError::UnexpectedEnd);
+            };
+            let Some(description) = tokens.next() else {
+                return Err(IncrementShopLoadError::UnexpectedEnd);
+            };
+            if description.is_empty() {
+                return Err(IncrementShopLoadError::ItemDescriptionNotFound(
+                    description.to_vec(),
+                ));
+            }
+            let Some(key) = query_goods_name(resolve_goods, goods_id) else {
+                return Err(IncrementShopLoadError::ItemNameNotFound(description.to_vec()));
+            };
+
+            self.insert(
+                page as u8,
+                IncrementShopItem {
+                    category: category as u16,
+                    overlapped_amount: overlapped_amount as u32,
+                    goods_id,
+                    yuan_bao_price: yuan_bao_price as u32,
+                    deduction_goods_id,
+                    icon_id: icon_id as u8,
+                    description: description.to_vec(),
+                    key: truncate_at_nul(&key).to_vec(),
+                },
+            );
+        }
+
+        self.load_affiche(source);
+        Ok(IncrementShopLoadReport { warnings })
+    }
+
+    fn load_affiche(&mut self, source: &[u8]) {
+        self.affiche.clear();
+        let mut started = false;
+        for raw_line in source.split(|byte| *byte == b'\n') {
+            let line = raw_line.strip_suffix(b"\r").unwrap_or(raw_line);
+            if !started {
+                started = line
+                    .split(u8::is_ascii_whitespace)
+                    .any(|token| token == b"<AfficheStart>");
+                continue;
+            }
+            if line
+                .split(u8::is_ascii_whitespace)
+                .any(|token| token == b"<AfficheEnd>")
+            {
+                break;
+            }
+            self.affiche.extend_from_slice(line);
+            self.affiche.push(b'\n');
+        }
     }
 
     /// Дописывает exact `count + items + affiche` wire.
@@ -165,6 +352,37 @@ fn truncate_at_nul(value: &[u8]) -> &[u8] {
         .iter()
         .position(|byte| *byte == 0)
         .unwrap_or(value.len())]
+}
+
+fn read_signed_long<'a>(tokens: &mut impl Iterator<Item = &'a [u8]>) -> Option<i32> {
+    let token = tokens.next()?;
+    std::str::from_utf8(token).ok()?.parse().ok()
+}
+
+fn query_goods_id(
+    resolve_goods: &mut impl for<'name> FnMut(IncrementShopGoodsQuery<'name>) -> IncrementShopGoodsResult,
+    original_name: &[u8],
+) -> u32 {
+    match resolve_goods(IncrementShopGoodsQuery::OriginalName(original_name)) {
+        IncrementShopGoodsResult::Id(id) => id,
+        IncrementShopGoodsResult::Name(_) => 0,
+    }
+}
+
+fn query_goods_name(
+    resolve_goods: &mut impl for<'name> FnMut(IncrementShopGoodsQuery<'name>) -> IncrementShopGoodsResult,
+    goods_id: u32,
+) -> Option<Vec<u8>> {
+    match resolve_goods(IncrementShopGoodsQuery::DisplayName(goods_id)) {
+        IncrementShopGoodsResult::Name(name) => name,
+        IncrementShopGoodsResult::Id(_) => None,
+    }
+}
+
+fn with_suffix(value: &[u8], suffix: &[u8]) -> Vec<u8> {
+    let mut payload = value.to_vec();
+    payload.extend_from_slice(suffix);
+    payload
 }
 
 // Сырой C++ ниже сохранён как локальная документация loaders, singleton и
