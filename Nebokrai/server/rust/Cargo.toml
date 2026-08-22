@@ -23,6 +23,7 @@ getrandom = "0.4.3"
 md-5 = "0.11.0"
 parking_lot = "0.12.5"
 procfs = { version = "0.18.0", default-features = false }
+quick-xml = "0.39.2"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls", "system-proxy"] }
 rustix = { version = "1.1.4", features = ["system", "time"] }
 socket2 = "0.6.5"

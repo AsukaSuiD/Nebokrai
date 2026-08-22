@@ -851,6 +851,7 @@ dependencies = [
  "md-5",
  "parking_lot",
  "procfs",
+ "quick-xml",
  "reqwest",
  "rustix",
  "socket2",
@@ -966,6 +967,15 @@ checksum = "e6401bf7b6af22f78b563665d15a22e9aef27775b79b149a66ca022468a4e405"
 dependencies = [
  "bitflags",
  "hex",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.39.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdcc8dd4e2f670d309a5f0e83fe36dfdc05af317008fea29144da1a2ac858e5e"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]

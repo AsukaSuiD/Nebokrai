@@ -1198,6 +1198,9 @@ use crate::public::timer::{
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::godsbattleconf::CGodsBattleConf;
 use crate::setup::leitingsetup::{CThingSetup, ThingSetupCodecError};
+use crate::setup::newskillmonsterlist::{
+    NewSkillMonsterConf, NewSkillMonsterSerializeError,
+};
 use crate::setup::playerlist::{CPlayerList, PlayerListFormatError, PlayerListSerializeError};
 use crate::setup::regionrouter::RegionRouter;
 use crate::public::tools::{ini_decode, put_string_to_file};
@@ -4203,7 +4206,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     DropGoodsList,
     SkillUsageCache,
     SkillCache,
-    NewSkillMonsterList,
     GlobeSetup,
     GameSetup,
     LogSystem,
@@ -4244,7 +4246,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     GoodsList,
     MonsterList,
     SkillList,
-    NewSkillMonsterList,
     GlobeSetup,
     LogSystem,
     GmList,
@@ -4297,6 +4298,8 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn player_list(&mut self) -> &mut CPlayerList;
     /// Отдельный owner правил уничтожения предметов, разделяемый с initial-config.
     fn goods_destroy_setup(&mut self) -> &mut GoodsDestroySetup;
+    /// Отдельный owner списков монстров новых навыков для reload и initial-config.
+    fn new_skill_monster_conf(&mut self) -> &mut NewSkillMonsterConf;
     /// Возвращает исходный 32-битный result; bool owners обязаны дать `0/1`.
     fn call_boolean_owner(&mut self, owner: WorldReloadBooleanOwner) -> u32;
     fn call_void_owner(&mut self, owner: WorldReloadVoidOwner);
@@ -5883,6 +5886,7 @@ pub(crate) enum WorldReloadBlock {
     PlayerListSerialization(PlayerListSerializeError),
     GoodsDestroyFormat(GoodsDestroyFormatError),
     GoodsDestroySerialization(GoodsDestroySerializeError),
+    NewSkillMonsterSerialization(NewSkillMonsterSerializeError),
     EquipmentComposeSerialization(EquipmentComposeSerializeError),
     CiQingSerialization(CiQingSerializationBlock),
     TaoZhuangSerialization(TaoZhuangSerializationBlock),
@@ -7806,20 +7810,50 @@ impl CGame {
                 }
             }
             WorldReloadProfile::NewSkillMonsterList => {
-                if Self::reload_boolean_with_log(
-                    context,
-                    WorldReloadBooleanOwner::NewSkillMonsterList,
-                    b"Load NewSkillMonsterList.xml...ok!",
-                    b"Load NewSkillMonsterList.xml...failed!",
-                ) && send_to_game_servers
-                {
-                    self.serialize_reload_owner(
-                        context,
-                        WorldReloadSerializationOwner::NewSkillMonsterList,
-                        0x22,
-                        true,
-                        &mut legacy_result,
-                    );
+                const PATH: &[u8] = b"data/NewSkillMonsterList.xml";
+                let loaded = match context.read_resource(PATH) {
+                    Some(source) => {
+                        let string_table = self.string_table.table();
+                        match context.new_skill_monster_conf().load_from_bytes(
+                            &source,
+                            &mut |key| string_table.get_string_by_id(key).map(ToOwned::to_owned),
+                        ) {
+                            Ok(report) => {
+                                for count in report.read_monster_counts {
+                                    let count = count as u32 as i32;
+                                    context.add_log_text(
+                                        format!("read monster num: {count}").as_bytes(),
+                                    );
+                                }
+                                true
+                            }
+                            Err(error) => {
+                                context.add_log_text(error.log_payload());
+                                false
+                            }
+                        }
+                    }
+                    None => {
+                        context.new_skill_monster_conf().clear();
+                        context.add_log_text(
+                            b"error: original name in file [NewSkillMonsterList.xml] not exist!!",
+                        );
+                        false
+                    }
+                };
+                context.add_log_text(if loaded {
+                    b"Load NewSkillMonsterList.xml...ok!"
+                } else {
+                    b"Load NewSkillMonsterList.xml...failed!"
+                });
+                if loaded && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    context
+                        .new_skill_monster_conf()
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::NewSkillMonsterSerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(0x22, &payload);
                 }
             }
             WorldReloadProfile::GlobeSetup | WorldReloadProfile::GameSetup => {
