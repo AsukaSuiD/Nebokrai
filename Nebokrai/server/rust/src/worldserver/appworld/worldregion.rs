@@ -119,7 +119,9 @@
 //! `LoadNpcList` присваивает `lTime = 0`; Rust держит все эти значения
 //! именованно и строит wire prefix в исходном x86 порядке. Особый prefix
 //! `tagMonsterList` остаётся отдельным compatibility-слоем из-за захваченного
-//! старого MSVC `std::string`.
+//! старого MSVC `std::string`: четыре его scalar-поля `wOdds/wSign/`
+//! `wLeaderSign/wLeaderDistance` также materialized, а 0x22 bytes строятся
+//! только при serializer-е.
 
 use super::country::countryparam::CCountryParam;
 use super::organizingsystem::faction::{
@@ -281,6 +283,9 @@ pub(crate) enum WorldRegionSerializationBlock {
         collection: &'static str,
         count: usize,
     },
+    MonsterVariant {
+        source: WorldRegionTextLoadError,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -332,9 +337,25 @@ impl WorldRegionNpc {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct WorldRegionMonsterVariant {
-    legacy_prefix: [u8; 0x22],
+    cumulative_odds: u16,
+    sign: u16,
+    leader_sign: u16,
+    leader_distance: u16,
     name: Vec<u8>,
     script: Vec<u8>,
+}
+
+impl WorldRegionMonsterVariant {
+    fn wire_prefix(&self) -> Result<[u8; 0x22], WorldRegionSerializationBlock> {
+        legacy_monster_variant_prefix(
+            self.cumulative_odds,
+            self.sign,
+            self.leader_sign,
+            self.leader_distance,
+            &self.name,
+        )
+        .map_err(|source| WorldRegionSerializationBlock::MonsterVariant { source })
+    }
 }
 
 /// Доказанные scalar-поля PDB `CWorldRegion::tagMonster`.
@@ -741,19 +762,27 @@ impl CWorldRegion {
             }
             let name = tokens.next_bytes_field("tagMonsterList.strName")?;
             let odds = tokens.next_u16_field("tagMonsterList.wOdds")?;
-            let flag = tokens.next_u16_field("tagMonsterList.wFlag")?;
-            let leader = tokens.next_u16_field("tagMonsterList.wLeader")?;
-            let distance = tokens.next_u16_field("tagMonsterList.wDistance")?;
+            let sign = tokens.next_u16_field("tagMonsterList.wSign")?;
+            let leader_sign = tokens.next_u16_field("tagMonsterList.wLeaderSign")?;
+            let leader_distance = tokens.next_u16_field("tagMonsterList.wLeaderDistance")?;
             let script =
                 normalize_legacy_script(tokens.next_bytes_field("tagMonsterList.strScript")?);
             let Some(index) = current else {
                 continue;
             };
             cumulative_odds = cumulative_odds.wrapping_add(odds);
-            let legacy_prefix =
-                legacy_monster_variant_prefix(cumulative_odds, flag, leader, distance, name)?;
+            legacy_monster_variant_prefix(
+                cumulative_odds,
+                sign,
+                leader_sign,
+                leader_distance,
+                name,
+            )?;
             monsters[index].variants.push(WorldRegionMonsterVariant {
-                legacy_prefix,
+                cumulative_odds,
+                sign,
+                leader_sign,
+                leader_distance,
                 name: name.to_vec(),
                 script,
             });
@@ -1102,7 +1131,7 @@ impl CWorldRegion {
                 monster.variants.len(),
             )?;
             for variant in &monster.variants {
-                destination.extend_from_slice(&variant.legacy_prefix);
+                destination.extend_from_slice(&variant.wire_prefix()?);
                 append_c_string(destination, &variant.name);
                 append_c_string(destination, &variant.script);
             }
