@@ -138,6 +138,7 @@ use super::super::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, create_goods, query_goods_base_properties, unserialize_goods,
 };
 use super::cgoodscontainer::CGoodsContainerState;
+use super::ccontainer::{ContainerGuidStorage, find_by_object_guid};
 
 /// Ошибка безопасной границы amount-container codec-а.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -196,6 +197,19 @@ pub(crate) struct CAmountLimitGoodsContainer {
     goods: BTreeMap<CGuid, Box<CGoods>>,
     goods_amount_limit: u32,
     locked_goods: Vec<CGuid>,
+}
+
+impl ContainerGuidStorage for CAmountLimitGoodsContainer {
+    type Object = CGoods;
+    type Removed = Box<CGoods>;
+
+    fn find_by_guid(&self, ex_id: &CGuid) -> Option<&Self::Object> {
+        self.find(ex_id)
+    }
+
+    fn remove_by_guid(&mut self, ex_id: &CGuid) -> Option<Self::Removed> {
+        self.remove(ex_id)
+    }
 }
 
 impl CAmountLimitGoodsContainer {
@@ -385,7 +399,7 @@ impl CAmountLimitGoodsContainer {
 
     /// Делегирует object-overload точному GUID-поиску после null-check.
     pub(crate) fn find_object(&self, goods: Option<&CGoods>) -> Option<&CGoods> {
-        self.find(goods?.get_ex_id())
+        find_by_object_guid(self, goods.map(CGoods::get_ex_id))
     }
 
     /// Возвращает ordinal map-элемент, если position ниже limit и он не locked.

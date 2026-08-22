@@ -1,8 +1,8 @@
 //! Владелец базового контейнера исторического `WorldServer`.
 //!
 //! Статус constructor/destructor RVA `0x000E0DB0/0x000E0AE0` и
-//! `AddListener` RVA `0x000E0DF0` — `IMPLEMENTED`; virtual find/remove ниже
-//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально) до конкретного storage-owner-а. Точная пара:
+//! `AddListener` RVA `0x000E0DF0` и virtual GUID forwarder-ы
+//! `0x000E0A00..0x000E0A60` — `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -20,6 +20,7 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
+use crate::public::guid::CGuid;
 use crate::worldserver::appworld::listener::ccontainerlistener::CContainerListener;
 
 pub(crate) type SharedContainerListener = Arc<Mutex<dyn CContainerListener>>;
@@ -56,6 +57,59 @@ impl CContainerState {
     }
 }
 
+/// Concrete storage, к которому старый `CContainer` обращался virtual slot-ом
+/// GUID find/remove. Rust не хранит erased `CBaseObject*` и не вводит vtable.
+pub(crate) trait ContainerGuidStorage {
+    type Object;
+    type Removed;
+
+    fn find_by_guid(&self, ex_id: &CGuid) -> Option<&Self::Object>;
+    fn remove_by_guid(&mut self, ex_id: &CGuid) -> Option<Self::Removed>;
+}
+
+/// Повторяет `Find(long, GUID)`: scalar type не читается и GUID передаётся
+/// concrete virtual owner-у без дополнительных эффектов.
+pub(crate) fn find_by_typed_guid<'storage, Storage: ContainerGuidStorage>(
+    storage: &'storage Storage,
+    _object_type: i32,
+    ex_id: &CGuid,
+) -> Option<&'storage Storage::Object> {
+    storage.find_by_guid(ex_id)
+}
+
+/// Повторяет `Remove(long, GUID, void*)`: scalar type не читается.
+pub(crate) fn remove_by_typed_guid<Storage: ContainerGuidStorage>(
+    storage: &mut Storage,
+    _object_type: i32,
+    ex_id: &CGuid,
+) -> Option<Storage::Removed> {
+    storage.remove_by_guid(ex_id)
+}
+
+/// Повторяет object-overload `Find`: null даёт null, иначе используется
+/// embedded GUID объекта.
+pub(crate) fn find_by_object_guid<'storage, Storage: ContainerGuidStorage>(
+    storage: &'storage Storage,
+    ex_id: Option<&CGuid>,
+) -> Option<&'storage Storage::Object> {
+    storage.find_by_guid(ex_id?)
+}
+
+/// Повторяет object-overload `Remove`: null даёт null, иначе GUID делегируется
+/// concrete storage-owner-у.
+pub(crate) fn remove_by_object_guid<Storage: ContainerGuidStorage>(
+    storage: &mut Storage,
+    ex_id: Option<&CGuid>,
+) -> Option<Storage::Removed> {
+    storage.remove_by_guid(ex_id?)
+}
+
+/// Базовый virtual `Remove(GUID, void*)` не имел storage и всегда возвращал
+/// null; generic result сохраняет это без raw pointer-а.
+pub(crate) const fn remove_base_by_guid<Removed>(_ex_id: &CGuid) -> Option<Removed> {
+    None
+}
+
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
@@ -78,7 +132,7 @@ impl CContainerState {
 
 // ============================================================================
 // FUNCTION: CContainer::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\ccontainer.cpp:162
@@ -86,13 +140,15 @@ impl CContainerState {
 // ADDRESS: 004e0a00
 // PROTOTYPE: CBaseObject * __thiscall Find(long param_1, CGUID * param_2)
 //
+// IMPLEMENTED_OWNER: `find_by_typed_guid` выше игнорирует type scalar и
+// делегирует GUID concrete storage-owner-у, как virtual slot исходника.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\ccontainer.cpp:119
@@ -100,13 +156,15 @@ impl CContainerState {
 // ADDRESS: 004e0a10
 // PROTOTYPE: CBaseObject * __thiscall Remove(CGUID * param_1, void * param_2)
 //
+// IMPLEMENTED_OWNER: `remove_base_by_guid` возвращает typed `None`: base
+// virtual не имел storage и буквально возвращал null.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\ccontainer.cpp:225
@@ -114,13 +172,15 @@ impl CContainerState {
 // ADDRESS: 004e0a20
 // PROTOTYPE: CBaseObject * __thiscall Remove(long param_1, CGUID * param_2, void * param_3)
 //
+// IMPLEMENTED_OWNER: `remove_by_typed_guid` игнорирует type scalar и
+// перенаправляет GUID concrete storage-owner-у.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CContainer::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\ccontainer.cpp:145
@@ -128,13 +188,15 @@ impl CContainerState {
 // ADDRESS: 004e0a40
 // PROTOTYPE: CBaseObject * __thiscall Find(CBaseObject * param_1)
 //
+// IMPLEMENTED_OWNER: `find_by_object_guid` сохраняет null gate и передаёт
+// embedded GUID объекта, не создавая erased `CBaseObject*`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\ccontainer.cpp:209
@@ -142,6 +204,8 @@ impl CContainerState {
 // ADDRESS: 004e0a60
 // PROTOTYPE: CBaseObject * __thiscall Remove(CBaseObject * param_1, void * param_2)
 //
+// IMPLEMENTED_OWNER: `remove_by_object_guid` сохраняет null gate и делегирует
+// GUID concrete storage-owner-у.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
