@@ -210,6 +210,11 @@ impl CVolumeLimitGoodsContainer {
         self.cells.clear();
     }
 
+    /// Exact `AI` является только inherited dispatch amount-owner-а.
+    pub(crate) fn ai(&mut self, on_goods_ai: impl FnMut(&mut CGoods)) {
+        self.amount_base.ai(on_goods_ai);
+    }
+
     /// Возвращает первый cell с exact GUID, как исходный linear scan.
     pub(crate) fn query_goods_position(&self, ex_id: &CGuid) -> Option<u32> {
         self.cells
@@ -471,7 +476,7 @@ impl CVolumeLimitGoodsContainer {
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cvolumelimitgoodscontainer.cpp:339
@@ -479,6 +484,7 @@ impl CVolumeLimitGoodsContainer {
 // ADDRESS: 004da640
 // PROTOTYPE: void __thiscall AI(void)
 //
+// Реализовано выше как inherited delegate `ai` к amount-owner-у.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

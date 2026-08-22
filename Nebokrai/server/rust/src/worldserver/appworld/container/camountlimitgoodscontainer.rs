@@ -351,6 +351,15 @@ impl CAmountLimitGoodsContainer {
         self.container_base.release();
     }
 
+    /// Обходит все goods в storage-order ровно один раз для virtual `CGoods::AI`.
+    /// Сам товарный AI остаётся owner-ом `CGoods`, поэтому callback внедряется
+    /// явно вместо прежнего virtual dispatch через raw pointer.
+    pub(crate) fn ai(&mut self, mut on_goods_ai: impl FnMut(&mut CGoods)) {
+        for goods in self.goods.values_mut() {
+            on_goods_ai(goods);
+        }
+    }
+
     /// Копирует World-набор `limit + goods`, сохраняя owner/locked target-а.
     pub(crate) fn clone_into(
         &self,
@@ -822,7 +831,7 @@ fn read_amount_u32(
 
 // ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:501
@@ -830,6 +839,8 @@ fn read_amount_u32(
 // ADDRESS: 004dbfb0
 // PROTOTYPE: void __thiscall AI(void)
 //
+// Реализовано выше как `ai`: exact обход goods сохранён, а достигнутый
+// товарный owner передаёт virtual `CGoods::AI` явным callback-ом.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
