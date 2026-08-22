@@ -2,7 +2,8 @@
 //!
 //! Статус `CFourNationWarSys::AddToByteArray` RVA `0x00094250`,
 //! `RecvResultFromGS` RVA `0x00093C60` и `ConvertMoraleToExploit` RVA
-//! `0x00093F80`: `IMPLEMENTED`; loader, timers и
+//! `0x00093F80`, `OnRefreshRegion`/`OnClearWar`/`RequestWarResultFromGS` RVA
+//! `0x00093B10/0x00093B80/0x00093BF0`: `IMPLEMENTED`; loader, timers и
 //! остальной Game runtime ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -289,7 +290,54 @@ pub(crate) struct FourNationWarResultReport {
     pub(crate) publications: Vec<FourNationMoralePublication>,
 }
 
+/// Общая безопасная materialization трёх static World callback-ов.
+fn send_four_nation_broadcast<SendAll, Delivery>(
+    opcode: i32,
+    region_id: i32,
+    send_all: &mut SendAll,
+) -> Delivery
+where
+    SendAll: FnMut(&CMessage) -> Delivery,
+{
+    let mut message = CMessage::new(opcode);
+    message.base_mut().add_long(region_id);
+    send_all(&message)
+}
+
 impl CFourNationWarSys {
+    /// Broadcast `OnRefreshRegion`: exact `0x7FE41 { region_id:i32 }`.
+    pub(crate) fn on_refresh_region<SendAll, Delivery>(
+        region_id: i32,
+        send_all: &mut SendAll,
+    ) -> Delivery
+    where
+        SendAll: FnMut(&CMessage) -> Delivery,
+    {
+        send_four_nation_broadcast(0x7FE41, region_id, send_all)
+    }
+
+    /// Broadcast `OnClearWar`: exact `0x7FE44 { region_id:i32 }`.
+    pub(crate) fn on_clear_war<SendAll, Delivery>(
+        region_id: i32,
+        send_all: &mut SendAll,
+    ) -> Delivery
+    where
+        SendAll: FnMut(&CMessage) -> Delivery,
+    {
+        send_four_nation_broadcast(0x7FE44, region_id, send_all)
+    }
+
+    /// Broadcast `RequestWarResultFromGS`: exact `0x7FE45 { region_id:i32 }`.
+    pub(crate) fn request_war_result_from_gs<SendAll, Delivery>(
+        region_id: i32,
+        send_all: &mut SendAll,
+    ) -> Delivery
+    where
+        SendAll: FnMut(&CMessage) -> Delivery,
+    {
+        send_four_nation_broadcast(0x7FE45, region_id, send_all)
+    }
+
     /// Восстанавливает полный exact loader `FourNationWarSys.ini`.
     ///
     /// Source `regions/<first region>.nation` запрашивается лишь после
@@ -844,7 +892,7 @@ fn next_war_i32<'a>(
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::OnRefreshRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:517
@@ -852,13 +900,14 @@ fn next_war_i32<'a>(
 // ADDRESS: 00493b10
 // PROTOTYPE: void __stdcall OnRefreshRegion(long param_1)
 //
+// IMPLEMENTED_OWNER: `CFourNationWarSys::on_refresh_region` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::OnClearWar
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:646
@@ -866,13 +915,14 @@ fn next_war_i32<'a>(
 // ADDRESS: 00493b80
 // PROTOTYPE: void __stdcall OnClearWar(long param_1)
 //
+// IMPLEMENTED_OWNER: `CFourNationWarSys::on_clear_war` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::RequestWarResultFromGS
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:669
@@ -880,6 +930,7 @@ fn next_war_i32<'a>(
 // ADDRESS: 00493bf0
 // PROTOTYPE: void __cdecl RequestWarResultFromGS(long param_1)
 //
+// IMPLEMENTED_OWNER: `CFourNationWarSys::request_war_result_from_gs` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
