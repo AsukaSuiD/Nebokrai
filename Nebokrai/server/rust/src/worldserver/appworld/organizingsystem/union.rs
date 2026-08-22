@@ -3377,6 +3377,11 @@ impl CUnion {
     }
 
     /// Проверяет manager-а относительно другой member-faction.
+    ///
+    /// Это полный owner `CUnion::CheckOperValidate(manager, target, purview)`
+    /// RVA `0x000C18D0`: выделенный Ghidra хвост `0x000C18DB` не является
+    /// самостоятельной функцией и продолжает те же проверки membership и
+    /// противоположности purview.
     pub(crate) fn check_operator_validate_target<Context>(
         &self,
         manager_player_id: i32,
@@ -4366,10 +4371,15 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: FUN_004c18db
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:490
+// Ghidra ошибочно выделил блок `0x004C18DB` из
+// `CUnion::CheckOperValidate(long,long,ePurview)` RVA `0x000C18D0`.
+// RUST: `CUnion::check_operator_validate_target` выше сохраняет его gates:
+// manager != target, master-faction, обе membership-проверки и различие
+// purview при разрешённом manager-е.
 // RVA: 0x000C18DB
 // ADDRESS: 004c18db
 // PROTOTYPE: undefined FUN_004c18db()
