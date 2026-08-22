@@ -1,8 +1,8 @@
 //! Две таблицы преобразования экипировки исторического Miracle.
 //!
-//! Статус World `EquipmentComposeList::AddToByteArray` RVA `0x0008A750`:
-//! `IMPLEMENTED`; text loader, Game decoder и lookup queries ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! World `EquipmentComposeList::LoadList/AddToByteArray` RVA
+//! `0x0008A860/0x0008A750` — `IMPLEMENTED`; Game decoder и lookup queries ниже
+//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
 //! SHA-256 PDB
@@ -17,10 +17,18 @@
 //! записи, но reconnect caller игнорировал результат; Rust сообщает только
 //! реальную ошибку представимости count и не переносит бессодержательный flag.
 //! `BTreeMap` заменяет MSVC tree без изменения unsigned key-order.
+//! `LoadList` очищает обе таблицы до попытки чтения, ищет два точных маркера
+//! `#`, пропускает следующий label и читает signed count с парами signed
+//! `long`, сохраняя их 32-битный шаблон как unsigned key/value. Exact
+//! `0x0048A8F7..0x0048AB11` возвращает `0` только при ошибке открытия и `1`
+//! после любого открытого stream, даже если секции неполны; это legacy-
+//! различие между доступностью ресурса и полнотой данных сохранено.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+
+use super::readwrite::read_to;
 
 /// Safe owner исходных static `m_mapList1` и `m_mapList2`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -30,6 +38,22 @@ pub(crate) struct EquipmentComposeList {
 }
 
 impl EquipmentComposeList {
+    /// Загружает две ordered map из уже выбранного resource backend-а.
+    pub(crate) fn load_list(&mut self, source: Option<&[u8]>) -> bool {
+        self.clear();
+        let Some(source) = source else {
+            return false;
+        };
+
+        let mut tokens = source
+            .split(|byte| byte.is_ascii_whitespace())
+            .filter(|token| !token.is_empty());
+        let mut stream_failed = false;
+        load_section(&mut tokens, &mut stream_failed, &mut self.first);
+        load_section(&mut tokens, &mut stream_failed, &mut self.second);
+        true
+    }
+
     pub(crate) fn insert_first(&mut self, source: u32, target: u32) -> bool {
         insert_first_wins(&mut self.first, source, target)
     }
@@ -93,6 +117,50 @@ fn insert_first_wins(values: &mut BTreeMap<u32, u32>, source: u32, target: u32) 
     }
     values.insert(source, target);
     true
+}
+
+fn load_section<'a>(
+    tokens: &mut impl Iterator<Item = &'a [u8]>,
+    stream_failed: &mut bool,
+    destination: &mut BTreeMap<u32, u32>,
+) {
+    if *stream_failed || !read_to(tokens, b"#") {
+        return;
+    }
+    if tokens.next().is_none() {
+        *stream_failed = true;
+        return;
+    }
+    let count = read_formatted_long(tokens, stream_failed);
+    if count <= 0 {
+        return;
+    }
+    for _ in 0..count {
+        let source = read_formatted_long(tokens, stream_failed) as u32;
+        let target = read_formatted_long(tokens, stream_failed) as u32;
+        insert_first_wins(destination, source, target);
+    }
+}
+
+fn read_formatted_long<'a>(
+    tokens: &mut impl Iterator<Item = &'a [u8]>,
+    stream_failed: &mut bool,
+) -> i32 {
+    if *stream_failed {
+        return 0;
+    }
+    let Some(token) = tokens.next() else {
+        *stream_failed = true;
+        return 0;
+    };
+    let Some(value) = std::str::from_utf8(token)
+        .ok()
+        .and_then(|token| token.parse::<i32>().ok())
+    else {
+        *stream_failed = true;
+        return 0;
+    };
+    value
 }
 
 fn write_map(
@@ -173,7 +241,7 @@ fn write_map(
 
 // ============================================================================
 // FUNCTION: EquipmentComposeList::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\equipmentcomposelist.cpp:76
@@ -187,7 +255,7 @@ fn write_map(
 
 // ============================================================================
 // FUNCTION: EquipmentComposeList::LoadList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\equipmentcomposelist.cpp:17

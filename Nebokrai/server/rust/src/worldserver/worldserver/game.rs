@@ -141,6 +141,14 @@
 //! вызывает двухаргументный overload, создание роли — трёхаргументный с exact
 //! all-numbers gate; прежние внешние callback-и для этих путей удалены.
 //!
+//! `EquipmentComposeList` также принадлежит единственному `CGame`: reload и
+//! initial-config serializer читают одну пару ordered map. Exact caller
+//! `0x00417AF6..0x00417B7F` передаёт `data/EquipmentCompose.ini`, сохраняет
+//! return `LoadList`, пишет прежний log и только при success + send-флаге
+//! публикует `0x7F801/0x30`. Прежние boolean/serialization callback-owner-ы
+//! для этой ветви удалены; resource backend и `CMessage` остаются общими
+//! техническими границами.
+//!
 //! `LoadSetup` сначала пробует обычный `setup.ini`, а только при ошибке
 //! открытия — декодированный `setup.dat`. Поток читает пары `label + value`,
 //! label не проверяет, строки хранит byte-exact и при EOF/fail-state оставляет
@@ -1088,6 +1096,9 @@ use crate::public::auctionlog::{
 };
 use crate::public::date::TagTime;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
+use crate::public::equipmentcomposelist::{
+    EquipmentComposeList, EquipmentComposeSerializeError,
+};
 use crate::public::mystringtable::MyStringTable;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
 use crate::public::wordsfilter::CWordsFilter;
@@ -4137,7 +4148,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     BattleFairyCombine,
     Synthesis,
     DaKongXiangQian,
-    EquipmentCompose,
     GoodsDestroy,
     HonorEliminate,
     TaoZhuang,
@@ -4188,7 +4198,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     BattleFairyCombine,
     Synthesis,
     DaKongXiangQian,
-    EquipmentCompose,
     GoodsDestroy,
     TaoZhuang,
     CiQingAndLingBao,
@@ -5797,6 +5806,7 @@ pub(crate) enum WorldReloadBlock {
     RegionList(WorldRegionListBlock),
     RegionSnapshot(WorldReloadRegionSnapshotBlock),
     ThingSetupCodec(ThingSetupCodecError),
+    EquipmentComposeSerialization(EquipmentComposeSerializeError),
     CountryWarOwnerRequired,
     CountryWar(CountryWarReloadBlock),
 }
@@ -6558,6 +6568,7 @@ pub(crate) struct CGame {
     string_table: MyStringTable,
     string_table_array: Vec<u8>,
     words_filter: CWordsFilter,
+    equipment_compose_list: EquipmentComposeList,
     net_client: Option<CMyNetClient>,
     net_server: Option<CMyNetServer>,
     regions: BTreeMap<i32, WorldRegionAssignment>,
@@ -6624,6 +6635,10 @@ impl CGame {
             .check_with_numeric_gate(value, replace, reject_all_numbers)
     }
 
+    pub(crate) fn equipment_compose_list(&self) -> &EquipmentComposeList {
+        &self.equipment_compose_list
+    }
+
     /// Создаёт `tagSetup`, затем применяет четыре точные записи `CGame::CGame`.
     pub(crate) fn new() -> Self {
         Self {
@@ -6633,6 +6648,7 @@ impl CGame {
             string_table: MyStringTable::new(),
             string_table_array: Vec::new(),
             words_filter: CWordsFilter::new(),
+            equipment_compose_list: EquipmentComposeList::default(),
             net_client: None,
             net_server: None,
             regions: BTreeMap::new(),
@@ -7932,17 +7948,22 @@ impl CGame {
                 );
             }
             WorldReloadProfile::EquipmentCompose => {
-                self.reload_simple_serialized(
-                    context,
-                    WorldReloadBooleanOwner::EquipmentCompose,
-                    WorldReloadSerializationOwner::EquipmentCompose,
-                    0x30,
-                    b"Load EquipmentCompose.ini...ok!",
-                    b"Load EquipmentCompose.ini...failed!",
-                    send_to_game_servers,
-                    false,
-                    &mut legacy_result,
-                );
+                const PATH: &[u8] = b"data/EquipmentCompose.ini";
+                let source = context.read_resource(PATH);
+                let loaded = self.equipment_compose_list.load_list(source.as_deref());
+                legacy_result = i32::from(loaded);
+                context.add_log_text(if loaded {
+                    b"Load EquipmentCompose.ini...ok!"
+                } else {
+                    b"Load EquipmentCompose.ini...failed!"
+                });
+                if loaded && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    self.equipment_compose_list
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::EquipmentComposeSerialization)?;
+                    self.send_reload_payload(0x30, &payload);
+                }
             }
             WorldReloadProfile::GoodsDestroy => {
                 self.reload_simple_serialized(

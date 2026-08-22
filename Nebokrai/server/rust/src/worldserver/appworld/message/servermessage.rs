@@ -284,9 +284,7 @@ use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::networld::mynetclient::CMyNetClient;
 use crate::nets::servers::ServerCommandHandle;
 use crate::public::dupliregionsetup::{CDupliRegionSetup, DupliRegionSerializeError};
-use crate::public::equipmentcomposelist::{
-    EquipmentComposeList, EquipmentComposeSerializeError,
-};
+use crate::public::equipmentcomposelist::EquipmentComposeSerializeError;
 use crate::public::ciqing::{CCiQingSetup, CiQingSerializationBlock};
 use crate::public::taozhuangsetup::{CTaoZhuangSetup, TaoZhuangSerializationBlock};
 use crate::setup::cbattlefairyexpconfig::{
@@ -3131,10 +3129,12 @@ pub(crate) fn continue_game_server_synthesis_configuration(
 pub(crate) fn continue_game_server_equipment_compose_configuration(
     game: &CGame,
     socket_id: i32,
-    equipment_compose: &EquipmentComposeList,
 ) -> WorldEquipmentComposeConfigurationReport {
     let mut payload = Vec::new();
-    if let Err(error) = equipment_compose.add_to_byte_array(&mut payload) {
+    if let Err(error) = game
+        .equipment_compose_list()
+        .add_to_byte_array(&mut payload)
+    {
         return WorldEquipmentComposeConfigurationReport {
             delivery: None,
             completion: WorldEquipmentComposeConfigurationCompletion::EquipmentCompose(error),
