@@ -338,7 +338,7 @@ impl ClientResource {
         self.packages.get(&package_type)
     }
 
-    /// Повторяет `IsFileExist` после normalizing lookup text.
+    /// Нормализованный lookup `rfOpen` после exact `CheckRFileStr`.
     pub(crate) fn file_info(&self, path: &[u8]) -> Option<&FileInfo> {
         let mut normalized = path.to_vec();
         for byte in &mut normalized {
@@ -354,7 +354,21 @@ impl ClientResource {
     }
 
     pub(crate) fn is_file_exist(&self, path: &[u8]) -> bool {
-        self.file_info(path).is_some()
+        // `IsFileExist` не вызывает `CheckRFileStr`: exact код ищет первый
+        // `\\` и, когда он не стоит в позиции ноль (включая отсутствие),
+        // дописывает `\\` *в конец*. `GetFileInfoByText` тогда оставляет
+        // root, поэтому путь без initial `\\` наблюдаемо даёт `true`.
+        // Это не перенос внутренней ошибки, а публичный bool-quirk; rfOpen
+        // продолжает использовать отдельный нормализованный `file_info`.
+        let mut lookup = path
+            .split(|byte| *byte == 0)
+            .next()
+            .unwrap_or_default()
+            .to_vec();
+        if lookup.first() != Some(&b'\\') {
+            lookup.push(b'\\');
+        }
+        self.files_info.file_info_by_text(&lookup).is_some()
     }
 
     /// Связывает `CClientResource::FindFileList` с owned `.ril` tree.
@@ -643,6 +657,11 @@ fn package_path(root: &Path, file_name: &[u8]) -> PathBuf {
 // ADDRESS: 0044f750
 // PROTOTYPE: bool __thiscall IsFileExist(char * param_1)
 //
+// Exact дизассемблировка `0x0044F7A7..0x0044F7CB` подтверждает: функция
+// дописывает `\\` только если первый `\\` не находится в позиции ноль, а
+// затем делегирует `GetFileInfoByText`. `ClientResource::is_file_exist`
+// сохраняет этот публичный trailing-separator quirk, отдельно от
+// нормализованного `rfOpen` пути.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
