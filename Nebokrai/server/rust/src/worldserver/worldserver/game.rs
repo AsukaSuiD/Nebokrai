@@ -68,6 +68,7 @@
 //! полный `CGame::GenerateDBData` RVA `0x00012E50`,
 //! `CGame::GeterateRegionDBData` RVA `0x00012860`,
 //! `CGame::RefreshOwnedCityOrg` RVA `0x000128E0`,
+//! `CGame::CheckInvalidString` RVA `0x00001B30`,
 //! `SaveThreadFunc` RVA `0x00001E30`, полный `CGame::AI` RVA `0x000148A0`,
 //! полный `CGame::ProcessPlayerDataQueue` RVA `0x00013BD0`,
 //! worker `LoadPlayerDataFromDB` RVA `0x000092C0`,
@@ -131,6 +132,12 @@
 //! достигнутый route snapshot вместо сырого указателя. Null `pRegion` в EXE
 //! разыменовывался; Rust считает его повреждённым внутренним состоянием,
 //! пропускает и явно считает, не приписывая падению игровую семантику.
+//!
+//! `CheckInvalidString` остаётся точным однострочным делегатом, но process-global
+//! `CWordsFilter` теперь является owned полем единственного `CGame`. `Init`
+//! читает оба ресурса на прежней позиции и игнорирует bool `Initial`, а Release
+//! очищает owner на позиции исходного singleton delete. Это устраняет global
+//! lifetime, не меняя порядок загрузки, фильтрации или teardown.
 //!
 //! `LoadSetup` сначала пробует обычный `setup.ini`, а только при ошибке
 //! открытия — декодированный `setup.dat`. Поток читает пары `label + value`,
@@ -1081,6 +1088,7 @@ use crate::public::date::TagTime;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::public::mystringtable::MyStringTable;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
+use crate::public::wordsfilter::CWordsFilter;
 use crate::public::readwrite::read_to;
 use crate::public::timer::{
     AsyncTimerCallbackDisposition, AsyncTimerCallbackHandler, AsyncTimerRunBlock,
@@ -1787,7 +1795,6 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn load_region_parameters(&mut self, game: &mut CGame) -> bool;
     fn country_parameter_source(&mut self) -> Option<Vec<u8>>;
     fn country_war_source(&mut self) -> Option<Vec<u8>>;
-    fn initialize_words_filter(&mut self, invalid_strings: &[u8], char_codes: &[u8]);
     fn use_appellation_function(&mut self) -> bool;
     /// Возвращает достигнутый player DB-owner и его текущий caller-connection.
     fn player_database(
@@ -6550,6 +6557,7 @@ pub(crate) struct CGame {
     globe_variables: WorldGlobeVariables,
     string_table: MyStringTable,
     string_table_array: Vec<u8>,
+    words_filter: CWordsFilter,
     net_client: Option<CMyNetClient>,
     net_server: Option<CMyNetServer>,
     regions: BTreeMap<i32, WorldRegionAssignment>,
@@ -6600,6 +6608,11 @@ impl CGame {
         }
     }
 
+    /// Делегирует exact World overload достигнутому owned `CWordsFilter`.
+    pub(crate) fn check_invalid_string(&self, value: &mut Vec<u8>, replace: bool) -> bool {
+        self.words_filter.check(value, replace)
+    }
+
     /// Создаёт `tagSetup`, затем применяет четыре точные записи `CGame::CGame`.
     pub(crate) fn new() -> Self {
         Self {
@@ -6608,6 +6621,7 @@ impl CGame {
             globe_variables: WorldGlobeVariables::default(),
             string_table: MyStringTable::new(),
             string_table_array: Vec::new(),
+            words_filter: CWordsFilter::new(),
             net_client: None,
             net_server: None,
             regions: BTreeMap::new(),
@@ -9469,7 +9483,18 @@ impl CGame {
             stop!(WorldGameInitBlockReason::BooleanOwner(owner));
         }
 
-        context.initialize_words_filter(b"setup/InvalidStr.ini", b"setup/charcode.ini");
+        const INVALID_STRINGS: &[u8] = b"setup/InvalidStr.ini";
+        const CHAR_CODES: &[u8] = b"setup/charcode.ini";
+        let invalid_strings = context.read_resource(INVALID_STRINGS);
+        let char_codes = invalid_strings
+            .as_ref()
+            .and_then(|_| context.read_resource(CHAR_CODES));
+        let _ = self.words_filter.initial(
+            INVALID_STRINGS,
+            CHAR_CODES,
+            invalid_strings.as_deref(),
+            char_codes.as_deref(),
+        );
         events.push(WorldGameInitEvent::WordsFilterInitialized);
         for &profile in &[
             b"BattleFairyExpConfig".as_slice(),
@@ -10008,9 +10033,15 @@ impl CGame {
         events.push(WorldGameReleaseEvent::VoidOwner(
             WorldGameReleaseVoidOwner::UninitializeIncrementLog,
         ));
-        for owner in [
+        context.release_void_owner(WorldGameReleaseVoidOwner::ReleaseCountryHandler);
+        events.push(WorldGameReleaseEvent::VoidOwner(
             WorldGameReleaseVoidOwner::ReleaseCountryHandler,
+        ));
+        self.words_filter.clear();
+        events.push(WorldGameReleaseEvent::VoidOwner(
             WorldGameReleaseVoidOwner::ReleaseWordsFilter,
+        ));
+        for owner in [
             WorldGameReleaseVoidOwner::ReleaseOrganizingController,
             WorldGameReleaseVoidOwner::ReleaseAttackCity,
             WorldGameReleaseVoidOwner::ReleaseVillageWar,
@@ -14275,18 +14306,16 @@ impl CGame {
     /// Выполняет полный reached `CPlayer::ChangeName` без global singleton-ов.
     /// Filter получает отдельную mutable копию, а последующие проверки и
     /// финальное присваивание используют исходные bytes, как exact owner.
-    pub(crate) async fn change_map_player_name<Database, CheckInvalidString>(
+    pub(crate) async fn change_map_player_name<Database>(
         &mut self,
         player_id: u32,
         requested_name: Option<&[u8]>,
         globe_setup: &GlobeSetupSnapshot,
         database: &mut Database,
         active_transaction: Option<&mut WorldTdsClient>,
-        mut check_invalid_string: CheckInvalidString,
     ) -> Result<WorldPlayerNameChangeReport, WorldPlayerNameLookupError>
     where
         Database: RsPlayerOwner + ?Sized,
-        CheckInvalidString: FnMut(&mut Vec<u8>, bool) -> bool,
     {
         let report = |requested_name: &[u8], legacy_result, disposition| {
             WorldPlayerNameChangeReport {
@@ -14337,7 +14366,7 @@ impl CGame {
         }
 
         let mut checked_name = requested_name.to_vec();
-        if !check_invalid_string(&mut checked_name, false) {
+        if !self.check_invalid_string(&mut checked_name, false) {
             return Ok(report(
                 requested_name,
                 3,
@@ -16582,7 +16611,6 @@ where
             &mut *application_callbacks.random,
             rs_player,
             player_database.as_deref_mut(),
-            check_invalid_organizing_string,
             faction_chat_log_enabled,
             private_chat_log_enabled,
             add_log_text,
@@ -19836,19 +19864,8 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // IMPLEMENTED: `CGame::SendMsg2GameServer` RVA `0x00001B10` находится выше.
 
-// ============================================================================
-// FUNCTION: CGame::CheckInvalidString
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4592
-// RVA: 0x00001B30
-// ADDRESS: 00401b30
-// PROTOTYPE: bool __thiscall CheckInvalidString(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1, bool param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CGame::CheckInvalidString` RVA `0x00001B30` находится выше;
+// process-global singleton заменён owned `CWordsFilter` без изменения dispatch.
 
 // ============================================================================
 // FUNCTION: CGame::GetPlayerEquipID

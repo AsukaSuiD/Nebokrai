@@ -46,6 +46,16 @@ pub(crate) mod auctionlog;
 pub(crate) mod md5;
 pub(crate) mod mystringtable;
 pub(crate) mod stringtable;
+#[allow(
+    dead_code,
+    reason = "CharCodeFilter materialized for World name filtering before its snapshot serializer"
+)]
+pub(crate) mod char_code_filter;
+#[allow(
+    dead_code,
+    reason = "CWordsFilter подключён к CGame до reload и initial-config consumers"
+)]
+pub(crate) mod wordsfilter;
 
 #[allow(
     dead_code,

@@ -348,7 +348,6 @@ pub(crate) async fn on_other_message(
     random: &mut dyn FnMut(i32) -> i32,
     rs_player: &mut TiberiusRsPlayer,
     player_database: Option<&mut WorldTdsClient>,
-    check_invalid_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
     faction_chat_log_enabled: bool,
     private_chat_log_enabled: bool,
     add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
@@ -516,7 +515,6 @@ pub(crate) async fn on_other_message(
                     globe_setup,
                     rs_player,
                     player_database,
-                    &mut *check_invalid_string,
                 )
                 .await;
 

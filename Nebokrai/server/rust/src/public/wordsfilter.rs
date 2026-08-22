@@ -1,6 +1,137 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Владелец запрещённых слов WorldServer.
+//!
+//! World `CWordsFilter::CWordsFilter/Initial/LoadFilter/ReloadFilter/IsValid`,
+//! двухаргументный `Check` и singleton lifetime — `IMPLEMENTED`;
+//! трёхаргументный replace-owner, wire serializer и GameServer-вариант ниже
+//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
+//! исходный owner `e:\svn\fengyun_russia_dev\public\wordsfilter.cpp`.
+//!
+//! Запрещённые строки сохраняются byte-exact и проверяются как case-sensitive
+//! подстроки в исходном list-order. Двухаргументный overload не заменяет слова:
+//! он фиксирует первый match, всё равно вызывает `CharCodeFilter::check`, затем
+//! возвращает conjunction обоих результатов. `Vec` и owned `CWordsFilter` у
+//! `CGame` заменяют singleton/list/STL lifetime. Чтение ресурсов выполняет
+//! контекст WorldServer; parser сохраняет Windows text-mode CRLF, `fgets(1024)`
+//! и безусловное удаление последнего прочитанного byte каждой порции.
+
+use super::char_code_filter::CharCodeFilter;
+
+pub(crate) struct CWordsFilter {
+    filter_file_name: Vec<u8>,
+    char_code_file_name: Vec<u8>,
+    filters: Vec<Vec<u8>>,
+    char_code_filter: CharCodeFilter,
+}
+
+impl CWordsFilter {
+    pub(crate) const fn new() -> Self {
+        Self {
+            filter_file_name: Vec::new(),
+            char_code_file_name: Vec::new(),
+            filters: Vec::new(),
+            char_code_filter: CharCodeFilter::new(),
+        }
+    }
+
+    pub(crate) fn initial(
+        &mut self,
+        filter_file_name: &[u8],
+        char_code_file_name: &[u8],
+        filter_source: Option<&[u8]>,
+        char_code_source: Option<&[u8]>,
+    ) -> bool {
+        self.filter_file_name.clear();
+        self.filter_file_name.extend_from_slice(filter_file_name);
+        self.char_code_file_name.clear();
+        self.char_code_file_name
+            .extend_from_slice(char_code_file_name);
+        self.load_filter(filter_source, char_code_source)
+    }
+
+    pub(crate) fn reload(
+        &mut self,
+        filter_source: Option<&[u8]>,
+        char_code_source: Option<&[u8]>,
+    ) -> bool {
+        self.filters.clear();
+        self.char_code_filter.clear();
+        self.load_filter(filter_source, char_code_source)
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.filters.clear();
+        self.char_code_filter.clear();
+        self.filter_file_name.clear();
+        self.char_code_file_name.clear();
+    }
+
+    pub(crate) fn is_valid(&self) -> bool {
+        !self.filters.is_empty() || !self.char_code_filter.ranges().is_empty()
+    }
+
+    pub(crate) fn check(&self, value: &mut Vec<u8>, replace: bool) -> bool {
+        let words_valid = !self.filters.iter().any(|filter| contains(value, filter));
+        let codes_valid = self.char_code_filter.check(value, replace, false);
+        words_valid && codes_valid
+    }
+
+    pub(crate) fn filter_file_name(&self) -> &[u8] {
+        &self.filter_file_name
+    }
+
+    pub(crate) fn char_code_file_name(&self) -> &[u8] {
+        &self.char_code_file_name
+    }
+
+    fn load_filter(
+        &mut self,
+        filter_source: Option<&[u8]>,
+        char_code_source: Option<&[u8]>,
+    ) -> bool {
+        let Some(filter_source) = filter_source else {
+            return false;
+        };
+        append_fgets_lines(filter_source, &mut self.filters);
+        self.char_code_filter.load(char_code_source)
+    }
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    needle.is_empty()
+        || (needle.len() <= haystack.len()
+            && haystack.windows(needle.len()).any(|window| window == needle))
+}
+
+fn append_fgets_lines(source: &[u8], destination: &mut Vec<Vec<u8>>) {
+    let mut translated = Vec::with_capacity(source.len());
+    let mut cursor = 0;
+    while cursor < source.len() {
+        if source[cursor..].starts_with(b"\r\n") {
+            translated.push(b'\n');
+            cursor += 2;
+        } else {
+            translated.push(source[cursor]);
+            cursor += 1;
+        }
+    }
+
+    let mut cursor = 0;
+    while cursor < translated.len() {
+        let remaining = &translated[cursor..];
+        let take = remaining
+            .iter()
+            .take(1023)
+            .position(|byte| *byte == b'\n')
+            .map_or(remaining.len().min(1023), |index| index + 1);
+        let mut line = remaining[..take].to_vec();
+        cursor += take;
+        let _ = line.pop();
+        if !line.is_empty() {
+            destination.push(line);
+        }
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -147,7 +278,7 @@
 
 // ============================================================================
 // FUNCTION: CWordsFilter::IsValid
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:258
@@ -161,7 +292,7 @@
 
 // ============================================================================
 // FUNCTION: CWordsFilter::Check
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:98
@@ -203,7 +334,7 @@
 
 // ============================================================================
 // FUNCTION: CWordsFilter::~CWordsFilter
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.h:15
@@ -217,7 +348,7 @@
 
 // ============================================================================
 // FUNCTION: CWordsFilter::CWordsFilter
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:18
@@ -231,7 +362,7 @@
 
 // ============================================================================
 // FUNCTION: CWordsFilter::LoadFilter
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:29
@@ -245,7 +376,7 @@
 
 // ============================================================================
 // FUNCTION: CWordsFilter::ReloadFilter
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:50
@@ -259,7 +390,7 @@
 
 // ============================================================================
 // FUNCTION: CWordsFilter::GetInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:85
@@ -273,7 +404,7 @@
 
 // ============================================================================
 // FUNCTION: CWordsFilter::Initial
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:23
@@ -287,7 +418,7 @@
 
 // ============================================================================
 // FUNCTION: CWordsFilter::Release
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:93
