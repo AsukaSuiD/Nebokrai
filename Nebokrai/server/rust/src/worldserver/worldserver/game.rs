@@ -680,8 +680,11 @@
 //! список по `+0x6C`, region-список по `+0x90` и country-список по `+0x9C`.
 //! Pointer `pVariableList` по `+0x4`, village/city-war списки `+0x78/+0x84`
 //! пока остаются у своих RAW-владельцев.
-//! Конструктор создавал пустыми только списки/map и не назначал scalar-поля,
-//! поэтому достигнутая Rust-часть хранит ID как `Option`, не придумывая нули.
+//! Конструктор создавал пустыми только списки/отображения и не назначал
+//! скалярные поля. До обязательного `GenerateDBData` эти остаточные байты не
+//! имеют потребителя; Rust
+//! нормализует их к нулю в `WorldDbData::new`, не создавая псевдослучайное
+//! внутреннее состояние и не меняя сформированный save snapshot.
 //!
 //! `VecDeque<Box<CPlayer>>` и `BTreeMap<u32, Box<CPlayer>>` заменяют только
 //! list/map nodes и virtual deleting destructor. Один `parking_lot::Mutex`
@@ -6597,7 +6600,10 @@ pub(crate) struct WorldGenerateDbDataReport {
 /// `CRsSetup`; Rust-layout не является копией 32-битного MSVC ABI. Exact
 /// `DoSaveData` не имеет
 /// Village/City War snapshot-полей или save-фаз, поэтому они здесь не
-/// резервируются по одному лишь имени пустых DB-адаптеров.
+/// резервируются по одному лишь имени пустых DB-адаптеров. Constructor
+/// `tagDBData` создавал пустыми все достигнутые владельцы списков и
+/// отображений; `VecDeque` и `BTreeMap` сохраняют их порядок без служебного
+/// sentinel/allocator хранилища MSVC.
 struct WorldDbData {
     player_id: u32,
     leave_word_id: i32,

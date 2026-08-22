@@ -1239,10 +1239,14 @@ impl HonorRanksLoadSink for CHonorRanks {
 
 // ============================================================================
 // FUNCTION: CGame::tagDBData::tagDBData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp
+// RUST: `game::WorldDbData::new` создаёт достигнутые пустые очереди и map
+// через `VecDeque`/`BTreeMap`; scalar residue до `GenerateDBData` безопасно
+// нормализованы к нулю, а Village/City War DB-списки не имеют consumer-а
+// `DoSaveData` и не материализуются отдельно.
 // RVA: 0x00011F60
 // ADDRESS: 00411f60
 // PROTOTYPE: undefined __thiscall tagDBData(void)
