@@ -3,8 +3,8 @@
 //! Статусы `LoadVarList` RVA `0x000A1320`, `LoadOneVar` `0x000A1680`,
 //! `SetVarValue` RVA `0x000A11B0/0x000A1240`, `SaveVarData` RVA `0x000A1930`
 //! `AddToByteArray` RVA `0x000A1B10` и `LoadVarData` `0x000A1630` —
-//! `IMPLEMENTED`; только технические constructor/Release/GetArrayName и
-//! посторонний `CBattleFairyProperty::tagCompose` ниже остаются
+//! `IMPLEMENTED`; только посторонний `CBattleFairyProperty::tagCompose` ниже
+//! остаётся
 //! `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -78,19 +78,54 @@ pub(crate) struct VariableEntry {
 }
 
 /// Value-owner вместо `m_lVarNum + stVariable*` и двух raw union-ов.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CVariableList {
     variables: Vec<VariableEntry>,
 }
 
+impl Default for CVariableList {
+    fn default() -> Self {
+        Self::with_constructor_defaults()
+    }
+}
+
 impl CVariableList {
+    /// Создаёт пустой список, как конструктор с `m_lVarNum = 0` и null-массивом.
+    pub(crate) const fn with_constructor_defaults() -> Self {
+        Self {
+            variables: Vec::new(),
+        }
+    }
+
+    /// Освобождает все записи переменных и публикует пустое состояние.
+    ///
+    /// Rust `Vec` и `VariableValue` освобождают имя и значения без ранних
+    /// возвратов и утечек старого owner-а.
+    pub(crate) fn release(&mut self) {
+        self.variables.clear();
+    }
+
+    /// Возвращает имя C-строки без array-suffix от последней `[`. 
+    ///
+    /// Оригинал сначала копировал вход в выходной буфер вызывающего, затем
+    /// ставил NUL на последней `[` независимо от наличия закрывающей `]`.
+    /// Rust возвращает владеющий массив байтов и не меняет входной срез.
+    pub(crate) fn get_array_name(name: &[u8]) -> Vec<u8> {
+        let name = visible_c_string(name);
+        let end = name
+            .iter()
+            .rposition(|byte| *byte == b'[')
+            .unwrap_or(name.len());
+        name[..end].to_vec()
+    }
+
     /// Материализует достигнутый `LoadVarList` без raw allocation и union.
     ///
     /// `CIni::GetContinueDataNum` брал только непрерывный блок строк после
     /// index `GeneralVariableList`; пустая или отсутствующая resource поэтому
     /// публикует пустой список, как и исходный void owner.
     pub(crate) fn load_var_list(&mut self, source: Option<&[u8]>) -> VariableListLoadReport {
-        self.variables.clear();
+        self.release();
         let Some(source) = source else {
             return VariableListLoadReport::default();
         };
@@ -651,7 +686,7 @@ pub(crate) async fn save_var_data<S: VariableListSaveSource, O: RsGenVarOwner>(
 
 // ============================================================================
 // FUNCTION: CVariableList::CVariableList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\script\variablelist.cpp:18
@@ -659,13 +694,15 @@ pub(crate) async fn save_var_data<S: VariableListSaveSource, O: RsGenVarOwner>(
 // ADDRESS: 004a1090
 // PROTOTYPE: undefined __thiscall CVariableList(void)
 //
+// Реализовано выше как `with_constructor_defaults`: пустой `Vec` заменяет
+// `m_lVarNum = 0` и нулевой raw-массив без ABI/vtable-техники.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CVariableList::Release
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\script\variablelist.cpp:29
@@ -673,13 +710,15 @@ pub(crate) async fn save_var_data<S: VariableListSaveSource, O: RsGenVarOwner>(
 // ADDRESS: 004a10b0
 // PROTOTYPE: void __thiscall Release(void)
 //
+// Реализовано выше как `release`: Rust освобождает все типизированные записи; ранние
+// возвраты старого декомпилята после первого `delete` не являются контрактом.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CVariableList::GetArrayName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\script\variablelist.cpp:510
@@ -687,6 +726,8 @@ pub(crate) async fn save_var_data<S: VariableListSaveSource, O: RsGenVarOwner>(
 // ADDRESS: 004a1160
 // PROTOTYPE: void __thiscall GetArrayName(char * param_1, char * param_2)
 //
+// Реализовано выше как `get_array_name`: отдельное Rust-значение заменяет
+// выходной буфер вызывающего, а последний `[` отрезает суффикс.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
