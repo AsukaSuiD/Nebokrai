@@ -1,8 +1,9 @@
 //! Ordered cache и initial-config serializer навыков WorldServer.
 //!
 //! Статус `CSkillFactory::Serialize` RVA `0x00060E90` и безопасной замены
-//! `ClearSkillCache` RVA `0x00060DC0`: `IMPLEMENTED`; загрузчики и usage lookup
-//! ниже пока остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `ClearSkillCache` RVA `0x00060DC0`, `StringToUsage` `0x00060F80` и
+//! `ClearUsageCache` `0x00061E00`: `IMPLEMENTED`; файловые загрузчики ниже
+//! пока остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
 //! SHA-256 PDB
@@ -20,6 +21,8 @@
 //! выразимым доказанный null-slot, обычная вставка строит composite key
 //! `id << 16 | level & 0xffff`. Замена duplicate key корректно освобождает
 //! прежний owner вместо внутренней утечки старого `operator[]` call-site.
+//! Отдельная byte-keyed карта usage сохраняет `operator[]`-перезапись в
+//! `LoadUsage`, а `StringToUsage` возвращает нулевой `SKILL_USAGE_UNKNOW`.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -27,10 +30,15 @@ use std::fmt;
 
 use super::skill::{CSkill, SkillSerializeError};
 
+/// Exact `SKILL_USAGE_UNKNOW`: в перечислении ни один штатный usage не равен
+/// нулю, и exact `StringToUsage` возвращает этот sentinel для отсутствия.
+pub(crate) const UNKNOWN_SKILL_USAGE: u32 = 0;
+
 /// Safe owner исходного process-global `g_mSkillMap`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CSkillFactory {
     skills: BTreeMap<u32, Option<CSkill>>,
+    usage_names: BTreeMap<Vec<u8>, u32>,
 }
 
 impl CSkillFactory {
@@ -55,6 +63,26 @@ impl CSkillFactory {
 
     pub(crate) fn clear_skill_cache(&mut self) {
         self.skills.clear();
+    }
+
+    /// Точная запись строки `.usage`: `std::map::operator[]` заменял прежнее
+    /// значение при том же byte-sensitive имени.
+    pub(crate) fn set_usage_name(&mut self, name: &[u8], usage: u32) -> Option<u32> {
+        self.usage_names
+            .insert(visible_c_string(name).to_vec(), usage)
+    }
+
+    /// Exact `StringToUsage`; null указатель и несуществующее имя возвращают
+    /// `SKILL_USAGE_UNKNOW`, а не создают новую map-запись.
+    pub(crate) fn string_to_usage(&self, name: Option<&[u8]>) -> u32 {
+        name.and_then(|name| self.usage_names.get(visible_c_string(name)).copied())
+            .unwrap_or(UNKNOWN_SKILL_USAGE)
+    }
+
+    /// Safe replacement `ClearUsageCache`; Rust Drop освобождает ключи вместе
+    /// с map вместо ручного `_Tree::_Erase`.
+    pub(crate) fn clear_usage_cache(&mut self) {
+        self.usage_names.clear();
     }
 
     /// Дописывает exact `count + ordered (length, record)` wire.
@@ -91,6 +119,13 @@ impl CSkillFactory {
         }
         Ok(())
     }
+}
+
+fn visible_c_string(bytes: &[u8]) -> &[u8] {
+    bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .map_or(bytes, |end| &bytes[..end])
 }
 
 /// Safe serialization boundary для невозможного legacy registry-state.
@@ -147,7 +182,7 @@ impl Error for SkillFactorySerializeError {
 
 // ============================================================================
 // FUNCTION: CSkillFactory::ClearSkillCache
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\skills\skillfactory.cpp:144
@@ -161,7 +196,7 @@ impl Error for SkillFactorySerializeError {
 
 // ============================================================================
 // FUNCTION: CSkillFactory::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\skills\skillfactory.cpp:291
@@ -175,7 +210,7 @@ impl Error for SkillFactorySerializeError {
 
 // ============================================================================
 // FUNCTION: CSkillFactory::StringToUsage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\skills\skillfactory.cpp:403
@@ -189,7 +224,7 @@ impl Error for SkillFactorySerializeError {
 
 // ============================================================================
 // FUNCTION: CSkillFactory::ClearUsageCache
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\skills\skillfactory.cpp:398
