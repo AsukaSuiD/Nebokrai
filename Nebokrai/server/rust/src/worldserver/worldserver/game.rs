@@ -194,6 +194,12 @@
 //! сохраняет bool load-result до optional subtype `0x1D`. Initial-config
 //! читает этот же owner, без внешних Prison callbacks/snapshot.
 //!
+//! `CTradeList` owned `CGame`: `data/tradelist.ini` сначала очищает map, затем
+//! в exact порядке получает NPC text из owned StringTable и goods ID из
+//! `CGoodsFactory`. Reload сохраняет прежний return mapping: только успешная
+//! рассылка subtype `3` заменяет legacy return размером payload; initial-config
+//! читает тот же owner без внешнего TradeList snapshot/callback.
+//!
 //! `CContributeSetup` теперь owned `CGame`: dispatcher
 //! `0x004171CA..0x004172B1` читает `data/ContributeSetup.ini`, сохраняет bool
 //! load-result в legacy return-slot и при success + send-флаге публикует
@@ -1170,6 +1176,7 @@ use crate::setup::incrementshoplist::{
     IncrementShopSerializeError,
 };
 use crate::setup::prisonconf::{PrisonConf, PrisonConfFormatError, PrisonConfSerializeError};
+use crate::setup::tradelist::{CTradeList, TradeListFormatError, TradeListSerializeError};
 use crate::public::mystringtable::MyStringTable;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
 use crate::public::wordsfilter::CWordsFilter;
@@ -4189,7 +4196,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     GoodsList,
     MonsterList,
     DropGoodsList,
-    TradeList,
     SkillUsageCache,
     SkillCache,
     NewSkillMonsterList,
@@ -4235,7 +4241,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     Emotion,
     GoodsList,
     MonsterList,
-    TradeList,
     SkillList,
     NewSkillMonsterList,
     GlobeSetup,
@@ -5869,6 +5874,8 @@ pub(crate) enum WorldReloadBlock {
     TaoZhuangSerialization(TaoZhuangSerializationBlock),
     HitLevelFormat(HitLevelFormatError),
     HitLevelSerialization(HitLevelSerializeError),
+    TradeListFormat(TradeListFormatError),
+    TradeListSerialization(TradeListSerializeError),
     IncrementShopSerialization(IncrementShopSerializeError),
     PrisonFormat(PrisonConfFormatError),
     PrisonSerialization(PrisonConfSerializeError),
@@ -6640,6 +6647,7 @@ pub(crate) struct CGame {
     ci_qing_setup: CCiQingSetup,
     tao_zhuang_setup: CTaoZhuangSetup,
     hit_level_setup: CHitLevelSetup,
+    trade_list: CTradeList,
     increment_shop_list: CIncrementShopList,
     prison_conf: PrisonConf,
     contribute_setup: CContributeSetup,
@@ -6729,6 +6737,10 @@ impl CGame {
         &self.hit_level_setup
     }
 
+    pub(crate) fn trade_list(&self) -> &CTradeList {
+        &self.trade_list
+    }
+
     pub(crate) fn increment_shop_list(&self) -> &CIncrementShopList {
         &self.increment_shop_list
     }
@@ -6761,6 +6773,7 @@ impl CGame {
             ci_qing_setup: CCiQingSetup::default(),
             tao_zhuang_setup: CTaoZhuangSetup::default(),
             hit_level_setup: CHitLevelSetup::default(),
+            trade_list: CTradeList::default(),
             increment_shop_list: CIncrementShopList::default(),
             prison_conf: PrisonConf::default(),
             contribute_setup: CContributeSetup::default(),
@@ -7646,20 +7659,46 @@ impl CGame {
                 }
             }
             WorldReloadProfile::TradeList => {
-                if Self::reload_boolean_with_log(
-                    context,
-                    WorldReloadBooleanOwner::TradeList,
-                    b"Load tradelist.ini...OK!",
-                    b"Load tradelist.ini...FAILED!",
-                ) && send_to_game_servers
-                {
-                    self.serialize_reload_owner(
-                        context,
-                        WorldReloadSerializationOwner::TradeList,
-                        3,
-                        true,
-                        &mut legacy_result,
-                    );
+                const PATH: &[u8] = b"data/tradelist.ini";
+                let loaded = match context.read_resource(PATH) {
+                    Some(source) => {
+                        let string_table = self.string_table.table();
+                        self.trade_list
+                            .load_from_bytes(
+                                &source,
+                                &mut |id| {
+                                    string_table
+                                        .get_string_by_id(id)
+                                        .map(ToOwned::to_owned)
+                                },
+                                &mut |original_name| {
+                                    context.query_goods_id_by_original_name(original_name)
+                                },
+                            )
+                            .map(|_| true)
+                            .map_err(WorldReloadBlock::TradeListFormat)?
+                    }
+                    None => {
+                        self.trade_list.clear();
+                        let mut message = b"file '".to_vec();
+                        message.extend_from_slice(PATH);
+                        message.extend_from_slice(b"' can't found!");
+                        context.notify_reload_operator(b"ERROR", &message);
+                        false
+                    }
+                };
+                context.add_log_text(if loaded {
+                    b"Load tradelist.ini...OK!"
+                } else {
+                    b"Load tradelist.ini...FAILED!"
+                });
+                if loaded && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    self.trade_list
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::TradeListSerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(3, &payload);
                 }
             }
             WorldReloadProfile::SkillList => {

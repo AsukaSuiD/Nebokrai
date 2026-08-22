@@ -319,7 +319,7 @@ use crate::setup::questsystem::{CQuestSystem, QuestSystemSerializationBlock};
 use crate::setup::regionsetup::{CRegionSetup, RegionSetupSerializeError};
 use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};
-use crate::setup::tradelist::{CTradeList, TradeListSerializeError};
+use crate::setup::tradelist::TradeListSerializeError;
 use crate::worldserver::appworld::country::country::CountryKingSaveLimits;
 use crate::worldserver::appworld::country::countrywarsys::CountryWarSys;
 use crate::worldserver::appworld::country::countryparam::{
@@ -2945,10 +2945,9 @@ pub(crate) fn continue_game_server_skill_configuration(
 pub(crate) fn continue_game_server_trade_list_configuration(
     game: &CGame,
     socket_id: i32,
-    trades: &CTradeList,
 ) -> WorldTradeListConfigurationReport {
     let mut payload = Vec::new();
-    if let Err(error) = trades.add_to_byte_array(&mut payload) {
+    if let Err(error) = game.trade_list().add_to_byte_array(&mut payload) {
         return WorldTradeListConfigurationReport {
             delivery: None,
             completion: WorldTradeListConfigurationCompletion::TradeList(error),

@@ -82,8 +82,4 @@ pub(crate) mod regionrouter;
     reason = "synthesis serializer подключён к initial-config до точного XML loader-а"
 )]
 pub(crate) mod synthesis;
-#[allow(
-    dead_code,
-    reason = "trade-list loader подключён к initial-config до общего setup lifecycle"
-)]
 pub(crate) mod tradelist;

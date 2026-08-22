@@ -31,7 +31,6 @@ use std::fmt;
 use std::path::Path;
 
 use crate::public::readwrite::read_to;
-use crate::worldserver::appworld::goods::cgoodsfactory::GoodsOriginalNameIndex;
 
 /// Точная layout-проекция `tagTrade::tagGoods` без C++ padding-зависимости.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,31 +55,38 @@ pub(crate) struct CTradeList {
 }
 
 impl CTradeList {
+    /// `rfOpen` failure уже оставляет очищенную карту.
+    pub(crate) fn clear(&mut self) {
+        self.trades.clear();
+    }
+
     /// Очищает прежний state до открытия, как исходный loader.
-    pub(crate) fn load_from_file<ResolveNpcName>(
+    pub(crate) fn load_from_file<ResolveNpcName, ResolveGoodsId>(
         &mut self,
         path: impl AsRef<Path>,
         resolve_npc_name: &mut ResolveNpcName,
-        goods_original_names: &GoodsOriginalNameIndex,
+        resolve_goods_id: &mut ResolveGoodsId,
     ) -> Result<usize, TradeListFileLoadError>
     where
         ResolveNpcName: FnMut(&[u8]) -> Option<Vec<u8>>,
+        ResolveGoodsId: FnMut(&[u8]) -> u32,
     {
         self.trades.clear();
         let source = std::fs::read(path).map_err(TradeListFileLoadError::Io)?;
-        self.load_from_bytes(&source, resolve_npc_name, goods_original_names)
+        self.load_from_bytes(&source, resolve_npc_name, resolve_goods_id)
             .map_err(TradeListFileLoadError::Format)
     }
 
     /// Загружает formatted token-stream с exact merge/replace семантикой.
-    pub(crate) fn load_from_bytes<ResolveNpcName>(
+    pub(crate) fn load_from_bytes<ResolveNpcName, ResolveGoodsId>(
         &mut self,
         source: &[u8],
         resolve_npc_name: &mut ResolveNpcName,
-        goods_original_names: &GoodsOriginalNameIndex,
+        resolve_goods_id: &mut ResolveGoodsId,
     ) -> Result<usize, TradeListFormatError>
     where
         ResolveNpcName: FnMut(&[u8]) -> Option<Vec<u8>>,
+        ResolveGoodsId: FnMut(&[u8]) -> u32,
     {
         self.trades.clear();
         let mut tokens = source
@@ -108,10 +114,7 @@ impl CTradeList {
                 let position_y = read_i32(&mut tokens, "позиция Y товара")? as u8;
                 let original_name = next_token(&mut tokens, "original-name товара")?;
                 let amount = read_i32(&mut tokens, "количество товара")? as u8;
-                let goods_id = goods_original_names
-                    .get(truncate_at_nul(original_name))
-                    .copied()
-                    .unwrap_or(0);
+                let goods_id = resolve_goods_id(truncate_at_nul(original_name));
                 goods.push(TradeGoods {
                     page,
                     position_x,
