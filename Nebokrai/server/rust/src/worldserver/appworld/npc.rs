@@ -53,6 +53,16 @@ impl CNpc {
     pub(crate) const fn set_id(&mut self, id: i32) {
         self.move_shape_base.set_id(id);
     }
+
+    /// Присваивает унаследованное byte-exact имя до первого NUL.
+    pub(crate) fn set_name(&mut self, name: &[u8]) {
+        self.move_shape_base.set_name(name);
+    }
+
+    /// Присваивает унаследованный signed graphics ID.
+    pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
+        self.move_shape_base.set_graphics_id(graphics_id);
+    }
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer

@@ -2215,6 +2215,19 @@ impl CPlayer {
         self.move_shape_base.get_name()
     }
 
+    /// Присваивает унаследованное byte-exact имя без global/DB проверок.
+    ///
+    /// Это прямой `CBaseObject::SetName`, нужный factory lifecycle; публичная
+    /// игровая смена имени по-прежнему должна проходить `set_validated_name`.
+    pub(crate) fn set_name(&mut self, name: &[u8]) {
+        self.move_shape_base.set_name(name);
+    }
+
+    /// Присваивает унаследованный signed graphics ID без иных side effects.
+    pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
+        self.move_shape_base.set_graphics_id(graphics_id);
+    }
+
     /// Финальная exact-мутация `ChangeName` после ordered global/DB checks.
     pub(crate) fn set_validated_name(&mut self, name: &[u8]) {
         self.move_shape_base.set_name(name);

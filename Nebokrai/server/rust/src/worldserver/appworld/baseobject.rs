@@ -9,8 +9,9 @@
 //! `CBaseObject::CBaseObject` RVA `0x000D5790` — `IMPLEMENTED`. Контракт
 //! child-tree, destructor-а и передачи factory-результата внутри
 //! `CreateChildObject` RVA `0x000D58B0` восстановлен по raw/PDB и точечно
-//! проверен в EXE, но его Rust-storage ещё не материализован; соответствующие
-//! тела ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Статический `CreateObject` RVA
+//! проверен в EXE. `CreateChildObject` materialизован безопасной границей с
+//! явными callback-ами attachment и `Load`; сами owner-ы child-tree и его
+//! destructor пока остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Статический `CreateObject` RVA
 //! `0x000D5470` materialизован отдельным tagged factory-result без erased
 //! pointer/vtable. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
@@ -144,18 +145,28 @@
 //! project-caller-а, а не доказательство желаемого Rust-владения и не
 //! разрешение удалить публичный исходный контракт.
 //!
-//! Rust-storage намеренно не выбран заранее. Список содержит гетерогенные
-//! объекты пяти factory-типов, удаление инвалидирует все raw aliases немедленно,
-//! а отдельный `RemoveObject` формально оставляет живой detached pointer со
-//! старым father. До материализации `CreateObject` и derived owner-ов нельзя
-//! доказать совместимость `Box`, `Rc`, `Arc`, `Pin` либо raw-pointer слоя.
+//! Rust-storage child-tree намеренно не выбран заранее. Список содержит
+//! гетерогенные объекты пяти factory-типов, удаление инвалидирует все raw
+//! aliases немедленно, а отдельный `RemoveObject` формально оставляет живой
+//! detached pointer со старым father. `CreateChildObject` поэтому возвращает
+//! `Rc<RefCell<...>>`, а точное действие virtual `AddObject` передаёт
+//! вызывающему owner-у explicit callback-ом до `Load`; только он выбирает
+//! совместимое хранение parent/child и father. Такое Rust-владение исключает
+//! erased pointer и старую утечку на null-ветви, не приписывая отсутствующему
+//! caller-у container-semantics. Для `CGoods(id=0, name=nullptr)` старый EXE
+//! разыменовывал null: безопасная граница возвращает typed error без
+//! attachment и `Load`. Короткое имя больше не читается за границей slice и
+//! просто не совпадает с `NoAdd\0`: это исправление внутреннего UB без
+//! доказанного внешнего legacy-эффекта.
 //! Заменённые
 //! raw-блоки `SetName`, `AddToByteArray` и `DecordFromByteArray` удалены;
 //! отдельных экспортированных тел остальных inline-методов в корпусе нет, а
 //! их контракт полностью определён PDB.
 
+use std::cell::RefCell;
 use std::error::Error;
 use std::fmt;
+use std::rc::Rc;
 
 use super::goods::cgoods::CGoods;
 use super::monster::CMonster;
@@ -203,6 +214,32 @@ impl fmt::Display for BaseObjectDecodeError {
 }
 
 impl Error for BaseObjectDecodeError {}
+
+/// Безопасная замена единственной достигаемой null-границы
+/// `CBaseObject::CreateChildObject`.
+///
+/// Только `CGoods(type=700, factory-ID=0)` обращался к `name` без проверки на
+/// null ради сравнения `NoAdd\0`. До этой точки object уже построен и имя
+/// могло быть присвоено, однако exact EXE немедленно аварийно завершался до
+/// `AddObject` и `Load`. Rust не сохраняет этот внутренний дефект: allocation
+/// освобождается обычным владением, а вызывающий получает явный результат.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BaseObjectChildCreateError {
+    MissingGoodsNameForNoAddProbe,
+}
+
+impl fmt::Display for BaseObjectChildCreateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingGoodsNameForNoAddProbe => write!(
+                formatter,
+                "товар с нулевым factory-ID требует имя для проверки NoAdd"
+            ),
+        }
+    }
+}
+
+impl Error for BaseObjectChildCreateError {}
 
 /// Ровно пять literal type, принимаемых `CBaseObject::CreateObject`.
 ///
@@ -256,6 +293,13 @@ pub(crate) enum BaseObjectFactoryObject {
     Goods(CGoods),
 }
 
+/// Живой heterogeneous child без erased raw-pointer старого ABI.
+///
+/// `CreateChildObject` передаёт этот handle callback-у attachment до `Load`.
+/// Владелец конкретной parent/child-модели вправе сохранить его сильную копию
+/// либо только обновить свой индекс; базовый owner не изобретает tree-storage.
+pub(crate) type SharedBaseObjectFactoryObject = Rc<RefCell<BaseObjectFactoryObject>>;
+
 impl BaseObjectFactoryObject {
     /// Возвращает исходный type concrete factory-ветви.
     pub(crate) const fn object_type(&self) -> i32 {
@@ -288,6 +332,26 @@ impl BaseObjectFactoryObject {
             Self::Goods(object) => object.set_id(id),
         }
     }
+
+    fn set_object_name(&mut self, name: &[u8]) {
+        match self {
+            Self::Region(object) => object.set_name(name),
+            Self::Player(object) => object.set_name(name),
+            Self::Npc(object) => object.set_name(name),
+            Self::Monster(object) => object.set_name(name),
+            Self::Goods(object) => object.set_name(name),
+        }
+    }
+
+    fn set_object_graphics_id(&mut self, graphics_id: i32) {
+        match self {
+            Self::Region(object) => object.set_graphics_id(graphics_id),
+            Self::Player(object) => object.set_graphics_id(graphics_id),
+            Self::Npc(object) => object.set_graphics_id(graphics_id),
+            Self::Monster(object) => object.set_graphics_id(graphics_id),
+            Self::Goods(object) => object.set_graphics_id(graphics_id),
+        }
+    }
 }
 
 /// Материализует точные пять ветвей `CBaseObject::CreateObject`.
@@ -318,6 +382,72 @@ pub(crate) fn create_base_object(
     };
     object.set_object_id(object_id);
     Some(Box::new(object))
+}
+
+/// Восстанавливает порядок `CBaseObject::CreateChildObject` без ложной общей
+/// модели хранения children.
+///
+/// `attach` является точной точкой virtual `AddObject`: он вызывается после
+/// раннего имени и назначения входного ID, но до восстановления factory-ID и
+/// virtual `Load`. Его вызывают только attachment-ветви; player `type=400`
+/// с нулевым factory-ID и goods `type=700` с нулевым factory-ID и prefix
+/// `NoAdd\0` продолжают инициализацию detached. `load` вызывается во всех
+/// успешных ветвях, его результат намеренно отсутствует и потому не может
+/// изменить return mapping original-а.
+///
+/// Как и `CreateObject`, неизвестный type возвращает `Ok(None)` без
+/// callback-ов. После `load` входной ID назначается повторно, graphics применяется
+/// только при ненулевом значении, а имя копируется вторично, чтобы стереть
+/// допустимые мутации `Load`.
+pub(crate) fn create_base_object_child<Attach, Load>(
+    object_type: i32,
+    object_id: i32,
+    name: Option<&[u8]>,
+    graphics_id: i32,
+    mut attach: Attach,
+    mut load: Load,
+) -> Result<Option<SharedBaseObjectFactoryObject>, BaseObjectChildCreateError>
+where
+    Attach: FnMut(&SharedBaseObjectFactoryObject),
+    Load: FnMut(&mut BaseObjectFactoryObject),
+{
+    let Some(object) = create_base_object(object_type, object_id) else {
+        return Ok(None);
+    };
+    let child = Rc::new(RefCell::new(*object));
+
+    if let Some(name) = name {
+        child.borrow_mut().set_object_name(name);
+    }
+
+    let factory_id = child.borrow().object_id();
+    child.borrow_mut().set_object_id(object_id);
+
+    let attach_to_parent = match object_type {
+        400 => factory_id != 0,
+        700 if factory_id == 0 => match name {
+            Some(name) => !name.starts_with(b"NoAdd\0"),
+            None => return Err(BaseObjectChildCreateError::MissingGoodsNameForNoAddProbe),
+        },
+        _ => true,
+    };
+    if attach_to_parent {
+        attach(&child);
+    }
+
+    let mut child_mut = child.borrow_mut();
+    child_mut.set_object_id(factory_id);
+    load(&mut child_mut);
+    child_mut.set_object_id(object_id);
+    if graphics_id != 0 {
+        child_mut.set_object_graphics_id(graphics_id);
+    }
+    if let Some(name) = name {
+        child_mut.set_object_name(name);
+    }
+    drop(child_mut);
+
+    Ok(Some(child))
 }
 
 /// Достигнутая часть исходного `CBaseObject`.
@@ -673,13 +803,13 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 // VERIFIED_DISASSEMBLY: в exact World EXE нет project-call-site
 // `CreateChildObject` RVA `0x000D58B0`; 17 ссылок являются vtable-ячейками, а
 // все 27 candidate-инструкций `call [register + 0x28]` принадлежат другим
-// классам. Поэтому
-// возвращённый child и detached-ветви не создают project-alias, но handle из
-// одного только отсутствия caller-а не выбирается.
+// классам. Rust поэтому передаёт attachment explicit callback-ом и возвращает
+// safe shared handle, не выдавая это отсутствие caller-а за доказательство
+// конкретного tree-storage.
 
 // ============================================================================
 // FUNCTION: CBaseObject::CreateChildObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:204
@@ -687,6 +817,14 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 // ADDRESS: 004d58b0
 // PROTOTYPE: CBaseObject * __thiscall CreateChildObject(long param_1, long param_2, char * param_3, long param_4)
 //
+// Реализовано `create_base_object_child`: его `Rc<RefCell<tagged owner>>`
+// заменяет erased returned pointer, `attach` воспроизводит virtual `AddObject`
+// до `Load`, а `load` намеренно не возвращает значение, поскольку EXE его
+// игнорирует. У owner-а callback-а остаётся единственная обязанность выбрать
+// concrete parent/child storage и зафиксировать father; без точного caller-а
+// базовый owner этого не выдумывает. `CGoods(id=0, name=nullptr)` вместо
+// старого null-dereference даёт typed error без дальнейших side effects;
+// короткое имя безопасно не совпадает с `NoAdd\0`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

@@ -178,6 +178,11 @@ impl CRegion {
         self.base_object.set_name(name);
     }
 
+    /// Присваивает унаследованный signed graphics ID без иных side effects.
+    pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
+        self.base_object.set_graphics_id(graphics_id);
+    }
+
     /// Возвращает reached country byte без подстановки constructor-неизвестного значения.
     pub(crate) const fn country(&self) -> Option<u8> {
         self.country

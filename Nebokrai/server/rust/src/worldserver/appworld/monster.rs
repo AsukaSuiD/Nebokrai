@@ -89,6 +89,16 @@ impl CMonster {
         self.move_shape_base.set_id(id);
     }
 
+    /// Присваивает унаследованное byte-exact имя до первого NUL.
+    pub(crate) fn set_name(&mut self, name: &[u8]) {
+        self.move_shape_base.set_name(name);
+    }
+
+    /// Присваивает унаследованный signed graphics ID.
+    pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
+        self.move_shape_base.set_graphics_id(graphics_id);
+    }
+
     /// Присваивает единственное достигнутое строковое поле `m_Property`.
     pub(crate) fn set_original_name(&mut self, original_name: Vec<u8>) {
         self.property.original_name = original_name;
