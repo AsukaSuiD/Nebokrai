@@ -156,6 +156,16 @@
 //! для этой ветви удалены; resource backend и `CMessage` остаются общими
 //! техническими границами.
 //!
+//! `CCiQingSetup` теперь также принадлежит `CGame`. Reload `ciqing` по exact
+//! `0x00417D96..0x00417E63` читает `/data/ciqing.ini`, пишет прежний success/
+//! failure log, сохраняет bool в общий legacy return-slot и затем безусловно
+//! перезагружает LingBao; только успешный CiQing при включённой рассылке
+//! кодирует owned CiQing перед оставшимся LingBao-owner-ом в subtype `0x35`.
+//! Initial-config читает тот же owned экземпляр,
+//! поэтому внешний CiQing snapshot и два прежних reload callback-а удалены.
+//! `Vec` и resource-context заменяют только STL/file backend; original-name
+//! lookup остаётся явной границей уже загруженного World `CGoodsFactory`.
+//!
 //! `CDupliRegionSetup` создаётся и публикуется в `CGame` перед своим `Load`,
 //! как exact Init `0x0041901B..0x00419053`, и остаётся owned даже при
 //! load-failure до общего Release. Init читает точный
@@ -1108,6 +1118,7 @@ use crate::nets::servers::{ServerCommandHandle, ServerHostError};
 use crate::public::auctionlog::{
     AuctionBangUpdateOutcome, AuctionLogLoadOutcome, CAuctionLog,
 };
+use crate::public::ciqing::{CCiQingSetup, CiQingSerializationBlock};
 use crate::public::date::TagTime;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::public::equipmentcomposelist::{
@@ -4160,7 +4171,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     GoodsDestroy,
     HonorEliminate,
     TaoZhuang,
-    CiQing,
     GodsBattle,
 }
 
@@ -4209,7 +4219,7 @@ pub(crate) enum WorldReloadSerializationOwner {
     DaKongXiangQian,
     GoodsDestroy,
     TaoZhuang,
-    CiQingAndLingBao,
+    LingBao,
     GodsBattle,
 }
 
@@ -4243,6 +4253,8 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn call_boolean_owner(&mut self, owner: WorldReloadBooleanOwner) -> u32;
     fn call_void_owner(&mut self, owner: WorldReloadVoidOwner);
     fn serialize_owner(&mut self, owner: WorldReloadSerializationOwner) -> Vec<u8>;
+    /// Concrete lookup уже загруженного World `CGoodsFactory`.
+    fn query_goods_id_by_original_name(&mut self, original_name: &[u8]) -> u32;
     fn add_log_text(&mut self, payload: &[u8]);
     fn notify_reload_operator(&mut self, title: &[u8], message: &[u8]);
 
@@ -5816,6 +5828,7 @@ pub(crate) enum WorldReloadBlock {
     RegionSnapshot(WorldReloadRegionSnapshotBlock),
     ThingSetupCodec(ThingSetupCodecError),
     EquipmentComposeSerialization(EquipmentComposeSerializeError),
+    CiQingSerialization(CiQingSerializationBlock),
     CountryWarOwnerRequired,
     CountryWar(CountryWarReloadBlock),
 }
@@ -6579,6 +6592,7 @@ pub(crate) struct CGame {
     words_filter: CWordsFilter,
     dupli_region_setup: Option<CDupliRegionSetup>,
     equipment_compose_list: EquipmentComposeList,
+    ci_qing_setup: CCiQingSetup,
     net_client: Option<CMyNetClient>,
     net_server: Option<CMyNetServer>,
     regions: BTreeMap<i32, WorldRegionAssignment>,
@@ -6653,6 +6667,10 @@ impl CGame {
         &self.equipment_compose_list
     }
 
+    pub(crate) fn ci_qing_setup(&self) -> &CCiQingSetup {
+        &self.ci_qing_setup
+    }
+
     pub(crate) fn dupli_region_setup(&self) -> &CDupliRegionSetup {
         self.dupli_region_setup
             .as_ref()
@@ -6670,6 +6688,7 @@ impl CGame {
             words_filter: CWordsFilter::new(),
             dupli_region_setup: None,
             equipment_compose_list: EquipmentComposeList::default(),
+            ci_qing_setup: CCiQingSetup::default(),
             net_client: None,
             net_server: None,
             regions: BTreeMap::new(),
@@ -8030,21 +8049,28 @@ impl CGame {
                 );
             }
             WorldReloadProfile::CiQing => {
-                let succeeded = Self::reload_boolean_with_log(
-                    context,
-                    WorldReloadBooleanOwner::CiQing,
-                    b"Add ciqing.ini...ok!",
-                    b"Add ciqing.ini...failed!",
+                const PATH: &[u8] = b"/data/ciqing.ini";
+                let source = context.read_resource(PATH);
+                let succeeded = self.ci_qing_setup.read_setup_file(
+                    source.as_deref(),
+                    |original_name| context.query_goods_id_by_original_name(original_name),
                 );
+                context.add_log_text(if succeeded {
+                    b"Add ciqing.ini...ok!"
+                } else {
+                    b"Add ciqing.ini...failed!"
+                });
+                legacy_result = i32::from(succeeded);
                 context.call_void_owner(WorldReloadVoidOwner::LingBao);
                 if succeeded && send_to_game_servers {
-                    self.serialize_reload_owner(
-                        context,
-                        WorldReloadSerializationOwner::CiQingAndLingBao,
-                        0x35,
-                        false,
-                        &mut legacy_result,
+                    let mut payload = Vec::new();
+                    self.ci_qing_setup
+                        .add_byte_to_array(&mut payload)
+                        .map_err(WorldReloadBlock::CiQingSerialization)?;
+                    payload.extend_from_slice(
+                        &context.serialize_owner(WorldReloadSerializationOwner::LingBao),
                     );
+                    self.send_reload_payload(0x35, &payload);
                 }
             }
             WorldReloadProfile::Jjc => {

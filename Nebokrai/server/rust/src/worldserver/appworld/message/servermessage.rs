@@ -285,7 +285,7 @@ use crate::nets::networld::mynetclient::CMyNetClient;
 use crate::nets::servers::ServerCommandHandle;
 use crate::public::dupliregionsetup::DupliRegionSerializeError;
 use crate::public::equipmentcomposelist::EquipmentComposeSerializeError;
-use crate::public::ciqing::{CCiQingSetup, CiQingSerializationBlock};
+use crate::public::ciqing::CiQingSerializationBlock;
 use crate::public::taozhuangsetup::{CTaoZhuangSetup, TaoZhuangSerializationBlock};
 use crate::public::wordsfilter::WordsFilterSerializeError;
 use crate::setup::cbattlefairyexpconfig::{
@@ -3881,11 +3881,10 @@ pub(crate) fn continue_game_server_battle_fairy_property_configuration(
 pub(crate) fn continue_game_server_ciqing_ling_bao_configuration(
     game: &CGame,
     socket_id: i32,
-    ciqing: &CCiQingSetup,
     ling_bao: &CLingBaoSetup,
 ) -> WorldCiQingLingBaoConfigurationReport {
     let mut payload = Vec::new();
-    if let Err(error) = ciqing.add_byte_to_array(&mut payload) {
+    if let Err(error) = game.ci_qing_setup().add_byte_to_array(&mut payload) {
         return WorldCiQingLingBaoConfigurationReport {
             delivery: None,
             completion: WorldCiQingLingBaoConfigurationCompletion::CiQing(error),

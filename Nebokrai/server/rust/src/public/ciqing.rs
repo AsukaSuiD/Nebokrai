@@ -1,9 +1,9 @@
 //! Конфигурация CiQing исторического Miracle.
 //!
-//! Статус World `CCiQingSetup::AddByteToArray` RVA `0x00086080`:
-//! `IMPLEMENTED`; text loader, queries, RNG и Game runtime ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точные пары World/Game EXE+PDB подтверждают одинаковый
-//! serializer/decoder; World EXE SHA-256
+//! World `CCiQingSetup::ReadSetupFile/AddByteToArray` RVA
+//! `0x000877F0/0x00086080` — `IMPLEMENTED`; queries, RNG и Game runtime ниже
+//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точные пары World/Game EXE+PDB подтверждают
+//! одинаковый serializer/decoder; World EXE SHA-256
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
 //! Исходный owner PDB: `e:\svn\fengyun_russia_dev\public\ciqing.cpp:139` и
@@ -18,7 +18,17 @@
 //! но пишет доказанный порядок явно little-endian. Declared result count
 //! остаётся частью owner-state, тогда как wire, как оригинал, берёт реальный
 //! размер result-vector. Невозможный signed count блокирует append до изменения
-//! destination. Точный text-loader остаётся отдельным проходом.
+//! destination.
+//!
+//! Text-loader открывает точный `/data/ciqing.ini`: при отсутствующем ресурсе
+//! прежнее состояние сохраняется, а после успешного open сначала очищаются все
+//! три списка. Затем whitespace stream читает label/count и записи трёх секций;
+//! original names разрешаются через уже загруженный `CGoodsFactory`, miss даёт
+//! `0`. Exact `0x00487823..0x00487EF5` возвращает `0` только при null path/open
+//! failure и `1` после любого открытого stream. После stream fail MSVC оставлял
+//! default values и продолжал declared loops; Rust сохраняет это для
+//! представимых counts, но отклоняет count больше размера самого source, чтобы
+//! не переносить конфигурационный DoS/OOM как часть поведения Miracle.
 
 use std::error::Error;
 use std::fmt;
@@ -59,6 +69,99 @@ pub(crate) struct CCiQingSetup {
 }
 
 impl CCiQingSetup {
+    /// Перечитывает три секции из уже выбранного caller-ом resource backend-а.
+    pub(crate) fn read_setup_file(
+        &mut self,
+        source: Option<&[u8]>,
+        mut query_goods_id: impl FnMut(&[u8]) -> u32,
+    ) -> bool {
+        let Some(source) = source else {
+            return false;
+        };
+        self.clear();
+
+        let mut input = CiQingTokenStream::new(source);
+        let _make_label = input.read_bytes();
+        let make_count = input.read_u32();
+        if !count_fits_source(make_count, source) {
+            return false;
+        }
+        for _ in 0..make_count {
+            let destination = input.read_bytes();
+            let equipment_position = input.read_u32();
+            let source_a = input.read_bytes();
+            let source_a_count = input.read_u32();
+            let source_b = input.read_bytes();
+            let source_b_count = input.read_u32();
+            self.make.push(CiQingMakeNode {
+                destination_base_index: query_goods_id(&destination),
+                equipment_position,
+                source_a_base_index: query_goods_id(&source_a),
+                source_a_count,
+                source_b_base_index: query_goods_id(&source_b),
+                source_b_count,
+            });
+        }
+
+        let _compose_label = input.read_bytes();
+        let compose_count = input.read_u32();
+        if !count_fits_source(compose_count, source) {
+            return false;
+        }
+        for _ in 0..compose_count {
+            let source_a = input.read_bytes();
+            let source_b = input.read_bytes();
+            let compose_probability = input.read_u32();
+            let money = input.read_u32();
+            let crystal_count = input.read_u32();
+            let declared_result_count = input.read_u32();
+            if !count_fits_source(declared_result_count, source) {
+                return false;
+            }
+            let source_a_base_index = query_goods_id(&source_a);
+            let source_b_base_index = query_goods_id(&source_b);
+            let mut results = Vec::new();
+            for _ in 0..declared_result_count {
+                let probability = input.read_u32();
+                let result = input.read_bytes();
+                results.push((probability, query_goods_id(&result)));
+            }
+            self.compose.push(CiQingComposeNode {
+                source_a_base_index,
+                source_b_base_index,
+                compose_probability,
+                money,
+                crystal_count,
+                declared_result_count,
+                results,
+            });
+        }
+
+        let _improve_label = input.read_bytes();
+        let improve_count = input.read_u32();
+        if !count_fits_source(improve_count, source) {
+            return false;
+        }
+        for _ in 0..improve_count {
+            let level = input.read_u32();
+            let base_name = input.read_bytes();
+            let probability = input.read_u32();
+            let base_index = query_goods_id(&base_name);
+            self.improve.push(CiQingImproveNode {
+                level,
+                base_index,
+                probability,
+            });
+        }
+        true
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.make.clear();
+        self.compose.clear();
+        self.improve.clear();
+    }
+
     pub(crate) fn push_make(&mut self, node: CiQingMakeNode) {
         self.make.push(node);
     }
@@ -185,6 +288,89 @@ fn write_ciqing_count(
 fn write_u32_fields(destination: &mut Vec<u8>, values: &[u32]) {
     for value in values {
         destination.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
+fn count_fits_source(count: u32, source: &[u8]) -> bool {
+    usize::try_from(count).is_ok_and(|count| count <= source.len())
+}
+
+struct CiQingTokenStream<'a> {
+    source: &'a [u8],
+    position: usize,
+    failed: bool,
+}
+
+impl<'a> CiQingTokenStream<'a> {
+    fn new(source: &'a [u8]) -> Self {
+        Self {
+            source,
+            position: 0,
+            failed: false,
+        }
+    }
+
+    fn read_bytes(&mut self) -> Vec<u8> {
+        if self.failed {
+            return Vec::new();
+        }
+        while self
+            .source
+            .get(self.position)
+            .is_some_and(u8::is_ascii_whitespace)
+        {
+            self.position += 1;
+        }
+        if self.position == self.source.len() {
+            self.failed = true;
+            return Vec::new();
+        }
+        let start = self.position;
+        while self
+            .source
+            .get(self.position)
+            .is_some_and(|byte| !byte.is_ascii_whitespace())
+        {
+            self.position += 1;
+        }
+        self.source[start..self.position].to_vec()
+    }
+
+    fn read_u32(&mut self) -> u32 {
+        let token = self.read_bytes();
+        if self.failed {
+            return 0;
+        }
+        match parse_legacy_u32(&token) {
+            Some(value) => value,
+            None => {
+                self.failed = true;
+                0
+            }
+        }
+    }
+}
+
+fn parse_legacy_u32(token: &[u8]) -> Option<u32> {
+    let (negative, digits) = match token {
+        [b'-', rest @ ..] => (true, rest),
+        [b'+', rest @ ..] => (false, rest),
+        _ => (false, token),
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let mut value = 0u64;
+    for &digit in digits {
+        if !digit.is_ascii_digit() {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add(u64::from(digit - b'0'))?;
+    }
+    if negative {
+        (value <= u64::from(u32::MAX) + 1).then(|| (value as u32).wrapping_neg())
+    } else {
+        u32::try_from(value).ok()
     }
 }
 
@@ -331,7 +517,7 @@ fn write_u32_fields(destination: &mut Vec<u8>, values: &[u32]) {
 
 // ============================================================================
 // FUNCTION: CCiQingSetup::AddByteToArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\ciqing.cpp:139
@@ -339,13 +525,14 @@ fn write_u32_fields(destination: &mut Vec<u8>, values: &[u32]) {
 // ADDRESS: 00486080
 // PROTOTYPE: void __thiscall AddByteToArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
 //
+// IMPLEMENTED_OWNER: `CCiQingSetup::add_byte_to_array` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CCiQingSetup::CCiQingSetup
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\ciqing.cpp:20
@@ -353,13 +540,14 @@ fn write_u32_fields(destination: &mut Vec<u8>, values: &[u32]) {
 // ADDRESS: 00487650
 // PROTOTYPE: undefined __thiscall CCiQingSetup(void)
 //
+// IMPLEMENTED_OWNER: `Default` создаёт три пустых `Vec` без process-global
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CCiQingSetup::Clear
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\ciqing.cpp:191
@@ -367,6 +555,7 @@ fn write_u32_fields(destination: &mut Vec<u8>, values: &[u32]) {
 // ADDRESS: 004876a0
 // PROTOTYPE: void __thiscall Clear(void)
 //
+// IMPLEMENTED_OWNER: `CCiQingSetup::clear` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -387,7 +576,7 @@ fn write_u32_fields(destination: &mut Vec<u8>, values: &[u32]) {
 
 // ============================================================================
 // FUNCTION: CCiQingSetup::ReadSetupFile
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\ciqing.cpp:34
@@ -395,6 +584,9 @@ fn write_u32_fields(destination: &mut Vec<u8>, values: &[u32]) {
 // ADDRESS: 004877f0
 // PROTOTYPE: bool __thiscall ReadSetupFile(char * param_1)
 //
+// IMPLEMENTED_OWNER: `CCiQingSetup::read_setup_file` выше. Exact entry/tail
+// `0x00487823..0x00487848` и `0x00487EF3..0x00487F15` подтверждают сохранение
+// старого state при open failure, clear после успешного open и return `1`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
