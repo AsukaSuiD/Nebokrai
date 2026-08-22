@@ -1,8 +1,8 @@
 //! WorldServer dispatcher-owner `OnWriteLogMessage`.
 //!
 //! Весь dispatcher RVA `0x000A8AB0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме
-//! increment-shop `0x6020D` и carriage `0x6020E` producers со статусом
-//! `IMPLEMENTED`. Точная пара:
+//! increment-shop `0x6020D`, carriage `0x6020E` и plain player log `0x6020F`
+//! producers со статусом `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\writelogmessage.cpp:18`.
 //!
@@ -25,6 +25,13 @@
 //! подставляет `wDayOfWeek`, а не `wMonth`: event-time имеет вид
 //! `year-weekday-day hour:minute:second`. Это DB-наблюдаемый quirk сохранён;
 //! Linux-донор исправлял его на обычную календарную дату без доказательства.
+//! Ветка plain log `0x6020F` по exact `0x004AA12C..0x004AA207` читает signed
+//! player ID/log type и строку с границей `0x100`. Найденный player даёт полные
+//! visible name/account; null lookup буквально пишет `"null"` в оба поля.
+//! Только content проходил `CGame::CheckPoint`; Tiberius bind сохраняет то же
+//! штатное значение без ручного escaping. Donor-truncation `32/32/255` в
+//! машине отсутствует и не перенесена. Неэкранированные name/account оригинала
+//! также bind-ятся как данные: SQL breakage/injection не является контрактом.
 //!
 //! Rust хранит параметризуемую DB-команду вместо SQL-строки: будущий Tiberius
 //! worker не должен повторять `_sprintf`, ручное quoting и stack buffers.
@@ -44,6 +51,7 @@ use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
 const INCREMENT_LOG_MESSAGE: i32 = 0x0006_020D;
 const CARRIAGE_LOG_MESSAGE: i32 = 0x0006_020E;
+const PLAIN_LOG_MESSAGE: i32 = 0x0006_020F;
 
 /// Параметры одной исходной INSERT-команды без самодельного SQL quoting.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -72,11 +80,21 @@ pub(crate) struct WorldCarriageLogWrite {
     pub(crate) event_time: TagTime,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlainLogWrite {
+    pub(crate) player_id: i32,
+    pub(crate) player_name: Vec<u8>,
+    pub(crate) player_account: Vec<u8>,
+    pub(crate) content: Vec<u8>,
+    pub(crate) log_type: i32,
+}
+
 /// Typed очередь сохраняет старый FIFO, но оставляет SQL transport Tiberius-у.
 #[derive(Clone, Debug)]
 pub(crate) enum WorldWriteLogCommand {
     IncrementLog(WorldIncrementLogWrite),
     CarriageLog(WorldCarriageLogWrite),
+    PlainLog(WorldPlainLogWrite),
 }
 
 #[derive(Debug)]
@@ -107,9 +125,18 @@ pub(crate) struct WorldCarriageLogMessageOutcome {
 }
 
 #[derive(Debug)]
+pub(crate) struct WorldPlainLogMessageOutcome {
+    pub(crate) record: WorldPlainLogWrite,
+    pub(crate) player_found: bool,
+    pub(crate) payload_complete: [bool; 3],
+    pub(crate) queue_length_after: usize,
+}
+
+#[derive(Debug)]
 pub(crate) enum WorldWriteLogMessageOutcome {
     IncrementLog(WorldIncrementLogMessageOutcome),
     CarriageLog(WorldCarriageLogMessageOutcome),
+    PlainLog(WorldPlainLogMessageOutcome),
 }
 
 pub(crate) enum WorldWriteLogMessageDispatch {
@@ -117,13 +144,18 @@ pub(crate) enum WorldWriteLogMessageDispatch {
     Pending(CMessage),
 }
 
-/// Исполняет достигнутые increment-shop и carriage ветки `OnWriteLogMessage`.
+/// Исполняет достигнутые increment-shop, carriage и plain-log ветки.
 pub(crate) fn on_write_log_message(
     game: &mut CGame,
     increment_log: &mut CIncrementLog,
     add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     mut message: CMessage,
 ) -> WorldWriteLogMessageDispatch {
+    if message.message_type() == PLAIN_LOG_MESSAGE {
+        return WorldWriteLogMessageDispatch::Handled(WorldWriteLogMessageOutcome::PlainLog(
+            on_plain_log_message(game, message),
+        ));
+    }
     if message.message_type() == CARRIAGE_LOG_MESSAGE {
         return WorldWriteLogMessageDispatch::Handled(
             WorldWriteLogMessageOutcome::CarriageLog(on_carriage_log_message(game, message)),
@@ -232,6 +264,39 @@ pub(crate) fn on_write_log_message(
     ))
 }
 
+fn on_plain_log_message(game: &CGame, mut message: CMessage) -> WorldPlainLogMessageOutcome {
+    let player_id = message.base_mut().get_long();
+    let log_type = message.base_mut().get_long();
+    let (content, content_complete) = get_limited_string(&mut message, 0x100);
+    let player_id_value = player_id.unwrap_or(0);
+    let player = game.map_player(player_id_value as u32);
+    let player_found = player.is_some();
+    let (player_name, player_account) = player.map_or_else(
+        || (b"null".to_vec(), b"null".to_vec()),
+        |player| {
+            (
+                visible_c_string(player.get_name()),
+                visible_c_string(player.get_account()),
+            )
+        },
+    );
+    let record = WorldPlainLogWrite {
+        player_id: player_id_value,
+        player_name,
+        player_account,
+        content,
+        log_type: log_type.unwrap_or(0),
+    };
+    let queue_length_after =
+        game.push_write_log_command(WorldWriteLogCommand::PlainLog(record.clone()));
+    WorldPlainLogMessageOutcome {
+        record,
+        player_found,
+        payload_complete: [player_id.is_some(), log_type.is_some(), content_complete],
+        queue_length_after,
+    }
+}
+
 fn on_carriage_log_message(
     game: &CGame,
     mut message: CMessage,
@@ -280,6 +345,14 @@ fn get_limited_string(message: &mut CMessage, maximum: usize) -> (Vec<u8>, bool)
         .get_str_bytes(maximum)
         .unwrap_or_default();
     (value, complete)
+}
+
+fn visible_c_string(value: &[u8]) -> Vec<u8> {
+    value
+        .iter()
+        .copied()
+        .take_while(|byte| *byte != 0)
+        .collect()
 }
 
 fn increment_amount_error(account: &[u8], item_name: &[u8], amount: i32) -> Vec<u8> {

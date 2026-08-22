@@ -51,6 +51,9 @@ const INSERT_INCREMENT_LOG_SQL: &str = "INSERT INTO increment_log(\
 const INSERT_CARRIAGE_LOG_SQL: &str = "INSERT INTO carriage_log(\
     player_id,carriage_idx,carriage_region_id,carriage_coordinate_x,carriage_coordinate_y,event_type,event_time\
 ) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7)";
+const INSERT_PLAIN_LOG_SQL: &str = "INSERT INTO log(\
+    player_id,player_name,player_account,content,log_type\
+) VALUES(@P1,@P2,@P3,@P4,@P5)";
 
 /// Cloneable FIFO-owner для producer-а главного цикла и отдельного DB worker-а.
 ///
@@ -285,6 +288,16 @@ pub(crate) async fn execute_world_write_log_command(
             query.execute(connection).await?;
             Ok(())
         }
+        WorldWriteLogCommand::PlainLog(record) => {
+            let mut query = Query::new(INSERT_PLAIN_LOG_SQL);
+            query.bind(record.player_id);
+            query.bind(decode_legacy_text(&record.player_name));
+            query.bind(decode_legacy_text(&record.player_account));
+            query.bind(decode_legacy_text(&record.content));
+            query.bind(record.log_type);
+            query.execute(connection).await?;
+            Ok(())
+        }
     }
 }
 
@@ -296,5 +309,6 @@ fn world_write_log_command_name(command: &WorldWriteLogCommand) -> &'static str 
     match command {
         WorldWriteLogCommand::IncrementLog(_) => "IncrementLog",
         WorldWriteLogCommand::CarriageLog(_) => "CarriageLog",
+        WorldWriteLogCommand::PlainLog(_) => "PlainLog",
     }
 }
