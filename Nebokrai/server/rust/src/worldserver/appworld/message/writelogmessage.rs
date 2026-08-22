@@ -1,7 +1,7 @@
 //! WorldServer dispatcher-owner `OnWriteLogMessage`.
 //!
 //! Весь dispatcher RVA `0x000A8AB0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме
-//! goods craft `0x60204..0x60205`, player progress `0x60206..0x60208`,
+//! goods upgrade/craft `0x60203..0x60205`, player progress `0x60206..0x60208`,
 //! team/killer `0x60209..0x6020A`,
 //! chat/change-map `0x6020B..0x6020C`, increment-shop `0x6020D`, carriage
 //! `0x6020E`, plain player log `0x6020F`, fairy `0x60210`, reserved no-op
@@ -82,12 +82,13 @@
 //! Linux-донор ошибочно делал ранний `return`. Параметризация заменила только
 //! `FixSingleQuotes` и неэкранированные имена. Change-map сохраняет обычный
 //! wire-порядок source/destination координат и не добавляет валидацию.
-//! Goods craft `0x60204..0x60205` по exact
-//! `0x004A91C1..0x004A94A7` читает соответственно две и три пары GUID/name с
-//! границей имени `0x40`, затем четыре signed long. Lookup имени игрока даёт
-//! literal `"NULL"`; gem-exchange сохраняет имена напрямую, а jewelry-made
-//! пропускает только goods-name через `CGame::CheckPoint`. Bind сохраняет
-//! штатные bytes без ручного quoting и не переносит donor-added лимит 32.
+//! Goods upgrade/craft `0x60203..0x60205` по exact
+//! `0x004A8F88..0x004A94A7` читает пары GUID/name: upgrade — item `0x100` и
+//! четыре gem `0x80`, exchange/jewelry — пары с `0x40`. Затем идут signed map
+//! и coordinate/amount long; upgrade также расширяет log-type через `movzx`.
+//! Lookup имени игрока даёт literal `"NULL"`; только upgrade/jewelry goods-name
+//! проходил через `CGame::CheckPoint`. Bind сохраняет штатные bytes без ручного
+//! quoting и не переносит donor-added лимит 32.
 //! Exact outer jump-table VA `0x004AACA8` направляет все три wire ID
 //! `0x60211..0x60213` прямо в epilogue `0x004AAC87`; Rust поэтому считает их
 //! обработанными no-op, не создавая ложный pending owner. Ветка `0x60218` по
@@ -112,6 +113,7 @@ use crate::worldserver::appworld::incrementlog::incrementlog::CIncrementLog;
 use crate::worldserver::worldserver::game::CGame;
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
+const GOODS_UPGRADE_LOG_MESSAGE: i32 = 0x0006_0203;
 const GOODS_GEM_EXCHANGE_LOG_MESSAGE: i32 = 0x0006_0204;
 const GOODS_JEWELRY_MADE_LOG_MESSAGE: i32 = 0x0006_0205;
 const PLAYER_LEVEL_LOG_MESSAGE: i32 = 0x0006_0206;
@@ -329,6 +331,15 @@ pub(crate) struct WorldGoodsCraftLogWrite {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WorldGoodsCraftLogEvent {
+    Upgrade {
+        goods_id: CGuid,
+        goods_name: Vec<u8>,
+        gems: [(CGuid, Vec<u8>); 4],
+        map_id: i32,
+        position_x: i32,
+        position_y: i32,
+        log_type: u8,
+    },
     GemExchange {
         destination_gem_id: CGuid,
         destination_gem_name: Vec<u8>,
@@ -529,6 +540,7 @@ pub(crate) struct WorldPlayerRelationLogMessageOutcome {
 
 #[derive(Debug)]
 pub(crate) enum WorldGoodsCraftPayloadCompleteness {
+    Upgrade([bool; 15]),
     GemExchange([bool; 9]),
     JewelryMade([bool; 11]),
 }
@@ -658,7 +670,9 @@ pub(crate) fn on_write_log_message(
     }
     if matches!(
         message.message_type(),
-        GOODS_GEM_EXCHANGE_LOG_MESSAGE | GOODS_JEWELRY_MADE_LOG_MESSAGE
+        GOODS_UPGRADE_LOG_MESSAGE
+            | GOODS_GEM_EXCHANGE_LOG_MESSAGE
+            | GOODS_JEWELRY_MADE_LOG_MESSAGE
     ) {
         return WorldWriteLogMessageDispatch::Handled(
             WorldWriteLogMessageOutcome::GoodsCraftLog(on_goods_craft_log_message(game, message)),
@@ -831,6 +845,11 @@ fn on_goods_craft_log_message(
     game: &CGame,
     mut message: CMessage,
 ) -> WorldGoodsCraftLogMessageOutcome {
+    let log_type = if message.message_type() == GOODS_UPGRADE_LOG_MESSAGE {
+        message.base_mut().get_char()
+    } else {
+        None
+    };
     let player_id = message.base_mut().get_long();
     let player_id_value = player_id.unwrap_or(0);
     let player = game.map_player(player_id_value as u32);
@@ -840,6 +859,54 @@ fn on_goods_craft_log_message(
         .unwrap_or_else(|| b"NULL".to_vec());
 
     let (event, payload_complete) = match message.message_type() {
+        GOODS_UPGRADE_LOG_MESSAGE => {
+            let (goods_id, goods_id_complete) = get_guid(&mut message);
+            let (goods_name, goods_name_complete) = get_limited_string(&mut message, 0x100);
+            let (gem1_id, gem1_id_complete) = get_guid(&mut message);
+            let (gem1_name, gem1_name_complete) = get_limited_string(&mut message, 0x80);
+            let (gem2_id, gem2_id_complete) = get_guid(&mut message);
+            let (gem2_name, gem2_name_complete) = get_limited_string(&mut message, 0x80);
+            let (gem3_id, gem3_id_complete) = get_guid(&mut message);
+            let (gem3_name, gem3_name_complete) = get_limited_string(&mut message, 0x80);
+            let (gem4_id, gem4_id_complete) = get_guid(&mut message);
+            let (gem4_name, gem4_name_complete) = get_limited_string(&mut message, 0x80);
+            let map_id = message.base_mut().get_long();
+            let position_x = message.base_mut().get_long();
+            let position_y = message.base_mut().get_long();
+            (
+                WorldGoodsCraftLogEvent::Upgrade {
+                    goods_id,
+                    goods_name,
+                    gems: [
+                        (gem1_id, gem1_name),
+                        (gem2_id, gem2_name),
+                        (gem3_id, gem3_name),
+                        (gem4_id, gem4_name),
+                    ],
+                    map_id: map_id.unwrap_or(0),
+                    position_x: position_x.unwrap_or(0),
+                    position_y: position_y.unwrap_or(0),
+                    log_type: log_type.unwrap_or(0) as u8,
+                },
+                WorldGoodsCraftPayloadCompleteness::Upgrade([
+                    log_type.is_some(),
+                    player_id.is_some(),
+                    goods_id_complete,
+                    goods_name_complete,
+                    gem1_id_complete,
+                    gem1_name_complete,
+                    gem2_id_complete,
+                    gem2_name_complete,
+                    gem3_id_complete,
+                    gem3_name_complete,
+                    gem4_id_complete,
+                    gem4_name_complete,
+                    map_id.is_some(),
+                    position_x.is_some(),
+                    position_y.is_some(),
+                ]),
+            )
+        }
         GOODS_GEM_EXCHANGE_LOG_MESSAGE => {
             let (destination_gem_id, destination_gem_id_complete) = get_guid(&mut message);
             let (destination_gem_name, destination_gem_name_complete) =
@@ -915,7 +982,7 @@ fn on_goods_craft_log_message(
                 ]),
             )
         }
-        _ => unreachable!("goods craft decoder вызывается только для двух wire ID"),
+        _ => unreachable!("goods craft decoder вызывается только для трёх wire ID"),
     };
     let write = WorldGoodsCraftLogWrite {
         player_id: player_id_value,

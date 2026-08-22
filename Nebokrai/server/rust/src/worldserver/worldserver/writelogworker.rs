@@ -105,6 +105,9 @@ const INSERT_TEAM_LOG_SQL: &str = "INSERT INTO team_log(\
 const INSERT_PLAYER_KILLER_LOG_SQL: &str = "INSERT INTO player_killer_log(\
     player_id,player_name,murderer_id,murderer_name,map_id,pos_x,pos_y,log_type\
 ) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8)";
+const INSERT_GOODS_UPGRADE_LOG_SQL: &str = "INSERT INTO goods_upgrade_log(\
+    player_id,player_name,goods_id,goods_name,gem1_id,gem1_name,gem2_id,gem2_name,gem3_id,gem3_name,gem4_id,gem4_name,map_id,pos_x,pos_y,log_type\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11,@P12,@P13,@P14,@P15,@P16)";
 const INSERT_GOODS_GEM_EXCHANGE_LOG_SQL: &str = "INSERT INTO goods_gem_exchange_log(\
     player_id,player_name,d_gem_id,d_gem_name,s_gem_id,s_gem_name,s_gem_amount,map_id,pos_x,pos_y\
 ) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10)";
@@ -625,6 +628,30 @@ pub(crate) async fn execute_world_write_log_command(
         }
         WorldWriteLogCommand::GoodsCraftLog(write) => {
             match &write.event {
+                WorldGoodsCraftLogEvent::Upgrade {
+                    goods_id,
+                    goods_name,
+                    gems,
+                    map_id,
+                    position_x,
+                    position_y,
+                    log_type,
+                } => {
+                    let mut query = Query::new(INSERT_GOODS_UPGRADE_LOG_SQL);
+                    query.bind(write.player_id);
+                    query.bind(decode_legacy_text(&write.player_name));
+                    query.bind(goods_id.to_string());
+                    query.bind(decode_legacy_text(goods_name));
+                    for (gem_id, gem_name) in gems {
+                        query.bind(gem_id.to_string());
+                        query.bind(decode_legacy_text(gem_name));
+                    }
+                    query.bind(*map_id);
+                    query.bind(*position_x);
+                    query.bind(*position_y);
+                    query.bind(i32::from(*log_type));
+                    query.execute(connection).await?;
+                }
                 WorldGoodsCraftLogEvent::GemExchange {
                     destination_gem_id,
                     destination_gem_name,
