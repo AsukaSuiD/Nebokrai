@@ -5,8 +5,9 @@
 //! `0x000FA080`, `SaveFactionMembers` RVA `0x000FB700`, `SaveLeaveWords` RVA
 //! `0x000FACA0`, `SaveFactionApplyPersons` RVA `0x000FB240`, `SaveIconData` RVA
 //! `0x000FB3F0`, `SaveFactionPronounce` RVA `0x000FC860` и `SaveAbility` RVA
-//! `0x000FECB0` — `IMPLEMENTED`; constructor, destructor и остальные функции
-//! ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `0x000FECB0`, а также private `LoadFactionProperty` RVA `0x000FCB20` —
+//! `IMPLEMENTED`; constructor, destructor и остальные функции ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
@@ -156,25 +157,61 @@
 //! явными `false` и поглощаются dispatcher-ом буквально. Только два ранее
 //! зафиксированных overread-пути возвращают typed `BlockedMissingFact`: их
 //! неизвестная достижимость не заменена продолжением следующих dirty-bits.
+//!
+//! `LoadFactionProperty` открывает отдельное World DB connection и буквально
+//! выполняет `SELECT * FROM CSL_FACTION_BaseProperty ORDER BY id`. Для каждой
+//! строки он сперва запускает public constructor `CFaction`, затем в исходном
+//! порядке заменяет DB property/scalar поля и кладёт объект в signed-key map.
+//! Поэтому staging сохраняет уже готовый prefix до DB/field failure, а duplicate
+//! ID оставляет последнюю строку. Старый leaked overwritten pointer устранён:
+//! он не был виден вне реализации. `GoodsWarLastTime` проходит SQL calendar
+//! time в `SYSTEMTIME`-эквивалент и форматируется без zero-padding как старый
+//! `_sprintf`; `country` сохраняется как `unsigned char`. Пять остальных
+//! частей `LoadAllFaction` намеренно ещё не вызываются из этого narrow owner-а:
+//! их нельзя подменять частично опубликованным `COrganizingCtrl`.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
 use std::fmt;
 
+use chrono::{Datelike, NaiveDateTime, Timelike};
 use encoding_rs::WINDOWS_1251;
-use tiberius::Query;
+use tiberius::{Query, Row};
 
-use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
+use crate::dbaccess::worlddb::rssetup::{
+    WorldDatabaseConnectionError, WorldDatabaseSettings, WorldTdsClient,
+};
 use crate::worldserver::appworld::organizingsystem::faction::{
-    CFaction, FactionBaseProperty, TagLeaveWord, UnterminatedLeaveWordField,
+    CFaction, FactionBaseProperty, FactionDatabaseBaseState, FactionInitialBlock, TagLeaveWord,
+    UnterminatedLeaveWordField,
 };
 use crate::worldserver::appworld::organizingsystem::organizing::{
-    TagMemInfo, UnterminatedMemberField,
+    TagMemInfo, TagTimeValue, UnterminatedMemberField,
 };
+use crate::worldserver::appworld::organizingsystem::organizingparam::COrganizingParam;
 use crate::worldserver::worldserver::game::{CGame, WorldCheckPointBlock};
 
 const SAVE_FACTION_PROPERTY_SQL: &str = "IF EXISTS (SELECT TOP 1 ID FROM CSL_FACTION_BaseProperty WHERE ID = @P16 ORDER BY ID) BEGIN UPDATE TOP (1) CSL_FACTION_BaseProperty SET MasterID = @P1, Levels = @P2, Experience = @P3, OffenseVictorCounts = @P4, DefenceVictorCounts = @P5, VillageWarVictorCounts = @P6, MemberNums = @P7, UnionID = @P8, bPermit = @P9, lPro1 = @P10, lPro2 = @P11, DelRemainTime = @P12, country = @P13, GoodsWarCount = @P14, GoodsWarLastTime = @P15 WHERE ID = @P16; SELECT CAST(@@ROWCOUNT AS int) AS UpdatedRows END ELSE SELECT CAST(0 AS int) AS UpdatedRows";
 const SAVE_FACTION_ABILITY_SQL: &str = "IF EXISTS (SELECT TOP 1 FactionID FROM CSL_FACTION_Ability WHERE FactionID = @P1 ORDER BY FactionID) BEGIN UPDATE TOP (1) CSL_FACTION_Ability SET Pronounce = @P2, IconData = @P3, LastUploadIconDataTime = @P4 WHERE FactionID = @P1 END ELSE BEGIN INSERT INTO CSL_FACTION_Ability (FactionID, Pronounce, IconData, LastUploadIconDataTime) VALUES (@P1, @P2, @P3, @P4) END";
+const LOAD_FACTION_PROPERTY_SQL: &str = "SELECT * FROM CSL_FACTION_BaseProperty ORDER BY id";
+
+/// Безопасный prefix concrete `CFaction`, сформированный private owner-ом
+/// `LoadFactionProperty` до следующих четырёх DB-этапов `LoadAllFaction`.
+pub(crate) type FactionPropertyLoadStaging = BTreeMap<i32, CFaction>;
+
+/// Наблюдаемый исход private owner-а `LoadFactionProperty`.
+///
+/// `factions` сохраняет уже вставленный map-prefix. Повторный ID заменяет
+/// прежний объект, как `std::map::operator[]`; старая утечка pointer-а не
+/// переносится, поскольку не меняла опубликованное последнее значение.
+pub(crate) enum FactionPropertyLoadOutcome {
+    ReturnedTrue { factions: FactionPropertyLoadStaging },
+    ReturnedFalse { factions: FactionPropertyLoadStaging },
+    BlockedMissingFact {
+        factions: FactionPropertyLoadStaging,
+        block: FactionInitialBlock,
+    },
+}
 
 /// Scalar-поля property-группы одной достигнутой save-копии `CFaction`.
 struct FactionPropertySaveSnapshot {
@@ -307,6 +344,7 @@ pub(crate) struct RsFactionNotice {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum RsFactionOperation {
+    LoadFactionProperty,
     SaveFaction,
     DeleteFaction,
     SaveFactionProperty,
@@ -324,6 +362,9 @@ pub(crate) enum RsFactionSaveError {
     Database(RsFactionDatabaseError),
     MissingConnection,
     MissingPropertyRow,
+    MissingSettings,
+    Connection(WorldDatabaseConnectionError),
+    MissingRequiredValue(&'static str),
 }
 
 impl fmt::Display for RsFactionSaveError {
@@ -335,6 +376,11 @@ impl fmt::Display for RsFactionSaveError {
             }
             Self::MissingPropertyRow => formatter
                 .write_str("World faction DB не содержит base-property строку для обновления"),
+            Self::MissingSettings => formatter.write_str("не заданы параметры World faction DB"),
+            Self::Connection(error) => error.fmt(formatter),
+            Self::MissingRequiredValue(column) => {
+                write!(formatter, "в faction DB отсутствует обязательное поле {column}")
+            }
         }
     }
 }
@@ -343,7 +389,11 @@ impl Error for RsFactionSaveError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Database(error) => Some(error),
-            Self::MissingConnection | Self::MissingPropertyRow => None,
+            Self::Connection(error) => Some(error),
+            Self::MissingConnection
+            | Self::MissingPropertyRow
+            | Self::MissingSettings
+            | Self::MissingRequiredValue(_) => None,
         }
     }
 }
@@ -369,8 +419,139 @@ impl From<tiberius::error::Error> for RsFactionDatabaseError {
     }
 }
 
+/// Ошибка одного field/query шага `LoadFactionProperty` до преобразования в
+/// operator-visible notice. Runtime SQL и DB-значения намеренно не выдаются.
+#[derive(Debug)]
+enum FactionLoadReadError {
+    Database(tiberius::error::Error),
+    MissingRequiredValue(&'static str),
+}
+
+impl From<tiberius::error::Error> for FactionLoadReadError {
+    fn from(error: tiberius::error::Error) -> Self {
+        Self::Database(error)
+    }
+}
+
+impl From<FactionLoadReadError> for RsFactionSaveError {
+    fn from(error: FactionLoadReadError) -> Self {
+        match error {
+            FactionLoadReadError::Database(error) => Self::Database(error.into()),
+            FactionLoadReadError::MissingRequiredValue(column) => Self::MissingRequiredValue(column),
+        }
+    }
+}
+
+fn read_faction_i32(row: &Row, column: &'static str) -> Result<i32, FactionLoadReadError> {
+    match row.try_get::<i32, _>(column) {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => Err(FactionLoadReadError::MissingRequiredValue(column)),
+        Err(error) => Err(FactionLoadReadError::Database(error)),
+    }
+}
+
+fn read_faction_bool(row: &Row, column: &'static str) -> Result<bool, FactionLoadReadError> {
+    match row.try_get::<bool, _>(column) {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => Err(FactionLoadReadError::MissingRequiredValue(column)),
+        Err(error) => Err(FactionLoadReadError::Database(error)),
+    }
+}
+
+fn read_faction_u8(row: &Row, column: &'static str) -> Result<u8, FactionLoadReadError> {
+    match row.try_get::<u8, _>(column) {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => Err(FactionLoadReadError::MissingRequiredValue(column)),
+        Err(error) => Err(FactionLoadReadError::Database(error)),
+    }
+}
+
+fn read_faction_text(row: &Row, column: &'static str) -> Result<Vec<u8>, FactionLoadReadError> {
+    match row.try_get::<&str, _>(column) {
+        Ok(Some(value)) => {
+            let (encoded, _, _) = WINDOWS_1251.encode(value);
+            Ok(encoded.into_owned())
+        }
+        Ok(None) => Err(FactionLoadReadError::MissingRequiredValue(column)),
+        Err(error) => Err(FactionLoadReadError::Database(error)),
+    }
+}
+
+fn read_faction_time(
+    row: &Row,
+    column: &'static str,
+) -> Result<TagTimeValue, FactionLoadReadError> {
+    let value = match row.try_get::<NaiveDateTime, _>(column) {
+        Ok(Some(value)) => value,
+        Ok(None) => return Err(FactionLoadReadError::MissingRequiredValue(column)),
+        Err(error) => return Err(FactionLoadReadError::Database(error)),
+    };
+    Ok(TagTimeValue {
+        year: u16::try_from(value.year())
+            .expect("год NaiveDateTime помещается в SYSTEMTIME"),
+        month: u16::try_from(value.month())
+            .expect("месяц NaiveDateTime помещается в SYSTEMTIME"),
+        day_of_week: u16::try_from(value.weekday().num_days_from_sunday())
+            .expect("день недели NaiveDateTime помещается в SYSTEMTIME"),
+        day: u16::try_from(value.day()).expect("день NaiveDateTime помещается в SYSTEMTIME"),
+        hour: u16::try_from(value.hour()).expect("час NaiveDateTime помещается в SYSTEMTIME"),
+        minute: u16::try_from(value.minute())
+            .expect("минута NaiveDateTime помещается в SYSTEMTIME"),
+        second: u16::try_from(value.second())
+            .expect("секунда NaiveDateTime помещается в SYSTEMTIME"),
+        milliseconds: u16::try_from(value.nanosecond() / 1_000_000)
+            .expect("миллисекунда NaiveDateTime помещается в SYSTEMTIME"),
+    })
+}
+
+fn read_faction_database_base_state(
+    row: &Row,
+) -> Result<FactionDatabaseBaseState, FactionLoadReadError> {
+    let goods_war_last_win_time = read_faction_time(row, "GoodsWarLastTime")?;
+    Ok(FactionDatabaseBaseState {
+        faction_id: read_faction_i32(row, "ID")?,
+        name: read_faction_text(row, "Name")?,
+        master_id: read_faction_i32(row, "MasterID")?,
+        established_time: read_faction_time(row, "EstablishedTime")?,
+        level: read_faction_i32(row, "Levels")?,
+        experience: read_faction_i32(row, "Experience")?,
+        offense_victor_counts: read_faction_i32(row, "OffenseVictorCounts")?,
+        defence_victor_counts: read_faction_i32(row, "DefenceVictorCounts")?,
+        village_war_victor_counts: read_faction_i32(row, "VillageWarVictorCounts")?,
+        member_count: read_faction_i32(row, "MemberNums")?,
+        union_id: read_faction_i32(row, "UnionID")?,
+        permit: read_faction_bool(row, "bPermit")?,
+        property_1: read_faction_i32(row, "lPro1")?,
+        property_2: read_faction_i32(row, "lPro2")?,
+        delete_remain_time: read_faction_i32(row, "DelRemainTime")?,
+        country: read_faction_u8(row, "country")?,
+        goods_war_count: read_faction_i32(row, "GoodsWarCount")?,
+        // `_sprintf` использовал year/month/day/hour/minute/second без zero
+        // padding и не переносил weekday/milliseconds из SYSTEMTIME.
+        goods_war_last_win_time: format!(
+            "{}-{}-{} {}:{}:{}",
+            goods_war_last_win_time.year,
+            goods_war_last_win_time.month,
+            goods_war_last_win_time.day,
+            goods_war_last_win_time.hour,
+            goods_war_last_win_time.minute,
+            goods_war_last_win_time.second
+        ),
+    })
+}
+
 /// Узкая объектная граница достигнутой стадии исходного `CRsFaction`.
 pub(crate) trait RsFactionOwner {
+    /// Открывает отдельное World DB соединение и materialize-ит только
+    /// `LoadFactionProperty`; оставшиеся load-owner-ы пока не смешиваются с
+    /// этим staging map.
+    async fn load_faction_property(
+        &mut self,
+        master_title: &[u8],
+        game: &CGame,
+        parameters: &COrganizingParam,
+    ) -> FactionPropertyLoadOutcome;
+
     /// Вызывает dirty-bit leaf-ы `1/2/4/8` внутри caller-транзакции.
     async fn save_faction(
         &mut self,
@@ -423,10 +604,93 @@ pub(crate) trait RsFactionOwner {
 /// Linux/TDS-замена достигнутой части исходного `CRsFaction`.
 #[derive(Default)]
 pub(crate) struct TiberiusRsFaction {
+    settings: Option<WorldDatabaseSettings>,
     notices: VecDeque<RsFactionNotice>,
 }
 
+impl TiberiusRsFaction {
+    pub(crate) fn new(settings: WorldDatabaseSettings) -> Self {
+        Self {
+            settings: Some(settings),
+            notices: VecDeque::new(),
+        }
+    }
+
+    fn property_load_failed(
+        &mut self,
+        error: FactionLoadReadError,
+        factions: FactionPropertyLoadStaging,
+    ) -> FactionPropertyLoadOutcome {
+        self.notices.push_back(RsFactionNotice {
+            operation: RsFactionOperation::LoadFactionProperty,
+            error: error.into(),
+        });
+        FactionPropertyLoadOutcome::ReturnedFalse { factions }
+    }
+}
+
 impl RsFactionOwner for TiberiusRsFaction {
+    async fn load_faction_property(
+        &mut self,
+        master_title: &[u8],
+        game: &CGame,
+        parameters: &COrganizingParam,
+    ) -> FactionPropertyLoadOutcome {
+        let Some(settings) = self.settings.clone() else {
+            self.notices.push_back(RsFactionNotice {
+                operation: RsFactionOperation::LoadFactionProperty,
+                error: RsFactionSaveError::MissingSettings,
+            });
+            return FactionPropertyLoadOutcome::ReturnedFalse {
+                factions: BTreeMap::new(),
+            };
+        };
+        let mut connection = match settings.connect().await {
+            Ok(connection) => connection,
+            Err(error) => {
+                self.notices.push_back(RsFactionNotice {
+                    operation: RsFactionOperation::LoadFactionProperty,
+                    error: RsFactionSaveError::Connection(error),
+                });
+                return FactionPropertyLoadOutcome::ReturnedFalse {
+                    factions: BTreeMap::new(),
+                };
+            }
+        };
+        let rows = match Query::new(LOAD_FACTION_PROPERTY_SQL)
+            .query(&mut connection)
+            .await
+        {
+            Ok(stream) => match stream.into_first_result().await {
+                Ok(rows) => rows,
+                Err(error) => return self.property_load_failed(error.into(), BTreeMap::new()),
+            },
+            Err(error) => return self.property_load_failed(error.into(), BTreeMap::new()),
+        };
+
+        let mut factions = BTreeMap::new();
+        for row in &rows {
+            let state = match read_faction_database_base_state(row) {
+                Ok(state) => state,
+                Err(error) => return self.property_load_failed(error, factions),
+            };
+            let faction_id = state.faction_id;
+            let faction = match CFaction::from_database_base_state(
+                state,
+                master_title,
+                game,
+                parameters,
+            ) {
+                Ok(faction) => faction,
+                Err(block) => {
+                    return FactionPropertyLoadOutcome::BlockedMissingFact { factions, block };
+                }
+            };
+            factions.insert(faction_id, faction);
+        }
+        FactionPropertyLoadOutcome::ReturnedTrue { factions }
+    }
+
     async fn save_faction(
         &mut self,
         snapshot: Option<&mut FactionSaveSnapshot<'_>>,
