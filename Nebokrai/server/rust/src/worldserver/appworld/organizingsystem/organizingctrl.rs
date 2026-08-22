@@ -2930,6 +2930,24 @@ pub(crate) enum OrganizingNewDayBlock {
     DateArithmetic(TagTimeArithmeticBlock),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingNewDayScheduleBlock {
+    DateArithmetic(TagTimeArithmeticBlock),
+}
+
+/// Финальный достигнутый suffix `COrganizingCtrl::Initialize` после DB-load.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OrganizingInitializeSuffixReport {
+    pub(crate) new_day_schedule: OrganizingNewDayScheduleReport,
+}
+
+/// Safe-граница suffix-а не откатывает уже поставленный calendar event.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingInitializeSuffixBlock {
+    NewDaySchedule(TagTimeArithmeticBlock),
+    Billboard(FactionBillboardStatBlock),
+}
+
 /// Наблюдаемый no-op либо обе city-war мутации `SetEnemyFactionRelation`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EnemyFactionRelationOutcome {
@@ -3235,7 +3253,7 @@ impl COrganizingCtrl {
         current_time: TagTime,
         timer: &mut CTimer<Callback>,
         callback: Callback,
-    ) -> Result<OrganizingNewDayScheduleReport, OrganizingNewDayBlock> {
+    ) -> Result<OrganizingNewDayScheduleReport, OrganizingNewDayScheduleBlock> {
         let mut scheduled_time = self.new_day_time_for_date(current_time);
         scheduled_time.hour = 0;
         scheduled_time.minute = 0;
@@ -3243,7 +3261,7 @@ impl COrganizingCtrl {
         if scheduled_time.legacy_lt(current_time) {
             scheduled_time
                 .add_day(1)
-                .map_err(OrganizingNewDayBlock::DateArithmetic)?;
+                .map_err(OrganizingNewDayScheduleBlock::DateArithmetic)?;
         }
         let event_id = timer.set_time_event(scheduled_time, callback, 0);
         self.new_day_event_id = Some(event_id);
@@ -3293,6 +3311,26 @@ impl COrganizingCtrl {
             second: self.new_day_time.second,
             milliseconds: self.new_day_time.milliseconds,
         }
+    }
+
+    /// Выполняет часть `Initialize` строго после DB-publication: сначала
+    /// `SetTimeEvent(OnNewDay, 0)`, затем member/offense/defence snapshot-ы.
+    pub(crate) fn finish_database_initialize<Callback: Copy>(
+        &mut self,
+        current_time: TagTime,
+        timer: &mut CTimer<Callback>,
+        on_new_day: Callback,
+    ) -> Result<OrganizingInitializeSuffixReport, OrganizingInitializeSuffixBlock> {
+        let new_day_schedule = self
+            .schedule_initial_new_day(current_time, timer, on_new_day)
+            .map_err(|error| match error {
+                OrganizingNewDayScheduleBlock::DateArithmetic(source) => {
+                    OrganizingInitializeSuffixBlock::NewDaySchedule(source)
+                }
+            })?;
+        self.stat_billboard()
+            .map_err(OrganizingInitializeSuffixBlock::Billboard)?;
+        Ok(OrganizingInitializeSuffixReport { new_day_schedule })
     }
 
     /// Публикует DB-готовые union/faction owner-ы в порядке `Initialize`.
