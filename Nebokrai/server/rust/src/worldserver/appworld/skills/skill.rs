@@ -241,8 +241,8 @@ fn set_bounded_c_string(
     Ok(())
 }
 
-// Сырой C++ ниже сохранён как локальная документация ещё не связанных
-// loader/call-site деталей, а не как Rust-реализация.
+// Сырой C++ ниже сохранён как локальная доказательная документация
+// материализованного owner-а, а не как Rust-реализация.
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
 // Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
@@ -252,7 +252,7 @@ fn set_bounded_c_string(
 
 // ============================================================================
 // FUNCTION: CSkill::SetSkillType
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\skills\skill.cpp:51
@@ -266,7 +266,7 @@ fn set_bounded_c_string(
 
 // ============================================================================
 // FUNCTION: CSkill::SetLevel
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\skills\skill.cpp:61
@@ -280,7 +280,7 @@ fn set_bounded_c_string(
 
 // ============================================================================
 // FUNCTION: CSkill::SetSkillName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\skills\skill.cpp:66
@@ -294,7 +294,7 @@ fn set_bounded_c_string(
 
 // ============================================================================
 // FUNCTION: CSkill::SetDescription
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\skills\skill.cpp:73
@@ -308,7 +308,7 @@ fn set_bounded_c_string(
 
 // ============================================================================
 // FUNCTION: CSkill::SetTargetType
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\skills\skill.cpp:81
@@ -322,7 +322,7 @@ fn set_bounded_c_string(
 
 // ============================================================================
 // FUNCTION: CSkill::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\skills\skill.cpp:86
@@ -336,7 +336,7 @@ fn set_bounded_c_string(
 
 // ============================================================================
 // FUNCTION: CSkill::~CSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\skills\skill.cpp:31
@@ -350,7 +350,7 @@ fn set_bounded_c_string(
 
 // ============================================================================
 // FUNCTION: CSkill::CSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\skills\skill.cpp:22
@@ -364,7 +364,7 @@ fn set_bounded_c_string(
 
 // ============================================================================
 // FUNCTION: CSkill::AddUsage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\skills\skill.cpp:46
