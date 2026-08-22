@@ -77,6 +77,15 @@
 //! `0x0041B629..0x0041B65E`. `Vec::sort_by` сохраняет прежний порядок полных
 //! ties. Два несемантических padding-байта новой записи обнуляются вместо
 //! публикации неопределённого stack-содержимого в DB blob.
+//!
+//! `CHonorRanks::getInstance` в EXE лениво выделяет единственный
+//! process-global owner и при первом успехе записывает `SYSTEMTIME.wDay` в
+//! `m_nSortDate`; деструктор освобождает только технические MSVC list-node.
+//! В Rust `CHonorRanks` создаётся внешним lifecycle-owner-ом через
+//! `with_reached_process_state`, а все достигнутые ingress получают один
+//! `&mut CHonorRanks` через `WorldMainLoopOwners`. Это сохраняет начальный
+//! sort-day и всё последующее наблюдаемое состояние, не перенося singleton,
+//! `operator_new`, утечку process-global объекта и ручной cleanup list-node.
 
 use std::error::Error;
 use std::fmt;
@@ -165,17 +174,25 @@ pub(crate) struct CHonorRanks {
 
 impl Default for CHonorRanks {
     fn default() -> Self {
-        Self {
-            history: Default::default(),
-            current: Default::default(),
-            db_data: None,
-            sort_day: Local::now().day(),
-        }
+        Self::with_reached_process_state(Local::now().day())
     }
 }
 
 impl CHonorRanks {
-    /// Создаёт доказанные пустые live/DB list-массивы.
+    /// Создаёт process-static состояние после успешного original `getInstance`.
+    ///
+    /// `sort_day` — точный `SYSTEMTIME.wDay`, снятый lifecycle-owner-ом в
+    /// момент создания; clock API не является частью состояния рангов.
+    pub(crate) fn with_reached_process_state(sort_day: u32) -> Self {
+        Self {
+            history: Default::default(),
+            current: Default::default(),
+            db_data: None,
+            sort_day,
+        }
+    }
+
+    /// Создаёт доказанные пустые live/DB list-массивы, снимая текущий local day.
     pub(crate) fn with_reached_save_state() -> Self {
         Self::default()
     }
@@ -1228,7 +1245,7 @@ impl HonorRanksLoadSink for CHonorRanks {
 
 // ============================================================================
 // FUNCTION: CHonorRanks::getInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp:59
@@ -1236,6 +1253,12 @@ impl HonorRanksLoadSink for CHonorRanks {
 // ADDRESS: 0041a460
 // PROTOTYPE: CHonorRanks * __cdecl getInstance(void)
 //
+// IMPLEMENTED_OWNER: внешний lifecycle-owner создаёт `CHonorRanks` через
+// `with_reached_process_state`, передавая точный `SYSTEMTIME.wDay`; все
+// достигнутые call-site получают его явной `&mut` ссылкой через
+// `WorldMainLoopOwners`. Process-global singleton, `operator_new` и его
+// failure/log path не имеют самостоятельного wire, DB или игрового контракта
+// и заменены безопасным явным владением.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1302,7 +1325,7 @@ impl HonorRanksLoadSink for CHonorRanks {
 
 // ============================================================================
 // FUNCTION: CHonorRanks::~CHonorRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp:47
@@ -1310,6 +1333,10 @@ impl HonorRanksLoadSink for CHonorRanks {
 // ADDRESS: 0041a650
 // PROTOTYPE: void __thiscall ~CHonorRanks(void)
 //
+// IMPLEMENTED_OWNER: owned `Vec` и `Option` освобождаются обычным Rust Drop.
+// Ручной обход и освобождение MSVC list-node — внутренняя техническая деталь
+// без внешнего контракта; Rust не воспроизводит его ранний `return` после
+// первого node, который оставлял остальные list-узлы неосвобождёнными.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
