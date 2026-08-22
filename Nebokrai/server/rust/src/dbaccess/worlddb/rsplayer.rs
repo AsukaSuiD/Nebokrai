@@ -12,7 +12,8 @@
 //! `GetPlayerCountInDBbyCdkey` RVA `0x00100C40`, `GetPlayerDeletionDate` RVA
 //! `0x00100EA0`, `OpenPlayerBaseInDB` RVA `0x0010D2D0`,
 //! `GetPlayerCountryByID` RVA `0x00101E30`, `GetPlayerNameByID` RVA
-//! `0x00105980`,
+//! `0x00105980`, `ValidatePlayerIDInCdkey` RVA `0x00101350`,
+//! `GetPlayerData` RVA `0x00114EA0`,
 //! `OpenPlayerBaseInMem` RVA `0x0010F280`, внешний `OpenPlayerBase` RVA
 //! `0x0010F750`,
 //! `RestorePlayer` RVA `0x00101260` и
@@ -984,6 +985,7 @@ pub(crate) enum RsPlayerOperation {
     GetPlayerDeletionDate,
     GetPlayerCountryById,
     GetPlayerNameById,
+    ValidatePlayerIdInCdkey,
     IsNameExist,
     GetPlayerId,
     GetCdKey,
@@ -1181,6 +1183,14 @@ pub(crate) trait RsPlayerOwner {
         player_id: u32,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> Vec<u8>;
+
+    /// Обходит все DB ID указанного account и сравнивает exact u32 bit-pattern.
+    async fn validate_player_id_in_cdkey(
+        &mut self,
+        account: &[u8],
+        player_id: u32,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> bool;
 
     /// Проверяет case-insensitive player-name через parameterized TDS query.
     async fn is_name_exist(
@@ -2440,6 +2450,71 @@ impl RsPlayerOwner for TiberiusRsPlayer {
                 Vec::new()
             }
         }
+    }
+
+    async fn validate_player_id_in_cdkey(
+        &mut self,
+        account: &[u8],
+        player_id: u32,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> bool {
+        if player_id == 0 {
+            return false;
+        }
+        let Some(active_transaction) = active_transaction else {
+            self.notices.push_back(RsPlayerNotice {
+                operation: RsPlayerOperation::ValidatePlayerIdInCdkey,
+                error: RsPlayerSaveError::MissingConnection,
+            });
+            return false;
+        };
+
+        let (account, _, _) = WINDOWS_1251.decode(visible_c_string(account));
+        let mut query = Query::new("SELECT id FROM csl_player_base WHERE account=@P1");
+        query.bind(account.into_owned());
+        let rows = match query.query(active_transaction).await {
+            Ok(stream) => match stream.into_first_result().await {
+                Ok(rows) => rows,
+                Err(error) => {
+                    self.notices.push_back(RsPlayerNotice {
+                        operation: RsPlayerOperation::ValidatePlayerIdInCdkey,
+                        error: RsPlayerSaveError::Database(error.into()),
+                    });
+                    return false;
+                }
+            },
+            Err(error) => {
+                self.notices.push_back(RsPlayerNotice {
+                    operation: RsPlayerOperation::ValidatePlayerIdInCdkey,
+                    error: RsPlayerSaveError::Database(error.into()),
+                });
+                return false;
+            }
+        };
+
+        for row in rows {
+            let database_id = match read_ado_integer(&row, "ID") {
+                Ok(Some(value)) if i32::try_from(value).is_ok() => value as i32 as u32,
+                Ok(Some(_)) | Ok(None) => {
+                    self.notices.push_back(RsPlayerNotice {
+                        operation: RsPlayerOperation::ValidatePlayerIdInCdkey,
+                        error: RsPlayerSaveError::MalformedPlayerBaseRow,
+                    });
+                    return false;
+                }
+                Err(error) => {
+                    self.notices.push_back(RsPlayerNotice {
+                        operation: RsPlayerOperation::ValidatePlayerIdInCdkey,
+                        error: RsPlayerSaveError::Database(error.into()),
+                    });
+                    return false;
+                }
+            };
+            if database_id == player_id {
+                return true;
+            }
+        }
+        false
     }
 
     async fn is_name_exist(
@@ -3732,7 +3807,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::ValidatePlayerIDInCdkey
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2668
@@ -3740,6 +3815,9 @@ async fn execute_batch(
 // ADDRESS: 00501350
 // PROTOTYPE: bool __thiscall ValidatePlayerIDInCdkey(char * param_1, uint param_2, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_3)
 //
+// Реализация находится в `TiberiusRsPlayer::validate_player_id_in_cdkey`
+// выше: ordered row scan, ID bit-pattern и false/catch semantics сохранены;
+// parameter binding заменяет только `_sprintf` и ADO/COM plumbing.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -4528,7 +4606,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::GetPlayerData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:432
@@ -4536,6 +4614,8 @@ async fn execute_batch(
 // ADDRESS: 00514ea0
 // PROTOTYPE: bool __thiscall GetPlayerData(char * param_1, uint param_2, ulong param_3, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_4)
 //
+// Реализация распределена между `player_select`, clone/queue owners и
+// `CGame::route_loaded_player`; observable order прямого пути сохранён.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

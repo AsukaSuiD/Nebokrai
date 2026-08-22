@@ -2168,6 +2168,12 @@ impl CPlayer {
         true
     }
 
+    /// Завершает direct `CRsPlayer::GetPlayerData` после friend-loop.
+    pub(crate) fn reset_selected_login_flags(&mut self) {
+        self.faction_data_received.set(false);
+        self.login = false;
+    }
+
     /// Обновляет organizing-состояние игрока через переданного владельца.
     pub(crate) fn set_player_organizing<U: PlayerOrganizingUpdater>(
         &mut self,

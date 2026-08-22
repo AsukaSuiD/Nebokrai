@@ -2,8 +2,9 @@
 //!
 //! Корпус остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме player lifecycle leaf-ов
 //! `0x5FB01/0x5FB02`, player-list leaf `0x4FB01`, delete-role leaf `0x4FB02`,
-//! restore-role leaf `0x4FB03`, create-role leaf `0x4FB04` и account cleanup leaf-ов `0x4FB06/0x4FB07`
-//! со статусом `IMPLEMENTED`.
+//! restore-role leaf `0x4FB03`, create-role leaf `0x4FB04`, select-player leaf
+//! `0x4FB05` и account cleanup leaf-ов `0x4FB06/0x4FB07` со статусом
+//! `IMPLEMENTED`.
 //! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\logmessage.cpp:30`.
@@ -74,6 +75,18 @@
 //! equipment ID, 11 level-byte и signed region ID; send остаётся
 //! неприоритетным. Safe name/layout/GUID/append blocks не превращаются в
 //! придуманный legacy ответ, а parameterized Tiberius заменяет только ADO.
+//! Exact `0x004B181A..0x004B19AD` для `0x4FB05` читает
+//! `player_id/account/client_ip`, проверяет binding строго через live map,
+//! frozen save-map и только затем `CRsPlayer`. Invalid binding сначала
+//! посылает `0x1FF01/0x1C`, затем пишет исходный error text. `GetPlayerData`
+//! сохраняет restore/deletion gate, clone live перед clone save и только при
+//! обоих miss ставит fixed `char[20]` record в player-load FIFO. Direct clone
+//! после `0x1D` ответа вызывает Largess, публикует login/map state и лишь затем
+//! обновляет friends и сбрасывает faction/login flags; DB-loaded consumer
+//! сохраняет свой подтверждённый обратный
+//! порядок friend-loop/map publication. Добавленные Linux-донором preflight,
+//! lifecycle queue и account-wide cancellation не перенесены. Tiberius и
+//! parameter binding заменяют только ADO/COM и небезопасный SQL buffer.
 //!
 //! Декомпилятор: Ghidra 12.1.2. Сырой C++ ниже сохранён как локальная
 //! документация, а не как Rust-реализация.
@@ -113,10 +126,13 @@ use crate::worldserver::appworld::player::{
 };
 use crate::worldserver::appworld::session::csessionfactory::CSessionFactory;
 use crate::worldserver::worldserver::game::{
-    CGame, WorldCreationPlayerAppendOutcome, WorldLoginTimeoutTeamExit,
+    CGame, WorldCreationPlayerAppendOutcome, WorldLoadedPlayerRouteOrder,
+    WorldLoginTimeoutTeamExit,
     WorldOnlinePlayerAppendOutcome, WorldOnlinePlayerRemoveOutcome, WorldOriginGoodsBlock,
-    WorldOriginGoodsReport, WorldPlayerIdBlock, WorldPlayerNameLookupError,
-    WorldReturnedPlayerDecode,
+    WorldOriginGoodsReport, WorldPlayerIdBlock, WorldPlayerLoadRequestBlock,
+    WorldPlayerLoadRequestOutcome, WorldPlayerNameLookupError,
+    WorldProcessPlayerDataQueueError, WorldProcessPlayerDataQueueOutcome,
+    WorldReturnedPlayerDecode, legacy_tick_ms,
 };
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
@@ -126,6 +142,7 @@ const PLAYER_DETAIL_REQUEST: i32 = 0x0005_FB01;
 const PLAYER_RETURN_REQUEST: i32 = 0x0005_FB02;
 const RESTORE_ROLE_REQUEST: i32 = 0x0004_FB03;
 const CREATE_ROLE_REQUEST: i32 = 0x0004_FB04;
+const PLAYER_SELECT_REQUEST: i32 = 0x0004_FB05;
 const ACCOUNT_LOGIN_CLEANUP_REQUEST: i32 = 0x0004_FB06;
 const ACCOUNT_DISCONNECT_REQUEST: i32 = 0x0004_FB07;
 const PLAYER_BASE_RESPONSE: i32 = 0x0001_FF02;
@@ -140,6 +157,8 @@ const CREATE_ROLE_INVALID_STATUS: i8 = 0x18;
 const CREATE_ROLE_LIMIT_STATUS: i8 = 0x19;
 const CREATE_ROLE_FILTER_STATUS: i8 = 0x1A;
 const CREATE_ROLE_SUCCESS_STATUS: i8 = 0x1B;
+const PLAYER_SELECT_RESPONSE: i32 = 0x0001_FF01;
+const PLAYER_SELECT_REJECTED_STATUS: i8 = 0x1C;
 const ACCOUNT_DISCONNECT_GAME_RESPONSE: i32 = 0x0007_F903;
 const ACCOUNT_DISCONNECT_LOGIN_RESPONSE: i32 = 0x0001_FF06;
 const PLAYER_DETAIL_RESPONSE: i32 = 0x0007_F901;
@@ -221,6 +240,68 @@ pub(crate) enum WorldCreateRoleOutcome {
         status: i8,
         wire: Vec<u8>,
         delivery: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerSelectRequest {
+    pub(crate) player_id: u32,
+    pub(crate) account: Vec<u8>,
+    pub(crate) client_ip: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldPlayerSelectValidationOwner {
+    LiveMap,
+    FrozenDbMap,
+    PersistentDatabase,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldPlayerSelectCloneOwner {
+    LiveMap,
+    FrozenDbMap,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldPlayerSelectRejectReason {
+    InvalidBinding,
+    Deleted,
+}
+
+#[derive(Debug)]
+pub(crate) enum WorldPlayerSelectBlock {
+    Clone(PlayerCodecError),
+    Route(WorldProcessPlayerDataQueueError),
+    LoadRequest(WorldPlayerLoadRequestBlock),
+}
+
+#[derive(Debug)]
+pub(crate) enum WorldPlayerSelectOutcome {
+    Rejected {
+        request: WorldPlayerSelectRequest,
+        reason: WorldPlayerSelectRejectReason,
+        response_type: i32,
+        status: i8,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+        log: Option<AddLogTextDisposition>,
+    },
+    Routed {
+        request: WorldPlayerSelectRequest,
+        validation_owner: WorldPlayerSelectValidationOwner,
+        clone_owner: WorldPlayerSelectCloneOwner,
+        route: WorldProcessPlayerDataQueueOutcome,
+    },
+    Queued {
+        request: WorldPlayerSelectRequest,
+        validation_owner: WorldPlayerSelectValidationOwner,
+        queue: WorldPlayerLoadRequestOutcome,
+    },
+    Blocked {
+        request: WorldPlayerSelectRequest,
+        validation_owner: WorldPlayerSelectValidationOwner,
+        source: WorldPlayerSelectBlock,
     },
 }
 
@@ -403,6 +484,7 @@ pub(crate) enum WorldLogMessageOutcome {
     DeleteRole(WorldDeleteRoleOutcome),
     RestoreRole(WorldRestoreRoleOutcome),
     CreateRole(WorldCreateRoleOutcome),
+    PlayerSelect(WorldPlayerSelectOutcome),
     AccountLoginCleanup(WorldAccountLoginCleanupOutcome),
     AccountDisconnect(WorldAccountDisconnectOutcome),
     PlayerDetail(WorldPlayerDetailOutcome),
@@ -426,6 +508,7 @@ pub(crate) async fn on_log_message(
     registry: &GoodsBasePropertiesRegistry,
     original_name_index: &GoodsOriginalNameIndex,
     coefficients: &PlayerPropertyCoefficients,
+    load_player_largess: &mut dyn FnMut(&mut CPlayer),
     globe_setup: &GlobeSetupSnapshot,
     rs_player: &mut TiberiusRsPlayer,
     player_database: Option<&mut WorldTdsClient>,
@@ -505,12 +588,230 @@ pub(crate) async fn on_log_message(
             )
             .await
         }
+        PLAYER_SELECT_REQUEST => {
+            player_select(
+                game,
+                organizing,
+                registry,
+                coefficients,
+                rs_player,
+                player_database,
+                load_player_largess,
+                add_error_log_text,
+                message,
+            )
+            .await
+        }
         ACCOUNT_LOGIN_CLEANUP_REQUEST => {
             account_login_cleanup(game, session_factory, message)
         }
         ACCOUNT_DISCONNECT_REQUEST => account_disconnect(game, session_factory, message),
         _ => WorldLogMessageDispatch::Pending(message),
     }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "exact select-player связывает live/save/DB owners и transport"
+)]
+async fn player_select(
+    game: &mut CGame,
+    organizing: &mut COrganizingCtrl,
+    registry: &GoodsBasePropertiesRegistry,
+    coefficients: &PlayerPropertyCoefficients,
+    rs_player: &mut TiberiusRsPlayer,
+    mut player_database: Option<&mut WorldTdsClient>,
+    load_player_largess: &mut dyn FnMut(&mut CPlayer),
+    add_error_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
+    mut message: CMessage,
+) -> WorldLogMessageDispatch {
+    let request = WorldPlayerSelectRequest {
+        player_id: message.base_mut().get_long().unwrap_or(0) as u32,
+        account: message
+            .base_mut()
+            .get_str_bytes(0x14)
+            .unwrap_or_default(),
+        client_ip: message.base_mut().get_long().unwrap_or(0) as u32,
+    };
+
+    let validation_owner = if game.validate_player_id_in_cdkey(
+        &request.account,
+        request.player_id,
+    ) {
+        Some(WorldPlayerSelectValidationOwner::LiveMap)
+    } else if game.validate_db_player_id_in_cdkey(&request.account, request.player_id) {
+        Some(WorldPlayerSelectValidationOwner::FrozenDbMap)
+    } else if rs_player
+        .validate_player_id_in_cdkey(
+            &request.account,
+            request.player_id,
+            player_database.as_deref_mut(),
+        )
+        .await
+    {
+        Some(WorldPlayerSelectValidationOwner::PersistentDatabase)
+    } else {
+        None
+    };
+
+    let Some(validation_owner) = validation_owner else {
+        let mut log_payload = format!(
+            "==[L2W Invalid Request]== ID <{}> Not Bound To Cdkey <",
+            request.player_id,
+        )
+        .into_bytes();
+        let account_end = request
+            .account
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(request.account.len());
+        log_payload.extend_from_slice(&request.account[..account_end]);
+        log_payload.extend_from_slice(b"> !");
+        return send_player_select_rejection(
+            game,
+            request,
+            WorldPlayerSelectRejectReason::InvalidBinding,
+            Some(&log_payload),
+            add_error_log_text,
+        );
+    };
+
+    if !game.is_restore_player_exist(request.player_id) {
+        let mut deletion_time = game.deletion_player_time(request.player_id);
+        if deletion_time == 0 {
+            deletion_time = rs_player
+                .get_player_deletion_date(
+                    request.player_id,
+                    player_database.as_deref_mut(),
+                )
+                .await;
+        }
+        if deletion_time != 0 {
+            return send_player_select_rejection(
+                game,
+                request,
+                WorldPlayerSelectRejectReason::Deleted,
+                None,
+                add_error_log_text,
+            );
+        }
+    }
+
+    let (clone_owner, player) = match game.clone_map_player(
+        request.player_id,
+        registry,
+        organizing,
+        coefficients,
+    ) {
+        Ok(Some(player)) => (Some(WorldPlayerSelectCloneOwner::LiveMap), Some(player)),
+        Ok(None) => match game.clone_saving_player(
+            request.player_id,
+            registry,
+            organizing,
+            coefficients,
+        ) {
+            Ok(Some(player)) => {
+                (Some(WorldPlayerSelectCloneOwner::FrozenDbMap), Some(player))
+            }
+            Ok(None) => (None, None),
+            Err(source) => {
+                return WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::PlayerSelect(
+                    WorldPlayerSelectOutcome::Blocked {
+                        request,
+                        validation_owner,
+                        source: WorldPlayerSelectBlock::Clone(source),
+                    },
+                ));
+            }
+        },
+        Err(source) => {
+            return WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::PlayerSelect(
+                WorldPlayerSelectOutcome::Blocked {
+                    request,
+                    validation_owner,
+                    source: WorldPlayerSelectBlock::Clone(source),
+                },
+            ));
+        }
+    };
+
+    if let (Some(clone_owner), Some(player)) = (clone_owner, player) {
+        let route = game.route_loaded_player(
+            organizing,
+            0,
+            0,
+            request.player_id,
+            request.client_ip,
+            &request.account,
+            Some(player),
+            WorldLoadedPlayerRouteOrder::Direct,
+            load_player_largess,
+            legacy_tick_ms,
+        );
+        return WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::PlayerSelect(
+            match route {
+                Ok(route) => WorldPlayerSelectOutcome::Routed {
+                    request,
+                    validation_owner,
+                    clone_owner,
+                    route,
+                },
+                Err(source) => WorldPlayerSelectOutcome::Blocked {
+                    request,
+                    validation_owner,
+                    source: WorldPlayerSelectBlock::Route(source),
+                },
+            },
+        ));
+    }
+
+    WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::PlayerSelect(
+        match game.push_player_load_request(
+            &request.account,
+            request.player_id,
+            request.client_ip,
+        ) {
+            Ok(queue) => WorldPlayerSelectOutcome::Queued {
+                request,
+                validation_owner,
+                queue,
+            },
+            Err(source) => WorldPlayerSelectOutcome::Blocked {
+                request,
+                validation_owner,
+                source: WorldPlayerSelectBlock::LoadRequest(source),
+            },
+        },
+    ))
+}
+
+fn send_player_select_rejection(
+    game: &CGame,
+    request: WorldPlayerSelectRequest,
+    reason: WorldPlayerSelectRejectReason,
+    log_payload: Option<&[u8]>,
+    add_error_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
+) -> WorldLogMessageDispatch {
+    let mut response = CMessage::new(PLAYER_SELECT_RESPONSE);
+    response.base_mut().add_char(PLAYER_SELECT_REJECTED_STATUS);
+    append_c_string(response.base_mut(), &request.account);
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = response.send(
+        game.current_login_client().map(|client| client.send_queue()),
+        false,
+    );
+    let log = log_payload.map(add_error_log_text);
+    WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::PlayerSelect(
+        WorldPlayerSelectOutcome::Rejected {
+            request,
+            reason,
+            response_type: PLAYER_SELECT_RESPONSE,
+            status: PLAYER_SELECT_REJECTED_STATUS,
+            wire,
+            delivery,
+            log,
+        },
+    ))
 }
 
 #[allow(

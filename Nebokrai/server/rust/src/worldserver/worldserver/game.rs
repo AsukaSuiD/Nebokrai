@@ -33,6 +33,8 @@
 //! `CGame::RemoveOfflinePlayer` RVA `0x00007330`,
 //! `CGame::RemoveLoginPlayer` RVA `0x00007340`,
 //! `CGame::GetLoginPlayerByID` RVA `0x00007390`,
+//! `CGame::ValidateDBPlayerIDinCdkey` RVA `0x000073F0`,
+//! `CGame::ValidatePlayerIDinCdkey` RVA `0x00007490`,
 //! `CGame::GetTeamSessionID` RVA `0x000070C0`,
 //! `CGame::AppendOnlinePlayer` RVA `0x00010D50`,
 //! `CGame::AppendOfflinePlayer` RVA `0x00010DF0`,
@@ -1002,7 +1004,10 @@ use crate::dbaccess::worlddb::dbmisc::{
 };
 use crate::dbaccess::worlddb::largess::LargessOwner;
 use crate::dbaccess::worlddb::playerdataqueue::CPlayerDataQueue;
-use crate::dbaccess::worlddb::playerloadqueue::CPlayerLoadQueue;
+use crate::dbaccess::worlddb::playerloadqueue::{
+    CPlayerLoadQueue, PLAYER_LOAD_CDKEY_CAPACITY, PlayerLoadPushOutcome,
+    PlayerLoadQueueEntry,
+};
 use crate::dbaccess::worlddb::rsenemyfactions::{EnemyFactionSaveSnapshot, RsEnemyFactionsOwner};
 use crate::dbaccess::worlddb::rsfaction::RsFactionOwner;
 use crate::dbaccess::worlddb::rsgenvar::RsGenVarOwner;
@@ -2811,6 +2816,14 @@ pub(crate) struct WorldFriendPresenceUpdate {
     pub(crate) delivery: Option<Result<i32, SendMessageError>>,
 }
 
+/// Два подтверждённых порядка одного route: direct `GetPlayerData` публикует
+/// player до friend-loop, а `ProcessPlayerDataQueue` — после него.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldLoadedPlayerRouteOrder {
+    Direct,
+    LoadedQueue,
+}
+
 /// Итог полного snapshot/retry прохода `CGame::ProcessPlayerDataQueue`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldProcessPlayerDataQueueOutcome {
@@ -2855,6 +2868,19 @@ pub(crate) struct WorldProcessPlayerDataQueueError {
     pub(crate) null_pops: u32,
     pub(crate) player_id: u32,
     pub(crate) block: WorldProcessPlayerDataQueueBlock,
+}
+
+/// Safe-граница fixed `char szCdkey[20]` одного DB-load запроса.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerLoadRequestBlock {
+    pub(crate) account_length: usize,
+}
+
+/// Exact bool-смысл `CPlayerLoadQueue::PushPlayerLoadData`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WorldPlayerLoadRequestOutcome {
+    Queued,
+    Duplicate,
 }
 
 /// Профилированная `DAT_0056e524` стадия перед `CTimer::Run`.
@@ -3358,6 +3384,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) registry: &'a GoodsBasePropertiesRegistry,
     pub(crate) original_name_index: &'a GoodsOriginalNameIndex,
     pub(crate) coefficients: &'a PlayerPropertyCoefficients,
+    pub(crate) load_player_largess: &'a mut dyn FnMut(&mut CPlayer),
     pub(crate) organizing: &'a mut COrganizingCtrl,
     pub(crate) country: &'a mut CCountryHandler,
     pub(crate) country_parameters: &'a mut CCountryParam,
@@ -9767,6 +9794,7 @@ impl CGame {
         registry: &GoodsBasePropertiesRegistry,
         original_name_index: &GoodsOriginalNameIndex,
         coefficients: &PlayerPropertyCoefficients,
+        load_player_largess: &mut dyn FnMut(&mut CPlayer),
         net_sessions: &CNetSessionManager,
         jjc: &mut CJJcSystem,
         jjc_config: JjcRunConfig,
@@ -9868,6 +9896,7 @@ impl CGame {
                             registry,
                             original_name_index,
                             coefficients,
+                            &mut *load_player_largess,
                             net_sessions,
                             jjc,
                             jjc_config,
@@ -9965,6 +9994,7 @@ impl CGame {
                     registry,
                     original_name_index,
                     coefficients,
+                    &mut *load_player_largess,
                     net_sessions,
                     jjc,
                     jjc_config,
@@ -10065,6 +10095,7 @@ impl CGame {
         registry: &GoodsBasePropertiesRegistry,
         original_name_index: &GoodsOriginalNameIndex,
         coefficients: &PlayerPropertyCoefficients,
+        load_player_largess: &mut dyn FnMut(&mut CPlayer),
         net_sessions: &CNetSessionManager,
         jjc: &mut CJJcSystem,
         jjc_config: JjcRunConfig,
@@ -10163,6 +10194,7 @@ impl CGame {
             registry,
             original_name_index,
             coefficients,
+            load_player_largess,
             net_sessions,
             jjc,
             jjc_config,
@@ -10265,6 +10297,305 @@ impl CGame {
         }
     }
 
+    fn update_detached_player_friends(
+        &self,
+        player: &mut CPlayer,
+    ) -> Vec<WorldFriendPresenceUpdate> {
+        let mut updates = Vec::with_capacity(player.friend_count());
+        for friend_index in 0..player.friend_count() {
+            let friend_name = player
+                .friend_name(friend_index)
+                .expect("friend index получен из текущего len")
+                .to_vec();
+            let mut friend_player_id = self.online_player_id_by_name(&friend_name);
+            if friend_player_id == 0 {
+                friend_player_id = self.login_player_id_by_name(&friend_name);
+            }
+            let online = friend_player_id != 0;
+            let updated = player.set_friend_online(friend_index, online);
+            debug_assert!(updated, "friend index не менялся между read и write");
+            updates.push(self.send_friend_presence_update(
+                friend_index,
+                friend_player_id,
+                online,
+                player.get_name(),
+            ));
+        }
+        updates
+    }
+
+    fn update_published_player_friends(
+        &mut self,
+        player_id: u32,
+    ) -> Vec<WorldFriendPresenceUpdate> {
+        let friend_count = self
+            .map_player(player_id)
+            .map_or(0, CPlayer::friend_count);
+        let mut updates = Vec::with_capacity(friend_count);
+        for friend_index in 0..friend_count {
+            let (friend_name, player_name) = {
+                let player = self
+                    .map_player(player_id)
+                    .expect("direct route уже опубликовал selected player");
+                (
+                    player
+                        .friend_name(friend_index)
+                        .expect("friend index получен из текущего len")
+                        .to_vec(),
+                    player.get_name().to_vec(),
+                )
+            };
+            let mut friend_player_id = self.online_player_id_by_name(&friend_name);
+            if friend_player_id == 0 {
+                friend_player_id = self.login_player_id_by_name(&friend_name);
+            }
+            let online = friend_player_id != 0;
+            let updated = self
+                .players
+                .get_mut(&player_id)
+                .expect("selected player остаётся опубликованным")
+                .set_friend_online(friend_index, online);
+            debug_assert!(updated, "friend index не менялся между read и write");
+            updates.push(self.send_friend_presence_update(
+                friend_index,
+                friend_player_id,
+                online,
+                &player_name,
+            ));
+        }
+        updates
+    }
+
+    fn send_friend_presence_update(
+        &self,
+        friend_index: usize,
+        friend_player_id: u32,
+        online: bool,
+        player_name: &[u8],
+    ) -> WorldFriendPresenceUpdate {
+        if !online {
+            return WorldFriendPresenceUpdate {
+                friend_index,
+                player_id: 0,
+                online: false,
+                target_game_server_index: None,
+                delivery: None,
+            };
+        }
+        let target_game_server_index = self
+            .online_player_by_id(friend_player_id)
+            .and_then(|friend| self.get_region_game_server(friend.get_region_id()))
+            .map(|game_server| game_server.index);
+        let mut presence = CMessage::new(0x0007_F904);
+        presence.base_mut().add_ulong(friend_player_id);
+        add_legacy_c_string(presence.base_mut(), player_name);
+        let sender = self.current_game_server_sender();
+        let delivery = presence.send_to_map_id(
+            sender.as_ref(),
+            target_game_server_index.unwrap_or(0) as i32,
+        );
+        WorldFriendPresenceUpdate {
+            friend_index,
+            player_id: friend_player_id,
+            online: true,
+            target_game_server_index,
+            delivery: Some(delivery),
+        }
+    }
+
+    fn publish_loaded_player<GetTick>(
+        &mut self,
+        organizing_ctrl: &mut COrganizingCtrl,
+        player_id: u32,
+        player: Box<CPlayer>,
+        mut get_tick: GetTick,
+    ) -> (WorldOnlinePlayerRemoveOutcome, bool, u32)
+    where
+        GetTick: FnMut() -> u32,
+    {
+        let online_removal = self.remove_online_player(organizing_ctrl, player_id);
+        self.remove_offline_player(player_id);
+        let login_time_ms = get_tick();
+        self.append_login_player(player_id, login_time_ms);
+        let replaced_existing_player = self.players.remove(&player_id).is_some();
+        let append_outcome = self.append_map_player(player, |_| {});
+        let WorldMapPlayerAppendOutcome::Inserted {
+            player_id: inserted_player_id,
+        } = append_outcome
+        else {
+            unreachable!("map key удалён непосредственно перед AppendMapPlayer")
+        };
+        debug_assert_eq!(inserted_player_id, player_id);
+        (
+            online_removal,
+            replaced_existing_player,
+            login_time_ms,
+        )
+    }
+
+    /// Проводит уже полученного player-owner-а по общей direct/DB-load цепочке.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "queue metadata сохраняет exact diagnostic outcome producer-а"
+    )]
+    pub(crate) fn route_loaded_player<GetTick>(
+        &mut self,
+        organizing_ctrl: &mut COrganizingCtrl,
+        initial_size: u32,
+        null_pops: u32,
+        queue_player_id: u32,
+        client_ip: u32,
+        cdkey: &[u8],
+        player: Option<Box<CPlayer>>,
+        route_order: WorldLoadedPlayerRouteOrder,
+        after_login_send: &mut dyn FnMut(&mut CPlayer),
+        mut get_tick: GetTick,
+    ) -> Result<WorldProcessPlayerDataQueueOutcome, WorldProcessPlayerDataQueueError>
+    where
+        GetTick: FnMut() -> u32,
+    {
+        let Some(mut player) = player else {
+            let login_delivery = self.send_player_data_queue_rejection(cdkey);
+            return Ok(WorldProcessPlayerDataQueueOutcome::Rejected {
+                initial_size,
+                null_pops,
+                queue_player_id,
+                client_ip,
+                reason: WorldPlayerDataQueueRejectReason::NullPlayer,
+                login_delivery,
+            });
+        };
+
+        let player_id = player.get_id() as u32;
+        let region_types = self.player_organizing_region_types();
+        let organizing_result = {
+            let mut updater = organizing_ctrl.player_updater(&region_types);
+            player.set_player_organizing(&mut updater)
+        };
+        if let Err(error) = organizing_result {
+            return Err(WorldProcessPlayerDataQueueError {
+                initial_size,
+                null_pops,
+                player_id,
+                block: WorldProcessPlayerDataQueueBlock::Organizing(error),
+            });
+        }
+
+        let region_id = player.get_region_id();
+        let Some(game_server_index) = self
+            .region(region_id)
+            .map(|region| region.game_server_index)
+        else {
+            let login_delivery = self.send_player_data_queue_rejection(cdkey);
+            drop(player);
+            return Ok(WorldProcessPlayerDataQueueOutcome::Rejected {
+                initial_size,
+                null_pops,
+                queue_player_id,
+                client_ip,
+                reason: WorldPlayerDataQueueRejectReason::MissingRegion { region_id },
+                login_delivery,
+            });
+        };
+
+        // CPlayer vtable +0x84 = exact `CShape::SetState(0)`.
+        player.set_state(0);
+        let Some(game_server) = self
+            .game_server(game_server_index)
+            .filter(|game_server| game_server.connected)
+        else {
+            let login_delivery = self.send_player_data_queue_rejection(cdkey);
+            drop(player);
+            return Ok(WorldProcessPlayerDataQueueOutcome::Rejected {
+                initial_size,
+                null_pops,
+                queue_player_id,
+                client_ip,
+                reason: WorldPlayerDataQueueRejectReason::MissingOrDisconnectedGameServer {
+                    region_id,
+                    game_server_index,
+                },
+                login_delivery,
+            });
+        };
+
+        let game_server_ip = game_server.ip.clone();
+        let game_server_port = game_server.port.ok_or(WorldProcessPlayerDataQueueError {
+            initial_size,
+            null_pops,
+            player_id,
+            block: WorldProcessPlayerDataQueueBlock::UninitializedGameServerPort {
+                game_server_index,
+            },
+        })?;
+
+        let mut login_reply = CMessage::new(0x0001_FF01);
+        login_reply.base_mut().add_byte(0x1D);
+        add_legacy_c_string(login_reply.base_mut(), cdkey);
+        add_legacy_c_string(login_reply.base_mut(), &game_server_ip);
+        login_reply.base_mut().add_ulong(game_server_port);
+        add_legacy_c_string(login_reply.base_mut(), player.get_name());
+        login_reply.base_mut().add_byte(player.get_level());
+        let login_delivery = login_reply.send(
+            self.current_login_client().map(CMyNetClient::send_queue),
+            false,
+        );
+        after_login_send(&mut player);
+
+        let (friend_updates, online_removal, replaced_existing_player, login_time_ms) =
+            match route_order {
+                WorldLoadedPlayerRouteOrder::LoadedQueue => {
+                    let friend_updates = self.update_detached_player_friends(&mut player);
+                    let (online_removal, replaced_existing_player, login_time_ms) = self
+                        .publish_loaded_player(
+                            organizing_ctrl,
+                            player_id,
+                            player,
+                            &mut get_tick,
+                        );
+                    (
+                        friend_updates,
+                        online_removal,
+                        replaced_existing_player,
+                        login_time_ms,
+                    )
+                }
+                WorldLoadedPlayerRouteOrder::Direct => {
+                    let (online_removal, replaced_existing_player, login_time_ms) = self
+                        .publish_loaded_player(
+                            organizing_ctrl,
+                            player_id,
+                            player,
+                            &mut get_tick,
+                        );
+                    let friend_updates = self.update_published_player_friends(player_id);
+                    self.players
+                        .get_mut(&player_id)
+                        .expect("direct route сохраняет опубликованного player-owner-а")
+                        .reset_selected_login_flags();
+                    (
+                        friend_updates,
+                        online_removal,
+                        replaced_existing_player,
+                        login_time_ms,
+                    )
+                }
+            };
+
+        Ok(WorldProcessPlayerDataQueueOutcome::Accepted {
+            initial_size,
+            null_pops,
+            player_id,
+            client_ip,
+            game_server_index,
+            login_delivery,
+            friend_updates,
+            online_removal,
+            replaced_existing_player,
+            login_time_ms,
+        })
+    }
+
     /// Обрабатывает не более одного non-null record-а из начального snapshot.
     ///
     /// Null-pop не завершает метод: он уменьшает только сохранённый snapshot и
@@ -10299,166 +10630,19 @@ impl CGame {
                     block: WorldProcessPlayerDataQueueBlock::UnterminatedCdkey,
                 });
             };
-            let Some(mut player) = entry.take_player() else {
-                let login_delivery = self.send_player_data_queue_rejection(&cdkey);
-                return Ok(WorldProcessPlayerDataQueueOutcome::Rejected {
-                    initial_size,
-                    null_pops,
-                    queue_player_id,
-                    client_ip,
-                    reason: WorldPlayerDataQueueRejectReason::NullPlayer,
-                    login_delivery,
-                });
-            };
-
-            let player_id = player.get_id() as u32;
-            let region_types = self.player_organizing_region_types();
-            let organizing_result = {
-                let mut updater = organizing_ctrl.player_updater(&region_types);
-                player.set_player_organizing(&mut updater)
-            };
-            if let Err(error) = organizing_result {
-                return Err(WorldProcessPlayerDataQueueError {
-                    initial_size,
-                    null_pops,
-                    player_id,
-                    block: WorldProcessPlayerDataQueueBlock::Organizing(error),
-                });
-            }
-
-            let region_id = player.get_region_id();
-            let Some(game_server_index) = self
-                .region(region_id)
-                .map(|region| region.game_server_index)
-            else {
-                let login_delivery = self.send_player_data_queue_rejection(&cdkey);
-                drop(player);
-                return Ok(WorldProcessPlayerDataQueueOutcome::Rejected {
-                    initial_size,
-                    null_pops,
-                    queue_player_id,
-                    client_ip,
-                    reason: WorldPlayerDataQueueRejectReason::MissingRegion { region_id },
-                    login_delivery,
-                });
-            };
-
-            // CPlayer vtable +0x84 = exact `CShape::SetState(0)`.
-            player.set_state(0);
-            let Some(game_server) = self
-                .game_server(game_server_index)
-                .filter(|game_server| game_server.connected)
-            else {
-                let login_delivery = self.send_player_data_queue_rejection(&cdkey);
-                drop(player);
-                return Ok(WorldProcessPlayerDataQueueOutcome::Rejected {
-                    initial_size,
-                    null_pops,
-                    queue_player_id,
-                    client_ip,
-                    reason: WorldPlayerDataQueueRejectReason::MissingOrDisconnectedGameServer {
-                        region_id,
-                        game_server_index,
-                    },
-                    login_delivery,
-                });
-            };
-
-            let game_server_ip = game_server.ip.clone();
-            let game_server_port = game_server.port.ok_or(WorldProcessPlayerDataQueueError {
+            let mut after_login_send = |_player: &mut CPlayer| {};
+            return self.route_loaded_player(
+                organizing_ctrl,
                 initial_size,
                 null_pops,
-                player_id,
-                block: WorldProcessPlayerDataQueueBlock::UninitializedGameServerPort {
-                    game_server_index,
-                },
-            })?;
-
-            let mut login_reply = CMessage::new(0x0001_FF01);
-            login_reply.base_mut().add_byte(0x1D);
-            add_legacy_c_string(login_reply.base_mut(), &cdkey);
-            add_legacy_c_string(login_reply.base_mut(), &game_server_ip);
-            login_reply.base_mut().add_ulong(game_server_port);
-            add_legacy_c_string(login_reply.base_mut(), player.get_name());
-            login_reply.base_mut().add_byte(player.get_level());
-            let login_delivery = login_reply.send(
-                self.current_login_client().map(CMyNetClient::send_queue),
-                false,
-            );
-
-            let mut friend_updates = Vec::with_capacity(player.friend_count());
-            for friend_index in 0..player.friend_count() {
-                let friend_name = player
-                    .friend_name(friend_index)
-                    .expect("friend index получен из текущего len")
-                    .to_vec();
-                let mut friend_player_id = self.online_player_id_by_name(&friend_name);
-                if friend_player_id == 0 {
-                    friend_player_id = self.login_player_id_by_name(&friend_name);
-                }
-
-                let online = friend_player_id != 0;
-                let updated = player.set_friend_online(friend_index, online);
-                debug_assert!(updated, "friend index не менялся между read и write");
-                if !online {
-                    friend_updates.push(WorldFriendPresenceUpdate {
-                        friend_index,
-                        player_id: 0,
-                        online: false,
-                        target_game_server_index: None,
-                        delivery: None,
-                    });
-                    continue;
-                }
-
-                let target_game_server_index = self
-                    .online_player_by_id(friend_player_id)
-                    .and_then(|friend| self.get_region_game_server(friend.get_region_id()))
-                    .map(|game_server| game_server.index);
-                let mut presence = CMessage::new(0x0007_F904);
-                presence.base_mut().add_ulong(friend_player_id);
-                add_legacy_c_string(presence.base_mut(), player.get_name());
-                let sender = self.current_game_server_sender();
-                let delivery = presence.send_to_map_id(
-                    sender.as_ref(),
-                    target_game_server_index.unwrap_or(0) as i32,
-                );
-                friend_updates.push(WorldFriendPresenceUpdate {
-                    friend_index,
-                    player_id: friend_player_id,
-                    online: true,
-                    target_game_server_index,
-                    delivery: Some(delivery),
-                });
-            }
-
-            let online_removal = self.remove_online_player(organizing_ctrl, player_id);
-            self.remove_offline_player(player_id);
-            let login_time_ms = get_tick();
-            self.append_login_player(player_id, login_time_ms);
-
-            let replaced_existing_player = self.players.remove(&player_id).is_some();
-            let append_outcome = self.append_map_player(player, |_| {});
-            let WorldMapPlayerAppendOutcome::Inserted {
-                player_id: inserted_player_id,
-            } = append_outcome
-            else {
-                unreachable!("map key удалён непосредственно перед AppendMapPlayer")
-            };
-            debug_assert_eq!(inserted_player_id, player_id);
-
-            return Ok(WorldProcessPlayerDataQueueOutcome::Accepted {
-                initial_size,
-                null_pops,
-                player_id,
+                queue_player_id,
                 client_ip,
-                game_server_index,
-                login_delivery,
-                friend_updates,
-                online_removal,
-                replaced_existing_player,
-                login_time_ms,
-            });
+                &cdkey,
+                entry.take_player(),
+                WorldLoadedPlayerRouteOrder::LoadedQueue,
+                &mut after_login_send,
+                &mut get_tick,
+            );
         }
 
         Ok(WorldProcessPlayerDataQueueOutcome::NoRecord {
@@ -11463,6 +11647,7 @@ impl CGame {
             owners.registry,
             owners.original_name_index,
             owners.coefficients,
+            &mut *owners.load_player_largess,
             owners.net_sessions,
             owners.jjc,
             configuration.jjc,
@@ -12403,6 +12588,34 @@ impl CGame {
     /// Возвращает игрока непосредственно из владеющего map либо `None`.
     pub(crate) fn map_player(&self, player_id: u32) -> Option<&CPlayer> {
         self.players.get(&player_id).map(Box::as_ref)
+    }
+
+    /// Повторяет `ValidatePlayerIDinCdkey`: lookup идёт только по live map,
+    /// а account сравнивается старым `_strcmpi` до первого NUL.
+    pub(crate) fn validate_player_id_in_cdkey(
+        &self,
+        account: &[u8],
+        player_id: u32,
+    ) -> bool {
+        let Some(player) = self.map_player(player_id) else {
+            return false;
+        };
+        legacy_c_string_prefix(player.get_account())
+            .eq_ignore_ascii_case(legacy_c_string_prefix(account))
+    }
+
+    /// Повторяет locked `ValidateDBPlayerIDinCdkey` над frozen save-map.
+    pub(crate) fn validate_db_player_id_in_cdkey(
+        &self,
+        account: &[u8],
+        player_id: u32,
+    ) -> bool {
+        let db_data = self.db_data.lock();
+        let Some(player) = db_data.players.get(&player_id) else {
+            return false;
+        };
+        legacy_c_string_prefix(player.get_account())
+            .eq_ignore_ascii_case(legacy_c_string_prefix(account))
     }
 
     pub(crate) fn set_map_player_jjc_identity(
@@ -13482,6 +13695,33 @@ impl CGame {
         self.player_load_queue
             .remove_player_load_data(player_id)
             .is_some()
+    }
+
+    /// Копирует request в exact fixed record и передаёт его DB-load FIFO.
+    pub(crate) fn push_player_load_request(
+        &self,
+        account: &[u8],
+        player_id: u32,
+        client_ip: u32,
+    ) -> Result<WorldPlayerLoadRequestOutcome, WorldPlayerLoadRequestBlock> {
+        let account = legacy_c_string_prefix(account);
+        if account.len() >= PLAYER_LOAD_CDKEY_CAPACITY {
+            return Err(WorldPlayerLoadRequestBlock {
+                account_length: account.len(),
+            });
+        }
+
+        let mut fixed_account = [0_u8; PLAYER_LOAD_CDKEY_CAPACITY];
+        fixed_account[..account.len()].copy_from_slice(account);
+        let entry = PlayerLoadQueueEntry::new(
+            fixed_account,
+            player_id as i32,
+            client_ip,
+        );
+        Ok(match self.player_load_queue.push_player_load_data(entry) {
+            PlayerLoadPushOutcome::Queued => WorldPlayerLoadRequestOutcome::Queued,
+            PlayerLoadPushOutcome::Duplicate(_) => WorldPlayerLoadRequestOutcome::Duplicate,
+        })
     }
 
     /// Удаляет первую login-запись с указанным ID либо сохраняет список.
@@ -15205,6 +15445,7 @@ async fn process_world_message<TimerCallback, JjcContext>(
     registry: &GoodsBasePropertiesRegistry,
     original_name_index: &GoodsOriginalNameIndex,
     coefficients: &PlayerPropertyCoefficients,
+    load_player_largess: &mut dyn FnMut(&mut CPlayer),
     net_sessions: &CNetSessionManager,
     jjc: &mut CJJcSystem,
     jjc_config: JjcRunConfig,
@@ -15317,6 +15558,7 @@ where
             registry,
             original_name_index,
             coefficients,
+            load_player_largess,
             globe_setup,
             rs_player,
             player_database.as_deref_mut(),
@@ -18935,7 +19177,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::ValidateDBPlayerIDinCdkey
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:3894
@@ -18943,13 +19185,14 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 004073f0
 // PROTOTYPE: bool __thiscall ValidateDBPlayerIDinCdkey(char * param_1, uint param_2)
 //
+// Реализация находится в `CGame::validate_db_player_id_in_cdkey` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGame::ValidatePlayerIDinCdkey
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5078
@@ -18957,6 +19200,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 00407490
 // PROTOTYPE: bool __thiscall ValidatePlayerIDinCdkey(char * param_1, uint param_2)
 //
+// Реализация находится в `CGame::validate_player_id_in_cdkey` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
