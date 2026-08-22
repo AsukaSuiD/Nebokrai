@@ -7427,7 +7427,7 @@ fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
 
 // ============================================================================
 // FUNCTION: OnOrgasysMessage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_PARTIAL
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\organsysmessage.cpp:30

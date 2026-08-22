@@ -2087,7 +2087,7 @@ fn increment_amount_error(account: &[u8], item_name: &[u8], amount: i32) -> Vec<
 
 // ============================================================================
 // FUNCTION: OnWriteLogMessage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\writelogmessage.cpp:18
