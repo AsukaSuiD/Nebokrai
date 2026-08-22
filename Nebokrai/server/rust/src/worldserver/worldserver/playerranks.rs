@@ -329,10 +329,14 @@ fn write_player_rank_string(destination: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CHonorRanks::tagDBData::tagDBData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\playerranks.cpp
+// RUST: `CHonorRanks::with_reached_process_state` создаёт пустые live-списки,
+// а DB-копия остаётся `None` до exact `generate_save_data`: старый пустой
+// `tagTime` календарно невалиден и не имел DB-потребителя. `Vec` и отдельная
+// Rust-копия заменяют 32 владельца списков без служебного конструктора MSVC.
 // RVA: 0x0001A9B0
 // ADDRESS: 0041a9b0
 // PROTOTYPE: undefined __thiscall tagDBData(void)
