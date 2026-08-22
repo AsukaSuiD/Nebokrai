@@ -212,6 +212,11 @@
 //! длину wire только при отправке. `quick-xml` заменяет TinyXML внутри owner-а,
 //! а CGame сохраняет наблюдаемые путь, диагностики, log-order и wire boundary.
 //!
+//! `CFairyExpConf` — производный, но самостоятельный owner обычных духов:
+//! reload читает `data/fairyexp.xml`, очищает базовую map до открытия, отдаёт
+//! собственные exact diagnostics в log (включая missing-file, без operator
+//! notice) и после успеха публикует тот же base wire subtype `0x20`.
+//!
 //! `CBattleFairyProperty` аналогично остаётся внешним runtime owner-ом:
 //! `BattleFairyCombineConfig` читает `BattleFairyReleate/CombineConfig.ini`,
 //! не меняет старый compose-vector при missing resource и после успешного
@@ -1207,6 +1212,7 @@ use crate::setup::contributesetup::{
 };
 use crate::setup::cbattlefairyexpconfig::{BattleFairyExpSerializeError, CBattleFairyExpConfig};
 use crate::setup::emotion::{CEmotion, EmotionFormatError, EmotionSerializeError};
+use crate::setup::fairyexpconf::CFairyExpConf;
 use crate::setup::goodsdestructionconfig::{
     GoodsDestroyFormatError, GoodsDestroySerializeError, GoodsDestroySetup,
 };
@@ -4250,7 +4256,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     FourNationWar,
     TimeToReturn,
     PreciousBox,
-    FairyExp,
     ChangeBody,
     DaKongXiangQian,
     GodsBattle,
@@ -4285,7 +4290,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     FourNationWar,
     Quest,
     PreciousBox,
-    FairyExp,
     ChangeBody,
     DaKongXiangQian,
     LingBao,
@@ -4335,6 +4339,8 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn synthesis(&mut self) -> &mut CSynthesis;
     /// Два scalar-а honor-eliminate, общие для runtime и initial-config wire.
     fn honor_eliminate_config(&mut self) -> &mut HonorElimilateConfig;
+    /// Derived owner обычных духов с отдельным XML источником и base wire.
+    fn fairy_exp_conf(&mut self) -> &mut CFairyExpConf;
     /// Возвращает исходный 32-битный result; bool owners обязаны дать `0/1`.
     fn call_boolean_owner(&mut self, owner: WorldReloadBooleanOwner) -> u32;
     fn call_void_owner(&mut self, owner: WorldReloadVoidOwner);
@@ -5923,6 +5929,7 @@ pub(crate) enum WorldReloadBlock {
     GoodsDestroySerialization(GoodsDestroySerializeError),
     NewSkillMonsterSerialization(NewSkillMonsterSerializeError),
     BattleFairyExpSerialization(BattleFairyExpSerializeError),
+    FairyExpSerialization(BattleFairyExpSerializeError),
     BattleFairyCombineSerialization(BattleFairyComposeWireError),
     SynthesisSerialization(SynthesisSerializeError),
     EquipmentComposeSerialization(EquipmentComposeSerializeError),
@@ -8283,17 +8290,35 @@ impl CGame {
                 );
             }
             WorldReloadProfile::FairyExp => {
-                self.reload_simple_serialized(
-                    context,
-                    WorldReloadBooleanOwner::FairyExp,
-                    WorldReloadSerializationOwner::FairyExp,
-                    0x20,
-                    b"Load FairyExp ....OK!",
-                    b"Load FairyExp....failed!",
-                    send_to_game_servers,
-                    true,
-                    &mut legacy_result,
-                );
+                const PATH: &[u8] = b"data/fairyexp.xml";
+                let loaded = match context.read_resource(PATH) {
+                    Some(source) => match context.fairy_exp_conf().load_from_bytes(&source) {
+                        Ok(()) => true,
+                        Err(error) => {
+                            context.add_log_text(error.log_payload());
+                            false
+                        }
+                    },
+                    None => {
+                        context.fairy_exp_conf().clear();
+                        context.add_log_text(b"file FairyExp  can't found ..  ...failed  !");
+                        false
+                    }
+                };
+                context.add_log_text(if loaded {
+                    b"Load FairyExp ....OK!"
+                } else {
+                    b"Load FairyExp....failed!"
+                });
+                if loaded && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    context
+                        .fairy_exp_conf()
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::FairyExpSerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(0x20, &payload);
+                }
             }
             WorldReloadProfile::ChangeBody => {
                 self.reload_simple_serialized(

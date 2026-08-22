@@ -7,6 +7,11 @@
 pub(crate) mod cbattlefairyexpconfig;
 #[allow(
     dead_code,
+    reason = "FairyExp owner подключён к reload и initial-config wire до runtime query прохода"
+)]
+pub(crate) mod fairyexpconf;
+#[allow(
+    dead_code,
     reason = "contribute setup подключён к initial-config до общего setup lifecycle"
 )]
 pub(crate) mod contributesetup;

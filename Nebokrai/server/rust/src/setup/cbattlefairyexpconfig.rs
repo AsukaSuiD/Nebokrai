@@ -50,6 +50,11 @@ impl CBattleFairyExpConfig {
         self.exp_lists.insert(owner_level, values)
     }
 
+    /// Проверка duplicate owner-level до mutation derived `CFairyExpConf`.
+    pub(crate) fn contains_exp_list(&self, owner_level: u32) -> bool {
+        self.exp_lists.contains_key(&owner_level)
+    }
+
     /// Очищает map на exact позиции до resource-open.
     pub(crate) fn clear(&mut self) {
         self.exp_lists.clear();
