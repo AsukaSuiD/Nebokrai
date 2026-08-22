@@ -30,20 +30,28 @@
 //! typed variant сохраняет общий FIFO, а parameter binding заменяет только
 //! исходный `_sprintf` INSERT.
 //!
-//! Остаются `UNKNOWN` (исследовательский декомпилят хранится локально): внешний thread/exit owner, 1-ms polling, exact
-//! operator-log публикация и отменяемая замена бесконечного 10-sec reconnect.
-//! Здесь материализованы connection open, typed Execute и checkpoint для
-//! точного batch/reconnect-порядка; runtime-owner должен собрать их вместе.
+//! `WorldWriteLogWorker` завершает внешний thread/exit owner: отдельный
+//! `JoinHandle` выполняет 1-ms polling, exit сначала дренирует FIFO, а typed
+//! events заменяют operator-log вызовы. Reconnect сохраняет 10-sec cadence и
+//! продолжает тот же batch без повтора потерянной команды. В отличие от
+//! исходного бесконечного reconnect, shutdown будит ожидание через `Condvar`
+//! и возвращает явный `ReconnectCancelled`: зависание Release было внутренним
+//! дефектом lifetime, а не контрактом данных Miracle.
 
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use encoding_rs::WINDOWS_1251;
 use tiberius::Query;
 use tokio::net::TcpStream;
+use tokio::runtime::Handle;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 use crate::dbaccess::worlddb::rssetup::{WorldDatabaseSettings, WorldTdsClient};
@@ -137,6 +145,8 @@ const INSERT_CHANGE_MAP_LOG_SQL: &str = "INSERT INTO change_map_log(\
 const INSERT_PLAYER_DELETE_LOG_SQL: &str = "INSERT INTO player_delete_log(\
     player_id,player_name,ip_addr\
 ) VALUES(@P1,@P2,@P3)";
+const WRITE_LOG_POLL_INTERVAL: Duration = Duration::from_millis(1);
+const WRITE_LOG_RECONNECT_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Cloneable FIFO-owner для producer-а главного цикла и отдельного DB worker-а.
 ///
@@ -236,6 +246,213 @@ impl WorldWriteLogWorkerSpec {
         batch: Option<WorldWriteLogBatch>,
     ) -> WorldWriteLogBatchProgress {
         self.queue.process_batch(connection, batch).await
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum WorldWriteLogWorkerEvent {
+    InitialConnectionFailed(WorldWriteLogConnectionError),
+    CommandDiscarded(WorldWriteLogDiscardedCommand),
+    ReconnectStarted,
+    ReconnectFailed(WorldWriteLogConnectionError),
+    ReconnectSucceeded,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldWriteLogWorkerReport {
+    Disabled,
+    InitialConnectionFailed,
+    DrainedAndStopped {
+        completed_batches: usize,
+        executed: usize,
+        discarded: usize,
+    },
+    ReconnectCancelled {
+        completed_batches: usize,
+        executed: usize,
+        discarded: usize,
+        queue_remaining: usize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldWriteLogWorkerCompletion {
+    Returned(WorldWriteLogWorkerReport),
+    Panicked,
+}
+
+/// Owned thread/exit owner точных `ProcessWriteLogDataFunc` и `DoSaveLog`.
+pub(crate) struct WorldWriteLogWorker {
+    signal: Arc<WorldWriteLogWorkerSignal>,
+    handle: Option<JoinHandle<WorldWriteLogWorkerReport>>,
+    events: Receiver<WorldWriteLogWorkerEvent>,
+}
+
+impl WorldWriteLogWorker {
+    pub(crate) fn start(
+        spec: WorldWriteLogWorkerSpec,
+        runtime: Handle,
+    ) -> Result<Self, io::Error> {
+        let signal = Arc::new(WorldWriteLogWorkerSignal::default());
+        let worker_signal = Arc::clone(&signal);
+        let (event_sender, events) = mpsc::channel();
+        let handle = thread::Builder::new()
+            .name("world-write-log".to_owned())
+            .spawn(move || run_world_write_log_worker(spec, runtime, worker_signal, event_sender))?;
+        Ok(Self {
+            signal,
+            handle: Some(handle),
+            events,
+        })
+    }
+
+    pub(crate) fn request_exit(&self) {
+        self.signal.request_exit();
+    }
+
+    pub(crate) fn try_next_event(&self) -> Option<WorldWriteLogWorkerEvent> {
+        match self.events.try_recv() {
+            Ok(event) => Some(event),
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
+        }
+    }
+
+    pub(crate) fn join(&mut self) -> Option<WorldWriteLogWorkerCompletion> {
+        self.handle.take().map(join_world_write_log_worker)
+    }
+}
+
+impl Drop for WorldWriteLogWorker {
+    fn drop(&mut self) {
+        self.request_exit();
+        let _ = self.join();
+    }
+}
+
+#[derive(Default)]
+struct WorldWriteLogWorkerSignal {
+    exit: AtomicBool,
+    reconnect_wait: Mutex<()>,
+    reconnect_wakeup: Condvar,
+}
+
+impl WorldWriteLogWorkerSignal {
+    fn request_exit(&self) {
+        self.exit.store(true, Ordering::Release);
+        self.reconnect_wakeup.notify_all();
+    }
+
+    fn exit_requested(&self) -> bool {
+        self.exit.load(Ordering::Acquire)
+    }
+
+    fn wait_reconnect_or_exit(&self) -> bool {
+        if self.exit_requested() {
+            return true;
+        }
+        let guard = self
+            .reconnect_wait
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ = self
+            .reconnect_wakeup
+            .wait_timeout_while(guard, WRITE_LOG_RECONNECT_INTERVAL, |_| {
+                !self.exit_requested()
+            })
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.exit_requested()
+    }
+}
+
+fn join_world_write_log_worker(
+    handle: JoinHandle<WorldWriteLogWorkerReport>,
+) -> WorldWriteLogWorkerCompletion {
+    match handle.join() {
+        Ok(report) => WorldWriteLogWorkerCompletion::Returned(report),
+        Err(_) => WorldWriteLogWorkerCompletion::Panicked,
+    }
+}
+
+fn run_world_write_log_worker(
+    spec: WorldWriteLogWorkerSpec,
+    runtime: Handle,
+    signal: Arc<WorldWriteLogWorkerSignal>,
+    events: Sender<WorldWriteLogWorkerEvent>,
+) -> WorldWriteLogWorkerReport {
+    if !spec.enabled() {
+        return WorldWriteLogWorkerReport::Disabled;
+    }
+
+    let mut connection = match runtime.block_on(spec.open_connection()) {
+        Ok(connection) => Some(connection),
+        Err(error) => {
+            let _ = events.send(WorldWriteLogWorkerEvent::InitialConnectionFailed(error));
+            return WorldWriteLogWorkerReport::InitialConnectionFailed;
+        }
+    };
+    let mut completed_batches = 0usize;
+    let mut completed_executed = 0usize;
+    let mut discarded = 0usize;
+    let mut pending_batch = None;
+
+    loop {
+        thread::sleep(WRITE_LOG_POLL_INTERVAL);
+        if signal.exit_requested() && spec.queue_length() == 0 {
+            return WorldWriteLogWorkerReport::DrainedAndStopped {
+                completed_batches,
+                executed: completed_executed,
+                discarded,
+            };
+        }
+        if pending_batch.is_none() && spec.queue_length() == 0 {
+            continue;
+        }
+
+        let progress = runtime.block_on(spec.process_batch(
+            connection
+                .as_mut()
+                .expect("соединение существует вне reconnect-участка"),
+            pending_batch.take(),
+        ));
+        match progress {
+            WorldWriteLogBatchProgress::Complete(batch) => {
+                completed_batches += 1;
+                completed_executed += batch.executed;
+            }
+            WorldWriteLogBatchProgress::ReconnectRequired {
+                batch,
+                discarded: failed,
+            } => {
+                discarded += 1;
+                let _ = events.send(WorldWriteLogWorkerEvent::CommandDiscarded(failed));
+                pending_batch = Some(batch);
+                connection.take();
+                let _ = events.send(WorldWriteLogWorkerEvent::ReconnectStarted);
+                loop {
+                    match runtime.block_on(spec.open_connection()) {
+                        Ok(reconnected) => {
+                            connection = Some(reconnected);
+                            let _ = events.send(WorldWriteLogWorkerEvent::ReconnectSucceeded);
+                            break;
+                        }
+                        Err(error) => {
+                            let _ = events.send(WorldWriteLogWorkerEvent::ReconnectFailed(error));
+                            if signal.wait_reconnect_or_exit() {
+                                let in_progress = pending_batch
+                                    .as_ref()
+                                    .map_or(0, |batch| batch.executed);
+                                return WorldWriteLogWorkerReport::ReconnectCancelled {
+                                    completed_batches,
+                                    executed: completed_executed + in_progress,
+                                    discarded,
+                                    queue_remaining: spec.queue_length(),
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

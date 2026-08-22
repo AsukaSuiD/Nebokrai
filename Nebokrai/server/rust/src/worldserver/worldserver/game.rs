@@ -19670,7 +19670,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: DoSaveLog
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5230
@@ -19678,8 +19678,9 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 004095e0
 // PROTOTYPE: void __cdecl DoSaveLog(void)
 //
-// IMPLEMENTED_OWNER: exact GetSize/Pop/Execute batch и connection-open находятся
-// выше и в `writelogworker.rs`; outer polling, exit и reconnect-delay остаются RAW.
+// IMPLEMENTED_OWNER: `WorldWriteLogWorker` в `writelogworker.rs` соединяет
+// exact GetSize/Pop/Execute batch с 1-ms polling, drain-on-exit и 10-sec
+// reconnect; отмена reconnect на shutdown исправляет внутреннее зависание.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -19754,7 +19755,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: ProcessWriteLogDataFunc
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5088
@@ -19762,7 +19763,9 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 0040d770
 // PROTOTYPE: uint __stdcall ProcessWriteLogDataFunc(void * param_1)
 //
-// IMPLEMENTED_OWNER: DB/batch core достигнут; thread/COM/exit adapter остаётся RAW.
+// IMPLEMENTED_OWNER: `WorldWriteLogWorker::start` создаёт owned системный поток,
+// ранний `bUseLogSys=false` возвращает `Disabled`, Tokio Handle заменяет COM
+// apartment для TDS, `request_exit`/`join` заменяют глобальный флаг и CRT handle.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
