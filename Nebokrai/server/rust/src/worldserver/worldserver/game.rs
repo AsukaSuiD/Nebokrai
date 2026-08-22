@@ -1368,8 +1368,10 @@ use crate::worldserver::appworld::jjcsystem::{
 };
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
     CFourNationWarSys, FourNationCountryFailContext, FourNationExploitContext,
-    FourNationExploitLoadedDisposition, FourNationWarCallbacks, FourNationWarLoadError,
-    FourNationWarLoadReport, FourNationWarReloadDisposition,
+    FourNationExploitLoadedDisposition, FourNationWarCallbackContext,
+    FourNationWarCallbackKind, FourNationWarCallbacks, FourNationWarCalendarBlock,
+    FourNationWarLoadError, FourNationWarLoadReport, FourNationWarRegionIndexBlock,
+    FourNationWarReloadDisposition,
     FourNationWarResultContext, FourNationWarSerializationBlock,
 };
 use crate::worldserver::appworld::leiting::{
@@ -3676,6 +3678,13 @@ pub(crate) enum WorldTimerCallbackBlock {
     PlayerRanks(PlayerRanksTimerRefreshBlock),
     OrganizingTax(OrganizingTaxScheduleBlock),
     CountryWar(CountryWarTimerBlock),
+    FourNationWar(FourNationWarCalendarBlock),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FourNationWarTimerReport {
+    pub(crate) callback: FourNationWarCallbackKind,
+    pub(crate) index: i32,
 }
 
 /// Выполненный prefix `CTimer::Run` перед domain callback safe-границей.
@@ -3693,6 +3702,7 @@ pub(crate) struct WorldMainLoopTimerStageReport {
     pub(crate) player_ranks: Vec<PlayerRanksTimerRefreshReport>,
     pub(crate) organizing_taxes: Vec<OrganizingTodayTaxRefreshReport>,
     pub(crate) country_wars: Vec<CountryWarTimerReport>,
+    pub(crate) four_nation_wars: Vec<FourNationWarTimerReport>,
     pub(crate) finished_at_ms: u32,
     pub(crate) elapsed_ms: u32,
     pub(crate) accumulated_time_ms: u32,
@@ -3704,6 +3714,9 @@ struct WorldTimerHandler<'a, Callback> {
     country_war: &'a mut CountryWarSys,
     country_handler: &'a mut CCountryHandler,
     country_war_callbacks: CountryWarCallbacks<Callback>,
+    four_nation_war: &'a mut CFourNationWarSys,
+    four_nation_war_callbacks: FourNationWarCallbacks<Callback>,
+    four_nation_war_context: &'a mut dyn FourNationWarCallbackContext,
     globe_setup: &'a GlobeSetupSnapshot,
     organizing_parameters: &'a mut COrganizingParam,
     player_ranks: &'a mut CPlayerRanks,
@@ -3721,6 +3734,7 @@ struct WorldTimerHandler<'a, Callback> {
     refreshes: Vec<PlayerRanksTimerRefreshReport>,
     tax_refreshes: Vec<OrganizingTodayTaxRefreshReport>,
     country_wars: Vec<CountryWarTimerReport>,
+    four_nation_wars: Vec<FourNationWarTimerReport>,
     pending_copy_number_registration: Option<usize>,
     pending_player_ranks_registration: Option<usize>,
     pending_tax_registration: Option<PreparedTodayTaxRefresh>,
@@ -3738,6 +3752,7 @@ where
 
     async fn dispatch(
         &mut self,
+        timer: &mut CTimer<Callback>,
         invocation: TimerCallbackInvocation<Callback>,
         get_tick: &mut GetTick,
         get_timer_local_time: &mut GetTimerLocalTime,
@@ -3840,6 +3855,68 @@ where
                     callback: invocation.callback,
                     parameter: 0,
                 }),
+            });
+        }
+
+        if let Some(callback) = self
+            .four_nation_war_callbacks
+            .kind(&invocation.callback)
+        {
+            let index = invocation.parameter;
+            let region_block = |source: FourNationWarRegionIndexBlock| {
+                WorldTimerCallbackBlock::FourNationWar(
+                    FourNationWarCalendarBlock::RegionIndex(source),
+                )
+            };
+            match callback {
+                FourNationWarCallbackKind::SignUpStart => self
+                    .four_nation_war
+                    .on_sign_up_war_start(index, self.four_nation_war_context)
+                    .map_err(WorldTimerCallbackBlock::FourNationWar)?,
+                FourNationWarCallbackKind::SignUpEnd => self
+                    .four_nation_war
+                    .on_sign_up_war_end(index, self.four_nation_war_context)
+                    .map_err(region_block)?,
+                FourNationWarCallbackKind::WarStart => self
+                    .four_nation_war
+                    .on_war_start(index, self.four_nation_war_context)
+                    .map_err(region_block)?,
+                FourNationWarCallbackKind::WarEnd => self
+                    .four_nation_war
+                    .on_war_end(
+                        index,
+                        timer,
+                        self.four_nation_war_callbacks,
+                        self.four_nation_war_context,
+                    )
+                    .map_err(WorldTimerCallbackBlock::FourNationWar)?,
+                FourNationWarCallbackKind::WarEndInfo => self
+                    .four_nation_war
+                    .on_war_end_info(index, self.four_nation_war_context)
+                    .map_err(region_block)?,
+                FourNationWarCallbackKind::EnterStart => self
+                    .four_nation_war
+                    .on_enter_start(index, self.four_nation_war_context)
+                    .map_err(region_block)?,
+                FourNationWarCallbackKind::EnterEnd => self
+                    .four_nation_war
+                    .on_enter_end(index, self.four_nation_war_context)
+                    .map_err(region_block)?,
+                FourNationWarCallbackKind::RefreshRegion => {
+                    CFourNationWarSys::on_refresh_region(index, &mut |message| {
+                        self.four_nation_war_context.send_all(message)
+                    });
+                }
+                FourNationWarCallbackKind::ClearWar => {
+                    CFourNationWarSys::on_clear_war(index, &mut |message| {
+                        self.four_nation_war_context.send_all(message)
+                    });
+                }
+            }
+            self.four_nation_wars
+                .push(FourNationWarTimerReport { callback, index });
+            return Ok(AsyncTimerCallbackDisposition::Handled {
+                next_calendar_event: None,
             });
         }
 
@@ -4160,6 +4237,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) country_war_callbacks: CountryWarCallbacks<TimerCallback>,
     pub(crate) four_nation_war: &'a mut CFourNationWarSys,
     pub(crate) four_nation_war_callbacks: FourNationWarCallbacks<TimerCallback>,
+    pub(crate) four_nation_war_context: &'a mut dyn FourNationWarCallbackContext,
     pub(crate) honor_ranks: &'a mut CHonorRanks,
     pub(crate) organizing_parameters: &'a mut COrganizingParam,
     pub(crate) player_ranks: &'a mut CPlayerRanks,
@@ -13119,6 +13197,9 @@ impl CGame {
         country_war: &mut CountryWarSys,
         country_handler: &mut CCountryHandler,
         country_war_callbacks: CountryWarCallbacks<Callback>,
+        four_nation_war: &mut CFourNationWarSys,
+        four_nation_war_callbacks: FourNationWarCallbacks<Callback>,
+        four_nation_war_context: &mut dyn FourNationWarCallbackContext,
         globe_setup: &GlobeSetupSnapshot,
         clocks: &mut WorldMainLoopClockState,
         profile_state: &mut WorldMainLoopProfileState,
@@ -13149,6 +13230,9 @@ impl CGame {
             country_war,
             country_handler,
             country_war_callbacks,
+            four_nation_war,
+            four_nation_war_callbacks,
+            four_nation_war_context,
             globe_setup,
             organizing_parameters,
             player_ranks,
@@ -13165,6 +13249,7 @@ impl CGame {
             refreshes: Vec::new(),
             tax_refreshes: Vec::new(),
             country_wars: Vec::new(),
+            four_nation_wars: Vec::new(),
             pending_copy_number_registration: None,
             pending_player_ranks_registration: None,
             pending_tax_registration: None,
@@ -13188,6 +13273,7 @@ impl CGame {
         let player_ranks = handler.refreshes;
         let organizing_taxes = handler.tax_refreshes;
         let country_wars = handler.country_wars;
+        let four_nation_wars = handler.four_nation_wars;
         let finished_at_ms = get_tick();
         let elapsed_ms = finished_at_ms.wrapping_sub(clocks.stage_started_at_ms);
         profile_state.timer_time_ms = profile_state.timer_time_ms.wrapping_add(elapsed_ms);
@@ -13199,6 +13285,7 @@ impl CGame {
             player_ranks,
             organizing_taxes,
             country_wars,
+            four_nation_wars,
             finished_at_ms,
             elapsed_ms,
             accumulated_time_ms: profile_state.timer_time_ms,
@@ -14182,6 +14269,9 @@ impl CGame {
                 owners.country_war,
                 owners.country,
                 owners.country_war_callbacks,
+                owners.four_nation_war,
+                owners.four_nation_war_callbacks,
+                &mut *owners.four_nation_war_context,
                 owners.globe_setup,
                 state.clocks,
                 state.profile,

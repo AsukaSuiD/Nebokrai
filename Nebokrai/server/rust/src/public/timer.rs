@@ -142,6 +142,7 @@ pub(crate) trait AsyncTimerCallbackHandler<Callback, GetTick, GetLocalTime> {
 
     async fn dispatch(
         &mut self,
+        timer: &mut CTimer<Callback>,
         invocation: TimerCallbackInvocation<Callback>,
         get_tick: &mut GetTick,
         get_local_time: &mut GetLocalTime,
@@ -366,7 +367,7 @@ impl<Callback: Copy> CTimer<Callback> {
             if let Some(invocation) = invocation {
                 report.periodic_callbacks = report.periodic_callbacks.wrapping_add(1);
                 let disposition = handler
-                    .dispatch(invocation, &mut get_tick, &mut get_local_time)
+                    .dispatch(self, invocation, &mut get_tick, &mut get_local_time)
                     .await
                     .map_err(|source| AsyncTimerRunBlock {
                         timer: report,
@@ -411,7 +412,7 @@ impl<Callback: Copy> CTimer<Callback> {
                     parameter: event.parameter,
                 };
                 let disposition = handler
-                    .dispatch(invocation, &mut get_tick, &mut get_local_time)
+                    .dispatch(self, invocation, &mut get_tick, &mut get_local_time)
                     .await
                     .map_err(|source| AsyncTimerRunBlock {
                         timer: report,

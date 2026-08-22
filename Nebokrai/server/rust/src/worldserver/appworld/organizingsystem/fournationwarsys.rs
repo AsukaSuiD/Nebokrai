@@ -180,6 +180,37 @@ pub(crate) struct FourNationWarCallbacks<Callback> {
     pub(crate) clear_war: Callback,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FourNationWarCallbackKind {
+    SignUpStart,
+    SignUpEnd,
+    WarStart,
+    WarEnd,
+    WarEndInfo,
+    EnterStart,
+    EnterEnd,
+    RefreshRegion,
+    ClearWar,
+}
+
+impl<Callback: PartialEq> FourNationWarCallbacks<Callback> {
+    pub(crate) fn kind(&self, callback: &Callback) -> Option<FourNationWarCallbackKind> {
+        [
+            (&self.sign_up_start, FourNationWarCallbackKind::SignUpStart),
+            (&self.sign_up_end, FourNationWarCallbackKind::SignUpEnd),
+            (&self.war_start, FourNationWarCallbackKind::WarStart),
+            (&self.war_end, FourNationWarCallbackKind::WarEnd),
+            (&self.war_end_info, FourNationWarCallbackKind::WarEndInfo),
+            (&self.enter_start, FourNationWarCallbackKind::EnterStart),
+            (&self.enter_end, FourNationWarCallbackKind::EnterEnd),
+            (&self.refresh_region, FourNationWarCallbackKind::RefreshRegion),
+            (&self.clear_war, FourNationWarCallbackKind::ClearWar),
+        ]
+        .into_iter()
+        .find_map(|(candidate, kind)| (candidate == callback).then_some(kind))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct FourNationWarLoadReport {
     pub(crate) setup_resource_found: bool,
