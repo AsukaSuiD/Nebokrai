@@ -389,7 +389,7 @@ fn open_loose_file(path: &std::path::Path) -> Option<CRFile> {
 
 // ============================================================================
 // FUNCTION: rfOpen
-// STATUS: PARTIALLY_IMPLEMENTED / DEFAULT_RESOURCE_EXTERNAL
+// STATUS: IMPLEMENTED / OWNERSHIP_CONTEXT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\rfile.cpp:119
@@ -397,6 +397,10 @@ fn open_loose_file(path: &std::path::Path) -> Option<CRFile> {
 // ADDRESS: 0045ab20
 // PROTOTYPE: CRFile * __cdecl rfOpen(char * param_1, CClientResource * param_2)
 //
+// loose fallback. Process-global `g_pDefaultClientResource` выражен через
+// `DefaultClientResourceOwner::open`, который передаёт borrowed context без
+// mutable Rust static. `None` здесь остаётся точным случаем, когда и explicit,
+// и default resource отсутствуют, поэтому открывается исходный loose path.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
