@@ -2,8 +2,9 @@
 //!
 //! Статус двух перегрузок `SaveLoadDetails` RVA `0x000E8CA0` и
 //! `0x000E91B0`, `GetTime` RVA `0x000E6800`, `AddGoldCoin` RVA `0x000E6690`,
-//! `AddOneLargess` RVA `0x000E6A60`, `AppendLargessToMap` RVA `0x000E9D40`
-//! и `CycleLoadLargessThread` RVA `0x000E9FD0` — `IMPLEMENTED`; остальной
+//! `AddOneLargess` RVA `0x000E6A60`, `TransferLargessThread` RVA `0x000E7500`,
+//! `AppendLargessToMap` RVA `0x000E9D40` и `CycleLoadLargessThread` RVA
+//! `0x000E9FD0` — `IMPLEMENTED`; остальной
 //! корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
 //! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
 //! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
@@ -87,11 +88,11 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 
-use chrono::{Datelike, Local, Timelike};
+use chrono::{Datelike, Local, NaiveDateTime, Timelike};
 use encoding_rs::WINDOWS_1251;
 use futures_util::TryStreamExt;
 use parking_lot::Mutex;
-use tiberius::{AuthMethod, Client, Config, EncryptionLevel, Row};
+use tiberius::{AuthMethod, Client, Config, EncryptionLevel, Query, Row};
 use tokio::net::TcpStream;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
@@ -193,6 +194,47 @@ pub(crate) enum CycleLoadLargessOutcome {
         existing_players_kept: usize,
     },
     ReturnedFalse(CycleLoadLargessFailure),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TransferLargessDatabaseStage {
+    BeginWorkingTransaction,
+    InsertWorkingRow,
+    MarkIncomingRowProcessed,
+    CommitWorkingTransaction,
+}
+
+#[derive(Debug)]
+pub(crate) enum TransferLargessFailure {
+    IncomingConnection(LargessDatabaseError),
+    WorkingConnection(LargessDatabaseError),
+    IncomingQuery(tiberius::error::Error),
+    MissingRequiredValue {
+        row_index: usize,
+        column: &'static str,
+    },
+    NumericOutsideLegacyRange {
+        row_index: usize,
+        column: &'static str,
+        value: i64,
+    },
+    IncomingRow {
+        row_index: usize,
+        column: &'static str,
+        source: tiberius::error::Error,
+    },
+    Database {
+        row_index: usize,
+        stage: TransferLargessDatabaseStage,
+        source: tiberius::error::Error,
+        rollback: Option<tiberius::error::Error>,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum TransferLargessOutcome {
+    ReturnedTrue { row_count: usize },
+    ReturnedFalse(TransferLargessFailure),
 }
 
 /// Делегирует `CLargess::AddGoldCoin` готовому bank-wallet owner-у.
@@ -395,6 +437,7 @@ pub(crate) trait LargessOwner {
 /// Linux/TDS-замена достигнутой части статического `CLargess`.
 pub(crate) struct TiberiusLargess {
     load_largess_time: u32,
+    incoming_cost_database: CostDatabaseSettings,
     cost_database: CostDatabaseSettings,
     entries: Mutex<BTreeMap<i32, LargessSnapshot>>,
     notices: VecDeque<LargessNotice>,
@@ -405,15 +448,129 @@ impl TiberiusLargess {
     /// готовые `AppendLargessToMap` и `CycleLoadLargessThread` owners.
     pub(crate) fn new(
         load_largess_time: u32,
+        incoming_cost_database: CostDatabaseSettings,
         cost_database: CostDatabaseSettings,
         entries: BTreeMap<i32, LargessSnapshot>,
     ) -> Self {
         Self {
             load_largess_time,
+            incoming_cost_database,
             cost_database,
             entries: Mutex::new(entries),
             notices: VecDeque::new(),
         }
+    }
+
+    /// Переносит входящие назначения текущего World в рабочую Cost DB.
+    ///
+    /// Tiberius-параметры заменяют небезопасные `_sprintf` SQL-буферы, но
+    /// сохраняют исходный порядок: target BEGIN/INSERT, source IsProcessed=1,
+    /// затем target COMMIT. Поэтому доказанное окно потери при ошибке COMMIT
+    /// после успешного source UPDATE намеренно не маскируется новой общей
+    /// транзакцией между двумя базами.
+    pub(crate) async fn transfer_largess(&self, world_number: u32) -> TransferLargessOutcome {
+        const SELECT_INCOMING_LARGESS: &str =
+            "SELECT * FROM Largess WHERE WorldID=@P1 AND IsProcessed=0";
+
+        let mut incoming = match Self::connect_cost_database(
+            self.incoming_cost_database.tds_config(),
+        )
+        .await
+        {
+            Ok(connection) => connection,
+            Err(source) => {
+                return TransferLargessOutcome::ReturnedFalse(
+                    TransferLargessFailure::IncomingConnection(source),
+                );
+            }
+        };
+        let mut working =
+            match Self::connect_cost_database(self.cost_database.tds_config()).await {
+                Ok(connection) => connection,
+                Err(source) => {
+                    return TransferLargessOutcome::ReturnedFalse(
+                        TransferLargessFailure::WorkingConnection(source),
+                    );
+                }
+            };
+
+        let mut select = Query::new(SELECT_INCOMING_LARGESS);
+        select.bind(world_number as i32);
+        let rows = match select.query(&mut incoming).await {
+            Ok(stream) => match stream.into_first_result().await {
+                Ok(rows) => rows,
+                Err(source) => {
+                    return TransferLargessOutcome::ReturnedFalse(
+                        TransferLargessFailure::IncomingQuery(source),
+                    );
+                }
+            },
+            Err(source) => {
+                return TransferLargessOutcome::ReturnedFalse(
+                    TransferLargessFailure::IncomingQuery(source),
+                );
+            }
+        };
+
+        let mut row_count = 0usize;
+        for row in rows {
+            let transfer = match TransferLargessRow::read(&row, row_count) {
+                Ok(transfer) => transfer,
+                Err(source) => return TransferLargessOutcome::ReturnedFalse(source),
+            };
+            if let Err(source) = working.simple_query("BEGIN TRANSACTION").await {
+                return TransferLargessOutcome::ReturnedFalse(
+                    TransferLargessFailure::Database {
+                        row_index: row_count,
+                        stage: TransferLargessDatabaseStage::BeginWorkingTransaction,
+                        source,
+                        rollback: None,
+                    },
+                );
+            }
+
+            if let Err(source) = insert_transferred_largess(&mut working, &transfer).await {
+                let rollback = rollback_working_largess(&mut working).await.err();
+                return TransferLargessOutcome::ReturnedFalse(
+                    TransferLargessFailure::Database {
+                        row_index: row_count,
+                        stage: TransferLargessDatabaseStage::InsertWorkingRow,
+                        source,
+                        rollback,
+                    },
+                );
+            }
+            if let Err(source) = mark_incoming_largess_processed(&mut incoming, transfer.send_id).await
+            {
+                let rollback = rollback_working_largess(&mut working).await.err();
+                return TransferLargessOutcome::ReturnedFalse(
+                    TransferLargessFailure::Database {
+                        row_index: row_count,
+                        stage: TransferLargessDatabaseStage::MarkIncomingRowProcessed,
+                        source,
+                        rollback,
+                    },
+                );
+            }
+            let commit = working
+                .simple_query("COMMIT TRANSACTION")
+                .await
+                .map(|_| ());
+            if let Err(source) = commit {
+                let rollback = rollback_working_largess(&mut working).await.err();
+                return TransferLargessOutcome::ReturnedFalse(
+                    TransferLargessFailure::Database {
+                        row_index: row_count,
+                        stage: TransferLargessDatabaseStage::CommitWorkingTransaction,
+                        source,
+                        rollback,
+                    },
+                );
+            }
+            row_count += 1;
+        }
+
+        TransferLargessOutcome::ReturnedTrue { row_count }
     }
 
     /// Повторяет global SendID scan и последующий unique player-key insert.
@@ -721,6 +878,170 @@ impl TiberiusLargess {
             result,
             use_log_system,
         ))
+    }
+}
+
+struct TransferLargessRow {
+    send_id: i32,
+    cd_key: String,
+    player_id: i32,
+    goods_index: u32,
+    goods_name: String,
+    goods_level: i32,
+    send_num: i32,
+    world_id: i32,
+    send_time: String,
+}
+
+impl TransferLargessRow {
+    fn read(row: &Row, row_index: usize) -> Result<Self, TransferLargessFailure> {
+        Ok(Self {
+            send_id: required_transfer_i32(row, "SendID", row_index)?,
+            cd_key: required_transfer_text(row, "Cdkey", row_index)?,
+            player_id: required_transfer_i32(row, "PlayerId", row_index)?,
+            goods_index: required_transfer_u32(row, "GoodsIndex", row_index)?,
+            goods_name: required_transfer_text(row, "GoodsName", row_index)?,
+            goods_level: required_transfer_i32(row, "GoodsLevel", row_index)?,
+            send_num: required_transfer_i32(row, "SendNum", row_index)?,
+            world_id: required_transfer_i32(row, "WorldID", row_index)?,
+            send_time: required_transfer_send_time(row, row_index)?,
+        })
+    }
+}
+
+async fn insert_transferred_largess(
+    working: &mut WorldTdsClient,
+    row: &TransferLargessRow,
+) -> Result<(), tiberius::error::Error> {
+    const INSERT_WORKING_LARGESS: &str =
+        "INSERT INTO Largess(SendID,Cdkey,PlayerId,GoodsIndex,GoodsName,GoodsLevel,SendNum,WorldID,SendTime,ObtainedNum) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,0)";
+
+    let mut insert = Query::new(INSERT_WORKING_LARGESS);
+    insert.bind(row.send_id);
+    insert.bind(row.cd_key.as_str());
+    insert.bind(row.player_id);
+    insert.bind(i64::from(row.goods_index));
+    insert.bind(row.goods_name.as_str());
+    insert.bind(row.goods_level);
+    insert.bind(row.send_num);
+    insert.bind(row.world_id);
+    insert.bind(row.send_time.as_str());
+    insert.execute(working).await.map(|_| ())
+}
+
+async fn mark_incoming_largess_processed(
+    incoming: &mut WorldTdsClient,
+    send_id: i32,
+) -> Result<(), tiberius::error::Error> {
+    // LoginDB schema-аудит поздней Rust-ветки подтверждает identity/PK SendID;
+    // это безопасный эквивалент ADO Recordset::Fields[IsProcessed]=1; Update().
+    let mut update = Query::new(
+        "UPDATE Largess SET IsProcessed=1 WHERE SendID=@P1 AND IsProcessed=0",
+    );
+    update.bind(send_id);
+    update.execute(incoming).await.map(|_| ())
+}
+
+async fn rollback_working_largess(
+    working: &mut WorldTdsClient,
+) -> Result<(), tiberius::error::Error> {
+    working
+        .simple_query("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
+        .await
+        .map(|_| ())
+}
+
+fn required_transfer_i32(
+    row: &Row,
+    column: &'static str,
+    row_index: usize,
+) -> Result<i32, TransferLargessFailure> {
+    match row.try_get::<i32, _>(column) {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => Err(TransferLargessFailure::MissingRequiredValue { row_index, column }),
+        Err(first_error) => match row.try_get::<i64, _>(column) {
+            Ok(Some(value)) => i32::try_from(value).map_err(|_| {
+                TransferLargessFailure::NumericOutsideLegacyRange {
+                    row_index,
+                    column,
+                    value,
+                }
+            }),
+            Ok(None) => Err(TransferLargessFailure::MissingRequiredValue { row_index, column }),
+            Err(_) => Err(TransferLargessFailure::IncomingRow {
+                row_index,
+                column,
+                source: first_error,
+            }),
+        },
+    }
+}
+
+fn required_transfer_u32(
+    row: &Row,
+    column: &'static str,
+    row_index: usize,
+) -> Result<u32, TransferLargessFailure> {
+    match row.try_get::<i64, _>(column) {
+        Ok(Some(value)) => u32::try_from(value).map_err(|_| {
+            TransferLargessFailure::NumericOutsideLegacyRange {
+                row_index,
+                column,
+                value,
+            }
+        }),
+        Ok(None) => Err(TransferLargessFailure::MissingRequiredValue { row_index, column }),
+        Err(first_error) => match row.try_get::<i32, _>(column) {
+            Ok(Some(value)) => Ok(value as u32),
+            Ok(None) => Err(TransferLargessFailure::MissingRequiredValue { row_index, column }),
+            Err(_) => Err(TransferLargessFailure::IncomingRow {
+                row_index,
+                column,
+                source: first_error,
+            }),
+        },
+    }
+}
+
+fn required_transfer_text(
+    row: &Row,
+    column: &'static str,
+    row_index: usize,
+) -> Result<String, TransferLargessFailure> {
+    match row.try_get::<&str, _>(column) {
+        Ok(Some(value)) => Ok(value.to_owned()),
+        Ok(None) => Err(TransferLargessFailure::MissingRequiredValue { row_index, column }),
+        Err(source) => Err(TransferLargessFailure::IncomingRow {
+            row_index,
+            column,
+            source,
+        }),
+    }
+}
+
+fn required_transfer_send_time(
+    row: &Row,
+    row_index: usize,
+) -> Result<String, TransferLargessFailure> {
+    const COLUMN: &str = "SendTime";
+    match row.try_get::<NaiveDateTime, _>(COLUMN) {
+        Ok(Some(value)) => Ok(value.to_string()),
+        Ok(None) => Err(TransferLargessFailure::MissingRequiredValue {
+            row_index,
+            column: COLUMN,
+        }),
+        Err(first_error) => match row.try_get::<&str, _>(COLUMN) {
+            Ok(Some(value)) => Ok(value.to_owned()),
+            Ok(None) => Err(TransferLargessFailure::MissingRequiredValue {
+                row_index,
+                column: COLUMN,
+            }),
+            Err(_) => Err(TransferLargessFailure::IncomingRow {
+                row_index,
+                column: COLUMN,
+                source: first_error,
+            }),
+        },
     }
 }
 
@@ -1098,7 +1419,7 @@ fn format_local_time() -> String {
 
 // ============================================================================
 // FUNCTION: CLargess::TransferLargessThread
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:715
@@ -1106,6 +1427,11 @@ fn format_local_time() -> String {
 // ADDRESS: 004e7500
 // PROTOTYPE: bool __cdecl TransferLargessThread(void)
 //
+// IMPLEMENTED_OWNER: `TiberiusLargess::transfer_largess` выше сохраняет
+// двухбазовый BEGIN/INSERT/source-Update/COMMIT порядок; параметры Tiberius
+// заменяют небезопасные `_sprintf` SQL-буферы. EXE 0x004E7CE7..0x004E7CFF
+// подтвердил `%d = CSetup::dwNumber`, а 0x004E81D5..0x004E8208 — точный порядок
+// девяти INSERT-аргументов.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
