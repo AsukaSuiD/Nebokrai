@@ -21,6 +21,12 @@
 //! `ServerCountryRegion::DecordFromByteArray` RVA `0x001CD3F0` подтверждает
 //! размеры и порядок. Имена и scripts сохраняются byte-exact: COUNTRY loader,
 //! в отличие от CITY, не обращается к StringTable.
+//! Exact PDB дополнительно задаёт имена всех scalar-полей: gate содержит
+//! `lID/lPicID/lDir/lAction/lMaxHP/lDef/lER/lTitleX/lTitleY/lWidthInc/`
+//! `lHeightInc`, flag — ту же последовательность без `lAction`, area — `lID`
+//! и четыре координаты `tagRECT`. Rust хранит их именованно; `[i32; N]` в
+//! wire helper-е сохраняет x86 little-endian последовательность без старого
+//! MSVC layout.
 //!
 //! `std::list`, stream, allocation, destructors и compiler cleanup заменены
 //! `Vec`, заимствованными resource bytes и обычным `Drop`; Rust layout не
@@ -49,23 +55,90 @@ pub(crate) enum WorldCountryWarRegionSerializationBlock {
     TooManyEntries { section: &'static str, count: usize },
 }
 
-#[derive(Clone, Debug)]
+/// Профиль country-war ворот из точного PDB `tagGate`.
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct WorldCountryWarGate {
-    header: [u8; 0x2C],
+    id: i32,
+    picture_id: i32,
+    direction: i32,
+    action: i32,
+    maximum_hp: i32,
+    defence: i32,
+    element_resistant: i32,
+    title_x: i32,
+    title_y: i32,
+    width_increment: i32,
+    height_increment: i32,
     name: Vec<u8>,
     script: Vec<u8>,
 }
 
-#[derive(Clone, Debug)]
+impl WorldCountryWarGate {
+    const fn wire_scalars(&self) -> [i32; 11] {
+        [
+            self.id,
+            self.picture_id,
+            self.direction,
+            self.action,
+            self.maximum_hp,
+            self.defence,
+            self.element_resistant,
+            self.title_x,
+            self.title_y,
+            self.width_increment,
+            self.height_increment,
+        ]
+    }
+}
+
+/// Профиль country-war флага из точного PDB `tagFlag`.
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct WorldCountryWarFlag {
-    header: [u8; 0x28],
+    id: i32,
+    picture_id: i32,
+    direction: i32,
+    maximum_hp: i32,
+    defence: i32,
+    element_resistant: i32,
+    title_x: i32,
+    title_y: i32,
+    width_increment: i32,
+    height_increment: i32,
     name: Vec<u8>,
     script: Vec<u8>,
 }
 
-#[derive(Clone, Debug)]
+impl WorldCountryWarFlag {
+    const fn wire_scalars(&self) -> [i32; 10] {
+        [
+            self.id,
+            self.picture_id,
+            self.direction,
+            self.maximum_hp,
+            self.defence,
+            self.element_resistant,
+            self.title_x,
+            self.title_y,
+            self.width_increment,
+            self.height_increment,
+        ]
+    }
+}
+
+/// Зона country-war из PDB `tagArea`: ID и legacy `RECT`.
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct WorldCountryWarArea {
-    header: [u8; 0x14],
+    id: i32,
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+impl WorldCountryWarArea {
+    const fn wire_scalars(&self) -> [i32; 5] {
+        [self.id, self.left, self.top, self.right, self.bottom]
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -179,15 +252,31 @@ fn parse_gate_section(
         if token != b"#" {
             continue;
         }
-        let mut header = [0; 0x2C];
-        write_i32(&mut header, 0, tokens.next_i32("tagGate.field_00")?);
+        let id = tokens.next_i32("tagGate.lID")?;
         let name = tokens.next("tagGate.strName")?.to_vec();
-        for (index, field) in GATE_FIELDS.iter().enumerate().skip(1) {
-            write_i32(&mut header, index, tokens.next_i32(field)?);
-        }
+        let picture_id = tokens.next_i32("tagGate.lPicID")?;
+        let direction = tokens.next_i32("tagGate.lDir")?;
+        let action = tokens.next_i32("tagGate.lAction")?;
+        let maximum_hp = tokens.next_i32("tagGate.lMaxHP")?;
+        let defence = tokens.next_i32("tagGate.lDef")?;
+        let element_resistant = tokens.next_i32("tagGate.lER")?;
+        let title_x = tokens.next_i32("tagGate.lTitleX")?;
+        let title_y = tokens.next_i32("tagGate.lTitleY")?;
+        let width_increment = tokens.next_i32("tagGate.lWidthInc")?;
+        let height_increment = tokens.next_i32("tagGate.lHeightInc")?;
         let script = tokens.next("tagGate.strScript")?.to_vec();
         records.push(WorldCountryWarGate {
-            header,
+            id,
+            picture_id,
+            direction,
+            action,
+            maximum_hp,
+            defence,
+            element_resistant,
+            title_x,
+            title_y,
+            width_increment,
+            height_increment,
             name,
             script,
         });
@@ -206,15 +295,29 @@ fn parse_flag_section(
         if token != b"#" {
             continue;
         }
-        let mut header = [0; 0x28];
-        write_i32(&mut header, 0, tokens.next_i32("tagFlag.field_00")?);
+        let id = tokens.next_i32("tagFlag.lID")?;
         let name = tokens.next("tagFlag.strName")?.to_vec();
-        for (index, field) in FLAG_FIELDS.iter().enumerate().skip(1) {
-            write_i32(&mut header, index, tokens.next_i32(field)?);
-        }
+        let picture_id = tokens.next_i32("tagFlag.lPicID")?;
+        let direction = tokens.next_i32("tagFlag.lDir")?;
+        let maximum_hp = tokens.next_i32("tagFlag.lMaxHP")?;
+        let defence = tokens.next_i32("tagFlag.lDef")?;
+        let element_resistant = tokens.next_i32("tagFlag.lER")?;
+        let title_x = tokens.next_i32("tagFlag.lTitleX")?;
+        let title_y = tokens.next_i32("tagFlag.lTitleY")?;
+        let width_increment = tokens.next_i32("tagFlag.lWidthInc")?;
+        let height_increment = tokens.next_i32("tagFlag.lHeightInc")?;
         let script = tokens.next("tagFlag.strScript")?.to_vec();
         records.push(WorldCountryWarFlag {
-            header,
+            id,
+            picture_id,
+            direction,
+            maximum_hp,
+            defence,
+            element_resistant,
+            title_x,
+            title_y,
+            width_increment,
+            height_increment,
             name,
             script,
         });
@@ -233,11 +336,13 @@ fn parse_area_section(
         if token != b"#" {
             continue;
         }
-        let mut header = [0; 0x14];
-        for (index, field) in AREA_FIELDS.iter().enumerate() {
-            write_i32(&mut header, index, tokens.next_i32(field)?);
-        }
-        records.push(WorldCountryWarArea { header });
+        records.push(WorldCountryWarArea {
+            id: tokens.next_i32("tagArea.lID")?,
+            left: tokens.next_i32("tagArea.rPoint.left")?,
+            top: tokens.next_i32("tagArea.rPoint.top")?,
+            right: tokens.next_i32("tagArea.rPoint.right")?,
+            bottom: tokens.next_i32("tagArea.rPoint.bottom")?,
+        });
     }
     Ok(records)
 }
@@ -249,7 +354,9 @@ fn append_gate_section(
 ) -> Result<(), WorldCountryWarRegionSerializationBlock> {
     append_count(destination, section, records.len())?;
     for record in records {
-        destination.extend_from_slice(&record.header);
+        for scalar in record.wire_scalars() {
+            destination.extend_from_slice(&scalar.to_le_bytes());
+        }
         append_country_c_string(destination, &record.name);
         append_country_c_string(destination, &record.script);
     }
@@ -263,7 +370,9 @@ fn append_flag_section(
 ) -> Result<(), WorldCountryWarRegionSerializationBlock> {
     append_count(destination, section, records.len())?;
     for record in records {
-        destination.extend_from_slice(&record.header);
+        for scalar in record.wire_scalars() {
+            destination.extend_from_slice(&scalar.to_le_bytes());
+        }
         append_country_c_string(destination, &record.name);
         append_country_c_string(destination, &record.script);
     }
@@ -277,7 +386,9 @@ fn append_area_section(
 ) -> Result<(), WorldCountryWarRegionSerializationBlock> {
     append_count(destination, section, records.len())?;
     for record in records {
-        destination.extend_from_slice(&record.header);
+        for scalar in record.wire_scalars() {
+            destination.extend_from_slice(&scalar.to_le_bytes());
+        }
     }
     Ok(())
 }
@@ -293,11 +404,6 @@ fn append_count(
     Ok(())
 }
 
-fn write_i32<const SIZE: usize>(destination: &mut [u8; SIZE], index: usize, value: i32) {
-    let offset = index * 4;
-    destination[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-}
-
 fn append_country_c_string(destination: &mut Vec<u8>, value: &[u8]) {
     let end = value
         .iter()
@@ -306,41 +412,6 @@ fn append_country_c_string(destination: &mut Vec<u8>, value: &[u8]) {
     destination.extend_from_slice(&value[..end]);
     destination.push(0);
 }
-
-const GATE_FIELDS: [&str; 11] = [
-    "tagGate.field_00",
-    "tagGate.field_04",
-    "tagGate.field_08",
-    "tagGate.field_0C",
-    "tagGate.field_10",
-    "tagGate.field_14",
-    "tagGate.field_18",
-    "tagGate.field_1C",
-    "tagGate.field_20",
-    "tagGate.field_24",
-    "tagGate.field_28",
-];
-
-const FLAG_FIELDS: [&str; 10] = [
-    "tagFlag.field_00",
-    "tagFlag.field_04",
-    "tagFlag.field_08",
-    "tagFlag.field_0C",
-    "tagFlag.field_10",
-    "tagFlag.field_14",
-    "tagFlag.field_18",
-    "tagFlag.field_1C",
-    "tagFlag.field_20",
-    "tagFlag.field_24",
-];
-
-const AREA_FIELDS: [&str; 5] = [
-    "tagArea.field_00",
-    "tagArea.field_04",
-    "tagArea.field_08",
-    "tagArea.field_0C",
-    "tagArea.field_10",
-];
 
 struct CountryTokens<'a> {
     values: Vec<&'a [u8]>,
