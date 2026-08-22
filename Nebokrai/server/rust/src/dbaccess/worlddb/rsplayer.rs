@@ -1138,6 +1138,22 @@ pub(crate) trait RsPlayerOwner {
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> Option<u8>;
 
+    /// Повторяет World-only `GetPlayerCountInCdkey`: DB sentinel сохраняется,
+    /// successful byte складывается с live creation-count с x86 wrapping.
+    async fn get_player_count_in_cdkey(
+        &mut self,
+        account: &[u8],
+        creation_count: u8,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> Option<u8> {
+        self.get_player_count_in_db_by_cdkey(account, active_transaction)
+            .await
+            .and_then(|database_count| {
+                let count = database_count.wrapping_add(creation_count);
+                (count != u8::MAX).then_some(count)
+            })
+    }
+
     /// Читает ordered DB-часть списка; live/save merge остаётся у `CGame`.
     async fn open_player_base_in_db(
         &mut self,
@@ -3971,7 +3987,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::GetPlayerCountInCdkey
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2399
@@ -3979,6 +3995,9 @@ async fn execute_batch(
 // ADDRESS: 00504750
 // PROTOTYPE: uchar __thiscall GetPlayerCountInCdkey(char * param_1)
 //
+// IMPLEMENTED_OWNER: default `RsPlayerOwner::get_player_count_in_cdkey` выше
+// сохраняет DB `0xFF` sentinel и wrapping addition, получая прежний singleton-
+// count явным аргументом.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

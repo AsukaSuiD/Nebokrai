@@ -1540,7 +1540,7 @@ impl CPlayer {
         clippy::too_many_arguments,
         reason = "исходный owner достигает region, country, player-list, globe и thing setup"
     )]
-    pub(crate) fn load_default_property<'region, FindRegion, Random, WeekDay>(
+    pub(crate) fn load_default_property<'region, FindRegion, Random, WeekDay, Timestamp>(
         &mut self,
         sex: u8,
         occupation: u8,
@@ -1554,12 +1554,13 @@ impl CPlayer {
         mut find_region: FindRegion,
         random: &mut Random,
         mut get_week_day: WeekDay,
-        timestamp: u32,
+        mut get_timestamp: Timestamp,
     ) -> Result<PlayerDefaultPropertyReport, PlayerDefaultPropertyBlock>
     where
         FindRegion: FnMut(i32) -> Option<&'region CRegion>,
         Random: FnMut(i32) -> i32 + ?Sized,
         WeekDay: FnMut() -> u16,
+        Timestamp: FnMut() -> u32,
     {
         let start_region_id = country_parameters.start_region_or_insert(country);
         let selected_region_id =
@@ -1754,7 +1755,7 @@ impl CPlayer {
                 .collect();
         }
         self.base_property
-            .write_u32(BASE_PROPERTY_LT_60_STAMP_OFFSET, timestamp);
+            .write_u32(BASE_PROPERTY_LT_60_STAMP_OFFSET, get_timestamp());
 
         Ok(PlayerDefaultPropertyReport {
             selected_region_id,

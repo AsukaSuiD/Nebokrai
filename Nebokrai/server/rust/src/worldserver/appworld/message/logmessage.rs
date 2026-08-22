@@ -2,7 +2,7 @@
 //!
 //! Корпус остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме player lifecycle leaf-ов
 //! `0x5FB01/0x5FB02`, player-list leaf `0x4FB01`, delete-role leaf `0x4FB02`,
-//! restore-role leaf `0x4FB03` и account cleanup leaf-ов `0x4FB06/0x4FB07`
+//! restore-role leaf `0x4FB03`, create-role leaf `0x4FB04` и account cleanup leaf-ов `0x4FB06/0x4FB07`
 //! со статусом `IMPLEMENTED`.
 //! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
@@ -62,36 +62,61 @@
 //! Union-ветвь достигает concrete `CUnion::DelMember`, который всегда true,
 //! отвязывает faction и даёт код `3`; код `2` concrete машиной недостижим.
 //!
+//! Exact `0x004B1724..0x004B1EEB` для `0x4FB04` читает
+//! `name/sex/occupation/head/face/country/account`, затем строго выполняет
+//! count/limit, допустимую RU-пару sex/occupation, country, WordsFilter и
+//! шесть name lookup-ов: creation, map, DB-creation, DB-data, persistent DB,
+//! faction/union. Коды ответа `0x18/0x19/0x1A/0x17` и их первая terminal
+//! проверка сохранены. Успех создаёт `CPlayer`, применяет default property,
+//! identity/service поля, pre-increment player ID, ordered origin equipment и
+//! только затем `AppendCreationPlayer`. Ответ `0x1FF05/0x1B` сохраняет exact
+//! C-строки, signed short level, `sex -> occupation -> country -> head`, 11
+//! equipment ID, 11 level-byte и signed region ID; send остаётся
+//! неприоритетным. Safe name/layout/GUID/append blocks не превращаются в
+//! придуманный legacy ответ, а parameterized Tiberius заменяет только ADO.
+//!
 //! Декомпилятор: Ghidra 12.1.2. Сырой C++ ниже сохранён как локальная
 //! документация, а не как Rust-реализация.
+
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::dbaccess::worlddb::rsplayer::{
     PlayerBaseDatabaseRow, RsPlayerOwner, TiberiusRsPlayer,
 };
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::public::date::TagTime;
+use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::setup::globesetup::GlobeSetupSnapshot;
+use crate::setup::playerlist::CPlayerList;
 use crate::public::tools::put_string_to_file;
 use crate::worldserver::appworld::country::country::{
     CountryExileTextArgument, CountryHasJobContext,
 };
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
-use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
+use crate::worldserver::appworld::country::countryparam::CCountryParam;
+use crate::worldserver::appworld::goods::cgoodsfactory::{
+    GoodsBasePropertiesRegistry, GoodsOriginalNameIndex,
+};
 use crate::worldserver::appworld::message::writelogmessage::{
     WorldPlayerDeleteLogWrite, WorldWriteLogCommand,
 };
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     COrganizingCtrl, OrganizingDeleteRoleBlock, OrganizingDeleteRoleOutcome,
+    OrganizingNameLookupBlock,
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::COrganizingParam;
 use crate::worldserver::appworld::organizingsystem::union::UnionFormatArgument;
 use crate::worldserver::appworld::player::{
-    PlayerBaseWireSnapshot, PlayerCodecError, PlayerPropertyCoefficients,
+    CPlayer, PlayerBaseWireSnapshot, PlayerCodecError, PlayerDbProjectionBlock,
+    PlayerDefaultPropertyBlock, PlayerDefaultPropertyReport, PlayerPropertyCoefficients,
 };
 use crate::worldserver::appworld::session::csessionfactory::CSessionFactory;
 use crate::worldserver::worldserver::game::{
-    CGame, WorldLoginTimeoutTeamExit, WorldOnlinePlayerAppendOutcome,
-    WorldOnlinePlayerRemoveOutcome, WorldReturnedPlayerDecode,
+    CGame, WorldCreationPlayerAppendOutcome, WorldLoginTimeoutTeamExit,
+    WorldOnlinePlayerAppendOutcome, WorldOnlinePlayerRemoveOutcome, WorldOriginGoodsBlock,
+    WorldOriginGoodsReport, WorldPlayerIdBlock, WorldPlayerNameLookupError,
+    WorldReturnedPlayerDecode,
 };
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
@@ -100,6 +125,7 @@ const DELETE_ROLE_REQUEST: i32 = 0x0004_FB02;
 const PLAYER_DETAIL_REQUEST: i32 = 0x0005_FB01;
 const PLAYER_RETURN_REQUEST: i32 = 0x0005_FB02;
 const RESTORE_ROLE_REQUEST: i32 = 0x0004_FB03;
+const CREATE_ROLE_REQUEST: i32 = 0x0004_FB04;
 const ACCOUNT_LOGIN_CLEANUP_REQUEST: i32 = 0x0004_FB06;
 const ACCOUNT_DISCONNECT_REQUEST: i32 = 0x0004_FB07;
 const PLAYER_BASE_RESPONSE: i32 = 0x0001_FF02;
@@ -108,6 +134,12 @@ const DELETE_ROLE_REJECTED_STATUS: i8 = 0x13;
 const DELETE_ROLE_SCHEDULED_STATUS: i8 = 0x14;
 const RESTORE_ROLE_RESPONSE: i32 = 0x0001_FF04;
 const RESTORE_ROLE_STATUS: i8 = 0x15;
+const CREATE_ROLE_RESPONSE: i32 = 0x0001_FF05;
+const CREATE_ROLE_DUPLICATE_STATUS: i8 = 0x17;
+const CREATE_ROLE_INVALID_STATUS: i8 = 0x18;
+const CREATE_ROLE_LIMIT_STATUS: i8 = 0x19;
+const CREATE_ROLE_FILTER_STATUS: i8 = 0x1A;
+const CREATE_ROLE_SUCCESS_STATUS: i8 = 0x1B;
 const ACCOUNT_DISCONNECT_GAME_RESPONSE: i32 = 0x0007_F903;
 const ACCOUNT_DISCONNECT_LOGIN_RESPONSE: i32 = 0x0001_FF06;
 const PLAYER_DETAIL_RESPONSE: i32 = 0x0007_F901;
@@ -122,6 +154,74 @@ pub(crate) struct WorldRestoreRoleOutcome {
     pub(crate) status: i8,
     pub(crate) wire: Vec<u8>,
     pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldCreateRoleRequest {
+    pub(crate) name: Vec<u8>,
+    pub(crate) sex: u8,
+    pub(crate) occupation: u8,
+    pub(crate) head_picture: u8,
+    pub(crate) face_picture: u8,
+    pub(crate) country: u8,
+    pub(crate) account: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldCreateRoleFailureStage {
+    DatabaseCount,
+    CharacterLimit,
+    OccupationSex,
+    Country,
+    WordsFilter,
+    DuplicateName,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldCreateRoleAppendCollision {
+    DuplicateCreationId,
+    ExistingMapOwner,
+}
+
+#[derive(Debug)]
+pub(crate) enum WorldCreateRoleBlock {
+    PlayerName(WorldPlayerNameLookupError),
+    OrganizingName(OrganizingNameLookupBlock),
+    DefaultProperty(PlayerDefaultPropertyBlock),
+    PlayerId(WorldPlayerIdBlock),
+    OriginGoods(WorldOriginGoodsBlock),
+    AppendCollision(WorldCreateRoleAppendCollision),
+    Snapshot(PlayerDbProjectionBlock),
+    PublishedPlayerMissing { player_id: u32 },
+}
+
+#[derive(Debug)]
+pub(crate) enum WorldCreateRoleOutcome {
+    Failed {
+        request: WorldCreateRoleRequest,
+        player_count: Option<u8>,
+        stage: WorldCreateRoleFailureStage,
+        status: i8,
+        response_type: i32,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+    Blocked {
+        request: WorldCreateRoleRequest,
+        source: WorldCreateRoleBlock,
+    },
+    Created {
+        request: WorldCreateRoleRequest,
+        player_count_before: u8,
+        player_id: u32,
+        defaults: PlayerDefaultPropertyReport,
+        origin_goods: WorldOriginGoodsReport,
+        snapshot: PlayerBaseWireSnapshot,
+        response_type: i32,
+        status: i8,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -297,11 +397,12 @@ pub(crate) enum WorldPlayerReturnOutcome {
     },
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) enum WorldLogMessageOutcome {
     PlayerBase(WorldPlayerBaseOutcome),
     DeleteRole(WorldDeleteRoleOutcome),
     RestoreRole(WorldRestoreRoleOutcome),
+    CreateRole(WorldCreateRoleOutcome),
     AccountLoginCleanup(WorldAccountLoginCleanupOutcome),
     AccountDisconnect(WorldAccountDisconnectOutcome),
     PlayerDetail(WorldPlayerDetailOutcome),
@@ -318,8 +419,12 @@ pub(crate) async fn on_log_message(
     organizing: &mut COrganizingCtrl,
     organizing_parameters: &COrganizingParam,
     country_handler: &CCountryHandler,
+    country_parameters: &mut CCountryParam,
+    player_list: &mut CPlayerList,
+    duplicate_regions: &CDupliRegionSetup,
     session_factory: &mut CSessionFactory,
     registry: &GoodsBasePropertiesRegistry,
+    original_name_index: &GoodsOriginalNameIndex,
     coefficients: &PlayerPropertyCoefficients,
     globe_setup: &GlobeSetupSnapshot,
     rs_player: &mut TiberiusRsPlayer,
@@ -328,6 +433,8 @@ pub(crate) async fn on_log_message(
         &mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
     delete_log_enabled: bool,
     add_error_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
+    random: &mut dyn FnMut(i32) -> i32,
+    check_create_role_name: &mut dyn FnMut(&mut Vec<u8>, bool, bool) -> bool,
     message: CMessage,
 ) -> WorldLogMessageDispatch {
     match message.message_type() {
@@ -377,11 +484,375 @@ pub(crate) async fn on_log_message(
             message,
         ),
         RESTORE_ROLE_REQUEST => restore_role(game, message),
+        CREATE_ROLE_REQUEST => {
+            create_role(
+                game,
+                organizing,
+                country_handler,
+                country_parameters,
+                player_list,
+                duplicate_regions,
+                registry,
+                original_name_index,
+                coefficients,
+                globe_setup,
+                rs_player,
+                player_database,
+                random,
+                check_create_role_name,
+                add_error_log_text,
+                message,
+            )
+            .await
+        }
         ACCOUNT_LOGIN_CLEANUP_REQUEST => {
             account_login_cleanup(game, session_factory, message)
         }
         ACCOUNT_DISCONNECT_REQUEST => account_disconnect(game, session_factory, message),
         _ => WorldLogMessageDispatch::Pending(message),
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "exact create-role связывает setup, DB, organizing, goods и transport owners"
+)]
+async fn create_role(
+    game: &mut CGame,
+    organizing: &COrganizingCtrl,
+    country_handler: &CCountryHandler,
+    country_parameters: &mut CCountryParam,
+    player_list: &mut CPlayerList,
+    duplicate_regions: &CDupliRegionSetup,
+    registry: &GoodsBasePropertiesRegistry,
+    original_name_index: &GoodsOriginalNameIndex,
+    coefficients: &PlayerPropertyCoefficients,
+    globe_setup: &GlobeSetupSnapshot,
+    rs_player: &mut TiberiusRsPlayer,
+    mut player_database: Option<&mut WorldTdsClient>,
+    random: &mut dyn FnMut(i32) -> i32,
+    check_create_role_name: &mut dyn FnMut(&mut Vec<u8>, bool, bool) -> bool,
+    add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
+    mut message: CMessage,
+) -> WorldLogMessageDispatch {
+    let request = WorldCreateRoleRequest {
+        name: message
+            .base_mut()
+            .get_str_bytes(0x32)
+            .unwrap_or_default(),
+        sex: message.base_mut().get_byte().unwrap_or(0),
+        occupation: message.base_mut().get_byte().unwrap_or(0),
+        head_picture: message.base_mut().get_byte().unwrap_or(0),
+        face_picture: message.base_mut().get_byte().unwrap_or(0),
+        country: message.base_mut().get_byte().unwrap_or(0),
+        account: message
+            .base_mut()
+            .get_str_bytes(0x14)
+            .unwrap_or_default(),
+    };
+
+    let creation_count = game.creation_player_count_in_cdkey(&request.account);
+    let Some(player_count) = rs_player
+        .get_player_count_in_cdkey(
+            &request.account,
+            creation_count,
+            player_database.as_deref_mut(),
+        )
+        .await
+    else {
+        return send_create_role_failure(
+            game,
+            request,
+            None,
+            WorldCreateRoleFailureStage::DatabaseCount,
+            CREATE_ROLE_INVALID_STATUS,
+        );
+    };
+    if i16::from(player_count) >= globe_setup.maximum_characters() {
+        return send_create_role_failure(
+            game,
+            request,
+            Some(player_count),
+            WorldCreateRoleFailureStage::CharacterLimit,
+            CREATE_ROLE_LIMIT_STATUS,
+        );
+    }
+
+    if !matches!(
+        (request.sex, request.occupation),
+        (0, 0) | (1, 1) | (2, 0)
+    ) {
+        return send_create_role_failure(
+            game,
+            request,
+            Some(player_count),
+            WorldCreateRoleFailureStage::OccupationSex,
+            CREATE_ROLE_INVALID_STATUS,
+        );
+    }
+    if country_handler.get_country(request.country).is_none() {
+        return send_create_role_failure(
+            game,
+            request,
+            Some(player_count),
+            WorldCreateRoleFailureStage::Country,
+            CREATE_ROLE_INVALID_STATUS,
+        );
+    }
+
+    let mut checked_name = request.name.clone();
+    if !check_create_role_name(&mut checked_name, false, true) {
+        return send_create_role_failure(
+            game,
+            request,
+            Some(player_count),
+            WorldCreateRoleFailureStage::WordsFilter,
+            CREATE_ROLE_FILTER_STATUS,
+        );
+    }
+
+    let duplicate = match game.creation_player_by_name(&request.name) {
+        Ok(found) => found.is_some(),
+        Err(source) => {
+            return create_role_blocked(request, WorldCreateRoleBlock::PlayerName(source));
+        }
+    };
+    let duplicate = if duplicate {
+        true
+    } else {
+        match game.is_name_exist_in_map_player(&request.name) {
+            Ok(found) => found,
+            Err(source) => {
+                return create_role_blocked(request, WorldCreateRoleBlock::PlayerName(source));
+            }
+        }
+    };
+    let duplicate = if duplicate {
+        true
+    } else {
+        match game.is_name_exist_in_db_creation(&request.name) {
+            Ok(found) => found,
+            Err(source) => {
+                return create_role_blocked(request, WorldCreateRoleBlock::PlayerName(source));
+            }
+        }
+    };
+    let duplicate = if duplicate {
+        true
+    } else {
+        match game.is_name_exist_in_db_data(&request.name) {
+            Ok(found) => found,
+            Err(source) => {
+                return create_role_blocked(request, WorldCreateRoleBlock::PlayerName(source));
+            }
+        }
+    };
+    let duplicate = if duplicate {
+        true
+    } else {
+        rs_player
+            .is_name_exist(&request.name, player_database.as_deref_mut())
+            .await
+    };
+    let duplicate = if duplicate {
+        true
+    } else {
+        match game.is_name_exit_in_faction(organizing, &request.name) {
+            Ok(found) => found,
+            Err(source) => {
+                return create_role_blocked(
+                    request,
+                    WorldCreateRoleBlock::OrganizingName(source),
+                );
+            }
+        }
+    };
+    if duplicate {
+        return send_create_role_failure(
+            game,
+            request,
+            Some(player_count),
+            WorldCreateRoleFailureStage::DuplicateName,
+            CREATE_ROLE_DUPLICATE_STATUS,
+        );
+    }
+
+    let mut player = Box::new(CPlayer::with_clone_decode_constructor_state());
+    let defaults = match player.load_default_property(
+        request.sex,
+        request.occupation,
+        request.country,
+        country_parameters,
+        duplicate_regions,
+        player_list,
+        globe_setup,
+        game.thing_setup(),
+        coefficients,
+        |region_id| game.creation_region_base(region_id),
+        random,
+        || TagTime::local_now().day_of_week,
+        legacy_time_seconds,
+    ) {
+        Ok(report) => report,
+        Err(source) => {
+            return create_role_blocked(
+                request,
+                WorldCreateRoleBlock::DefaultProperty(source),
+            );
+        }
+    };
+    player.set_creation_identity(
+        &request.name,
+        &request.account,
+        request.head_picture,
+        request.face_picture,
+    );
+    player.set_creation_service_defaults();
+    let player_id = match game.allocate_player_id() {
+        Ok(player_id) => player_id,
+        Err(source) => {
+            return create_role_blocked(request, WorldCreateRoleBlock::PlayerId(source));
+        }
+    };
+    player.set_id(player_id);
+    let origin_goods = match game.add_origin_goods_to_player(
+        &mut player,
+        player_list,
+        registry,
+        original_name_index,
+        random,
+    ) {
+        Ok(report) => report,
+        Err(source) => {
+            return create_role_blocked(request, WorldCreateRoleBlock::OriginGoods(source));
+        }
+    };
+
+    match game.append_creation_player(player, |entry| {
+        let text = entry.to_string();
+        let _ = add_log_text(text.as_bytes());
+    }) {
+        WorldCreationPlayerAppendOutcome::Inserted { .. } => {}
+        WorldCreationPlayerAppendOutcome::DuplicateReleased { .. } => {
+            return create_role_blocked(
+                request,
+                WorldCreateRoleBlock::AppendCollision(
+                    WorldCreateRoleAppendCollision::DuplicateCreationId,
+                ),
+            );
+        }
+        WorldCreationPlayerAppendOutcome::ExistingMapOwnerKept { incoming, .. } => {
+            drop(incoming);
+            return create_role_blocked(
+                request,
+                WorldCreateRoleBlock::AppendCollision(
+                    WorldCreateRoleAppendCollision::ExistingMapOwner,
+                ),
+            );
+        }
+    }
+
+    let Some(created_player) = game.map_player(player_id as u32) else {
+        return create_role_blocked(
+            request,
+            WorldCreateRoleBlock::PublishedPlayerMissing {
+                player_id: player_id as u32,
+            },
+        );
+    };
+    let snapshot = match created_player.player_base_wire_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(source) => {
+            return create_role_blocked(request, WorldCreateRoleBlock::Snapshot(source));
+        }
+    };
+
+    let mut response = CMessage::new(CREATE_ROLE_RESPONSE);
+    response.base_mut().add_char(CREATE_ROLE_SUCCESS_STATUS);
+    append_c_string(response.base_mut(), &request.account);
+    response.base_mut().add_ulong(snapshot.id as u32);
+    append_c_string(response.base_mut(), &snapshot.name);
+    response.base_mut().add_short(i16::from(snapshot.level));
+    response.base_mut().add_byte(snapshot.sex);
+    response.base_mut().add_byte(snapshot.occupation);
+    response.base_mut().add_byte(snapshot.country);
+    response.base_mut().add_byte(snapshot.head);
+    for equipment_id in snapshot.equipment_ids {
+        response.base_mut().add_ulong(equipment_id);
+    }
+    for equipment_level in snapshot.equipment_levels {
+        response.base_mut().add_byte(equipment_level);
+    }
+    response.base_mut().add_long(snapshot.region_id);
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = response.send(
+        game.current_login_client().map(|client| client.send_queue()),
+        false,
+    );
+
+    WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::CreateRole(
+        WorldCreateRoleOutcome::Created {
+            request,
+            player_count_before: player_count,
+            player_id: player_id as u32,
+            defaults,
+            origin_goods,
+            snapshot,
+            response_type: CREATE_ROLE_RESPONSE,
+            status: CREATE_ROLE_SUCCESS_STATUS,
+            wire,
+            delivery,
+        },
+    ))
+}
+
+fn send_create_role_failure(
+    game: &CGame,
+    request: WorldCreateRoleRequest,
+    player_count: Option<u8>,
+    stage: WorldCreateRoleFailureStage,
+    status: i8,
+) -> WorldLogMessageDispatch {
+    let mut response = CMessage::new(CREATE_ROLE_RESPONSE);
+    response.base_mut().add_char(status);
+    append_c_string(response.base_mut(), &request.account);
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = response.send(
+        game.current_login_client().map(|client| client.send_queue()),
+        false,
+    );
+    WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::CreateRole(
+        WorldCreateRoleOutcome::Failed {
+            request,
+            player_count,
+            stage,
+            status,
+            response_type: CREATE_ROLE_RESPONSE,
+            wire,
+            delivery,
+        },
+    ))
+}
+
+fn create_role_blocked(
+    request: WorldCreateRoleRequest,
+    source: WorldCreateRoleBlock,
+) -> WorldLogMessageDispatch {
+    WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::CreateRole(
+        WorldCreateRoleOutcome::Blocked { request, source },
+    ))
+}
+
+fn append_c_string(message: &mut crate::nets::basemessage::CBaseMessage, value: &[u8]) {
+    let visible = value.iter().position(|byte| *byte == 0).unwrap_or(value.len());
+    message.add(&value[..visible]);
+    message.add_char(0);
+}
+
+fn legacy_time_seconds() -> u32 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs() as u32,
+        Err(error) => 0_u32.wrapping_sub(error.duration().as_secs() as u32),
     }
 }
 

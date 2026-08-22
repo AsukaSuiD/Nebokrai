@@ -1031,6 +1031,7 @@ use crate::public::auctionlog::{
     AuctionBangUpdateOutcome, AuctionLogLoadOutcome, CAuctionLog,
 };
 use crate::public::date::TagTime;
+use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::public::mystringtable::MyStringTable;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
 use crate::public::readwrite::read_to;
@@ -1245,6 +1246,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock, OrganizingLeaveWordEnableBlock,
     OrganizingFactionDoJoinBlock,
     OrganizingUnionDemiseBlock, OrganizingUnionExitBlock, OrganizingUnionFireOutBlock,
+    OrganizingNameLookupBlock,
     OrganizingPronounceBlock, OrganizingSaveDataReport, OrganizingUnionApplicationCallbackBlock,
     OrganizingUnionApplicationCallbackReport, OrganizingUnionApplyForJoinDispatchBlock,
     OrganizingUnionInvitationCallbackBlock, OrganizingUnionInvitationCallbackReport,
@@ -3358,7 +3360,9 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) coefficients: &'a PlayerPropertyCoefficients,
     pub(crate) organizing: &'a mut COrganizingCtrl,
     pub(crate) country: &'a mut CCountryHandler,
-    pub(crate) country_parameters: &'a CCountryParam,
+    pub(crate) country_parameters: &'a mut CCountryParam,
+    pub(crate) player_list: &'a mut CPlayerList,
+    pub(crate) duplicate_regions: &'a CDupliRegionSetup,
     pub(crate) country_war: &'a mut CountryWarSys,
     pub(crate) country_war_callbacks: CountryWarCallbacks<TimerCallback>,
     pub(crate) four_nation_war: &'a mut CFourNationWarSys,
@@ -3417,6 +3421,8 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     pub(crate) update_union_player: &'a mut dyn FnMut(i32),
     pub(crate) check_invalid_organizing_string:
         &'a mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
+    pub(crate) check_create_role_name:
+        &'a mut dyn FnMut(&mut Vec<u8>, bool, bool) -> bool,
     /// Внешние feature-gates exact `CLogSystem::bFactionChat/bPrivateChat`.
     pub(crate) faction_chat_log_enabled: bool,
     pub(crate) private_chat_log_enabled: bool,
@@ -9743,7 +9749,9 @@ impl CGame {
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
         country_handler: &mut CCountryHandler,
-        country_parameters: &CCountryParam,
+        country_parameters: &mut CCountryParam,
+        player_list: &mut CPlayerList,
+        duplicate_regions: &CDupliRegionSetup,
         country_war: &mut CountryWarSys,
         four_nation_war: &mut CFourNationWarSys,
         country_limits: CountryKingSaveLimits,
@@ -9766,6 +9774,7 @@ impl CGame {
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
         check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
+        check_create_role_name: &mut dyn FnMut(&mut Vec<u8>, bool, bool) -> bool,
         faction_chat_log_enabled: bool,
         private_chat_log_enabled: bool,
         delete_log_enabled: bool,
@@ -9842,6 +9851,8 @@ impl CGame {
                             organizing_parameters,
                             country_handler,
                             country_parameters,
+                            player_list,
+                            duplicate_regions,
                             country_war,
                             four_nation_war,
                             country_limits,
@@ -9864,6 +9875,7 @@ impl CGame {
                             application_runtime,
                             application_callbacks,
                             &mut *check_invalid_organizing_string,
+                            &mut *check_create_role_name,
                             faction_chat_log_enabled,
                             private_chat_log_enabled,
                             delete_log_enabled,
@@ -9936,6 +9948,8 @@ impl CGame {
                     organizing_parameters,
                     country_handler,
                     country_parameters,
+                    player_list,
+                    duplicate_regions,
                     country_war,
                     four_nation_war,
                     country_limits,
@@ -9958,6 +9972,7 @@ impl CGame {
                     application_runtime,
                     application_callbacks,
                     &mut *check_invalid_organizing_string,
+                    &mut *check_create_role_name,
                     faction_chat_log_enabled,
                     private_chat_log_enabled,
                     delete_log_enabled,
@@ -10032,7 +10047,9 @@ impl CGame {
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
         country_handler: &mut CCountryHandler,
-        country_parameters: &CCountryParam,
+        country_parameters: &mut CCountryParam,
+        player_list: &mut CPlayerList,
+        duplicate_regions: &CDupliRegionSetup,
         country_war: &mut CountryWarSys,
         four_nation_war: &mut CFourNationWarSys,
         country_limits: CountryKingSaveLimits,
@@ -10055,6 +10072,7 @@ impl CGame {
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
         check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
+        check_create_role_name: &mut dyn FnMut(&mut Vec<u8>, bool, bool) -> bool,
         faction_chat_log_enabled: bool,
         private_chat_log_enabled: bool,
         delete_log_enabled: bool,
@@ -10128,6 +10146,8 @@ impl CGame {
             organizing_parameters,
             country_handler,
             country_parameters,
+            player_list,
+            duplicate_regions,
             country_war,
             four_nation_war,
             country_limits,
@@ -10150,6 +10170,7 @@ impl CGame {
             application_runtime,
             application_callbacks,
             check_invalid_organizing_string,
+            check_create_role_name,
             faction_chat_log_enabled,
             private_chat_log_enabled,
             delete_log_enabled,
@@ -11425,6 +11446,8 @@ impl CGame {
             owners.organizing_parameters,
             owners.country,
             owners.country_parameters,
+            owners.player_list,
+            owners.duplicate_regions,
             owners.country_war,
             owners.four_nation_war,
             configuration.country_limits,
@@ -11447,6 +11470,7 @@ impl CGame {
             owners.union_application_runtime,
             &mut union_application_callbacks,
             &mut *callbacks.check_invalid_organizing_string,
+            &mut *callbacks.check_create_role_name,
             callbacks.faction_chat_log_enabled,
             callbacks.private_chat_log_enabled,
             callbacks.delete_log_enabled,
@@ -13159,6 +13183,18 @@ impl CGame {
             }
         }
         Ok(false)
+    }
+
+    /// Повторяет exact `IsNameExitInFaction`: общий organizing lookup ищет
+    /// сначала faction, затем union и сворачивает любой match в `true`.
+    pub(crate) fn is_name_exit_in_faction(
+        &self,
+        organizing: &COrganizingCtrl,
+        name: &[u8],
+    ) -> Result<bool, OrganizingNameLookupBlock> {
+        organizing
+            .organizing_by_name(name)
+            .map(|matched| matched.is_some())
     }
 
     /// Выполняет полный reached `CPlayer::ChangeName` без global singleton-ов.
@@ -15151,7 +15187,9 @@ async fn process_world_message<TimerCallback, JjcContext>(
     organizing: &mut COrganizingCtrl,
     organizing_parameters: &COrganizingParam,
     country_handler: &mut CCountryHandler,
-    country_parameters: &CCountryParam,
+    country_parameters: &mut CCountryParam,
+    player_list: &mut CPlayerList,
+    duplicate_regions: &CDupliRegionSetup,
     country_war: &mut CountryWarSys,
     four_nation_war: &mut CFourNationWarSys,
     country_limits: CountryKingSaveLimits,
@@ -15174,6 +15212,7 @@ async fn process_world_message<TimerCallback, JjcContext>(
     application_runtime: &WorldUnionApplicationRuntimeOwner,
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
+    check_create_role_name: &mut dyn FnMut(&mut Vec<u8>, bool, bool) -> bool,
     faction_chat_log_enabled: bool,
     private_chat_log_enabled: bool,
     delete_log_enabled: bool,
@@ -15271,8 +15310,12 @@ where
             organizing,
             organizing_parameters,
             country_handler,
+            country_parameters,
+            player_list,
+            duplicate_regions,
             session_factory,
             registry,
+            original_name_index,
             coefficients,
             globe_setup,
             rs_player,
@@ -15280,6 +15323,8 @@ where
             &mut *application_callbacks.format_world_string,
             delete_log_enabled,
             add_log_text,
+            &mut *application_callbacks.random,
+            check_create_role_name,
             message,
         )
         .await
@@ -18968,7 +19013,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::IsNameExitInFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5763
@@ -18976,6 +19021,9 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 004089a0
 // PROTOTYPE: bool __thiscall IsNameExitInFaction(char * param_1)
 //
+// IMPLEMENTED_OWNER: `CGame::is_name_exit_in_faction` выше делегирует exact
+// `FindOrgaByName` owner-у; typed overflow/null block заменяет потерянный raw
+// return, который декомпилятор ошибочно принял за security-cookie результат.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
