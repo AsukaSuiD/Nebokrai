@@ -3,7 +3,8 @@
 //! Статус `CFourNationWarSys::AddToByteArray` RVA `0x00094250`,
 //! `RecvResultFromGS` RVA `0x00093C60` и `ConvertMoraleToExploit` RVA
 //! `0x00093F80`, `OnRefreshRegion`/`OnClearWar`/`RequestWarResultFromGS` RVA
-//! `0x00093B10/0x00093B80/0x00093BF0`: `IMPLEMENTED`; loader, timers и
+//! `0x00093B10/0x00093B80/0x00093BF0`, `GetWarRegionIDByTime` RVA
+//! `0x00094200`: `IMPLEMENTED`; loader, timers и
 //! остальной Game runtime ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -163,6 +164,13 @@ pub(crate) enum FourNationWarLoadError {
     InvalidValue { field: &'static str },
     Arithmetic(TagTimeArithmeticBlock),
     ScheduleIndexOverflow,
+}
+
+/// Безопасная граница старого индексирования `s_vSetup` без bounds-check.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FourNationWarRegionIndexBlock {
+    pub(crate) index: i32,
+    pub(crate) setup_count: usize,
 }
 
 impl From<TagTimeArithmeticBlock> for FourNationWarLoadError {
@@ -428,6 +436,32 @@ impl CFourNationWarSys {
 
     pub(crate) fn funds(&self) -> &[FourNationWarFund] {
         &self.funds
+    }
+
+    /// Возвращает region setup-а по машинному индексу `GetWarRegionIDByTime`.
+    ///
+    /// Пустой vector возвращает `0`. При существующем vector raw разыменовывал
+    /// index без проверки; invalid index остаётся typed safe-границей, а не
+    /// превращается молча в иной region ID.
+    pub(crate) fn war_region_id_by_time(
+        &self,
+        index: i32,
+    ) -> Result<i32, FourNationWarRegionIndexBlock> {
+        if self.setups.is_empty() {
+            return Ok(0);
+        }
+        let setup_count = self.setups.len();
+        let index = usize::try_from(index).map_err(|_| FourNationWarRegionIndexBlock {
+            index,
+            setup_count,
+        })?;
+        self.setups
+            .get(index)
+            .map(|setup| setup.region_id)
+            .ok_or(FourNationWarRegionIndexBlock {
+                index: index as i32,
+                setup_count,
+            })
     }
     /// Сохраняет единственный внешний контракт exact `OneCountrySignUp`.
     pub(crate) const fn one_country_sign_up(country: i32) -> FourNationSignUpDisposition {
@@ -1007,7 +1041,7 @@ fn next_war_i32<'a>(
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::GetWarRegionIDByTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.h:71
@@ -1015,6 +1049,7 @@ fn next_war_i32<'a>(
 // ADDRESS: 00494200
 // PROTOTYPE: long __thiscall GetWarRegionIDByTime(long param_1)
 //
+// IMPLEMENTED_OWNER: `CFourNationWarSys::war_region_id_by_time` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
