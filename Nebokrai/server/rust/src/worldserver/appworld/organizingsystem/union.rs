@@ -321,8 +321,6 @@ const UNION_APPLICATION_CONFIRMATION_MESSAGE_TYPE: i32 = 0x7FE17;
 const MAX_UNION_MEMBER_COUNT: i32 = 50;
 const UNION_DEMISE_MEMBER_LIMIT: usize = 6;
 const UNION_DEMISE_COOLDOWN_MS: u32 = 10_800_000;
-const UNION_DEMISE_INFORMATION_CAPACITY: usize = 256;
-const UNION_DEMISE_WAR_LOG_CAPACITY: usize = 232;
 
 /// Узкая read-only граница controller-wide `IsFactionMaster`.
 pub(crate) trait UnionOperatorValidationContext {
@@ -2639,14 +2637,6 @@ impl CUnion {
             ],
         );
         let information = legacy_c_string_visible_bytes(&information);
-        if information.len() >= UNION_DEMISE_INFORMATION_CAPACITY {
-            return Err(UnionDemiseBlock::InformationWouldOverflow {
-                visible_length: information.len(),
-                capacity: UNION_DEMISE_INFORMATION_CAPACITY,
-                old_member_update,
-                new_member_update,
-            });
-        }
         let title = effects.world_string(b"WS0188");
         let member_information = self.send_info_to_all_members(
             information,
@@ -2673,16 +2663,6 @@ impl CUnion {
                 ],
             );
             let war_log = legacy_c_string_visible_bytes(&war_log).to_vec();
-            if war_log.len() >= UNION_DEMISE_WAR_LOG_CAPACITY {
-                return Err(UnionDemiseBlock::WarLogWouldOverflow {
-                    visible_length: war_log.len(),
-                    capacity: UNION_DEMISE_WAR_LOG_CAPACITY,
-                    old_member_update,
-                    new_member_update,
-                    member_information,
-                    player_refresh,
-                });
-            }
             effects.put_war_log(&war_log);
             Some(war_log)
         } else {

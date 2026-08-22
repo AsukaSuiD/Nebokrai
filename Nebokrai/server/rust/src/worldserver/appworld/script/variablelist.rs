@@ -35,9 +35,8 @@
 //! connection, получал `GetGame()->m_pRsGenVar`, вызывал
 //! `CRsGenVar::Save(this, connection)` и возвращал его `bool`. Rust заменяет
 //! singleton явными owner/connection аргументами и исключает `nullptr` через
-//! ссылки, но не меняет порядок, соединение либо результат. Условный
-//! `BLOCKED_MISSING_FACT` переполнения исходного SQL scratch-буфера проходит
-//! наружу отдельно и не маскируется придуманным `false`.
+//! ссылки, но не меняет порядок, соединение либо результат. Owned SQL buffer
+//! не переносит переполнение исходного scratch-буфера.
 //!
 //! Exact World serializer и Game decoder задают framing общего списка:
 //! `signed variable count + signed payload length + payload`. Каждая запись

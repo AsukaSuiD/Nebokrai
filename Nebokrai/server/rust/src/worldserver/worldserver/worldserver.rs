@@ -27,13 +27,12 @@
 //! GUI/FFI. Адрес следующего буфера `AddErrorLogText` `0x0058DED0` минус адрес
 //! буфера `AddLogText` `0x0057E4D0` точно задаёт вместимость 64000 байт.
 //!
-//! Старый `_vsprintf` не ограничивал этот буфер. Safe Rust возвращает локальный
-//! `BLOCKED_MISSING_FACT`, если строка с CRLF и NUL не помещается, уже после
-//! достигнутых rotation/time эффектов. Отдельный no-arguments вход сохраняет
-//! второе форматирование `ShowSaveInfo`: `%%` превращается в `%`, а любой иной
-//! specifier требовал отсутствующий vararg и остаётся заблокированным, а не
-//! получает придуманное UB-поведение. Обычный вход принимает результат
-//! call-site форматирования, сознательно заменяя variadic ABI на byte-slice.
+//! Owned output не переносит переполнение старого `_vsprintf`-буфера.
+//! Отдельный no-arguments вход сохраняет второе форматирование `ShowSaveInfo`:
+//! `%%` превращается в `%`, а любой иной specifier требовал отсутствующий
+//! vararg и остаётся заблокированным, а не получает придуманное UB-поведение.
+//! Обычный вход принимает результат call-site форматирования, сознательно
+//! заменяя variadic ABI на byte-slice.
 //!
 //! `RefeashInfoText` принимает один caller-owned snapshot вместо повторных
 //! `GetGame()` и прямых чтений process-global containers. Он обновляет
@@ -72,10 +71,9 @@ pub(crate) enum SaveLogTextDisposition {
     Flushed,
 }
 
-/// Неизвестный результат одного из двух исходных unbounded `_vsprintf`.
+/// Неизвестный результат исходного форматирования без varargs-значения.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AddLogTextBlock {
-    BufferOverflow { required_bytes_with_nul: usize },
     MissingNoArgumentValue { percent_offset: usize },
 }
 
@@ -449,16 +447,6 @@ impl WorldLogTextOwner {
         }
         .into_bytes();
         let required_bytes_with_nul = prefix.len() + message.len() + 2 + 1;
-        if required_bytes_with_nul > LEGACY_LOG_BUFFER_CAPACITY {
-            return AddLogTextDisposition::BlockedMissingFact {
-                rotation,
-                local_time,
-                block: AddLogTextBlock::BufferOverflow {
-                    required_bytes_with_nul,
-                },
-            };
-        }
-
         let mut bytes = Vec::with_capacity(required_bytes_with_nul - 1);
         bytes.extend_from_slice(&prefix);
         bytes.extend_from_slice(&message);

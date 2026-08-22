@@ -29,11 +29,8 @@
 //! апостроф в runtime-значении вызывает тот же SQL-синтаксис/эффект, а не
 //! незаметно исправляется параметризацией.
 //!
-//! Старый `_sprintf` писал batch в `char[1024]`. Вывод длиной до 1023 байт
-//! воспроизводится byte-exact; для большего вывода исходный результат является
-//! неизвестным UB. Безопасный Rust не назначает ему fail-closed поведение:
-//! возвращает локальный `BLOCKED_MISSING_FACT` с одним вопросом о достижимости
-//! и реакции оригинала, не выполняя отличающийся SQL. ANSI-байты после сборки
+//! Rust строит batch в owned buffer и не переносит переполнение старого
+//! `_sprintf(char[1024])`. ANSI-байты после сборки
 //! декодируются Windows-1251, как уже доказано для русской поставки, и
 //! отправляются закреплённым `tiberius`; `Vec`, stream consumption и Rust Drop
 //! заменяют `std::string`, ADO recordset/COM и compiler cleanup.
@@ -52,7 +49,6 @@ use crate::worldserver::appworld::script::variablelist::{
     CVariableList, VariableDatabaseLoadDisposition, VariableListSaveSource,
 };
 
-const LEGACY_SQL_BUFFER_CAPACITY: usize = 1024;
 const SELECT_PREFIX: &[u8] = b"SELECT * FROM CSL_GENVAR WHERE VarName = '";
 const SELECT_SUFFIX: &[u8] = b"'";
 const INSERT_PREFIX: &[u8] = b"INSERT INTO CSL_GENVAR(VarName, SValue,CValue) VALUES('";
@@ -64,29 +60,11 @@ const UPDATE_MIDDLE: &[u8] = b"' WHERE VarName = '";
 const UPDATE_SUFFIX: &[u8] = b"'";
 const LOAD_GENERAL_VARIABLES_SQL: &str = "SELECT * FROM CSL_GENVAR";
 
-/// Вид исходного SQL, для которого не доказано поведение buffer overflow.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum GenVarStatement {
-    Select,
-    Insert,
-    Update,
-}
-
-/// Локальная граница единственного ещё отсутствующего факта `CRsGenVar::Save`.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct GenVarSqlBufferBlock {
-    pub(crate) variable_index: usize,
-    pub(crate) statement: GenVarStatement,
-    /// Число байт batch вместе с завершающим NUL.
-    pub(crate) required_bytes: usize,
-}
-
-/// Доказанный bool-результат либо изолированная неизвестная UB-граница.
+/// Доказанный bool-результат.
 #[derive(Debug)]
 pub(crate) enum GenVarSaveOutcome {
     Saved,
     Failed,
-    BlockedMissingFact(GenVarSqlBufferBlock),
 }
 
 /// Bool-результат самостоятельного `CRsGenVar::Load` с уже применённым prefix.
@@ -253,14 +231,7 @@ impl RsGenVarOwner for TiberiusRsGenVar {
                 continue;
             }
 
-            let select = match build_sql(
-                variable_index,
-                GenVarStatement::Select,
-                &[SELECT_PREFIX, name, SELECT_SUFFIX],
-            ) {
-                Ok(sql) => sql,
-                Err(block) => return GenVarSaveOutcome::BlockedMissingFact(block),
-            };
+            let select = build_sql(&[SELECT_PREFIX, name, SELECT_SUFFIX]);
             let missing = match query_is_empty(active_transaction, select).await {
                 Ok(missing) => missing,
                 Err(error) => {
@@ -276,10 +247,7 @@ impl RsGenVarOwner for TiberiusRsGenVar {
             if missing {
                 let initial_value = visible_c_string(&row.initial_value);
                 let current_value = visible_c_string(&row.current_value);
-                let insert = match build_sql(
-                    variable_index,
-                    GenVarStatement::Insert,
-                    &[
+                let insert = build_sql(&[
                         INSERT_PREFIX,
                         name,
                         INSERT_MIDDLE_INITIAL,
@@ -287,11 +255,7 @@ impl RsGenVarOwner for TiberiusRsGenVar {
                         INSERT_MIDDLE_CURRENT,
                         current_value,
                         INSERT_SUFFIX,
-                    ],
-                ) {
-                    Ok(sql) => sql,
-                    Err(block) => return GenVarSaveOutcome::BlockedMissingFact(block),
-                };
+                    ]);
                 if let Err(error) = execute_batch(active_transaction, insert).await {
                     self.notices.push_back(RsGenVarNotice::SaveFailed {
                         variable_index,
@@ -302,20 +266,13 @@ impl RsGenVarOwner for TiberiusRsGenVar {
                 }
             } else {
                 let current_value = visible_c_string(&row.current_value);
-                let update = match build_sql(
-                    variable_index,
-                    GenVarStatement::Update,
-                    &[
+                let update = build_sql(&[
                         UPDATE_PREFIX,
                         current_value,
                         UPDATE_MIDDLE,
                         name,
                         UPDATE_SUFFIX,
-                    ],
-                ) {
-                    Ok(sql) => sql,
-                    Err(block) => return GenVarSaveOutcome::BlockedMissingFact(block),
-                };
+                    ]);
                 if let Err(error) = execute_batch(active_transaction, update).await {
                     self.notices.push_back(RsGenVarNotice::UpdateFailedIgnored {
                         variable_index,
@@ -356,30 +313,17 @@ fn visible_c_string(bytes: &[u8]) -> &[u8] {
         .map_or(bytes, |end| &bytes[..end])
 }
 
-fn build_sql(
-    variable_index: usize,
-    statement: GenVarStatement,
-    fragments: &[&[u8]],
-) -> Result<String, GenVarSqlBufferBlock> {
+fn build_sql(fragments: &[&[u8]]) -> String {
     let output_bytes = fragments
         .iter()
         .map(|fragment| fragment.len())
         .sum::<usize>();
-    let required_bytes = output_bytes.saturating_add(1);
-    if required_bytes > LEGACY_SQL_BUFFER_CAPACITY {
-        return Err(GenVarSqlBufferBlock {
-            variable_index,
-            statement,
-            required_bytes,
-        });
-    }
-
     let mut sql = Vec::with_capacity(output_bytes);
     for fragment in fragments {
         sql.extend_from_slice(fragment);
     }
     let (decoded, _, _) = WINDOWS_1251.decode(&sql);
-    Ok(decoded.into_owned())
+    decoded.into_owned()
 }
 
 async fn query_is_empty(

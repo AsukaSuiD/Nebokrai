@@ -198,7 +198,7 @@ use crate::worldserver::appworld::organizingsystem::organizing::{
     EPurviewOwnState, TagMemInfo, TagTimeValue, UnterminatedMemberField,
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::COrganizingParam;
-use crate::worldserver::worldserver::game::{CGame, WorldCheckPointBlock};
+use crate::worldserver::worldserver::game::CGame;
 
 const SAVE_FACTION_PROPERTY_SQL: &str = "IF EXISTS (SELECT TOP 1 ID FROM CSL_FACTION_BaseProperty WHERE ID = @P16 ORDER BY ID) BEGIN UPDATE TOP (1) CSL_FACTION_BaseProperty SET MasterID = @P1, Levels = @P2, Experience = @P3, OffenseVictorCounts = @P4, DefenceVictorCounts = @P5, VillageWarVictorCounts = @P6, MemberNums = @P7, UnionID = @P8, bPermit = @P9, lPro1 = @P10, lPro2 = @P11, DelRemainTime = @P12, country = @P13, GoodsWarCount = @P14, GoodsWarLastTime = @P15 WHERE ID = @P16; SELECT CAST(@@ROWCOUNT AS int) AS UpdatedRows END ELSE SELECT CAST(0 AS int) AS UpdatedRows";
 const SAVE_FACTION_ABILITY_SQL: &str = "IF EXISTS (SELECT TOP 1 FactionID FROM CSL_FACTION_Ability WHERE FactionID = @P1 ORDER BY FactionID) BEGIN UPDATE TOP (1) CSL_FACTION_Ability SET Pronounce = @P2, IconData = @P3, LastUploadIconDataTime = @P4 WHERE FactionID = @P1 END ELSE BEGIN INSERT INTO CSL_FACTION_Ability (FactionID, Pronounce, IconData, LastUploadIconDataTime) VALUES (@P1, @P2, @P3, @P4) END";
@@ -353,14 +353,12 @@ pub(crate) enum FactionMembersSaveOutcome {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FactionLeaveWordSaveBlock {
     UnterminatedContent(UnterminatedLeaveWordField),
-    CheckPointBuffer(WorldCheckPointBlock),
 }
 
 impl fmt::Display for FactionLeaveWordSaveBlock {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnterminatedContent(block) => block.fmt(formatter),
-            Self::CheckPointBuffer(block) => block.fmt(formatter),
         }
     }
 }
@@ -369,7 +367,6 @@ impl Error for FactionLeaveWordSaveBlock {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::UnterminatedContent(block) => Some(block),
-            Self::CheckPointBuffer(block) => Some(block),
         }
     }
 }
@@ -377,12 +374,6 @@ impl Error for FactionLeaveWordSaveBlock {
 impl From<UnterminatedLeaveWordField> for FactionLeaveWordSaveBlock {
     fn from(block: UnterminatedLeaveWordField) -> Self {
         Self::UnterminatedContent(block)
-    }
-}
-
-impl From<WorldCheckPointBlock> for FactionLeaveWordSaveBlock {
-    fn from(block: WorldCheckPointBlock) -> Self {
-        Self::CheckPointBuffer(block)
     }
 }
 
@@ -1710,7 +1701,7 @@ fn build_faction_leave_word_insert(
     leave_word: &TagLeaveWord,
 ) -> Result<String, FactionLeaveWordSaveBlock> {
     let content = leave_word.content_wire_bytes()?;
-    let escaped_content = CGame::check_point(&content[..content.len() - 1])?;
+    let escaped_content = CGame::check_point(&content[..content.len() - 1]);
     let (escaped_content, _, _) = WINDOWS_1251.decode(&escaped_content);
     let time = leave_word.time;
     let leave_word_time = format!(

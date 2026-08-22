@@ -67,9 +67,8 @@
 //! притворяются частью этого owner-а: `FactionWarStopContext` называет каждый
 //! их точный вызов и обязан выполнить его синхронно. Это сохраняет порядок и
 //! внешние эффекты без повторения virtual ABI или выдуманного formatter-а.
-//! Старый `_sprintf` писал в 10000-byte stack buffer; результат длиннее 9999
-//! байт безопасно останавливается локальным `BLOCKED_MISSING_FACT`, потому что
-//! наблюдаемая реакция исходного overflow не доказана.
+//! Форматированные notices хранятся в owned `Vec`, не перенося переполнение
+//! старых stack-buffer-ов `_sprintf`.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
@@ -153,7 +152,6 @@ pub(crate) enum FactionWarInitializationBlock {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum FactionWarStopBlock<ContextBlock> {
     Context(ContextBlock),
-    FormattedNoticeExceedsLegacyBuffer { len: usize },
 }
 
 impl<ContextBlock: fmt::Display> fmt::Display for FactionWarStopBlock<ContextBlock> {
@@ -162,10 +160,6 @@ impl<ContextBlock: fmt::Display> fmt::Display for FactionWarStopBlock<ContextBlo
             Self::Context(block) => {
                 write!(formatter, "контекст остановки войны заблокирован: {block}")
             }
-            Self::FormattedNoticeExceedsLegacyBuffer { len } => write!(
-                formatter,
-                "WS0234 занимает {len} байт при старой границе 9999 байт"
-            ),
         }
     }
 }
@@ -225,11 +219,6 @@ impl FactionWarDeclarationOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum FactionWarDeclarationBlock<ContextBlock> {
     Context(ContextBlock),
-    FormattedNoticeExceedsLegacyBuffer {
-        string_id: &'static [u8],
-        len: usize,
-        capacity: usize,
-    },
 }
 
 /// Узкая синхронная граница controller/player/string/transport owner-ов.
@@ -358,7 +347,6 @@ pub(crate) enum FactionWarPlayerDiedOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum FactionWarPlayerDiedBlock<ContextBlock> {
     Context(ContextBlock),
-    FormattedNoticeExceedsLegacyBuffer { len: usize },
 }
 
 /// Узкая граница concrete organizing/faction/string/transport owner-ов смерти.
@@ -622,13 +610,6 @@ impl CFactionWarSys {
                 b"WS0231",
                 &[FactionWarFormatArgument::Signed(war.money)],
             );
-            if first.len() > 255 {
-                return Err(FactionWarDeclarationBlock::FormattedNoticeExceedsLegacyBuffer {
-                    string_id: b"WS0231",
-                    len: first.len(),
-                    capacity: 256,
-                });
-            }
             let second = context.world_string(b"WS0121");
             context.send_player_info(player_id, &first, &second);
             return Ok(FactionWarDeclarationOutcome::InsufficientFunds {
@@ -668,13 +649,6 @@ impl CFactionWarSys {
                 FactionWarFormatArgument::Text(&target_names),
             ],
         );
-        if notice.len() > 9_999 {
-            return Err(FactionWarDeclarationBlock::FormattedNoticeExceedsLegacyBuffer {
-                string_id: b"WS0232",
-                len: notice.len(),
-                capacity: 10_000,
-            });
-        }
         context.send_orga_info_to_all(&notice, 0xFFFF_FE92, 0xFFFF_0000);
         context.put_war_log(&notice);
 
@@ -732,13 +706,6 @@ impl CFactionWarSys {
         }
 
         let notice = context.format_world_string(b"WS0234", &[&second_names, &first_names]);
-        if notice.len() > 9_999 {
-            // BLOCKED_MISSING_FACT: RVA 0x00065D10 использует `_sprintf` в
-            // 10000-byte buffer; достижимость и результат overflow неизвестны.
-            return Err(FactionWarStopBlock::FormattedNoticeExceedsLegacyBuffer {
-                len: notice.len(),
-            });
-        }
         context.send_orga_info_to_all(&notice, 0xFFFF_FE92, 0xFFFF_0000);
         context.put_war_log(&notice);
 
@@ -828,11 +795,6 @@ impl CFactionWarSys {
             .map_err(FactionWarPlayerDiedBlock::Context)?;
         let notice =
             context.format_world_string(b"WS0233", &[&victor_names, &defeated_names]);
-        if notice.len() > 9_999 {
-            return Err(FactionWarPlayerDiedBlock::FormattedNoticeExceedsLegacyBuffer {
-                len: notice.len(),
-            });
-        }
         context.send_orga_info_to_all(&notice, 0xFFFF_FE92, 0xFFFF_0000);
         context.put_war_log(&notice);
 

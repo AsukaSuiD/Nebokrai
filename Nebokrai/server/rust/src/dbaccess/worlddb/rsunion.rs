@@ -32,9 +32,8 @@
 //! `MasterID`; при EOF выполнял отдельный INSERT `ID,Name,MasterID`. Имя
 //! передавалось как неэкранированный ANSI `%s`, поэтому Rust сохраняет
 //! C-string prefix, одинарные кавычки и исходную SQL-parser семантику. Если
-//! INSERT вместе с NUL не помещается в старый `char[256]`, возвращается
-//! локальный `BLOCKED_MISSING_FACT`, а результат `_sprintf` overflow не
-//! придумывается. Tiberius `SELECT TOP 1`, `UPDATE TOP (1)` и INSERT заменяют
+//! Rust строит INSERT в owned buffer и не переносит переполнение старого
+//! `char[256]`. Tiberius `SELECT TOP 1`, `UPDATE TOP (1)` и INSERT заменяют
 //! только ADO recordset; affected rows исходно не проверялись.
 //!
 //! После base-row owner безусловно вызывает `SaveConfeMembers` на том же
@@ -105,7 +104,6 @@ const UNION_BASE_SELECT_SQL: &str = "SELECT TOP 1 ID FROM CSL_UNION_BaseProperty
 const UNION_BASE_UPDATE_SQL: &str =
     "UPDATE TOP (1) CSL_UNION_BaseProperty SET MasterID = @P1 WHERE ID = @P2";
 const UNION_MEMBER_INSERT_PREFIX: &[u8] = b"INSERT INTO CSL_UNION_Members (UnionID,FactionID,MemberLvl,Title,bControbute,\t\t\t\t\t\t PV_Disband,PV_Exit,PV_DubJobLvl,PV_ConMem,PV_FireOut,PV_Pronounce,PV_LeaveWord,\t\t\t\t\t\t PV_EditLeaveWord,PV_ObtainTax,PV_OperCityGate,PV_EndueROR)\t\t\t\t\t\t VALUES (";
-const UNION_BASE_INSERT_CAPACITY: usize = 256;
 const UNION_MEMBER_INSERT_CAPACITY: usize = 500;
 const LOAD_ALL_CONFEDERATIONS_SQL: &str = "SELECT * FROM CSL_UNION_BaseProperty";
 
@@ -158,30 +156,10 @@ impl<'union> UnionSaveSnapshot<'union> {
     }
 }
 
-/// Неизвестный результат переполнения base INSERT `char[256]`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct UnionBaseInsertBufferBlock {
-    pub(crate) required_with_nul: usize,
-    pub(crate) capacity: usize,
-}
-
-impl fmt::Display for UnionBaseInsertBufferBlock {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "union base INSERT требует {} байт при старой ёмкости {}",
-            self.required_with_nul, self.capacity
-        )
-    }
-}
-
-impl Error for UnionBaseInsertBufferBlock {}
-
-/// Безопасная граница старого null/overread/overflow пути union save.
+/// Безопасная граница старого null/overread пути union save.
 #[derive(Debug)]
 pub(crate) enum UnionSaveBlock {
     NullUnionPointer,
-    BaseInsertBuffer(UnionBaseInsertBufferBlock),
     MemberTitle(UnterminatedMemberField),
 }
 
@@ -190,7 +168,6 @@ impl fmt::Display for UnionSaveBlock {
         match self {
             Self::NullUnionPointer => formatter
                 .write_str("SaveConfederation разыменовывал null CUnion при живом соединении"),
-            Self::BaseInsertBuffer(block) => block.fmt(formatter),
             Self::MemberTitle(block) => block.fmt(formatter),
         }
     }
@@ -200,15 +177,8 @@ impl Error for UnionSaveBlock {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::NullUnionPointer => None,
-            Self::BaseInsertBuffer(block) => Some(block),
             Self::MemberTitle(block) => Some(block),
         }
-    }
-}
-
-impl From<UnionBaseInsertBufferBlock> for UnionSaveBlock {
-    fn from(block: UnionBaseInsertBufferBlock) -> Self {
-        Self::BaseInsertBuffer(block)
     }
 }
 
@@ -511,12 +481,7 @@ impl RsUnionOwner for TiberiusRsUnion {
                 return UnionSaveOutcome::ReturnedFalse;
             }
         } else {
-            let insert = match build_union_base_insert(snapshot) {
-                Ok(insert) => insert,
-                Err(block) => {
-                    return UnionSaveOutcome::BlockedMissingFact(block.into());
-                }
-            };
+            let insert = build_union_base_insert(snapshot);
             if let Err(error) = execute_union_statement(active_transaction, insert).await {
                 self.push_database_notice(RsUnionOperation::SaveConfederation, error);
                 return UnionSaveOutcome::ReturnedFalse;
@@ -780,9 +745,7 @@ fn copy_legacy_short_field<const CAPACITY: usize>(source: &[u8]) -> [u8; CAPACIT
     output
 }
 
-fn build_union_base_insert(
-    snapshot: &UnionSaveSnapshot<'_>,
-) -> Result<Vec<u8>, UnionBaseInsertBufferBlock> {
+fn build_union_base_insert(snapshot: &UnionSaveSnapshot<'_>) -> Vec<u8> {
     let name_end = snapshot
         .name
         .iter()
@@ -796,16 +759,7 @@ fn build_union_base_insert(
     sql.extend_from_slice(&snapshot.name[..name_end]);
     sql.extend_from_slice(format!("',{})", snapshot.master_id).as_bytes());
 
-    let required_with_nul = sql.len() + 1;
-    if required_with_nul > UNION_BASE_INSERT_CAPACITY {
-        // BLOCKED_MISSING_FACT: `_sprintf` писал в `char[256]`; результат
-        // переполнения и дальнейшего ExecuteCn не задан exact EXE.
-        return Err(UnionBaseInsertBufferBlock {
-            required_with_nul,
-            capacity: UNION_BASE_INSERT_CAPACITY,
-        });
-    }
-    Ok(sql)
+    sql
 }
 
 fn build_union_member_insert(

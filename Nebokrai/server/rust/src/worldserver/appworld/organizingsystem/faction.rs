@@ -187,8 +187,8 @@
 //! Owned-city wire сохраняет list-order: 32-битный count, затем для каждого
 //! узла signed city ID и NUL-terminated region name. Missing key и null
 //! `pRegion` дают пустую строку. Exact ASM подтверждает lookup по текущему city
-//! ID и локальный `char[256]`; переполнение `strcpy` заменено typed-границей,
-//! сохраняя уже дописанный prefix результата.
+//! ID и локальный `char[256]`; owned wire-buffer не переносит переполнение
+//! временного stack-buffer-а.
 //! Owned-city update `0x7FE13` повторяет тот же full snapshot для каждого
 //! готового member recipient после исходного предварительного, но не
 //! использованного построения. Оба объявленных delta-аргумента не читаются.
@@ -353,12 +353,10 @@
 //! различии копируются байты имени и один NUL; оставшийся хвост fixed field не
 //! очищается. Затем существующий `UpdateMemberInfoToClient` снимает local-time
 //! и выполняет ordered recipient-рассылку. Rust использует slice equality и
-//! bounded copy только там, где старые записи доказанно помещаются. Nullable
-//! `pRegion`, имя длиннее 255 bytes, отсутствующий NUL в member field и имя
-//! длиннее 63 bytes являются четырьмя локальными `BLOCKED_MISSING_FACT`:
-//! исходник соответственно разыменовывал null либо читал/писал за границей, а
-//! безопасная реализация не назначает этим UB-путям no-op, fail-closed или
-//! `unsafe`-результат.
+//! bounded copy только там, где меняется fixed member data. Nullable `pRegion`,
+//! отсутствующий NUL в member field и имя длиннее 63 bytes остаются локальными
+//! `BLOCKED_MISSING_FACT`: первый путь разыменовывал null, а два последних
+//! затрагивают fixed layout. Временный `char[256]` заменён owned slice.
 //!
 //! PDB связывает slots organizing-base `+0x13C/+0x140` с enter/exit-функциями
 //! этого owner-а; оба slot-а теперь замкнуты. Заменённые project-блоки удалены;
@@ -411,7 +409,7 @@
 //! `SendOrgaInfoToClient(WS0191, WS0119, game_server_id, 0xFFDAEDFE, 0)`.
 //! `WS0119` разрешается заново после каждой отправки. Exact ASM
 //! `0x004B8A20..0x004B8DB2` подтверждает ветвление и порядок side effects;
-//! старое переполнение `char[100]` строкой `WS0191` заменено typed-границей.
+//! owned notice не переносит старое переполнение `char[100]` строкой `WS0191`.
 //! `Pronounce` сначала проверяет property-флаг и право `PV_Pronounce`, затем
 //! обрезает переданную `std::string&` до глобального `0x800`, присваивает ID и
 //! время, копирует только C-string prefix текста, а имя заменяет лишь для
@@ -556,15 +554,15 @@
 //! разных requester/target ID, 256-байтовый `_sprintf` buffer и отсутствие
 //! отдельной purview-проверки. Vtable подтверждает `+0xD8 = IsMaster`, а не
 //! донорский `IsMember`. Локализация и player-owner остаются контекстом;
-//! нетерминированное имя и overflow заменены typed-границами после уже
-//! совершённых эффектов.
+//! нетерминированное имя остаётся typed-границей после уже совершённых
+//! эффектов; форматированный notice хранится без старого buffer-limit.
 //! `UploadIcon`, вопреки имени, не принимает icon bytes и не выполняет file I/O:
 //! аргумент `tagTime` не читается. Master-gate (`vtable +0xD8`) и property flag дают silent miss
 //! либо `WS0225/WS0119`; разрешённый interval `<1` лишь ставит dirty `8` и
 //! возвращает `true`, положительный interval отправляет `WS0226(minutes)` и
 //! возвращает `false`. Exact ASM `0x004B8F30..0x004B92ED` подтверждает
 //! 256-байтовый `_sprintf` buffer и отсутствие иных эффектов. Локализация
-//! остаётся тонким контекстом, overflow старого buffer-а — typed-границей.
+//! остаётся тонким контекстом, а owned notice не переносит overflow.
 //! `Disband` проверяет `CheckOperValidate(player, PV_Disband)`, отсутствие
 //! superior organizing, standard/village, city/attack и Goods War именно в
 //! этом порядке. War-отказы отправляют `WS0189/WS0190/ws0362` с `WS0121`, а
@@ -620,7 +618,6 @@ const FACTION_MEMBER_REMOVED_LOCAL_MESSAGE_TYPE: i32 = 0x60508;
 const FACTION_UPGRADE_CHARGE_MESSAGE_TYPE: i32 = 0x7FE1E;
 const APPLY_MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0A;
 const MAX_APPLY_PERSON_COUNT: u32 = 40;
-const APPLY_JOIN_NOTICE_CAPACITY: usize = 256;
 const PRONOUNCE_UPDATE_MESSAGE_TYPE: i32 = 0x7FE10;
 const LEAVE_WORD_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0F;
 const OTHER_FACTION_UPDATE_MESSAGE_TYPE: i32 = 0x7FE15;
@@ -628,8 +625,6 @@ const FACTION_TALK_MESSAGE_TYPE: i32 = 0x7FA02;
 const FACTION_TALK_CHANNEL: i32 = 400;
 const DELETE_ORGANIZING_MESSAGE_TYPE: i32 = 0x7FE03;
 const OWNED_CITY_UPDATE_MESSAGE_TYPE: i32 = 0x7FE13;
-const ENTER_REGION_BUFFER_CAPACITY: usize = 256;
-const ENEMY_WAR_LOG_BUFFER_CAPACITY: usize = 256;
 const LEAVE_WORD_NAME_CAPACITY: usize = 20;
 const LEAVE_WORD_CONTENT_CAPACITY: usize = 212;
 const LEAVE_WORD_CONTENT_LIMIT: usize = 210;
@@ -637,20 +632,8 @@ const LEAVE_WORD_LIMIT: usize = 60;
 const APPLY_PERSON_NAME_CAPACITY: usize = 20;
 const FACTION_MEMBER_NAME_CAPACITY: usize = 32;
 const FACTION_MEMBER_TEXT_CAPACITY: usize = 64;
-const FACTION_MEMBER_NOTICE_CAPACITY: usize = 260;
-const FACTION_DUB_NOTICE_CAPACITY: usize = 100;
-const FACTION_DUB_OLD_TITLE_CAPACITY: usize = 32;
-const FACTION_PURVIEW_NOTICE_CAPACITY: usize = 100;
-const FACTION_MAXIMUM_MEMBERS_NOTICE_CAPACITY: usize = 256;
-const FACTION_UPGRADE_NOTICE_CAPACITY: usize = 256;
-const FACTION_CONTRIBUTOR_NOTICE_CAPACITY: usize = 256;
-const FACTION_UPLOAD_ICON_NOTICE_CAPACITY: usize = 256;
-const FACTION_DEMISE_BLOCK_NOTICE_CAPACITY: usize = 256;
-const FACTION_DEMISE_NOTICE_CAPACITY: usize = 100;
 const PRONOUNCE_NAME_CAPACITY: usize = 20;
 const PRONOUNCE_CONTENT_CAPACITY: usize = 2048;
-const OTHER_FACTION_NAME_CAPACITY: usize = 20;
-const DELETE_ORGANIZING_INFO_CAPACITY: usize = 100;
 const PRONOUNCE_DATA_SIZE: usize = 0x828;
 const FACTION_BASE_PROPERTY_SIZE: usize = 0x38;
 
@@ -2351,7 +2334,6 @@ impl Error for MemberUpdateBuildError {}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MemberEnterBlockedReason {
     NullRegionPointer { region_id: i32 },
-    RegionNameExceedsLocalBuffer { region_id: i32, byte_len: usize },
     UnterminatedMemberRegion(UnterminatedMemberField),
     RegionNameExceedsMemberField { region_id: i32, byte_len: usize },
 }
@@ -2363,14 +2345,6 @@ impl fmt::Display for MemberEnterBlockedReason {
                 formatter,
                 "у tagRegion {} отсутствует исходный pRegion",
                 region_id
-            ),
-            Self::RegionNameExceedsLocalBuffer {
-                region_id,
-                byte_len,
-            } => write!(
-                formatter,
-                "имя региона {} длиной {} байт не помещается в старый char[256]",
-                region_id, byte_len
             ),
             Self::UnterminatedMemberRegion(field) => field.fmt(formatter),
             Self::RegionNameExceedsMemberField {
@@ -3309,7 +3283,6 @@ impl CFaction {
         output: &mut Vec<u8>,
     ) -> Result<bool, OwnedCitiesWireBuildError> {
         output.extend_from_slice(&(self.owned_cities.len() as u32).to_le_bytes());
-        let mut completed_cities = 0usize;
         for &region_id in &self.owned_cities {
             append_i32(output, region_id);
             let region_name = match game.region_name(region_id) {
@@ -3317,16 +3290,8 @@ impl CFaction {
                 | WorldRegionNameLookup::NullRegionPointer => &[][..],
                 WorldRegionNameLookup::Name(name) => name,
             };
-            if region_name.len() >= 256 {
-                return Err(OwnedCitiesWireBuildError {
-                    region_id,
-                    byte_len: region_name.len(),
-                    completed_cities,
-                });
-            }
             output.extend_from_slice(region_name);
             output.push(0);
-            completed_cities += 1;
         }
         Ok(true)
     }
@@ -3603,8 +3568,8 @@ impl CFaction {
         enemy_id: i32,
         string_id: &'static [u8],
         remaining_enemy_count: Option<u32>,
-        state_changed: bool,
-        changed_flag_set: bool,
+        _state_changed: bool,
+        _changed_flag_set: bool,
     ) -> Result<bool, FactionEnemyMutationBlock>
     where
         Context: FactionEnemyMutationContext,
@@ -3626,13 +3591,6 @@ impl CFaction {
             ));
         }
         let text = context.format_world_string(string_id, &arguments);
-        if text.len() >= ENEMY_WAR_LOG_BUFFER_CAPACITY {
-            return Err(FactionEnemyMutationBlock {
-                state_changed,
-                changed_flag_set,
-                formatted_len: text.len(),
-            });
-        }
         context.put_war_log(&text);
         Ok(true)
     }
@@ -4131,13 +4089,6 @@ impl CFaction {
         let formatted =
             context.format_world_string(b"WS0166", &[legacy_c_string_visible_bytes(&self.name)]);
         let formatted = legacy_c_string_visible_bytes(&formatted);
-        if formatted.len() >= APPLY_JOIN_NOTICE_CAPACITY {
-            return Err(FactionApplyForJoinBlock::SuccessNoticeWouldOverflow {
-                player_id,
-                formatted_len: formatted.len(),
-                application_inserted: true,
-            });
-        }
         let second_text = context.world_string(b"WS0119").unwrap_or_default();
         context.send_organizing_info(FactionMemberInfoRequest {
             recipient_player_id: player_id,
@@ -4219,13 +4170,6 @@ impl CFaction {
         let player_name = player_name_wire[..player_name_wire.len() - 1].to_vec();
         let notice = context.format_world_string(b"WS0187", &[&player_name]);
         let notice = legacy_c_string_visible_bytes(&notice);
-        if notice.len() >= FACTION_MEMBER_NOTICE_CAPACITY {
-            return Err(FactionExitBlock::NoticeWouldOverflow {
-                player_id,
-                formatted_len: notice.len(),
-                goods_war_notice_sent,
-            });
-        }
         let second_text = context.world_string(b"WS0188").unwrap_or_default();
         let member_information = self.send_info_to_all_members(
             notice,
@@ -4339,12 +4283,6 @@ impl CFaction {
         let target_name = target_name_wire[..target_name_wire.len() - 1].to_vec();
         let notice = context.format_world_string(b"WS0192", &[&target_name]);
         let notice = legacy_c_string_visible_bytes(&notice);
-        if notice.len() >= FACTION_MEMBER_NOTICE_CAPACITY {
-            return Err(FactionFireOutBlock::NoticeWouldOverflow {
-                target_id,
-                formatted_len: notice.len(),
-            });
-        }
         let second_text = context.world_string(b"WS0119").unwrap_or_default();
         let member_information = self.send_info_to_all_members(
             notice,
@@ -4502,13 +4440,6 @@ impl CFaction {
         let mut old_title = Vec::new();
 
         if target_title != new_title {
-            if target_title.len() >= FACTION_DUB_OLD_TITLE_CAPACITY {
-                return Err(FactionDubBlock::OldTitleWouldOverflow {
-                    target_id,
-                    visible_len: target_title.len(),
-                    progress,
-                });
-            }
             old_title.extend_from_slice(target_title);
             let target = self
                 .members
@@ -4541,13 +4472,6 @@ impl CFaction {
                 ],
             );
             let notice = legacy_c_string_visible_bytes(&notice);
-            if notice.len() >= FACTION_DUB_NOTICE_CAPACITY {
-                return Err(FactionDubBlock::NoticeWouldOverflow {
-                    notice: FactionDubNotice::Title,
-                    formatted_len: notice.len(),
-                    progress,
-                });
-            }
             let second_text = context.world_string(b"WS0119").unwrap_or_default();
             progress.title_information = Some(self.send_info_to_all_members(
                 notice,
@@ -4596,13 +4520,6 @@ impl CFaction {
                 ],
             );
             let notice = legacy_c_string_visible_bytes(&notice);
-            if notice.len() >= FACTION_DUB_NOTICE_CAPACITY {
-                return Err(FactionDubBlock::NoticeWouldOverflow {
-                    notice: FactionDubNotice::JobLevel,
-                    formatted_len: notice.len(),
-                    progress,
-                });
-            }
             let second_text = context.world_string(b"WS0119").unwrap_or_default();
             progress.job_level_information = Some(self.send_info_to_all_members(
                 notice,
@@ -4732,13 +4649,6 @@ impl CFaction {
 
         let notice = context.format_world_string_signed(b"WS0186", maximum_members);
         let notice = legacy_c_string_visible_bytes(&notice);
-        if notice.len() >= FACTION_MAXIMUM_MEMBERS_NOTICE_CAPACITY {
-            return Err(FactionMaximumMembersBlock::NoticeWouldOverflow {
-                maximum_members,
-                formatted_len: notice.len(),
-                property_changed: true,
-            });
-        }
         let second_text = context.world_string(b"WS0119").unwrap_or_default();
         Ok(FactionMaximumMembersUpdate::Updated(
             self.send_info_to_all_members(
@@ -5306,12 +5216,6 @@ impl CFaction {
         let string_id = faction_purview_notice_string_id(change, purview);
         let notice = context.format_world_string(string_id, &target_name);
         let notice = legacy_c_string_visible_bytes(&notice);
-        if notice.len() >= FACTION_PURVIEW_NOTICE_CAPACITY {
-            return Err(FactionPurviewChangeBlock::NoticeWouldOverflow {
-                formatted_len: notice.len(),
-                progress,
-            });
-        }
         let second_text = context.world_string(b"WS0119").unwrap_or_default();
         progress.member_information = Some(self.send_info_to_all_members(
             notice,
@@ -5417,13 +5321,6 @@ impl CFaction {
             let notice = context
                 .format_world_string(b"WS0167", &[legacy_c_string_visible_bytes(&self.name)]);
             let notice = legacy_c_string_visible_bytes(&notice);
-            ensure_do_join_string_fits::<Context::Block>(
-                FactionDoJoinStringField::DenialNotice,
-                notice.len(),
-                APPLY_JOIN_NOTICE_CAPACITY,
-                true,
-                false,
-            )?;
             let second_text = context.world_string(b"WS0119").unwrap_or_default();
             context.send_organizing_info(FactionMemberInfoRequest {
                 recipient_player_id: applicant_id,
@@ -5447,13 +5344,6 @@ impl CFaction {
         if self.members.len() as u32 as i32 >= maximum_members {
             let first_text = context.world_string(b"WS0168").unwrap_or_default();
             let first_text = legacy_c_string_visible_bytes(&first_text);
-            ensure_do_join_string_fits::<Context::Block>(
-                FactionDoJoinStringField::MemberLimitNotice,
-                first_text.len(),
-                APPLY_JOIN_NOTICE_CAPACITY,
-                true,
-                false,
-            )?;
             let second_text = context.world_string(b"WS0119").unwrap_or_default();
             context.send_organizing_info(FactionMemberInfoRequest {
                 recipient_player_id: manager_id,
@@ -5558,13 +5448,6 @@ impl CFaction {
 
         let joined_notice = context.format_world_string(b"WS0170", &[&member_name]);
         let joined_notice = legacy_c_string_visible_bytes(&joined_notice);
-        ensure_do_join_string_fits::<Context::Block>(
-            FactionDoJoinStringField::MemberJoinedNotice,
-            joined_notice.len(),
-            APPLY_JOIN_NOTICE_CAPACITY,
-            true,
-            false,
-        )?;
         let joined_second_text = context.world_string(b"WS0119").unwrap_or_default();
         let member_information = self.send_info_to_all_members(
             joined_notice,
@@ -5576,13 +5459,6 @@ impl CFaction {
         let applicant_notice =
             context.format_world_string(b"WS0171", &[legacy_c_string_visible_bytes(&self.name)]);
         let applicant_notice = legacy_c_string_visible_bytes(&applicant_notice);
-        ensure_do_join_string_fits::<Context::Block>(
-            FactionDoJoinStringField::ApplicantJoinedNotice,
-            applicant_notice.len(),
-            APPLY_JOIN_NOTICE_CAPACITY,
-            true,
-            false,
-        )?;
         let applicant_second_text = context.world_string(b"WS0119").unwrap_or_default();
         context.send_organizing_info(FactionMemberInfoRequest {
             recipient_player_id: applicant_id,
@@ -5942,11 +5818,6 @@ impl CFaction {
 
         let notice = context.format_upload_icon_interval(b"WS0226", interval_minutes);
         let notice = legacy_c_string_visible_bytes(&notice);
-        if notice.len() >= FACTION_UPLOAD_ICON_NOTICE_CAPACITY {
-            return Err(FactionUploadIconBlock::NoticeWouldOverflow {
-                formatted_len: notice.len(),
-            });
-        }
         let second_text = context.world_string(b"WS0119").unwrap_or_default();
         context.send_organizing_info(FactionMemberInfoRequest {
             recipient_player_id: player_id,
@@ -6140,7 +6011,7 @@ impl CFaction {
         let required_level = parameters.create_faction_player_level();
         if i32::from(new_player.get_level()) < required_level {
             let notice = context.format_demise_signed(b"WS0215", required_level);
-            let notice = bounded_demise_notice(&notice, FACTION_DEMISE_BLOCK_NOTICE_CAPACITY)
+            let notice = bounded_demise_notice(&notice)
                 .map_err(|formatted_len| FactionDemiseBlock::NoticeWouldOverflow {
                     notice: FactionDemiseNotice::RequiredLevel,
                     formatted_len,
@@ -6166,7 +6037,7 @@ impl CFaction {
             .ok_or(FactionDemiseBlock::PermitDemiseUnknown)?;
         if !permit_demise {
             let notice = context.world_string(b"WS0216").unwrap_or_default();
-            let notice = bounded_demise_notice(&notice, FACTION_DEMISE_BLOCK_NOTICE_CAPACITY)
+            let notice = bounded_demise_notice(&notice)
                 .map_err(|formatted_len| FactionDemiseBlock::NoticeWouldOverflow {
                     notice: FactionDemiseNotice::DemiseForbidden,
                     formatted_len,
@@ -6192,7 +6063,7 @@ impl CFaction {
             .ok_or(FactionDemiseBlock::MissingBaseProperty)?;
         if context.country_blocks_demise(country, old_master_id) {
             let notice = context.format_demise_signed(b"WS0217", required_level);
-            let notice = bounded_demise_notice(&notice, FACTION_DEMISE_BLOCK_NOTICE_CAPACITY)
+            let notice = bounded_demise_notice(&notice)
                 .map_err(|formatted_len| FactionDemiseBlock::NoticeWouldOverflow {
                     notice: FactionDemiseNotice::CountryKingBlocked,
                     formatted_len,
@@ -6342,7 +6213,7 @@ impl CFaction {
             &old_master_name,
             &new_master_name,
         );
-        let notice = match bounded_demise_notice(&notice, FACTION_DEMISE_NOTICE_CAPACITY) {
+        let notice = match bounded_demise_notice(&notice) {
             Ok(notice) => notice,
             Err(formatted_len) => {
                 return Err(FactionDemiseBlock::NoticeWouldOverflow {
@@ -6603,13 +6474,6 @@ impl CFaction {
         operator: EOperator,
     ) -> Result<Vec<FactionOtherInfoDelivery>, FactionOtherInfoBuildError> {
         let name_wire = legacy_c_string_wire_bytes(other_faction_name);
-        let visible_name_len = name_wire.len() - 1;
-        if visible_name_len >= OTHER_FACTION_NAME_CAPACITY {
-            return Err(FactionOtherInfoBuildError {
-                visible_name_len,
-            });
-        }
-
         let mut deliveries = Vec::new();
         for &recipient_player_id in self.members.keys() {
             let player = game.online_player_by_id(recipient_player_id as u32);
@@ -6695,11 +6559,6 @@ impl CFaction {
 
         let first_text = context.world_string(b"WS0191").unwrap_or_default();
         let first_text = legacy_c_string_visible_bytes(&first_text);
-        if first_text.len() >= DELETE_ORGANIZING_INFO_CAPACITY {
-            return Err(FactionDeleteOrganizingBuildError {
-                localized_info_len: first_text.len(),
-            });
-        }
         let first_text = first_text.to_vec();
 
         let mut deliveries = Vec::new();
@@ -6971,12 +6830,6 @@ impl CFaction {
             &target_name_wire[..target_name_wire.len() - 1],
         );
         let notice = legacy_c_string_visible_bytes(&notice);
-        if notice.len() >= FACTION_CONTRIBUTOR_NOTICE_CAPACITY {
-            return Err(FactionContributorBlock::NoticeWouldOverflow {
-                formatted_len: notice.len(),
-                progress,
-            });
-        }
         let second_text = context.world_string(b"WS0119").unwrap_or_default();
         progress.member_information = Some(self.send_info_to_all_members_with_color(
             notice,
@@ -7580,18 +7433,6 @@ impl CFaction {
             WorldRegionNameLookup::Name(name) => name,
         };
 
-        if region_name.len() >= ENTER_REGION_BUFFER_CAPACITY {
-            // BLOCKED_MISSING_FACT: старый strcpy по `0x004C0AB0..0x004C0ABC`
-            // переполнял бы локальный char[256]. Safe Rust не назначает этому
-            // пути новый результат и не воспроизводит запись через unsafe.
-            return MemberEnterOutcome::Blocked(
-                MemberEnterBlockedReason::RegionNameExceedsLocalBuffer {
-                    region_id,
-                    byte_len: region_name.len(),
-                },
-            );
-        }
-
         let member_region_matches = {
             let member = self
                 .members
@@ -7862,11 +7703,8 @@ fn empty_faction_demise_progress() -> FactionDemiseProgress {
     }
 }
 
-fn bounded_demise_notice(value: &[u8], capacity: usize) -> Result<Vec<u8>, usize> {
+fn bounded_demise_notice(value: &[u8]) -> Result<Vec<u8>, usize> {
     let visible = legacy_c_string_visible_bytes(value);
-    if visible.len() >= capacity {
-        return Err(visible.len());
-    }
     Ok(visible.to_vec())
 }
 
@@ -7937,9 +7775,6 @@ where
         arguments,
     );
     let formatted = legacy_c_string_visible_bytes(&formatted);
-    if formatted.len() >= FACTION_UPGRADE_NOTICE_CAPACITY {
-        return Err(formatted.len());
-    }
     Ok(formatted.to_vec())
 }
 

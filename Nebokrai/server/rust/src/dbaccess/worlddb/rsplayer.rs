@@ -306,9 +306,8 @@
 //! `SaveGoodsFiled` доказанно возвращает `true` после traversal, даже если
 //! отдельный listener/`SaveGoods` вернул `false`; внешний `CreatePlayer` также
 //! считает такую goods-стадию успешной. Rust не «исправляет» эту ветку.
-//! Вложенные `BLOCKED_MISSING_FACT` base SQL buffer и goods listener-а
-//! передаются наружу отдельно, потому что неизвестный UB/OS-результат нельзя
-//! назначить исходным `false` либо `true`. Полный snapshot сохраняет обязанность
+//! Rust не переносит переполнение base SQL stack-buffer; вложенная безопасная
+//! граница goods listener-а передаётся наружу отдельно. Полный snapshot сохраняет обязанность
 //! получить base/ability/goods ID из одного `CPlayer`, не объявляя его Rust-
 //! layout завершённым.
 //!
@@ -530,7 +529,6 @@ use crate::worldserver::appworld::player::{CPlayer, PlayerLoadDataOwner};
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
 use crate::worldserver::worldserver::playerranks::{CPlayerRanks, PlayerRankAddBlock};
 
-const LEGACY_SQL_BUFFER_CAPACITY: usize = 1024;
 const CREATE_PLAYER_BASE_PREFIX: &[u8] = b"INSERT INTO CSL_PLAYER_BASE (id,name,Account,levels,occupation,sex,Country,HEAD,\t\t\t\t\t HELM,BODY,GLOV,BOOT,WEAPON,BACK,\t\t\t\t\t HEADGEAR,FROCK,WING,MANTEAU,FAIRY,\t\t\t\t\t HelmLevel,BodyLevel,GlovLevel,BootLevel,WeaponLevel,BackLevel,\t\t\t\t\t HEADGEARLevel,FROCKLevel,WINGLevel,MANTEAULevel,FAIRYLevel,\t\t\t\t\t Region) \t\t\t\t VALUES (";
 const SAVE_PLAYER_BASE_SQL: &str = "IF EXISTS (SELECT TOP 1 id FROM CSL_PLAYER_BASE WHERE id = @P30) BEGIN UPDATE TOP (1) CSL_PLAYER_BASE SET [Name] = @P1, [Levels] = @P2, [Occupation] = @P3, [Sex] = @P4, [Country] = @P5, [HEAD] = @P6, [HELM] = @P7, [BODY] = @P8, [GLOV] = @P9, [BOOT] = @P10, [WEAPON] = @P11, [BACK] = @P12, [HEADGEAR] = @P13, [FROCK] = @P14, [WING] = @P15, [MANTEAU] = @P16, [FAIRY] = @P17, [HelmLevel] = @P18, [BodyLevel] = @P19, [GlovLevel] = @P20, [BootLevel] = @P21, [WeaponLevel] = @P22, [BackLevel] = @P23, [HEADGEARLevel] = @P24, [FROCKLevel] = @P25, [WINGLevel] = @P26, [MANTEAULevel] = @P27, [FAIRYLevel] = @P28, [Region] = @P29 WHERE id = @P30; SELECT CAST(@@ROWCOUNT AS int) AS UpdatedRows END ELSE SELECT CAST(0 AS int) AS UpdatedRows";
 const VALUE_GROUP_BREAK: &[u8] = b",\t\t\t\t\t ";
@@ -981,19 +979,11 @@ pub(crate) enum PlayerBaseLoadFailure {
     },
 }
 
-/// Неразрешённая граница старого `_sprintf(local_418[1024], ...)`.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct PlayerBaseSqlBufferBlock {
-    /// Число байт готового batch вместе с завершающим NUL.
-    pub(crate) required_bytes: usize,
-}
-
-/// Доказанный bool `CreatePlayerBase` либо локальная UB-граница.
+/// Доказанный bool `CreatePlayerBase`.
 #[derive(Debug)]
 pub(crate) enum PlayerBaseCreateOutcome {
     Created,
     Failed,
-    BlockedMissingFact(PlayerBaseSqlBufferBlock),
 }
 
 /// Полный caller-owned view трёх стадий `CRsPlayer::CreatePlayer`.
@@ -1009,7 +999,6 @@ pub(crate) struct PlayerCreationSnapshot<'player, 'goods_snapshot> {
 /// Неразрешённая граница одной из трёх create-стадий.
 #[derive(Debug)]
 pub(crate) enum PlayerCreateBlock {
-    BaseSqlBuffer(PlayerBaseSqlBufferBlock),
     Goods(GoodsTraversalBlock),
 }
 
@@ -3924,11 +3913,6 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         {
             PlayerBaseCreateOutcome::Created => {}
             PlayerBaseCreateOutcome::Failed => return PlayerCreateOutcome::ReturnedFalse,
-            PlayerBaseCreateOutcome::BlockedMissingFact(block) => {
-                return PlayerCreateOutcome::BlockedMissingFact(PlayerCreateBlock::BaseSqlBuffer(
-                    block,
-                ));
-            }
         }
         if !self
             .create_player_abilities(&snapshot.abilities, &mut *active_transaction, jjc_owner)
@@ -4002,10 +3986,7 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         snapshot: &PlayerCreationBaseSnapshot,
         active_transaction: &mut WorldTdsClient,
     ) -> PlayerBaseCreateOutcome {
-        let sql = match build_create_player_base_sql(snapshot) {
-            Ok(sql) => sql,
-            Err(block) => return PlayerBaseCreateOutcome::BlockedMissingFact(block),
-        };
+        let sql = build_create_player_base_sql(snapshot);
 
         match execute_batch(active_transaction, sql).await {
             Ok(()) => PlayerBaseCreateOutcome::Created,
@@ -4701,9 +4682,7 @@ fn infallible(never: Infallible) {
     match never {}
 }
 
-fn build_create_player_base_sql(
-    snapshot: &PlayerCreationBaseSnapshot,
-) -> Result<String, PlayerBaseSqlBufferBlock> {
+fn build_create_player_base_sql(snapshot: &PlayerCreationBaseSnapshot) -> String {
     let name = visible_c_string(&snapshot.name);
     let account = visible_c_string(&snapshot.account);
     let mut sql = Vec::with_capacity(CREATE_PLAYER_BASE_PREFIX.len() + name.len() + account.len());
@@ -4735,12 +4714,8 @@ fn build_create_player_base_sql(
     append_i32(&mut sql, snapshot.region_id);
     sql.push(b')');
 
-    let required_bytes = sql.len().saturating_add(1);
-    if required_bytes > LEGACY_SQL_BUFFER_CAPACITY {
-        return Err(PlayerBaseSqlBufferBlock { required_bytes });
-    }
     let (decoded, _, _) = WINDOWS_1251.decode(&sql);
-    Ok(decoded.into_owned())
+    decoded.into_owned()
 }
 
 fn visible_c_string(bytes: &[u8]) -> &[u8] {

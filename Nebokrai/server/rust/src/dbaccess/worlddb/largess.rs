@@ -56,10 +56,8 @@
 //! этой поставки, а literal SQL сознательно сохраняет исходный parser-эффект
 //! одинарных кавычек вместо параметризации.
 //!
-//! Оба INSERT собирались небезопасным `_sprintf` в `char[256]`. Если точные
-//! C-string prefixes вместе с NUL требуют больше 256 байт, результат старого
-//! stack-overflow неизвестен; локальный `BLOCKED_MISSING_FACT` не назначает ему
-//! `false`, truncation либо продолжение. Текущий local time заведомо помещается
+//! Оба INSERT собирались небезопасным `_sprintf` в `char[256]`; owned SQL
+//! buffer не переносит его переполнение. Текущий local time заведомо помещается
 //! в `char[32]`, а оба UPDATE — в `char[256]`. `Vec`, `BTreeMap`, Rust `Drop`
 //! и structured notices заменяют только `std::string`, MSVC tree, COM lifetime
 //! и log-механику; CD-key в `Debug` намеренно скрыт. `LargessWriteLog` хранит
@@ -114,7 +112,6 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
 };
 use crate::worldserver::appworld::player::{CPlayer, PlayerCodecError};
 
-const LEGACY_SQL_BUFFER_SIZE: usize = 256;
 const ERROR_GOODS_ID: &[u8] = b"error goodsID!";
 const LARGESS_DEPOT_EXTENSION_FIRST_POSITION: u32 = 0x60;
 const LARGESS_DEPOT_EXTENSION_STRIDE: u32 = 0x0D;
@@ -386,18 +383,11 @@ impl fmt::Debug for SensitiveCdKey {
     }
 }
 
-/// Один конкретный неизвестный результат старого `_sprintf` за `char[256]`.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct LargessSqlBufferBlock {
-    pub(crate) required_bytes_with_nul: usize,
-}
-
-/// Наблюдаемый bool либо локальная небезопасная граница старого owner-а.
+/// Наблюдаемый bool старого owner-а.
 #[derive(Debug)]
 pub(crate) enum SaveLoadDetailsOutcome {
     ReturnedTrue,
     ReturnedFalse,
-    BlockedMissingFact(LargessSqlBufferBlock),
 }
 
 /// Структурированные эквиваленты трёх исходных log-ветвей.
@@ -1330,15 +1320,7 @@ async fn save_matching_entry(
     }
 
     let save_time = format_local_time();
-    let insert_sql = match build_insert_sql(&entry, player_id, &save_time) {
-        Ok(sql) => sql,
-        Err(block) => {
-            // BLOCKED_MISSING_FACT: что наблюдалось после `_sprintf` за
-            // `char[256]` в WorldServer RVA 0x000E8DC3/0x000E95DF?
-            // До overflow map не изменялась и SQL ещё не выполнялся.
-            return SaveLoadDetailsOutcome::BlockedMissingFact(block);
-        }
-    };
+    let insert_sql = build_insert_sql(&entry, player_id, &save_time);
 
     if let Err(error) = execute_optional(connection, &insert_sql).await {
         notices.push_back(LargessNotice::AddPresentDetail {
@@ -1391,11 +1373,7 @@ async fn execute_optional(
     Ok(())
 }
 
-fn build_insert_sql(
-    entry: &LargessSnapshot,
-    player_id: i32,
-    save_time: &str,
-) -> Result<String, LargessSqlBufferBlock> {
+fn build_insert_sql(entry: &LargessSnapshot, player_id: i32, save_time: &str) -> String {
     let mut sql = format!(
         "INSERT INTO LoadDetails(SendID,PlayerId,ObtainedNum,LoadTime,Failedreason,SaveTime) VALUES({},{},{},'",
         entry.send_id, player_id, entry.obtained_num
@@ -1408,15 +1386,8 @@ fn build_insert_sql(
     sql.extend_from_slice(save_time.as_bytes());
     sql.extend_from_slice(b"')");
 
-    let required_bytes_with_nul = sql.len() + 1;
-    if required_bytes_with_nul > LEGACY_SQL_BUFFER_SIZE {
-        return Err(LargessSqlBufferBlock {
-            required_bytes_with_nul,
-        });
-    }
-
     let (decoded, _, _) = WINDOWS_1251.decode(&sql);
-    Ok(decoded.into_owned())
+    decoded.into_owned()
 }
 
 fn c_string_prefix(bytes: &[u8]) -> &[u8] {

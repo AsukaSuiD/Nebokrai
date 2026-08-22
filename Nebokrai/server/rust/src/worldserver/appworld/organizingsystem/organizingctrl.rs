@@ -4412,14 +4412,6 @@ impl COrganizingCtrl {
             if country_index >= start_index && country_index < end_index {
                 append_i32(&mut page.payload, faction.faction_id());
                 let name = legacy_c_string_prefix(faction.name());
-                let required_bytes_with_nul = name.len().saturating_add(1);
-                if required_bytes_with_nul > 256 {
-                    return Err(FactionListPageBlock::NameWouldOverflow {
-                        page,
-                        map_key,
-                        required_bytes_with_nul,
-                    });
-                }
                 page.payload.extend_from_slice(name);
                 page.payload.push(0);
                 page.entries.push(FactionListEntry {
@@ -4440,14 +4432,7 @@ impl COrganizingCtrl {
         &self,
         requested_name: &[u8],
     ) -> Result<Option<OrganizingNameMatch>, OrganizingNameLookupBlock> {
-        const LEGACY_NAME_CAPACITY: usize = 260;
-
         let requested_name = legacy_c_string_prefix(requested_name);
-        if requested_name.len() >= LEGACY_NAME_CAPACITY {
-            return Err(OrganizingNameLookupBlock::RequestedNameWouldOverflow {
-                visible_len: requested_name.len(),
-            });
-        }
 
         for (&map_key, faction) in &self.factions {
             let Some(faction) = faction.as_deref() else {
@@ -4457,13 +4442,6 @@ impl COrganizingCtrl {
                 });
             };
             let owner_name = legacy_c_string_prefix(faction.name());
-            if owner_name.len() >= LEGACY_NAME_CAPACITY {
-                return Err(OrganizingNameLookupBlock::OwnerNameWouldOverflow {
-                    kind: OrganizingNameKind::Faction,
-                    map_key,
-                    visible_len: owner_name.len(),
-                });
-            }
             if owner_name.eq_ignore_ascii_case(requested_name) {
                 return Ok(Some(OrganizingNameMatch {
                     kind: OrganizingNameKind::Faction,
@@ -4481,13 +4459,6 @@ impl COrganizingCtrl {
                 });
             };
             let owner_name = legacy_c_string_prefix(union.name());
-            if owner_name.len() >= LEGACY_NAME_CAPACITY {
-                return Err(OrganizingNameLookupBlock::OwnerNameWouldOverflow {
-                    kind: OrganizingNameKind::Union,
-                    map_key,
-                    visible_len: owner_name.len(),
-                });
-            }
             if owner_name.eq_ignore_ascii_case(requested_name) {
                 return Ok(Some(OrganizingNameMatch {
                     kind: OrganizingNameKind::Union,
@@ -4913,14 +4884,6 @@ impl COrganizingCtrl {
                 })?;
             message.base_mut().add_byte(country);
             let name = legacy_c_string_prefix(faction.name());
-            if name.len() >= 256 {
-                return Err(AllFactionInfoClientBlock::NameWouldOverflow {
-                    map_key,
-                    faction_id,
-                    visible_len: name.len(),
-                    completed_factions,
-                });
-            }
             message.base_mut().add(name);
             message.base_mut().add_byte(0);
             completed_factions += 1;
@@ -6194,12 +6157,6 @@ impl COrganizingCtrl {
             }
             WorldRegionNameLookup::Name(name) => {
                 let name = legacy_c_string_prefix(name);
-                if name.len() >= 0x100 {
-                    return Err(AttackCityEndBlock::RegionNameWouldOverflow {
-                        report,
-                        visible_len: name.len(),
-                    });
-                }
                 name.to_vec()
             }
         };
@@ -6268,13 +6225,6 @@ impl COrganizingCtrl {
                     ],
                 );
                 let text = legacy_c_string_prefix(&text);
-                if text.len() >= 0x400 {
-                    return Err(AttackCityEndBlock::NoticeWouldOverflow {
-                        report,
-                        string_id: b"WS0261",
-                        formatted_len: text.len(),
-                    });
-                }
                 report.broadcast = Some(effects.broadcast_city_war_result(text));
             }
 
@@ -6315,13 +6265,6 @@ impl COrganizingCtrl {
                 ],
             );
             let text = legacy_c_string_prefix(&text);
-            if text.len() >= 0x400 {
-                return Err(AttackCityEndBlock::NoticeWouldOverflow {
-                    report,
-                    string_id: b"WS0262",
-                    formatted_len: text.len(),
-                });
-            }
             report.broadcast = Some(effects.broadcast_city_war_result(text));
         }
         Ok(report)
@@ -8909,7 +8852,7 @@ fn legacy_tick_ms() -> u32 {
 // PROTOTYPE: void __thiscall AddFactionListToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, long param_2, uchar param_3)
 //
 // Реализовано выше как `faction_list_page`; exact pagination/wire/map-order
-// сохранены, старый `char[256]` overflow локализован typed block-ом.
+// сохранены, старый `char[256]` заменён owned wire-buffer-ом.
 //
 
 // ============================================================================

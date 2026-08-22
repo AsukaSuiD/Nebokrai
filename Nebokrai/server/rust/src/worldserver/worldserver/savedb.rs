@@ -488,11 +488,9 @@
 //! Мониторинговая C-string строится byte-exact с Windows-1251 server name,
 //! шестью полями `SYSTEMTIME`, signed `%d`-проекциями elapsed/log count и
 //! отправляется как `0x1FE08` с типом `-2`, server ID и битами `dwNumber`.
-//! Старый `_sprintf` писал в `char[128]`: если результат вместе с NUL не
-//! помещается, Rust сохраняет уже выполненные time/global изменения, но
-//! возвращает локальный `BLOCKED_MISSING_FACT`, не назначая `SendErrLog` и
-//! последующий `g_bIsSavingData = false`. При допустимой длине send-result
-//! исходно игнорируется, после чего флаг обязательно сбрасывается.
+//! Rust строит monitoring C-string в owned buffer и не переносит переполнение
+//! старого `_sprintf(char[128])`. Send-result исходно игнорируется, после чего
+//! флаг обязательно сбрасывается.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -506,9 +504,7 @@ use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 use crate::dbaccess::worlddb::dbcountry::{CountrySaveSnapshot, DbCountryOwner};
 use crate::dbaccess::worlddb::dbgoods::DbGoodsOwner;
-use crate::dbaccess::worlddb::largess::{
-    LargessOwner, LargessSqlBufferBlock, SaveLoadDetailsOutcome,
-};
+use crate::dbaccess::worlddb::largess::{LargessOwner, SaveLoadDetailsOutcome};
 use crate::dbaccess::worlddb::rsenemyfactions::{
     EnemyFactionNullEntryBlock, EnemyFactionSaveSnapshot, EnemyFactionsSaveOutcome,
     RsEnemyFactionsOwner,
@@ -517,7 +513,7 @@ use crate::dbaccess::worlddb::rsfaction::{
     FactionSaveBlock, FactionSaveOutcome, FactionSaveProjectionBlock, FactionSaveSnapshot,
     RsFactionOwner,
 };
-use crate::dbaccess::worlddb::rsgenvar::{GenVarSaveOutcome, GenVarSqlBufferBlock, RsGenVarOwner};
+use crate::dbaccess::worlddb::rsgenvar::{GenVarSaveOutcome, RsGenVarOwner};
 use crate::dbaccess::worlddb::rsgodsbattle::{
     GodsBattleFactionXydSnapshot, GodsBattleNpcFactionSnapshot, GodsBattleSaveOperation,
     RsGodsBattleOwner,
@@ -538,7 +534,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingC
 use crate::worldserver::appworld::player::{CPlayer, PlayerDbProjectionBlock};
 use crate::worldserver::appworld::script::variablelist::{VariableListSaveSource, save_var_data};
 use crate::worldserver::worldserver::game::{
-    CGame, DeletionPlayerSnapshot, ShowSaveInfoBufferBlock, ShowSaveInfoDisposition,
+    CGame, DeletionPlayerSnapshot, ShowSaveInfoDisposition,
     WorldDbDataSaveSession, show_save_info,
 };
 use crate::worldserver::worldserver::honorranks::CHonorRanks;
@@ -550,7 +546,6 @@ use crate::worldserver::worldserver::worldserver::{
 const BEGIN_TRANSACTION_SQL: &str = "BEGIN TRAN";
 const COMMIT_TRANSACTION_SQL: &str = "COMMIT";
 const ROLLBACK_TRANSACTION_SQL: &str = "ROLLBACK";
-const LEGACY_SAVE_REPORT_BUFFER_SIZE: usize = 128;
 
 fn legacy_snapshot_count(phase: &'static str, count: usize) -> Result<u32, WorldSnapshotSaveBlock> {
     u32::try_from(count)
@@ -588,8 +583,6 @@ impl fmt::Debug for SaveDataLogEvent {
 /// Локальная неизвестность конкретного достигнутого logger-owner-а.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SaveDataLogPublishBlock {
-    /// Первый `_vsprintf(char[256], ...)` `ShowSaveInfo` ещё не достиг logger-а.
-    ShowSaveInfoBuffer(ShowSaveInfoBufferBlock),
     /// `AddLogText` уже выполнил rotation-check и снял собственное local time.
     AddLogText {
         target: SaveDataLogTarget,
@@ -687,11 +680,6 @@ where
                 ShowSaveInfoDisposition::Suppressed => SaveDataLogPublishDisposition::Suppressed,
                 ShowSaveInfoDisposition::Logged(disposition) => {
                     map_add_log_text_disposition(event.target, disposition)
-                }
-                ShowSaveInfoDisposition::BlockedMissingFact(block) => {
-                    SaveDataLogPublishDisposition::BlockedMissingFact(
-                        SaveDataLogPublishBlock::ShowSaveInfoBuffer(block),
-                    )
                 }
             },
         }
@@ -828,8 +816,6 @@ pub(crate) enum GeneralVariableSaveDisposition {
     Rollback {
         error: Option<tiberius::error::Error>,
     },
-    /// Не назначает неизвестному `_sprintf` UB ни DB-команду, ни log-ветку.
-    BlockedMissingFact(GenVarSqlBufferBlock),
 }
 
 /// Полный доказанный результат VarData-участка `DoSaveData`.
@@ -1410,13 +1396,6 @@ pub(crate) enum LoadDetailsEntrySaveReport {
 pub(crate) enum LoadDetailsSaveDisposition {
     /// Все entries завершены; `mDBPlayer` остаётся byte-for-byte неизменной.
     CompleteRetainPlayerMap,
-    /// Не назначает UB ни transaction finish, ни next, ни судьбу map.
-    BlockedMissingFact {
-        map_key: u32,
-        /// `Some` возможен только в new-way после уже выполненного begin.
-        begin_error: Option<tiberius::error::Error>,
-        block: LargessSqlBufferBlock,
-    },
 }
 
 /// Полный доказанный LoadDetails normal-path либо локальная UB-граница.
@@ -1727,12 +1706,6 @@ pub(crate) struct SaveDataLifecycleState {
     pub(crate) is_saving_data: bool,
 }
 
-/// Неизвестный результат переполнения исходного `_sprintf(char[128], ...)`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SaveDataReportBufferBlock {
-    pub(crate) required_bytes_with_nul: usize,
-}
-
 /// Аргументы доказанного `SendErrLog(-2, server, world, text)`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct SaveDataMonitoringReport {
@@ -1749,8 +1722,6 @@ pub(crate) struct SaveDataMonitoringReport {
 pub(crate) enum SaveDataFinalDisposition {
     /// `SendErrLog` вызван, его send-result проигнорирован и save-флаг сброшен.
     Complete(SaveDataMonitoringReport),
-    /// Send и сброс флага не назначены неизвестному stack-overflow.
-    BlockedMissingFact(SaveDataReportBufferBlock),
 }
 
 /// Полный доказанный результат общего close/report tail `DoSaveData`.
@@ -2039,9 +2010,6 @@ where
                 .await
                 .err(),
         },
-        GenVarSaveOutcome::BlockedMissingFact(block) => {
-            GeneralVariableSaveDisposition::BlockedMissingFact(block)
-        }
     };
     match &disposition {
         GeneralVariableSaveDisposition::Commit { .. } => {
@@ -2050,7 +2018,6 @@ where
         GeneralVariableSaveDisposition::Rollback { .. } => {
             log_events.push(add_log_event(b"--Save VarDate FAILED!".to_vec()));
         }
-        GeneralVariableSaveDisposition::BlockedMissingFact(_) => {}
     }
 
     GeneralVariableSaveReport {
@@ -3033,10 +3000,6 @@ where
     }
 
     let variables_report = save_general_variables(variables, variable_database, connection).await;
-    let variables_blocked = matches!(
-        &variables_report.disposition,
-        GeneralVariableSaveDisposition::BlockedMissingFact(_)
-    );
     let variables_log_block = variables_report
         .log_events
         .get(1)
@@ -3052,15 +3015,6 @@ where
             },
         };
     }
-    if variables_blocked {
-        return DoSaveDataThroughUnionsReport {
-            phases,
-            disposition: DoSaveDataThroughUnionsDisposition::BlockedPhase(
-                DoSaveDataPhase::GeneralVariables,
-            ),
-        };
-    }
-
     if let Err(block) = publish_save_data_log(
         log_sink,
         &add_log_event(b"Save New Charactor Start...".to_vec()),
@@ -3950,18 +3904,6 @@ pub(crate) async fn save_load_details<L: LargessOwner>(
                         save_returned: false,
                     });
                 }
-                SaveLoadDetailsOutcome::BlockedMissingFact(block) => {
-                    return LoadDetailsSaveReport {
-                        way,
-                        entries,
-                        log_events,
-                        disposition: LoadDetailsSaveDisposition::BlockedMissingFact {
-                            map_key,
-                            begin_error: None,
-                            block,
-                        },
-                    };
-                }
             }
             continue;
         }
@@ -3979,18 +3921,6 @@ pub(crate) async fn save_load_details<L: LargessOwner>(
         {
             SaveLoadDetailsOutcome::ReturnedTrue => true,
             SaveLoadDetailsOutcome::ReturnedFalse => false,
-            SaveLoadDetailsOutcome::BlockedMissingFact(block) => {
-                return LoadDetailsSaveReport {
-                    way,
-                    entries,
-                    log_events,
-                    disposition: LoadDetailsSaveDisposition::BlockedMissingFact {
-                        map_key,
-                        begin_error,
-                        block,
-                    },
-                };
-            }
         };
         let commit_error = run_transaction_command(connection, COMMIT_TRANSACTION_SQL)
             .await
@@ -4650,19 +4580,7 @@ where
         connection,
     )
     .await;
-    let load_details_blocked = matches!(
-        &load_details.phase.disposition,
-        LoadDetailsSaveDisposition::BlockedMissingFact { .. }
-    );
     phases.load_details = Some(load_details);
-    if load_details_blocked {
-        return DoSaveDataAfterUnionsReport {
-            phases,
-            disposition: DoSaveDataAfterUnionsDisposition::BlockedPhase(
-                DoSaveDataPhase::LoadDetails,
-            ),
-        };
-    }
 
     if let Err(block) =
         publish_save_data_log(log_sink, &add_log_event(b"Save Charactor Data...".to_vec()))
@@ -4897,27 +4815,23 @@ where
 
     let monitoring_snapshot = get_monitoring();
 
-    let disposition = match legacy_save_monitoring_text(
+    let text = legacy_save_monitoring_text(
         &monitoring_snapshot.server_name,
         local_time,
         start.elapsed_ms,
         monitoring_snapshot.write_log_count,
-    ) {
-        Ok(text) => {
-            let monitoring = SaveDataMonitoringReport {
-                message_type: -2,
-                server_id: monitoring_snapshot.server_id,
-                world_number_bits: monitoring_snapshot.world_number_bits,
-                text,
-            };
-            // Исходный SendErrLog возвращал void: попытка send всегда ведёт к
-            // сбросу флага, независимо от результата внутреннего CMessage::Send.
-            send_monitoring(&monitoring);
-            state.is_saving_data = false;
-            SaveDataFinalDisposition::Complete(monitoring)
-        }
-        Err(block) => SaveDataFinalDisposition::BlockedMissingFact(block),
+    );
+    let monitoring = SaveDataMonitoringReport {
+        message_type: -2,
+        server_id: monitoring_snapshot.server_id,
+        world_number_bits: monitoring_snapshot.world_number_bits,
+        text,
     };
+    // Исходный SendErrLog возвращал void: попытка send всегда ведёт к
+    // сбросу флага, независимо от результата внутреннего CMessage::Send.
+    send_monitoring(&monitoring);
+    state.is_saving_data = false;
+    let disposition = SaveDataFinalDisposition::Complete(monitoring);
 
     SaveDataFinalReport {
         connection_finish: start.connection_finish,
@@ -5131,7 +5045,7 @@ fn legacy_save_monitoring_text(
     local_time: SaveDataLocalTime,
     elapsed_ms: u32,
     write_log_count: u32,
-) -> Result<Vec<u8>, SaveDataReportBufferBlock> {
+) -> Vec<u8> {
     let server_name = server_name
         .split(|byte| *byte == 0)
         .next()
@@ -5152,14 +5066,7 @@ fn legacy_save_monitoring_text(
     text.extend_from_slice(server_name);
     text.extend_from_slice(suffix.as_bytes());
 
-    let required_bytes_with_nul = text.len().saturating_add(1);
-    if required_bytes_with_nul > LEGACY_SAVE_REPORT_BUFFER_SIZE {
-        return Err(SaveDataReportBufferBlock {
-            required_bytes_with_nul,
-        });
-    }
-
-    Ok(text)
+    text
 }
 
 async fn run_transaction_command(

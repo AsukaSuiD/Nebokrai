@@ -505,8 +505,8 @@
 //! time для последовательных `_strdate`/`_strtime`, строит byte-exact
 //! `0x1FE06 + local IPv4 word + world number + C-string` и посылает его
 //! LoginServer с `prioritized=false`. Nullable/empty profile остаётся no-op;
-//! отсутствующие обязательные server/setup owners и переполнение старого
-//! `char[128]` являются локальными `BLOCKED_MISSING_FACT`. MSVC SEH/security-
+//! отсутствующие обязательные server/setup owners остаются явными границами.
+//! Owned `Vec` устраняет переполнение старого `char[128]`; MSVC SEH/security-
 //! cookie bookkeeping удалён как compiler noise без Linux-наблюдаемости.
 //!
 //! Следующий MainLoop maintenance-сегмент от `g_bStatPlayerRanks` до
@@ -763,11 +763,9 @@
 //! `IsNameExistInMapPlayer` и `GetCreationPlayerByName` на каждой map-записи
 //! независимо копируют input и inherited player name в два `char[260]`, затем
 //! применяют этот custom lowercase и сравнивают C-строки byte-exact. Максимум
-//! 259 bytes плюс NUL безопасен; при 260 и более exact linked `_snprintf`
-//! `0x0051B932..0x0051B945` оставлял buffer без terminator, а следующий
-//! `ToStrlwr` читал за стеком. Достижимость и реакция такого пути не доказаны,
-//! поэтому Rust возвращает локальный
-//! `BLOCKED_MISSING_FACT`, не назначая старому UB совпадение либо отказ.
+//! Rust-owned копия сохраняет сравнение для любой представимой длины и не
+//! переносит дефект `_snprintf(char[260])`, при котором отсутствующий NUL
+//! заставлял следующий `ToStrlwr` читать за stack-buffer.
 //!
 //! Первый lookup возвращает `true` при первом lower-case совпадении независимо
 //! от operational list-ов. Второй после совпадения имени линейно требует тот же
@@ -887,11 +885,10 @@
 //! `false` он не форматирует аргументы и не касается log-owner-а. При `true`
 //! первый `_vsprintf` материализует ANSI C-string в `char[256]`, после чего
 //! передаёт её как format без varargs в `AddLogText`. Rust принимает уже
-//! отформатированный call-site payload, проверяет точную первую вместимость и
-//! делегирует второе форматирование готовому `WorldLogTextOwner`. Переполнение
-//! первого stack-buffer остаётся локальным `BLOCKED_MISSING_FACT` до любого
-//! log/tick эффекта; неизвестный `%` второго форматирования блокируется уже у
-//! `AddLogText` после его доказанных rotation/time эффектов.
+//! отформатированный call-site payload в owned slice и делегирует второе
+//! форматирование готовому `WorldLogTextOwner`, не перенося переполнение
+//! первого stack-buffer. Неизвестный `%` второго форматирования блокируется
+//! уже у `AddLogText` после его доказанных rotation/time эффектов.
 //! Предшествующая ручная collect-player-data ветвь теперь отдельно очищает
 //! `g_bSendCollectPlayerDataMsgNow`, строит пустой `0x7F808` и ровно один раз
 //! вызывает готовый `CMessage::SendAll`. Nullable server-owner сохраняет
@@ -1164,11 +1161,9 @@
 //! `0x00409CBB` возвращает адрес этого уже заканчивающего lifetime stack-
 //! буфера; `this` функция не читает. Достигнутый caller
 //! `0x004FADCB..0x004FADEB` копировал байты в свой SQL-buffer без промежуточного
-//! вызова. Rust меняет только форму API и
-//! возвращает owned `Vec<u8>`, сохраняя точные escaped bytes. При длине
-//! результата `>= 256` linked MSVC `_snprintf` не ставил NUL, после чего caller
-//! читал за stack-buffer; это локальный `BLOCKED_MISSING_FACT`, а не основание
-//! для truncation, `unsafe` либо нового fail-closed результата.
+//! вызова. Rust меняет только форму API и возвращает owned `Vec<u8>`, сохраняя
+//! точные escaped bytes без старого dangling stack-pointer и 256-байтового
+//! лимита.
 //!
 //! Write-log producer `0x6020D` хранит в `CGame` FIFO структурированных
 //! `IncrementLog` DB-команд вместо готовых SQL literals. Это техническая
@@ -1754,8 +1749,6 @@ pub(crate) struct WorldClientInitialization {
 pub(crate) enum WorldClientInitializationError {
     /// Setup-чтение не назначило поле, которое исходник затем читал.
     MissingSetupField(&'static str),
-    /// `char[64]` старого `CClient::Connect` был бы переполнен.
-    LoginAddressTooLongReactionUnknown { length: usize },
     /// ANSI hostname нельзя без доказательства преобразовать в Linux resolver.
     LoginAddressEncodingUnsupported,
     /// `inet_addr/gethostbyname` не дали пригодный IPv4 endpoint.
@@ -1772,10 +1765,6 @@ impl fmt::Display for WorldClientInitializationError {
             Self::MissingSetupField(field) => {
                 write!(formatter, "World setup не назначил поле {field}")
             }
-            Self::LoginAddressTooLongReactionUnknown { length } => write!(
-                formatter,
-                "LoginServer-адрес длиной {length} bytes выходит за старый char[64]"
-            ),
             Self::LoginAddressEncodingUnsupported => formatter.write_str(
                 "кодировка LoginServer-адреса не поддерживается безопасным Linux resolver",
             ),
@@ -1795,9 +1784,7 @@ impl Error for WorldClientInitializationError {
         match self {
             Self::Bind(error) => Some(error),
             Self::Connect(error) => Some(error),
-            Self::MissingSetupField(_)
-            | Self::LoginAddressTooLongReactionUnknown { .. }
-            | Self::LoginAddressEncodingUnsupported
+            Self::MissingSetupField(_) | Self::LoginAddressEncodingUnsupported
             | Self::LoginAddressResolution => None,
         }
     }
@@ -5092,10 +5079,9 @@ pub(crate) enum WorldReloadFlagHalf {
     High,
 }
 
-/// Конкретная safe-граница `reload_conf_log`, где исходник уходил в UB.
+/// Safe-граница `reload_conf_log` обязательных runtime-owner-ов.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldReloadConfLogBlock {
-    MessageOutsideLegacyStackBuffer { required_bytes_with_nul: usize },
     MissingNetworkServerOwner,
     MissingWorldNumber,
 }
@@ -5640,8 +5626,6 @@ impl Error for WorldProcessMessageError {
 pub(crate) enum WorldLoginReconnectError {
     /// Setup-чтение не назначило поле, которое исходник затем читал.
     MissingSetupField(&'static str),
-    /// `char[64]` старого `CClient::Connect` был бы переполнен.
-    LoginAddressTooLongReactionUnknown { length: usize },
     /// ANSI hostname нельзя без доказательства преобразовать в Linux resolver.
     LoginAddressEncodingUnsupported,
     /// `inet_addr/gethostbyname` не дали пригодный IPv4 endpoint.
@@ -5660,10 +5644,6 @@ impl fmt::Display for WorldLoginReconnectError {
             Self::MissingSetupField(field) => {
                 write!(formatter, "World setup не назначил поле {field}")
             }
-            Self::LoginAddressTooLongReactionUnknown { length } => write!(
-                formatter,
-                "LoginServer-адрес длиной {length} bytes выходит за старый char[64]"
-            ),
             Self::LoginAddressEncodingUnsupported => formatter.write_str(
                 "кодировка LoginServer-адреса не поддерживается безопасным Linux resolver",
             ),
@@ -5689,9 +5669,7 @@ impl Error for WorldLoginReconnectError {
         match self {
             Self::Bind(error) => Some(error),
             Self::Connect(error) => Some(error),
-            Self::MissingSetupField(_)
-            | Self::LoginAddressTooLongReactionUnknown { .. }
-            | Self::LoginAddressEncodingUnsupported
+            Self::MissingSetupField(_) | Self::LoginAddressEncodingUnsupported
             | Self::LoginAddressResolution
             | Self::MissingNetworkServerOwner => None,
         }
@@ -7068,12 +7046,12 @@ impl WorldDbDataSaveSession<'_> {
     }
 }
 
-/// Безопасная граница двух исходных `char[260]` перед custom lowercase.
+/// Safe Rust не воспроизводит переполнение двух исходных `char[260]`.
+///
+/// Тип остаётся в составных результатах caller-ов, но после замены stack-copy
+/// на owned `Vec` не имеет возможных значений.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldPlayerNameLookupError {
-    PlayerNameTooLongForLegacyBuffer { player_id: u32, length: usize },
-    RequestedNameTooLongForLegacyBuffer { length: usize },
-}
+pub(crate) enum WorldPlayerNameLookupError {}
 
 /// Exact terminal CPlayer::ChangeName branch до однобайтового ответа GS.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -7134,25 +7112,6 @@ pub(crate) enum WorldMapPlayerAppendOutcome {
         incoming: Box<CPlayer>,
     },
 }
-
-/// Безопасная граница старого 256-байтового результата `CGame::CheckPoint`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldCheckPointBlock {
-    pub(crate) input_length: usize,
-    pub(crate) escaped_length: usize,
-}
-
-impl fmt::Display for WorldCheckPointBlock {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "CheckPoint расширяет {} входных байт до {}, поэтому старый char[256] остаётся без NUL",
-            self.input_length, self.escaped_length
-        )
-    }
-}
-
-impl Error for WorldCheckPointBlock {}
 
 /// Точный payload двух `AddLogText` внутри `AppendCreationPlayer`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -10616,21 +10575,10 @@ impl CGame {
     ///
     /// Вход уже является доказанным видимым C-string prefix; отсутствие NUL в
     /// конкретном fixed field проверяет его владелец до этого вызова.
-    pub(crate) fn check_point(input: &[u8]) -> Result<Vec<u8>, WorldCheckPointBlock> {
+    pub(crate) fn check_point(input: &[u8]) -> Vec<u8> {
         let escaped_length = input
             .len()
             .saturating_add(input.iter().filter(|byte| **byte == b'\'').count());
-        if escaped_length >= 256 {
-            // WorldServer RVA 0x00009A90, exact 0x00409C5B/0x00409CBB:
-            // `__snprintf(local, 0x100, "%s", escaped); return local;`.
-            // При >=256 байтах NUL отсутствовал, а caller читал за уже мёртвым
-            // stack-buffer; результат этого пути не назначается по догадке.
-            return Err(WorldCheckPointBlock {
-                input_length: input.len(),
-                escaped_length,
-            });
-        }
-
         let mut escaped = Vec::with_capacity(escaped_length);
         for byte in input {
             escaped.push(*byte);
@@ -10638,7 +10586,7 @@ impl CGame {
                 escaped.push(*byte);
             }
         }
-        Ok(escaped)
+        escaped
     }
 
     /// Позиционно читает `setup.ini`, а при ошибке открытия — `setup.dat`.
@@ -16433,18 +16381,10 @@ impl CGame {
         &self,
         name: &[u8],
     ) -> Result<bool, WorldPlayerNameLookupError> {
-        for (&player_id, player) in &self.players {
+        for player in self.players.values() {
             // 0x0040520D lower-case-ит player-buffer раньше requested-buffer.
-            let player_name =
-                copy_name_for_legacy_lowercase(player.get_name()).map_err(|length| {
-                    WorldPlayerNameLookupError::PlayerNameTooLongForLegacyBuffer {
-                        player_id,
-                        length,
-                    }
-                })?;
-            let requested_name = copy_name_for_legacy_lowercase(name).map_err(|length| {
-                WorldPlayerNameLookupError::RequestedNameTooLongForLegacyBuffer { length }
-            })?;
+            let player_name = copy_name_for_legacy_lowercase(player.get_name());
+            let requested_name = copy_name_for_legacy_lowercase(name);
             if player_name == requested_name {
                 return Ok(true);
             }
@@ -16459,16 +16399,8 @@ impl CGame {
     ) -> Result<Option<&CPlayer>, WorldPlayerNameLookupError> {
         for (&player_id, player) in &self.players {
             // 0x0040540A сохраняет обратный порядок двух ToStrlwr-вызовов.
-            let requested_name = copy_name_for_legacy_lowercase(name).map_err(|length| {
-                WorldPlayerNameLookupError::RequestedNameTooLongForLegacyBuffer { length }
-            })?;
-            let player_name =
-                copy_name_for_legacy_lowercase(player.get_name()).map_err(|length| {
-                    WorldPlayerNameLookupError::PlayerNameTooLongForLegacyBuffer {
-                        player_id,
-                        length,
-                    }
-                })?;
+            let requested_name = copy_name_for_legacy_lowercase(name);
+            let player_name = copy_name_for_legacy_lowercase(player.get_name());
             if player_name == requested_name && self.creation_players.contains(&(player_id as i32))
             {
                 return Ok(Some(player.as_ref()));
@@ -16482,17 +16414,10 @@ impl CGame {
         &self,
         name: &[u8],
     ) -> Result<bool, WorldPlayerNameLookupError> {
-        let requested_name = copy_name_for_legacy_lowercase(name).map_err(|length| {
-            WorldPlayerNameLookupError::RequestedNameTooLongForLegacyBuffer { length }
-        })?;
+        let requested_name = copy_name_for_legacy_lowercase(name);
         let db_data = self.db_data.lock();
         for player in &db_data.creation_players {
-            let player_name = copy_name_for_legacy_lowercase(player.get_name()).map_err(
-                |length| WorldPlayerNameLookupError::PlayerNameTooLongForLegacyBuffer {
-                    player_id: player.get_id() as u32,
-                    length,
-                },
-            )?;
+            let player_name = copy_name_for_legacy_lowercase(player.get_name());
             if player_name == requested_name {
                 return Ok(true);
             }
@@ -16505,17 +16430,10 @@ impl CGame {
         &self,
         name: &[u8],
     ) -> Result<bool, WorldPlayerNameLookupError> {
-        let requested_name = copy_name_for_legacy_lowercase(name).map_err(|length| {
-            WorldPlayerNameLookupError::RequestedNameTooLongForLegacyBuffer { length }
-        })?;
+        let requested_name = copy_name_for_legacy_lowercase(name);
         let db_data = self.db_data.lock();
-        for (&player_id, player) in &db_data.players {
-            let player_name = copy_name_for_legacy_lowercase(player.get_name()).map_err(
-                |length| WorldPlayerNameLookupError::PlayerNameTooLongForLegacyBuffer {
-                    player_id,
-                    length,
-                },
-            )?;
+        for player in db_data.players.values() {
+            let player_name = copy_name_for_legacy_lowercase(player.get_name());
             if player_name == requested_name {
                 return Ok(true);
             }
@@ -17479,7 +17397,6 @@ fn classify_game_init_for_caller<ContextBlock>(
         | WorldGameInitBlockReason::PlayerRanksStat(_)
         | WorldGameInitBlockReason::NetworkClient(
             WorldClientInitializationError::MissingSetupField(_)
-            | WorldClientInitializationError::LoginAddressTooLongReactionUnknown { .. }
             | WorldClientInitializationError::LoginAddressEncodingUnsupported,
         )
         | WorldGameInitBlockReason::NetworkServer(
@@ -21871,15 +21788,6 @@ where
     text.extend_from_slice(profile);
     text.push(b'.');
 
-    let required_bytes_with_nul = text.len() + 1;
-    if required_bytes_with_nul > 128 {
-        // BLOCKED_MISSING_FACT: RVA 0x00002FD0 писал `_sprintf` в `char[128]`.
-        // Реакция переполнения stack-buffer неизвестна и не имитируется.
-        return Err(WorldReloadConfLogBlock::MessageOutsideLegacyStackBuffer {
-            required_bytes_with_nul,
-        });
-    }
-
     let net_server = game
         .net_server
         .as_ref()
@@ -22129,7 +22037,6 @@ pub(crate) fn legacy_tick_ms() -> u32 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LoginEndpointError {
-    TooLongReactionUnknown { length: usize },
     EncodingUnsupported,
     Resolution,
 }
@@ -22137,9 +22044,6 @@ enum LoginEndpointError {
 impl From<LoginEndpointError> for WorldClientInitializationError {
     fn from(error: LoginEndpointError) -> Self {
         match error {
-            LoginEndpointError::TooLongReactionUnknown { length } => {
-                Self::LoginAddressTooLongReactionUnknown { length }
-            }
             LoginEndpointError::EncodingUnsupported => Self::LoginAddressEncodingUnsupported,
             LoginEndpointError::Resolution => Self::LoginAddressResolution,
         }
@@ -22149,9 +22053,6 @@ impl From<LoginEndpointError> for WorldClientInitializationError {
 impl From<LoginEndpointError> for WorldLoginReconnectError {
     fn from(error: LoginEndpointError) -> Self {
         match error {
-            LoginEndpointError::TooLongReactionUnknown { length } => {
-                Self::LoginAddressTooLongReactionUnknown { length }
-            }
             LoginEndpointError::EncodingUnsupported => Self::LoginAddressEncodingUnsupported,
             LoginEndpointError::Resolution => Self::LoginAddressResolution,
         }
@@ -22160,11 +22061,6 @@ impl From<LoginEndpointError> for WorldLoginReconnectError {
 
 fn resolve_login_endpoint(raw_host: &[u8], port: u32) -> Result<SocketAddrV4, LoginEndpointError> {
     let host = legacy_c_string_prefix(raw_host);
-    if host.len() > 63 {
-        // BLOCKED_MISSING_FACT: World CClient::Connect RVA 0x000293E0 копировал
-        // строку без проверки в `char local_44[64]`; stack overflow не имитируем.
-        return Err(LoginEndpointError::TooLongReactionUnknown { length: host.len() });
-    }
     let host = std::str::from_utf8(host).map_err(|_| LoginEndpointError::EncodingUnsupported)?;
     (host, port as u16)
         .to_socket_addrs()
@@ -22195,18 +22091,11 @@ fn normalize_script_path(path: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// Неизвестный результат первого `_vsprintf(char[256], ...)` в `ShowSaveInfo`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ShowSaveInfoBufferBlock {
-    pub(crate) required_bytes_with_nul: usize,
-}
-
 /// Достигнутый результат условной публикации `ShowSaveInfo`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ShowSaveInfoDisposition {
     Suppressed,
     Logged(AddLogTextDisposition),
-    BlockedMissingFact(ShowSaveInfoBufferBlock),
 }
 
 /// Выполняет exact gate и два последовательных formatting-владельца.
@@ -22232,15 +22121,7 @@ where
         return ShowSaveInfoDisposition::Suppressed;
     }
 
-    const LEGACY_SHOW_SAVE_INFO_CAPACITY: usize = 256;
     let formatted_message = legacy_c_string_prefix(formatted_message);
-    let required_bytes_with_nul = formatted_message.len() + 1;
-    if required_bytes_with_nul > LEGACY_SHOW_SAVE_INFO_CAPACITY {
-        return ShowSaveInfoDisposition::BlockedMissingFact(ShowSaveInfoBufferBlock {
-            required_bytes_with_nul,
-        });
-    }
-
     ShowSaveInfoDisposition::Logged(log.add_log_text_no_arguments(
         formatted_message,
         save_info_time_ms,
@@ -22270,20 +22151,11 @@ fn format_legacy_percent_s(template: &[u8], argument: &[u8]) -> Vec<u8> {
     formatted
 }
 
-fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
-    const LEGACY_BUFFER_CAPACITY: usize = 0x104;
-
+fn copy_name_for_legacy_lowercase(value: &[u8]) -> Vec<u8> {
     let value = legacy_c_string_prefix(value);
-    if value.len() >= LEGACY_BUFFER_CAPACITY {
-        // BLOCKED_MISSING_FACT: exact `_snprintf(char[260], 260, "%s", ...)`
-        // по 0x0051B932..0x0051B945 не дописывал NUL при исчерпанном count,
-        // после чего `ToStrlwr` читал за стеком. Не назначаем неизвестному UB
-        // ни совпадение, ни отказ.
-        return Err(value.len());
-    }
     let mut copy = value.to_vec();
     CGame::to_strlwr(&mut copy);
-    Ok(copy)
+    copy
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer

@@ -5438,13 +5438,6 @@ impl VillageWarApplicationContext for WorldVillageWarApplicationContext<'_, '_, 
             .collect::<Vec<_>>();
         let formatted = (self.callbacks.format_world_string)(string_id, &arguments);
         let formatted = legacy_c_string_prefix(&formatted);
-        if formatted.len() >= 500 {
-            return Err(
-                OrganizingVillageWarApplicationBlock::NoticeWouldOverflow {
-                    visible_len: formatted.len(),
-                },
-            );
-        }
         Ok(formatted.to_vec())
     }
 
@@ -5857,20 +5850,10 @@ impl AttackCityApplicationContext
 }
 
 fn bounded_city_war_notice(
-    string_id: &'static [u8],
+    _string_id: &'static [u8],
     notice: Vec<u8>,
 ) -> Result<Vec<u8>, OrganizingCityWarApplicationBlock> {
-    const CAPACITY: usize = 0x400;
     let notice = legacy_c_string_prefix(&notice);
-    if notice.len() >= CAPACITY {
-        return Err(
-            OrganizingCityWarApplicationBlock::NoticeWouldOverflow {
-                string_id,
-                visible_len: notice.len(),
-                capacity: CAPACITY,
-            },
-        );
-    }
     Ok(notice.to_vec())
 }
 
@@ -6448,14 +6431,6 @@ impl AttackCityWarResultContext
             .collect::<Vec<_>>();
         let formatted = (self.callbacks.format_world_string)(string_id, &arguments);
         let formatted = legacy_c_string_prefix(&formatted);
-        if formatted.len() >= 256 {
-            return Err(
-                OrganizingCityWarResultContextBlock::NoticeWouldOverflow {
-                    string_id,
-                    visible_len: formatted.len(),
-                },
-            );
-        }
         Ok(formatted.to_vec())
     }
 
@@ -7205,11 +7180,6 @@ impl VillageWarResultContext for WorldVillageWarResultContext<'_, '_, '_, '_, '_
             .collect::<Vec<_>>();
         let formatted = (self.callbacks.format_world_string)(string_id, &arguments);
         let formatted = legacy_c_string_prefix(&formatted);
-        if formatted.len() >= 256 {
-            return Err(OrganizingVillageWarResultContextBlock::NoticeWouldOverflow {
-                visible_len: formatted.len(),
-            });
-        }
         Ok(formatted.to_vec())
     }
 
