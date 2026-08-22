@@ -18313,6 +18313,7 @@ where
             add_log_text,
             session_factory,
             general_variables,
+            globe_setup,
             gods_battle,
             rs_gods_battle.as_deref_mut(),
             gods_battle_database.as_deref_mut(),

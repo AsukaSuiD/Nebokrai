@@ -781,6 +781,10 @@ pub(crate) enum WorldGameServerConnectionContinuation {
         game_server_index: u32,
         remaining_payload: Vec<u8>,
     },
+    ReconnectPlayerDataComplete {
+        socket_id: i32,
+        game_server_index: u32,
+    },
     RegistryPortUnavailable {
         game_server_index: u32,
     },
@@ -795,7 +799,7 @@ pub(crate) struct WorldGameServerAuctionBroadcast {
 }
 
 /// Наблюдаемые эффекты достигнутой части `OnServerMessage(0x5FA01)`.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct WorldGameServerConnectionReport {
     pub(crate) sync_flag: i8,
     pub(crate) sync_flag_complete: bool,
@@ -810,6 +814,7 @@ pub(crate) struct WorldGameServerConnectionReport {
     pub(crate) auction: Option<WorldGameServerAuctionBroadcast>,
     pub(crate) globe_variables: Option<WorldGlobeVariablesDelivery>,
     pub(crate) login_log: Option<WorldGameServerConnectedLog>,
+    pub(crate) reconnect: Option<WorldGameServerReconnectReport>,
     pub(crate) continuation: WorldGameServerConnectionContinuation,
 }
 
@@ -1749,6 +1754,7 @@ pub(crate) async fn on_server_message(
     add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     session_factory: &mut CSessionFactory,
     general_variables: Option<&mut CVariableList>,
+    globe_setup: &GlobeSetupSnapshot,
     gods_battle: &mut CGodsBattleConf,
     rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
     mut gods_battle_database: Option<&mut WorldTdsClient>,
@@ -1791,8 +1797,33 @@ pub(crate) async fn on_server_message(
             )
         }
         0x0005_FA01 => {
+            let mut report = on_game_server_connected(
+                game,
+                &mut message,
+                Some(globe_setup.auction_enabled()),
+            );
+            if let WorldGameServerConnectionContinuation::ReconnectPlayerDataPending {
+                socket_id,
+                game_server_index,
+                remaining_payload,
+            } = report.continuation.clone()
+            {
+                report.reconnect = Some(continue_game_server_reconnect(
+                    game,
+                    socket_id,
+                    &remaining_payload,
+                    registry,
+                    organizing,
+                    coefficients,
+                ));
+                report.continuation =
+                    WorldGameServerConnectionContinuation::ReconnectPlayerDataComplete {
+                        socket_id,
+                        game_server_index,
+                    };
+            }
             WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::GameServerConnection(
-                on_game_server_connected(game, &mut message, None),
+                report,
             ))
         }
         0x0005_FA02 => {
@@ -2674,6 +2705,7 @@ pub(crate) fn on_game_server_connected(
         auction: None,
         globe_variables: None,
         login_log: None,
+        reconnect: None,
         continuation: WorldGameServerConnectionContinuation::NotConfigured,
     };
 
