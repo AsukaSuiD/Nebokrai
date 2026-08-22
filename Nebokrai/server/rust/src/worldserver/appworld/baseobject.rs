@@ -145,15 +145,17 @@
 //! project-caller-а, а не доказательство желаемого Rust-владения и не
 //! разрешение удалить публичный исходный контракт.
 //!
-//! Rust-storage child-tree намеренно не выбран заранее. Список содержит
-//! гетерогенные объекты пяти factory-типов, удаление инвалидирует все raw
-//! aliases немедленно, а отдельный `RemoveObject` формально оставляет живой
-//! detached pointer со старым father. `CreateChildObject` поэтому возвращает
+//! Rust child-tree хранится безопасным `BaseObjectTreeNode`: гетерогенный
+//! factory-owner остаётся tagged, parent владеет children в list-order, а
+//! child держит только `Weak` father. `CreateChildObject` возвращает
 //! `Rc<RefCell<...>>`, а точное действие virtual `AddObject` передаёт
-//! вызывающему owner-у explicit callback-ом до `Load`; только он выбирает
-//! совместимое хранение parent/child и father. Такое Rust-владение исключает
-//! erased pointer и старую утечку на null-ветви, не приписывая отсутствующему
-//! caller-у container-semantics. Для `CGoods(id=0, name=nullptr)` старый EXE
+//! вызывающему owner-у explicit callback-ом до `Load`. `AddObject` сохраняет
+//! duplicate insertion и overwrite father; только цикл, который в original-е
+//! приводил бы к неограниченной рекурсии и dangling lifetime, safe Rust
+//! отвергает до мутации. `RemoveObject` убирает все equal children и, как EXE,
+//! не очищает father. Такое Rust-владение исключает erased pointer и старую
+//! утечку на null-ветви, не приписывая отсутствующему caller-у container-
+//! semantics. Для `CGoods(id=0, name=nullptr)` старый EXE
 //! разыменовывал null: безопасная граница возвращает typed error без
 //! attachment и `Load`. Короткое имя больше не читается за границей slice и
 //! просто не совпадает с `NoAdd\0`: это исправление внутреннего UB без
@@ -164,6 +166,7 @@
 //! их контракт полностью определён PDB.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 use std::rc::Rc;
@@ -293,12 +296,177 @@ pub(crate) enum BaseObjectFactoryObject {
     Goods(CGoods),
 }
 
-/// Живой heterogeneous child без erased raw-pointer старого ABI.
+/// Безопасная причина отклонения internal cycle старого child-tree.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BaseObjectTreeAttachError {
+    WouldCreateCycle,
+}
+
+impl fmt::Display for BaseObjectTreeAttachError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WouldCreateCycle => write!(formatter, "добавление child создаёт цикл object-tree"),
+        }
+    }
+}
+
+impl Error for BaseObjectTreeAttachError {}
+
+/// Безопасный узел historic `m_pFather + m_listObject`.
 ///
-/// `CreateChildObject` передаёт этот handle callback-у attachment до `Load`.
-/// Владелец конкретной parent/child-модели вправе сохранить его сильную копию
-/// либо только обновить свой индекс; базовый owner не изобретает tree-storage.
-pub(crate) type SharedBaseObjectFactoryObject = Rc<RefCell<BaseObjectFactoryObject>>;
+/// `Vec` сохраняет list-order `AddObject`; его strong ownership заменяет
+/// deleting destructor parent-а. `father` намеренно weak: raw pointer не
+/// владел parent-ом. Duplicate children допустимы как в original-е, а cycle
+/// отвергается до изменения state, поскольку его рекурсивные owner-ы не имели
+/// доказанного внешнего эффекта, но приводили к internal lifetime defect.
+pub(crate) struct BaseObjectTreeNode {
+    object: BaseObjectFactoryObject,
+    father: Option<std::rc::Weak<RefCell<BaseObjectTreeNode>>>,
+    children: Vec<SharedBaseObjectFactoryObject>,
+}
+
+/// Живой heterogeneous child без erased raw-pointer старого ABI.
+pub(crate) type SharedBaseObjectFactoryObject = Rc<RefCell<BaseObjectTreeNode>>;
+
+impl BaseObjectTreeNode {
+    fn from_object(object: BaseObjectFactoryObject) -> Self {
+        Self {
+            object,
+            father: None,
+            children: Vec::new(),
+        }
+    }
+
+    /// Создаёт root узел через точные пять ветвей `CreateObject`.
+    pub(crate) fn create(
+        object_type: i32,
+        object_id: i32,
+    ) -> Option<SharedBaseObjectFactoryObject> {
+        create_base_object(object_type, object_id)
+            .map(|object| Rc::new(RefCell::new(Self::from_object(*object))))
+    }
+
+    /// Заимствует tagged concrete owner без erased virtual ABI.
+    pub(crate) fn object(&self) -> &BaseObjectFactoryObject {
+        &self.object
+    }
+
+    /// Заимствует concrete owner для точного `Load`/post-load lifecycle.
+    pub(crate) fn object_mut(&mut self) -> &mut BaseObjectFactoryObject {
+        &mut self.object
+    }
+
+    /// Возвращает текущего father либо `None` для root/detached node.
+    pub(crate) fn father(&self) -> Option<SharedBaseObjectFactoryObject> {
+        self.father.as_ref().and_then(std::rc::Weak::upgrade)
+    }
+
+    /// Возвращает snapshot children в exact insertion-order.
+    pub(crate) fn children(&self) -> Vec<SharedBaseObjectFactoryObject> {
+        self.children.clone()
+    }
+
+    /// Выполняет `CBaseObject::AddObject`: father, затем append child.
+    pub(crate) fn add_child(
+        parent: &SharedBaseObjectFactoryObject,
+        child: &SharedBaseObjectFactoryObject,
+    ) -> Result<(), BaseObjectTreeAttachError> {
+        if Self::contains_node(child, parent) {
+            return Err(BaseObjectTreeAttachError::WouldCreateCycle);
+        }
+        child.borrow_mut().father = Some(Rc::downgrade(parent));
+        parent.borrow_mut().children.push(child.clone());
+        Ok(())
+    }
+
+    /// Выполняет `CBaseObject::RemoveObject`: удаляет все pointer-equal children
+    /// и, как EXE, оставляет child.father неизменённым.
+    pub(crate) fn remove_child(
+        parent: &SharedBaseObjectFactoryObject,
+        child: &SharedBaseObjectFactoryObject,
+    ) {
+        parent
+            .borrow_mut()
+            .children
+            .retain(|candidate| !Rc::ptr_eq(candidate, child));
+    }
+
+    /// Повторяет pointer-identity `FindChildObject(CBaseObject*)`.
+    pub(crate) fn find_child(
+        parent: &SharedBaseObjectFactoryObject,
+        child: &SharedBaseObjectFactoryObject,
+    ) -> bool {
+        parent
+            .borrow()
+            .children
+            .iter()
+            .any(|candidate| Rc::ptr_eq(candidate, child))
+    }
+
+    /// Повторяет list-order `FindChildObject(type, id, ignored_guid)`.
+    pub(crate) fn find_child_by_type_and_id(
+        parent: &SharedBaseObjectFactoryObject,
+        object_type: i32,
+        object_id: i32,
+    ) -> Option<SharedBaseObjectFactoryObject> {
+        parent
+            .borrow()
+            .children
+            .iter()
+            .find(|candidate| {
+                let candidate = candidate.borrow();
+                candidate.object.object_type() == object_type
+                    && candidate.object.object_id() == object_id
+            })
+            .cloned()
+    }
+
+    /// Повторяет preorder `RecursiveFindObject(type, id)`.
+    pub(crate) fn recursive_find_by_type_and_id(
+        root: &SharedBaseObjectFactoryObject,
+        object_type: i32,
+        object_id: i32,
+    ) -> Option<SharedBaseObjectFactoryObject> {
+        Self::recursive_find(root, &mut |object| {
+            object.object_type() == object_type && object.object_id() == object_id
+        })
+    }
+
+    fn contains_node(
+        root: &SharedBaseObjectFactoryObject,
+        sought: &SharedBaseObjectFactoryObject,
+    ) -> bool {
+        let mut pending = vec![root.clone()];
+        let mut seen = HashSet::new();
+        while let Some(node) = pending.pop() {
+            let address = Rc::as_ptr(&node) as usize;
+            if !seen.insert(address) {
+                continue;
+            }
+            if Rc::ptr_eq(&node, sought) {
+                return true;
+            }
+            pending.extend(node.borrow().children.iter().rev().cloned());
+        }
+        false
+    }
+
+    fn recursive_find(
+        root: &SharedBaseObjectFactoryObject,
+        predicate: &mut impl FnMut(&BaseObjectFactoryObject) -> bool,
+    ) -> Option<SharedBaseObjectFactoryObject> {
+        if predicate(&root.borrow().object) {
+            return Some(root.clone());
+        }
+        let children = root.borrow().children.clone();
+        for child in children {
+            if let Some(found) = Self::recursive_find(&child, predicate) {
+                return Some(found);
+            }
+        }
+        None
+    }
+}
 
 impl BaseObjectFactoryObject {
     /// Возвращает исходный type concrete factory-ветви.
@@ -414,14 +582,14 @@ where
     let Some(object) = create_base_object(object_type, object_id) else {
         return Ok(None);
     };
-    let child = Rc::new(RefCell::new(*object));
+    let child = Rc::new(RefCell::new(BaseObjectTreeNode::from_object(*object)));
 
     if let Some(name) = name {
-        child.borrow_mut().set_object_name(name);
+        child.borrow_mut().object.set_object_name(name);
     }
 
-    let factory_id = child.borrow().object_id();
-    child.borrow_mut().set_object_id(object_id);
+    let factory_id = child.borrow().object.object_id();
+    child.borrow_mut().object.set_object_id(object_id);
 
     let attach_to_parent = match object_type {
         400 => factory_id != 0,
@@ -436,14 +604,14 @@ where
     }
 
     let mut child_mut = child.borrow_mut();
-    child_mut.set_object_id(factory_id);
-    load(&mut child_mut);
-    child_mut.set_object_id(object_id);
+    child_mut.object.set_object_id(factory_id);
+    load(&mut child_mut.object);
+    child_mut.object.set_object_id(object_id);
     if graphics_id != 0 {
-        child_mut.set_object_graphics_id(graphics_id);
+        child_mut.object.set_object_graphics_id(graphics_id);
     }
     if let Some(name) = name {
-        child_mut.set_object_name(name);
+        child_mut.object.set_object_name(name);
     }
     drop(child_mut);
 
@@ -689,7 +857,7 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 
 // ============================================================================
 // FUNCTION: CBaseObject::FindChildObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:84
@@ -697,13 +865,15 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 // ADDRESS: 004d5620
 // PROTOTYPE: bool __thiscall FindChildObject(CBaseObject * param_1)
 //
+// Реализовано `BaseObjectTreeNode::find_child`: `Rc::ptr_eq` сохраняет pointer
+// identity без unsafe raw pointer, а порядок списка для bool не наблюдается.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CBaseObject::FindChildObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:100
@@ -711,13 +881,15 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 // ADDRESS: 004d5650
 // PROTOTYPE: CBaseObject * __thiscall FindChildObject(long param_1, long param_2, CGUID * param_3)
 //
+// Реализовано `BaseObjectTreeNode::find_child_by_type_and_id`: GUID-аргумент
+// в exact теле не читается, а `Vec` сохраняет первый list-order hit.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CBaseObject::RecursiveFindObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:115
@@ -725,6 +897,8 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 // ADDRESS: 004d5680
 // PROTOTYPE: CBaseObject * __thiscall RecursiveFindObject(long param_1, long param_2)
 //
+// Реализовано `BaseObjectTreeNode::recursive_find_by_type_and_id`: root
+// проверяется до children, затем используется exact preorder списка.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -759,7 +933,7 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 
 // ============================================================================
 // FUNCTION: CBaseObject::RemoveObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:321
@@ -767,6 +941,8 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 // ADDRESS: 004d5780
 // PROTOTYPE: void __thiscall RemoveObject(CBaseObject * param_1)
 //
+// Реализовано `BaseObjectTreeNode::remove_child`: `Vec::retain` удаляет все
+// pointer-equal nodes, как `std::list::remove`, и не меняет child father.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -831,7 +1007,7 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 
 // ============================================================================
 // FUNCTION: CBaseObject::AddObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:340
@@ -839,6 +1015,9 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 // ADDRESS: 004d5ad0
 // PROTOTYPE: void __thiscall AddObject(CBaseObject * param_1)
 //
+// Реализовано `BaseObjectTreeNode::add_child`: assignment weak father идёт до
+// append strong child. Duplicate insertion сохранён; cycle безопасно
+// отклоняется до мутации как внутренний lifetime defect original-а.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
