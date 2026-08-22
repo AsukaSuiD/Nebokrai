@@ -44,7 +44,8 @@
 //! `IsFactionMaster` RVA `0x000344A0`, `IsConferationMaster` RVA `0x00034520`,
 //! `ReInitialFacFactionByLvl` RVA
 //! `0x00034C80` и `AddUnionToClientByFactionID` RVA `0x00038010` —
-//! `IMPLEMENTED`; `PushToEstaList` RVA `0x000367C0` и оба overload-а
+//! `IMPLEMENTED`; `IsInEstaList/PushToEstaList` RVA
+//! `0x00033BA0/0x000367C0` и оба overload-а
 //! `Release` RVA `0x00036F40` — `IMPLEMENTED`;
 //! `SendOrgaInfoToClient` RVA `0x00033750/0x00033840`, billboard serializer-ы
 //! RVA `0x000339D0/0x00033A50/0x00033AD0/0x00033CC0`, три stat-owner-а
@@ -8827,7 +8828,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::IsInEstaList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.h:143
@@ -8835,6 +8836,8 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00433ba0
 // PROTOTYPE: bool __thiscall IsInEstaList(long param_1)
 //
+// Реализовано выше как `is_union_application_reserved`: точный linear scan
+// `VecDeque` от начала, без mutation и duplicate-normalization.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
