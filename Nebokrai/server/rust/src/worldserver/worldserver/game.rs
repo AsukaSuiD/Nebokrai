@@ -1526,7 +1526,7 @@ use crate::worldserver::appworld::player::{
 };
 use crate::worldserver::appworld::region::{CRegion, RegionSerializationBlock};
 use crate::worldserver::appworld::script::variablelist::{
-    CVariableList, VariableListSaveSource,
+    CVariableList, VariableListLoadReport, VariableListSaveSource,
 };
 use crate::worldserver::appworld::session::csessionfactory::{
     CSessionFactory, WorldSessionFactoryAiReport,
@@ -1817,6 +1817,7 @@ pub(crate) enum WorldGameInitEvent {
     GoodsWarMemberLoaded(GoodsWarDatabaseLoadReport),
     RsSetupOwnerCreated(LoadedSetupIds),
     VoidOwner(WorldGameInitVoidOwner),
+    GeneralVariableListLoaded(VariableListLoadReport),
     TimeToReturnInitialized(TimeToReturnLoadReport),
     AttackCityInitialized(AttackCityLoadReport),
     AttackCityEnemyRelationsInitialized(AttackCityEnemyRelationReport),
@@ -9954,6 +9955,7 @@ impl CGame {
         jjc: &mut CJJcSystem,
         time_to_return: &mut TimeToReturn,
         time_to_return_callbacks: TimeToReturnCallbacks<TimerCallback>,
+        general_variables: &mut Option<CVariableList>,
         organizing_parameters: &mut COrganizingParam,
         attack_city: &mut CAttackCitySys,
         attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
@@ -10693,14 +10695,27 @@ impl CGame {
             stop!(WorldGameInitBlockReason::CountryWar);
         }
 
-        for owner in [
+        // Exact Init публикует новый owner до config/DB loading. Drop заменяет
+        // предварительный delete и не сохраняет его dangling-lifetime риск.
+        *general_variables = Some(CVariableList::default());
+        events.push(WorldGameInitEvent::VoidOwner(
             WorldGameInitVoidOwner::CreateGeneralVariableList,
-            WorldGameInitVoidOwner::LoadGeneralVariableList,
+        ));
+        let general_variable_source = context.read_resource(b"data/general_variable.ini");
+        let general_variable_load = general_variables
+            .as_mut()
+            .expect("owner опубликован перед LoadVarList")
+            .load_var_list(general_variable_source.as_deref());
+        events.push(WorldGameInitEvent::GeneralVariableListLoaded(
+            general_variable_load,
+        ));
+        // `CRsGenVar::Load` открывает собственную ADO connection. Пока этот
+        // connection-owner не передаётся runtime adapter-ом, оставляем ровно
+        // DB-гидратацию отдельной границей, а не весь lifecycle списка.
+        context.initialize_void_owner(WorldGameInitVoidOwner::LoadGeneralVariableData);
+        events.push(WorldGameInitEvent::VoidOwner(
             WorldGameInitVoidOwner::LoadGeneralVariableData,
-        ] {
-            context.initialize_void_owner(owner);
-            events.push(WorldGameInitEvent::VoidOwner(owner));
-        }
+        ));
 
         let increment_log_days = context.increment_log_days();
         let outcome = increment_log

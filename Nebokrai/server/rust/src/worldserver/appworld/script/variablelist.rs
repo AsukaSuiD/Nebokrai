@@ -1,7 +1,8 @@
 //! Владелец `CVariableList` исторического WorldServer из `variablelist.cpp`.
 //!
-//! Статусы `SetVarValue` RVA `0x000A11B0/0x000A1240`, `SaveVarData` RVA
-//! `0x000A1930` и `AddToByteArray` RVA `0x000A1B10` — `IMPLEMENTED`;
+//! Статусы `LoadVarList` RVA `0x000A1320`, `LoadOneVar` `0x000A1680`,
+//! `SetVarValue` RVA `0x000A11B0/0x000A1240`, `SaveVarData` RVA `0x000A1930`
+//! и `AddToByteArray` RVA `0x000A1B10` — `IMPLEMENTED`; `LoadVarData` и
 //! остальные функции файла ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -18,6 +19,15 @@
 //! `\"%s\"` для string и пустые значения для положительного `Array`.
 //! `VariableListSaveSource` сохраняет именно этот узкий byte-exact view; сам
 //! layout и остальные операции списка будут материализованы в их владельце.
+//!
+//! `LoadVarList` сначала очищает прежний список, затем читает непрерывные
+//! строки после `GeneralVariableList`: `name=value`, `name[N]=value` и
+//! `name="value"`. Scalar/array получают одинаковые current/saved values.
+//! `LoadOneVar` ищет первое byte-sensitive имя из `CSL_GENVAR` и заменяет его
+//! current/saved scalar либо строкой; именно так DB-строка может заменить
+//! объявленный array. Rust не сохраняет исходные преждевременные return после
+//! `delete` в декомпиляции — это внутренний compiler/lifetime defect, не
+//! контракт списка.
 //!
 //! `SaveVarData` не имел собственной DB-семантики: копировал тот же ADO
 //! connection, получал `GetGame()->m_pRsGenVar`, вызывал
@@ -70,6 +80,94 @@ pub(crate) struct CVariableList {
 }
 
 impl CVariableList {
+    /// Материализует достигнутый `LoadVarList` без raw allocation и union.
+    ///
+    /// `CIni::GetContinueDataNum` брал только непрерывный блок строк после
+    /// index `GeneralVariableList`; пустая или отсутствующая resource поэтому
+    /// публикует пустой список, как и исходный void owner.
+    pub(crate) fn load_var_list(&mut self, source: Option<&[u8]>) -> VariableListLoadReport {
+        self.variables.clear();
+        let Some(source) = source else {
+            return VariableListLoadReport::default();
+        };
+
+        let mut report = VariableListLoadReport {
+            resource_found: true,
+            ..VariableListLoadReport::default()
+        };
+        for (name, value) in general_variable_records(source) {
+            let (name, array_length) = split_array_name(name);
+            let value = trim_ascii(value);
+            let entry = match array_length {
+                Some(length) => {
+                    let parsed = legacy_atoi(value);
+                    VariableEntry {
+                        name: name.to_vec(),
+                        value: VariableValue::IntegerArray {
+                            current: vec![parsed; length],
+                            saved: vec![parsed; length],
+                        },
+                    }
+                }
+                None if value.first() == Some(&b'\"') => {
+                    // EXE копировал всё между первым символом и последней
+                    // позицией строки, не требуя парной closing quote.
+                    let string = value
+                        .get(1..value.len().saturating_sub(1))
+                        .unwrap_or_default()
+                        .to_vec();
+                    VariableEntry {
+                        name: name.to_vec(),
+                        value: VariableValue::String {
+                            current: string.clone(),
+                            saved: string,
+                        },
+                    }
+                }
+                None => {
+                    let parsed = legacy_atoi(value);
+                    VariableEntry {
+                        name: name.to_vec(),
+                        value: VariableValue::Integer {
+                            current: parsed,
+                            saved: parsed,
+                        },
+                    }
+                }
+            };
+            self.variables.push(entry);
+            report.loaded_variables += 1;
+        }
+        report
+    }
+
+    /// Точный `CVariableList::LoadOneVar`: первая byte-sensitive запись с
+    /// совпавшим именем получает DB SValue/CValue; array-объявления становятся
+    /// scalar/string, как это делал исходный owner.
+    pub(crate) fn load_one_var(
+        &mut self,
+        name: &[u8],
+        saved_value: &[u8],
+        current_value: &[u8],
+    ) -> VariableDatabaseLoadDisposition {
+        let Some(variable) = self.variables.iter_mut().find(|variable| variable.name == name) else {
+            return VariableDatabaseLoadDisposition::NameNotDeclared;
+        };
+        let saved_value = visible_c_string(saved_value);
+        let current_value = visible_c_string(current_value);
+        if saved_value.first() == Some(&b'\"') || current_value.first() == Some(&b'\"') {
+            let saved = unquote_legacy_value(saved_value);
+            let current = unquote_legacy_value(current_value);
+            variable.value = VariableValue::String { current, saved };
+            return VariableDatabaseLoadDisposition::LoadedString;
+        }
+        variable.value = VariableValue::Integer {
+            current: legacy_atoi(current_value),
+            saved: legacy_atoi(saved_value),
+        };
+        VariableDatabaseLoadDisposition::LoadedInteger
+    }
+
     pub(crate) fn push(&mut self, variable: VariableEntry) {
         self.variables.push(variable);
     }
@@ -201,6 +299,85 @@ impl CVariableList {
         destination.extend_from_slice(&payload);
         Ok(())
     }
+}
+
+/// Наблюдаемый итог configuration-половины `LoadVarList`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct VariableListLoadReport {
+    pub(crate) resource_found: bool,
+    pub(crate) loaded_variables: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum VariableDatabaseLoadDisposition {
+    NameNotDeclared,
+    LoadedInteger,
+    LoadedString,
+}
+
+fn general_variable_records(source: &[u8]) -> Vec<(&[u8], &[u8])> {
+    let Some(start) = source
+        .split(|byte| *byte == b'\n')
+        .position(|line| {
+            let line = trim_ascii(line.strip_suffix(b"\r").unwrap_or(line));
+            line == b"GeneralVariableList" || line == b"[GeneralVariableList]"
+        })
+        .map(|line| line + 1)
+    else {
+        return Vec::new();
+    };
+    source
+        .split(|byte| *byte == b'\n')
+        .skip(start)
+        .map(|line| line.strip_suffix(b"\r").unwrap_or(line))
+        .take_while(|line| {
+            !matches!(line.first(), None | Some(b' ') | Some(b'\t') | Some(b'/') | Some(b'\r'))
+        })
+        .map(trim_ascii)
+        .filter_map(|line| {
+            let separator = line.iter().position(|byte| *byte == b'=')?;
+            Some((trim_ascii(&line[..separator]), trim_ascii(&line[separator + 1..])))
+        })
+        .collect()
+}
+
+fn split_array_name(name: &[u8]) -> (&[u8], Option<usize>) {
+    let Some(open) = name.iter().rposition(|byte| *byte == b'[') else {
+        return (name, None);
+    };
+    let Some(closing) = name[open..].iter().position(|byte| *byte == b']') else {
+        return (name, None);
+    };
+    if open + closing + 1 != name.len() {
+        return (name, None);
+    }
+    let length = legacy_atoi(&name[open + 1..open + closing]);
+    (name[..open].as_ref(), usize::try_from(length).ok().filter(|length| *length > 0))
+}
+
+fn trim_ascii(value: &[u8]) -> &[u8] {
+    let start = value.iter().position(|byte| !byte.is_ascii_whitespace()).unwrap_or(value.len());
+    let end = value.iter().rposition(|byte| !byte.is_ascii_whitespace()).map_or(start, |index| index + 1);
+    &value[start..end]
+}
+
+fn legacy_atoi(value: &[u8]) -> i32 {
+    let value = trim_ascii(value);
+    let (negative, value) = match value.first() {
+        Some(b'-') => (true, &value[1..]),
+        Some(b'+') => (false, &value[1..]),
+        _ => (false, value),
+    };
+    let magnitude = value.iter().take_while(|byte| byte.is_ascii_digit()).fold(0_i64, |value, byte| {
+        value.saturating_mul(10).saturating_add(i64::from(*byte - b'0'))
+    });
+    let signed = if negative { magnitude.saturating_neg() } else { magnitude };
+    signed.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+fn unquote_legacy_value(value: &[u8]) -> Vec<u8> {
+    let value = value.strip_prefix(b"\"").unwrap_or(value);
+    value.strip_suffix(b"\"").unwrap_or(value).to_vec()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
