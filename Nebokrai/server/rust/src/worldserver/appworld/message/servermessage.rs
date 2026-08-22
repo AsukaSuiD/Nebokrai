@@ -360,6 +360,7 @@ use crate::worldserver::worldserver::game::{
     CGame, WorldCdkeySnapshot, WorldCdkeySnapshotError, WorldGameServerLookupError,
     WorldGenerateDbDataBlock, WorldGenerateDbDataReport, WorldGlobeVariablesDelivery,
     WorldInitialRegionSnapshot, WorldInitialRegionSnapshotBlock, WorldInitialRegionSnapshotKind,
+    WorldLoginReconnectThreadRestart,
     WorldOnlinePlayerAppendOutcome, WorldPingGameServerInfo, WorldReconnectedPlayerDecode,
     WorldPlayerSaveResponseProgress, WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate,
     WorldRegionParamDecodeOutcome, WorldRegionChangePlayerTransition,
@@ -415,6 +416,7 @@ pub(crate) enum WorldServerMessageOutcome {
     GodsBattle(WorldGodsBattleMessage),
     GodsBattleTopTen(WorldGodsBattleTopTenMessage),
     GeneralVariableUpdated(WorldGeneralVariableUpdate),
+    LoginServerClosed(WorldLoginServerClosed),
     LoginServerTupleRelay(WorldLoginServerTupleRelay),
     LoginServerIdentityAssigned(WorldLoginServerIdentity),
     MurderReported(WorldMurderReport),
@@ -425,6 +427,16 @@ pub(crate) enum WorldServerMessageOutcome {
     RegionParametersUpdated(WorldRegionParameterUpdate),
     RegionChanged(WorldRegionChangeMessage),
     RegionMessageRelayed(WorldRegionMessageRelay),
+}
+
+/// Наблюдаемые эффекты внутреннего `0x3FC01`, опубликованного
+/// `CMyNetClient::OnClose`.
+#[derive(Debug)]
+pub(crate) struct WorldLoginServerClosed {
+    /// Исходный operator-log выполняется до остановки прежнего reconnect worker-а.
+    pub(crate) log: AddLogTextDisposition,
+    /// Точный stop/join/start `CGame::CreateConnectLoginThread`.
+    pub(crate) reconnect: WorldLoginReconnectThreadRestart,
 }
 
 /// Полный typed-итог server opcode `0x5FA0F`.
@@ -1783,6 +1795,13 @@ pub(crate) async fn on_server_message(
     mut gods_battle_database: Option<&mut WorldTdsClient>,
 ) -> WorldServerMessageDispatch {
     match message.message_type() {
+        0x0003_FC01 => {
+            let log = add_log_text(b"========= LoginServer closed =========");
+            let reconnect = game.create_connect_login_thread(tokio::runtime::Handle::current());
+            WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::LoginServerClosed(
+                WorldLoginServerClosed { log, reconnect },
+            ))
+        }
         0x0004_FC01 => {
             let (cleared_responses, started_at_ms) = game.begin_game_server_ping();
             let ping = CMessage::new(0x0007_F809);

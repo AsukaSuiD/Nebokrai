@@ -2909,6 +2909,7 @@ pub(crate) struct OrganizingDatabasePublishReport {
 }
 
 /// Safe-граница constructor `CUnion::Initial` при DB materialization.
+#[derive(Debug)]
 pub(crate) struct OrganizingDatabasePublishBlock {
     pub(crate) union_id: i32,
     pub(crate) source: UnionInitialBlock,
@@ -2922,6 +2923,7 @@ pub(crate) enum OrganizingDatabaseLoadDisposition {
     FactionLoadBlocked,
 }
 
+#[derive(Debug)]
 pub(crate) struct OrganizingDatabaseLoadReport {
     pub(crate) published_unions: usize,
     pub(crate) published_factions: usize,
@@ -2983,6 +2985,7 @@ pub(crate) enum OrganizingInitializeSuffixBlock {
 }
 
 /// Полный наблюдаемый результат owner-а `COrganizingCtrl::Initialize`.
+#[derive(Debug)]
 pub(crate) struct OrganizingInitializeReport {
     pub(crate) database: OrganizingDatabaseLoadReport,
     pub(crate) suffix: OrganizingInitializeSuffixReport,
@@ -2990,6 +2993,7 @@ pub(crate) struct OrganizingInitializeReport {
 
 /// Safe-граница полного `Initialize` не откатывает ранее опубликованный prefix
 /// либо уже поставленный timer event.
+#[derive(Debug)]
 pub(crate) enum OrganizingInitializeBlock {
     Database(OrganizingDatabasePublishBlock),
     Suffix(OrganizingInitializeSuffixBlock),

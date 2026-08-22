@@ -1553,7 +1553,8 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     CityTransferStartBlock, ConfederationCreationCallbackBlock,
     ConfederationCreationCallbackReport, ConfederationCreationEndpointBlock,
     ConfederationCreationSessionBlock, ConfederationCreationSessionReport,
-    OrganizingContributorBlock, OrganizingDisbandOutcome,
+    OrganizingContributorBlock, OrganizingDisbandOutcome, OrganizingInitializeBlock,
+    OrganizingInitializeReport,
     OrganizingDisbandPlayer, OrganizingRunBlock, OrganizingRunReport, OrganizingSaveDataBlock,
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock, OrganizingLeaveWordEnableBlock,
     OrganizingFactionDoJoinBlock,
@@ -1907,6 +1908,7 @@ pub(crate) enum WorldGameInitEvent {
         succeeded: bool,
     },
     OrganizingParametersLoaded(OrganizingParamLoadReport),
+    OrganizingControllerInitialized(OrganizingInitializeReport),
     GodsBattleFactionXydLoaded {
         succeeded: bool,
     },
@@ -2004,6 +2006,7 @@ pub(crate) enum WorldGameInitBlockReason<ContextBlock> {
     FourNationWarLoad(FourNationWarLoadError),
     VillageWarLoad(VillageWarLoadError),
     OrganizingParameters(OrganizingParamLoadError),
+    OrganizingController(OrganizingInitializeBlock),
     CountryParameters(CountryParamLoadError),
     CountryHandler,
     CountryWarLoad(CountryWarLoadError),
@@ -2043,6 +2046,8 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     type PlayerDatabase: RsPlayerOwner;
     type EnemyFactionsDatabase: RsEnemyFactionsOwner;
     type GeneralVariableDatabase: RsGenVarOwner;
+    type UnionDatabase: RsUnionOwner;
+    type FactionDatabase: RsFactionOwner;
 
     fn install_crash_reporter(&mut self);
     fn current_time_seconds(&mut self) -> i64;
@@ -2074,6 +2079,8 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn enemy_factions_database(&mut self) -> &mut Self::EnemyFactionsDatabase;
     /// Отдельный DB-owner `CRsGenVar`, который сам открывает World connection.
     fn general_variable_database(&mut self) -> &mut Self::GeneralVariableDatabase;
+    /// Возвращает два самостоятельных DB-owner-а exact organizing Initialize.
+    fn organizing_databases(&mut self) -> (&mut Self::UnionDatabase, &mut Self::FactionDatabase);
     /// Возвращает уже открытый Log DB connection техническому increment-owner-у.
     fn increment_log_database(&mut self) -> Option<&mut WorldTdsClient>;
     /// Возвращает уже открытый Log DB connection техническому auction-owner-у.
@@ -2105,6 +2112,9 @@ pub(crate) struct WorldGameInitCallbacks<'a> {
     pub(crate) get_timer_local_time: &'a mut dyn FnMut() -> TagTime,
     pub(crate) put_log_info: &'a mut dyn FnMut(&[u8]),
     pub(crate) update_player: &'a mut dyn FnMut(i32),
+    /// Тот же загруженный World StringTable, из которого constructors берут
+    /// стандартные титулы глав союза и фракции.
+    pub(crate) world_string_by_id: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
 }
 
 /// Локальная safe-граница `SaveCityRegion(0)` до virtual save-вызова.
@@ -11298,10 +11308,33 @@ impl CGame {
             village_war_initialization,
         ));
 
-        context.initialize_void_owner(WorldGameInitVoidOwner::InitializeOrganizingController);
-        events.push(WorldGameInitEvent::VoidOwner(
-            WorldGameInitVoidOwner::InitializeOrganizingController,
-        ));
+        let union_master_title = (callbacks.world_string_by_id)(b"WS0154");
+        let faction_master_title = (callbacks.world_string_by_id)(b"WS0157");
+        let organizing_now = (callbacks.get_timer_local_time)();
+        let organizing_initialize = {
+            let (union_database, faction_database) = context.organizing_databases();
+            let mut add_log_text = |payload: &[u8]| {
+                self.record_game_init_log(&mut events, log, callbacks, payload);
+            };
+            organizing
+                .initialize_from_database_owners(
+                    union_database,
+                    faction_database,
+                    &union_master_title,
+                    &faction_master_title,
+                    self,
+                    organizing_parameters,
+                    organizing_now,
+                    timer,
+                    organizing_tax_callback,
+                    &mut add_log_text,
+                )
+                .await
+        };
+        match organizing_initialize {
+            Ok(report) => events.push(WorldGameInitEvent::OrganizingControllerInitialized(report)),
+            Err(source) => stop!(WorldGameInitBlockReason::OrganizingController(source)),
+        }
         let region_ids = self.regions.keys().copied().collect::<Vec<_>>();
         for region_id in region_ids {
             let Some(mut region_owner) = self
