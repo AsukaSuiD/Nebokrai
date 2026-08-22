@@ -1,6 +1,7 @@
 //! Владелец базового контейнера исторического `WorldServer`.
 //!
-//! Статус constructor/destructor RVA `0x000E0DB0/0x000E0AE0` и
+//! Статус constructor/destructor RVA `0x000E0DB0/0x000E0AE0`, folded
+//! `CWorldRegion::tagWeatherTime::tagOption` destructor RVA `0x0003EAD0` и
 //! `AddListener` RVA `0x000E0DF0` и virtual GUID forwarder-ы
 //! `0x000E0A00..0x000E0A60` — `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -118,7 +119,7 @@ pub(crate) const fn remove_base_by_guid<Removed>(_ex_id: &CGuid) -> Option<Remov
 
 // ============================================================================
 // FUNCTION: CWorldRegion::tagWeatherTime::tagOption::~tagOption
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / FOLDED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\ccontainer.cpp:197
@@ -126,6 +127,13 @@ pub(crate) const fn remove_base_by_guid<Removed>(_ex_id: &CGuid) -> Option<Remov
 // ADDRESS: 0043ead0
 // PROTOTYPE: void __thiscall ~tagOption(void)
 //
+// VERIFIED_DISASSEMBLY: `0x0043EAD0..0x0043EAF9` освобождает единственный
+// vector backing-buffer и зануляет три vector-поля. MSVC folded это тело с
+// хвостом `CGoodsContainer::Release`, потому raw-декомпилятор приписал ему
+// чужой `this`; оба достигнутых owner-а имеют одну и ту же внутреннюю
+// семантику Drop vector-а. `WorldRegionWeatherOption::weather` владеет
+// соответствующим `Vec<WorldRegionWeather>` и Rust освобождает его обычным
+// Drop. Callback, DB, wire и игровой state отсутствуют.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
