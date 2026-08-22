@@ -472,8 +472,10 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 use rustix::time::{ClockId, clock_gettime};
 
-use crate::dbaccess::worlddb::rsfaction::FactionPropertyLoadStaging;
-use crate::dbaccess::worlddb::rsunion::UnionDatabaseLoadRecord;
+use crate::dbaccess::worlddb::rsfaction::{
+    FactionLoadOutcome, FactionPropertyLoadStaging,
+};
+use crate::dbaccess::worlddb::rsunion::{UnionDatabaseLoadRecord, UnionLoadOutcome};
 use super::attackcitysys::CAttackCitySys;
 use super::faction::{
     CFaction, CityWarEnemyRefreshOutcome, FactionCloneSaveBlock, FactionContributorBlock,
@@ -2900,6 +2902,21 @@ pub(crate) struct OrganizingDatabasePublishBlock {
     pub(crate) source: UnionInitialBlock,
 }
 
+/// Publication-контракт верхнего `COrganizingCtrl::Initialize` после DB owner-ов.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingDatabaseLoadDisposition {
+    PublishedAll,
+    FactionLoadFailed,
+    FactionLoadBlocked,
+}
+
+pub(crate) struct OrganizingDatabaseLoadReport {
+    pub(crate) published_unions: usize,
+    pub(crate) published_factions: usize,
+    pub(crate) union_load_returned_true: bool,
+    pub(crate) disposition: OrganizingDatabaseLoadDisposition,
+}
+
 /// Safe-граница ordered `ReSetPermitDemise`: старый virtual call
 /// разыменовывал сохранённый null faction-pointer.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3348,6 +3365,57 @@ impl COrganizingCtrl {
         unions: Vec<UnionDatabaseLoadRecord>,
         factions: FactionPropertyLoadStaging,
     ) -> Result<OrganizingDatabasePublishReport, OrganizingDatabasePublishBlock> {
+        let published_unions = self.publish_database_unions(union_master_title, unions)?;
+        let published_factions = self.publish_database_factions(factions);
+        Ok(OrganizingDatabasePublishReport {
+            published_unions,
+            published_factions,
+        })
+    }
+
+    /// Принимает завершённые DB owner-outcome-ы с их разной cleanup-семантикой.
+    pub(crate) fn publish_database_load_outcomes(
+        &mut self,
+        union_master_title: &[u8],
+        unions: UnionLoadOutcome,
+        factions: FactionLoadOutcome,
+    ) -> Result<OrganizingDatabaseLoadReport, OrganizingDatabasePublishBlock> {
+        let (union_load_returned_true, union_records) = match unions {
+            UnionLoadOutcome::ReturnedTrue { records } => (true, records),
+            UnionLoadOutcome::ReturnedFalse { records } => (false, records),
+        };
+        let published_unions = self.publish_database_unions(union_master_title, union_records)?;
+        match factions {
+            FactionLoadOutcome::ReturnedTrue { factions } => Ok(OrganizingDatabaseLoadReport {
+                published_unions,
+                published_factions: self.publish_database_factions(factions),
+                union_load_returned_true,
+                disposition: OrganizingDatabaseLoadDisposition::PublishedAll,
+            }),
+            // Exact LoadAllFaction deletes its temporary map on any failed
+            // helper; its completed prefix therefore cannot become live.
+            FactionLoadOutcome::ReturnedFalse { .. } => Ok(OrganizingDatabaseLoadReport {
+                published_unions,
+                published_factions: 0,
+                union_load_returned_true,
+                disposition: OrganizingDatabaseLoadDisposition::FactionLoadFailed,
+            }),
+            FactionLoadOutcome::BlockedInitial { .. }
+            | FactionLoadOutcome::BlockedMember { .. }
+            | FactionLoadOutcome::BlockedPronounce { .. } => Ok(OrganizingDatabaseLoadReport {
+                published_unions,
+                published_factions: 0,
+                union_load_returned_true,
+                disposition: OrganizingDatabaseLoadDisposition::FactionLoadBlocked,
+            }),
+        }
+    }
+
+    fn publish_database_unions(
+        &mut self,
+        union_master_title: &[u8],
+        unions: Vec<UnionDatabaseLoadRecord>,
+    ) -> Result<usize, OrganizingDatabasePublishBlock> {
         self.request_establishment_union_players.clear();
         let published_unions = unions.len();
         for record in unions {
@@ -3362,14 +3430,18 @@ impl COrganizingCtrl {
             .map_err(|source| OrganizingDatabasePublishBlock { union_id, source })?;
             self.confederations.insert(union_id, Some(Box::new(union)));
         }
+        Ok(published_unions)
+    }
+
+    fn publish_database_factions(
+        &mut self,
+        factions: FactionPropertyLoadStaging,
+    ) -> usize {
         let published_factions = factions.len();
         for (faction_id, faction) in factions {
             self.factions.insert(faction_id, Some(Box::new(faction)));
         }
-        Ok(OrganizingDatabasePublishReport {
-            published_unions,
-            published_factions,
-        })
+        published_factions
     }
 
     /// Выполняет exact ordered `ReSetPermitDemise` без сетевых/DB эффектов.
