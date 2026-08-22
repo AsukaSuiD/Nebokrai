@@ -17,6 +17,7 @@ use std::{
 use crate::public::filesinfo::{FileInfo, FilesInfo, FilesInfoParseError};
 use crate::public::package::PackageArchive;
 use crate::public::package::PackageReadError;
+use crate::public::rfile::{CRFile, RFileResource, rf_open};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ClientResourceReadError {
@@ -58,6 +59,97 @@ pub(crate) enum ClientResourcePackageLoad {
 pub(crate) struct ClientResourceLoadReport {
     pub(crate) resource: ClientResource,
     pub(crate) packages: Vec<ClientResourcePackageLoad>,
+}
+
+/// Итог exact замены `g_pDefaultClientResource` из `CGame::LoadServerResource`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum DefaultClientResourceReplacement {
+    Loaded {
+        previous_owner_released: bool,
+        packages: Vec<ClientResourcePackageLoad>,
+        legacy_result: bool,
+    },
+    IndexUnavailable {
+        previous_owner_released: bool,
+        source: ClientResourceLoadError,
+        legacy_result: bool,
+    },
+}
+
+/// Safe owner process-global resource pointer WorldServer-а.
+///
+/// Оригинал освобождает прежний `g_pDefaultClientResource`, немедленно
+/// публикует новый `CClientResource`, игнорирует bool `LoadEx` и возвращает
+/// `true`. `Installed` сохраняет эту промежуточную/ошибочную доступность: даже
+/// при неудачном `.ril` runtime видит новый current-folder и может выполнить
+/// loose fallback, но package index отсутствует.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DefaultClientResourceOwner {
+    installed: Option<InstalledClientResource>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct InstalledClientResource {
+    root: PathBuf,
+    resource: Option<ClientResource>,
+}
+
+impl DefaultClientResourceOwner {
+    /// Точный owner-порядок `LoadServerResource` после уже полученного cwd.
+    pub(crate) fn replace_from_world_directory(
+        &mut self,
+        root: &Path,
+    ) -> DefaultClientResourceReplacement {
+        let previous_owner_released = self
+            .installed
+            .replace(InstalledClientResource {
+                root: root.to_path_buf(),
+                resource: None,
+            })
+            .is_some();
+        let load = ClientResource::load_world_server_directory(root);
+        match load {
+            Ok(report) => {
+                let packages = report.packages;
+                self.installed
+                    .as_mut()
+                    .expect("новый default resource опубликован до LoadEx")
+                    .resource = Some(report.resource);
+                DefaultClientResourceReplacement::Loaded {
+                    previous_owner_released,
+                    packages,
+                    // Exact caller игнорирует bool LoadEx и всегда возвращает true.
+                    legacy_result: true,
+                }
+            }
+            Err(source) => DefaultClientResourceReplacement::IndexUnavailable {
+                previous_owner_released,
+                source,
+                legacy_result: true,
+            },
+        }
+    }
+
+    /// Replaces nullable `GetDefaultClientResource` plus immediate `rfOpen`.
+    pub(crate) fn open(&self, path: &[u8]) -> Option<CRFile> {
+        let context = self
+            .installed
+            .as_ref()
+            .map(|installed| match installed.resource.as_ref() {
+                Some(resource) => RFileResource::loaded(resource, &installed.root),
+                None => RFileResource::without_index(&installed.root),
+            });
+        rf_open(path, context)
+    }
+
+    /// Exact Release удаляет global pointer только если он был установлен.
+    pub(crate) fn clear(&mut self) -> bool {
+        self.installed.take().is_some()
+    }
+
+    pub(crate) fn is_installed(&self) -> bool {
+        self.installed.is_some()
+    }
 }
 
 /// Связанный read-side owner одного World resource набора.

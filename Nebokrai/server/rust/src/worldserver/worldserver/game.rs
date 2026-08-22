@@ -2005,6 +2005,10 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn seed_random(&mut self, seed: u32);
     fn random(&mut self, upper_bound: i32) -> i32;
     fn put_debug_string(&mut self, payload: &[u8]);
+    /// Вызывает `DefaultClientResourceOwner::replace_from_world_directory`:
+    /// exact `LoadServerResource` заменяет global owner до `LoadEx`, игнорирует
+    /// его bool и публикует success-log. Получение cwd и log-sink остаётся
+    /// runtime responsibility этого context.
     fn load_server_resources(&mut self, game: &mut CGame);
 
     /// Возвращает `true`, если Linux single-instance owner закрепил title.
@@ -21745,7 +21749,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::LoadServerResource
-// STATUS: UNKNOWN (сохранены только метаданные исследования) / VERIFIED_DISASSEMBLY_BOUNDARY
+// STATUS: PARTIALLY_IMPLEMENTED / RUNTIME_CONTEXT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:567
@@ -21757,8 +21761,10 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // cwd-buffer. Exact тело продолжается до `0x004092BB`: удаляет прежний global
 // `CClientResource`, создаёт новый с `GAME_RES=2`, cwd и `FilesInfo.ril`, вызывает
 // `LoadEx`, игнорирует его bool, пишет `Load package file OK!` и возвращает
-// `true`. Owner остаётся RAW до реконструкции `CClientResource/rfOpen`; текущая
-// `WorldGameInitContext::load_server_resources` честно удерживает эту границу.
+// `true`. Delete/create/LoadEx path materialized как
+// `DefaultClientResourceOwner::replace_from_world_directory`; получение cwd и
+// side effect лога остаются `WorldGameInitContext::load_server_resources`,
+// чтобы не вводить process-global Rust state.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

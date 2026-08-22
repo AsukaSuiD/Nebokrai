@@ -9,8 +9,9 @@
 //!
 //! `rf_open` материализует точный выбор package/loose источника для explicit
 //! `CClientResource`; `Option<CRFile>` заменяет nullable старый указатель.
-//! Process-global default-resource остаётся внешним runtime owner-ом. `ReadToStream`
-//! также намеренно не материализован:
+//! Process-global default-resource принадлежит безопасному
+//! `DefaultClientResourceOwner` в соседнем owner-е. `ReadToStream` также
+//! намеренно не материализован:
 //! его файловая ветвь в точной дизассемблировке возвращает неустойчивое значение
 //! регистра, а практический C++ reference ему противоречит. Это нельзя
 //! превратить в Rust-контракт без дополнительной проверки EXE/PDB.
@@ -23,6 +24,30 @@ use std::{
 };
 
 use crate::public::clientresource::ClientResource;
+
+/// Явный borrowed resource-context вместо `g_pDefaultClientResource`.
+pub(crate) struct RFileResource<'a> {
+    resource: Option<&'a ClientResource>,
+    root: &'a std::path::Path,
+}
+
+impl<'a> RFileResource<'a> {
+    pub(crate) fn loaded(resource: &'a ClientResource, root: &'a std::path::Path) -> Self {
+        Self {
+            resource: Some(resource),
+            root,
+        }
+    }
+
+    /// Представляет уже созданный `CClientResource`, у которого `LoadEx`
+    /// оставил пустой/недоступный file index.
+    pub(crate) fn without_index(root: &'a std::path::Path) -> Self {
+        Self {
+            resource: None,
+            root,
+        }
+    }
+}
 
 /// Безопасная замена двух подтверждённых источников `CRFile`.
 ///
@@ -122,28 +147,29 @@ pub(crate) fn check_rfile_str(path: &mut Vec<u8>) {
 /// nullable `CRFile*`, ошибка файла, пакета или декодирования возвращает
 /// `None`: подробная диагностика остаётся на API `ClientResource`.
 ///
-/// Без resource exact owner использует process-global default. Его safe Rust
-/// владелец находится за runtime boundary; если он не передан, здесь остаётся
-/// только прямой loose fallback параметра без package normalizing.
-pub(crate) fn rf_open(
-    path: &[u8],
-    resource: Option<(&ClientResource, &std::path::Path)>,
-) -> Option<CRFile> {
+/// Без resource exact owner использует process-global default. В Rust его
+/// передаёт `DefaultClientResourceOwner` как `RFileResource`; если контекст
+/// действительно отсутствует, остаётся прямой loose fallback параметра без
+/// package normalizing.
+pub(crate) fn rf_open(path: &[u8], resource: Option<RFileResource<'_>>) -> Option<CRFile> {
     let path = c_string_prefix(path);
-    let Some((resource, root)) = resource else {
+    let Some(resource) = resource else {
         return open_loose_file(std::path::Path::new(String::from_utf8_lossy(path).as_ref()));
     };
 
     let mut normalized = path.to_vec();
     check_rfile_str(&mut normalized);
-    let loose = resource
+    let Some(client_resource) = resource.resource else {
+        return open_loose_file(&resource_loose_path(resource.root, &normalized));
+    };
+    let loose = client_resource
         .file_info(&normalized)
         .is_none_or(|info| info.package_type() & 1 != 0);
     if loose {
-        return open_loose_file(&resource_loose_path(root, &normalized));
+        return open_loose_file(&resource_loose_path(resource.root, &normalized));
     }
 
-    resource
+    client_resource
         .read_packaged(&normalized)
         .ok()
         .flatten()
