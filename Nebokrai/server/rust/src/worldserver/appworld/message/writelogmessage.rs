@@ -687,6 +687,7 @@ pub(crate) enum WorldWriteLogMessageOutcome {
     ChatLog(WorldChatLogMessageOutcome),
     ChangeMapLog(WorldChangeMapLogMessageOutcome),
     ReservedNoOp { message_type: i32 },
+    NoOp { message_type: i32 },
 }
 
 pub(crate) enum WorldWriteLogMessageDispatch {
@@ -694,7 +695,8 @@ pub(crate) enum WorldWriteLogMessageDispatch {
     Pending(CMessage),
 }
 
-/// Исполняет достигнутые write-log ветки и exact reserved no-op IDs.
+/// Исполняет достигнутые write-log ветки, exact reserved no-op IDs и default
+/// внешнего switch без side effects.
 pub(crate) fn on_write_log_message(
     game: &mut CGame,
     increment_log: &mut CIncrementLog,
@@ -800,7 +802,9 @@ pub(crate) fn on_write_log_message(
         );
     }
     if message.message_type() != INCREMENT_LOG_MESSAGE {
-        return WorldWriteLogMessageDispatch::Pending(message);
+        return WorldWriteLogMessageDispatch::Handled(WorldWriteLogMessageOutcome::NoOp {
+            message_type: message.message_type(),
+        });
     }
 
     let decoded_type = message.base_mut().get_char();
