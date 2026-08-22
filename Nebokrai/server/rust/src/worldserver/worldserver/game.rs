@@ -1056,7 +1056,8 @@ use crate::worldserver::appworld::goodswarmember::{
     GoodsWarMemberBlock,
 };
 use crate::worldserver::appworld::jjcsystem::{
-    CJJcSystem, JjcRunBlock, JjcRunConfig, JjcRunContext, JjcRunReport,
+    CJJcSystem, JJC_CONFIG_PATH, JJC_LEVEL_LIST_PATH, JJC_REGION_LIST_PATH,
+    JjcConfigurationLoadReport, JjcRunBlock, JjcRunConfig, JjcRunContext, JjcRunReport,
 };
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
     CFourNationWarSys, FourNationCountryFailContext, FourNationExploitContext,
@@ -1528,7 +1529,7 @@ pub(crate) enum WorldGameInitEvent {
     GoodsWarMemberLoaded(GoodsWarDatabaseLoadReport),
     RsSetupOwnerCreated(LoadedSetupIds),
     VoidOwner(WorldGameInitVoidOwner),
-    JjcConfigurationLoaded,
+    JjcConfigurationLoaded(JjcConfigurationLoadReport),
     Reload {
         profile: &'static [u8],
         legacy_result: i32,
@@ -1624,7 +1625,7 @@ pub(crate) enum WorldGameInitBlockReason<ContextBlock> {
     DupliRegionSetup,
     Context(ContextBlock),
     Reload(WorldReloadBlock),
-    JjcConfiguration,
+    JjcConfiguration(JjcConfigurationLoadReport),
     BooleanOwner(WorldGameInitBooleanOwner),
     OrganizingParameters(OrganizingParamLoadError),
     CountryParameters(CountryParamLoadError),
@@ -1686,7 +1687,6 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
 
     fn initialize_void_owner(&mut self, owner: WorldGameInitVoidOwner);
     fn initialize_boolean_owner(&mut self, owner: WorldGameInitBooleanOwner) -> bool;
-    fn load_jjc_configuration(&mut self) -> bool;
     fn load_region_parameters(&mut self, game: &mut CGame) -> bool;
     fn country_parameter_source(&mut self) -> Option<Vec<u8>>;
     fn country_war_source(&mut self) -> Option<Vec<u8>>;
@@ -3603,7 +3603,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     HonorEliminate,
     TaoZhuang,
     CiQing,
-    Jjc,
     GodsBattle,
 }
 
@@ -6502,6 +6501,7 @@ impl CGame {
     pub(crate) fn reload<Context: WorldReloadContext + ?Sized>(
         &mut self,
         context: &mut Context,
+        jjc: &mut CJJcSystem,
         profile: &[u8],
         send_to_game_servers: bool,
         reload_server_resources: bool,
@@ -7085,12 +7085,15 @@ impl CGame {
                 }
             }
             WorldReloadProfile::Jjc => {
-                let _ = Self::reload_boolean_with_log(
-                    context,
-                    WorldReloadBooleanOwner::Jjc,
-                    b"Load JJcConfig.ini...ok!",
-                    b"Load JJcCoinfig.ini...failed!",
-                );
+                let report = Self::load_jjc_configuration_from_resources(jjc, context);
+                if let Some(path) = report.missing_path() {
+                    context.notify_reload_operator(b"file not found", path);
+                }
+                context.add_log_text(if report.legacy_result() {
+                    b"Load JJcConfig.ini...ok!"
+                } else {
+                    b"Load JJcCoinfig.ini...failed!"
+                });
             }
             WorldReloadProfile::AllThing => {
                 const PATH: &[u8] = b"/data/LeitingAction.ini";
@@ -8124,6 +8127,24 @@ impl CGame {
         events.push(WorldGameInitEvent::OperatorNotice(notice));
     }
 
+    fn load_jjc_configuration_from_resources<Context: WorldReloadContext + ?Sized>(
+        jjc: &mut CJJcSystem,
+        context: &mut Context,
+    ) -> JjcConfigurationLoadReport {
+        let Some(region_source) = context.read_resource(JJC_REGION_LIST_PATH) else {
+            return jjc.load_configuration(None, None, None);
+        };
+        let Some(level_source) = context.read_resource(JJC_LEVEL_LIST_PATH) else {
+            return jjc.load_configuration(Some(&region_source), None, None);
+        };
+        let config_source = context.read_resource(JJC_CONFIG_PATH);
+        jjc.load_configuration(
+            Some(&region_source),
+            Some(&level_source),
+            config_source.as_deref(),
+        )
+    }
+
     fn database_initialization_snapshot(&self) -> WorldGameDatabaseInitialization {
         WorldGameDatabaseInitialization {
             settings: WorldDatabaseSettings::from_parts(WorldDatabaseSettingsParts {
@@ -8166,6 +8187,7 @@ impl CGame {
         &mut self,
         runtime_directory: &Path,
         context: &mut Context,
+        jjc: &mut CJJcSystem,
         organizing_parameters: &mut COrganizingParam,
         player_ranks: &mut CPlayerRanks,
         timer: &mut CTimer<TimerCallback>,
@@ -8340,10 +8362,19 @@ impl CGame {
         events.push(WorldGameInitEvent::VoidOwner(
             WorldGameInitVoidOwner::InitializeLargess,
         ));
-        if !context.load_jjc_configuration() {
-            stop!(WorldGameInitBlockReason::JjcConfiguration);
+        let jjc_configuration = Self::load_jjc_configuration_from_resources(jjc, context);
+        if let Some(path) = jjc_configuration.missing_path() {
+            Self::record_game_init_notice(
+                &mut events,
+                context,
+                b"file not found",
+                path,
+            );
+            stop!(WorldGameInitBlockReason::JjcConfiguration(
+                jjc_configuration,
+            ));
         }
-        events.push(WorldGameInitEvent::JjcConfigurationLoaded);
+        events.push(WorldGameInitEvent::JjcConfigurationLoaded(jjc_configuration));
 
         if let Err(block) = context.create_database_owner(WorldGameDatabaseOwner::RsPlayer) {
             stop!(WorldGameInitBlockReason::Context(block));
@@ -8424,7 +8455,7 @@ impl CGame {
             b"HonorElimilate",
         ];
         for &profile in INITIAL_RELOADS {
-            let legacy_result = match self.reload(context, profile, false, false) {
+            let legacy_result = match self.reload(context, jjc, profile, false, false) {
                 Ok(result) => result,
                 Err(block) => stop!(WorldGameInitBlockReason::Reload(block)),
             };
@@ -8458,7 +8489,7 @@ impl CGame {
             b"taozhuang",
         ];
         for &profile in SECONDARY_RELOADS {
-            let legacy_result = match self.reload(context, profile, false, false) {
+            let legacy_result = match self.reload(context, jjc, profile, false, false) {
                 Ok(result) => result,
                 Err(block) => stop!(WorldGameInitBlockReason::Reload(block)),
             };
@@ -8487,7 +8518,7 @@ impl CGame {
             b"BattleFairyExpConfig".as_slice(),
             b"BattleFairyCombineConfig",
         ] {
-            let legacy_result = match self.reload(context, profile, false, false) {
+            let legacy_result = match self.reload(context, jjc, profile, false, false) {
                 Ok(result) => result,
                 Err(block) => stop!(WorldGameInitBlockReason::Reload(block)),
             };
@@ -8527,7 +8558,7 @@ impl CGame {
             organizing_parameters_load,
         ));
 
-        let legacy_result = match self.reload(context, b"godsBattle", false, false) {
+        let legacy_result = match self.reload(context, jjc, b"godsBattle", false, false) {
             Ok(result) => result,
             Err(block) => stop!(WorldGameInitBlockReason::Reload(block)),
         };
@@ -10961,6 +10992,7 @@ impl CGame {
             self,
             state.reload_flags,
             &mut *callbacks.reload_context,
+            owners.jjc,
             &mut *callbacks.get_log_local_time,
             owners.country_war,
             owners.timer,
@@ -14752,6 +14784,7 @@ where
     if selector.owner == Some(WorldMessageOwner::Gm) {
         match on_gm_message(
             game,
+            jjc,
             rs_player,
             player_database.as_deref_mut(),
             reload_context,
@@ -17653,6 +17686,7 @@ pub(crate) fn reload_profiles<Context, GetLocalTime, GetTimerLocalTime, TimerCal
     game: &mut CGame,
     flags: &WorldReloadProfileFlags,
     context: &mut Context,
+    jjc: &mut CJJcSystem,
     mut get_local_time: GetLocalTime,
     country_war: &mut CountryWarSys,
     timer: &mut CTimer<TimerCallback>,
@@ -17693,6 +17727,7 @@ where
             } else {
                 game.reload(
                     context,
+                    jjc,
                     action.reload_profile,
                     action.first_option,
                     action.second_option,

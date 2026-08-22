@@ -5,9 +5,9 @@
 //! `RecycleJJcRegion` RVA `0x00085460`, `GetRegionServerID` RVA `0x000854C0`,
 //! `JJcPKTimeout` RVA `0x00085840`, `Run` RVA `0x00085A40`, apply/matching
 //! цепочка RVA `0x00082A30`, `0x00083760`, `0x00085590`, `0x00085770`,
-//! `0x00085990`, `0x00085B90`, `0x00085CA0` и два её малых query —
-//! `IMPLEMENTED / VERIFIED_DISASSEMBLY`; сырым ниже остаётся только INI
-//! parser `LoadJJcConfig`. Точная пара:
+//! `0x00085990`, `0x00085B90`, `0x00085CA0`, два её малых query и
+//! `LoadJJcConfig` RVA `0x00085020` — `IMPLEMENTED / VERIFIED_DISASSEMBLY`.
+//! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
 //! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
 //! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
@@ -53,11 +53,21 @@
 //! logging и DB остаются Linux-совместимыми callbacks без Windows FFI. STL,
 //! SEH, allocator, singleton destructor и unwind noise удалены у реализованных
 //! блоков; `nullptr` transport заменён готовым `Option` внутри `CGame`.
+//! `LoadJJcConfig` использует byte-parser поверх стандартных Rust slices:
+//! не требует декодировать китайский заголовок `JJcLevel.ini`, сохраняет
+//! исходную partial-publication между двумя обязательными resource-файлами и
+//! нулевые Win32 defaults необязательного `setup/JJcConfig.ini`. Повреждённая
+//! marker-запись пропускается вместо внутреннего iostream failbit/stale-value
+//! дефекта, не являющегося контрактом корректных ресурсов.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::worldserver::game::CGame;
+
+pub(crate) const JJC_REGION_LIST_PATH: &[u8] = b"data/JJCRegionlist.ini";
+pub(crate) const JJC_LEVEL_LIST_PATH: &[u8] = b"data/JJcLevel.ini";
+pub(crate) const JJC_CONFIG_PATH: &[u8] = b"setup/JJcConfig.ini";
 
 /// Точный PDB-layout `tagJJcRank` без обещания NUL в 32-байтном имени.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -90,6 +100,40 @@ pub(crate) struct JjcRunConfig {
     pub(crate) region_id_min: i32,
     pub(crate) region_id_max: i32,
     pub(crate) max_regions_in_use: i32,
+}
+
+/// Наблюдаемый итог `LoadJJcConfig`, включая исходную partial-publication.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum JjcConfigurationLoadReport {
+    MissingRegionList,
+    MissingLevelList {
+        available_regions: usize,
+    },
+    Loaded {
+        available_regions: usize,
+        level_steps: usize,
+        week_day: i32,
+        hour: i32,
+        minute: i32,
+        second: i32,
+        passed_weeks: i32,
+        last_clear_time: i32,
+        config_file_present: bool,
+    },
+}
+
+impl JjcConfigurationLoadReport {
+    pub(crate) const fn legacy_result(self) -> bool {
+        matches!(self, Self::Loaded { .. })
+    }
+
+    pub(crate) const fn missing_path(self) -> Option<&'static [u8]> {
+        match self {
+            Self::MissingRegionList => Some(JJC_REGION_LIST_PATH),
+            Self::MissingLevelList { .. } => Some(JJC_LEVEL_LIST_PATH),
+            Self::Loaded { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -549,6 +593,55 @@ impl CJJcSystem {
     pub(crate) fn set_clear_state(&mut self, passed_weeks: i32, last_clear_time: i32) {
         self.passed_weeks = passed_weeks;
         self.last_clear_time = last_clear_time;
+    }
+
+    /// Загружает три resource-файла `LoadJJcConfig` без Win32/iostream.
+    ///
+    /// Наличие двух marker-файлов определяет старый bool-result. Отсутствующий
+    /// `JJcConfig.ini` эквивалентен шести defaults `GetPrivateProfileIntA(0)`.
+    /// Невалидная marker-строка безопасно пропускается вместо переноса
+    /// внутреннего failbit/stale-value дефекта `operator>>`.
+    pub(crate) fn load_configuration(
+        &mut self,
+        region_source: Option<&[u8]>,
+        level_source: Option<&[u8]>,
+        config_source: Option<&[u8]>,
+    ) -> JjcConfigurationLoadReport {
+        let Some(region_source) = region_source else {
+            return JjcConfigurationLoadReport::MissingRegionList;
+        };
+        let regions = parse_jjc_regions(region_source);
+        self.replace_available_regions(regions);
+        let available_regions = self.regions_left.len();
+
+        let Some(level_source) = level_source else {
+            return JjcConfigurationLoadReport::MissingLevelList {
+                available_regions,
+            };
+        };
+        let levels = parse_jjc_level_steps(level_source);
+        self.replace_level_steps(levels);
+        let level_steps = self.level_list.len();
+
+        let ini = parse_jjc_ini(config_source.unwrap_or_default());
+        let week_day = if (0..=6).contains(&ini.week_day) {
+            ini.week_day
+        } else {
+            0
+        };
+        self.set_week_clear_schedule(week_day, ini.hour, ini.minute, ini.second);
+        self.set_clear_state(ini.passed_weeks, ini.last_clear_time);
+        JjcConfigurationLoadReport::Loaded {
+            available_regions,
+            level_steps,
+            week_day,
+            hour: ini.hour,
+            minute: ini.minute,
+            second: ini.second,
+            passed_weeks: ini.passed_weeks,
+            last_clear_time: ini.last_clear_time,
+            config_file_present: config_source.is_some(),
+        }
     }
 
     /// Публикует available region pool, не очищая отдельный in-use owner.
@@ -1335,6 +1428,129 @@ fn add_jjc_info(message: &mut crate::nets::basemessage::CBaseMessage, info: JjcI
     message.add_long(info.start_time);
 }
 
+fn parse_jjc_regions(source: &[u8]) -> BTreeSet<i32> {
+    source
+        .split(|&byte| byte == b'#')
+        .skip(1)
+        .filter_map(|record| ascii_fields(record).next().and_then(parse_legacy_config_int))
+        .collect()
+}
+
+fn parse_jjc_level_steps(source: &[u8]) -> BTreeMap<(i32, i32), i32> {
+    let mut levels = BTreeMap::new();
+    for record in source.split(|&byte| byte == b'#').skip(1) {
+        let mut fields = ascii_fields(record);
+        let Some(step) = fields.next().and_then(parse_legacy_config_int) else {
+            continue;
+        };
+        let Some(minimum) = fields.next().and_then(parse_legacy_config_int) else {
+            continue;
+        };
+        let Some(maximum) = fields.next().and_then(parse_legacy_config_int) else {
+            continue;
+        };
+        levels.insert((minimum, maximum), step);
+    }
+    levels
+}
+
+#[derive(Default)]
+struct ParsedJjcIni {
+    week_day: i32,
+    hour: i32,
+    minute: i32,
+    second: i32,
+    passed_weeks: i32,
+    last_clear_time: i32,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum JjcIniSection {
+    None,
+    Config,
+    Write,
+}
+
+fn parse_jjc_ini(source: &[u8]) -> ParsedJjcIni {
+    let mut values = ParsedJjcIni::default();
+    let mut section = JjcIniSection::None;
+    for raw_line in source.split(|&byte| byte == b'\n') {
+        let line = trim_ascii(raw_line);
+        if line.len() >= 2 && line[0] == b'[' && line[line.len() - 1] == b']' {
+            let name = trim_ascii(&line[1..line.len() - 1]);
+            section = if name.eq_ignore_ascii_case(b"config") {
+                JjcIniSection::Config
+            } else if name.eq_ignore_ascii_case(b"write") {
+                JjcIniSection::Write
+            } else {
+                JjcIniSection::None
+            };
+            continue;
+        }
+        if line.first().is_none_or(|byte| matches!(byte, b';' | b'#')) {
+            continue;
+        }
+        let Some(delimiter) = line.iter().position(|&byte| byte == b'=') else {
+            continue;
+        };
+        let key = trim_ascii(&line[..delimiter]);
+        let Some(value) = ascii_fields(trim_ascii(&line[delimiter + 1..]))
+            .next()
+            .and_then(parse_legacy_config_int)
+        else {
+            continue;
+        };
+        match section {
+            JjcIniSection::Config if key.eq_ignore_ascii_case(b"Day") => {
+                values.week_day = value;
+            }
+            JjcIniSection::Config if key.eq_ignore_ascii_case(b"Hour") => {
+                values.hour = value;
+            }
+            JjcIniSection::Config if key.eq_ignore_ascii_case(b"Min") => {
+                values.minute = value;
+            }
+            JjcIniSection::Config if key.eq_ignore_ascii_case(b"Sec") => {
+                values.second = value;
+            }
+            JjcIniSection::Write if key.eq_ignore_ascii_case(b"PassedWeeks") => {
+                values.passed_weeks = value;
+            }
+            JjcIniSection::Write if key.eq_ignore_ascii_case(b"lastClearTime") => {
+                values.last_clear_time = value;
+            }
+            JjcIniSection::None | JjcIniSection::Config | JjcIniSection::Write => {}
+        }
+    }
+    values
+}
+
+fn parse_legacy_config_int(token: &[u8]) -> Option<i32> {
+    let text = std::str::from_utf8(token).ok()?;
+    if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        return u32::from_str_radix(hex, 16).ok().map(|value| value as i32);
+    }
+    text.parse::<i32>()
+        .ok()
+        .or_else(|| text.parse::<u32>().ok().map(|value| value as i32))
+}
+
+fn trim_ascii(mut value: &[u8]) -> &[u8] {
+    while value.first().is_some_and(u8::is_ascii_whitespace) {
+        value = &value[1..];
+    }
+    while value.last().is_some_and(u8::is_ascii_whitespace) {
+        value = &value[..value.len() - 1];
+    }
+    value
+}
+
+fn ascii_fields(value: &[u8]) -> impl Iterator<Item = &[u8]> {
+    value
+        .split(u8::is_ascii_whitespace)
+        .filter(|field| !field.is_empty())
+}
+
 enum JjcPkTimeoutResult {
     Keep(JjcFightRunReport),
     RemoveFight,
@@ -1411,7 +1627,7 @@ struct JjcFightSnapshot {
 
 // ============================================================================
 // FUNCTION: CJJcSystem::LoadJJcConfig
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\jjcsystem.cpp:593
