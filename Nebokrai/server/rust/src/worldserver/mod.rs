@@ -126,6 +126,11 @@ pub(crate) mod appworld {
         pub(crate) mod cseekgoodslistener;
     }
     pub(crate) mod message {
+        #[allow(
+            dead_code,
+            reason = "M2W auction relay подключён к ProcessMessage; DB-ветви остаются pending"
+        )]
+        pub(crate) mod onmsg_m2w_auction;
         pub(crate) mod gmamessage;
         pub(crate) mod gmmessage;
         pub(crate) mod jjcsysmessage;

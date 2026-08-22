@@ -1381,6 +1381,9 @@ use crate::worldserver::appworld::message::gmmessage::{
 use crate::worldserver::appworld::message::logmessage::{
     WorldLogMessageDispatch, WorldLogMessageOutcome, on_log_message,
 };
+use crate::worldserver::appworld::message::onmsg_m2w_auction::{
+    WorldMiscAuctionMessageDispatch, WorldMiscAuctionMessageOutcome, on_msg_m2w_auction,
+};
 use crate::worldserver::appworld::message::playermessage::{
     WorldPlayerMessageDispatch, WorldPlayerMessageOutcome, on_player_message,
 };
@@ -2656,6 +2659,11 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: JjcSystemMessageOutcome,
+    },
+    MiscAuctionMessage {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: WorldMiscAuctionMessageOutcome,
     },
     TeamMessage {
         source: WorldMessageSource,
@@ -17720,6 +17728,19 @@ where
             legacy_run_result,
             outcome,
         };
+    }
+
+    if selector.owner == Some(WorldMessageOwner::MiscAuction) {
+        match on_msg_m2w_auction(game, message) {
+            WorldMiscAuctionMessageDispatch::Handled(outcome) => {
+                return ProcessedWorldEvent::MiscAuctionMessage {
+                    source,
+                    legacy_run_result,
+                    outcome,
+                };
+            }
+            WorldMiscAuctionMessageDispatch::Pending(pending) => message = pending,
+        }
     }
 
     if selector.owner == Some(WorldMessageOwner::WriteLog) {
