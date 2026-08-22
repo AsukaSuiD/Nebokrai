@@ -71,6 +71,9 @@
 //! `0x004E6B12` возвращает `AL=1` после вставки. Failure-tail читает в
 //! `0x004E6B7A` тот самый локальный byte, который `0x004E6A80` заранее
 //! обнулил, поэтому заполненный depot стабильно даёт `false`, а не мусор.
+//! `AppendLargessToMap` сначала линейно проверяет `lSendID` по всей карте и
+//! только затем делает unique insert по player ID; ни один из двух duplicate-
+//! случаев не заменяет старую запись. `BTreeMap::entry` сохраняет этот контракт.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
@@ -146,6 +149,13 @@ pub(crate) enum LoadLargessBlock {
     Player(PlayerCodecError),
     Guid(getrandom::Error),
     ZeroMaximumStack { goods_index: u32 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AppendLargessOutcome {
+    Inserted,
+    DuplicateSendId,
+    ExistingPlayerKept,
 }
 
 /// Делегирует `CLargess::AddGoldCoin` готовому bank-wallet owner-у.
@@ -366,6 +376,41 @@ impl TiberiusLargess {
             cost_database,
             entries: Mutex::new(entries),
             notices: VecDeque::new(),
+        }
+    }
+
+    /// Повторяет global SendID scan и последующий unique player-key insert.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn append_largess_to_map(
+        &self,
+        send_id: i32,
+        goods_index: u32,
+        send_num: i32,
+        obtained_num: i32,
+        goods_level: i32,
+        player_id: i32,
+    ) -> AppendLargessOutcome {
+        let mut entries = self.entries.lock();
+        if entries.values().any(|entry| entry.send_id == send_id) {
+            return AppendLargessOutcome::DuplicateSendId;
+        }
+        let entry = LargessSnapshot {
+            send_id,
+            goods_index,
+            send_num,
+            obtained_num,
+            goods_level,
+            sent_time: Vec::new(),
+            failed_reason: Vec::new(),
+        };
+        match entries.entry(player_id) {
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                slot.insert(entry);
+                AppendLargessOutcome::Inserted
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {
+                AppendLargessOutcome::ExistingPlayerKept
+            }
         }
     }
 
@@ -887,7 +932,7 @@ fn format_local_time() -> String {
 
 // ============================================================================
 // FUNCTION: CLargess::AppendLargessToMap
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:56
@@ -895,6 +940,8 @@ fn format_local_time() -> String {
 // ADDRESS: 004e9d40
 // PROTOTYPE: void __cdecl AppendLargessToMap(long param_1, ulong param_2, long param_3, long param_4, long param_5, long param_6)
 //
+// IMPLEMENTED_OWNER: `TiberiusLargess::append_largess_to_map` выше сохраняет
+// SendID scan и unique player-key insertion без замены существующего value.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
