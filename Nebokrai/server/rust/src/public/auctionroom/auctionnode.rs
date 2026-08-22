@@ -38,8 +38,10 @@
 //! `AuctionInfo` сохраняется byte-exact wrapper-ом над `[u8; 0x22c]`,
 //! `std::vector<unsigned char>` — `Vec<u8>`, а GUID — готовым `CGuid`.
 //! Достигнутое поле `dwBuyerId` PDB задаёт как unsigned 32-bit по offset
-//! `0x224`; только оно получает typed getter/setter, остальные байты структуры
-//! не переинтерпретируются заранее. Rust-владение заменяет destructor,
+//! `0x224`. Снимок полей для DB-записи ниже дополнительно читает только подтверждённые
+//! `strBuyerName`, `dwMoneySeller`, `dwSellerId` и `GoodsState`, нужные exact
+//! `CDbMisc`; остальные байты структуры не переинтерпретируются заранее.
+//! Rust-владение заменяет destructor,
 //! allocator и exception cleanup. Форма `long&` сознательно заменена
 //! `&mut usize`, а неинициализированные constructor-ом `m_btGoodsType` и
 //! `m_dwLvLimit` — `Option`: `Clear` буквально не меняет их, успешный
@@ -210,6 +212,26 @@ impl AuctionInfo {
             .copy_from_slice(&buyer_id.to_le_bytes());
     }
 
+    fn buyer_name(&self) -> &[u8] {
+        &self.bytes[AUCTION_BUYER_NAME_OFFSET..AUCTION_MONEY_BUYER_OFFSET]
+    }
+
+    fn money_seller(&self) -> u32 {
+        u32::from_le_bytes(
+            self.bytes[AUCTION_MONEY_SELLER_OFFSET..AUCTION_MONEY_SELLER_OFFSET + 4]
+                .try_into()
+                .expect("PDB offset dwMoneySeller помещается в AuctionInfo"),
+        )
+    }
+
+    fn seller_id(&self) -> u32 {
+        u32::from_le_bytes(
+            self.bytes[AUCTION_SELLER_ID_OFFSET..AUCTION_SELLER_ID_OFFSET + 4]
+                .try_into()
+                .expect("PDB offset dwSellerId помещается в AuctionInfo"),
+        )
+    }
+
     fn set_database_fields(
         &mut self,
         seller_name: &[u8],
@@ -298,6 +320,22 @@ pub(crate) struct AuctionDatabaseNodeFields {
     pub(crate) money_buyer: u32,
     pub(crate) time_buyer: u32,
     pub(crate) buyer_id: u32,
+}
+
+/// Подтверждённые PDB-поля узла, которые нужны четырём SQL write-переходам
+/// `CDbMisc`.
+///
+/// Строка buyer name остаётся срезом фиксированного legacy-буфера: TDS-владелец обязан
+/// остановиться на первом NUL, как старый `%s`, и отдельно обработать отсутствие
+/// terminator вместо чтения за границей `char[0x100]`.
+pub(crate) struct AuctionDatabaseWriteFields<'node> {
+    pub(crate) guid: CGuid,
+    pub(crate) buyer_id: u32,
+    pub(crate) buyer_name: &'node [u8],
+    pub(crate) money_type: u8,
+    pub(crate) seller_money: u32,
+    pub(crate) seller_id: u32,
+    pub(crate) goods_state: GoodsState,
 }
 
 impl Default for CGoodsNode {
@@ -532,6 +570,20 @@ impl CGoodsNode {
     /// Выполняет единственное доказанное присваивание `dwBuyerId`.
     pub(crate) fn set_buyer_id(&mut self, buyer_id: u32) {
         self.auction_info.set_buyer_id(buyer_id);
+    }
+
+    /// Собирает только поля, которые исходный `CDbMisc` передавал в свои
+    /// отдельные SQL write-переходы.
+    pub(crate) fn database_write_fields(&self) -> AuctionDatabaseWriteFields<'_> {
+        AuctionDatabaseWriteFields {
+            guid: self.guid,
+            buyer_id: self.auction_info.buyer_id(),
+            buyer_name: self.auction_info.buyer_name(),
+            money_type: self.money_type,
+            seller_money: self.auction_info.money_seller(),
+            seller_id: self.auction_info.seller_id(),
+            goods_state: self.goods_state,
+        }
     }
 
     /// Возвращает старый byte money type.

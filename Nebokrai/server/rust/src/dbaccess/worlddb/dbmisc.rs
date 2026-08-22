@@ -2,8 +2,10 @@
 //!
 //! Статус владельца: `IMPLEMENTED` для `DbNote`, constructor/lifecycle очередей,
 //! `PushItemToListIn/Out`, `PopItemFromListIn/Out`, трёх
-//! `DoneOT_IN_*`, `DoneListIn`, `DoneOutList`, `PopPlayerList` и достигнутой
-//! части `LoadAuction`, caller-контрактов `LoadOwnerBackGoods`,
+//! `DoneOT_IN_*`, `DoneListIn`, `DoneOutList`, `PopPlayerList`, пяти
+//! DB-переходов записи `DelItemFromDb`/`DelMoneyFromDb`/`ModifyGoodsStateA2S`/
+//! `TansferMoney`/`ModifyGoodsStateA2B` и достигнутой части `LoadAuction`,
+//! caller-контрактов `LoadOwnerBackGoods`,
 //! `LoadOwnerUndoGoods`, `LoadOwnerSuccGoods` и `LoadMoneyById`, а также
 //! Tiberius materialization `LoadGoodsByOwnerId` и `LoadMoneyById`. Остальные
 //! SQL/load-функции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
@@ -63,6 +65,10 @@
 //! полностью собранный goods/money batch вместо ADO/COM recordset; async
 //! bridge, который append-ит batch в общий output FIFO из World MainLoop,
 //! остаётся у concrete context и не подменяется блокирующим вызовом драйвера.
+//! `TiberiusAuctionWriteOwner` так же не прячет async I/O за синхронным
+//! `DbMiscContext`: удаление лота открывает собственное соединение, а остальные
+//! четыре точные SQL-команды принимают normal connection исходного owner-а от
+//! вызывающего кода.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -73,10 +79,13 @@ use futures_util::TryStreamExt;
 use parking_lot::Mutex;
 use tiberius::Query;
 
-use crate::dbaccess::worlddb::rssetup::{WorldDatabaseConnectionError, WorldDatabaseSettings};
+use crate::dbaccess::worlddb::rssetup::{
+    WorldDatabaseConnectionError, WorldDatabaseSettings, WorldTdsClient,
+};
 use crate::nets::networld::message::CMessage;
 use crate::public::auctionnode::{
-    AuctionDatabaseNodeFields, CGoodsNode, GoodsNodeSerializeError, GoodsState,
+    AuctionDatabaseNodeFields, AuctionDatabaseWriteFields, CGoodsNode,
+    GoodsNodeSerializeError, GoodsState,
 };
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::guid::CGuid;
@@ -635,6 +644,305 @@ fn output_block(
         processed_notes,
         pending_notes,
     }
+}
+
+/// Точная операция одного SQL-перехода записи `CDbMisc`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AuctionWriteOperation {
+    DeleteItem,
+    DeleteMoney,
+    ModifyStateAuctionToSucceeded,
+    TransferSellerMoney,
+    ModifyReturnedGoodsState,
+}
+
+/// Технический отказ TDS-границы, который старый owner представлял `false` и
+/// `PrintErr`-веткой.
+#[derive(Debug)]
+pub(crate) enum AuctionWriteFailure {
+    Connection {
+        operation: AuctionWriteOperation,
+        source: WorldDatabaseConnectionError,
+    },
+    Database {
+        operation: AuctionWriteOperation,
+        source: tiberius::error::Error,
+    },
+    LegacyUnsignedOutsideSqlInt {
+        operation: AuctionWriteOperation,
+        field: &'static str,
+        value: u32,
+    },
+}
+
+impl fmt::Display for AuctionWriteFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Connection { source, .. } => source.fmt(formatter),
+            Self::Database { operation, source } => {
+                write!(formatter, "ошибка Auction DB при {operation:?}: {source}")
+            }
+            Self::LegacyUnsignedOutsideSqlInt {
+                operation,
+                field,
+                value,
+            } => write!(
+                formatter,
+                "{operation:?}: {field}={value} не представим исходным SQL int"
+            ),
+        }
+    }
+}
+
+impl Error for AuctionWriteFailure {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Connection { source, .. } => Some(source),
+            Self::Database { source, .. } => Some(source),
+            Self::LegacyUnsignedOutsideSqlInt { .. } => None,
+        }
+    }
+}
+
+/// Безопасная остановка на старой строковой границе, для которой исходник мог
+/// выйти за фиксированный буфер до SQL-вызова.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AuctionWriteBlock {
+    BuyerNameWithoutTerminator,
+    MissingSellerMoneyAfterFee,
+}
+
+/// Результат одного write-перехода без выдумывания проверки rowcount: ADO
+/// `ExecuteCn` сообщал только успех выполнения команды.
+#[derive(Debug)]
+pub(crate) enum AuctionWriteOutcome {
+    Written,
+    /// `ModifyGoodsStateA2S`, `TansferMoney` и `ModifyGoodsStateA2B` печатали
+    /// ошибку `ExecuteCn`, но normal return оставался `true`. Это не
+    /// технический дефект, который можно исправить локально: `DoneListIn`
+    /// публикует из него внешний успешный переход.
+    ReturnedTrueAfterDatabaseFailure(AuctionWriteFailure),
+    ReturnedFalse(AuctionWriteFailure),
+    BlockedMissingFact(AuctionWriteBlock),
+}
+
+impl AuctionWriteOutcome {
+    /// Точный bool для будущего async-адаптера `DbMiscContext`; безопасная
+    /// блокировка не выдаётся за доказанный ответ старого процесса.
+    pub(crate) const fn legacy_bool(&self) -> Option<bool> {
+        match self {
+            Self::Written | Self::ReturnedTrueAfterDatabaseFailure(_) => Some(true),
+            Self::ReturnedFalse(_) => Some(false),
+            Self::BlockedMissingFact(_) => None,
+        }
+    }
+}
+
+/// Linux/TDS-владелец пяти точных DB-переходов записи `CDbMisc`.
+///
+/// Проверка машинного кода World EXE фиксирует аргументы format strings:
+/// `MondifyMoney(money, player_id)` в `0x004EFAE0..0x004EFAF9`,
+/// `BuyGoods(guid, buyer_id, buyer_name, buyer_id)` в
+/// `0x004EFC05..0x004EFC29`, `TransferMoney(seller_id, payout)` в
+/// `0x004EFD3B..0x004EFD5A` и `UpdateGoodsState(guid, state)` в
+/// `0x004EFE65..0x004EFE81`. Первое удаление сохраняет самостоятельное
+/// соединение `0x004EF961..0x004EFA6E`; четыре прочие команды используют
+/// `m_NormalCn`. Параметризованный TDS заменяет только небезопасный `_sprintf` и
+/// не объединяет последовательные BuyGoods/TransferMoney в транзакцию.
+pub(crate) struct TiberiusAuctionWriteOwner {
+    settings: WorldDatabaseSettings,
+}
+
+impl TiberiusAuctionWriteOwner {
+    pub(crate) fn new(settings: &WorldDatabaseSettings) -> Self {
+        Self {
+            settings: settings.clone(),
+        }
+    }
+
+    /// Выполняет точный `delete auction where goodsid = '%s'` в отдельном
+    /// соединении, как `DelItemFromDb`.
+    pub(crate) async fn delete_item_from_db(&self, guid: CGuid) -> AuctionWriteOutcome {
+        let mut connection = match self.settings.connect().await {
+            Ok(connection) => connection,
+            Err(source) => {
+                return AuctionWriteOutcome::ReturnedFalse(AuctionWriteFailure::Connection {
+                    operation: AuctionWriteOperation::DeleteItem,
+                    source,
+                });
+            }
+        };
+        let mut query = Query::new("delete auction where goodsid = @P1");
+        query.bind(guid.to_string());
+        execute_auction_write(
+            AuctionWriteOperation::DeleteItem,
+            &mut connection,
+            query,
+        )
+        .await
+    }
+
+    /// Выполняет `exec MondifyMoney money, player_id` через normal connection
+    /// от вызывающего кода. Значение денег является абсолютным остатком, а не
+    /// суммой для вычитания: именно его передавал `DoneListIn`.
+    pub(crate) async fn delete_money_from_db(
+        &self,
+        normal_connection: &mut WorldTdsClient,
+        player_id: i32,
+        money: i32,
+    ) -> AuctionWriteOutcome {
+        let mut query = Query::new("exec MondifyMoney @P1, @P2");
+        query.bind(money);
+        query.bind(player_id);
+        execute_auction_write(
+            AuctionWriteOperation::DeleteMoney,
+            normal_connection,
+            query,
+        )
+        .await
+    }
+
+    /// Выполняет первую точную часть A2S: `BuyGoods`. Вызывающий обязан вызвать
+    /// `transfer_money` только после `Written`, сохраняя исходную частичную
+    /// фиксацию при отказе второй команды.
+    pub(crate) async fn modify_goods_state_a2s(
+        &self,
+        normal_connection: &mut WorldTdsClient,
+        fields: AuctionDatabaseWriteFields<'_>,
+    ) -> AuctionWriteOutcome {
+        let buyer_name = match legacy_auction_buyer_name(fields.buyer_name) {
+            Some(value) => value,
+            None => {
+                return AuctionWriteOutcome::BlockedMissingFact(
+                    AuctionWriteBlock::BuyerNameWithoutTerminator,
+                );
+            }
+        };
+        let mut query = Query::new("exec buygoods @P1, @P2, @P3, @P4");
+        query.bind(fields.guid.to_string());
+        query.bind(fields.buyer_id as i32);
+        query.bind(buyer_name.as_str());
+        query.bind(fields.buyer_id as i32);
+        execute_auction_write_with_ignored_failure(
+            AuctionWriteOperation::ModifyStateAuctionToSucceeded,
+            normal_connection,
+            query,
+        )
+        .await
+    }
+
+    /// Выполняет вторую A2S-команду отдельно от `BuyGoods`.
+    ///
+    /// Для money type `1` исходный owner возвращал успех до вычисления
+    /// комиссии и SQL. Для остальных значений вызывающий передаёт точный результат
+    /// `CGame::GetOptMoneyJin`; отсутствие такого значения не превращается в
+    /// нулевое начисление.
+    pub(crate) async fn transfer_money(
+        &self,
+        normal_connection: &mut WorldTdsClient,
+        fields: AuctionDatabaseWriteFields<'_>,
+        seller_money_after_fee: Option<i32>,
+    ) -> AuctionWriteOutcome {
+        if fields.money_type == 1 {
+            return AuctionWriteOutcome::Written;
+        }
+        let Some(seller_money_after_fee) = seller_money_after_fee else {
+            return AuctionWriteOutcome::BlockedMissingFact(
+                AuctionWriteBlock::MissingSellerMoneyAfterFee,
+            );
+        };
+        let seller_id = match legacy_unsigned_sql_int(
+            AuctionWriteOperation::TransferSellerMoney,
+            "dwSellerId",
+            fields.seller_id,
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                return AuctionWriteOutcome::ReturnedTrueAfterDatabaseFailure(error);
+            }
+        };
+        let payout = match legacy_unsigned_sql_int(
+            AuctionWriteOperation::TransferSellerMoney,
+            "seller_money_after_fee",
+            seller_money_after_fee as u32,
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                return AuctionWriteOutcome::ReturnedTrueAfterDatabaseFailure(error);
+            }
+        };
+        let mut query = Query::new("exec TransferMoney @P1,@P2");
+        query.bind(seller_id);
+        query.bind(payout);
+        execute_auction_write_with_ignored_failure(
+            AuctionWriteOperation::TransferSellerMoney,
+            normal_connection,
+            query,
+        )
+        .await
+    }
+
+    /// Выполняет `exec UpdateGoodsState guid, node_state` для возврата товара.
+    pub(crate) async fn modify_goods_state_a2b(
+        &self,
+        normal_connection: &mut WorldTdsClient,
+        fields: AuctionDatabaseWriteFields<'_>,
+    ) -> AuctionWriteOutcome {
+        let mut query = Query::new("exec UpdateGoodsState @P1, @P2");
+        query.bind(fields.guid.to_string());
+        query.bind(fields.goods_state.raw());
+        execute_auction_write_with_ignored_failure(
+            AuctionWriteOperation::ModifyReturnedGoodsState,
+            normal_connection,
+            query,
+        )
+        .await
+    }
+}
+
+async fn execute_auction_write(
+    operation: AuctionWriteOperation,
+    connection: &mut WorldTdsClient,
+    query: Query<'_>,
+) -> AuctionWriteOutcome {
+    match query.execute(connection).await {
+        Ok(_) => AuctionWriteOutcome::Written,
+        Err(source) => AuctionWriteOutcome::ReturnedFalse(AuctionWriteFailure::Database {
+            operation,
+            source,
+        }),
+    }
+}
+
+async fn execute_auction_write_with_ignored_failure(
+    operation: AuctionWriteOperation,
+    connection: &mut WorldTdsClient,
+    query: Query<'_>,
+) -> AuctionWriteOutcome {
+    match query.execute(connection).await {
+        Ok(_) => AuctionWriteOutcome::Written,
+        Err(source) => AuctionWriteOutcome::ReturnedTrueAfterDatabaseFailure(
+            AuctionWriteFailure::Database { operation, source },
+        ),
+    }
+}
+
+fn legacy_auction_buyer_name(bytes: &[u8]) -> Option<String> {
+    let terminator = bytes.iter().position(|byte| *byte == 0)?;
+    let (name, _, _) = WINDOWS_1251.decode(&bytes[..terminator]);
+    Some(name.into_owned())
+}
+
+fn legacy_unsigned_sql_int(
+    operation: AuctionWriteOperation,
+    field: &'static str,
+    value: u32,
+) -> Result<i32, AuctionWriteFailure> {
+    i32::try_from(value).map_err(|_| AuctionWriteFailure::LegacyUnsignedOutsideSqlInt {
+        operation,
+        field,
+        value,
+    })
 }
 
 /// Ошибка достигнутой Tiberius-границы `CDbMisc::LoadGoodsByOwnerId`.
@@ -1220,7 +1528,7 @@ enum ReadAuctionGoodsRecordError {
 
 // ============================================================================
 // FUNCTION: CDbMisc::DelItemFromDb
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:673
@@ -1228,6 +1536,7 @@ enum ReadAuctionGoodsRecordError {
 // ADDRESS: 004ef930
 // PROTOTYPE: bool __thiscall DelItemFromDb(CGUID param_1)
 //
+// IMPLEMENTED_OWNER: `TiberiusAuctionWriteOwner::delete_item_from_db` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1248,7 +1557,7 @@ enum ReadAuctionGoodsRecordError {
 
 // ============================================================================
 // FUNCTION: CDbMisc::DelMoneyFromDb
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:703
@@ -1256,6 +1565,7 @@ enum ReadAuctionGoodsRecordError {
 // ADDRESS: 004efab0
 // PROTOTYPE: bool __thiscall DelMoneyFromDb(long param_1, long param_2)
 //
+// IMPLEMENTED_OWNER: `TiberiusAuctionWriteOwner::delete_money_from_db` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1276,7 +1586,7 @@ enum ReadAuctionGoodsRecordError {
 
 // ============================================================================
 // FUNCTION: CDbMisc::ModifyGoodsStateA2S
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:922
@@ -1284,6 +1594,8 @@ enum ReadAuctionGoodsRecordError {
 // ADDRESS: 004efb80
 // PROTOTYPE: bool __thiscall ModifyGoodsStateA2S(CGoodsNode * param_1)
 //
+// IMPLEMENTED_OWNER: `TiberiusAuctionWriteOwner::modify_goods_state_a2s` выше;
+// false `ExecuteCn` возвращается как `ReturnedTrueAfterDatabaseFailure`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1318,7 +1630,7 @@ enum ReadAuctionGoodsRecordError {
 
 // ============================================================================
 // FUNCTION: CDbMisc::TansferMoney
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:959
@@ -1326,6 +1638,8 @@ enum ReadAuctionGoodsRecordError {
 // ADDRESS: 004efcc0
 // PROTOTYPE: bool __thiscall TansferMoney(CGoodsNode * param_1)
 //
+// IMPLEMENTED_OWNER: `TiberiusAuctionWriteOwner::transfer_money` выше;
+// false `ExecuteCn` возвращается как `ReturnedTrueAfterDatabaseFailure`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1346,7 +1660,7 @@ enum ReadAuctionGoodsRecordError {
 
 // ============================================================================
 // FUNCTION: CDbMisc::ModifyGoodsStateA2B
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:999
@@ -1354,6 +1668,8 @@ enum ReadAuctionGoodsRecordError {
 // ADDRESS: 004efde0
 // PROTOTYPE: bool __thiscall ModifyGoodsStateA2B(CGoodsNode * param_1)
 //
+// IMPLEMENTED_OWNER: `TiberiusAuctionWriteOwner::modify_goods_state_a2b` выше;
+// false `ExecuteCn` возвращается как `ReturnedTrueAfterDatabaseFailure`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
