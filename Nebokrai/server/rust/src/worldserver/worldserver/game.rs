@@ -137,7 +137,9 @@
 //! `CWordsFilter` теперь является owned полем единственного `CGame`. `Init`
 //! читает оба ресурса на прежней позиции и игнорирует bool `Initial`, а Release
 //! очищает owner на позиции исходного singleton delete. Это устраняет global
-//! lifetime, не меняя порядок загрузки, фильтрации или teardown.
+//! lifetime, не меняя порядок загрузки, фильтрации или teardown. Смена имени
+//! вызывает двухаргументный overload, создание роли — трёхаргументный с exact
+//! all-numbers gate; прежние внешние callback-и для этих путей удалены.
 //!
 //! `LoadSetup` сначала пробует обычный `setup.ini`, а только при ошибке
 //! открытия — декодированный `setup.dat`. Поток читает пары `label + value`,
@@ -3878,8 +3880,6 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     pub(crate) update_union_player: &'a mut dyn FnMut(i32),
     pub(crate) check_invalid_organizing_string:
         &'a mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
-    pub(crate) check_create_role_name:
-        &'a mut dyn FnMut(&mut Vec<u8>, bool, bool) -> bool,
     /// Внешние feature-gates exact `CLogSystem::bFactionChat/bPrivateChat`.
     pub(crate) faction_chat_log_enabled: bool,
     pub(crate) private_chat_log_enabled: bool,
@@ -6611,6 +6611,17 @@ impl CGame {
     /// Делегирует exact World overload достигнутому owned `CWordsFilter`.
     pub(crate) fn check_invalid_string(&self, value: &mut Vec<u8>, replace: bool) -> bool {
         self.words_filter.check(value, replace)
+    }
+
+    /// Делегирует create-role overload с отдельным all-numbers gate.
+    pub(crate) fn check_create_role_name(
+        &self,
+        value: &mut Vec<u8>,
+        replace: bool,
+        reject_all_numbers: bool,
+    ) -> bool {
+        self.words_filter
+            .check_with_numeric_gate(value, replace, reject_all_numbers)
     }
 
     /// Создаёт `tagSetup`, затем применяет четыре точные записи `CGame::CGame`.
@@ -10583,7 +10594,6 @@ impl CGame {
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
         check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
-        check_create_role_name: &mut dyn FnMut(&mut Vec<u8>, bool, bool) -> bool,
         faction_chat_log_enabled: bool,
         private_chat_log_enabled: bool,
         delete_log_enabled: bool,
@@ -10685,7 +10695,6 @@ impl CGame {
                             application_runtime,
                             application_callbacks,
                             &mut *check_invalid_organizing_string,
-                            &mut *check_create_role_name,
                             faction_chat_log_enabled,
                             private_chat_log_enabled,
                             delete_log_enabled,
@@ -10783,7 +10792,6 @@ impl CGame {
                     application_runtime,
                     application_callbacks,
                     &mut *check_invalid_organizing_string,
-                    &mut *check_create_role_name,
                     faction_chat_log_enabled,
                     private_chat_log_enabled,
                     delete_log_enabled,
@@ -10884,7 +10892,6 @@ impl CGame {
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
         check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
-        check_create_role_name: &mut dyn FnMut(&mut Vec<u8>, bool, bool) -> bool,
         faction_chat_log_enabled: bool,
         private_chat_log_enabled: bool,
         delete_log_enabled: bool,
@@ -10983,7 +10990,6 @@ impl CGame {
             application_runtime,
             application_callbacks,
             check_invalid_organizing_string,
-            check_create_role_name,
             faction_chat_log_enabled,
             private_chat_log_enabled,
             delete_log_enabled,
@@ -12446,7 +12452,6 @@ impl CGame {
             owners.union_application_runtime,
             &mut union_application_callbacks,
             &mut *callbacks.check_invalid_organizing_string,
-            &mut *callbacks.check_create_role_name,
             callbacks.faction_chat_log_enabled,
             callbacks.private_chat_log_enabled,
             callbacks.delete_log_enabled,
@@ -16441,7 +16446,6 @@ async fn process_world_message<TimerCallback, JjcContext>(
     application_runtime: &WorldUnionApplicationRuntimeOwner,
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
-    check_create_role_name: &mut dyn FnMut(&mut Vec<u8>, bool, bool) -> bool,
     faction_chat_log_enabled: bool,
     private_chat_log_enabled: bool,
     delete_log_enabled: bool,
@@ -16554,7 +16558,6 @@ where
             delete_log_enabled,
             add_log_text,
             &mut *application_callbacks.random,
-            check_create_role_name,
             message,
         )
         .await

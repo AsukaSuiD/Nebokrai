@@ -2,8 +2,8 @@
 //!
 //! World `CWordsFilter::CWordsFilter/Initial/LoadFilter/ReloadFilter/IsValid`,
 //! двухаргументный `Check` и singleton lifetime — `IMPLEMENTED`;
-//! трёхаргументный replace-owner, wire serializer и GameServer-вариант ниже
-//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! трёхаргументный replace-owner и `AddToByteArray` — `IMPLEMENTED`;
+//! GameServer-вариант ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
 //! исходный owner `e:\svn\fengyun_russia_dev\public\wordsfilter.cpp`.
 //!
@@ -76,6 +76,66 @@ impl CWordsFilter {
         words_valid && codes_valid
     }
 
+    /// Трёхаргументный overload с exact replace- и DBCS-поведением.
+    pub(crate) fn check_with_numeric_gate(
+        &self,
+        value: &mut Vec<u8>,
+        replace: bool,
+        reject_all_numbers: bool,
+    ) -> bool {
+        if !self
+            .char_code_filter
+            .check(value, replace, reject_all_numbers)
+        {
+            return false;
+        }
+        for filter in &self.filters {
+            let Some(mut position) = find_from_start(value, filter) else {
+                continue;
+            };
+            loop {
+                if filter.len() == 1
+                    && position >= 1
+                    && value[position - 1] & 0x80 != 0
+                {
+                    // Exact owner считает совпадение вторым DBCS-byte и сразу
+                    // переходит к следующему filter, не ищет поздние вхождения.
+                    break;
+                }
+                if !replace {
+                    return false;
+                }
+                value.splice(
+                    position..position + filter.len(),
+                    std::iter::repeat_n(b'*', filter.len()),
+                );
+                let Some(next) = find_from_start(value, filter) else {
+                    break;
+                };
+                position = next;
+            }
+        }
+        true
+    }
+
+    /// Дописывает ranges и запрещённые C-строки в exact World wire-order.
+    pub(crate) fn add_to_byte_array(&self, destination: &mut Vec<u8>) -> Result<(), usize> {
+        let range_count = i32::try_from(self.char_code_filter.ranges().len())
+            .map_err(|_| self.char_code_filter.ranges().len())?;
+        destination.extend_from_slice(&range_count.to_le_bytes());
+        for range in self.char_code_filter.ranges() {
+            destination.push(range.first);
+            destination.push(range.last);
+        }
+        let filter_count = i32::try_from(self.filters.len()).map_err(|_| self.filters.len())?;
+        destination.extend_from_slice(&filter_count.to_le_bytes());
+        for filter in &self.filters {
+            destination.extend_from_slice(filter);
+            destination.push(0);
+        }
+        Ok(())
+    }
+
     pub(crate) fn filter_file_name(&self) -> &[u8] {
         &self.filter_file_name
     }
@@ -101,6 +161,16 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     needle.is_empty()
         || (needle.len() <= haystack.len()
             && haystack.windows(needle.len()).any(|window| window == needle))
+}
+
+fn find_from_start(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        Some(0)
+    } else if needle.len() <= haystack.len() {
+        haystack.windows(needle.len()).position(|window| window == needle)
+    } else {
+        None
+    }
 }
 
 fn append_fgets_lines(source: &[u8], destination: &mut Vec<Vec<u8>>) {
@@ -306,7 +376,7 @@ fn append_fgets_lines(source: &[u8], destination: &mut Vec<Vec<u8>>) {
 
 // ============================================================================
 // FUNCTION: CWordsFilter::Check
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:148
@@ -320,7 +390,7 @@ fn append_fgets_lines(source: &[u8], destination: &mut Vec<Vec<u8>>) {
 
 // ============================================================================
 // FUNCTION: CWordsFilter::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:187

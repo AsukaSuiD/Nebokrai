@@ -517,7 +517,6 @@ pub(crate) async fn on_log_message(
     delete_log_enabled: bool,
     add_error_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     random: &mut dyn FnMut(i32) -> i32,
-    check_create_role_name: &mut dyn FnMut(&mut Vec<u8>, bool, bool) -> bool,
     message: CMessage,
 ) -> WorldLogMessageDispatch {
     match message.message_type() {
@@ -582,7 +581,6 @@ pub(crate) async fn on_log_message(
                 rs_player,
                 player_database,
                 random,
-                check_create_role_name,
                 add_error_log_text,
                 message,
             )
@@ -832,7 +830,6 @@ async fn create_role(
     rs_player: &mut TiberiusRsPlayer,
     mut player_database: Option<&mut WorldTdsClient>,
     random: &mut dyn FnMut(i32) -> i32,
-    check_create_role_name: &mut dyn FnMut(&mut Vec<u8>, bool, bool) -> bool,
     add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     mut message: CMessage,
 ) -> WorldLogMessageDispatch {
@@ -902,7 +899,7 @@ async fn create_role(
     }
 
     let mut checked_name = request.name.clone();
-    if !check_create_role_name(&mut checked_name, false, true) {
+    if !game.check_create_role_name(&mut checked_name, false, true) {
         return send_create_role_failure(
             game,
             request,
