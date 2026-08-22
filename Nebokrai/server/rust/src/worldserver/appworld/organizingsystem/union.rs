@@ -65,8 +65,11 @@
 //! tree и `new/delete`. Rust-layout не выдаётся за старый ABI. Узкий
 //! `from_reached_save_state` создаёт save-проекцию, а `from_live_state`
 //! выполняет public-конструктор и `Initial` с явными callbacks. Private default
-//! constructor, который нужен старому allocation/clone plumbing и оставляет
-//! data-поля неназначенными, отдельно не имитируется safe Rust-значением.
+//! constructor материализован как общий safe baseline: старые string/map/time
+//! создаются, а неинициализированные data-поля нормализуются в нули/`None`.
+//! Это исправляет внутренний lifetime/initialization-дефект без выдумывания
+//! наблюдаемого состояния: каждая достигнутая фабрика затем явно назначает
+//! свой ID, время, members и transient `apply_person`.
 //!
 //! PDB публикует `CUnion::IsMember(long)` на том же RVA `0x000BD840`, что и
 //! faction-вариант: identical-code folding допустим, потому что `m_lID` и
@@ -1552,6 +1555,25 @@ pub(crate) struct CUnion {
 }
 
 impl CUnion {
+    /// Материализует достигнутую инфраструктурную часть private `CUnion::CUnion`.
+    ///
+    /// Старая функция конструирует пустые string/map и `tagTime`, но не пишет
+    /// scalar-поля. Последующее чтение таких полей было внутренним UB, поэтому
+    /// safe baseline задаёт нейтральные значения. Время приходит от concrete
+    /// фабрики, сохраняя её доказанный момент снятия local clock.
+    fn with_private_constructor_defaults(established_time: TagTimeValue) -> Self {
+        Self {
+            union_id: 0,
+            name: Vec::new(),
+            master_id: 0,
+            members: BTreeMap::new(),
+            established_time,
+            apply_person: None,
+            change_data_type: 0,
+            last_demise_time_ms: 0,
+        }
+    }
+
     /// Строит concrete union на DB-пути `LoadAllConfederation`.
     ///
     /// Public constructor точного EXE вызывает `Initial` ещё до
@@ -1602,18 +1624,14 @@ impl CUnion {
             established_time,
             false,
         );
-        let mut union_members = BTreeMap::from([(master_id, fallback_master)]);
-        union_members.extend(members);
-        Ok(Self {
-            union_id,
-            name,
-            master_id,
-            members: union_members,
-            established_time,
-            apply_person: Some(0),
-            change_data_type: 0,
-            last_demise_time_ms: 0,
-        })
+        let mut union = Self::with_private_constructor_defaults(established_time);
+        union.union_id = union_id;
+        union.name = name;
+        union.master_id = master_id;
+        union.members.insert(master_id, fallback_master);
+        union.members.extend(members);
+        union.apply_person = Some(0);
+        Ok(union)
     }
 
     /// Строит live-union и выполняет доказанный `Initial` с явными callbacks.
@@ -1634,16 +1652,10 @@ impl CUnion {
         Context:
             UnionFactionMemberContext + UnionInitialMutationContext + UnionPlayerRefreshContext,
     {
-        let mut union = Self {
-            union_id,
-            name,
-            master_id,
-            members: BTreeMap::new(),
-            established_time: current_local_member_time(),
-            apply_person: None,
-            change_data_type: 0,
-            last_demise_time_ms: 0,
-        };
+        let mut union = Self::with_private_constructor_defaults(current_local_member_time());
+        union.union_id = union_id;
+        union.name = name;
+        union.master_id = master_id;
         match union.initial_live(master_title, context, parameters, game, update_player) {
             Ok(report) => Ok((union, report)),
             Err(source) => Err((union, source)),
@@ -1659,16 +1671,13 @@ impl CUnion {
         established_time: TagTimeValue,
         change_data_type: i32,
     ) -> Self {
-        Self {
-            union_id,
-            name,
-            master_id,
-            members,
-            established_time,
-            apply_person: None,
-            change_data_type,
-            last_demise_time_ms: 0,
-        }
+        let mut union = Self::with_private_constructor_defaults(established_time);
+        union.union_id = union_id;
+        union.name = name;
+        union.master_id = master_id;
+        union.members = members;
+        union.change_data_type = change_data_type;
+        union
     }
 
     /// Выполняет машинный `Initial` поверх уже созданного live-owner-а.
