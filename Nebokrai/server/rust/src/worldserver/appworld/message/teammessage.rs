@@ -1,152 +1,312 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Входящий Team-owner исторического WorldServer.
+//!
+//! `OnTeamMessage` RVA `0x000AAD40` — `IMPLEMENTED / VERIFIED_DISASSEMBLY`
+//! по точной паре `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`.
+//! Исходный owner:
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\teammessage.cpp:22`.
+//!
+//! Реализация сохраняет opcodes `0x60001..0x6000C`, условный порядок чтения
+//! payload и все достигнутые virtual side effects. После отсутствующего
+//! `CTeam` остаётся прочитан только team ID; `0x60009` игнорирует два средних
+//! `long`; allocation scheme принимает любое signed значение `< 2`, включая
+//! отрицательное. Ответ `0x7FD08` буквально содержит virtual `Serialize`.
+//!
+//! Старый Linux-донор использован для имён и формы. Его peer-проверки, eager-
+//! разбор payload, duplicate-team gate и cleanup при ошибке `InsertPlug`
+//! отсутствуют в EXE и не перенесены. Единственные registry остаются внутри
+//! `CSessionFactory`; узкие team/teamate trait-проекции выражают исходные RTTI
+//! и virtual границы. Недостаточный scalar payload даёт typed malformed до
+//! относящегося к нему эффекта.
 
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\teammessage.cpp
+use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::worldserver::appworld::session::csessionfactory::{
+    CSessionFactory, WorldSessionFactoryAllocator, WorldSessionFactoryInputBlock,
+};
+use crate::worldserver::worldserver::game::CGame;
 
-// ============================================================================
-// FUNCTION: OnTeamMessage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\teammessage.cpp:22
-// RVA: 0x000AAD40
-// ADDRESS: 004aad40
-// PROTOTYPE: void __cdecl OnTeamMessage(CMessage * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+const TEAMATE_PLUG_TYPE: i32 = 5;
+const PLAYER_OWNER_TYPE: i32 = 400;
 
-// ============================================================================
-// FUNCTION: Unwind@00532a80
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\teammessage.cpp
-// RVA: 0x00132A80
-// ADDRESS: 00532a80
-// PROTOTYPE: undefined Unwind@00532a80()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldTeamMessageOutcome {
+    SessionUnserialized {
+        outcome: Result<i32, WorldSessionFactoryInputBlock>,
+        cursor: usize,
+    },
+    TeamEnded { team_id: i32, session_id: i32, result: Option<i32> },
+    TeamateAdded {
+        team_id: i32,
+        session_id: i32,
+        plug_id: Option<i32>,
+        inserted: Option<i32>,
+    },
+    TeamateExited {
+        team_id: i32,
+        session_id: i32,
+        plug_id: Option<i32>,
+        exited: bool,
+    },
+    TeamateRegionUpdated {
+        team_id: i32,
+        session_id: i32,
+        plug_id: Option<i32>,
+        updated: bool,
+    },
+    LeaderUpdated {
+        team_id: i32,
+        session_id: i32,
+        player_id: i32,
+        updated: bool,
+    },
+    PlayerKicked {
+        team_id: i32,
+        session_id: i32,
+        player_id: i32,
+        kicked: bool,
+    },
+    TeamSnapshot {
+        team_id: i32,
+        session_id: i32,
+        serialized: Option<Vec<u8>>,
+        delivery: Option<Result<i32, SendMessageError>>,
+    },
+    TeamateExistenceMarked { plug_id: i32, marked: bool },
+    AllocationUpdated {
+        team_id: i32,
+        session_id: i32,
+        requested: i32,
+        updated: bool,
+    },
+    PlugStateUpdated {
+        team_id: i32,
+        session_id: i32,
+        plug_id: Option<i32>,
+        state: i32,
+        updated: bool,
+    },
+    TeamMissing { message_type: i32, team_id: i32, session_id: i32 },
+    UnknownOpcode { message_type: i32 },
+    Malformed { message_type: i32, cursor: usize },
+}
 
-// ============================================================================
-// FUNCTION: Unwind@00532a8b
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\teammessage.cpp
-// RVA: 0x00132A8B
-// ADDRESS: 00532a8b
-// PROTOTYPE: undefined Unwind@00532a8b()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+/// Исполняет весь exact `OnTeamMessage` поверх единого session factory.
+pub(crate) fn on_team_message<Allocator: WorldSessionFactoryAllocator + ?Sized>(
+    game: &CGame,
+    factory: &mut CSessionFactory,
+    allocator: &mut Allocator,
+    message: &mut CMessage,
+) -> WorldTeamMessageOutcome {
+    let message_type = message.message_type();
 
-// ============================================================================
-// FUNCTION: Unwind@00532a96
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\teammessage.cpp
-// RVA: 0x00132A96
-// ADDRESS: 00532a96
-// PROTOTYPE: undefined Unwind@00532a96()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    macro_rules! malformed {
+        () => {
+            return WorldTeamMessageOutcome::Malformed {
+                message_type,
+                cursor: message.base_mut().cursor(),
+            }
+        };
+    }
+    macro_rules! team_session {
+        () => {{
+            let Some(team_id) = message.base_mut().get_long() else { malformed!() };
+            let session_id = game.get_team_session_id(team_id as u32);
+            if !factory.is_team(session_id) {
+                return WorldTeamMessageOutcome::TeamMissing { message_type, team_id, session_id };
+            }
+            (team_id, session_id)
+        }};
+    }
 
-// ============================================================================
-// FUNCTION: Unwind@00532aa1
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\teammessage.cpp
-// RVA: 0x00132AA1
-// ADDRESS: 00532aa1
-// PROTOTYPE: undefined Unwind@00532aa1()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@00532aac
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\teammessage.cpp
-// RVA: 0x00132AAC
-// ADDRESS: 00532aac
-// PROTOTYPE: undefined Unwind@00532aac()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@00532ad8
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\teammessage.cpp
-// RVA: 0x00132AD8
-// ADDRESS: 00532ad8
-// PROTOTYPE: undefined Unwind@00532ad8()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// ============================================================================
-// FUNCTION: Unwind@00532aee
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\teammessage.cpp
-// RVA: 0x00132AEE
-// ADDRESS: 00532aee
-// PROTOTYPE: undefined Unwind@00532aee()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@00532af9
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\teammessage.cpp
-// RVA: 0x00132AF9
-// ADDRESS: 00532af9
-// PROTOTYPE: undefined Unwind@00532af9()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@00532b04
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\teammessage.cpp
-// RVA: 0x00132B04
-// ADDRESS: 00532b04
-// PROTOTYPE: undefined Unwind@00532b04()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: WorldServer
+    match message_type {
+        0x0006_0001 => {
+            let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+            let Ok(mut offset) = i32::try_from(*cursor) else {
+                return WorldTeamMessageOutcome::Malformed { message_type, cursor: *cursor };
+            };
+            let outcome = factory.unserialize_session(Some(wire), &mut offset, allocator);
+            if let Ok(next_cursor) = usize::try_from(offset) {
+                *cursor = next_cursor;
+            }
+            WorldTeamMessageOutcome::SessionUnserialized { outcome, cursor: *cursor }
+        }
+        0x0006_0002 => {
+            let Some(team_id) = message.base_mut().get_long() else { malformed!() };
+            let session_id = game.get_team_session_id(team_id as u32);
+            WorldTeamMessageOutcome::TeamEnded {
+                team_id,
+                session_id,
+                result: factory.end_session(session_id),
+            }
+        }
+        0x0006_0003 => {
+            let (team_id, session_id) = team_session!();
+            let Some(owner_type) = message.base_mut().get_long() else { malformed!() };
+            let Some(owner_id) = message.base_mut().get_long() else { malformed!() };
+            let Some(region_id) = message.base_mut().get_long() else { malformed!() };
+            let owner_name = message.base_mut().get_str_bytes(0x100)
+                .expect("ненулевая legacy-граница GetStr");
+            let existing = factory.with_team(session_id, |team| {
+                team.query_plug_by_owner(owner_type, owner_id)
+            }).flatten();
+            if existing.is_some() {
+                return WorldTeamMessageOutcome::TeamateAdded {
+                    team_id, session_id, plug_id: existing, inserted: None,
+                };
+            }
+            let plug_id = factory.create_plug(
+                TEAMATE_PLUG_TYPE, owner_type, owner_id, allocator,
+            );
+            let initialized = factory.with_teamate(plug_id, |teamate| {
+                teamate.set_owner_region_id(region_id);
+                teamate.set_owner_name(&owner_name);
+            }).is_some();
+            let inserted = initialized.then(|| factory.insert_plug(session_id, plug_id));
+            WorldTeamMessageOutcome::TeamateAdded {
+                team_id,
+                session_id,
+                plug_id: initialized.then_some(plug_id),
+                inserted,
+            }
+        }
+        0x0006_0004 => {
+            let (team_id, session_id) = team_session!();
+            let Some(owner_type) = message.base_mut().get_long() else { malformed!() };
+            let Some(owner_id) = message.base_mut().get_long() else { malformed!() };
+            let plug_id = factory.with_team(session_id, |team| {
+                team.query_plug_by_owner(owner_type, owner_id)
+            }).flatten();
+            let exited = plug_id.and_then(|plug_id| {
+                factory.with_teamate(plug_id, |teamate| teamate.exit())
+            }).is_some();
+            WorldTeamMessageOutcome::TeamateExited {
+                team_id, session_id, plug_id, exited,
+            }
+        }
+        0x0006_0005 => {
+            let (team_id, session_id) = team_session!();
+            let Some(owner_type) = message.base_mut().get_long() else { malformed!() };
+            let Some(owner_id) = message.base_mut().get_long() else { malformed!() };
+            let Some(region_id) = message.base_mut().get_long() else { malformed!() };
+            let plug_id = factory.with_team(session_id, |team| {
+                team.query_plug_by_owner(owner_type, owner_id)
+            }).flatten();
+            let updated = plug_id.and_then(|plug_id| {
+                factory.with_teamate(plug_id, |teamate| teamate.set_owner_region_id(region_id))
+            }).is_some();
+            WorldTeamMessageOutcome::TeamateRegionUpdated {
+                team_id, session_id, plug_id, updated,
+            }
+        }
+        0x0006_0006 => {
+            let (team_id, session_id) = team_session!();
+            let Some(player_id) = message.base_mut().get_long() else { malformed!() };
+            let updated = factory.with_team(session_id, |team| {
+                if team.query_plug_by_owner(PLAYER_OWNER_TYPE, player_id).is_some() {
+                    team.set_leader(player_id);
+                    true
+                } else {
+                    false
+                }
+            }).unwrap_or(false);
+            WorldTeamMessageOutcome::LeaderUpdated {
+                team_id, session_id, player_id, updated,
+            }
+        }
+        0x0006_0007 => {
+            let (team_id, session_id) = team_session!();
+            let Some(player_id) = message.base_mut().get_long() else { malformed!() };
+            let kicked = factory.with_team(session_id, |team| team.kick_player(player_id)).is_some();
+            WorldTeamMessageOutcome::PlayerKicked {
+                team_id, session_id, player_id, kicked,
+            }
+        }
+        0x0006_0008 => {
+            let (team_id, session_id) = team_session!();
+            let serialized = factory.with_team(session_id, |team| {
+                let mut bytes = Vec::new();
+                team.serialize(&mut bytes);
+                bytes
+            });
+            let delivery = serialized.as_ref().map(|bytes| {
+                let mut response = CMessage::new(0x0007_FD08);
+                response.base_mut().add(bytes);
+                response.base_mut().update();
+                response.send_to_socket(
+                    game.current_game_server_sender().as_ref(), message.socket_id(),
+                )
+            });
+            WorldTeamMessageOutcome::TeamSnapshot {
+                team_id, session_id, serialized, delivery,
+            }
+        }
+        0x0006_0009 => {
+            let Some(plug_id) = message.base_mut().get_long() else { malformed!() };
+            let Some(_) = message.base_mut().get_long() else { malformed!() };
+            let Some(_) = message.base_mut().get_long() else { malformed!() };
+            let Some(existed) = message.base_mut().get_long() else { malformed!() };
+            let marked = existed != 0 && factory.with_teamate(plug_id, |teamate| {
+                teamate.player_still_existed(1)
+            }).is_some();
+            WorldTeamMessageOutcome::TeamateExistenceMarked { plug_id, marked }
+        }
+        0x0006_000A => {
+            let (team_id, session_id) = team_session!();
+            let Some(requested) = message.base_mut().get_long() else { malformed!() };
+            let updated = factory.with_team(session_id, |team| {
+                if requested != team.allocation_scheme() && requested < 2 {
+                    team.set_allocation_scheme(requested);
+                    true
+                } else {
+                    false
+                }
+            }).unwrap_or(false);
+            WorldTeamMessageOutcome::AllocationUpdated {
+                team_id, session_id, requested, updated,
+            }
+        }
+        0x0006_000B => {
+            let (team_id, session_id) = team_session!();
+            let Some(owner_type) = message.base_mut().get_long() else { malformed!() };
+            let Some(owner_id) = message.base_mut().get_long() else { malformed!() };
+            let plug_id = factory.with_team(session_id, |team| {
+                team.query_plug_by_owner(owner_type, owner_id)
+            }).flatten();
+            let Some(plug_id_value) = plug_id else {
+                return WorldTeamMessageOutcome::PlugStateUpdated {
+                    team_id, session_id, plug_id, state: 8, updated: false,
+                };
+            };
+            let text = message.base_mut().get_str_bytes(0x200)
+                .expect("ненулевая legacy-граница GetStr");
+            let updated = factory.with_team(session_id, |team| {
+                team.on_plug_change_state(plug_id_value, 8, &text)
+            }).is_some();
+            WorldTeamMessageOutcome::PlugStateUpdated {
+                team_id, session_id, plug_id, state: 8, updated,
+            }
+        }
+        0x0006_000C => {
+            let (team_id, session_id) = team_session!();
+            let Some(owner_type) = message.base_mut().get_long() else { malformed!() };
+            let Some(owner_id) = message.base_mut().get_long() else { malformed!() };
+            let Some(value) = message.base_mut().get_float() else { malformed!() };
+            let plug_id = factory.with_team(session_id, |team| {
+                team.query_plug_by_owner(owner_type, owner_id)
+            }).flatten();
+            let teamate_id = plug_id.filter(|plug_id| {
+                factory.with_teamate(*plug_id, |_| ()).is_some()
+            });
+            let updated = teamate_id
+                .and_then(|plug_id| {
+                    factory.with_team(session_id, |team| {
+                        team.on_plug_change_state(plug_id, 9, &value.to_le_bytes())
+                    })
+                })
+                .is_some();
+            WorldTeamMessageOutcome::PlugStateUpdated {
+                team_id, session_id, plug_id, state: 9, updated,
+            }
+        }
+        _ => WorldTeamMessageOutcome::UnknownOpcode { message_type },
+    }
+}

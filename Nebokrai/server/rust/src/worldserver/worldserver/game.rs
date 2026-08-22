@@ -1187,6 +1187,9 @@ use crate::worldserver::appworld::message::servermessage::{
     WorldLoginClientReplacement, WorldServerMessageDispatch, WorldServerMessageError,
     WorldServerMessageOutcome, on_login_client_reconnected, on_server_message,
 };
+use crate::worldserver::appworld::message::teammessage::{
+    WorldTeamMessageOutcome, on_team_message,
+};
 use crate::worldserver::appworld::organizingsystem::faction::{
     goods_war_check_for_faction_id, CFaction, FactionDemiseContext, FactionDemiseOutcome,
     FactionDisbandContext, FactionExperienceBlock, FactionMemberInfoRequest,
@@ -1239,7 +1242,7 @@ use crate::worldserver::appworld::script::variablelist::{
     CVariableList, VariableListSaveSource,
 };
 use crate::worldserver::appworld::session::csessionfactory::{
-    CSessionFactory, WorldSessionFactoryAiReport,
+    CSessionFactory, WorldSessionFactoryAiReport, WorldSessionFactoryAllocator,
 };
 use crate::worldserver::appworld::worldcityregion::{
     CWorldCityRegion, WorldCityRegionLoadError, WorldCityRegionSerializationBlock,
@@ -2251,6 +2254,11 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: JjcSystemMessageOutcome,
+    },
+    TeamMessage {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: WorldTeamMessageOutcome,
     },
     OrganizingSessionResult {
         source: WorldMessageSource,
@@ -9539,7 +9547,8 @@ impl CGame {
     /// остаются owned pending. Terminal
     /// actions применяются FIFO до следующего сообщения. Async TDS lookup
     /// `0x5FF12` завершается до следующего slot-а, как синхронный ADO EXE;
-    /// JJC owner `0x60901..0x60907` исполняется полностью.
+    /// JJC owner `0x60901..0x60907` и Team owner `0x60001..0x6000C`
+    /// исполняются полностью.
     pub(crate) async fn process_message<TimerCallback, TeamOwner, JjcContext>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
@@ -9601,6 +9610,7 @@ impl CGame {
         launch_save_thread: &mut dyn FnMut(
             &WorldSaveThreadLaunchRequest,
         ) -> WorldSaveThreadHandleState,
+        session_factory: &mut CSessionFactory,
         team_owner: &mut TeamOwner,
         mut general_variables: Option<&mut CVariableList>,
         gods_battle: &mut CGodsBattleConf,
@@ -9612,7 +9622,7 @@ impl CGame {
     ) -> Result<WorldProcessMessageOutcome, WorldProcessMessageError>
     where
         TimerCallback: Copy,
-        TeamOwner: WorldRegionChangeTeamOwner + ?Sized,
+        TeamOwner: WorldRegionChangeTeamOwner + WorldSessionFactoryAllocator + ?Sized,
         JjcContext: JjcRunContext + ?Sized,
     {
         let server_started_at = legacy_tick_ms();
@@ -9686,6 +9696,7 @@ impl CGame {
                             player_database.as_deref_mut(),
                             &mut *save_thread_handle,
                             &mut *launch_save_thread,
+                            &mut *session_factory,
                             &mut *team_owner,
                             general_variables.as_deref_mut(),
                             &mut *gods_battle,
@@ -9775,6 +9786,7 @@ impl CGame {
                     player_database.as_deref_mut(),
                     &mut *save_thread_handle,
                     &mut *launch_save_thread,
+                    &mut *session_factory,
                     &mut *team_owner,
                     general_variables.as_deref_mut(),
                     &mut *gods_battle,
@@ -9877,6 +9889,7 @@ impl CGame {
         launch_save_thread: &mut dyn FnMut(
             &WorldSaveThreadLaunchRequest,
         ) -> WorldSaveThreadHandleState,
+        session_factory: &mut CSessionFactory,
         team_owner: &mut TeamOwner,
         general_variables: Option<&mut CVariableList>,
         gods_battle: &mut CGodsBattleConf,
@@ -9893,7 +9906,7 @@ impl CGame {
     ) -> WorldProcessMessageStageReport
     where
         TimerCallback: Copy,
-        TeamOwner: WorldRegionChangeTeamOwner + ?Sized,
+        TeamOwner: WorldRegionChangeTeamOwner + WorldSessionFactoryAllocator + ?Sized,
         JjcContext: JjcRunContext + ?Sized,
         GetTick: FnMut() -> u32,
     {
@@ -9959,6 +9972,7 @@ impl CGame {
             player_database,
             save_thread_handle,
             launch_save_thread,
+            session_factory,
             team_owner,
             general_variables,
             gods_battle,
@@ -10938,7 +10952,9 @@ impl CGame {
         LeiTingContextOwner: LeiTingContext,
         DbMiscContextOwner: DbMiscContext,
         JjcContext: JjcRunContext,
-        TeamOwner: WorldLoginTimeoutTeamOwner + WorldRegionChangeTeamOwner,
+        TeamOwner: WorldLoginTimeoutTeamOwner
+            + WorldRegionChangeTeamOwner
+            + WorldSessionFactoryAllocator,
     {
         let profile_initialization = initialize_main_loop_profile_if_needed(
             state.initialization,
@@ -11178,6 +11194,7 @@ impl CGame {
             owners.player_database.as_deref_mut(),
             state.save_thread_handle,
             &mut *callbacks.launch_save_thread,
+            owners.session_factory,
             &mut *owners.team_owner,
             owners.general_variables.as_deref_mut(),
             owners.gods_battle,
@@ -14674,6 +14691,7 @@ async fn process_world_message<TimerCallback, TeamOwner, JjcContext>(
     launch_save_thread: &mut dyn FnMut(
         &WorldSaveThreadLaunchRequest,
     ) -> WorldSaveThreadHandleState,
+    session_factory: &mut CSessionFactory,
     team_owner: &mut TeamOwner,
     general_variables: Option<&mut CVariableList>,
     gods_battle: &mut CGodsBattleConf,
@@ -14687,7 +14705,7 @@ async fn process_world_message<TimerCallback, TeamOwner, JjcContext>(
 ) -> ProcessedWorldEvent
 where
     TimerCallback: Copy,
-    TeamOwner: WorldRegionChangeTeamOwner + ?Sized,
+    TeamOwner: WorldRegionChangeTeamOwner + WorldSessionFactoryAllocator + ?Sized,
     JjcContext: JjcRunContext + ?Sized,
 {
     let message_type = message.message_type();
@@ -14802,6 +14820,15 @@ where
             }
             WorldGmMessageDispatch::Pending(pending) => message = pending,
         }
+    }
+
+    if selector.owner == Some(WorldMessageOwner::Team) {
+        let outcome = on_team_message(game, session_factory, team_owner, &mut message);
+        return ProcessedWorldEvent::TeamMessage {
+            source,
+            legacy_run_result,
+            outcome,
+        };
     }
 
     if selector.owner == Some(WorldMessageOwner::JjcSystem) {

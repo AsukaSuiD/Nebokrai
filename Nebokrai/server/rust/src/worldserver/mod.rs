@@ -143,6 +143,7 @@ pub(crate) mod appworld {
         pub(crate) mod othermessage;
         pub(crate) mod playermessage;
         pub(crate) mod servermessage;
+        pub(crate) mod teammessage;
     }
     pub(crate) mod monster;
     pub(crate) mod moveshape;
