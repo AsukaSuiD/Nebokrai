@@ -1575,7 +1575,7 @@ fn next_war_i32<'a>(
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::ConvertMoraleToExploit
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:786
@@ -1583,6 +1583,9 @@ fn next_war_i32<'a>(
 // ADDRESS: 00493f80
 // PROTOTYPE: void __thiscall ConvertMoraleToExploit(long param_1, long param_2)
 //
+// Реализовано между `convert_loaded_morale_to_exploit` и exact async
+// dispatcher World: первый map lookup, offline SQL, повторный lookup и
+// local/`0x7FE46` route остаются в исходном порядке без COM plumbing.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
