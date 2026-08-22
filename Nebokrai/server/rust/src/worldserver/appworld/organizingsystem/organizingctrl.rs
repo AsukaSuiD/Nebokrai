@@ -17,6 +17,8 @@
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
 //! публикация DB-staging `COrganizingCtrl::Initialize` RVA `0x0003B830` —
 //! `IMPLEMENTED` для подтверждённой последовательности union/faction owner-ов;
+//! `ReSetPermitDemise` RVA `0x00034810` и calendar-prefix
+//! `Initialize/OnNewDay` RVA `0x0003B830/0x0003A490` — `IMPLEMENTED`;
 //! полный `COrganizingCtrl::Run` RVA `0x0003A550` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`, `DisbandFaction` RVA `0x00038550` и
 //! `UpdateOtherFacInfoToClient` RVA `0x00034980` и `DisbandConferation` RVA
@@ -532,6 +534,7 @@ use super::union::{
 };
 use super::villagewarsys::CVillageWarSys;
 use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::public::date::{TagTime, TagTimeArithmeticBlock};
 use crate::public::netsession::{
     NetSessionAsyncResult, NetSessionAsyncResultKind, NetSessionEndpoint,
 };
@@ -546,6 +549,7 @@ use crate::worldserver::appworld::player::{
 use crate::worldserver::worldserver::game::{
     CGame, WorldPlayerNameLookupError, WorldRegionNameLookup,
 };
+use crate::public::timer::{CTimer, TimerId};
 
 const TOP_INFO_MESSAGE_TYPE: i32 = 0x7FA04;
 const UNION_INITIAL_MESSAGE_TYPE: i32 = 0x7FE04;
@@ -2879,6 +2883,8 @@ pub(crate) struct COrganizingCtrl {
     offense_victories_billboard: Vec<FactionBillboardEntry>,
     defence_victories_billboard: Vec<FactionBillboardEntry>,
     detached_union_membership_lookup: Cell<Option<(i32, FreeFactionLookup)>>,
+    new_day_time: TagTime,
+    new_day_event_id: Option<TimerId>,
 }
 
 /// Наблюдаемый результат публикации двух DB staging-map в organizing-control.
@@ -2900,6 +2906,28 @@ pub(crate) struct OrganizingDatabasePublishBlock {
 pub(crate) struct OrganizingPermitDemiseResetBlock {
     pub(crate) map_key: i32,
     pub(crate) reset_faction_ids: Vec<i32>,
+}
+
+/// Результат первой calendar-постановки `COrganizingCtrl::Initialize`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OrganizingNewDayScheduleReport {
+    pub(crate) scheduled_time: TagTime,
+    pub(crate) event_id: TimerId,
+}
+
+/// Результат callback-а `OnNewDay` до внешнего `CCountryHandler::SetNewDay`.
+#[derive(Debug)]
+pub(crate) struct OrganizingNewDayReport {
+    pub(crate) reset_faction_ids: Vec<i32>,
+    pub(crate) country_day: u16,
+    pub(crate) scheduled_time: TagTime,
+    pub(crate) event_id: TimerId,
+}
+
+#[derive(Debug)]
+pub(crate) enum OrganizingNewDayBlock {
+    ResetPermitDemise(OrganizingPermitDemiseResetBlock),
+    DateArithmetic(TagTimeArithmeticBlock),
 }
 
 /// Наблюдаемый no-op либо обе city-war мутации `SetEnemyFactionRelation`.
@@ -3192,6 +3220,78 @@ impl COrganizingCtrl {
             offense_victories_billboard: Vec::new(),
             defence_victories_billboard: Vec::new(),
             detached_union_membership_lookup: Cell::new(None),
+            new_day_time: TagTime::from_fields([0, 0, 0, 0, 14, 15, 0, 0]),
+            new_day_event_id: None,
+        }
+    }
+
+    /// Ставит первый `OnNewDay` на ближайшую полночь exact `Initialize`.
+    ///
+    /// Legacy template хранит только время `14:15`; его нулевые date-поля
+    /// получают дату одного current local snapshot. Первый scheduling явно
+    /// затирает hour/minute/second, а `milliseconds` сохраняет из template.
+    pub(crate) fn schedule_initial_new_day<Callback: Copy>(
+        &mut self,
+        current_time: TagTime,
+        timer: &mut CTimer<Callback>,
+        callback: Callback,
+    ) -> Result<OrganizingNewDayScheduleReport, OrganizingNewDayBlock> {
+        let mut scheduled_time = self.new_day_time_for_date(current_time);
+        scheduled_time.hour = 0;
+        scheduled_time.minute = 0;
+        scheduled_time.second = 0;
+        if scheduled_time.legacy_lt(current_time) {
+            scheduled_time
+                .add_day(1)
+                .map_err(OrganizingNewDayBlock::DateArithmetic)?;
+        }
+        let event_id = timer.set_time_event(scheduled_time, callback, 0);
+        self.new_day_event_id = Some(event_id);
+        Ok(OrganizingNewDayScheduleReport {
+            scheduled_time,
+            event_id,
+        })
+    }
+
+    /// Выполняет `OnNewDay`: reset, day-of-next-event и новое событие 14:15.
+    pub(crate) fn on_new_day<Callback: Copy, SetCountryDay>(
+        &mut self,
+        current_time: TagTime,
+        timer: &mut CTimer<Callback>,
+        callback: Callback,
+        mut set_country_day: SetCountryDay,
+    ) -> Result<OrganizingNewDayReport, OrganizingNewDayBlock>
+    where
+        SetCountryDay: FnMut(u16),
+    {
+        let reset_faction_ids = self
+            .reset_permit_demise()
+            .map_err(OrganizingNewDayBlock::ResetPermitDemise)?;
+        let mut scheduled_time = self.new_day_time_for_date(current_time);
+        scheduled_time
+            .add_day(1)
+            .map_err(OrganizingNewDayBlock::DateArithmetic)?;
+        set_country_day(scheduled_time.day);
+        let event_id = timer.set_time_event(scheduled_time, callback, 0);
+        self.new_day_event_id = Some(event_id);
+        Ok(OrganizingNewDayReport {
+            reset_faction_ids,
+            country_day: scheduled_time.day,
+            scheduled_time,
+            event_id,
+        })
+    }
+
+    fn new_day_time_for_date(&self, current_time: TagTime) -> TagTime {
+        TagTime {
+            year: current_time.year,
+            month: current_time.month,
+            day_of_week: self.new_day_time.day_of_week,
+            day: current_time.day,
+            hour: self.new_day_time.hour,
+            minute: self.new_day_time.minute,
+            second: self.new_day_time.second,
+            milliseconds: self.new_day_time.milliseconds,
         }
     }
 
