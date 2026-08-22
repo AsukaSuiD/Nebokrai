@@ -453,7 +453,7 @@ fn append_city_c_string(destination: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CWorldCityRegion::SetEnterPosXY
-// STATUS: VERIFIED_DISASSEMBLY
+// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\worldcityregion.cpp:147

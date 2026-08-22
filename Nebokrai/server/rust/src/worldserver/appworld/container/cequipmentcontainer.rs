@@ -895,7 +895,7 @@ fn read_equipment_u32(
 
 // ============================================================================
 // FUNCTION: CEquipmentContainer::Add
-// STATUS: VERIFIED_DISASSEMBLY
+// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:291

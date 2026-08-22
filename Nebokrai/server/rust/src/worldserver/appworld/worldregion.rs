@@ -1488,7 +1488,7 @@ fn assign_next_i32(tokens: &mut RegionSetupTokens<'_>, field: &mut Option<i32>) 
 
 // ============================================================================
 // FUNCTION: CWorldRegion::SetEnterPosXY
-// STATUS: VERIFIED_DISASSEMBLY
+// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\worldregion.cpp:595
