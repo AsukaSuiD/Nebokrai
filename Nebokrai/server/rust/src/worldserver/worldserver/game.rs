@@ -189,6 +189,11 @@
 //! Initial-config и Release используют тот же owner; прежние IncrementShop
 //! boolean/serialization/release callbacks и внешний snapshot удалены.
 //!
+//! `PrisonConf` owned `CGame`: exact loader `data/PrisonConf.ini` очищает map
+//! до открытия, но сохраняет PK scalar при missing resource; dispatcher
+//! сохраняет bool load-result до optional subtype `0x1D`. Initial-config
+//! читает этот же owner, без внешних Prison callbacks/snapshot.
+//!
 //! `CContributeSetup` теперь owned `CGame`: dispatcher
 //! `0x004171CA..0x004172B1` читает `data/ContributeSetup.ini`, сохраняет bool
 //! load-result в legacy return-slot и при success + send-флаге публикует
@@ -1164,6 +1169,7 @@ use crate::setup::incrementshoplist::{
     CIncrementShopList, IncrementShopGoodsQuery, IncrementShopGoodsResult,
     IncrementShopSerializeError,
 };
+use crate::setup::prisonconf::{PrisonConf, PrisonConfFormatError, PrisonConfSerializeError};
 use crate::public::mystringtable::MyStringTable;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
 use crate::public::wordsfilter::CWordsFilter;
@@ -4195,7 +4201,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     RegionLevelSetup,
     AttackCity,
     FourNationWar,
-    Prison,
     TimeToReturn,
     PreciousBox,
     FairyExp,
@@ -4241,7 +4246,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     VillageWar,
     FourNationWar,
     Quest,
-    Prison,
     PreciousBox,
     FairyExp,
     ChangeBody,
@@ -5866,6 +5870,8 @@ pub(crate) enum WorldReloadBlock {
     HitLevelFormat(HitLevelFormatError),
     HitLevelSerialization(HitLevelSerializeError),
     IncrementShopSerialization(IncrementShopSerializeError),
+    PrisonFormat(PrisonConfFormatError),
+    PrisonSerialization(PrisonConfSerializeError),
     ContributeFormat(ContributeSetupFormatError),
     ContributeSerialization(ContributeSetupSerializeError),
     CountryWarOwnerRequired,
@@ -6635,6 +6641,7 @@ pub(crate) struct CGame {
     tao_zhuang_setup: CTaoZhuangSetup,
     hit_level_setup: CHitLevelSetup,
     increment_shop_list: CIncrementShopList,
+    prison_conf: PrisonConf,
     contribute_setup: CContributeSetup,
     net_client: Option<CMyNetClient>,
     net_server: Option<CMyNetServer>,
@@ -6726,6 +6733,10 @@ impl CGame {
         &self.increment_shop_list
     }
 
+    pub(crate) fn prison_conf(&self) -> &PrisonConf {
+        &self.prison_conf
+    }
+
     pub(crate) fn contribute_setup(&self) -> &CContributeSetup {
         &self.contribute_setup
     }
@@ -6751,6 +6762,7 @@ impl CGame {
             tao_zhuang_setup: CTaoZhuangSetup::default(),
             hit_level_setup: CHitLevelSetup::default(),
             increment_shop_list: CIncrementShopList::default(),
+            prison_conf: PrisonConf::default(),
             contribute_setup: CContributeSetup::default(),
             net_client: None,
             net_server: None,
@@ -8025,17 +8037,35 @@ impl CGame {
                 }
             }
             WorldReloadProfile::Prison => {
-                self.reload_simple_serialized(
-                    context,
-                    WorldReloadBooleanOwner::Prison,
-                    WorldReloadSerializationOwner::Prison,
-                    0x1D,
-                    b"Load PrisonConf.ini...OK!",
-                    b"Load PrisonConf.ini...FAILED!",
-                    send_to_game_servers,
-                    true,
-                    &mut legacy_result,
-                );
+                const PATH: &[u8] = b"data/PrisonConf.ini";
+                let loaded = match context.read_resource(PATH) {
+                    Some(source) => self
+                        .prison_conf
+                        .load_from_bytes(&source)
+                        .map(|_| true)
+                        .map_err(WorldReloadBlock::PrisonFormat)?,
+                    None => {
+                        self.prison_conf.clear_prison_params();
+                        let mut message = b"file '".to_vec();
+                        message.extend_from_slice(PATH);
+                        message.extend_from_slice(b"' can't found!");
+                        context.notify_reload_operator(b"ERROR", &message);
+                        false
+                    }
+                };
+                legacy_result = i32::from(loaded);
+                context.add_log_text(if loaded {
+                    b"Load PrisonConf.ini...OK!"
+                } else {
+                    b"Load PrisonConf.ini...FAILED!"
+                });
+                if loaded && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    self.prison_conf
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::PrisonSerialization)?;
+                    self.send_reload_payload(0x1D, &payload);
+                }
             }
             WorldReloadProfile::TimeToReturn => {
                 let _ = Self::reload_boolean_with_log(

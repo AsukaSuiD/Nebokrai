@@ -314,7 +314,7 @@ use crate::setup::newskillmonsterlist::{
 };
 use crate::setup::playerlist::{CPlayerList, PlayerListSerializeError};
 use crate::setup::preciousboxconf::{PreciousBoxConf, PreciousBoxSerializeError};
-use crate::setup::prisonconf::{PrisonConf, PrisonConfSerializeError};
+use crate::setup::prisonconf::PrisonConfSerializeError;
 use crate::setup::questsystem::{CQuestSystem, QuestSystemSerializationBlock};
 use crate::setup::regionsetup::{CRegionSetup, RegionSetupSerializeError};
 use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
@@ -3023,10 +3023,9 @@ pub(crate) fn continue_game_server_contribute_configuration(
 pub(crate) fn continue_game_server_prison_configuration(
     game: &CGame,
     socket_id: i32,
-    prison: &PrisonConf,
 ) -> WorldPrisonConfigurationReport {
     let mut payload = Vec::new();
-    if let Err(error) = prison.add_to_byte_array(&mut payload) {
+    if let Err(error) = game.prison_conf().add_to_byte_array(&mut payload) {
         return WorldPrisonConfigurationReport {
             delivery: None,
             completion: WorldPrisonConfigurationCompletion::PrisonConf(error),

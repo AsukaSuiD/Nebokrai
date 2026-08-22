@@ -103,6 +103,11 @@ impl PrisonConf {
         self.prison_params.get(&country)
     }
 
+    /// Missing-file ветвь loader-а очищает только map, сохраняя прежний scalar.
+    pub(crate) fn clear_prison_params(&mut self) {
+        self.prison_params.clear();
+    }
+
     /// Дописывает exact compact wire без C++ struct padding.
     pub(crate) fn add_to_byte_array(
         &self,
