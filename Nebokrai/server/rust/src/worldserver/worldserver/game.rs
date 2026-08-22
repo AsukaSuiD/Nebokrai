@@ -10966,13 +10966,10 @@ impl CGame {
         events.push(WorldGameInitEvent::GeneralVariableListLoaded(
             general_variable_load,
         ));
-        let general_variable_data_load = context
-            .general_variable_database()
-            .load_general_variables(
-                general_variables
-                    .as_mut()
-                    .expect("owner опубликован перед CRsGenVar::Load"),
-            )
+        let general_variable_data_load = general_variables
+            .as_mut()
+            .expect("owner опубликован перед LoadVarData")
+            .load_var_data(context.general_variable_database())
             .await;
         // `LoadVarData` был void: исходный Init не ветвился по bool Load.
         events.push(WorldGameInitEvent::GeneralVariableDataLoaded(
