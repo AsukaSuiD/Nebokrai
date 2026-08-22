@@ -1,9 +1,10 @@
 //! Частично восстановленный read-side владелец `public/package.cpp`.
 //!
 //! Точная World-пара подтверждает package header из трёх little-endian `u32`,
-//! инвертированные записи индекса размером `0x118`, ASCII-lowercase ключи и
-//! копирование сжатого blob по `dwOffset/dwSize`. Это materialized ниже без
-//! `FILE*`, ручных буферов и read-after-short-read дефектов.
+//! обязательный empty-index header по `12 + dwIndexHeadSize`, инвертированные
+//! записи индекса размером `0x118`, ASCII-lowercase ключи и копирование
+//! сжатого blob по `dwOffset/dwSize`. Это materialized ниже без `FILE*`,
+//! ручных буферов и read-after-short-read дефектов.
 //!
 //! `DeCompressData` (LZO) и `DeCompress` (zlib) materialized через
 //! поддерживаемые Rust-библиотеки; сохраняются исходный выбор по bit 2 и
@@ -55,6 +56,7 @@ pub(crate) enum PackageReadError {
     TruncatedHeader,
     IndexSizeOutsideFile,
     IndexCountOutsideHeader,
+    EmptyIndexHeaderOutsideFile,
     IndexNameWithoutNul,
     DataOutsideFile,
     BufferTooSmall { required: u32, available: u32 },
@@ -87,6 +89,18 @@ impl PackageArchive {
             .ok_or(PackageReadError::IndexSizeOutsideFile)?;
         if index_end > bytes.len() {
             return Err(PackageReadError::IndexSizeOutsideFile);
+        }
+        // `CPackage::Open` после file-index записей делает `fseek(12 +
+        // dwIndexHeadSize)` и два `fread(u32)` empty-index заголовка. Эти
+        // update-side записи не нужны read-only owner-у, но сам header
+        // обязателен в layout; иначе исходник читает неинициализированные
+        // данные. Rust отклоняет такой повреждённый snapshot детерминированно.
+        let empty_index_header = PACKAGE_HEADER_LEN
+            .checked_add(index_head_size as usize)
+            .and_then(|offset| offset.checked_add(8))
+            .ok_or(PackageReadError::EmptyIndexHeaderOutsideFile)?;
+        if empty_index_header > bytes.len() {
+            return Err(PackageReadError::EmptyIndexHeaderOutsideFile);
         }
 
         let mut indexes = BTreeMap::new();
@@ -424,7 +438,7 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 
 // ============================================================================
 // FUNCTION: CPackage::Open
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED / SNAPSHOT_IO_SUBSTITUTED
 // COMPONENT: ServerUpdate
 // ARTIFACT: GameServer/ServerUpdate.exe + GameServer/ServerUpdate.pdb
 // SOURCE: d:\йЈЋдє‘\fengyun_els\src\public\package.cpp:131
@@ -1070,7 +1084,7 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 
 // ============================================================================
 // FUNCTION: CPackage::Open
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED / SNAPSHOT_IO_SUBSTITUTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\package.cpp:131
@@ -1078,6 +1092,10 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 // ADDRESS: 004d1d00
 // PROTOTYPE: bool __thiscall Open(char * param_1, bool param_2)
 //
+// `PackageArchive::from_bytes` materializes read-side header, file-index и
+// обязательный empty-index header этого пути. Доступ `r+b` и file snapshot
+// остаются у `CClientResource`; update-side empty-list и утерянное bool
+// отображение `Open` намеренно не выдаются за completed Rust контракт.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
