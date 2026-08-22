@@ -1288,6 +1288,7 @@ use crate::worldserver::appworld::player::{
     CPlayer, PlayerCodecError, PlayerCountryChangeReport, PlayerExploitUpdate,
     PlayerFactionInfoContext, PlayerFactionInfoDelivery, PlayerFactionInfoUpdateBlock,
     PlayerFactionInfoUpdateReport,
+    PlayerLoadDataOutcome, PlayerLoadDataOwner,
     PlayerLeiTingClock, PlayerLeiTingUpdateBlock, PlayerLeiTingUpdateReport,
     PlayerMurderCounterReset, PlayerMurderCounterUpdate, PlayerOrganizingUpdateError,
     PlayerOrganizingState, PlayerOrganizingUpdater, PlayerOriginEquipmentBlock,
@@ -2904,6 +2905,58 @@ pub(crate) trait WorldPlayerDataLoadOwner {
         &'a mut self,
         player: &'a mut CPlayer,
     ) -> impl Future<Output = bool> + 'a;
+}
+
+/// Связывает полный `CPlayer::LoadData` с bool-контрактом фонового World worker-а.
+///
+/// DB-owner, player-list и setup snapshots остаются явно принадлежащими
+/// вызывающему коду. Это заменяет только process-global singleton lookup-и;
+/// порядок `CRsPlayer::LoadPlayer` и последующей post-load стадии не меняется.
+pub(crate) struct WorldPlayerLoadDataAdapter<'owner, Loader> {
+    loader: &'owner mut Loader,
+    player_list: &'owner mut CPlayerList,
+    globe_setup: &'owner GlobeSetupSnapshot,
+    coefficients: &'owner PlayerPropertyCoefficients,
+}
+
+impl<'owner, Loader> WorldPlayerLoadDataAdapter<'owner, Loader> {
+    pub(crate) fn new(
+        loader: &'owner mut Loader,
+        player_list: &'owner mut CPlayerList,
+        globe_setup: &'owner GlobeSetupSnapshot,
+        coefficients: &'owner PlayerPropertyCoefficients,
+    ) -> Self {
+        Self {
+            loader,
+            player_list,
+            globe_setup,
+            coefficients,
+        }
+    }
+}
+
+impl<Loader> WorldPlayerDataLoadOwner for WorldPlayerLoadDataAdapter<'_, Loader>
+where
+    Loader: PlayerLoadDataOwner,
+{
+    fn load_player_data<'a>(
+        &'a mut self,
+        player: &'a mut CPlayer,
+    ) -> impl Future<Output = bool> + 'a {
+        async move {
+            matches!(
+                player
+                    .load_data(
+                        self.loader,
+                        self.player_list,
+                        self.globe_setup,
+                        self.coefficients,
+                    )
+                    .await,
+                PlayerLoadDataOutcome::Loaded(_)
+            )
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -19546,8 +19599,8 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // PROTOTYPE: uint __stdcall LoadPlayerDataFromDB(void * param_1)
 //
 // Реализация находится в `run_player_load_worker` и
-// `process_player_load_batch` выше; `CPlayer::LoadData` передан отдельному
-// async owner-у и не подменён заглушкой.
+// `process_player_load_batch` выше; `WorldPlayerLoadDataAdapter` вызывает
+// полный `CPlayer::LoadData`, а его exact bool-смысл передаёт worker-у.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

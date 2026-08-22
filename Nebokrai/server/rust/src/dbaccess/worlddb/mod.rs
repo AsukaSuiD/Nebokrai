@@ -32,12 +32,12 @@ pub(crate) mod goodslistener;
 pub(crate) mod largess;
 #[allow(
     dead_code,
-    reason = "CPlayerDataQueue подключена к World CGame::ProcessPlayerDataQueue; producer DB-load остаётся сырым"
+    reason = "CPlayerDataQueue подключена между полным World DB-load worker-ом и CGame::ProcessPlayerDataQueue"
 )]
 pub(crate) mod playerdataqueue;
 #[allow(
     dead_code,
-    reason = "CPlayerLoadQueue подключена к CGame и account-cleanup 0x4FB06; DB-load producer/consumer достигаются следующими проходами"
+    reason = "CPlayerLoadQueue подключена к CGame, полному DB-load worker-у и account-cleanup 0x4FB06"
 )]
 pub(crate) mod playerloadqueue;
 #[allow(

@@ -478,7 +478,9 @@
 //! normal `AL=1`, общий failure-tail `0x00514D9C` — `AL=0`. Таймер и запись
 //! `TemptLoadDataLog` являются технической диагностикой и не входят в игровой
 //! контракт. `TiberiusPlayerLoadData` связывает этот owner с готовым
-//! `CPlayer::LoadData`, не пряча registry/config в mutable singleton.
+//! `CPlayer::LoadData`, а `WorldPlayerLoadDataAdapter` передаёт его bool-итог
+//! точному `LoadPlayerDataFromDB` worker-у, не пряча registry/config в mutable
+//! singleton.
 //! Автономная ветка null connection пока остаётся честным
 //! `PendingStandaloneConnection`; рабочий DB-thread передаёт готовое соединение.
 
