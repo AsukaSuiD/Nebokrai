@@ -1,7 +1,8 @@
 //! WorldServer dispatcher-owner `OnWriteLogMessage`.
 //!
 //! Весь dispatcher RVA `0x000A8AB0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме
-//! player progress `0x60206..0x60208`, team/killer `0x60209..0x6020A`,
+//! goods craft `0x60204..0x60205`, player progress `0x60206..0x60208`,
+//! team/killer `0x60209..0x6020A`,
 //! chat/change-map `0x6020B..0x6020C`, increment-shop `0x6020D`, carriage
 //! `0x6020E`, plain player log `0x6020F`, fairy `0x60210`, reserved no-op
 //! `0x60211..0x60213`, auction
@@ -81,6 +82,12 @@
 //! Linux-донор ошибочно делал ранний `return`. Параметризация заменила только
 //! `FixSingleQuotes` и неэкранированные имена. Change-map сохраняет обычный
 //! wire-порядок source/destination координат и не добавляет валидацию.
+//! Goods craft `0x60204..0x60205` по exact
+//! `0x004A91C1..0x004A94A7` читает соответственно две и три пары GUID/name с
+//! границей имени `0x40`, затем четыре signed long. Lookup имени игрока даёт
+//! literal `"NULL"`; gem-exchange сохраняет имена напрямую, а jewelry-made
+//! пропускает только goods-name через `CGame::CheckPoint`. Bind сохраняет
+//! штатные bytes без ручного quoting и не переносит donor-added лимит 32.
 //! Exact outer jump-table VA `0x004AACA8` направляет все три wire ID
 //! `0x60211..0x60213` прямо в epilogue `0x004AAC87`; Rust поэтому считает их
 //! обработанными no-op, не создавая ложный pending owner. Ветка `0x60218` по
@@ -105,6 +112,8 @@ use crate::worldserver::appworld::incrementlog::incrementlog::CIncrementLog;
 use crate::worldserver::worldserver::game::CGame;
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
+const GOODS_GEM_EXCHANGE_LOG_MESSAGE: i32 = 0x0006_0204;
+const GOODS_JEWELRY_MADE_LOG_MESSAGE: i32 = 0x0006_0205;
 const PLAYER_LEVEL_LOG_MESSAGE: i32 = 0x0006_0206;
 const PLAYER_EXP_LOG_MESSAGE: i32 = 0x0006_0207;
 const PLAYER_DIED_LOG_MESSAGE: i32 = 0x0006_0208;
@@ -312,6 +321,39 @@ pub(crate) enum WorldPlayerRelationLogEvent {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldGoodsCraftLogWrite {
+    pub(crate) player_id: i32,
+    pub(crate) player_name: Vec<u8>,
+    pub(crate) event: WorldGoodsCraftLogEvent,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WorldGoodsCraftLogEvent {
+    GemExchange {
+        destination_gem_id: CGuid,
+        destination_gem_name: Vec<u8>,
+        source_gem_id: CGuid,
+        source_gem_name: Vec<u8>,
+        source_gem_amount: i32,
+        map_id: i32,
+        position_x: i32,
+        position_y: i32,
+    },
+    JewelryMade {
+        goods_id: CGuid,
+        goods_name: Vec<u8>,
+        material_id: CGuid,
+        material_name: Vec<u8>,
+        jade_id: CGuid,
+        jade_name: Vec<u8>,
+        jade_amount: i32,
+        map_id: i32,
+        position_x: i32,
+        position_y: i32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldChatLogWrite {
     pub(crate) sender_id: i32,
     pub(crate) sender_name: Vec<u8>,
@@ -351,6 +393,7 @@ pub(crate) enum WorldWriteLogCommand {
     AuctionSaleLog(WorldAuctionSaleLogWrite),
     PlayerProgressLog(WorldPlayerProgressLogWrite),
     PlayerRelationLog(WorldPlayerRelationLogWrite),
+    GoodsCraftLog(WorldGoodsCraftLogWrite),
     ChatLog(WorldChatLogWrite),
     /// Exact chat jump-table ставил в FIFO очищенный SQL-buffer.
     LegacyEmptyChatSql { log_type: u8 },
@@ -485,6 +528,20 @@ pub(crate) struct WorldPlayerRelationLogMessageOutcome {
 }
 
 #[derive(Debug)]
+pub(crate) enum WorldGoodsCraftPayloadCompleteness {
+    GemExchange([bool; 9]),
+    JewelryMade([bool; 11]),
+}
+
+#[derive(Debug)]
+pub(crate) struct WorldGoodsCraftLogMessageOutcome {
+    pub(crate) write: WorldGoodsCraftLogWrite,
+    pub(crate) player_found: bool,
+    pub(crate) payload_complete: WorldGoodsCraftPayloadCompleteness,
+    pub(crate) queue_length_after: usize,
+}
+
+#[derive(Debug)]
 pub(crate) enum WorldChatPayloadCompleteness {
     FixedReceiver([bool; 6]),
     PrivateReceiver([bool; 7]),
@@ -533,6 +590,7 @@ pub(crate) enum WorldWriteLogMessageOutcome {
     AuctionSaleLog(WorldAuctionSaleLogMessageOutcome),
     PlayerProgressLog(WorldPlayerProgressLogMessageOutcome),
     PlayerRelationLog(WorldPlayerRelationLogMessageOutcome),
+    GoodsCraftLog(WorldGoodsCraftLogMessageOutcome),
     ChatLog(WorldChatLogMessageOutcome),
     ChangeMapLog(WorldChangeMapLogMessageOutcome),
     ReservedNoOp { message_type: i32 },
@@ -596,6 +654,14 @@ pub(crate) fn on_write_log_message(
             WorldWriteLogMessageOutcome::PlayerProgressLog(
                 on_player_progress_log_message(game, message),
             ),
+        );
+    }
+    if matches!(
+        message.message_type(),
+        GOODS_GEM_EXCHANGE_LOG_MESSAGE | GOODS_JEWELRY_MADE_LOG_MESSAGE
+    ) {
+        return WorldWriteLogMessageDispatch::Handled(
+            WorldWriteLogMessageOutcome::GoodsCraftLog(on_goods_craft_log_message(game, message)),
         );
     }
     if matches!(
@@ -758,6 +824,111 @@ fn on_auction_log_message(
         payload_complete,
         queue_length_after,
         live_published,
+    }
+}
+
+fn on_goods_craft_log_message(
+    game: &CGame,
+    mut message: CMessage,
+) -> WorldGoodsCraftLogMessageOutcome {
+    let player_id = message.base_mut().get_long();
+    let player_id_value = player_id.unwrap_or(0);
+    let player = game.map_player(player_id_value as u32);
+    let player_found = player.is_some();
+    let player_name = player
+        .map(|player| visible_c_string(player.get_name()))
+        .unwrap_or_else(|| b"NULL".to_vec());
+
+    let (event, payload_complete) = match message.message_type() {
+        GOODS_GEM_EXCHANGE_LOG_MESSAGE => {
+            let (destination_gem_id, destination_gem_id_complete) = get_guid(&mut message);
+            let (destination_gem_name, destination_gem_name_complete) =
+                get_limited_string(&mut message, 0x40);
+            let (source_gem_id, source_gem_id_complete) = get_guid(&mut message);
+            let (source_gem_name, source_gem_name_complete) =
+                get_limited_string(&mut message, 0x40);
+            let source_gem_amount = message.base_mut().get_long();
+            let map_id = message.base_mut().get_long();
+            let position_x = message.base_mut().get_long();
+            let position_y = message.base_mut().get_long();
+            (
+                WorldGoodsCraftLogEvent::GemExchange {
+                    destination_gem_id,
+                    destination_gem_name,
+                    source_gem_id,
+                    source_gem_name,
+                    source_gem_amount: source_gem_amount.unwrap_or(0),
+                    map_id: map_id.unwrap_or(0),
+                    position_x: position_x.unwrap_or(0),
+                    position_y: position_y.unwrap_or(0),
+                },
+                WorldGoodsCraftPayloadCompleteness::GemExchange([
+                    player_id.is_some(),
+                    destination_gem_id_complete,
+                    destination_gem_name_complete,
+                    source_gem_id_complete,
+                    source_gem_name_complete,
+                    source_gem_amount.is_some(),
+                    map_id.is_some(),
+                    position_x.is_some(),
+                    position_y.is_some(),
+                ]),
+            )
+        }
+        GOODS_JEWELRY_MADE_LOG_MESSAGE => {
+            let (goods_id, goods_id_complete) = get_guid(&mut message);
+            let (goods_name, goods_name_complete) = get_limited_string(&mut message, 0x40);
+            let (material_id, material_id_complete) = get_guid(&mut message);
+            let (material_name, material_name_complete) =
+                get_limited_string(&mut message, 0x40);
+            let (jade_id, jade_id_complete) = get_guid(&mut message);
+            let (jade_name, jade_name_complete) = get_limited_string(&mut message, 0x40);
+            let jade_amount = message.base_mut().get_long();
+            let map_id = message.base_mut().get_long();
+            let position_x = message.base_mut().get_long();
+            let position_y = message.base_mut().get_long();
+            (
+                WorldGoodsCraftLogEvent::JewelryMade {
+                    goods_id,
+                    goods_name,
+                    material_id,
+                    material_name,
+                    jade_id,
+                    jade_name,
+                    jade_amount: jade_amount.unwrap_or(0),
+                    map_id: map_id.unwrap_or(0),
+                    position_x: position_x.unwrap_or(0),
+                    position_y: position_y.unwrap_or(0),
+                },
+                WorldGoodsCraftPayloadCompleteness::JewelryMade([
+                    player_id.is_some(),
+                    goods_id_complete,
+                    goods_name_complete,
+                    material_id_complete,
+                    material_name_complete,
+                    jade_id_complete,
+                    jade_name_complete,
+                    jade_amount.is_some(),
+                    map_id.is_some(),
+                    position_x.is_some(),
+                    position_y.is_some(),
+                ]),
+            )
+        }
+        _ => unreachable!("goods craft decoder вызывается только для двух wire ID"),
+    };
+    let write = WorldGoodsCraftLogWrite {
+        player_id: player_id_value,
+        player_name,
+        event,
+    };
+    let queue_length_after =
+        game.push_write_log_command(WorldWriteLogCommand::GoodsCraftLog(write.clone()));
+    WorldGoodsCraftLogMessageOutcome {
+        write,
+        player_found,
+        payload_complete,
+        queue_length_after,
     }
 }
 

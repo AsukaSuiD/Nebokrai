@@ -45,8 +45,8 @@ use tokio_util::compat::TokioAsyncWriteCompatExt;
 use crate::dbaccess::worlddb::rssetup::{WorldDatabaseSettings, WorldTdsClient};
 use crate::public::date::TagTime;
 use crate::worldserver::appworld::message::writelogmessage::{
-    WorldAuctionSaleLogEvent, WorldFairyLogEvent, WorldPlayerProgressLogEvent,
-    WorldPlayerRelationLogEvent, WorldWriteLogCommand,
+    WorldAuctionSaleLogEvent, WorldFairyLogEvent, WorldGoodsCraftLogEvent,
+    WorldPlayerProgressLogEvent, WorldPlayerRelationLogEvent, WorldWriteLogCommand,
 };
 
 const INSERT_INCREMENT_LOG_SQL: &str = "INSERT INTO increment_log(\
@@ -105,6 +105,12 @@ const INSERT_TEAM_LOG_SQL: &str = "INSERT INTO team_log(\
 const INSERT_PLAYER_KILLER_LOG_SQL: &str = "INSERT INTO player_killer_log(\
     player_id,player_name,murderer_id,murderer_name,map_id,pos_x,pos_y,log_type\
 ) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8)";
+const INSERT_GOODS_GEM_EXCHANGE_LOG_SQL: &str = "INSERT INTO goods_gem_exchange_log(\
+    player_id,player_name,d_gem_id,d_gem_name,s_gem_id,s_gem_name,s_gem_amount,map_id,pos_x,pos_y\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10)";
+const INSERT_GOODS_JEWELRY_MADE_LOG_SQL: &str = "INSERT INTO goods_jewelry_made_log(\
+    player_id,player_name,goods_id,goods_name,material_id,material_name,jade_id,jade_name,jade_amount,map_id,pos_x,pos_y\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11,@P12)";
 const INSERT_CHAT_LOG_SQL: &str = "INSERT INTO chat_log(\
     sender_id,sender_name,map_id,pos_x,pos_y,receiver_id,receiver_name,content,log_type\
 ) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9)";
@@ -617,6 +623,61 @@ pub(crate) async fn execute_world_write_log_command(
             }
             Ok(())
         }
+        WorldWriteLogCommand::GoodsCraftLog(write) => {
+            match &write.event {
+                WorldGoodsCraftLogEvent::GemExchange {
+                    destination_gem_id,
+                    destination_gem_name,
+                    source_gem_id,
+                    source_gem_name,
+                    source_gem_amount,
+                    map_id,
+                    position_x,
+                    position_y,
+                } => {
+                    let mut query = Query::new(INSERT_GOODS_GEM_EXCHANGE_LOG_SQL);
+                    query.bind(write.player_id);
+                    query.bind(decode_legacy_text(&write.player_name));
+                    query.bind(destination_gem_id.to_string());
+                    query.bind(decode_legacy_text(destination_gem_name));
+                    query.bind(source_gem_id.to_string());
+                    query.bind(decode_legacy_text(source_gem_name));
+                    query.bind(*source_gem_amount);
+                    query.bind(*map_id);
+                    query.bind(*position_x);
+                    query.bind(*position_y);
+                    query.execute(connection).await?;
+                }
+                WorldGoodsCraftLogEvent::JewelryMade {
+                    goods_id,
+                    goods_name,
+                    material_id,
+                    material_name,
+                    jade_id,
+                    jade_name,
+                    jade_amount,
+                    map_id,
+                    position_x,
+                    position_y,
+                } => {
+                    let mut query = Query::new(INSERT_GOODS_JEWELRY_MADE_LOG_SQL);
+                    query.bind(write.player_id);
+                    query.bind(decode_legacy_text(&write.player_name));
+                    query.bind(goods_id.to_string());
+                    query.bind(decode_legacy_text(goods_name));
+                    query.bind(material_id.to_string());
+                    query.bind(decode_legacy_text(material_name));
+                    query.bind(jade_id.to_string());
+                    query.bind(decode_legacy_text(jade_name));
+                    query.bind(*jade_amount);
+                    query.bind(*map_id);
+                    query.bind(*position_x);
+                    query.bind(*position_y);
+                    query.execute(connection).await?;
+                }
+            }
+            Ok(())
+        }
         WorldWriteLogCommand::ChatLog(write) => {
             let mut query = Query::new(INSERT_CHAT_LOG_SQL);
             query.bind(write.sender_id);
@@ -701,6 +762,7 @@ fn world_write_log_command_name(command: &WorldWriteLogCommand) -> &'static str 
         WorldWriteLogCommand::AuctionSaleLog(_) => "AuctionSaleLog",
         WorldWriteLogCommand::PlayerProgressLog(_) => "PlayerProgressLog",
         WorldWriteLogCommand::PlayerRelationLog(_) => "PlayerRelationLog",
+        WorldWriteLogCommand::GoodsCraftLog(_) => "GoodsCraftLog",
         WorldWriteLogCommand::ChatLog(_) => "ChatLog",
         WorldWriteLogCommand::LegacyEmptyChatSql { .. } => "LegacyEmptyChatSql",
         WorldWriteLogCommand::ChangeMapLog(_) => "ChangeMapLog",
