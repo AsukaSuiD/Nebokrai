@@ -35,6 +35,9 @@
 //!
 //! Rust `VecDeque::len` шире старого 32-битного `_Mysize`; значение вне
 //! legacy-range безопасно блокируется typed-исходом, а не молча обрезается.
+//! Полный exact switch охватывает `0x5FF01..=0x5FF16`; неизвестный opcode
+//! приходит к общему epilogue уже после безусловного чтения request ID, но без
+//! последующих side effects и без передачи следующему owner-у.
 //! Raw ниже сохранён как provenance уже достигнутого owner-а. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\gmmessage.cpp`.
@@ -175,6 +178,12 @@ pub(crate) enum WorldGmOnlinePlayerCountOutcome {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldGmMessageOutcome {
+    /// Default полного `OnGMMessage` после его безусловного чтения request ID.
+    NoOp {
+        request_type: i32,
+        request_id: i32,
+        request_id_complete: bool,
+    },
     OnlinePlayerCount(WorldGmOnlinePlayerCountOutcome),
     OnlinePlayerId {
         request_id: i32,
@@ -764,7 +773,11 @@ pub(crate) async fn on_gm_message(
             ))
         }
         0x0005_FF16 => handled_rewritten_broadcast(game, message, 0x0005_FF16, 0x0007_FC13),
-        _ => WorldGmMessageDispatch::Pending(message),
+        request_type => WorldGmMessageDispatch::Handled(WorldGmMessageOutcome::NoOp {
+            request_type,
+            request_id,
+            request_id_complete: decoded_request_id.is_some(),
+        }),
     }
 }
 
