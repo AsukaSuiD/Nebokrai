@@ -1,8 +1,9 @@
 //! Владелец региона исторического `WorldServer`.
 //!
-//! Owner `CRegion`; constructor, `New`, resource `Load` и region-wire
-//! `AddToByteArray` имеют статус `IMPLEMENTED`, а существенные offsets и
-//! возвраты сверены как `VERIFIED_DISASSEMBLY`. Точная пара:
+//! Owner `CRegion`; constructor, `New`, resource `Load`, region-wire
+//! `AddToByteArray` и `DecordFromByteArray` имеют статус `IMPLEMENTED`, а
+//! существенные offsets и возвраты сверены как `VERIFIED_DISASSEMBLY`. Точная
+//! пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -29,6 +30,14 @@
 //! zero-filled cell block и возвращал `1`. Serializer сохраняет literal order и
 //! четыре IEEE-754 байта scale; независимый GameServer decoder RVA `0x000F1070`
 //! читает их именно как `float`, исправляя ошибочный cast в raw-псевдокоде.
+//! World `DecordFromByteArray` намеренно не является обратным к этому полному
+//! serializer: exact EXE `0x004D773C..0x004D7782` после base-wire читает только
+//! region type, width, height, country и notify, затем вызывает `New`; поля
+//! resource ID и exp scale не потребляются и сохраняют прежнее состояние.
+//! Очищенный C++ reference делает decoder симметричным, но это противоречит
+//! World EXE и не переносится. Rust сохраняет exact порядок уже применённых
+//! base/scalar-изменений и cursor; чтение за концом input либо небезопасная
+//! размерная арифметика остаётся typed safe-границей.
 //! `GetRandomPosInRange` сохраняет сначала 1000 случайных попыток, затем scan
 //! X-снаружи/Y-внутри и расширение прямоугольника на 10 клеток с каждой
 //! стороны. `VERIFIED_DISASSEMBLY` по `0x004D6BA3/0x004D6C14` подтверждает, что
@@ -41,7 +50,7 @@
 //! локальным `BLOCKED_MISSING_FACT`. CRT/STL allocation и cleanup-noise выражены
 //! владением Rust и отдельно не восстанавливаются.
 
-use super::baseobject::CBaseObject;
+use super::baseobject::{BaseObjectDecodeError, CBaseObject};
 
 const REGION_RESOURCE_HEADER: &[u8; 7] = b"CLS-RGN";
 const REGION_RESOURCE_VERSION: i32 = 1;
@@ -68,6 +77,13 @@ pub(crate) enum RegionLoadError {
 pub(crate) enum RegionSerializationBlock {
     UninitializedField { field: &'static str },
     TooManySwitches { count: usize },
+}
+
+/// Ошибка safe-границы World `CRegion::DecordFromByteArray`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum RegionDecodeError {
+    Base(BaseObjectDecodeError),
+    Region(RegionLoadError),
 }
 
 /// Результат старого поиска позиции, включая его наблюдаемый `bool`.
@@ -270,6 +286,54 @@ impl CRegion {
         destination.extend_from_slice(&switch_count.to_le_bytes());
         for switch in &self.switches {
             destination.extend_from_slice(switch);
+        }
+        Ok(true)
+    }
+
+    /// Декодирует отдельный короткий World region-wire.
+    ///
+    /// Он не читает `m_lResourceID/m_fExpScale`: это подтверждённая
+    /// асимметрия World `DecordFromByteArray`, а не пропуск Rust decoder-а.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        include_child: bool,
+    ) -> Result<bool, RegionDecodeError> {
+        self.base_object
+            .decord_from_byte_array(source, cursor, include_child)
+            .map_err(RegionDecodeError::Base)?;
+        self.region_type = read_region_i32(source, cursor, "m_lRegionType")
+            .map_err(RegionDecodeError::Region)?;
+        self.width = read_region_i32(source, cursor, "m_lWidth")
+            .map_err(RegionDecodeError::Region)?;
+        self.height = read_region_i32(source, cursor, "m_lHeight")
+            .map_err(RegionDecodeError::Region)?;
+        self.country = Some(
+            read_region_bytes(source, cursor, 1, "m_btCountry")
+                .map_err(RegionDecodeError::Region)?[0],
+        );
+        self.notify = Some(
+            read_region_i32(source, cursor, "m_lNotify").map_err(RegionDecodeError::Region)?,
+        );
+        self.recreate_cells().map_err(RegionDecodeError::Region)?;
+
+        for cell in &mut self.cells {
+            cell.copy_from_slice(
+                read_region_bytes(source, cursor, REGION_CELL_SIZE, "m_pCell")
+                    .map_err(RegionDecodeError::Region)?,
+            );
+        }
+
+        let switch_count = read_region_i32(source, cursor, "m_vectorSwitch.size")
+            .map_err(RegionDecodeError::Region)?;
+        for _ in 0..switch_count {
+            let mut region_switch = [0; REGION_SWITCH_SIZE];
+            region_switch.copy_from_slice(
+                read_region_bytes(source, cursor, REGION_SWITCH_SIZE, "m_vectorSwitch[]")
+                    .map_err(RegionDecodeError::Region)?,
+            );
+            self.switches.push(region_switch);
         }
         Ok(true)
     }
@@ -537,7 +601,7 @@ fn read_region_bytes<'a>(
 
 // ============================================================================
 // FUNCTION: CRegion::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\region.cpp:159
