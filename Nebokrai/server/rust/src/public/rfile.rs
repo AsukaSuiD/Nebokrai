@@ -1,6 +1,115 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Частично восстановленный владелец `public/rfile.cpp`.
+//!
+//! Точная пара WorldServer: `Nworldserver.exe` / `WorldServer.pdb`, исходный
+//! владелец PDB: `e:\svn\fengyun_russia_dev\public\rfile.cpp`. Подтверждены
+//! компоновка cursor-а `CRFile`, границы `ReadData` и преобразование
+//! `CheckRFileStr`; они материализованы ниже. Rust-владелец файла и буфера
+//! заменяет `FILE*`, ручное освобождение и небезопасные копирования, не меняя
+//! их контракт на корректном вводе.
+//!
+//! `rfOpen`, default-resource и package/decompression ветви остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально): они зависят от ещё не восстановленных `CClientResource`,
+//! `CFilesInfo` и `CPackage`. `ReadToStream` также намеренно не материализован:
+//! его файловая ветвь в точной дизассемблировке возвращает неустойчивое значение
+//! регистра, а практический C++ reference ему противоречит. Это нельзя
+//! превратить в Rust-контракт без дополнительной проверки EXE/PDB.
+//!
+//! Сырой C++ ниже остаётся доказательной заготовкой, а не Rust-реализацией.
+
+use std::{
+    fs::File,
+    io::{Read, Seek, SeekFrom},
+};
+
+/// Безопасная замена двух подтверждённых источников `CRFile`.
+///
+/// `position` сохраняет `m_dwPos`; файловое чтение, как в оригинале, перед
+/// каждым запросом позиционируется по нему с начала файла.
+pub(crate) struct CRFile {
+    source: CRFileSource,
+    size: u32,
+    position: u32,
+}
+
+enum CRFileSource {
+    Memory(Vec<u8>),
+    File(File),
+}
+
+impl CRFile {
+    /// Точный конструктор памяти `CRFile(unsigned char *, unsigned long)`.
+    pub(crate) fn from_memory(data: Vec<u8>) -> Self {
+        let size = u32::try_from(data.len())
+            .expect("размер буфера CRFile превышает unsigned long исходного сервера");
+        Self {
+            source: CRFileSource::Memory(data),
+            size,
+            position: 0,
+        }
+    }
+
+    /// Создаёт файловый cursor с размером, уже полученным владельцем открытия.
+    pub(crate) fn from_file(file: File, size: u32) -> Self {
+        Self {
+            source: CRFileSource::File(file),
+            size,
+            position: 0,
+        }
+    }
+
+    /// Повторяет успешную ветвь `ReadData`.
+    ///
+    /// Переполнение суммы позиции и длины, а также неполное чтение исходника были
+    /// внутренними дефектами C++ реализации. Здесь они возвращают `false` и не
+    /// меняют логический cursor: корректные resource-файлы сохраняют тот же результат.
+    pub(crate) fn read_data(&mut self, output: &mut [u8]) -> bool {
+        let requested = match u32::try_from(output.len()) {
+            Ok(requested) => requested,
+            Err(_) => return false,
+        };
+        let end = match self.position.checked_add(requested) {
+            Some(end) if end <= self.size => end,
+            _ => return false,
+        };
+
+        let read_ok = match &mut self.source {
+            CRFileSource::Memory(data) => {
+                let start = self.position as usize;
+                let end = end as usize;
+                output.copy_from_slice(&data[start..end]);
+                true
+            }
+            CRFileSource::File(file) => file
+                .seek(SeekFrom::Start(u64::from(self.position)))
+                .and_then(|_| file.read_exact(output))
+                .is_ok(),
+        };
+
+        if read_ok {
+            self.position = end;
+        }
+        read_ok
+    }
+}
+
+/// Повторяет побайтовую часть `CheckRFileStr`.
+///
+/// Оригинал приводил байты к нижнему регистру активной locale CRT. Внешний контракт
+/// путей WorldServer подтверждён для ASCII; байты вне ASCII сохраняются, чтобы
+/// не навязывать Rust Unicode-normalization. После замены `/` на `\\` функция
+/// добавляет начальный `\\`, если первый обратный слеш не стоит на нулевой позиции.
+pub(crate) fn check_rfile_str(path: &mut Vec<u8>) {
+    for byte in path.iter_mut() {
+        byte.make_ascii_lowercase();
+        if *byte == b'/' {
+            *byte = b'\\';
+        }
+    }
+
+    if path.first() != Some(&b'\\') {
+        path.insert(0, b'\\');
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -88,7 +197,7 @@
 
 // ============================================================================
 // FUNCTION: CRFile::CRFile
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\rfile.cpp:27
@@ -102,7 +211,7 @@
 
 // ============================================================================
 // FUNCTION: CRFile::ReadData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\rfile.cpp:50
@@ -158,7 +267,7 @@
 
 // ============================================================================
 // FUNCTION: CheckRFileStr
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\rfile.cpp:216

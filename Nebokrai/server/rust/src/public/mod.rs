@@ -106,3 +106,8 @@ pub(crate) mod timer;
 
 pub(crate) mod readwrite;
 pub(crate) mod tools;
+#[allow(
+    dead_code,
+    reason = "CRFile подключён перед восстановлением CClientResource/package-opening"
+)]
+pub(crate) mod rfile;
