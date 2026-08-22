@@ -1231,7 +1231,7 @@ use crate::dbaccess::worlddb::rssetup::{
 };
 use crate::dbaccess::worlddb::rsunion::RsUnionOwner;
 use crate::dbaccess::worlddb::writelogqueue::WorldWriteLogQueue;
-use crate::nets::clients::ClientConnectError;
+use crate::nets::clients::{ClientConnectError, ClientSendQueue};
 use crate::nets::mysocket::{DEFAULT_SOCKET_TYPE, legacy_ipv4_word};
 use crate::nets::networld::message::{CMessage, SendMessageError, WorldMessageHandlers};
 use crate::nets::networld::mynetclient::CMyNetClient;
@@ -1578,7 +1578,7 @@ use crate::worldserver::worldserver::playerranks::{
 use crate::worldserver::worldserver::savedb::{
     DoSaveDataLifecycleReport, SaveDataFinalDisposition, SaveDataLifecycleState, SaveDataLogEvent,
     SaveDataLogPublishBlock, SaveDataLogPublishDisposition, SaveDataLogSink, SaveDataLogTarget,
-    SaveDataMonitoringReport, SaveDataMonitoringSnapshot, do_save_data_lifecycle,
+    SaveDataMonitoringSnapshot, do_save_data_lifecycle,
 };
 use crate::worldserver::worldserver::worldserver::{
     AddLogTextDisposition, WorldLogLocalTime, WorldLogTextOwner, WorldRefreshInfoCurrent,
@@ -6410,6 +6410,41 @@ pub(crate) enum WorldErrorLogDelivery {
         wire: Vec<u8>,
         delivery: Result<i32, SendMessageError>,
     },
+}
+
+/// Строит и ставит exact `SendErrLog` packet указанному Login transport.
+///
+/// Выделен из `CGame` только для save-owner-а, который эксклюзивно держит
+/// `m_DBData`, но заимствует независимый Login FIFO до async DB traversal.
+fn send_err_log_to_login(
+    sender: Option<&ClientSendQueue>,
+    message_type: i8,
+    server_ip: i32,
+    world_id: i32,
+    text: Option<&[u8]>,
+) -> WorldErrorLogDelivery {
+    let Some(text) = text else {
+        return WorldErrorLogDelivery::SkippedNullText;
+    };
+    let text = &text[..text.iter().position(|byte| *byte == 0).unwrap_or(text.len())];
+
+    let mut message = CMessage::new(0x0001_FE08);
+    message.base_mut().add_char(message_type);
+    message.base_mut().add_long(server_ip);
+    message.base_mut().add_long(world_id);
+    message.base_mut().add(text);
+    message.base_mut().add_char(0);
+    let wire = message.as_wire_bytes().to_vec();
+    let delivery = message.send(sender, false);
+
+    WorldErrorLogDelivery::Sent {
+        message_type,
+        server_ip,
+        world_id,
+        text: text.to_vec(),
+        wire,
+        delivery,
+    }
 }
 
 /// Точная достигнутая семантика полей исходного `CGame::tagLoginPlayer`.
@@ -14482,31 +14517,13 @@ impl CGame {
         world_id: i32,
         text: Option<&[u8]>,
     ) -> WorldErrorLogDelivery {
-        let Some(text) = text else {
-            return WorldErrorLogDelivery::SkippedNullText;
-        };
-        let text = &text[..text.iter().position(|byte| *byte == 0).unwrap_or(text.len())];
-
-        let mut message = CMessage::new(0x0001_FE08);
-        message.base_mut().add_char(message_type);
-        message.base_mut().add_long(server_ip);
-        message.base_mut().add_long(world_id);
-        message.base_mut().add(text);
-        message.base_mut().add_char(0);
-        let wire = message.as_wire_bytes().to_vec();
-        let delivery = message.send(
+        send_err_log_to_login(
             self.current_login_client().map(CMyNetClient::send_queue),
-            false,
-        );
-
-        WorldErrorLogDelivery::Sent {
             message_type,
             server_ip,
             world_id,
-            text: text.to_vec(),
-            wire,
-            delivery,
-        }
+            text,
+        )
     }
 
     /// Возвращает producer handle текущего nullable GameServer owner-а.
@@ -20696,7 +20713,6 @@ pub(crate) async fn save_thread_func<
     L,
     Log,
     GetMonitoring,
-    SendMonitoring,
 >(
     game: &'game mut CGame,
     settings: &WorldDatabaseSettings,
@@ -20722,7 +20738,6 @@ pub(crate) async fn save_thread_func<
     largess: &mut L,
     log_sink: &mut Log,
     get_monitoring: GetMonitoring,
-    send_monitoring: SendMonitoring,
 ) -> WorldSaveThreadReport<'game>
 where
     S: VariableListSaveSource,
@@ -20740,7 +20755,6 @@ where
     L: LargessOwner,
     Log: SaveDataLogSink,
     GetMonitoring: FnOnce() -> SaveDataMonitoringSnapshot,
-    SendMonitoring: FnOnce(&SaveDataMonitoringReport),
 {
     let guard = WorldSaveThreadGuard { game };
     let start_log = match log_sink.publish(&save_thread_log_event(b"SaveThread Starting...")) {
@@ -20750,8 +20764,14 @@ where
         disposition => disposition,
     };
 
+    // `DoSaveData` держит только m_DBData, тогда как SendErrLog читает
+    // независимый Login FIFO. Раздельные заимствования заменяют исходный
+    // process-global без ослабления внешнего save-barrier.
+    let login_sender = guard.game.net_client.as_ref().map(CMyNetClient::send_queue);
     let lifecycle = {
-        let mut session = guard.game.db_data_save_session();
+        let mut session = WorldDbDataSaveSession {
+            data: guard.game.db_data.get_mut(),
+        };
         do_save_data_lifecycle(
             settings,
             state,
@@ -20777,7 +20797,15 @@ where
             largess,
             log_sink,
             get_monitoring,
-            send_monitoring,
+            |monitoring| {
+                let _legacy_result = send_err_log_to_login(
+                    login_sender,
+                    monitoring.message_type,
+                    monitoring.server_id,
+                    monitoring.world_number_bits as i32,
+                    Some(&monitoring.text),
+                );
+            },
         )
         .await
     };
