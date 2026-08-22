@@ -2,9 +2,10 @@
 //!
 //! Статус владельца: `IMPLEMENTED` для `DbNote`, constructor/lifecycle очередей,
 //! `PushItemToListIn/Out`, `PopItemFromListIn/Out`, трёх
-//! `DoneOT_IN_*`, `DoneListIn`, `DoneOutList`, `PopPlayerList`, пяти
-//! DB-переходов записи `DelItemFromDb`/`DelMoneyFromDb`/`ModifyGoodsStateA2S`/
-//! `TansferMoney`/`ModifyGoodsStateA2B` и достигнутой части `LoadAuction`,
+//! `DoneOT_IN_*`, `DoneListIn`, `DoneOutList`, `PopPlayerList`, создания normal
+//! DB-соединения и пяти DB-переходов записи `DelItemFromDb`/`DelMoneyFromDb`/
+//! `ModifyGoodsStateA2S`/`TansferMoney`/`ModifyGoodsStateA2B`, а также
+//! достигнутой части `LoadAuction`,
 //! caller-контрактов `LoadOwnerBackGoods`,
 //! `LoadOwnerUndoGoods`, `LoadOwnerSuccGoods` и `LoadMoneyById`, а также
 //! Tiberius materialization `LoadGoodsByOwnerId` и `LoadMoneyById`. Остальные
@@ -649,6 +650,7 @@ fn output_block(
 /// Точная операция одного SQL-перехода записи `CDbMisc`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AuctionWriteOperation {
+    CreateNormalConnection,
     DeleteItem,
     DeleteMoney,
     ModifyStateAuctionToSucceeded,
@@ -758,6 +760,24 @@ impl TiberiusAuctionWriteOwner {
         Self {
             settings: settings.clone(),
         }
+    }
+
+    /// Заменяет normal connection перед первым DB-batch либо после reconnect.
+    /// Старый `CreateNormalCn` сначала освобождал `m_NormalCn`, затем создавал
+    /// и открывал новый ADO connection; ошибка любого шага попадала в catch и
+    /// возвращала `false`. Владелец старого `WorldTdsClient` в Rust сам решает,
+    /// когда отбросить его перед вызовом, а этот метод передаёт только новый
+    /// успешно установленный owner.
+    pub(crate) async fn create_normal_connection(
+        &self,
+    ) -> Result<WorldTdsClient, AuctionWriteFailure> {
+        self.settings
+            .connect()
+            .await
+            .map_err(|source| AuctionWriteFailure::Connection {
+                operation: AuctionWriteOperation::CreateNormalConnection,
+                source,
+            })
     }
 
     /// Выполняет точный `delete auction where goodsid = '%s'` в отдельном
@@ -1500,7 +1520,7 @@ enum ReadAuctionGoodsRecordError {
 
 // ============================================================================
 // FUNCTION: CDbMisc::CreateNormalCn
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1799
@@ -1508,6 +1528,7 @@ enum ReadAuctionGoodsRecordError {
 // ADDRESS: 004ef7f0
 // PROTOTYPE: bool __thiscall CreateNormalCn(void)
 //
+// IMPLEMENTED_OWNER: `TiberiusAuctionWriteOwner::create_normal_connection` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
