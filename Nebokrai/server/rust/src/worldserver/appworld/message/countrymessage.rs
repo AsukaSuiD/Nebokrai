@@ -30,6 +30,8 @@
 //! снизу нулём и сверху максимумом, tech-exp только сверху, tech-level только
 //! снизу, king points только сверху. Вместо singleton `CCountryParam` Rust
 //! принимает уже принадлежащий main-loop параметр явно.
+//! Вне полного списка case dispatcher завершается общим epilogue без чтения,
+//! отправки и передачи следующему owner-у; Rust фиксирует это `NoOp`.
 //! Exact `0x004A4EF1..0x004A4F9E` и PDB layout `COfficer` подтверждают для
 //! `0x60315` три unsigned byte `country/job/raw switch`, выбор встроенного king
 //! при job `1`, `GetMinister` только для `2..=7` и запись именно
@@ -585,6 +587,10 @@ pub(crate) struct WorldFourNationCountryFailSync {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryMessageOutcome {
+    /// Default полного exact `OnCountryMessage` без side effects.
+    NoOp {
+        request_type: i32,
+    },
     Relay(WorldCountryRelayOutcome),
     PlayerCountryChanged(WorldCountryPlayerChangeSync),
     NewDaySet(WorldCountryNewDaySync),
@@ -615,7 +621,7 @@ pub(crate) enum WorldCountryMessageDispatch {
     Pending(CMessage),
 }
 
-/// Исполняет достигнутые scalar-sync и in-place relay ветви `OnCountryMessage`.
+/// Исполняет оставшиеся scalar-sync и in-place relay ветви `OnCountryMessage`.
 pub(crate) fn on_country_message(
     game: &CGame,
     country_handler: &mut CCountryHandler,
@@ -763,7 +769,11 @@ pub(crate) fn on_country_message(
     let response_type = match request_type {
         COUNTRY_RELAY_FIRST => 0x0007_FF11,
         COUNTRY_RELAY_SECOND => 0x0007_FF12,
-        _ => return WorldCountryMessageDispatch::Pending(message),
+        _ => {
+            return WorldCountryMessageDispatch::Handled(WorldCountryMessageOutcome::NoOp {
+                request_type,
+            });
+        }
     };
     message.set_message_type(response_type);
     let wire = message.as_wire_bytes().to_vec();
