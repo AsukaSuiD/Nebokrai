@@ -11393,6 +11393,11 @@ impl CGame {
             events.push(WorldGameReleaseEvent::OptionalOwner { owner, released });
         }
         self.script_file_data.clear();
+        // C++-донор очищает `m_mTeamSessionID` вместе с file-data map-ами.
+        // После этого места нет ни одного team lookup до немедленного
+        // `DeleteGame`, поэтому Rust освобождает только пустые map-node, не
+        // меняя session ID, routing либо внешний порядок.
+        self.team_session_ids.clear();
         let owner = WorldGameReleaseOptionalOwner::GeneralVariableList;
         let released = context.release_optional_owner(owner);
         events.push(WorldGameReleaseEvent::OptionalOwner { owner, released });
