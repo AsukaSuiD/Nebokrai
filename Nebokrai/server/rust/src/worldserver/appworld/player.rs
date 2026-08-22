@@ -172,6 +172,10 @@
 //! получает безопасный owned lifetime вместо старой ветви delete/early-return.
 //! Непустой `ListThing` очищает deque даже при одном неполном хвосте; пустой
 //! вызывает daily setup только при `dwfyEnergy == 0`, как точный DB-owner.
+//! Scalar load-проекция пишет тот же byte-exact base-owner, shape identity,
+//! owned строки и reached standalone поля. `SetFosterNum/SetHatcherNum`
+//! сохраняют исходный clamp до пяти; `BaseMaxRp` не материализуется из DB,
+//! потому что точный `LoadPlayer` его не читает.
 
 //! PDB задаёт `SaveData` как public `bool`-метод с единственным connection
 //! `cn`, RVA `0x0005B4E0`, длина `0xA0`; исходный владелец —
@@ -354,10 +358,11 @@ use crate::dbaccess::worlddb::goodslistener::{GoodsContainerTraversalSnapshot, T
 use crate::dbaccess::worlddb::rsjjcsys::{PlayerJjcDataSnapshot, RsJjcSysOwner};
 use crate::dbaccess::worlddb::rsplayer::{
     EmbeddedFriendNameNul, LoadedPlayerScriptFlag, PlayerAbilityCreationSnapshot,
-    PlayerAbilitySaveSnapshot, PlayerAbilityScalarSnapshot, PlayerAbilitySkill,
-    PlayerBaseSaveSnapshot, PlayerCreationBaseSnapshot, PlayerCreationSnapshot, PlayerFriendName,
-    PlayerQuestSaveEntry, PlayerQuestSaveSnapshot, PlayerSaveOutcome, PlayerSaveSnapshot,
-    PlayerScriptFlagSnapshot, PlayerThing as DbPlayerThing, RsPlayerOwner,
+    PlayerAbilityLoadScalarSnapshot, PlayerAbilitySaveSnapshot, PlayerAbilityScalarSnapshot,
+    PlayerAbilitySkill, PlayerBaseSaveSnapshot, PlayerCreationBaseSnapshot,
+    PlayerCreationSnapshot, PlayerFriendName, PlayerQuestSaveEntry, PlayerQuestSaveSnapshot,
+    PlayerSaveOutcome, PlayerSaveSnapshot, PlayerScriptFlagSnapshot, PlayerThing as DbPlayerThing,
+    RsPlayerOwner,
 };
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
@@ -2049,6 +2054,159 @@ impl CPlayer {
     pub(crate) fn set_hatcher_num(&mut self, value: u32) {
         self.base_property
             .write_u32(BASE_PROPERTY_HATCHER_NUM_OFFSET, value.min(5));
+    }
+
+    /// Публикует scalar-часть одной найденной строки `CSL_PLAYER_ABILITY`.
+    pub(crate) fn apply_loaded_ability_scalars(
+        &mut self,
+        loaded: &PlayerAbilityLoadScalarSnapshot<'_>,
+    ) {
+        let scalar = &loaded.ability;
+        self.move_shape_base.set_name(scalar.name);
+        self.move_shape_base.set_region_id(scalar.region_id);
+        self.move_shape_base.set_pos_xy(scalar.pos_x, scalar.pos_y);
+        let _ = self.move_shape_base.set_direction(scalar.dir);
+        self.base_property.title = scalar.title.to_vec();
+        self.depot_password = scalar.depot_password.to_vec();
+
+        let base = &mut self.base_property;
+        base.write_u8(BASE_PROPERTY_LEVEL_OFFSET, scalar.level);
+        base.write_u32(BASE_PROPERTY_EXP_OFFSET, scalar.exp);
+        base.write_u8(BASE_PROPERTY_HEAD_PIC_OFFSET, scalar.head_pic);
+        base.write_u8(BASE_PROPERTY_FACE_PIC_OFFSET, scalar.face_pic);
+        base.write_u8(BASE_PROPERTY_OCCUPATION_OFFSET, scalar.occupation);
+        base.write_u8(BASE_PROPERTY_SEX_OFFSET, scalar.sex);
+        base.write_u32(BASE_PROPERTY_SPOUSE_ID_OFFSET, scalar.spouse_id);
+        base.write_u32(BASE_PROPERTY_UNION_ID_OFFSET, scalar.union_id);
+        base.write_u16(BASE_PROPERTY_PK_COUNT_OFFSET, scalar.pk_count);
+        base.write_u32(BASE_PROPERTY_KILL_COUNT_OFFSET, scalar.kill_count);
+        base.write_u16(BASE_PROPERTY_HIT_TOP_LOG_OFFSET, scalar.hit_top_log);
+        base.write_u32(BASE_PROPERTY_HOT_HIT_OFFSET, scalar.hot_hit);
+        base.write_u32(BASE_PROPERTY_LOAN_MAX_OFFSET, scalar.loan_max);
+        base.write_u32(BASE_PROPERTY_LOAN_OFFSET, scalar.loan);
+        base.write_u32(BASE_PROPERTY_LOAN_TIME_OFFSET, scalar.loan_time as u32);
+        base.write_u16(BASE_PROPERTY_REMAIN_POINT_OFFSET, scalar.remain_point);
+        base.write_u8(BASE_PROPERTY_PK_NORMAL_OFFSET, u8::from(scalar.pk_normal));
+        base.write_u8(BASE_PROPERTY_PK_TEAM_OFFSET, u8::from(scalar.pk_team));
+        base.write_u8(BASE_PROPERTY_PK_UNION_OFFSET, u8::from(scalar.pk_union));
+        base.write_u8(BASE_PROPERTY_PK_BADMAN_OFFSET, u8::from(scalar.pk_badman));
+        base.write_u8(BASE_PROPERTY_PK_COUNTRY_OFFSET, u8::from(scalar.pk_country));
+        base.write_u16(BASE_PROPERTY_YP_OFFSET, scalar.yp);
+        base.write_u32(BASE_PROPERTY_HP_OFFSET, scalar.hp);
+        base.write_u32(BASE_PROPERTY_MP_OFFSET, scalar.mp);
+        base.write_u16(BASE_PROPERTY_RP_OFFSET, scalar.rp);
+        base.write_u32(BASE_PROPERTY_MAX_HP_OFFSET, scalar.base_max_hp);
+        base.write_u32(BASE_PROPERTY_MAX_MP_OFFSET, scalar.base_max_mp);
+        base.write_u16(BASE_PROPERTY_MAX_YP_OFFSET, scalar.base_max_yp);
+        // `LoadPlayer` не читает BaseMaxRp: его сразу вычисляет `LoadData`.
+        base.write_u32(BASE_PROPERTY_STR_OFFSET, scalar.base_str);
+        base.write_u32(BASE_PROPERTY_DEX_OFFSET, scalar.base_dex);
+        base.write_u32(BASE_PROPERTY_CON_OFFSET, scalar.base_con);
+        base.write_u32(BASE_PROPERTY_INT_OFFSET, scalar.base_int);
+        base.write_u32(BASE_PROPERTY_MIN_ATK_OFFSET, scalar.base_min_atk);
+        base.write_u32(BASE_PROPERTY_MAX_ATK_OFFSET, scalar.base_max_atk);
+        base.write_u16(BASE_PROPERTY_HIT_OFFSET, scalar.base_hit);
+        base.write_u16(BASE_PROPERTY_BURDEN_OFFSET, scalar.base_burden);
+        base.write_u16(BASE_PROPERTY_CCH_OFFSET, scalar.base_cch);
+        base.write_u32(BASE_PROPERTY_DEF_OFFSET, scalar.base_def);
+        base.write_u16(BASE_PROPERTY_DODGE_OFFSET, scalar.base_dodge);
+        base.write_u16(BASE_PROPERTY_ATC_SPEED_OFFSET, scalar.base_atc_speed);
+        base.write_u32(
+            BASE_PROPERTY_ELEMENT_RESISTANT_OFFSET,
+            scalar.base_element_resistant,
+        );
+        base.write_u16(
+            BASE_PROPERTY_HP_RECOVER_SPEED_OFFSET,
+            scalar.base_hp_recover_speed,
+        );
+        base.write_u16(
+            BASE_PROPERTY_MP_RECOVER_SPEED_OFFSET,
+            scalar.base_mp_recover_speed,
+        );
+        base.write_u32(BASE_PROPERTY_VIGOUR_OFFSET, scalar.base_vigour);
+        base.write_u32(BASE_PROPERTY_MAX_VIGOUR_OFFSET, scalar.base_max_vigour);
+        base.write_u32(BASE_PROPERTY_ENERGY_OFFSET, scalar.base_energy);
+        base.write_u32(BASE_PROPERTY_MAX_ENERGY_OFFSET, scalar.base_max_energy);
+        base.write_u32(BASE_PROPERTY_CREDIT_OFFSET, scalar.base_credit);
+        base.write_u8(
+            BASE_PROPERTY_DISPLAY_HEAD_PIECE_OFFSET,
+            scalar.display_head_piece,
+        );
+        base.write_u8(BASE_PROPERTY_IS_CHARGED_OFFSET, u8::from(scalar.is_charged));
+        base.write_u32(
+            BASE_PROPERTY_QUEST_TIME_BEGIN_OFFSET,
+            scalar.quest_time_begin as u32,
+        );
+        base.write_u32(
+            BASE_PROPERTY_QUEST_TIME_LIMIT_OFFSET,
+            scalar.quest_time_limit as u32,
+        );
+        base.write_u8(BASE_PROPERTY_QUEST_OFFSET, u8::from(scalar.quest));
+        base.write_u32(BASE_PROPERTY_EXPLOIT_OFFSET, scalar.exploit);
+        base.write_u32(BASE_PROPERTY_KUDOS_OFFSET, scalar.kudos);
+        base.write_u32(BASE_PROPERTY_MODE_OFFSET, scalar.mode);
+        base.write_u8(
+            BASE_PROPERTY_FAIRY_ENABLED_OFFSET,
+            u8::from(scalar.fairy_enabled),
+        );
+        base.write_u8(
+            BASE_PROPERTY_BATTLE_FAIRY_ENABLED_OFFSET,
+            u8::from(scalar.battle_fairy_enabled),
+        );
+        base.write_u32(BASE_PROPERTY_FETCH_POWER_OFFSET, scalar.fetch_power);
+        base.write_u32(
+            BASE_PROPERTY_MAX_FETCH_POWER_OFFSET,
+            scalar.max_fetch_power,
+        );
+        base.write_u32(BASE_PROPERTY_AUCTION_SPACE_OFFSET, scalar.auction_space);
+        base.write_u32(BASE_PROPERTY_EXALT_OFFSET, scalar.exalt);
+        base.write_u32(BASE_PROPERTY_SZL_OFFSET, scalar.szl);
+        base.write_u32(
+            BASE_PROPERTY_GODS_BATTLE_FACTION_OFFSET,
+            scalar.gods_battle_faction as u32,
+        );
+        base.write_u32(BASE_PROPERTY_FY_ENERGY_OFFSET, scalar.base_fy_energy);
+        base.write_u32(
+            BASE_PROPERTY_FY_ENABLE_FLAGS_OFFSET,
+            scalar.base_bl_fy_energy,
+        );
+        base.write_u16(
+            BASE_PROPERTY_LT_UP_60_COUNT_OFFSET,
+            scalar.lt_up_60_count,
+        );
+        base.write_u16(
+            BASE_PROPERTY_REMAIN_JING_LI_DAN_COUNT_OFFSET,
+            scalar.remain_jl_dan_count,
+        );
+        base.write_u32(BASE_PROPERTY_LT_60_STAMP_OFFSET, scalar.lt_60_stamp);
+        base.write_u32(
+            BASE_PROPERTY_DAYS_HONOR_OFFSET,
+            loaded.days_honor_eliminate_num,
+        );
+        base.write_u32(
+            BASE_PROPERTY_WEEKS_HONOR_OFFSET,
+            loaded.weeks_honor_eliminate_num,
+        );
+        base.write_u32(
+            BASE_PROPERTY_MONTHS_HONOR_OFFSET,
+            loaded.months_honor_eliminate_num,
+        );
+        base.write_u32(
+            BASE_PROPERTY_TOTAL_HONOR_OFFSET,
+            loaded.total_honor_eliminate_num,
+        );
+        base.write_u32(
+            BASE_PROPERTY_RANK_NOBILITY_OFFSET,
+            loaded.rank_of_nobility_id,
+        );
+        base.write_u32(BASE_PROPERTY_APPELLATION_OFFSET, loaded.appellation_id);
+
+        self.set_foster_num(scalar.foster_num);
+        self.set_hatcher_num(scalar.hatcher_num);
+        self.murderer_time = scalar.murderer_time;
+        self.silience_time = loaded.silence_time;
+        self.country = Some(scalar.country);
+        self.contribute = Some(scalar.contribute);
     }
 
     /// Публикует все 24 DWORD `HotKey` после exact-size проверки DB-owner-а.

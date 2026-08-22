@@ -118,6 +118,14 @@
 //! у `CPlayer`, где доступен `CThingSetup`. Единственный unchecked `strlen`
 //! без NUL до конца friend-blob заменён typed malformed-границей; чтение за
 //! SAFEARRAY и use-after-unaccess не воспроизводятся.
+//! Scalar ability-row теперь также достигнута как typed Tiberius-проекция:
+//! exact `SELECT * ... WHERE id=@P1 ORDER BY id`, ADO-compatible integer/bit/
+//! real/text conversions, nullable-only `dwLT60Stamp=0`, все реально читаемые
+//! поля и семь load-only silence/honor значений. `ID`, `Account` и
+//! `BaseMaxRp` намеренно не читаются: exact `LoadPlayer` сохраняет уже
+//! назначенные identity/account, а `CPlayer::LoadData` сразу вычисляет RP.
+//! DB/EOF остаются доказанным `false`, malformed range/blob — отдельной typed
+//! границей. Неявное создание connection пока принадлежит полному wrapper-у.
 //!
 //! Текущий raw задаёт byte-exact имена и порядок всех 84 обращений
 //! `Fields::Item`; PDB полностью закрывает source-типы `tagBaseProperty` и
@@ -477,6 +485,8 @@ use crate::dbaccess::worlddb::dbgoods::{
 use crate::dbaccess::worlddb::goodslistener::GoodsTraversalBlock;
 use crate::dbaccess::worlddb::rsjjcsys::{PlayerJjcDataSnapshot, RsJjcSysOwner};
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
+use crate::setup::leitingsetup::CThingSetup;
+use crate::worldserver::appworld::player::CPlayer;
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
 use crate::worldserver::worldserver::playerranks::{CPlayerRanks, PlayerRankAddBlock};
 
@@ -1649,6 +1659,18 @@ pub(crate) struct PlayerAbilityScalarSnapshot<'a> {
     pub(crate) lt_60_stamp: u32,
 }
 
+/// Полный scalar-набор, который `CRsPlayer::LoadPlayer` публикует в `CPlayer`.
+pub(crate) struct PlayerAbilityLoadScalarSnapshot<'a> {
+    pub(crate) ability: PlayerAbilityScalarSnapshot<'a>,
+    pub(crate) silence_time: i32,
+    pub(crate) days_honor_eliminate_num: u32,
+    pub(crate) weeks_honor_eliminate_num: u32,
+    pub(crate) months_honor_eliminate_num: u32,
+    pub(crate) total_honor_eliminate_num: u32,
+    pub(crate) rank_of_nobility_id: u32,
+    pub(crate) appellation_id: u32,
+}
+
 /// Восстанавливает точный порядок и `VARIANT`-форму 84 scalar-присваиваний.
 pub(crate) fn player_ability_scalar_assignments<'a>(
     snapshot: &PlayerAbilityScalarSnapshot<'a>,
@@ -2242,6 +2264,394 @@ pub(crate) fn load_quest_data(blob: &[u8]) -> Vec<PlayerQuestSaveEntry> {
             complete: entry[2],
         })
         .collect()
+}
+
+#[derive(Debug)]
+pub(crate) enum PlayerAbilityRowLoadFailure {
+    Database {
+        column: &'static str,
+        source: tiberius::error::Error,
+    },
+    MissingRequiredValue {
+        column: &'static str,
+    },
+    NumericOutsideLegacyRange {
+        column: &'static str,
+        value: i64,
+        target: &'static str,
+    },
+    Blob {
+        field: PlayerAbilityBinaryField,
+        source: PlayerAbilityBlobDecodeBlock,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum PlayerAbilityQueryLoadFailure {
+    ZeroPlayerId,
+    MissingConnection,
+    Database(tiberius::error::Error),
+    MissingRow,
+}
+
+#[derive(Debug)]
+pub(crate) enum PlayerAbilityQueryLoadOutcome {
+    ReturnedTrue,
+    ReturnedFalse(PlayerAbilityQueryLoadFailure),
+    BlockedMalformed(PlayerAbilityRowLoadFailure),
+}
+
+fn required_ability_integer(
+    row: &Row,
+    column: &'static str,
+) -> Result<i64, PlayerAbilityRowLoadFailure> {
+    match read_ado_integer(row, column) {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => Err(PlayerAbilityRowLoadFailure::MissingRequiredValue { column }),
+        Err(source) => Err(PlayerAbilityRowLoadFailure::Database { column, source }),
+    }
+}
+
+fn required_ability_bool(
+    row: &Row,
+    column: &'static str,
+) -> Result<bool, PlayerAbilityRowLoadFailure> {
+    let first_error = match row.try_get::<bool, _>(column) {
+        Ok(Some(value)) => return Ok(value),
+        Ok(None) => return Err(PlayerAbilityRowLoadFailure::MissingRequiredValue { column }),
+        Err(source) => source,
+    };
+    match read_ado_integer(row, column) {
+        Ok(Some(value)) => Ok(value != 0),
+        Ok(None) => Err(PlayerAbilityRowLoadFailure::MissingRequiredValue { column }),
+        Err(_) => Err(PlayerAbilityRowLoadFailure::Database {
+            column,
+            source: first_error,
+        }),
+    }
+}
+
+fn required_ability_float(
+    row: &Row,
+    column: &'static str,
+) -> Result<f32, PlayerAbilityRowLoadFailure> {
+    match row.try_get::<f32, _>(column) {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => Err(PlayerAbilityRowLoadFailure::MissingRequiredValue { column }),
+        Err(source) => Err(PlayerAbilityRowLoadFailure::Database { column, source }),
+    }
+}
+
+fn required_ability_ansi(
+    row: &Row,
+    column: &'static str,
+) -> Result<Vec<u8>, PlayerAbilityRowLoadFailure> {
+    match row.try_get::<&str, _>(column) {
+        Ok(Some(value)) => {
+            let (encoded, _, _) = WINDOWS_1251.encode(value);
+            Ok(encoded.into_owned())
+        }
+        Ok(None) => Err(PlayerAbilityRowLoadFailure::MissingRequiredValue { column }),
+        Err(source) => Err(PlayerAbilityRowLoadFailure::Database { column, source }),
+    }
+}
+
+fn ability_blob(
+    row: &Row,
+    field: PlayerAbilityBinaryField,
+) -> Result<Vec<u8>, PlayerAbilityRowLoadFailure> {
+    let column = field.column_name();
+    match row.try_get::<&[u8], _>(column) {
+        Ok(Some(value)) => Ok(value.to_vec()),
+        Ok(None) => Ok(Vec::new()),
+        Err(source) => Err(PlayerAbilityRowLoadFailure::Database { column, source }),
+    }
+}
+
+/// Материализует доказанную scalar-часть одной ability-строки без ADO casts.
+pub(crate) fn materialize_player_ability_scalar_row(
+    row: &Row,
+    player: &mut CPlayer,
+) -> Result<(), PlayerAbilityRowLoadFailure> {
+    macro_rules! integer {
+        ($column:literal, $target:ty) => {{
+            let value = required_ability_integer(row, $column)?;
+            <$target>::try_from(value).map_err(|_| {
+                PlayerAbilityRowLoadFailure::NumericOutsideLegacyRange {
+                    column: $column,
+                    value,
+                    target: stringify!($target),
+                }
+            })?
+        }};
+    }
+    macro_rules! bit_pattern_u32 {
+        ($column:literal) => {{
+            let value = required_ability_integer(row, $column)?;
+            if let Ok(value) = u32::try_from(value) {
+                value
+            } else if let Ok(value) = i32::try_from(value) {
+                value as u32
+            } else {
+                return Err(PlayerAbilityRowLoadFailure::NumericOutsideLegacyRange {
+                    column: $column,
+                    value,
+                    target: "u32/i32 bit-pattern",
+                });
+            }
+        }};
+    }
+
+    let name = required_ability_ansi(row, "Name")?;
+    let title = required_ability_ansi(row, "Title")?;
+    let depot_password = required_ability_ansi(row, "DepotPassword")?;
+    let account = player.get_account().to_vec();
+    let scalar = PlayerAbilityScalarSnapshot {
+        id: player.get_id(),
+        name: &name,
+        region_id: integer!("RegionID", i32),
+        pos_x: required_ability_float(row, "PosX")?,
+        pos_y: required_ability_float(row, "PosY")?,
+        dir: integer!("Dir", i32),
+        account: &account,
+        title: &title,
+        level: integer!("Levels", u8),
+        exp: bit_pattern_u32!("Exp"),
+        head_pic: integer!("HeadPic", u8),
+        face_pic: integer!("FacePic", u8),
+        occupation: integer!("Occupation", u8),
+        sex: integer!("Sex", u8),
+        spouse_id: bit_pattern_u32!("SpouseID"),
+        union_id: bit_pattern_u32!("UnionID"),
+        murderer_time: bit_pattern_u32!("MurdererTime"),
+        pk_count: integer!("PkCount", u16),
+        kill_count: bit_pattern_u32!("KillCount"),
+        hit_top_log: integer!("HitTopLog", u16),
+        hot_hit: bit_pattern_u32!("HotHit"),
+        loan_max: bit_pattern_u32!("LoanMax"),
+        loan: bit_pattern_u32!("Loan"),
+        loan_time: integer!("LoanTime", i32),
+        remain_point: integer!("RemainPoint", u16),
+        pk_normal: required_ability_bool(row, "Pk_Normal")?,
+        pk_team: required_ability_bool(row, "Pk_Team")?,
+        pk_union: required_ability_bool(row, "Pk_Union")?,
+        pk_badman: required_ability_bool(row, "Pk_Badman")?,
+        pk_country: required_ability_bool(row, "Pk_Country")?,
+        yp: integer!("Yp", u16),
+        hp: bit_pattern_u32!("Hp"),
+        mp: bit_pattern_u32!("Mp"),
+        rp: integer!("Rp", u16),
+        base_max_hp: bit_pattern_u32!("BaseMaxHp"),
+        base_max_mp: bit_pattern_u32!("BaseMaxMp"),
+        base_max_yp: integer!("BaseMaxYp", u16),
+        base_max_rp: 0,
+        base_str: bit_pattern_u32!("BaseStr"),
+        base_dex: bit_pattern_u32!("BaseDex"),
+        base_con: bit_pattern_u32!("BaseCon"),
+        base_int: bit_pattern_u32!("BaseInt"),
+        base_min_atk: bit_pattern_u32!("BaseMinAtk"),
+        base_max_atk: bit_pattern_u32!("BaseMaxAtk"),
+        base_hit: integer!("BaseHit", u16),
+        base_burden: integer!("BaseBurden", u16),
+        base_cch: integer!("BaseCCH", u16),
+        base_def: bit_pattern_u32!("BaseDef"),
+        base_dodge: integer!("BaseDodge", u16),
+        base_atc_speed: integer!("BaseAtcSpeed", u16),
+        base_element_resistant: bit_pattern_u32!("BaseElementResistant"),
+        base_hp_recover_speed: integer!("BaseHpRecoverSpeed", u16),
+        base_mp_recover_speed: integer!("BaseMpRecoverSpeed", u16),
+        base_vigour: bit_pattern_u32!("BaseVigour"),
+        base_max_vigour: bit_pattern_u32!("BaseMaxVigour"),
+        base_energy: bit_pattern_u32!("BaseEnergy"),
+        base_max_energy: bit_pattern_u32!("BaseMaxEnergy"),
+        base_credit: bit_pattern_u32!("BaseCredit"),
+        display_head_piece: integer!("DisplayHeadPiece", u8),
+        country: integer!("country", u8),
+        contribute: integer!("contribute", i32),
+        is_charged: required_ability_bool(row, "IsCharged")?,
+        quest_time_begin: integer!("QuestTimeBegin", i32),
+        quest_time_limit: integer!("QuestTimeLimit", i32),
+        quest: required_ability_bool(row, "Quest")?,
+        depot_password: &depot_password,
+        exploit: bit_pattern_u32!("Exploit"),
+        kudos: bit_pattern_u32!("Kudos"),
+        mode: bit_pattern_u32!("Mode"),
+        fairy_enabled: required_ability_bool(row, "FairyEnabled")?,
+        foster_num: bit_pattern_u32!("FosterNum"),
+        hatcher_num: bit_pattern_u32!("HatcherNum"),
+        battle_fairy_enabled: required_ability_bool(row, "BattleFairyEnabled")?,
+        fetch_power: bit_pattern_u32!("FetchPower"),
+        max_fetch_power: bit_pattern_u32!("MaxFetchPower"),
+        auction_space: bit_pattern_u32!("dwAuctionSpace"),
+        exalt: bit_pattern_u32!("dwExalt"),
+        szl: bit_pattern_u32!("SZL"),
+        gods_battle_faction: integer!("GodsBattleFaction", i32),
+        base_fy_energy: bit_pattern_u32!("basefyEnergy"),
+        base_bl_fy_energy: bit_pattern_u32!("baseblfyenergy"),
+        lt_up_60_count: integer!("LTUp60Cnt", u16),
+        remain_jl_dan_count: integer!("wRemainJLDanCnt", u16),
+        lt_60_stamp: match read_ado_integer(row, "dwLT60Stamp") {
+            Ok(Some(value)) => {
+                if let Ok(value) = u32::try_from(value) {
+                    value
+                } else if let Ok(value) = i32::try_from(value) {
+                    value as u32
+                } else {
+                    return Err(PlayerAbilityRowLoadFailure::NumericOutsideLegacyRange {
+                        column: "dwLT60Stamp",
+                        value,
+                        target: "u32/i32 bit-pattern",
+                    });
+                }
+            }
+            Ok(None) => 0,
+            Err(source) => {
+                return Err(PlayerAbilityRowLoadFailure::Database {
+                    column: "dwLT60Stamp",
+                    source,
+                });
+            }
+        },
+    };
+    let loaded = PlayerAbilityLoadScalarSnapshot {
+        ability: scalar,
+        silence_time: integer!("silence", i32),
+        days_honor_eliminate_num: bit_pattern_u32!("DaysHonorElimilateNum"),
+        weeks_honor_eliminate_num: bit_pattern_u32!("WeeksHonorElimilateNum"),
+        months_honor_eliminate_num: bit_pattern_u32!("MonthsHonorElimilateNum"),
+        total_honor_eliminate_num: bit_pattern_u32!("TotalHonorElimilateNum"),
+        rank_of_nobility_id: bit_pattern_u32!("RankOfNobilityID"),
+        appellation_id: bit_pattern_u32!("AppellationID"),
+    };
+    player.apply_loaded_ability_scalars(&loaded);
+    Ok(())
+}
+
+/// Материализует семь binary fields одной ability-строки в exact helper-order.
+pub(crate) fn materialize_player_ability_binary_row(
+    row: &Row,
+    player: &mut CPlayer,
+    thing_setup: &CThingSetup,
+    get_week_day: impl FnMut() -> u16,
+) -> Result<(), PlayerAbilityRowLoadFailure> {
+    let hot_keys_blob = ability_blob(row, PlayerAbilityBinaryField::HotKey)?;
+    let hot_keys = load_hot_key_field(&hot_keys_blob).map_err(|source| {
+        PlayerAbilityRowLoadFailure::Blob {
+            field: PlayerAbilityBinaryField::HotKey,
+            source,
+        }
+    })?;
+    player.apply_loaded_hot_keys(&hot_keys);
+
+    let skills = load_skill_field(&ability_blob(row, PlayerAbilityBinaryField::Skill)?);
+    player.append_loaded_skills(&skills);
+
+    if let Some(states) = load_state_field(&ability_blob(row, PlayerAbilityBinaryField::State)?) {
+        player.apply_loaded_ex_states(states);
+    }
+
+    let friends_blob = ability_blob(row, PlayerAbilityBinaryField::Friend)?;
+    let friends = load_friend_field(&friends_blob).map_err(|source| {
+        PlayerAbilityRowLoadFailure::Blob {
+            field: PlayerAbilityBinaryField::Friend,
+            source,
+        }
+    })?;
+    player.append_loaded_friends(friends);
+
+    let script_blob = ability_blob(row, PlayerAbilityBinaryField::ScriptFlag)?;
+    if let Some(script) = load_script_flag(&script_blob).map_err(|source| {
+        PlayerAbilityRowLoadFailure::Blob {
+            field: PlayerAbilityBinaryField::ScriptFlag,
+            source,
+        }
+    })? {
+        player.apply_loaded_script_flag(script);
+    }
+
+    let ci_qing = load_ci_qing_field(&ability_blob(row, PlayerAbilityBinaryField::CiQing)?);
+    player.extend_loaded_ci_qing(ci_qing);
+
+    let thing_blob = ability_blob(row, PlayerAbilityBinaryField::Thing)?;
+    let things = load_thing_field(&thing_blob);
+    let fy_energy_value = required_ability_integer(row, "basefyEnergy")?;
+    let fy_energy = if let Ok(value) = u32::try_from(fy_energy_value) {
+        value
+    } else if let Ok(value) = i32::try_from(fy_energy_value) {
+        value as u32
+    } else {
+        return Err(PlayerAbilityRowLoadFailure::NumericOutsideLegacyRange {
+            column: "basefyEnergy",
+            value: fy_energy_value,
+            target: "u32/i32 bit-pattern",
+        });
+    };
+    player.apply_loaded_things(
+        thing_blob.is_empty(),
+        things,
+        fy_energy,
+        thing_setup,
+        get_week_day,
+    );
+    Ok(())
+}
+
+impl TiberiusRsPlayer {
+    /// Загружает и публикует одну ordered ability-строку по signed player ID.
+    pub(crate) async fn load_player_ability_row(
+        &mut self,
+        player: &mut CPlayer,
+        active_transaction: Option<&mut WorldTdsClient>,
+        thing_setup: &CThingSetup,
+        get_week_day: impl FnMut() -> u16,
+    ) -> PlayerAbilityQueryLoadOutcome {
+        let player_id = player.get_id();
+        if player_id == 0 {
+            return PlayerAbilityQueryLoadOutcome::ReturnedFalse(
+                PlayerAbilityQueryLoadFailure::ZeroPlayerId,
+            );
+        }
+        let Some(active_transaction) = active_transaction else {
+            return PlayerAbilityQueryLoadOutcome::ReturnedFalse(
+                PlayerAbilityQueryLoadFailure::MissingConnection,
+            );
+        };
+
+        let mut query = Query::new(
+            "SELECT * FROM CSL_PLAYER_ABILITY WHERE id=@P1 ORDER BY id",
+        );
+        query.bind(player_id);
+        let row = match query.query(active_transaction).await {
+            Ok(stream) => match stream.into_row().await {
+                Ok(Some(row)) => row,
+                Ok(None) => {
+                    return PlayerAbilityQueryLoadOutcome::ReturnedFalse(
+                        PlayerAbilityQueryLoadFailure::MissingRow,
+                    );
+                }
+                Err(source) => {
+                    return PlayerAbilityQueryLoadOutcome::ReturnedFalse(
+                        PlayerAbilityQueryLoadFailure::Database(source),
+                    );
+                }
+            },
+            Err(source) => {
+                return PlayerAbilityQueryLoadOutcome::ReturnedFalse(
+                    PlayerAbilityQueryLoadFailure::Database(source),
+                );
+            }
+        };
+
+        if let Err(source) = materialize_player_ability_scalar_row(&row, player) {
+            return PlayerAbilityQueryLoadOutcome::BlockedMalformed(source);
+        }
+        if let Err(source) =
+            materialize_player_ability_binary_row(&row, player, thing_setup, get_week_day)
+        {
+            return PlayerAbilityQueryLoadOutcome::BlockedMalformed(source);
+        }
+        PlayerAbilityQueryLoadOutcome::ReturnedTrue
+    }
 }
 
 impl RsPlayerOwner for TiberiusRsPlayer {
@@ -4145,7 +4555,7 @@ async fn execute_batch(
 //
 
 // FUNCTION: CRsPlayer::LoadHotKeyField
-// STATUS: IMPLEMENTED_PARTIAL
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2010
@@ -4174,7 +4584,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadStateField
-// STATUS: IMPLEMENTED_PARTIAL
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2167
@@ -4203,7 +4613,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadScriptFlag
-// STATUS: IMPLEMENTED_PARTIAL
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2331
@@ -4463,7 +4873,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadCiQingField
-// STATUS: IMPLEMENTED_PARTIAL
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:3254
@@ -4520,7 +4930,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadSkillField
-// STATUS: IMPLEMENTED_PARTIAL
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2041
@@ -4578,7 +4988,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadThingField
-// STATUS: IMPLEMENTED_PARTIAL
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:3332
@@ -4663,7 +5073,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadFriendField
-// STATUS: IMPLEMENTED_PARTIAL
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2240
