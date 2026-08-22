@@ -148,6 +148,16 @@
 //! а общий legacy return-slot остаётся нулевым. Resource-context заменяет
 //! `fopen`, но чтение charcode начинается только после доступного word-list.
 //!
+//! `CQuestSystem` является owned setup-частью `CGame`: после
+//! `InitializeFactionWar` exact `CGame::Init` вызывает его void `Initialize`,
+//! который очищает map, читает пакетный `Data/Quest.ini` и затем накладывает
+//! loose `Data/QuestEx.ini`. Три setup-script и уже загруженная StringTable
+//! остаются теми же owner-ами, которые затем обслуживают subtype `0x16`.
+//! Отсутствующий `QuestEx.ini` раньше приводил к внутреннему null dereference;
+//! Rust не вводит несуществующий log или init-failure, но сохраняет primary map
+//! и отдаёт typed report. Release сбрасывает тот же owned value на месте
+//! исторического singleton release.
+//!
 //! `EquipmentComposeList` также принадлежит единственному `CGame`: reload и
 //! initial-config serializer читают одну пару ordered map. Exact caller
 //! `0x00417AF6..0x00417B7F` передаёт `data/EquipmentCompose.ini`, сохраняет
@@ -1243,6 +1253,7 @@ use crate::setup::incrementshoplist::{
     IncrementShopSerializeError,
 };
 use crate::setup::prisonconf::{PrisonConf, PrisonConfFormatError, PrisonConfSerializeError};
+use crate::setup::questsystem::{CQuestSystem, QuestSystemLoadReport};
 use crate::setup::tradelist::{CTradeList, TradeListFormatError, TradeListSerializeError};
 use crate::public::mystringtable::MyStringTable;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
@@ -1798,6 +1809,7 @@ pub(crate) enum WorldGameInitEvent {
     GoodsWarMemberLoaded(GoodsWarDatabaseLoadReport),
     RsSetupOwnerCreated(LoadedSetupIds),
     VoidOwner(WorldGameInitVoidOwner),
+    QuestSystemInitialized(QuestSystemLoadReport),
     JjcConfigurationLoaded(JjcConfigurationLoadReport),
     Reload {
         profile: &'static [u8],
@@ -6745,6 +6757,7 @@ pub(crate) struct CGame {
     increment_shop_list: CIncrementShopList,
     prison_conf: PrisonConf,
     contribute_setup: CContributeSetup,
+    quest_system: CQuestSystem,
     net_client: Option<CMyNetClient>,
     net_server: Option<CMyNetServer>,
     regions: BTreeMap<i32, WorldRegionAssignment>,
@@ -6851,6 +6864,11 @@ impl CGame {
         &self.contribute_setup
     }
 
+    /// Владелец QuestSystem WorldServer-а после фазы инициализации.
+    pub(crate) fn quest_system(&self) -> &CQuestSystem {
+        &self.quest_system
+    }
+
     pub(crate) fn dupli_region_setup(&self) -> &CDupliRegionSetup {
         self.dupli_region_setup
             .as_ref()
@@ -6876,6 +6894,7 @@ impl CGame {
             increment_shop_list: CIncrementShopList::default(),
             prison_conf: PrisonConf::default(),
             contribute_setup: CContributeSetup::default(),
+            quest_system: CQuestSystem::default(),
             net_client: None,
             net_server: None,
             regions: BTreeMap::new(),
@@ -6978,6 +6997,42 @@ impl CGame {
             .table()
             .get_string_by_id(legacy_c_string_prefix(string_id))
             .unwrap_or_default()
+    }
+
+    /// Выполняет `CQuestSystem::Initialize` в его точной позиции World init.
+    /// `Initialize` всегда возвращал true после void `Load`, поэтому report не
+    /// превращается в init-block и сохраняет уже сделанные in-place изменения.
+    fn initialize_quest_system<Context: WorldReloadContext + ?Sized>(
+        &mut self,
+        context: &mut Context,
+    ) -> QuestSystemLoadReport {
+        const QUEST_PATH: &[u8] = b"Data/Quest.ini";
+        const QUEST_EX_PATH: &[u8] = b"Data/QuestEx.ini";
+
+        let quest_source = context.read_resource(QUEST_PATH);
+        let quest_ex_source = quest_source
+            .as_ref()
+            .and_then(|_| context.read_resource(QUEST_EX_PATH));
+        let string_table = self.string_table.table();
+        let report = self.quest_system.load_from_resources(
+            quest_source.as_deref(),
+            quest_ex_source.as_deref(),
+            &mut |string_id| string_table.get_string_by_id(string_id).map(ToOwned::to_owned),
+        );
+        match report.completion {
+            crate::setup::questsystem::QuestSystemLoadCompletion::QuestFileMissing => {
+                context.add_log_text(b"Data/Quest.ini can't found!");
+            }
+            crate::setup::questsystem::QuestSystemLoadCompletion::QuestExFileMissing => {
+                // EXE разыменовывал null CRFile; не добавляем новый внешний log.
+            }
+            crate::setup::questsystem::QuestSystemLoadCompletion::PrimaryFormatStopped => {}
+            crate::setup::questsystem::QuestSystemLoadCompletion::Loaded => {
+                context.add_log_text(b"Load Quest List Data/Quest.ini, OK!");
+                context.add_log_text(b"Load Quest List Data/QuestEx.ini, OK!");
+            }
+        }
+        report
     }
 
     /// Exact reload всегда игнорирует переданное имя и перечитывает default и
@@ -10345,13 +10400,12 @@ impl CGame {
             });
         }
 
-        for owner in [
+        context.initialize_void_owner(WorldGameInitVoidOwner::InitializeFactionWar);
+        events.push(WorldGameInitEvent::VoidOwner(
             WorldGameInitVoidOwner::InitializeFactionWar,
-            WorldGameInitVoidOwner::InitializeQuestSystem,
-        ] {
-            context.initialize_void_owner(owner);
-            events.push(WorldGameInitEvent::VoidOwner(owner));
-        }
+        ));
+        let quest_system = self.initialize_quest_system(context);
+        events.push(WorldGameInitEvent::QuestSystemInitialized(quest_system));
 
         let player_ranks_configuration = PlayerRanksInitializationConfig {
             stat_time: organizing_parameters.stat_player_ranks_time(),
@@ -10762,12 +10816,18 @@ impl CGame {
             WorldGameReleaseVoidOwner::ReleaseAttackCity,
             WorldGameReleaseVoidOwner::ReleaseVillageWar,
             WorldGameReleaseVoidOwner::ReleaseOrganizingParameters,
-            WorldGameReleaseVoidOwner::ReleaseQuestSystem,
-            WorldGameReleaseVoidOwner::ReleaseFactionWar,
         ] {
             context.release_void_owner(owner);
             events.push(WorldGameReleaseEvent::VoidOwner(owner));
         }
+        self.quest_system = CQuestSystem::default();
+        events.push(WorldGameReleaseEvent::VoidOwner(
+            WorldGameReleaseVoidOwner::ReleaseQuestSystem,
+        ));
+        context.release_void_owner(WorldGameReleaseVoidOwner::ReleaseFactionWar);
+        events.push(WorldGameReleaseEvent::VoidOwner(
+            WorldGameReleaseVoidOwner::ReleaseFactionWar,
+        ));
         let player_ranks = context.release_player_ranks();
         events.push(WorldGameReleaseEvent::PlayerRanksReleased(player_ranks));
         let owner = WorldGameReleaseVoidOwner::ReleaseTimer;

@@ -1,8 +1,8 @@
 //! Общая конфигурация заданий исторического Miracle.
 //!
-//! Статус World `CQuestSystem::AddToByteArray` RVA `0x000669E0`:
-//! `IMPLEMENTED`; loaders, singleton lifecycle и Game runtime ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Статус World `CQuestSystem::Load` RVA `0x00067AA0` и
+//! `AddToByteArray` RVA `0x000669E0`: `IMPLEMENTED`; singleton lifecycle и
+//! Game runtime ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -17,7 +17,12 @@
 //! после пяти `u32` идут пять C-string, затем именно region/x/y/effect и byte
 //! display, хотя PDB layout размещал effect раньше координат. Typed поля и
 //! owned bytes устраняют C++ layout/lifetime; NUL/count ошибки блокируются до
-//! изменения destination. Точная parser-семантика двух ini остаётся отдельной.
+//! изменения destination. `Load` очищает map до первого resource-open, читает
+//! `Quest.ini` in-place, затем накладывает `QuestEx.ini` по ID. Missing
+//! StringTable key остаётся пустой строкой; script-path проходит exact
+//! `ReplaceLine` и ASCII `_strlwr`. Отсутствующий второй ресурс в EXE вызывал
+//! null dereference без подтверждённого внешнего эффекта: Rust оставляет уже
+//! загруженный основной map и сообщает эту границу через typed completion.
 //! `FilesInfo.ril` подтверждает resource-границу loader-а: `Data/Quest.ini`
 //! берётся из `patch01.pak/data/quest.ini`, где после `MaxQuestNum` есть
 //! `maxlvldiff 130`; `Data/QuestEx.ini` отсутствует в package-index и
@@ -28,7 +33,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct QuestEntry {
     pub(crate) id: u16,
     pub(crate) old: u32,
@@ -48,6 +53,31 @@ pub(crate) struct QuestEntry {
     pub(crate) display: bool,
 }
 
+impl Default for QuestEntry {
+    fn default() -> Self {
+        Self {
+            // Конструктор `tagQuest` задаёт `dwType = 2`; QuestEx затем
+            // перезаписывает его своим parsed value.
+            quest_type: 2,
+            id: 0,
+            old: 0,
+            level: 0,
+            difficulty: 0,
+            track: 0,
+            short_description: Vec::new(),
+            name: Vec::new(),
+            description: Vec::new(),
+            abandon_script: Vec::new(),
+            complete_script: Vec::new(),
+            region_id: 0,
+            tile_x: 0,
+            tile_y: 0,
+            effect_id: 0,
+            display: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CQuestSystem {
     pub(crate) max_quest_count: i32,
@@ -63,6 +93,115 @@ impl CQuestSystem {
     /// поля сохраняются, если первый resource `Data/Quest.ini` недоступен.
     pub(crate) fn clear_quests_for_load(&mut self) {
         self.quests.clear();
+    }
+
+    /// Выполняет безопасную resource-границу exact World `Load`.
+    ///
+    /// Основной source записывается непосредственно в owner, как EXE. Поэтому
+    /// уже распарсенные scalar/records сохраняются и при повреждённом хвосте;
+    /// временная копия здесь намеренно не подменяет наблюдаемое частичное
+    /// обновление.
+    pub(crate) fn load_from_resources<ResolveString>(
+        &mut self,
+        quest_source: Option<&[u8]>,
+        quest_ex_source: Option<&[u8]>,
+        resolve_string: &mut ResolveString,
+    ) -> QuestSystemLoadReport
+    where
+        ResolveString: FnMut(&[u8]) -> Option<Vec<u8>>,
+    {
+        self.clear_quests_for_load();
+        let Some(quest_source) = quest_source else {
+            return QuestSystemLoadReport {
+                primary_records: 0,
+                extension_records: 0,
+                completion: QuestSystemLoadCompletion::QuestFileMissing,
+            };
+        };
+
+        let mut primary = QuestInput::new(quest_source);
+        if !self.load_primary_header(&mut primary) {
+            return QuestSystemLoadReport {
+                primary_records: 0,
+                extension_records: 0,
+                completion: QuestSystemLoadCompletion::PrimaryFormatStopped,
+            };
+        }
+
+        let primary_records = self.load_primary_nodes(&mut primary, resolve_string);
+        let Some(quest_ex_source) = quest_ex_source else {
+            return QuestSystemLoadReport {
+                primary_records,
+                extension_records: 0,
+                completion: QuestSystemLoadCompletion::QuestExFileMissing,
+            };
+        };
+
+        let mut extension = QuestInput::new(quest_ex_source);
+        let extension_records = self.load_extension_nodes(&mut extension, resolve_string);
+        QuestSystemLoadReport {
+            primary_records,
+            extension_records,
+            completion: QuestSystemLoadCompletion::Loaded,
+        }
+    }
+
+    fn load_primary_header(&mut self, input: &mut QuestInput<'_>) -> bool {
+        // Labels здесь в EXE просто извлекаются в буфер и не сравниваются.
+        let Some(_) = input.token() else { return false };
+        let Some(max_quest_count) = input.i32() else { return false };
+        self.max_quest_count = max_quest_count;
+        let Some(_) = input.token() else { return false };
+        let Some(level_difference) = input.u32() else { return false };
+        self.level_difference = level_difference;
+        let Some(_) = input.token() else { return false };
+        let Some(player_login_script) = input.token() else { return false };
+        self.player_login_script = normalize_script_path(player_login_script);
+        let Some(_) = input.token() else { return false };
+        let Some(player_level_up_script) = input.token() else { return false };
+        self.player_level_up_script = normalize_script_path(player_level_up_script);
+        let Some(_) = input.token() else { return false };
+        let Some(player_died_script) = input.token() else { return false };
+        self.player_died_script = normalize_script_path(player_died_script);
+        true
+    }
+
+    fn load_primary_nodes<ResolveString>(
+        &mut self,
+        input: &mut QuestInput<'_>,
+        resolve_string: &mut ResolveString,
+    ) -> usize
+    where
+        ResolveString: FnMut(&[u8]) -> Option<Vec<u8>>,
+    {
+        let mut loaded = 0;
+        while input.read_to(b"<Node>") {
+            let Some(quest) = read_primary_node(input, resolve_string) else {
+                break;
+            };
+            self.quests.insert(quest.id, quest);
+            loaded += 1;
+        }
+        loaded
+    }
+
+    fn load_extension_nodes<ResolveString>(
+        &mut self,
+        input: &mut QuestInput<'_>,
+        resolve_string: &mut ResolveString,
+    ) -> usize
+    where
+        ResolveString: FnMut(&[u8]) -> Option<Vec<u8>>,
+    {
+        let mut loaded = 0;
+        while input.read_to(b"<Node>") {
+            let Some(quest) = read_extension_node(input, resolve_string) else {
+                break;
+            };
+            self.quests.insert(quest.id, quest);
+            loaded += 1;
+        }
+        loaded
     }
 
     pub(crate) fn insert(&mut self, quest: QuestEntry) -> Option<QuestEntry> {
@@ -142,6 +281,203 @@ impl CQuestSystem {
         destination.extend_from_slice(&payload);
         Ok(())
     }
+}
+
+/// Наблюдаемый итог `Load`, включая безопасно заменённую null-resource границу.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum QuestSystemLoadCompletion {
+    Loaded,
+    QuestFileMissing,
+    QuestExFileMissing,
+    PrimaryFormatStopped,
+}
+
+/// Число вставок каждой фазы; дубликат ID считается отдельной обработанной
+/// записью, хотя `std::map::operator[]` сохраняет только последнюю.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct QuestSystemLoadReport {
+    pub(crate) primary_records: usize,
+    pub(crate) extension_records: usize,
+    pub(crate) completion: QuestSystemLoadCompletion,
+}
+
+struct QuestInput<'source> {
+    source: &'source [u8],
+    cursor: usize,
+}
+
+impl<'source> QuestInput<'source> {
+    fn new(source: &'source [u8]) -> Self {
+        Self { source, cursor: 0 }
+    }
+
+    fn token(&mut self) -> Option<&'source [u8]> {
+        while self.cursor < self.source.len() && self.source[self.cursor].is_ascii_whitespace() {
+            self.cursor += 1;
+        }
+        let start = self.cursor;
+        while self.cursor < self.source.len() && !self.source[self.cursor].is_ascii_whitespace() {
+            self.cursor += 1;
+        }
+        (start != self.cursor).then_some(&self.source[start..self.cursor])
+    }
+
+    fn i32(&mut self) -> Option<i32> {
+        let token = self.token()?;
+        std::str::from_utf8(token).ok()?.parse().ok()
+    }
+
+    fn u32(&mut self) -> Option<u32> {
+        let token = self.token()?;
+        std::str::from_utf8(token).ok()?.parse().ok()
+    }
+
+    fn u16(&mut self) -> Option<u16> {
+        let token = self.token()?;
+        std::str::from_utf8(token).ok()?.parse().ok()
+    }
+
+    /// `ReadTo` ищет marker token из текущей stream-позиции.
+    fn read_to(&mut self, marker: &[u8]) -> bool {
+        while let Some(token) = self.token() {
+            if token == marker {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Соответствует `getline` после уже извлечённого `<Start>` marker-а.
+    fn discard_to_line_end(&mut self) {
+        while self.cursor < self.source.len() && self.source[self.cursor] != b'\n' {
+            self.cursor += 1;
+        }
+        if self.cursor < self.source.len() {
+            self.cursor += 1;
+        }
+    }
+
+    fn line(&mut self) -> Option<&'source [u8]> {
+        if self.cursor >= self.source.len() {
+            return None;
+        }
+        let start = self.cursor;
+        while self.cursor < self.source.len() && self.source[self.cursor] != b'\n' {
+            self.cursor += 1;
+        }
+        let mut end = self.cursor;
+        if end > start && self.source[end - 1] == b'\r' {
+            end -= 1;
+        }
+        if self.cursor < self.source.len() {
+            self.cursor += 1;
+        }
+        Some(&self.source[start..end])
+    }
+
+    fn marked_text(&mut self, append_lines: bool) -> Option<Vec<u8>> {
+        if !self.read_to(b"<Start>") {
+            return None;
+        }
+        self.discard_to_line_end();
+        let mut text = Vec::new();
+        while let Some(line) = self.line() {
+            if line.windows(b"<End>".len()).any(|window| window == b"<End>") {
+                return Some(text);
+            }
+            if append_lines {
+                text.extend_from_slice(line);
+            } else {
+                text.clear();
+                text.extend_from_slice(line);
+            }
+        }
+        None
+    }
+}
+
+fn resolve_or_empty<ResolveString>(resolve_string: &mut ResolveString, string_id: &[u8]) -> Vec<u8>
+where
+    ResolveString: FnMut(&[u8]) -> Option<Vec<u8>>,
+{
+    resolve_string(string_id).unwrap_or_default()
+}
+
+fn read_primary_node<ResolveString>(
+    input: &mut QuestInput<'_>,
+    resolve_string: &mut ResolveString,
+) -> Option<QuestEntry>
+where
+    ResolveString: FnMut(&[u8]) -> Option<Vec<u8>>,
+{
+    let mut quest = QuestEntry::default();
+    let _id_label = input.token()?;
+    quest.id = input.u16()?;
+    let _name_label = input.token()?;
+    quest.name = resolve_or_empty(resolve_string, input.token()?);
+    quest.description = resolve_or_empty(resolve_string, &input.marked_text(true)?);
+    let _abandon_label = input.token()?;
+    quest.abandon_script = normalize_script_path(input.token()?);
+    let _complete_label = input.token()?;
+    quest.complete_script = normalize_script_path(input.token()?);
+    let _coordinate_label = input.token()?;
+    quest.region_id = input.i32()?;
+    quest.tile_x = input.i32()?;
+    quest.tile_y = input.i32()?;
+    let _effect_label = input.token()?;
+    quest.effect_id = input.i32()?;
+    let _display_label = input.token()?;
+    quest.display = input.i32()? != 0;
+    Some(quest)
+}
+
+fn read_extension_node<ResolveString>(
+    input: &mut QuestInput<'_>,
+    resolve_string: &mut ResolveString,
+) -> Option<QuestEntry>
+where
+    ResolveString: FnMut(&[u8]) -> Option<Vec<u8>>,
+{
+    let mut quest = QuestEntry { old: 1, ..QuestEntry::default() };
+    let _id_label = input.token()?;
+    quest.id = input.u16()?;
+    let _type_label = input.token()?;
+    quest.quest_type = input.u32()?;
+    let _level_label = input.token()?;
+    quest.level = input.u32()?;
+    let _difficulty_label = input.token()?;
+    quest.difficulty = input.u32()?;
+    let _tracking_label = input.token()?;
+    quest.track = input.u32()?;
+    let _description_label = input.token()?;
+    quest.short_description = resolve_or_empty(resolve_string, &input.marked_text(true)?);
+    let _name_label = input.token()?;
+    quest.name = resolve_or_empty(resolve_string, input.token()?);
+    quest.description = resolve_or_empty(resolve_string, &input.marked_text(false)?);
+    let _abandon_label = input.token()?;
+    quest.abandon_script = normalize_script_path(input.token()?);
+    let _complete_label = input.token()?;
+    quest.complete_script = normalize_script_path(input.token()?);
+    let _coordinate_label = input.token()?;
+    quest.region_id = input.i32()?;
+    quest.tile_x = input.i32()?;
+    quest.tile_y = input.i32()?;
+    let _effect_label = input.token()?;
+    quest.effect_id = input.i32()?;
+    let _display_label = input.token()?;
+    quest.display = input.i32()? != 0;
+    Some(quest)
+}
+
+fn normalize_script_path(value: &[u8]) -> Vec<u8> {
+    value
+        .iter()
+        .map(|&byte| match byte {
+            b'\\' => b'/',
+            b'A'..=b'Z' => byte + (b'a' - b'A'),
+            _ => byte,
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -510,7 +846,10 @@ fn write_quest_string(
 
 // ============================================================================
 // FUNCTION: CQuestSystem::Load
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// IMPLEMENTED_OWNER: `CQuestSystem::load_from_resources` и CGame owner-call
+// выше. `QuestInput` сохраняет formatted-token/marked-text grammar и in-place
+// transition; safe `Option` заменяет только достигнутый null-CRFile defect.
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\questsystem.cpp:56
@@ -524,7 +863,10 @@ fn write_quest_string(
 
 // ============================================================================
 // FUNCTION: CQuestSystem::Initialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// IMPLEMENTED_OWNER: `CGame::initialize_quest_system` вызывает
+// `load_from_resources` на exact init-slot; return `true` не используется,
+// поскольку World `CGame::Init` также не ветвится по этому результату.
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\questsystem.cpp:40
