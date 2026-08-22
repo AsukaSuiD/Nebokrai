@@ -22,7 +22,8 @@
 //! `id << 16 | level & 0xffff`. Замена duplicate key корректно освобождает
 //! прежний owner вместо внутренней утечки старого `operator[]` call-site.
 //! Отдельная byte-keyed карта usage сохраняет `operator[]`-перезапись в
-//! `LoadUsage`, а `StringToUsage` возвращает нулевой `SKILL_USAGE_UNKNOW`.
+//! `LoadUsage`, а `StringToUsage` возвращает `SKILL_USAGE_UNKNOW`
+//! `0x7fff_ffff`.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -30,9 +31,13 @@ use std::fmt;
 
 use super::skill::{CSkill, SkillSerializeError};
 
-/// Exact `SKILL_USAGE_UNKNOW`: в перечислении ни один штатный usage не равен
-/// нулю, и exact `StringToUsage` возвращает этот sentinel для отсутствия.
-pub(crate) const UNKNOWN_SKILL_USAGE: u32 = 0;
+/// `SKILL_USAGE_UNKNOW` из общего `SkillRelated.h` World/Game.
+///
+/// У PDB/EXE `StringToUsage` возвращает именно этот именованный sentinel;
+/// public enum фиксирует его численное значение `0x7fff_ffff`. Он отличен от
+/// нуля, поэтому неизвестная строка не должна превращаться в допустимый usage
+/// в сериализуемой `(usage, cost)`-паре.
+pub(crate) const UNKNOWN_SKILL_USAGE: u32 = 0x7fff_ffff;
 
 /// Safe owner исходного process-global `g_mSkillMap`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
