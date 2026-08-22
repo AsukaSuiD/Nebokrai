@@ -1,13 +1,8 @@
-//! `IMPLEMENTED`, `VERIFIED_DISASSEMBLY` — consumer account-журналов LoginServer.
+//! восстановлено, подтверждено точным EXE — consumer account-журналов LoginServer.
 //!
 //! Источник: `loginserver/applogin/acclogthread.cpp` из точной пары
 //! LoginServer.exe/PDB (`1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876` /
 //! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`).
-//! Существенные RVA: конструктор 0x420C30, деструктор 0x420C90, `Run`
-//! 0x420D30 и catch 0x420E83. Точечная проверка exact EXE подтвердила: после
-//! любого DB-сбоя уже извлечённая запись теряется, соединение освобождается,
-//! а цикл продолжается с новым `pop` (переходы 0x420E7E/0x420EA9 -> 0x420D6B).
-//!
 //! Четыре SQL-шаблона, регистр имён, пробелы и формат времени без ведущих
 //! нулей подтверждены как псевдокодом producer-функций `game.cpp`, так и
 //! найденными runtime-журналами точного компонента. ADO/COM и Windows thread

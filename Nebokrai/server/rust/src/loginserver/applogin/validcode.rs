@@ -1,19 +1,7 @@
 //! Генератор legacy valid-code `CValidCode` из `validcode.cpp` и `.h`.
 //!
-//! Статус владельца: `IMPLEMENTED`, спорные числовые выражения
-//! `CodeToBitmap` и поля BMP — `VERIFIED_DISASSEMBLY`. Точная пара:
-//! `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`, SHA-256 EXE
-//! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`,
-//! SHA-256 PDB
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`.
-//! Исходные пути PDB:
-//! `d:\complite_version\fengyun_russia\trunk\server\loginserver\applogin\validcode.cpp`
-//! и `.h`. Существенные RVA: `BlendQuadColor` `0x00023E30`, `DrawBitmap`
-//! `0x00023E80`, `InitBitmap` `0x00023F60`, `Bresenham` `0x00023FD0`,
-//! `GenerateValidCodeString` `0x000246C0`, `CodeToBitmap` `0x00024770`,
-//! `AddNoise` `0x00024B20`, `CValidCodeSetup::LoadSetup` `0x00024E20` и
-//! `CValidCode` `0x000251A0`.
-//!
+//! Восстановлены функции, спорные числовые выражения
+//! `CodeToBitmap` и поля BMP — подтверждено точным EXE. Точная пара:
 //! `validcode.ini` читается как исходная whitespace-последовательность:
 //! byte-exact двухбайтовый набор символов, три signed параметра шума и список
 //! font-файлов. Четыре вызова выбирают по одной двухбайтовой паре и образуют
@@ -266,7 +254,6 @@ fn generate_valid_code_string(charset: &[u8]) -> Result<Vec<u8>, ValidCodeError>
 
 fn initialize_bitmap(bitmap: &mut [u8; VALID_CODE_BITMAP_LEN]) {
     put_u16(bitmap, 0, 0x4D42);
-    // VERIFIED_DISASSEMBLY: LoginServer RVA 0x00023F60 пишет именно 0xF6,
     // а не фактическую длину 0x70B6; клиент русской ветки это поле терпел.
     put_u32(bitmap, 2, 0xF6);
     put_u16(bitmap, 6, 0);

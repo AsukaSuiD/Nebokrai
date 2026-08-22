@@ -1,14 +1,11 @@
 //! Очереди и проверки `CLoginQueue` из `loginqueue.cpp` и `.h`.
 //!
-//! Статус `OnInitial` RVA `0x000147A0`, `CGasQueue::Pop` `0x00015C20`,
 //! `AddGasQueue` `0x000199A0`, `OnQuestCdkey` `0x0001A130`,
-//! `AddQuestCdkey` `0x0001CAD0`, `tagPwdChecked` RVA `0x00001D80`,
 //! `IsValidQuest` `0x000172C0`, `ClearTimeoutList` `0x00017330`,
 //! `PushLoginList` `0x0001AAB0`, `OnQuestPlayerData` `0x0001B3F0`,
 //! `AddQuestPlayerList` `0x0001E740`, `AddQuestPlayerData` `0x0001E880`,
 //! `OnClientLost` `0x0001A800`,
 //! `IsInNoQueueList` `0x00016040`, `LoadNoQueueCdkeyList` `0x000195E0`,
-//! `PushBackPwdChecked` RVA
 //! `0x00019880`, `IsValidErrManyTimes` `0x000163E0`, `CheckValidErr`
 //! `0x00018700`, `AddValidErr` `0x0001C100` и baseline-ветви
 //! `HandlePwdChecked` `0x0001BB20`, `tagValidCode` `0x00015F70`,
@@ -18,16 +15,8 @@
 //! `matrix_add` `0x0001B870`, `matrix_register` `0x0001B950`,
 //! `matrices_timeout` `0x000183D0`, constructor/destructor
 //! `0x0001E9F0/0x0001E490` и timeout-хвост `Run` `0x0001D500` —
-//! `IMPLEMENTED`; спорные field/call mappings этих функций —
-//! `VERIFIED_DISASSEMBLY`. Владелец завершён. Точная пара:
-//! `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`, SHA-256 EXE
-//! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`,
-//! SHA-256 PDB
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`.
-//! Исходные пути PDB:
-//! `d:\complite_version\fengyun_russia\trunk\server\loginserver\loginserver\loginqueue.cpp`
-//! и `.h`.
-//!
+//! восстановлено; спорные field/call mappings этих функций —
+//! подтверждено точным EXE. Владелец завершён. Точная пара:
 //! `TagPwdChecked` сохраняет signed socket ID, исходный IPv4 `ulong`,
 //! byte-exact account/world-name и matrix-флаг. `PushBackPwdChecked` игнорировал
 //! `nullptr`; Rust меняет форму API и принимает только owned значение. Под
@@ -65,7 +54,6 @@
 //! старую запись с `F`, вызывает ту же границу `matrix_add` и независимо от
 //! её исходно проигнорированного результата отправляет `B + account + 3
 //! bytes`.
-//! `matrix_get/matrix_del/matirx_validate` RVA `0x00016100/0x00018310/`
 //! `0x00019800` сохраняют одноразовую запись: отсутствующая запись даёт `D`,
 //! endpoint mismatch удаляет её без DB-вызова, а совпавший endpoint передаёт
 //! позиции и ответ единому `CRsCDKey` и затем удаляет запись при любом `C/D`.
@@ -73,7 +61,6 @@
 //! строгую unsigned wrapping-разность, отправляет `E` до удаления и сохраняет
 //! ошибку отправки только как наблюдаемое уведомление.
 //!
-//! Полный `Run` RVA `0x0001D500..0x0001DEAF` сохраняет исходный порядок:
 //! немедленные GAS/no-queue drains, один обычный CD-key по cadence,
 //! `HandlePwdChecked`, по одному player-list/player-data на World, ответы
 //! позиции `0xAF507`, `ClearTimeoutList`, `AuthManager::run` и три timeout-
@@ -127,8 +114,7 @@
 //! `LoadNoQueueCdkeyList` очищает ordered set до открытия case-insensitive
 //! `NoQueueAccounts.conf`, читает whitespace-token, применяет C-locale `_strlwr`
 //! и вставляет каждый account немедленно, сохраняя partial mutation и
-//! дедупликацию. Размер `char[0x100]` имеет статус `VERIFIED_DISASSEMBLY`:
-//! `0x004196F0` передаёт `ESP+0xC8`, верхняя граница локала находится на
+//! дедупликацию. Размер `char[0x100]` подтверждено точным EXE:
 //! `ESP+0x1C8`; безопасный предел равен 255 bytes плюс NUL. Найденный fixture
 //! непустой, содержит два коротких ASCII-token. Пустой файл, более длинный
 //! token безопасно отклоняется до переполнения; пустой файл даёт пустой set.
@@ -1239,8 +1225,6 @@ impl CLoginQueue {
         let mut regular_player_data_processed = 0;
         let mut queue_position_messages = 0;
         let mut notices = Vec::new();
-
-        // VERIFIED_DISASSEMBLY: Login RVA 0x0001D52B..0x0001D58A читает
         // GAS по `this+0x64/0x68`, но очищает `this+0x34/0x38` — именно
         // no-queue CD-key FIFO. GAS намеренно остаётся и повторяется далее.
         let gas_snapshot: Vec<_> = self.gas_quests.lock().iter().cloned().collect();
@@ -1774,7 +1758,6 @@ impl CLoginQueue {
         for (index, token) in tokens.enumerate() {
             let token_index = index + 1;
             if token.len() >= NO_QUEUE_ACCOUNT_BUFFER_SIZE {
-                // VERIFIED_DISASSEMBLY: Login 0x004196F0 передаёт в extraction
                 // `ESP+0xC8`; верхняя граница локала находится на `ESP+0x1C8`.
                 // Старый `char[0x100]` не имел width и переполнялся вместе с NUL.
                 return Err(NoQueueAccountsLoadError::TokenTooLong {
@@ -2101,7 +2084,6 @@ fn send_queue_position(game: &CGame, socket_id: i32, position: i32) -> Result<()
 
 fn password_digest_hex(digest: &[u8]) -> Result<Vec<u8>, QuestCdkeyError> {
     if digest.len() < 16 {
-        // Login RVA 0x0001A130 читал `strPassWord[0..16]` без size-проверки;
         // safe Rust отклоняет короткий внешний digest до доступа.
         return Err(QuestCdkeyError::PasswordDigestTooShort {
             actual_len: digest.len(),

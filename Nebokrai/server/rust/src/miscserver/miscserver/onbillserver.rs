@@ -1,15 +1,8 @@
 //! Свободный handler `OnMSG_M2M_Fuction` из `onbillserver.cpp`.
 //!
-//! Статус владельца: `IMPLEMENTED`.
+//! Восстановлены функции.
 //!
-//! Точная пара: `MiscServer/miscserver.exe + MiscServer/miscserver.pdb`;
-//! SHA-256 EXE
-//! `F4426942465E6E9D1397EEF7A977B87D0D8C5B12957832770F57656F998AED65`,
-//! SHA-256 PDB
-//! `ED5F482DADB3E8B050B37F9911067479D297C5B6D33C1EA2CE99C9CD0FC11FA7`.
 //! Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\server\miscserver\miscserver\onbillserver.cpp`.
-//! `OnMSG_M2M_Fuction` — RVA `0x00003C10`.
 //!
 //! Handler знает два полных opcode. `0x0016EA01` сначала ставит
 //! `m_bClientClose = true`, затем синхронно вызывает `CGame::ReConnect`.

@@ -1,12 +1,8 @@
-//! `IMPLEMENTED` — FIFO и сигнализация исторического `AccLogQueue`.
+//! восстановлено — FIFO и сигнализация исторического `AccLogQueue`.
 //!
 //! Источник: `loginserver/loginserver/acclogqueue.cpp` из точной пары
 //! LoginServer.exe/PDB (`1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876` /
 //! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`).
-//! Существенные RVA: `pop` 0x401850, конструктор 0x401A10, `clear` 0x401A90,
-//! `push` 0x401B20. Исходный `Semaphore(0, 10000)` и защищённый critical
-//! section `deque<string>` заменены `parking_lot::{Mutex, Condvar}`.
-//!
 //! Сохранена наблюдаемая странность: `push` сначала добавляет запись и
 //! игнорирует отказ `ReleaseSemaphore`, поэтому после 10000 накопленных
 //! сигналов более новые записи могут остаться в deque без сигнала. `clear`

@@ -1,15 +1,8 @@
 //! Владелец ответа AuthServer `AuthHandler` из `authhandler.cpp`.
 //!
-//! Статус обеих virtual-функций — `IMPLEMENTED`; первый slot дополнительно
-//! имеет статус `VERIFIED_DISASSEMBLY`. Точная пара:
-//! `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`, SHA-256 EXE
-//! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`,
-//! SHA-256 PDB
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`.
+//! Контракт обеих virtual-функций — восстановлено; первый slot дополнительно
+//! подтверждено точным EXE. Точная пара:
 //! Исходный путь PDB:
-//! `d:\complite_version\fengyun_russia\trunk\server\loginserver\loginserver\authhandler.cpp`.
-//! Существенные адреса: `OnResponse` RVA `0x000025D0`; vtable
-//! `0x004847EC`, первый slot `0x004664B0`.
 //!
 //! Первый slot, вызываемый `AuthManager::addQuest`, не получил тела в сыром
 //! owner-файле. Точечная проверка точного EXE показала единственную инструкцию

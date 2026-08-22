@@ -1,12 +1,9 @@
 //! Типизированные элементы DB-очередей AuthServer из `dbqueue.h`.
 //!
-//! Статус владельца: `IMPLEMENTED` для форм quest/result и coalescing-очереди
+//! Восстановлены функции для форм quest/result и coalescing-очереди
 //! `ServerInfo`. SQL-исполнение принадлежит `dbaccess/authdb/authproc.rs`.
 //!
-//! Точная пара: `AuthServer/authserver.exe + AuthServer/authserver.pdb`;
 //! исходный владелец PDB:
-//! `h:\fengyun\fy_russia\src\server\authserver\src\dbqueue.h`.
-//! Экспортированные тела: `AuthExResultData` RVA `0x00004DA0`,
 //! `AuthQuestData` `0x000164D0`, специализированный
 //! `my_fucking_list<ServerInfo>::push_back` `0x00016B60`. Поля остальных
 //! вариантов подтверждены их созданием и

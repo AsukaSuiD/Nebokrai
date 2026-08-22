@@ -1,20 +1,10 @@
 //! Менеджер запросов авторизации LoginServer из `authmanager.cpp` и `.h`.
 //!
-//! Статус всех семантических функций владельца — `IMPLEMENTED`: `init` RVA
 //! `0x0001FBD0`, `send_quest_message` `0x0001FBF0`, `run` `0x0001FD20`,
 //! конструктор `AuthQuest` `0x0001FF10`, `removeQuest` `0x000201A0`,
 //! `OnResponseAuth` `0x00020200`, конструктор/деструктор manager
 //! `0x00020350/0x00020390` и две формы `addQuest`
 //! `0x000203E0/0x00020460`.
-//!
-//! Точная пара: `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`;
-//! SHA-256 EXE
-//! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`,
-//! SHA-256 PDB
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`.
-//! Исходные пути PDB:
-//! `d:\complite_version\fengyun_russia\trunk\server\loginserver\loginserver\authmanager.cpp`
-//! и `.h`.
 //!
 //! Заявка хранит client IPv4/socket ID, byte-exact account/password и wrapping
 //! `timeGetTime` начала. `addQuest` отбрасывает точный duplicate account; новую

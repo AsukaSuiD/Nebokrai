@@ -1,16 +1,9 @@
 //! Свободный handler `OnMSG_W2M_AUCTION` из `miscservermessage.cpp`.
 //!
-//! Статус владельца: `IMPLEMENTED` для всех доказанных ветвей
+//! Восстановлены функции для всех доказанных ветвей
 //! `0x0014ED01` и `0x0014ED04..0x0014ED09`.
 //!
-//! Точная пара: `MiscServer/miscserver.exe + MiscServer/miscserver.pdb`;
-//! SHA-256 EXE
-//! `F4426942465E6E9D1397EEF7A977B87D0D8C5B12957832770F57656F998AED65`,
-//! SHA-256 PDB
-//! `ED5F482DADB3E8B050B37F9911067479D297C5B6D33C1EA2CE99C9CD0FC11FA7`.
 //! Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\server\miscserver\miscserver\miscservermessage.cpp`.
-//! `OnMSG_W2M_AUCTION` — RVA `0x000036B0`.
 //!
 //! `0x0014ED01` безусловно wrapping увеличивает `CGame::m_dwAddNewCount`,
 //! создаёт один heap `CGoodsNode`, читает его из общего message buffer по
@@ -23,7 +16,6 @@
 //! helper всегда возвращает `false`, даже когда записал buyer и вставил GUID в
 //! opt-list. Поэтому handler всегда строит `0x0015EB06` с двумя 32-битными
 //! полями `0` и исходным player ID и отправляет его без приоритета. Ширина
-//! нулевого `Add` уже независимо подтверждена exact Misc call target RVA
 //! `0x00010F20` в достигнутом `OnOtherMsg`; повторный reverse не выполнялся.
 //! Короткий wire сохраняет поведение готовых безопасных getters: отсутствующий
 //! long становится `0`, а отсутствующий GUID — `GUID_INVALID`, после чего
@@ -283,7 +275,6 @@ pub(crate) fn on_msg_w2m_auction(message: &mut CMessage, game: &mut CGame) -> Wo
         item.unserialize(source, cursor)
     };
     if let Err(error) = unserialize {
-        // Misc RVA 0x000036B0 продолжал после безграничного void UnSerialize;
         // safe Rust не передаёт комнате частично прочитанный узел.
         return WorldAuctionOutcome::UnserializeRejected(error);
     }

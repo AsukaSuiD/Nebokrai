@@ -1,11 +1,8 @@
 //! Потокобезопасная очередь Auth DB из `authserver/src/kl_multi_list.h`.
 //!
-//! Статус владельца: `IMPLEMENTED`.
+//! Восстановлены функции.
 //!
-//! Точная пара: `AuthServer/authserver.exe + AuthServer/authserver.pdb`;
 //! исходный владелец PDB:
-//! `h:\fengyun\fy_russia\src\server\authserver\src\kl_multi_list.h`.
-//! Существенные RVA специализации `db_element_type`: `size` `0x00002CB0`,
 //! конструктор `0x000046A0`, деструктор `0x00004710`, `pop_front`
 //! `0x00004750`, `push_back` `0x00005B10`; специализации `ServerInfo`:
 //! конструктор `0x00005220`, `push_back` `0x00016C40`, `pop_all`

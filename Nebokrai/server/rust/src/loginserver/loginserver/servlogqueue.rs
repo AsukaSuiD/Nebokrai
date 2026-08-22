@@ -1,16 +1,6 @@
 //! Потокобезопасный FIFO-владелец `ServLogQueue` LoginServer.
 //!
-//! Статус `ServLogQueue`, `~ServLogQueue`, `push` RVA `0x0001FB50`, `pop`
-//! RVA `0x0001F780`, `size` RVA `0x0001F6F0` и `clear` RVA `0x0001F810` —
-//! `IMPLEMENTED`. Точная пара:
-//! `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`, SHA-256 EXE
-//! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`,
-//! SHA-256 PDB
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`.
-//! Исходные пути PDB:
-//! `d:\complite_version\fengyun_russia\trunk\server\loginserver\loginserver\`
-//! `servlogqueue.cpp/.h`.
-//!
+//! восстановлено. Точная пара:
 //! `push` копировал четыре поля в отдельный heap-object и добавлял указатель в
 //! конец `std::deque` под `CRITICAL_SECTION`; `pop` снимал начало, `size`
 //! читал длину, а `clear` удалял все записи под тем же lock. `Mutex<VecDeque>`

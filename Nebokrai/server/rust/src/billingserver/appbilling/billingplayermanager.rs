@@ -1,25 +1,10 @@
 //! Общие FIFO и записи `CBillingPlayerManager` из
 //! `appbilling/billingplayermanager.{h,cpp}`.
 //!
-//! Статус владельца: `IMPLEMENTED`. Восстановлены записи и три FIFO,
-//! `Push*Queue`, `Run` RVA `0x000125A0`, `OnLogProcess` `0x00012BE0`,
+//! Восстановлены функции. Восстановлены записи и три FIFO,
 //! `BPMThreadFunc` `0x00012CC0`, `LogThreadFunc` `0x00012D70`, `Start`
 //! `0x00012E10`, `CreateThread` `0x00012E60`, `Release` `0x00011840` и
 //! `End` `0x000117E0`.
-//!
-//! Точная пара: `BillingServer/billingserver.exe + BillingServer/billingserver.pdb`;
-//! SHA-256 EXE
-//! `FA32E3C043CB49965686129696A4EB34B733ACA1D60CAF57D369F97D5E68FB19`,
-//! SHA-256 PDB
-//! `F900CD0330BEFF32AC071B107AB653FD403CD18746896B3C0187C5751ACA0B21`.
-//! Исходные пути PDB:
-//! `h:\fengyun\fy_russia\src\server\billingserver\appbilling\billingplayermanager.h`
-//! и `.cpp`.
-//!
-//! Существенные RVA: `PushACQueue` `0x000124B0`, `PushILQueue`
-//! `0x00012500`, `PushTRQueue` `0x00012550`; value-конструкторы
-//! `tagAccInfo` `0x00013730`, `tagTradeNode` `0x000137A0` и
-//! `tagIncLogNode` `0x00018170`.
 //!
 //! Три очереди были process-static и общими для всех элементов `CGame::vecBPM`,
 //! а каждый `Push` глубоко копировал запись в конец собственного `std::list`

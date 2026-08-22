@@ -1,17 +1,5 @@
 //! Конфигурация соединения MiscServer из `miscserver/setup/setup.cpp` и `.h`.
 //!
-//! Статус владельца: `IMPLEMENTED` для `CSetup::GetInstance` RVA `0x00001000`,
-//! `CSetup::CSetup` RVA `0x0000BD50`, `LoadIpPort` RVA `0x000105D0` и
-//! `LoadSetup` RVA `0x00010760`.
-//!
-//! Точная пара: `MiscServer/miscserver.exe + MiscServer/miscserver.pdb`;
-//! SHA-256 EXE
-//! `F4426942465E6E9D1397EEF7A977B87D0D8C5B12957832770F57656F998AED65`,
-//! SHA-256 PDB
-//! `ED5F482DADB3E8B050B37F9911067479D297C5B6D33C1EA2CE99C9CD0FC11FA7`.
-//! Исходные пути PDB:
-//! `h:\fengyun\fy_russia\src\server\miscserver\miscserver\setup\setup.cpp`
-//! и `.h`.
 //!
 //! `LoadIpPort` открывал ровно `setup.ini` и последовательно извлекал четыре
 //! пары `label value`: World IP, World port, local bind IP и listen port.
@@ -25,14 +13,6 @@
 //! придумывает ноль либо пустой адрес. Process-global lazy `GetInstance`
 //! заменён обычным owned `CSetup`: единственный будущий `CGame` получает тот
 //! же единственный экземпляр без global mutable state и ручного `new`.
-//!
-//! Найденный read-only fixture `MiscServer/setup.ini` имеет SHA-256
-//! `9a1bc4280961d49bf785dbb68d37209f7fa2e5defd7fce7b3e0150ecef3de1c5`
-//! и содержит все четыре коротких корректных значения. Точный размер старых
-//! destination `char[]` не присутствует в текущем raw-export; реакция
-//! operator `>>` на слишком длинный внешний token могла быть переполнением и
-//! не воспроизводится через `unsafe`. Owned `Vec<u8>` доказывает обычный путь,
-//! но не объявляет malformed long-token совместимым поведением.
 //!
 //! `std::vector<unsigned char>::resize`, два `$L` unwind-funclet, allocator,
 //! iostream internals и singleton allocation удалены как library/compiler

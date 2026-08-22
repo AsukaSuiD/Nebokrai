@@ -1,15 +1,8 @@
 //! Сообщения AuthServer и GMA LoginServer из `asmessage.cpp`.
 //!
-//! Статус всех трёх функций файла — `IMPLEMENTED`: `OnGMAKickPlayer` RVA
 //! `0x0007F110`, `OnGMAMessage` `0x0007F2A0`, `OnASMessage` `0x0007F320`.
 //!
-//! Точная пара: `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`;
-//! SHA-256 EXE
-//! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`,
-//! SHA-256 PDB
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`.
 //! Исходный путь PDB:
-//! `d:\complite_version\fengyun_russia\trunk\server\loginserver\applogin\message\asmessage.cpp`.
 //!
 //! `0xCF301` сначала явно закрывает текущий Auth client и только затем заменяет
 //! прежний reconnect-thread управляемой Tokio-задачей. Она немедленно пробует
@@ -30,7 +23,6 @@
 //! diagnostic с исходным world name.
 //!
 //! Пропущенный декомпилятором vararg этой diagnostic-строки точечно подтверждён
-//! машинным кодом LoginServer `0x0047F1CF..0x0047F1E4`: перед `sprintf` в стек
 //! кладётся адрес буфера world name. Ограничение обоих `GetStr` равно `0x100`;
 //! отсутствие NUL в пределах буфера сохраняет пустой результат и уже
 //! сдвинутый курсор. SEH, stack cookie, временные C-массивы и ручные

@@ -1,19 +1,8 @@
-//! `IMPLEMENTED` — владелец `CGasThread` из
-//! `loginserver/applogin/gasthread.cpp`.
+//! восстановлено — владелец `CGasThread` из
 //!
 //! Точная пара LoginServer.exe/PDB:
 //! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876` /
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`.
 //! Исходный путь PDB:
-//! `d:\complite_version\fengyun_russia\trunk\server\loginserver\applogin\gasthread.cpp`.
-//! Существенные RVA: constructor 0x420EB0, `FindNextInvertedMark` 0x420F50,
-//! `GetNickNameFromStrs` 0x420FA0, `AnalysisRet` 0x421080,
-//! `MD5vec2str` 0x4211C0, `FormContent` 0x4212C0, `CheckAcc` 0x421590 и
-//! `Run` 0x421720. Точечная проверка машинного кода подтвердила lowercase
-//! `0123456789abcdef`, строку подписи `account|password|DaYeZaiCi`, uppercase
-//! только второго digest при `m_lVerifiSignUpper == 1` и итоговое тело
-//! `username=%s&password=%s&hash=%s`.
-//!
 //! Worker сохраняет одну FIFO GAS, 10-миллисекундную idle cadence, один
 //! `CMyWinInet` с исторически повторно используемым receive-буфером и точную
 //! таблицу ответных кодов. HTTP остаётся в выделенном blocking-thread. Вместо

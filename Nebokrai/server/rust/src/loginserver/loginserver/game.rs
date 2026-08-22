@@ -1,6 +1,6 @@
 //! Фактический `CGame` LoginServer из `loginserver/game.cpp` и `.h`.
 //!
-//! Статус владельца: `IMPLEMENTED` для AuthServer lifecycle-функций
+//! Восстановлены функции для AuthServer lifecycle-функций
 //! `LoadASList`, `SendLSInfoToAS`, `IsConnectAS`, `DisconnectAS`,
 //! `ReconnectAS`, `ReassignAS`, `InitAuthClient`, обработки типизированного
 //! reconnect-события, управляемых `StartReconnectThread/_ReconnectThread`,
@@ -33,49 +33,6 @@
 //! После закрытия последних серверных границ заменённый псевдокод,
 //! constructor/destructor, STL/CRT и compiler cleanup удалены; оставшиеся
 //! неизвестности локализованы у конкретных безопасных границ.
-//!
-//! Точная пара: `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`;
-//! SHA-256 EXE
-//! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`,
-//! SHA-256 PDB
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`.
-//! Исходные пути PDB:
-//! `d:\complite_version\fengyun_russia\trunk\server\loginserver\loginserver\game.cpp`
-//! и `.h`. Существенные RVA: `SendLSInfoToAS` `0x00003490`, `IsConnectAS`
-//! `0x00003520`, `DisconnectAS` `0x00004320`, `ReconnectAS` `0x00006240`,
-//! `ReassignAS` `0x00009BF0`, `InitAuthClient` `0x0000C9D0`, `LoadASList`
-//! `0x000100F0`, `SendMsg2World` `0x00003260`, `GetWorldIDByName`
-//! `0x00005DB0`, `AddWorldInfoToMsg` `0x000074E0`, `L2W_PlayerBase_Send`
-//! `0x00007770`, `L2W_DeleteRole_Send` `0x00005E60`,
-//! `L2W_RestoreRole_Send` `0x00005F30`, `L2W_CreateRole_Send` `0x000091D0`,
-//! `EnterGame` `0x00007970`, `SetLoginCdkeyWorldServer`
-//! `0x00011890`, `PrepareEnter` `0x00011940`, `KickOut` `0x0000C910`,
-//! `IsExitWorld` `0x00005E40`, `L2W_QuestDetail_Send` `0x00005FD0`,
-//! `GetLoginWorldPlayerNumByWorldName` `0x00007590`,
-//! `GetLoginCdkeyWorldServer` `0x000099B0`,
-//! `tagSetup` `0x0000C6E0`, `LoadSetup` `0x0000E690`, `LoadSetupEx`
-//! `0x0000D9E0`, `ReLoadSetupEx` `0x0000DC60`, `ReLoadSetup` `0x0000F4E0`,
-//! `load_listen_port` `0x0000DCB0`, `LoadWorldSetup` `0x00010F30`,
-//! `ReLoadWorldSetup` `0x00011FF0`, `LoadNoQueueCDKeyList` `0x00002D90`,
-//! `GetLoginWorldCdkeyNumbers` `0x00007740`,
-//! `SetListWorldInfoBySetup` `0x00011170`, `WorldServerIsOpenState`
-//! `0x000074A0`,
-//! `InitNetServer_Client` `0x00002DA0`, `InitNetServer_World` `0x00002F90`,
-//! `ProcessMessage` `0x00003180`, `ChangeAllWorldSate` `0x000075E0`,
-//! `MainLoop` `0x00013EC0`, `GetCdkeyCount` `0x00007930`,
-//! `AppendServerInfoLog` `0x00013A20`, `ServerInfoLog` `0x00013050`,
-//! `GetWorldNameByID` `0x00007460`, `UpdateWorldInfoToAllClient` `0x00007860`,
-//! `ClearCDKeyByWorldServerID` `0x0000DE70`, `AddWorld` `0x00012910`,
-//! `DelWorld` `0x00012A60`,
-//! `UpdateOnlineUser2DB` `0x000060A0`, `FindCdkey` `0x00007660`,
-//! `AddCdkey` `0x0000F600`, `ClearLoginCdkey` `0x00010B00`,
-//! `ClearCDKey` `0x00011720`,
-//! `AccountEnterLog` `0x00003280`, `RoleEnterLog` `0x00003320`,
-//! `LeaveLog` `0x000033B0`, `AccountLeaveLog` `0x00003420`,
-//! `ClearOnlineUserDatabase` `0x00005220`, `Release` `0x00005C60`, полный
-//! `Init` `0x000111F0`, `ExecuteProce` `0x00007AB0`, `_ReconnectThread`
-//! `0x000063B0`, `StartReconnectThread` `0x00007A50` и `GameThreadFunc`
-//! `0x00014680`.
 //!
 //! `LoadASList` сначала очищал список, затем читал whitespace-пары
 //! `string + unsigned short` и возвращал успех даже для пустого либо частично
@@ -110,11 +67,9 @@
 //! `AddWorld`/`DelWorld` сохраняют setup-запись и меняют только runtime state,
 //! рассылают `0xAF509`, записывают неизменный размер карты в `m_nWordNum` и
 //! затем заменяют/удаляют World-список CD-key. Неоднозначный decompiler iterator
-//! `AddWorld` имеет статус `VERIFIED_DISASSEMBLY`: в точном EXE инструкции
-//! `0x0041294B..0x00412958` передают в `std::map::find` адрес первого stack-
+//! `AddWorld` подтверждено точным EXE: в точном EXE инструкции
 //! аргумента (`world_id`), а слот второго аргумента используют как iterator-
 //! output после того, как byte-name уже сохранён в `EDI`. Возврат карты читается
-//! из `this+0x60` в `0x004129EA`, как и в `DelWorld` `0x00412A95`.
 //! Старый `UpdateDisplayWorldInfo` только очищал/заполнял MFC listbox строками
 //! `Disconnected/Started/Closed`; Linux runtime не получает Windows GUI/FFI,
 //! а фактическое состояние остаётся доступно у typed `CGame`.
@@ -125,17 +80,12 @@
 //! `m_LoginCdkeyWorld`. `ClearCDKey` удаляет только первое совпадение в порядке
 //! World ID и пересчитывает тот же state; лишь полное отсутствие account во
 //! всех World вызывает `ClearLoginCdkey`. Повреждённый
-//! хвост имеет статус `VERIFIED_DISASSEMBLY`: `0x00411829` сохраняет ключ
-//! найденного World-узла, `0x00411859..0x00411866` ищет его в runtime-карте и
-//! `0x00411875` пишет state в `tagWorldInfo+0x2C`.
 //! Rust-slice не представляет nullable `char*`; все достигнутые вызовы
 //! `ClearLoginCdkey` передают ненулевой адрес буфера, а C-string граница
 //! сохраняется усечением по первому NUL.
 //!
 //! `UpdateOnlineUser2DB` сохраняет отдельное соединение и нетранзакционный
 //! `DELETE world -> INSERT account...` в порядке snapshot. Аргументы потерянных
-//! `sprintf` имеют статус `VERIFIED_DISASSEMBLY`: `0x0040612D` передаёт
-//! `context.world_id` в DELETE, `0x00406175..0x00406191` — byte-account и тот
 //! же ID в INSERT. Игнорируемая ошибка каждого `ExecuteCn` не обрывала цикл;
 //! Rust собирает её в typed report и продолжает. Detached `_beginthreadex` и
 //! COM apartment заменены параллельными owned `std::thread::JoinHandle`, каждый
@@ -154,9 +104,7 @@
 //! Ветка Login читает canonical IP World listener и атомарный снимок суммы
 //! `s_listCdkey` в исходной позиции `GetCdkeyCount`; World использует свой port
 //! одновременно как `server_num/world_id`, Game — свой port и World port.
-//! Потерянные variadic-аргументы имеют статус `VERIFIED_DISASSEMBLY`: существенные
-//! call sites `0x00413162..0x004132AB`, `0x0041335B..0x004134C9`,
-//! `0x0041356D..0x00413717` и `0x004137F3..0x00413820` подтверждают IP, signed
+//! Потерянные variadic-аргументы подтверждены точным EXE: существенные
 //! `%d` bit-pattern, parent port и порядок IPv4 octets. ADO/COM заменены зрелым
 //! `tiberius`; исходные непараметризованные SQL-строки, lookup-before-write,
 //! отсутствие транзакции, pop-before-INSERT и очистка staging также при COM-
@@ -244,7 +192,7 @@
 //!
 //! `load_listen_port` отдельно читает две пары из `port.ini` и сохраняет
 //! partial mutation при stream fail. Его связь с listeners имеет статус
-//! `VERIFIED_DISASSEMBLY`: точный EXE пишет Client/World значения в
+//! подтверждено точным EXE: точный EXE пишет Client/World значения в
 //! `CGame+0x32C/+0x328`, а `InitNetServer_Client/World` читают именно эти
 //! offsets при вызове `Host`; одноимённые поля `tagSetup` не подменяют их.
 //! Rust хранит ещё не извлечённые порты как `Option` и блокирует только Host-
@@ -272,13 +220,11 @@
 //!
 //! Windows `FindWindowA/SetWindowTextA` проверяли ключ
 //! `LoginServer[area_id][client_port]-FengYun` до очистки runtime-БД. Порядок и
-//! точные аргументы подтверждены инструкциями `0x004112B2..0x004112D0` exact
 //! EXE. На единственной Linux-платформе тот же ключ атомарно удерживается
 //! abstract Unix listener до `Drop`; он не создаёт файл в read-only runtime и
 //! не допускает вторую очистку БД раньше bind основных listeners. Стартовая
 //! ServLog сохраняет source IPv4 World owner, `server_num = -1`, `world_id = 0`
 //! и исходную опечатку `LoingServer`; порядок отдельных date/time буферов
-//! подтверждён `0x00411638..0x00411660`.
 //!
 //! Оба `InitNetServer_*` сначала уничтожали прежний owner, сохраняли новый
 //! pointer и только затем вызывали `Host(nullptr, 1, true)`. Ошибка bind/listen
@@ -3820,7 +3766,6 @@ impl CGame {
 
     /// Выполняет GAS stored procedure и сохраняет исходный безусловный `false`.
     ///
-    /// `CGame::ExecuteProce` RVA 0x407AB0 открывал отдельное соединение,
     /// вызывал `getAccInfoEx` с тремя `varchar(200)` input и одним `int` output,
     /// закрывал соединение и возвращал `false` даже после успеха. DB-ошибка
     /// остаётся доступна через notice единственного `CRsCDKey` owner.
@@ -4900,7 +4845,6 @@ async fn update_online_user_database_async(
     for (account_index, account) in accounts.into_iter().enumerate() {
         report.insert_attempts += 1;
         let (account, _, _) = WINDOWS_1251.decode(&account);
-        // Login RVA 0x000060A0 строил SQL через `sprintf` без escaping.
         // Буквальная строка сохраняет реакцию доверенного WorldServer и не
         // назначает новый результат account с апострофом.
         let insert_sql = format!(
@@ -4952,8 +4896,6 @@ fn server_info_log_database(
         &shared.logs,
         &online_cdkey_count,
     ));
-
-    // Catch RVA 0x000139BC возвращался в общий хвост RVA 0x000138A6, поэтому
     // COM-ошибка, как и успех, очищала весь telemetry staging перед unlock.
     staging.clear();
     shared.staged_world_records.store(0, Ordering::SeqCst);
@@ -5003,7 +4945,6 @@ async fn server_info_log_database_async(
             return report;
         }
     };
-    // GetCdkeyCount RVA 0x00007930 выполнялся именно после lookup и перед
     // sprintf выбранной UPDATE/INSERT ветви; `%d` читал uint bit-pattern как int.
     let online_user = online_cdkey_count.load(Ordering::SeqCst) as i32;
     let login_write = if login_exists {
@@ -5378,8 +5319,6 @@ async fn connect_new_auth_client(
 
     (client, attempts, connected)
 }
-
-/// Owned Linux-форма исходного `GameThreadFunc` RVA 0x00014680.
 ///
 /// Единственный `CGame` всегда проходит `Release` перед уничтожением, включая
 /// фатальный partial `Init` и ошибку runtime turn. `shutdown` заменяет внешний

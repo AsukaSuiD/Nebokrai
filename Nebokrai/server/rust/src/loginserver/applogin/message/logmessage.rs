@@ -1,15 +1,9 @@
 //! Client/World сообщения LoginServer из `logmessage.cpp`.
 //!
-//! Статус `OnLogMessage`: `IMPLEMENTED` для synthetic disconnect `0x10001`,
+//! Контракт `OnLogMessage`: восстановлено для synthetic disconnect `0x10001`,
 //! World opcode `0x1FF01..0x1FF07` и client opcode `0x2FD01..0x2FD0C`.
 //! Неизвестный opcode проходит исходный default без side effects. Точная пара:
-//! `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`, SHA-256 EXE
-//! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`,
-//! SHA-256 PDB
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`.
 //! Исходный путь PDB:
-//! `d:\complite_version\fengyun_russia\trunk\server\loginserver\applogin\message\logmessage.cpp`;
-//! `OnLogMessage` RVA `0x0007F3F0`.
 //!
 //! `0x2FD09` сначала выполняет `CheckMsgInfo` над принятым account и немедленно
 //! игнорирует только socket-mismatch. Затем непустой account приводится к
@@ -97,9 +91,7 @@
 //! `short` client code, `long` encryption key, неиспользуемая строка `0x40` и
 //! World `0x14`; только затем account приводится к lowercase и полный owner-
 //! набор ставится в `CLoginQueue::AddQuestCdkey` с login type `0`.
-//! Неустойчивая decompiler dataflow имеет статус `VERIFIED_DISASSEMBLY`:
-//! reads/checks находятся в `0x0047F825..0x0047F92D`, а точный порядок
-//! аргументов вызова — в `0x0047FB02..0x0047FB29`.
+//! Неустойчивая decompiler dataflow подтверждено точным EXE:
 //!
 //! Расширенный login-вариант `0x2FD0B` читает marker/version, World `0x20`,
 //! account `0x20` и password-source `0x104`. Пустой password вызывает тихий
@@ -107,10 +99,8 @@
 //! повторной проверки и без lowercase. Marker/version проверяются уже после
 //! сборки digest; отказ отправляет `0xAF50A + long(6) + "" + ""`. Успех
 //! ставит тот же queue-owner с login type `1`, нулевыми client code/key и
-//! принятым World. Странность digest имеет статус `VERIFIED_DISASSEMBLY`:
-//! `0x0047FF70..0x0047FFAF` берёт длину у password без пробелов, но копирует
+//! принятым World. Странность digest подтверждено точным EXE:
 //! prefix исходного buffer и добавляет NUL только при отсутствии пробелов.
-//! Exact вызов `AddQuestCdkey` подтверждён `0x00480053..0x00480082`.
 //!
 //! Малый запрос списка миров `0x2FD0C` читает account с границей `0x20` и
 //! оставляет пустое значение без ответа. Для непустого account он строит
@@ -480,7 +470,6 @@ impl<'a> LogMessageHandler<'a> {
         account.retain(|byte| *byte != b' ');
 
         let compacted_len = password_source.iter().filter(|byte| **byte != b' ').count();
-        // Login RVA 0x0007F3F0, exact `0x0047FF70..0x0047FFAF`: оригинал
         // использует длину очищенной std::string, но индексирует исходный
         // stack-buffer. Поэтому пробел сокращает digest с хвоста, а не в своей
         // позиции; NUL добавляется только когда длина вообще не изменилась.

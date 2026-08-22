@@ -1,13 +1,6 @@
 //! Три входные Billing-ветви из `appbilling/billingmessage.cpp`.
 //!
-//! Статус `OnBillingMessage` RVA `0x000139D0`: `IMPLEMENTED`. Точная пара:
-//! `BillingServer/billingserver.exe + BillingServer/billingserver.pdb`;
-//! SHA-256 EXE
-//! `FA32E3C043CB49965686129696A4EB34B733ACA1D60CAF57D369F97D5E68FB19`,
-//! SHA-256 PDB
-//! `F900CD0330BEFF32AC071B107AB653FD403CD18746896B3C0187C5751ACA0B21`.
 //! Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\server\billingserver\appbilling\billingmessage.cpp`.
 //!
 //! `0xEF201` читает строковую player identity с границей `0x20` и только при
 //! её непустом первом byte читает numeric player ID. Запись

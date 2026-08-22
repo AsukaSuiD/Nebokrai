@@ -1,21 +1,11 @@
 //! Владелец `CGame` исторического BillingServer из `billingserver/game.cpp`.
 //!
-//! Статус `ProcessMessage` RVA `0x00001A50`, `MainLoop` RVA `0x00001AA0`,
-//! `InitServer` RVA `0x000018C0`, `LoadGSSetup` RVA `0x00001880`,
-//! `InitBPManager` RVA `0x00007530`, `ReleaseBPManager` RVA `0x00003F10` и
 //! достигнутые PlayerFill-ветви, полные `Init/Release`, owned network runtime и
-//! `GameThreadFunc` — `IMPLEMENTED`.
-//! Positional-часть `LoadSetup` RVA `0x00007140` также
+//! `GameThreadFunc` — восстановлено.
 //! реализована; её Windows `FindWindow` single-instance граница заменяется
 //! последующим exclusive listener bind в `InitServer`.
 //!
-//! Точная пара: `BillingServer/billingserver.exe + BillingServer/billingserver.pdb`;
-//! SHA-256 EXE
-//! `FA32E3C043CB49965686129696A4EB34B733ACA1D60CAF57D369F97D5E68FB19`,
-//! SHA-256 PDB
-//! `F900CD0330BEFF32AC071B107AB653FD403CD18746896B3C0187C5751ACA0B21`.
 //! Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\server\billingserver\billingserver\game.cpp`.
 //!
 //! `ProcessMessage` один раз читает размер FIFO `CServerForGS` и исполняет
 //! ровно этот snapshot. Сообщения, добавленные после чтения размера, остаются
@@ -43,7 +33,6 @@
 //! `LoadSetup` читает пятнадцать positional-пар, игнорируя labels и сохраняя
 //! partial mutation при преждевременном EOF. Конструктор `tagSetup` не попал в
 //! owner-export, поэтому его точное тело проверено адресно: Billing EXE
-//! `0x004031B0..0x00403222` создаёт только восемь пустых `std::string`, не
 //! задавая numeric/bool defaults. Rust хранит такие поля как `Option`; safe
 //! init останавливается только на конкретной недоказанной границе вместо
 //! придуманного значения. Найденный setup содержит все пятнадцать пар.
@@ -854,7 +843,6 @@ impl BillingSetup {
                     return tokens.report();
                 };
                 let Some(value) = $parser(raw) else {
-                    // Constructor RVA 0x000031B0 инициализирует только восемь
                     // std::string. Malformed numeric token безопасно оставляет
                     // Option пустым и останавливает positional parsing; Init
                     // затем возвращает конкретный MissingSetupField.

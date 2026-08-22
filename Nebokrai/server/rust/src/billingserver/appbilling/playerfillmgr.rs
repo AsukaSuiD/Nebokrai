@@ -1,14 +1,6 @@
 //! Владелец optional `CPlayerFillMgr` исторического BillingServer.
 //!
-//! Статус `End` RVA `0x00012E90`, `Run` RVA `0x00012FB0`,
-//! `PlayerFillThreadFunc` RVA `0x00013190` и `Start` RVA `0x00013240` —
-//! `IMPLEMENTED`. Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\server\billingserver\appbilling\playerfillmgr.cpp`.
-//! Точная пара: `BillingServer/billingserver.exe + BillingServer/billingserver.pdb`;
-//! SHA-256 EXE
-//! `FA32E3C043CB49965686129696A4EB34B733ACA1D60CAF57D369F97D5E68FB19`,
-//! SHA-256 PDB
-//! `F900CD0330BEFF32AC071B107AB653FD403CD18746896B3C0187C5751ACA0B21`.
+//! восстановлено. Исходный путь PDB:
 //!
 //! Один проход получает не более 50 строк `TBL_NeedUpdate` в DB-порядке. Для
 //! каждой строки он вызывает фактический `CRsPlayerAccount::GetUserPoint`,

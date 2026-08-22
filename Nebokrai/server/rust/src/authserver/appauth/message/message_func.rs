@@ -1,18 +1,7 @@
 //! Свободные обработчики AuthServer из `appauth/message/message_func.cpp`.
 //!
-//! Статус всех девяти функций таблицы Auth `InitMsgFuncPool`: `IMPLEMENTED`.
-//! Существенные RVA: `OnMSG_GMKickPlayer` `0x00016010`, response kick
-//! `0x00016220`, GM lock `0x000163F0`, auth/auth-ex
-//! `0x00016550/0x00016720`, LS connect/disconnect/get-info
-//! `0x00016900/0x00016AD0/0x00016BD0`, response server-info `0x00016CD0`.
-//!
-//! Точная пара: `AuthServer/authserver.exe + AuthServer/authserver.pdb`;
-//! SHA-256 EXE
-//! `AE0022429C135553092364F01838FA6EF8E631D558C96278123FF3ADE6AD3B15`,
-//! SHA-256 PDB
-//! `26F8936605024F56B0A2C3BBB1923BCACD3DF9E17221FCC20AB38070E28403D5`.
+//! Контракт всех девяти функций таблицы Auth `InitMsgFuncPool`: восстановлено.
 //! Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\server\authserver\appauth\message\message_func.cpp`.
 //! Связанное состояние и helpers подтверждены в `cgame.cpp/.h`: `addLSItem`
 //! `0x000020E0`, `gmaGetSocketID` `0x00003E60`, `gmaGetAreaID` `0x00003EA0`,
 //! `delLSItem` `0x00004350`, `CheckConnection` `0x000058E0` и inline
@@ -43,7 +32,6 @@
 //! GM kick маршрутизирует `0xCF701` по area ID, сохраняя socket отправителя,
 //! account, однобайтовую причину и operator string. Нулевой socket sentinel
 //! возвращает `0x10F201` отправителю. Пропущенный декомпилятом аргумент
-//! `sprintf` точечно подтверждён инструкцией `push edi` перед call RVA
 //! `0x00016100`: diagnostic действительно содержит исходный area ID. Ответ
 //! kick пересылается сохранённому socket ID; result `0` несёт две строки,
 //! ненулевой result — одну.
@@ -366,25 +354,3 @@ fn legacy_lowercase(value: Vec<u8>) -> Vec<u8> {
         })
         .collect()
 }
-
-// COMPONENT_VARIANT_BEGIN: AuthServer
-// Точная пара: AuthServer/authserver.exe + AuthServer/authserver.pdb
-// SHA-256 EXE: AE0022429C135553092364F01838FA6EF8E631D558C96278123FF3ADE6AD3B15
-// SHA-256 PDB: 26F8936605024F56B0A2C3BBB1923BCACD3DF9E17221FCC20AB38070E28403D5
-// Исходный владелец PDB: h:\fengyun\fy_russia\src\server\authserver\appauth\message\message_func.cpp
-
-// ============================================================================
-// FUNCTION: $L77773
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: AuthServer
-// ARTIFACT: AuthServer/authserver.exe + AuthServer/authserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\server\authserver\appauth\message\message_func.cpp
-// RVA: 0x0002AD00
-// ADDRESS: 0042ad00
-// PROTOTYPE: undefined __stdcall $L77773(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: AuthServer

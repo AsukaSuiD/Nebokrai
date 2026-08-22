@@ -1,14 +1,7 @@
 //! Две lifecycle-ветви GameServer у BillingServer из
 //! `appbilling/servermessage.cpp`.
 //!
-//! Статус `OnServerMessage` RVA `0x00013580`: `IMPLEMENTED`. Точная пара:
-//! `BillingServer/billingserver.exe + BillingServer/billingserver.pdb`;
-//! SHA-256 EXE
-//! `FA32E3C043CB49965686129696A4EB34B733ACA1D60CAF57D369F97D5E68FB19`,
-//! SHA-256 PDB
-//! `F900CD0330BEFF32AC071B107AB653FD403CD18746896B3C0187C5751ACA0B21`.
 //! Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\server\billingserver\appbilling\servermessage.cpp`.
 //!
 //! `0xEF101` не читает payload: socket ID и peer IPv4 берутся из runtime-
 //! metadata принятого сообщения. При наличии `CGame::m_pGSServer` первым

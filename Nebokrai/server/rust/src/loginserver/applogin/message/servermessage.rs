@@ -1,15 +1,9 @@
 //! World lifecycle-ветви LoginServer из `applogin/message/servermessage.cpp`.
 //!
-//! Статус `OnServerMessage` RVA `0x00080850` — `IMPLEMENTED` для
 //! `0x1FE01`/`0xFF01` (World lifecycle) и `0x1FE02`/`0x1FE03` (CD-key
 //! snapshot/clear), `0x1FE04` (World/Game telemetry) и
 //! `0x1FE05`/`0x1FE06`/`0x1FE08` (`_serv_logs`). Точная пара:
-//! `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`, SHA-256 EXE
-//! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`,
-//! SHA-256 PDB
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`.
 //! Исходный путь PDB:
-//! `d:\complite_version\fengyun_russia\trunk\server\loginserver\applogin\message\servermessage.cpp`.
 //!
 //! Connect буквально читает `world_id/name`, сначала ставит numeric identity
 //! socket, затем вызывает `AddWorld`, пишет операторский результат, отправляет
@@ -45,16 +39,13 @@
 //! `0x1FE04` безусловно добавляет один World snapshot. World player count,
 //! map-ID port и оба GameServer numeric-поля сохраняют исходный 32-битный bit
 //! pattern; Game-записи читаются только при положительном signed count.
-//! Потерянные IPv4-varargs имеют статус `VERIFIED_DISASSEMBLY`: точный EXE
-//! `0x00480BD1..0x00480BE8` передаёт четыре байта `m_dwIP` от младшего к
+//! Потерянные IPv4-varargs подтверждены точным EXE: точный EXE
 //! старшему, что совпадает с общим `legacy_ipv4_word`.
 //!
 //! Три server-log opcode проверяют `dwServerInfoLogTime` до чтения payload и
 //! при нуле немедленно возвращаются. `0x1FE06` ставит тип `-2`, `0x1FE08`
 //! sign-расширяет исходный `char`, обе ветви глубоко копируют готовые `0x80`-
-//! ограниченные bytes. Формат `0x1FE05` имеет статус `VERIFIED_DISASSEMBLY`:
-//! строка exact EXE по `0x004A03A8` равна
-//! `GS<CP936 在>%s %s<CP936 连接>WS(%d).`, а `0x00480DEA..0x00480E2B`
+//! ограниченные bytes. Формат `0x1FE05` подтверждено точным EXE:
 //! передаёт `_strdate`, `_strtime`, затем signed `m_lMapID`. Source IP и второй
 //! `long` входят только в поля queue. Два `Local::now` сохраняют отдельные
 //! позиции старых date/time вызовов; описание остаётся byte-exact.

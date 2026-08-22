@@ -1,29 +1,10 @@
 //! Runtime-владелец `CGame` AuthServer из `authserver/src/cgame.cpp/.h`.
 //!
-//! Статус владельца смешанный: `IMPLEMENTED` для сохранённого `mConfiger`,
+//! Контракт владельца смешанный: восстановлено для сохранённого `mConfiger`,
 //! DB-очередей, `PushDBQuest`, owned DB workers, `ProcessMessage`,
 //! `ProcessDBResult`, `UpdateServerInfo`, `MainLoop`, `GameThreadFunc`, узкой
 //! Linux-замены accept/net/worker lifecycle и внешнего порядка `Init/Release`;
-//! остальные доменные функции ниже сохраняют `UNKNOWN` (исследовательский декомпилят хранится локально) до проходов.
-//!
-//! Точная пара: `AuthServer/authserver.exe + AuthServer/authserver.pdb`;
-//! SHA-256 EXE
-//! `AE0022429C135553092364F01838FA6EF8E631D558C96278123FF3ADE6AD3B15`,
-//! SHA-256 PDB
-//! `26F8936605024F56B0A2C3BBB1923BCACD3DF9E17221FCC20AB38070E28403D5`.
-//! Исходные пути PDB:
-//! `h:\fengyun\fy_russia\src\server\authserver\src\cgame.cpp` и
-//! `h:\fengyun\fy_russia\src\server\authserver\src\cgame.h`.
-//!
-//! Существенные RVA: `ProcessMessage` `0x00002090`, `InitNetServer_Auth`
-//! `0x00002AF0`, `Release` `0x000034C0`, `gmaSendMessage` `0x00003590`, три
-//! `Send*Result` `0x00004370/0x00004460/0x000045C0`, `ProcessDBResult`
-//! `0x00004E70`, `PushDBQuest` `0x00005EC0`, `UpdateServerInfo` `0x00006310`,
-//! `MainLoop` `0x00006890`, `GameThreadFunc` `0x000068C0`.
-//! Состояние `mLSList`,
-//! `CheckConnection` и helpers LoginServer реализованы конкретным handler-state
-//! в `appauth/message/message_func.rs`; их provenance перенесён туда, а старые
-//! STL/MFC тела здесь удалены.
+//! остальные доменные функции ниже сохраняют невосстановленные функции до проходов.
 //!
 //! Оригинал держал accept-, net-, IOCP-worker- и game-thread раздельно. Их
 //! относительный порядок зависел от Windows scheduler, но каждый net snapshot
@@ -566,7 +547,6 @@ where
     /// при достижении `_max_auth_quest`.
     ///
     /// Signed предел намеренно сравнивается после приведения к `uint`, как в
-    /// RVA `0x00005EC0`: отрицательная malformed-конфигурация превращалась в
     /// большой unsigned предел. Для server-info команды переполнение не
     /// создаёт результата.
     pub(crate) fn push_db_quest(&self, quest: DbQuest) -> bool {
@@ -1159,7 +1139,6 @@ fn send_auth_extended_result(
     base.add_ulong(result.client_ip);
     base.add_long(result.client_socket_id);
     if result.result == 3 {
-        // Auth RVA 0x00004460 отправлял пять SYSTEMTIME-полей и буквально
         // пропускал day-of-week (+4) и seconds (+12).
         for offset in [0, 2, 6, 8, 10] {
             base.add_word(u16::from_le_bytes([
@@ -1251,68 +1230,3 @@ impl<Handler> Drop for CGame<Handler> {
         // вызывает async release_auth_network и дополнительно ждёт их выход.
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: AuthServer
-// Точная пара: AuthServer/authserver.exe + AuthServer/authserver.pdb
-// SHA-256 EXE: AE0022429C135553092364F01838FA6EF8E631D558C96278123FF3ADE6AD3B15
-// SHA-256 PDB: 26F8936605024F56B0A2C3BBB1923BCACD3DF9E17221FCC20AB38070E28403D5
-// Исходный владелец PDB: h:\fengyun\fy_russia\src\server\authserver\src\cgame.cpp
-// Исходный владелец PDB: h:\fengyun\fy_russia\src\server\authserver\src\cgame.h
-
-// ============================================================================
-// FUNCTION: AddLogText
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: AuthServer
-// ARTIFACT: AuthServer/authserver.exe + AuthServer/authserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\server\authserver\src\cgame.cpp:613
-// RVA: 0x00002250
-// ADDRESS: 00402250
-// PROTOTYPE: void __cdecl AddLogText(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::CheckClientIP
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: AuthServer
-// ARTIFACT: AuthServer/authserver.exe + AuthServer/authserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\server\authserver\src\cgame.cpp:437
-// RVA: 0x00005920
-// ADDRESS: 00405920
-// PROTOTYPE: bool __thiscall CheckClientIP(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::CheckClientIP
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: AuthServer
-// ARTIFACT: AuthServer/authserver.exe + AuthServer/authserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\server\authserver\src\cgame.cpp:421
-// RVA: 0x00005A50
-// ADDRESS: 00405a50
-// PROTOTYPE: bool __thiscall CheckClientIP(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::ReloadSetup
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: AuthServer
-// ARTIFACT: AuthServer/authserver.exe + AuthServer/authserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\server\authserver\src\cgame.cpp:132
-// RVA: 0x00006740
-// ADDRESS: 00406740
-// PROTOTYPE: bool __thiscall ReloadSetup(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: AuthServer

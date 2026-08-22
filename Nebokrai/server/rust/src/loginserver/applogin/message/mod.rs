@@ -1,6 +1,6 @@
 //! Свободные обработчики сообщений LoginServer из `applogin/message`.
 //!
-//! Статус композиции: `IMPLEMENTED`. Исторический `CMessage::Run` из точной
+//! Контракт композиции: восстановлено. Исторический `CMessage::Run` из точной
 //! пары `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb` выбирает
 //! ровно одного владельца Auth/GMA, GM, Log либо Server. `LoginComponentRunner`
 //! не повторяет его numeric switch: узкий selector принимает callback от

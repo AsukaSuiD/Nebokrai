@@ -1,20 +1,10 @@
 //! Владелец конфигурации AuthServer из `authserver/src/configreader.cpp`.
 //!
-//! Статус `ConfigReader::{ConfigReader,reset,load,set_sp_name,getDBSP}`:
-//! `IMPLEMENTED` для корректного baseline `setup.ini`. Необычные malformed-
+//! Контракт `ConfigReader::{ConfigReader,reset,load,set_sp_name,getDBSP}`:
+//! восстановлено для корректного baseline `setup.ini`. Необычные malformed-
 //! границы числового `operator>>` локализованы ниже.
 //!
-//! Точная пара: `AuthServer/authserver.exe + AuthServer/authserver.pdb`;
-//! SHA-256 EXE
-//! `AE0022429C135553092364F01838FA6EF8E631D558C96278123FF3ADE6AD3B15`,
-//! SHA-256 PDB
-//! `26F8936605024F56B0A2C3BBB1923BCACD3DF9E17221FCC20AB38070E28403D5`.
 //! Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\server\authserver\src\configreader.cpp`.
-//!
-//! Существенные RVA: `getDBSP` `0x00009560`, `reset` `0x0000A380`,
-//! destructor `0x0000A780`, `set_sp_name` `0x0000A940`, constructor
-//! `0x0000AA60`, `load` `0x0000AB60`.
 //!
 //! `load` не разбирал настоящий key/value INI: двадцать раз подряд он читал
 //! whitespace-token метки в один scratch `std::string`, тут же забывал его и
@@ -199,8 +189,6 @@ impl ConfigReader {
     pub(crate) fn load(&mut self, path: impl AsRef<Path>) -> Result<(), ConfigLoadError> {
         let input = fs::read(path).map_err(ConfigLoadError::Io)?;
         let result = self.load_tokens(&input);
-
-        // Auth RVA 0x0000AB60 делает это после цепочки извлечений даже при
         // failbit. Значение из setup намеренно не влияет на runtime.
         self.enable_ip_filter = false;
         self.set_sp_name();

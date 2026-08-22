@@ -1,16 +1,9 @@
 //! Свободный handler `OnOtherMsg` из `miscserver/othermessage.cpp`.
 //!
-//! Статус владельца: `IMPLEMENTED`; ширина единственного response-поля имеет
-//! статус `VERIFIED_DISASSEMBLY`.
+//! Восстановлены функции; ширина единственного response-поля имеет
+//! Контракт подтверждён точным EXE.
 //!
-//! Точная пара: `MiscServer/miscserver.exe + MiscServer/miscserver.pdb`;
-//! SHA-256 EXE
-//! `F4426942465E6E9D1397EEF7A977B87D0D8C5B12957832770F57656F998AED65`,
-//! SHA-256 PDB
-//! `ED5F482DADB3E8B050B37F9911067479D297C5B6D33C1EA2CE99C9CD0FC11FA7`.
 //! Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\server\miscserver\miscserver\othermessage.cpp`.
-//! `OnOtherMsg` — RVA `0x00003CC0`.
 //!
 //! Handler знает только два полных opcode. `0x0007F809` при существующем
 //! `CMyNetClient` строит `0x0005FA0A`, а `0x0007F80B` без предварительной
@@ -21,8 +14,6 @@
 //! нулевой результат. Остальные opcode ничего не делают.
 //!
 //! Ghidra-псевдокод потерял перегрузку `CBaseMessage::Add(..., 0)`. Точечное
-//! дизассемблирование exact EXE подтвердило: call sites `0x00403D12` и
-//! `0x00403D4F` вызывают RVA `0x00010F20`, который копирует четыре байта и
 //! увеличивает длину на четыре. Нулевой signed/unsigned bit-pattern одинаков;
 //! Rust использует существующий `add_long(0)` и не назначает полю доменное имя.
 //!

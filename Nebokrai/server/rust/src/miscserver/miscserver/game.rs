@@ -1,19 +1,7 @@
 //! Владелец `CGame` исторического MiscServer из `miscserver/game.cpp`.
 //!
-//! Статус `CGame::InitNetClient` RVA `0x00001210`, `ReConnect` RVA
-//! `0x00001480`, `Init` RVA `0x00001690`, `PutMemCondition` RVA `0x00001720`,
-//! `ReFlushLog` RVA `0x00001CD0`, `ProcessMessage` RVA `0x000026A0` и достигнутая
-//! constructor-инициализация auction/sync-полей RVA `0x000027B0`, а также
-//! внешний `GameThreadFunc` RVA `0x00002870` — `IMPLEMENTED`; catch main-loop
-//! RVA `0x00002959` дополнительно имеет статус `VERIFIED_DISASSEMBLY`.
 //!
-//! Точная пара: `MiscServer/miscserver.exe + MiscServer/miscserver.pdb`;
-//! SHA-256 EXE
-//! `F4426942465E6E9D1397EEF7A977B87D0D8C5B12957832770F57656F998AED65`,
-//! SHA-256 PDB
-//! `ED5F482DADB3E8B050B37F9911067479D297C5B6D33C1EA2CE99C9CD0FC11FA7`.
 //! Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\server\miscserver\miscserver\game.cpp`.
 //!
 //! Обе network-функции сначала уничтожают прежний `CMyNetClient`, создают новый
 //! IPv4 socket через исходные `Create(0, 0, 1)` и синхронно разрешают World
@@ -93,12 +81,8 @@
 //! форматы сохранены в документации его частей. Узкий accessor комнаты
 //! возвращает прежний 32-битный `_Mysize`, не открывая её контейнер владельцу.
 //!
-//! Потерянные декомпилятором varargs имеют статус `VERIFIED_DISASSEMBLY` по
-//! exact Misc EXE. `0x00401CEF..0x00401D06` передаёт соответственно offsets
-//! `CGame+0x0C/+0x7D/+0x98/+0x9C`, а `0x00401D8C..0x00401D9E` — node key/value
+//! Потерянные декомпилятором varargs подтверждены точным EXE по
 //! `+0x0C/+0x10`. В `PutMemCondition` адреса
-//! `0x0040176A..0x0040177F` сдвигают WorkingSet/Pagefile на двадцать бит, а
-//! `0x00401784..0x004017A9` строго сравнивают несдвинутый WorkingSet с
 //! `0x02800000` и при превышении сбрасывают sync-флаг перед новым boot tick.
 //!
 //! `procfs 0.18` заменяет `GetProcessMemoryInfo`: Linux `VmRSS` является
@@ -130,9 +114,7 @@
 //! возвращаемым legacy status, потому что доменный owner не завершает будущий
 //! общий Linux-процесс самостоятельно.
 //!
-//! `VERIFIED_DISASSEMBLY`: exact EXE `0x00402959..0x00402977` показывает, что
 //! compiler catch читает `CGame+0x88` (`m_dwCurMsg`), передаёт его формату
-//! `mainloop... = %d ...` и возвращается на `0x00402978`, то есть сразу в общий
 //! shutdown-tail, а не к следующему turn. Safe handlers уже возвращают typed
 //! outcomes; SEH/COM, WinSock startup/cleanup, MFC logging, message destructor,
 //! STL map allocation и ручные new/delete не получают пустых аналогов. `Drop`,
@@ -240,8 +222,6 @@ pub(crate) enum MiscProcessMemoryQuery {
     /// Старый zero-initialized `PROCESS_MEMORY_COUNTERS` оставался нулевым.
     Unavailable(ProcError),
 }
-
-/// Полный результат `CGame::PutMemCondition` RVA `0x00001720`.
 ///
 /// Основная строка имела точный формат
 /// `WorkingSetSize = %u(M)  PagefileUsage = %u(M) \n`; при reset следовала
@@ -921,8 +901,6 @@ async fn poll_once<Output>(future: impl Future<Output = Output>) -> Option<Outpu
     })
     .await
 }
-
-/// Выполняет полный lifecycle `GameThreadFunc` RVA `0x00002870`.
 ///
 /// `shutdown` заменяет только внешний `g_bMainThreadExit`. Локальный owner
 /// заменяет `g_pGame`; после любой достигнутой границы аукционная комната
@@ -970,25 +948,3 @@ where
         release,
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: MiscServer
-// Точная пара: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SHA-256 EXE: F4426942465E6E9D1397EEF7A977B87D0D8C5B12957832770F57656F998AED65
-// SHA-256 PDB: ED5F482DADB3E8B050B37F9911067479D297C5B6D33C1EA2CE99C9CD0FC11FA7
-// Исходный владелец PDB: h:\fengyun\fy_russia\src\server\miscserver\miscserver\game.cpp
-
-// ============================================================================
-// FUNCTION: AddLogText
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\server\miscserver\miscserver\game.cpp:83
-// RVA: 0x00001070
-// ADDRESS: 00401070
-// PROTOTYPE: void __cdecl AddLogText(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: MiscServer

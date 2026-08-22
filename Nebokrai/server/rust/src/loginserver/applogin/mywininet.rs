@@ -1,15 +1,9 @@
-//! `IMPLEMENTED` — технический владелец `CMyWinInet` из
+//! восстановлено — технический владелец `CMyWinInet` из
 //! `loginserver/applogin/mywininet.cpp` и `.h`.
 //!
 //! Точная пара LoginServer.exe/PDB:
 //! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876` /
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`.
 //! Исходный путь PDB:
-//! `d:\complite_version\fengyun_russia\trunk\server\loginserver\applogin\mywininet.cpp`.
-//! Существенные RVA: `Init` 0x425250, `Recv` 0x4252D0, `Close` 0x425380 и
-//! `Send` 0x425440. Проверка машинного кода `Init` подтверждает точное
-//! `strncpy(..., 0x100)` URL перед разбором.
-//!
 //! Наблюдаемый контракт — синхронный HTTP/1 POST с user-agent `App`,
 //! `Accept: text/*`, form-urlencoded content type, системным proxy и
 //! совместимостью со старым HTTPS-сервером с недоверенным CA. WinInet заменён
