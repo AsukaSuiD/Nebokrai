@@ -469,6 +469,10 @@
 //! owner отменяет map-ordered event IDs и загружает `setup/TimeToReturn.ini`.
 //! Как в EXE, его bool влияет только на success/failure log, а общий legacy
 //! return-slot `CGame::ReLoad` остаётся нулём.
+//! `VillageWar` аналогично выполняется через owned map и timer: шесть event-ID
+//! снимаются в доказанном порядке, активные войны завершаются до `Initialize`,
+//! а затем тот же owner формирует subtype `0x1C`. Неизвестный event-ID остаётся
+//! typed границей уже восстановленного safe owner-а вместо старого UB.
 //! Результат `SendAll(0x7FF1D)`
 //! старый код игнорировал; Rust хранит его как `Result` только в typed report,
 //! не назначая искусственный legacy error code.
@@ -1523,6 +1527,7 @@ use crate::worldserver::appworld::organizingsystem::union::{
 };
 use crate::worldserver::appworld::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarCallbacks, VillageWarLoadError, VillageWarLoadReport,
+    VillageWarReloadBlock,
 };
 use crate::worldserver::appworld::player::{
     CPlayer, PlayerCodecError, PlayerCountryChangeReport, PlayerExploitUpdate,
@@ -4341,7 +4346,6 @@ pub(crate) enum WorldReloadBooleanOwner {
 pub(crate) enum WorldReloadVoidOwner {
     LoadOrganizingParameters,
     ReinitializeFactionsByLevel,
-    VillageWar,
     AttackCityUnchecked,
     FactionWarParameters,
     Quest,
@@ -4360,7 +4364,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     GmList,
     RegionLevelSetup,
     AttackCity,
-    VillageWar,
     Quest,
     GodsBattle,
 }
@@ -6032,6 +6035,8 @@ pub(crate) enum WorldReloadBlock {
     FourNationWarOwnerRequired,
     FourNationWarSerialization(FourNationWarSerializationBlock),
     TimeToReturnOwnerRequired,
+    VillageWarOwnerRequired,
+    VillageWar(VillageWarReloadBlock),
 }
 
 pub(crate) type WorldReloadResult = Result<i32, WorldReloadBlock>;
@@ -7833,6 +7838,38 @@ impl CGame {
         Ok(0)
     }
 
+    /// Выполняет concrete `CVillageWarSys::ReLoad` для main-loop профиля.
+    fn reload_village_war<Context, TimerCallback>(
+        &mut self,
+        context: &mut Context,
+        village_war: &mut CVillageWarSys,
+        timer: &mut CTimer<TimerCallback>,
+        callbacks: VillageWarCallbacks<TimerCallback>,
+        now: TagTime,
+        reload_server_resources: bool,
+    ) -> WorldReloadResult
+    where
+        Context: WorldReloadContext + ?Sized,
+        TimerCallback: Copy,
+    {
+        if reload_server_resources {
+            context.load_reload_server_resources(self);
+        }
+        let source = context.read_resource(b"setup/villageWarSys.ini");
+        let sender = self.current_game_server_sender();
+        village_war
+            .reload(source.as_deref(), now, timer, callbacks, |message| {
+                message.send_all(sender.as_ref()).unwrap_or(0)
+            })
+            .map_err(WorldReloadBlock::VillageWar)?;
+        let mut payload = Vec::new();
+        let _ = village_war.add_to_byte_array(&mut payload);
+        let legacy_result = payload.len() as u32 as i32;
+        self.send_reload_payload(0x1C, &payload);
+        context.add_log_text(b"Load VilWarPara...OK!");
+        Ok(legacy_result)
+    }
+
     /// Выполняет полный case-insensitive dispatcher `CGame::ReLoad`.
     pub(crate) fn reload<Context: WorldReloadContext + ?Sized>(
         &mut self,
@@ -8299,15 +8336,7 @@ impl CGame {
                 context.add_log_text(b"Load FactionPara...OK!");
             }
             WorldReloadProfile::VillageWar => {
-                context.call_void_owner(WorldReloadVoidOwner::VillageWar);
-                self.serialize_reload_owner(
-                    context,
-                    WorldReloadSerializationOwner::VillageWar,
-                    0x1C,
-                    true,
-                    &mut legacy_result,
-                );
-                context.add_log_text(b"Load VilWarPara...OK!");
+                return Err(WorldReloadBlock::VillageWarOwnerRequired);
             }
             WorldReloadProfile::FourNationWar => {
                 return Err(WorldReloadBlock::FourNationWarOwnerRequired);
@@ -13319,6 +13348,8 @@ impl CGame {
             owners.four_nation_war_callbacks,
             owners.time_to_return,
             owners.time_to_return_callbacks,
+            owners.village_war,
+            owners.village_war_callbacks,
             &mut *callbacks.get_timer_local_time,
         );
         let reload = match reload {
@@ -20589,6 +20620,8 @@ pub(crate) fn reload_profiles<Context, GetLocalTime, GetTimerLocalTime, TimerCal
     four_nation_war_callbacks: FourNationWarCallbacks<TimerCallback>,
     time_to_return: &mut TimeToReturn,
     time_to_return_callbacks: TimeToReturnCallbacks<TimerCallback>,
+    village_war: &mut CVillageWarSys,
+    village_war_callbacks: VillageWarCallbacks<TimerCallback>,
     mut get_timer_local_time: GetTimerLocalTime,
 ) -> WorldReloadProfilesReport
 where
@@ -20638,6 +20671,15 @@ where
                     time_to_return,
                     timer,
                     time_to_return_callbacks,
+                    get_timer_local_time(),
+                    action.second_option,
+                )
+            } else if action.reload_profile == b"VilWarPara" {
+                game.reload_village_war(
+                    context,
+                    village_war,
+                    timer,
+                    village_war_callbacks,
                     get_timer_local_time(),
                     action.second_option,
                 )
