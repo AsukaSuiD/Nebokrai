@@ -17774,6 +17774,7 @@ where
             game,
             auction_log,
             db_misc,
+            db_misc_context,
             globe_setup,
             registry,
             coefficients,

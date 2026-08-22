@@ -128,7 +128,7 @@ pub(crate) mod appworld {
     pub(crate) mod message {
         #[allow(
             dead_code,
-            reason = "S2W auction relay и player-virtual подключены к ProcessMessage; GlobeSetup и DB load-ветви остаются pending"
+            reason = "S2W auction relay, GlobeSetup и player-virtual подключены к ProcessMessage; DB load-ветвь подключена через DbMiscContext"
         )]
         pub(crate) mod auction;
         #[allow(

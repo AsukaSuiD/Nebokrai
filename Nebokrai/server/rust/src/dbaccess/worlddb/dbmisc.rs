@@ -152,6 +152,16 @@ pub(crate) trait DbMiscContext {
     /// `SELECT distinct dwowerid FROM Auction (nolock)`.
     fn read_auction_owner_ids(&mut self, destination: &mut VecDeque<i32>);
     fn load_goods_by_owner_id(&mut self, owner_id: i32, state: i32, limit: i32);
+
+    /// Выполняет точный owner-read `Auction` и публикует созданные
+    /// `OT_OUT_READ_AUCTION_RESULT` notes в output FIFO. Возвращает число
+    /// товаров, а не строк join-а `AuctionGoods`.
+    fn load_owner_auction_goods(&mut self, owner_id: i32, state: i32, limit: i32) -> i32;
+
+    /// Выполняет `LoadMoneyById`: создаёт и публикует возврат gold only при
+    /// ненулевом `AuctionPlayerMoney.dwmoney`; результат чтения намеренно не
+    /// участвует в S2W control-flow оригинала.
+    fn load_owner_auction_money(&mut self, owner_id: i32, money_limit: i32);
 }
 
 /// Причина остановки только на недоказанной безопасной границе output batch.

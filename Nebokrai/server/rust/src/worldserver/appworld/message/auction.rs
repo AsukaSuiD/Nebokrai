@@ -1,9 +1,7 @@
 //! WorldServer dispatcher-owner `OnMSG_S2W_AUCTION`.
 //!
 //! Статус владельца: `IMPLEMENTED` для relay/DB queue/BaiTan/auction-bang
-//! ветвей `0x60801..09/0B..14`; `0x6080A` остаётся owned `Pending`
-//! до concrete GlobeSetup, SQL-load, auction notice и player-virtual
-//! владельцев. Точная пара: `WorldServer/Nworldserver.exe +
+//! ветвей `0x60801..14`. Точная пара: `WorldServer/Nworldserver.exe +
 //! WorldServer/WorldServer.pdb`, исходный owner
 //! `e:\\svn\\fengyun_russia_dev\\server\\worldserver\\appworld\\message\\auction.cpp:10`,
 //! RVA `0x000A5650`.
@@ -29,9 +27,13 @@
 //! `0x60808` строит `0x80403` с signed long `0/1`: единица возможна только
 //! для подключённого GameServer `5` и `CGlobeSetup::bAuction != 0`; `Update`
 //! перед source-map send отсутствует и намеренно не добавляется.
+//! `0x6080A` читает owner, goods-limit и money-limit. Ровно в порядке EXE
+//! вызывает DB owner для `BACK(3)`, затем при неполном результате `UNDO(4)` и
+//! `SUCCESSED(2)` с остатком; `LoadMoneyById` вызывается всегда и публикует
+//! свой output note независимо от числа товаров.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
-use crate::dbaccess::worlddb::dbmisc::{CDbMisc, DbNote, OperatorType};
+use crate::dbaccess::worlddb::dbmisc::{CDbMisc, DbMiscContext, DbNote, OperatorType};
 use crate::public::auctionlog::{
     AuctionGoodsLogWriteOutcome, AuctionLogPageBlock, AuctionLogPageWriteDisposition,
     AuctionLogTimeBlock, AuctionNoticeCollection, AuctionNoticeWriteQueue, CAuctionLog,
@@ -49,6 +51,7 @@ const INSERT_AUCTION_ITEM: i32 = 0x0006_0801;
 const MODIFY_AUCTION_STATE: i32 = 0x0006_0804;
 const MODIFY_AUCTION_SALE: i32 = 0x0006_0806;
 const REQUEST_AUCTION_STATE: i32 = 0x0006_0808;
+const LOAD_AUCTION_RETURNS: i32 = 0x0006_080A;
 const REQUEST_AUCTION_HISTORY: i32 = 0x0006_080B;
 const REQUEST_AUCTION_GOODS_LOG: i32 = 0x0006_080C;
 const COLLECT_AUCTION_NOTICE: i32 = 0x0006_080D;
@@ -134,6 +137,14 @@ pub(crate) enum WorldServerAuctionMessageOutcome {
         wire: Vec<u8>,
         delivery: Result<i32, SendMessageError>,
     },
+    AuctionReturnsLoaded {
+        owner_id: i32,
+        requested_goods: i32,
+        money_limit: i32,
+        loaded_back: i32,
+        loaded_undo: Option<i32>,
+        loaded_succeeded: Option<i32>,
+    },
     BaiTanRequestAdded {
         ip: u32,
         player_id: i32,
@@ -191,6 +202,7 @@ pub(crate) fn on_msg_s2w_auction(
     game: &mut CGame,
     auction_log: &mut CAuctionLog,
     db_misc: &CDbMisc,
+    db_misc_context: &mut impl DbMiscContext,
     globe_setup: &GlobeSetupSnapshot,
     registry: &GoodsBasePropertiesRegistry,
     coefficients: &PlayerPropertyCoefficients,
@@ -368,6 +380,47 @@ pub(crate) fn on_msg_s2w_auction(
                     auction_enabled,
                     wire,
                     delivery,
+                },
+            )
+        }
+        LOAD_AUCTION_RETURNS => {
+            let owner_id = message.base_mut().get_long().unwrap_or(0);
+            let requested_goods = message.base_mut().get_long().unwrap_or(0);
+            let money_limit = message.base_mut().get_long().unwrap_or(0);
+
+            let loaded_back = db_misc_context.load_owner_auction_goods(
+                owner_id,
+                GoodsState::BACK.raw(),
+                requested_goods,
+            );
+            let (loaded_undo, loaded_succeeded) = if loaded_back < requested_goods {
+                let remaining_after_back = requested_goods - loaded_back;
+                let loaded_undo = db_misc_context.load_owner_auction_goods(
+                    owner_id,
+                    GoodsState::UNDO.raw(),
+                    remaining_after_back,
+                );
+                let loaded_succeeded = (loaded_undo < remaining_after_back).then(|| {
+                    db_misc_context.load_owner_auction_goods(
+                        owner_id,
+                        GoodsState::SUCESSED.raw(),
+                        remaining_after_back - loaded_undo,
+                    )
+                });
+                (Some(loaded_undo), loaded_succeeded)
+            } else {
+                (None, None)
+            };
+            db_misc_context.load_owner_auction_money(owner_id, money_limit);
+
+            WorldServerAuctionMessageDispatch::Handled(
+                WorldServerAuctionMessageOutcome::AuctionReturnsLoaded {
+                    owner_id,
+                    requested_goods,
+                    money_limit,
+                    loaded_back,
+                    loaded_undo,
+                    loaded_succeeded,
                 },
             )
         }
