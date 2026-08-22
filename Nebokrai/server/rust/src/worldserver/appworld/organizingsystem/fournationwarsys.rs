@@ -580,6 +580,7 @@ impl CFourNationWarSys {
             .ok_or(FourNationWarRegionIndexBlock { index, setup_count: self.setups.len() })?;
         let current_time = context.current_time();
         if setup.region_id == 0 || setup.region_state != 3 || !current_time.legacy_lt(setup.end_time) { return Ok(()); }
+        if context.region_name(setup.region_id).is_none() { return Ok(()); }
         let difference = setup.end_time.get_time_difference(current_time).map_err(|_| FourNationWarRegionIndexBlock { index, setup_count: self.setups.len() })?;
         let milliseconds = ((i32::from(difference.minute) * 60) + i32::from(difference.second)) * 1000;
         let text = context.war_end_info_text();
