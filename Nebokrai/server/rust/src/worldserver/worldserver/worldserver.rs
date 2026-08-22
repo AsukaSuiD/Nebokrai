@@ -1,7 +1,8 @@
 //! Владелец операторского журнала исторического `WorldServer`.
 //!
-//! `SaveLogText` RVA `0x0001E520`, `AddLogText` RVA `0x0001E630` и
-//! `RefeashInfoText` RVA `0x0001E810` имеют статус `IMPLEMENTED`; остальные
+//! `SaveLogText` RVA `0x0001E520`, `AddLogText` RVA `0x0001E630`,
+//! `AddErrorLogText` RVA `0x0001E720` и `RefeashInfoText` RVA `0x0001E810`
+//! имеют статус `IMPLEMENTED`; остальные
 //! владельцы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
 //! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
 //! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -330,6 +331,32 @@ impl WorldLogTextOwner {
         self.add_log_text_with(
             message,
             false,
+            false,
+            save_info_time_ms,
+            &mut get_tick,
+            &mut get_local_time,
+            &mut put_log_info,
+        )
+    }
+
+    /// Воспроизводит `AddErrorLogText` с exact ` <error> ` marker-ом.
+    pub(crate) fn add_error_log_text<GetTick, GetLocalTime, PutLogInfo>(
+        &mut self,
+        message: &[u8],
+        save_info_time_ms: u32,
+        mut get_tick: GetTick,
+        mut get_local_time: GetLocalTime,
+        mut put_log_info: PutLogInfo,
+    ) -> AddLogTextDisposition
+    where
+        GetTick: FnMut() -> u32,
+        GetLocalTime: FnMut() -> WorldLogLocalTime,
+        PutLogInfo: FnMut(&[u8]),
+    {
+        self.add_log_text_with(
+            message,
+            false,
+            true,
             save_info_time_ms,
             &mut get_tick,
             &mut get_local_time,
@@ -354,6 +381,7 @@ impl WorldLogTextOwner {
         self.add_log_text_with(
             format,
             true,
+            false,
             save_info_time_ms,
             &mut get_tick,
             &mut get_local_time,
@@ -365,6 +393,7 @@ impl WorldLogTextOwner {
         &mut self,
         message: &[u8],
         no_arguments_format: bool,
+        error_marker: bool,
         save_info_time_ms: u32,
         get_tick: &mut GetTick,
         get_local_time: &mut GetLocalTime,
@@ -398,10 +427,25 @@ impl WorldLogTextOwner {
         } else {
             message.to_vec()
         };
-        let prefix = format!(
-            "[{:02}-{:02} {:02}:{:02}:{:02}] ",
-            local_time.month, local_time.day, local_time.hour, local_time.minute, local_time.second,
-        )
+        let prefix = if error_marker {
+            format!(
+                "[{:02}-{:02} {:02}:{:02}:{:02}] <error> ",
+                local_time.month,
+                local_time.day,
+                local_time.hour,
+                local_time.minute,
+                local_time.second,
+            )
+        } else {
+            format!(
+                "[{:02}-{:02} {:02}:{:02}:{:02}] ",
+                local_time.month,
+                local_time.day,
+                local_time.hour,
+                local_time.minute,
+                local_time.second,
+            )
+        }
         .into_bytes();
         let required_bytes_with_nul = prefix.len() + message.len() + 2 + 1;
         if required_bytes_with_nul > LEGACY_LOG_BUFFER_CAPACITY {
@@ -556,7 +600,7 @@ fn format_without_arguments(format: &[u8]) -> Result<Vec<u8>, AddLogTextBlock> {
 
 // ============================================================================
 // FUNCTION: AddErrorLogText
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\worldserver.cpp:782
@@ -564,6 +608,9 @@ fn format_without_arguments(format: &[u8]) -> Result<Vec<u8>, AddLogTextBlock> {
 // ADDRESS: 0041e720
 // PROTOTYPE: void __cdecl AddErrorLogText(char * param_1, ...)
 //
+// IMPLEMENTED_OWNER: `WorldLogTextOwner::add_error_log_text` выше сохраняет
+// rotation/time/sink/operator-buffer порядок и exact `<error>` prefix; готовый
+// byte-slice заменяет variadic ABI и не воспроизводит `_vsprintf` overflow.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
