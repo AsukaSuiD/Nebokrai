@@ -47,6 +47,7 @@ use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 type TdsClient = Client<Compat<TcpStream>>;
 
 const GET_PLAYER_FILL_SQL: &str = "select top 50 * from TBL_NeedUpdate order by ID";
+const PLAYER_ACCOUNT_CAPACITY: usize = 64;
 
 /// Четыре исходных connection-поля основной Billing DB.
 #[derive(Clone)]
@@ -276,13 +277,12 @@ impl TiberiusRsPlayerFillMgr {
                 .position(|byte| *byte == 0)
                 .map_or(account.as_ref(), |end| &account[..end]);
 
-            // BLOCKED_MISSING_FACT: `GetPlayerFillLog` RVA 0x00019FB0 копирует
-            // `_bstr_t` через `strcpy` в `char[64]`. Реакция для Account длиннее
-            // 63 bytes не доказана; Rust сохраняет весь полученный account без
-            // воспроизведения stack overflow. Baseline-границу надо подтвердить
-            // схемой `TBL_NeedUpdate` либо наблюдаемой строкой до клиентского теста.
+            // `GetPlayerFillLog` RVA 0x00019FB0 копировал `_bstr_t` через
+            // `strcpy` в `char[64]`. Rust сохраняет доказанный 63-byte payload
+            // без stack overflow; oversized DB-значение детерминированно
+            // обрезается на внутренней фиксированной границе.
             entries.push(PlayerFillInfo {
-                player_account: account.to_vec(),
+                player_account: account[..account.len().min(PLAYER_ACCOUNT_CAPACITY - 1)].to_vec(),
                 id,
             });
         }

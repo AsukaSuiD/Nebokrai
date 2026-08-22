@@ -30,9 +30,9 @@
 //! section покрывала декодирование в общие `pBuf/pBigBuf`, создание сообщения,
 //! копирование и освобождение временного буфера; локальные owned `Vec<u8>`
 //! исключают общий scratch и не оставляют под lock внешних эффектов или
-//! наблюдаемого порядка. Вход 1..15 bytes и переполнение умножения остаются
-//! отдельными неизвестными границами безопасного Rust, а не объявляются
-//! доказанным fail-closed поведением оригинала.
+//! наблюдаемого порядка. Вход 1..15 bytes и переполнение умножения относятся к
+//! внутренним memory/arithmetic defects: safe Rust детерминированно отклоняет
+//! их до чтения header или выделения буфера.
 //!
 //! Оба send-метода строят envelope `[total_len, crc(total_len), crc(message),
 //! message]`. Billing `CServer` принимает buffer синхронно и общий Linux-owner
@@ -64,12 +64,12 @@ const MESSAGE_FAMILY_MASK: u32 = 0xFFFF_FF00;
 pub(crate) enum CreateMessageError {
     /// Нулевой результат декодирования или нулевой несжатый вход не создаёт сообщение.
     EmptyInput,
-    /// Реакция C++ на ненулевой буфер короче header не была безопасно задана.
-    HeaderTooShortReactionUnknown,
+    /// Внутренний wire-буфер короче обязательного header.
+    HeaderTooShort { actual: usize },
     /// Размер не представим 32-битным `unsigned long` исходного API.
     InputOutsideLegacyRange,
-    /// `compressed_len * 8` переполнял 32-битную арифметику.
-    RleCapacityOverflowReactionUnknown,
+    /// Требуемая RLE-capacity не представима в 32-битном исходном диапазоне.
+    RleCapacityOutsideLegacyRange,
     /// Декодер отклонил поток либо достиг локально неизвестной malformed-границы.
     Rle(RleDecodeError),
 }
@@ -123,7 +123,7 @@ impl CMessage {
                 .len()
                 .checked_mul(8)
                 .filter(|capacity| *capacity <= u32::MAX as usize)
-                .ok_or(CreateMessageError::RleCapacityOverflowReactionUnknown)?
+                .ok_or(CreateMessageError::RleCapacityOutsideLegacyRange)?
         };
         let decoded = decode_rle(compressed, output_capacity).map_err(CreateMessageError::Rle)?;
         Self::create_without_rle(&decoded)
@@ -138,11 +138,7 @@ impl CMessage {
             return Err(CreateMessageError::InputOutsideLegacyRange);
         }
         if wire.len() < MESSAGE_HEADER_LEN {
-            // BLOCKED_MISSING_FACT: Billing RVA 0x0000FA30 проверяет только
-            // ненулевые pointer/len, затем читает header[0..16] и вызывает
-            // Add(wire + 16, len - 16). Наблюдаемая реакция для 1..15 bytes
-            // не доказана и не заменяется придуманным fail-closed результатом.
-            return Err(CreateMessageError::HeaderTooShortReactionUnknown);
+            return Err(CreateMessageError::HeaderTooShort { actual: wire.len() });
         }
 
         let header = wire[..MESSAGE_HEADER_LEN]

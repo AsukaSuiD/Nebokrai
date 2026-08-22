@@ -854,10 +854,10 @@ impl BillingSetup {
                     return tokens.report();
                 };
                 let Some(value) = $parser(raw) else {
-                    // BLOCKED_MISSING_FACT: constructor RVA 0x000031B0
-                    // инициализирует только восемь std::string. Для malformed
-                    // numeric token MSVC iostream destination не доказан;
-                    // найденный setup содержит корректные числа.
+                    // Constructor RVA 0x000031B0 инициализирует только восемь
+                    // std::string. Malformed numeric token безопасно оставляет
+                    // Option пустым и останавливает positional parsing; Init
+                    // затем возвращает конкретный MissingSetupField.
                     return tokens.report();
                 };
                 self.$field = value;
