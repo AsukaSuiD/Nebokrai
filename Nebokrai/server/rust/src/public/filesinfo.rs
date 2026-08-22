@@ -1,6 +1,304 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Частично восстановленный владелец `public/filesinfo.cpp`.
+//!
+//! Точная пара WorldServer: `Nworldserver.exe` / `WorldServer.pdb`, исходные
+//! пути PDB: `e:\svn\fengyun_russia_dev\public\filesinfo.cpp/.h`.
+//! Материализована read-side проекция подтверждённых полей `tagFileInfo`,
+//! grammar корректного `.ril` и lookup
+//! `GetFileInfoByText`/`FindChildFileInfoByText`. Массивы,
+//! деревья и владение C++ заменены `Vec`/`BTreeMap` без изменения порядка
+//! package-записей и побайтовых ключей пути.
+//!
+//! Полный `CFilesInfo::Load` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально): exact RAW теряет его
+//! возвращаемое значение в security-cookie epilogue, а архивный C++-донор
+//! навязывает строгий error mapping. `FilesInfo::from_ril` выражает только
+//! успешный форматный путь и не выдаёт свою ошибку за legacy return value.
+//! Сырой C++ ниже остаётся доказательной заготовкой, а не Rust-реализацией.
+
+use std::collections::BTreeMap;
+
+/// Один элемент package-заголовка `.ril` в исходном порядке.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PackFileInfo {
+    pub(crate) id: u32,
+    pub(crate) file_name: Vec<u8>,
+    pub(crate) index_num: u32,
+    pub(crate) empty_index_num: u32,
+}
+
+/// Безопасный владелец полей исторического `tagFileInfo`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FileInfo {
+    name: Vec<u8>,
+    size: u32,
+    origin_size: u32,
+    valid_size: u32,
+    crc32: u32,
+    package_type: u32,
+    compress_type: u32,
+    folder: bool,
+    children: BTreeMap<Vec<u8>, FileInfo>,
+}
+
+impl FileInfo {
+    fn root() -> Self {
+        Self {
+            name: Vec::new(),
+            size: 0,
+            origin_size: 0,
+            valid_size: 0,
+            crc32: 0,
+            package_type: 1,
+            compress_type: 1,
+            folder: true,
+            children: BTreeMap::new(),
+        }
+    }
+
+    fn new(
+        name: Vec<u8>,
+        size: u32,
+        origin_size: u32,
+        valid_size: u32,
+        crc32: u32,
+        package_type: u32,
+        compress_type: u32,
+        folder: bool,
+    ) -> Self {
+        Self {
+            name,
+            size,
+            origin_size,
+            valid_size,
+            crc32,
+            package_type,
+            compress_type,
+            folder,
+            children: BTreeMap::new(),
+        }
+    }
+
+    pub(crate) fn name(&self) -> &[u8] {
+        &self.name
+    }
+
+    pub(crate) fn size(&self) -> u32 {
+        self.size
+    }
+
+    pub(crate) fn origin_size(&self) -> u32 {
+        self.origin_size
+    }
+
+    pub(crate) fn valid_size(&self) -> u32 {
+        self.valid_size
+    }
+
+    pub(crate) fn crc32(&self) -> u32 {
+        self.crc32
+    }
+
+    pub(crate) fn package_type(&self) -> u32 {
+        self.package_type
+    }
+
+    pub(crate) fn compress_type(&self) -> u32 {
+        self.compress_type
+    }
+
+    pub(crate) fn is_folder(&self) -> bool {
+        self.folder
+    }
+}
+
+/// Ошибка чтения формата, не являющаяся историческим return/error mapping.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FilesInfoParseError {
+    UnexpectedEnd,
+    InvalidUnsigned,
+    InvalidSigned,
+}
+
+/// Read-side владелец индекса файлов World resource.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FilesInfo {
+    version: Vec<u8>,
+    package_infos: Vec<PackFileInfo>,
+    root: FileInfo,
+    file_count: u32,
+}
+
+impl FilesInfo {
+    /// Точное устойчивое состояние `CFilesInfo::CFilesInfo` без GUI callback-а.
+    pub(crate) fn new() -> Self {
+        Self {
+            version: b"00.00.0000".to_vec(),
+            package_infos: Vec::new(),
+            root: FileInfo::root(),
+            file_count: 0,
+        }
+    }
+
+    /// Читает успешный текстовый `.ril` layout, использованный World `rfOpen`.
+    pub(crate) fn from_ril(input: &[u8]) -> Result<Self, FilesInfoParseError> {
+        let mut tokens = RilTokens::new(input);
+        let version = tokens.next()?.to_vec();
+        let package_count = parse_unsigned(tokens.next()?)?;
+        let mut package_infos = Vec::new();
+        for _ in 0..package_count {
+            package_infos.push(PackFileInfo {
+                id: parse_unsigned(tokens.next()?)?,
+                // Exact `LoadPackInfo` копирует `%s` без `_strlwr`; это имя
+                // позднее образует путь package-файла и не является lookup-key.
+                file_name: tokens.next()?.to_vec(),
+                index_num: parse_unsigned(tokens.next()?)?,
+                empty_index_num: parse_unsigned(tokens.next()?)?,
+            });
+        }
+
+        let mut result = Self::new();
+        result.version = version;
+        result.package_infos = package_infos;
+        result.root.size = parse_unsigned(tokens.next()?)?;
+        result.root.origin_size = parse_unsigned(tokens.next()?)?;
+        result.root.valid_size = parse_unsigned(tokens.next()?)?;
+        result.root.crc32 = parse_unsigned(tokens.next()?)?;
+        result.root.package_type = signed_bits(tokens.next()?)?;
+        result.root.compress_type = signed_bits(tokens.next()?)?;
+        let _ignored_root_type = signed_bits(tokens.next()?)?;
+
+        read_folder(&mut tokens, &mut result.root, &mut result.file_count)?;
+        Ok(result)
+    }
+
+    pub(crate) fn version(&self) -> &[u8] {
+        &self.version
+    }
+
+    pub(crate) fn package_infos(&self) -> &[PackFileInfo] {
+        &self.package_infos
+    }
+
+    pub(crate) fn root(&self) -> &FileInfo {
+        &self.root
+    }
+
+    pub(crate) fn file_count(&self) -> u32 {
+        self.file_count
+    }
+
+    /// Повторяет `GetFileInfoByText` для нормального пути `rfOpen`.
+    ///
+    /// Как точный общий RAW, пустой путь и пустой segment возвращают root;
+    /// путь без начального `\\` также не проходит ни одного сегмента и оставляет
+    /// root. `CheckRFileStr` нормализует реальный путь до этого вызова.
+    pub(crate) fn file_info_by_text(&self, text: &[u8]) -> Option<&FileInfo> {
+        let mut current = &self.root;
+        let mut remaining = text;
+        while remaining.first() == Some(&b'\\') {
+            remaining = &remaining[1..];
+            let segment_end = remaining
+                .iter()
+                .position(|byte| *byte == b'\\')
+                .unwrap_or(remaining.len());
+            let segment = &remaining[..segment_end];
+            remaining = &remaining[segment_end..];
+            current = find_child(&self.root, current, segment)?;
+        }
+        Some(current)
+    }
+}
+
+fn read_folder(
+    tokens: &mut RilTokens<'_>,
+    parent: &mut FileInfo,
+    file_count: &mut u32,
+) -> Result<(), FilesInfoParseError> {
+    loop {
+        let name = lowercase_ascii(tokens.next()?);
+        let size = parse_unsigned(tokens.next()?)?;
+        let origin_size = parse_unsigned(tokens.next()?)?;
+        let valid_size = parse_unsigned(tokens.next()?)?;
+        let crc32 = parse_unsigned(tokens.next()?)?;
+        let package_type = signed_bits(tokens.next()?)?;
+        let compress_type = signed_bits(tokens.next()?)?;
+        let record_type = signed_bits(tokens.next()?)? as i32;
+
+        if record_type == 0x14 {
+            return Ok(());
+        }
+
+        let folder = record_type != 0;
+        let mut child = FileInfo::new(
+            name.clone(),
+            size,
+            origin_size,
+            valid_size,
+            if folder { 0 } else { crc32 },
+            package_type,
+            compress_type,
+            folder,
+        );
+        if folder {
+            read_folder(tokens, &mut child, file_count)?;
+        } else {
+            *file_count = file_count.wrapping_add(1);
+        }
+        parent.children.insert(name, child);
+    }
+}
+
+fn find_child<'a>(root: &'a FileInfo, parent: &'a FileInfo, text: &[u8]) -> Option<&'a FileInfo> {
+    if text.is_empty() {
+        return Some(root);
+    }
+    parent.children.get(&lowercase_ascii(text))
+}
+
+fn lowercase_ascii(value: &[u8]) -> Vec<u8> {
+    value.iter().map(u8::to_ascii_lowercase).collect()
+}
+
+fn parse_unsigned(token: &[u8]) -> Result<u32, FilesInfoParseError> {
+    let token = std::str::from_utf8(token).map_err(|_| FilesInfoParseError::InvalidUnsigned)?;
+    token
+        .parse()
+        .map_err(|_| FilesInfoParseError::InvalidUnsigned)
+}
+
+fn signed_bits(token: &[u8]) -> Result<u32, FilesInfoParseError> {
+    let token = std::str::from_utf8(token).map_err(|_| FilesInfoParseError::InvalidSigned)?;
+    token
+        .parse::<i32>()
+        .map(|value| value as u32)
+        .map_err(|_| FilesInfoParseError::InvalidSigned)
+}
+
+struct RilTokens<'a> {
+    remaining: &'a [u8],
+}
+
+impl<'a> RilTokens<'a> {
+    fn new(input: &'a [u8]) -> Self {
+        Self { remaining: input }
+    }
+
+    fn next(&mut self) -> Result<&'a [u8], FilesInfoParseError> {
+        let start = self
+            .remaining
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+            .ok_or(FilesInfoParseError::UnexpectedEnd)?;
+        self.remaining = &self.remaining[start..];
+        let end = self
+            .remaining
+            .iter()
+            .position(u8::is_ascii_whitespace)
+            .unwrap_or(self.remaining.len());
+        let token = &self.remaining[..end];
+        self.remaining = &self.remaining[end..];
+        Ok(token)
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: ServerUpdate
 // Точная пара: GameServer/ServerUpdate.exe + GameServer/ServerUpdate.pdb
@@ -451,8 +749,6 @@
 //
 //
 
-
-
 // COMPONENT_VARIANT_END: GameServer
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
@@ -506,7 +802,7 @@
 
 // ============================================================================
 // FUNCTION: CFilesInfo::FindChildFileInfoByText
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / ASCII_CONTRACT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\filesinfo.cpp:949
@@ -562,7 +858,7 @@
 
 // ============================================================================
 // FUNCTION: CFilesInfo::GetFileInfoByText
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / ASCII_CONTRACT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\filesinfo.cpp:968
@@ -674,7 +970,7 @@
 
 // ============================================================================
 // FUNCTION: CFilesInfo::LoadFolderInfo
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / ERROR_MAPPING_SPLIT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\filesinfo.cpp:118
@@ -769,12 +1065,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: WorldServer

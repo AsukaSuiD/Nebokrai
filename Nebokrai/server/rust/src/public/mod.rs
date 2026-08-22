@@ -111,3 +111,8 @@ pub(crate) mod tools;
     reason = "CRFile подключён перед восстановлением CClientResource/package-opening"
 )]
 pub(crate) mod rfile;
+#[allow(
+    dead_code,
+    reason = "FilesInfo подключён перед materialization CClientResource и package-opening"
+)]
+pub(crate) mod filesinfo;
