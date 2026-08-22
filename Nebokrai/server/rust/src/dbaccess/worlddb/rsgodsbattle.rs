@@ -70,6 +70,16 @@
 //! требуют ровно одну строку; exact `0x004ECE6F..0x004ED01B` подтверждает
 //! исходный цикл без такого gate. `WorldDatabaseSettings::connect`, Tiberius
 //! и Rust Drop заменяют только ADO/COM, не добавляя транзакцию или сортировку.
+//!
+//! `GetNpcFaction` также открывает отдельное соединение, читает
+//! `SELECT NPC_NAME,Faciton FROM CSL_GODSBATTLE_NPC` без сортировки и применяет
+//! строки сразу. `NPC_NAME` проходит BSTR → Windows-1251 C-string границу и
+//! ограничивается буфером `char[0x11]`: только первые 16 видимых байт участвуют
+//! в поиске. Каждая строка вызывает точный `SetNpcFaction`, меняющий только
+//! первую существующую NPC-запись с тем же именем; неизвестное имя молча
+//! игнорируется. Поэтому пустая таблица успешна, а ошибка поздней строки не
+//! отменяет ранее применённые фракции. Linux-донор с буферизацией/merge и
+//! лимитом строк не используется.
 
 use std::collections::VecDeque;
 use std::error::Error;
@@ -85,6 +95,7 @@ use crate::setup::godsbattleconf::CGodsBattleConf;
 
 const DELETE_FACTION_XYD_SQL: &str = "DELETE FROM CSL_GODSBATTLE";
 const LOAD_FACTION_XYD_SQL: &str = "SELECT * FROM CSL_GODSBATTLE";
+const LOAD_NPC_FACTION_SQL: &str = "SELECT NPC_NAME,Faciton FROM CSL_GODSBATTLE_NPC";
 const INSERT_FACTION_XYD_SQL: &str =
     "INSERT INTO CSL_GODSBATTLE (RegionID, AFactionXYD, BFactionXYD) VALUES (@P1, @P2, @P3)";
 const DELETE_NPC_FACTIONS_SQL: &str = "DELETE FROM CSL_GODSBATTLE_NPC";
@@ -93,6 +104,7 @@ const INSERT_NPC_FACTION_SQL: &str =
     "INSERT INTO CSL_GODSBATTLE_NPC (NPC_NAME, Faciton) VALUES (@P1, @P2)";
 const TOP_TEN_SZL_SQL: &str = "SELECT TOP 10 Name,SZL,Levels FROM CSL_PLAYER_ABILITY WHERE GodsBattleFaction = @P1 ORDER BY SZL DESC";
 const TOP_TEN_NAME_VISIBLE_BYTES: usize = 16;
+const NPC_FACTION_NAME_VISIBLE_BYTES: usize = 16;
 
 /// Два значения, которые исходный DB-владелец читал из `CGodsBattleConf`.
 #[derive(Clone, Copy, Debug)]
@@ -139,11 +151,29 @@ pub(crate) enum RsGodsBattleNotice {
         row_index: Option<usize>,
         failure: GodsBattleFactionXydLoadFailure,
     },
+    GetNpcFactionFailed {
+        row_index: Option<usize>,
+        failure: GodsBattleNpcFactionLoadFailure,
+    },
 }
 
 /// Причина исходного `false` автономного `LoadFactionXYD`.
 #[derive(Debug)]
 pub(crate) enum GodsBattleFactionXydLoadFailure {
+    Connection(WorldDatabaseConnectionError),
+    Database(RsGodsBattleDatabaseError),
+    MissingRequiredValue {
+        column: &'static str,
+    },
+    NumericOutsideUnsignedLong {
+        column: &'static str,
+        value: i64,
+    },
+}
+
+/// Причина исходного `false` автономного `GetNpcFaction`.
+#[derive(Debug)]
+pub(crate) enum GodsBattleNpcFactionLoadFailure {
     Connection(WorldDatabaseConnectionError),
     Database(RsGodsBattleDatabaseError),
     MissingRequiredValue {
@@ -195,6 +225,9 @@ impl From<tiberius::error::Error> for RsGodsBattleDatabaseError {
 pub(crate) trait RsGodsBattleOwner {
     /// Загружает все XYD-строки в порядке провайдера через отдельное DB-соединение.
     async fn load_faction_xyd(&mut self, configuration: &mut CGodsBattleConf) -> bool;
+
+    /// Применяет DB-фракции к существующим NPC конфигурации в порядке провайдера.
+    async fn get_npc_faction(&mut self, configuration: &mut CGodsBattleConf) -> bool;
 
     /// Заменяет единственную faction-XYD строку внутри caller-транзакции.
     async fn save_faction_xyd(
@@ -327,6 +360,79 @@ impl RsGodsBattleOwner for TiberiusRsGodsBattle {
                 ),
             };
             configuration.set_xyd_from_db(faction_a, faction_b);
+        }
+        true
+    }
+
+    async fn get_npc_faction(&mut self, configuration: &mut CGodsBattleConf) -> bool {
+        macro_rules! load_failed {
+            ($row_index:expr, $failure:expr) => {{
+                self.notices
+                    .push_back(RsGodsBattleNotice::GetNpcFactionFailed {
+                        row_index: $row_index,
+                        failure: $failure,
+                    });
+                return false;
+            }};
+        }
+
+        let mut connection = match self.settings.connect().await {
+            Ok(connection) => connection,
+            Err(error) => load_failed!(None, GodsBattleNpcFactionLoadFailure::Connection(error)),
+        };
+        let rows = match connection.simple_query(LOAD_NPC_FACTION_SQL).await {
+            Ok(stream) => match stream.into_first_result().await {
+                Ok(rows) => rows,
+                Err(error) => load_failed!(
+                    None,
+                    GodsBattleNpcFactionLoadFailure::Database(error.into())
+                ),
+            },
+            Err(error) => load_failed!(
+                None,
+                GodsBattleNpcFactionLoadFailure::Database(error.into())
+            ),
+        };
+
+        for (row_index, row) in rows.iter().enumerate() {
+            let name = match row.try_get::<&str, _>("NPC_NAME") {
+                Ok(Some(value)) => value,
+                Ok(None) => load_failed!(
+                    Some(row_index),
+                    GodsBattleNpcFactionLoadFailure::MissingRequiredValue {
+                        column: "NPC_NAME",
+                    }
+                ),
+                Err(error) => load_failed!(
+                    Some(row_index),
+                    GodsBattleNpcFactionLoadFailure::Database(error.into())
+                ),
+            };
+            let (name, _, _) = WINDOWS_1251.encode(name);
+            let mut name = visible_c_string(name.as_ref()).to_vec();
+            name.truncate(NPC_FACTION_NAME_VISIBLE_BYTES);
+
+            let faction = match read_ado_unsigned_long(row, "Faciton") {
+                Ok(Some(value)) => value,
+                Ok(None) => load_failed!(
+                    Some(row_index),
+                    GodsBattleNpcFactionLoadFailure::MissingRequiredValue {
+                        column: "Faciton",
+                    }
+                ),
+                Err(ReadUnsignedLongError::Database(error)) => load_failed!(
+                    Some(row_index),
+                    GodsBattleNpcFactionLoadFailure::Database(error.into())
+                ),
+                Err(ReadUnsignedLongError::OutsideRange(value)) => load_failed!(
+                    Some(row_index),
+                    GodsBattleNpcFactionLoadFailure::NumericOutsideUnsignedLong {
+                        column: "Faciton",
+                        value,
+                    }
+                ),
+            };
+            let _ = configuration.set_npc_faction(&name, faction as i32);
         }
         true
     }
@@ -683,7 +789,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRSGodsBattle::GetNpcFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsgodsbattle.cpp:147
@@ -691,6 +797,9 @@ async fn execute_batch(
 // ADDRESS: 004edf00
 // PROTOTYPE: bool __thiscall GetNpcFaction(void)
 //
+// IMPLEMENTED_OWNER: `TiberiusRsGodsBattle::get_npc_faction` выше сохраняет
+// отдельное соединение, immediate update существующей NPC-конфигурации,
+// `char[0x11]` имя и игнорирование неизвестного имени.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
