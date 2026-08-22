@@ -329,7 +329,7 @@ fn open_loose_file(path: &std::path::Path) -> Option<CRFile> {
 
 // ============================================================================
 // FUNCTION: GetDefaultClientResource
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / OWNERSHIP_SUBSTITUTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\rfile.cpp:233
@@ -337,6 +337,10 @@ fn open_loose_file(path: &std::path::Path) -> Option<CRFile> {
 // ADDRESS: 0045a8d0
 // PROTOTYPE: CClientResource * __cdecl GetDefaultClientResource(void)
 //
+// `get_default_client_resource` принимает safe owner на Rust context boundary
+// вместо mutable static и возвращает nullable borrowed view. Она сохраняет
+// опубликованный `CClientResource` после неуспешного `LoadEx`, но не позволяет
+// сохранить висячую ссылку через последующие LoadServerResource/Release.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

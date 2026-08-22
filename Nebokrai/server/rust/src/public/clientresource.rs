@@ -97,6 +97,59 @@ struct InstalledClientResource {
     resource: Option<ClientResource>,
 }
 
+/// Заимствованная безопасная форма nullable `g_pDefaultClientResource`.
+///
+/// `Some` означает, что `CGame::LoadServerResource` уже опубликовал новый
+/// owner, даже если последующий `LoadEx` не смог прочитать индекс. Последний
+/// случай сохраняет C++-поведение запросов: `IsFileExist` возвращает `false`,
+/// а `FindFileList` выдаёт пустой список; `rfOpen` остаётся loose fallback.
+pub(crate) struct DefaultClientResourceRef<'a> {
+    installed: &'a InstalledClientResource,
+}
+
+impl<'a> DefaultClientResourceRef<'a> {
+    pub(crate) fn is_file_exist(&self, path: &[u8]) -> bool {
+        self.installed
+            .resource
+            .as_ref()
+            .is_some_and(|resource| resource.is_file_exist(path))
+    }
+
+    pub(crate) fn find_file_list(&self, root: &[u8], extension: &[u8]) -> Vec<Vec<u8>> {
+        self.installed
+            .resource
+            .as_ref()
+            .map_or_else(Vec::new, |resource| {
+                resource.find_file_list(root, extension)
+            })
+    }
+
+    fn has_loaded_index(&self) -> bool {
+        self.installed.resource.is_some()
+    }
+
+    fn rfile_resource(&self) -> RFileResource<'a> {
+        match self.installed.resource.as_ref() {
+            Some(resource) => RFileResource::loaded(resource, &self.installed.root),
+            None => RFileResource::without_index(&self.installed.root),
+        }
+    }
+}
+
+/// Безопасная граница process-global `GetDefaultClientResource`.
+///
+/// В отличие от старого указателя результат живёт только пока заимствован
+/// `DefaultClientResourceOwner`; это исключает dangling pointer между
+/// `LoadServerResource` и `Release`, сохраняя nullable результат вызова.
+pub(crate) fn get_default_client_resource(
+    owner: &DefaultClientResourceOwner,
+) -> Option<DefaultClientResourceRef<'_>> {
+    owner
+        .installed
+        .as_ref()
+        .map(|installed| DefaultClientResourceRef { installed })
+}
+
 impl DefaultClientResourceOwner {
     /// Точный owner-порядок `LoadServerResource` после уже полученного cwd.
     pub(crate) fn replace_from_world_directory(
@@ -135,13 +188,7 @@ impl DefaultClientResourceOwner {
 
     /// Replaces nullable `GetDefaultClientResource` plus immediate `rfOpen`.
     pub(crate) fn open(&self, path: &[u8]) -> Option<CRFile> {
-        let context = self
-            .installed
-            .as_ref()
-            .map(|installed| match installed.resource.as_ref() {
-                Some(resource) => RFileResource::loaded(resource, &installed.root),
-                None => RFileResource::without_index(&installed.root),
-            });
+        let context = get_default_client_resource(self).map(|resource| resource.rfile_resource());
         rf_open(path, context)
     }
 
@@ -156,15 +203,19 @@ impl DefaultClientResourceOwner {
         file.read_data(&mut data).then_some(data)
     }
 
+    /// Exact `GetDefaultClientResource()->IsFileExist` без global raw pointer.
+    pub(crate) fn is_file_exist(&self, path: &[u8]) -> bool {
+        get_default_client_resource(self).is_some_and(|resource| resource.is_file_exist(path))
+    }
+
     /// Возвращает package-backed file list, если текущий default owner имеет
     /// загруженный индекс. `None` отличает unavailable `LoadEx` от пустого
     /// списка и оставляет caller-у exact loose fallback.
     pub(crate) fn find_file_list(&self, root: &[u8], extension: &[u8]) -> Option<Vec<Vec<u8>>> {
-        self.installed
-            .as_ref()?
-            .resource
-            .as_ref()
-            .map(|resource| resource.find_file_list(root, extension))
+        let resource = get_default_client_resource(self)?;
+        resource
+            .has_loaded_index()
+            .then(|| resource.find_file_list(root, extension))
     }
 
     /// Exact Release удаляет global pointer только если он был установлен.
