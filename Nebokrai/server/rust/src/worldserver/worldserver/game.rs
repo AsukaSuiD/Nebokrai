@@ -16,6 +16,7 @@
 //! `CGame::GetConnectedGameServerCount` RVA `0x000084C0`,
 //! `CGame::GetConnectedGameServerCountEx` RVA `0x00008520`,
 //! обе перегрузки `CGame::GetGameServer` RVA `0x00008590/0x000132A0`,
+//! constructor `CGame::CGame` RVA `0x00015210`,
 //! `CGame::IsConnect` RVA `0x000A5600`,
 //! `CGame::ClearOfflinePlayer` RVA `0x00004BF0`,
 //! `CGame::ClearMapPlayerForOffline` RVA `0x0000D3A0`,
@@ -22173,7 +22174,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::CGame
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:520
@@ -22181,6 +22182,12 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 00415210
 // PROTOTYPE: undefined __thiscall CGame(void)
 //
+// IMPLEMENTED_OWNER: `CGame::new` выше сохраняет достигнутые empty-owners,
+// `tagSetup` defaults, 500 goods-link placeholder-ов, nullable DB/network
+// owner-ы, login/ping state и отдельный initial ping tick. Rust `BTreeMap`,
+// `VecDeque`, `Option`, `Mutex` и owned values заменяют только STL/Win32
+// lifetime mechanics; безопасно нулевой globe-wire payload документирован в
+// верхнем контракте как исправление ненаблюдаемого uninitialized-memory defect.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
