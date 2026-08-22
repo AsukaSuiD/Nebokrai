@@ -64,7 +64,7 @@
 //! bridge, который append-ит batch в общий output FIFO из World MainLoop,
 //! остаётся у concrete context и не подменяется блокирующим вызовом драйвера.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
 
@@ -78,6 +78,7 @@ use crate::nets::networld::message::CMessage;
 use crate::public::auctionnode::{
     AuctionDatabaseNodeFields, CGoodsNode, GoodsNodeSerializeError, GoodsState,
 };
+use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::guid::CGuid;
 use crate::worldserver::appworld::goods::cgoods::{CGoods, GoodsCodecError, GoodsLoadedAddonBlock};
 use crate::worldserver::appworld::goods::cgoodsfactory::{
@@ -738,16 +739,15 @@ impl TiberiusAuctionGoodsReader {
 
     /// Materializes `Auction` + `AuctionGoods` в будущий output batch.
     ///
-    /// `dakong_addon_types` принадлежит уже загруженному setup owner-у. Его
-    /// caller передаёт как snapshot, чтобы DB read не создавал второй mutable
-    /// глобальный singleton.
+    /// Набор DaKong addon property types получает здесь сам DB owner через
+    /// статический `CDaKongXiangQian::GetAddType`: exact EXE не читает для
+    /// этого setup state и не требует mutable global singleton.
     pub(crate) async fn load_goods_by_owner_id(
         &self,
         owner_id: i32,
         state: GoodsState,
         limit: i32,
         registry: &GoodsBasePropertiesRegistry,
-        dakong_addon_types: &std::collections::BTreeSet<i32>,
     ) -> AuctionGoodsLoadOutcome {
         let mut connection = match self.settings.connect().await {
             Ok(connection) => connection,
@@ -775,8 +775,10 @@ impl TiberiusAuctionGoodsReader {
             }
         };
 
-        let mut row_index = 0usize;
         let mut pending = BTreeMap::<CGuid, PendingAuctionGoods>::new();
+        let mut dakong_addon_types = BTreeSet::new();
+        CDaKongXiangQian::get_add_type(&mut dakong_addon_types);
+        let mut row_index = 0usize;
         loop {
             let item = match rows.try_next().await {
                 Ok(Some(item)) => item,
@@ -839,7 +841,7 @@ impl TiberiusAuctionGoodsReader {
                     first_modifier,
                     second_modifier,
                     registry,
-                    dakong_addon_types,
+                    &dakong_addon_types,
                 )
             {
                 return AuctionGoodsLoadOutcome::BlockedMissingFact(AuctionGoodsLoadBlock::Addon {

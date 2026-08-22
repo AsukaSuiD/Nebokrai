@@ -1,8 +1,11 @@
 //! Правила вставки больших отверстий исторического Miracle.
 //!
-//! Статус World `CDaKongXiangQian::LoadFile` RVA `0x0008CAD0` и
-//! `AddToByteArray` RVA `0x0008BDC0`: `IMPLEMENTED`; GameServer decoder и
-//! runtime query ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Статус World `CDaKongXiangQian::LoadFile` RVA `0x0008CAD0`,
+//! `AddToByteArray` RVA `0x0008BDC0` и статического `GetAddType` RVA
+//! `0x0008C400`: `IMPLEMENTED`; GameServer decoder и runtime query ниже
+//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально). `GetAddType` не зависит от загруженного
+//! `delux_modify`: EXE вставляет фиксированный набор addon property types в
+//! переданный set и всегда возвращает `true`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -12,7 +15,7 @@
 //! только MSVC map plumbing, сохраняя order wire `0x2B`; parser намеренно
 //! принимает частичный текст как исходный formatted-stream owner.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DaKongInfo {
@@ -74,6 +77,23 @@ pub(crate) enum DaKongSerializeError {
 }
 
 impl CDaKongXiangQian {
+    /// Статический World owner `GetAddType` (RVA `0x0008C400`).
+    ///
+    /// Сохраняет содержимое переданного set и добавляет точно те 34 raw enum
+    /// значения, которые EXE передаёт в `std::set::insert`; возвращаемый
+    /// `true` является частью исходной сигнатуры, хотя caller его не
+    /// использует.
+    pub(crate) fn get_add_type(destination: &mut BTreeSet<i32>) -> bool {
+        const ADDON_TYPES: [i32; 34] = [
+            0x83, 0x82, 0x81, 0x80, 0x78, 0x77, 0x76, 0x75, 0x69, 0x61, 0x60, 0x5F, 0x5D, 0x5C,
+            0x5B, 0x34, 0x33, 0x20, 0x1F, 0x1E, 0x1D, 0x1C, 0x1B, 0x1A, 0x19, 0x17, 0x15, 0x14,
+            0x13, 0x12, 0x11, 0x10, 0x0F, 0x0E,
+        ];
+
+        destination.extend(ADDON_TYPES);
+        true
+    }
+
     /// Exact pre-open transition: deluxe modifiers deliberately persist.
     pub(crate) fn clear_primary_state(&mut self) {
         self.info.clear();
