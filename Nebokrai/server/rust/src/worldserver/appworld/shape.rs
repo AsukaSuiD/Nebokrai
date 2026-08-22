@@ -21,6 +21,8 @@
 //! Оба virtual-метода буквально читают и присваивают `m_lRegionID` без
 //! проверок и побочных эффектов. Signed Windows `long` переносится как `i32`;
 //! Rust-тип не объявляет совместимость с исходным ABI, layout или vtable.
+//! Базовый виртуальный `GetFigure` не читает объект и всегда возвращает нуль;
+//! конкретный `CMonster` задаёт отдельное переопределение через настройку монстра.
 //! `CShape::CShape` RVA `0x000D51E0` отдельно доказывает начальное значение
 //! region ID `0` и первым вызывает готовый `CBaseObject::CBaseObject`.
 //! Полный достигнутый constructor-state задаёт region/position/direction/pos/
@@ -132,6 +134,11 @@ pub(crate) struct CShape {
 }
 
 impl CShape {
+    /// Повторяет базовый виртуальный `CShape::GetFigure`: нуль без чтения состояния.
+    pub(crate) const fn get_figure(&self) -> u8 {
+        0
+    }
+
     /// Создаёт только доказанное начальное region-состояние исходного
     /// конструктора.
     pub(crate) const fn with_constructor_region_default() -> Self {

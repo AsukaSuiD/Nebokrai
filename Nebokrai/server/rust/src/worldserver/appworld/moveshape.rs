@@ -42,6 +42,11 @@ pub(crate) struct CMoveShape {
 }
 
 impl CMoveShape {
+    /// Делегирует базовый виртуальный `CShape::GetFigure` без дополнительных эффектов.
+    pub(crate) const fn get_figure(&self) -> u8 {
+        self.shape_base.get_figure()
+    }
+
     /// Создаёт достигнутый `CShape` и оба точных default собственного owner-а.
     pub(crate) const fn with_constructor_shape_base() -> Self {
         Self {
@@ -270,6 +275,5 @@ impl CMoveShape {
 //
 // IMPLEMENTED выше; base construction, пустой vector и `m_bIsGod=false`
 // сохранены без vtable/SEH plumbing.
-
 
 // COMPONENT_VARIANT_END: WorldServer
