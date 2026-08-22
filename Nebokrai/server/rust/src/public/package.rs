@@ -156,6 +156,11 @@ impl PackageArchive {
         let Some((index, compressed)) = self.extract_compressed(name, u32::MAX)? else {
             return Ok(None);
         };
+        // `rfOpen` передаёт blob прямо в `CRFile`, когда установлен bit 0.
+        // Только cleared bit 0 означает сжатое содержимое и вызывает LZO/zlib.
+        if index.compress_type & 1 != 0 {
+            return Ok(Some(compressed));
+        }
         let capacity = index.origin_size as usize;
         let mut output = vec![0; capacity];
         if index.compress_type & 4 == 0 {

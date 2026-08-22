@@ -7,9 +7,10 @@
 //! заменяет `FILE*`, ручное освобождение и небезопасные копирования, не меняя
 //! их контракт на корректном вводе.
 //!
-//! `rfOpen`, default-resource и package/decompression ветви остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально): они зависят от ещё не восстановленных `CClientResource`,
-//! `CFilesInfo` и `CPackage`. `ReadToStream` также намеренно не материализован:
+//! `rf_open` материализует точный выбор package/loose источника для explicit
+//! `CClientResource`; `Option<CRFile>` заменяет nullable старый указатель.
+//! Process-global default-resource остаётся внешним runtime owner-ом. `ReadToStream`
+//! также намеренно не материализован:
 //! его файловая ветвь в точной дизассемблировке возвращает неустойчивое значение
 //! регистра, а практический C++ reference ему противоречит. Это нельзя
 //! превратить в Rust-контракт без дополнительной проверки EXE/PDB.
@@ -20,6 +21,8 @@ use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
 };
+
+use crate::public::clientresource::ClientResource;
 
 /// Безопасная замена двух подтверждённых источников `CRFile`.
 ///
@@ -109,6 +112,65 @@ pub(crate) fn check_rfile_str(path: &mut Vec<u8>) {
     if path.first() != Some(&b'\\') {
         path.insert(0, b'\\');
     }
+}
+
+/// Безопасный read-side `rfOpen` для explicit resource либо прямого loose пути.
+///
+/// При resource сначала выполняется exact `CheckRFileStr`. Несуществующая
+/// index-запись и установленный bit 0 `dwPackageType` открываются из
+/// `m_strCurFolder`; package-ветвь выдаёт memory cursor. Как и исходный
+/// nullable `CRFile*`, ошибка файла, пакета или декодирования возвращает
+/// `None`: подробная диагностика остаётся на API `ClientResource`.
+///
+/// Без resource exact owner использует process-global default. Его safe Rust
+/// владелец находится за runtime boundary; если он не передан, здесь остаётся
+/// только прямой loose fallback параметра без package normalizing.
+pub(crate) fn rf_open(
+    path: &[u8],
+    resource: Option<(&ClientResource, &std::path::Path)>,
+) -> Option<CRFile> {
+    let path = c_string_prefix(path);
+    let Some((resource, root)) = resource else {
+        return open_loose_file(std::path::Path::new(String::from_utf8_lossy(path).as_ref()));
+    };
+
+    let mut normalized = path.to_vec();
+    check_rfile_str(&mut normalized);
+    let loose = resource
+        .file_info(&normalized)
+        .is_none_or(|info| info.package_type() & 1 != 0);
+    if loose {
+        return open_loose_file(&resource_loose_path(root, &normalized));
+    }
+
+    resource
+        .read_packaged(&normalized)
+        .ok()
+        .flatten()
+        .map(CRFile::from_memory)
+}
+
+fn c_string_prefix(value: &[u8]) -> &[u8] {
+    value
+        .iter()
+        .position(|byte| *byte == 0)
+        .map_or(value, |end| &value[..end])
+}
+
+fn resource_loose_path(root: &std::path::Path, normalized: &[u8]) -> std::path::PathBuf {
+    let mut path = root.to_path_buf();
+    for part in normalized[1..].split(|byte| *byte == b'\\') {
+        if !part.is_empty() {
+            path.push(String::from_utf8_lossy(part).as_ref());
+        }
+    }
+    path
+}
+
+fn open_loose_file(path: &std::path::Path) -> Option<CRFile> {
+    let file = File::open(path).ok()?;
+    let size = u32::try_from(file.metadata().ok()?.len()).ok()?;
+    Some(CRFile::from_file(file, size))
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
@@ -281,7 +343,7 @@ pub(crate) fn check_rfile_str(path: &mut Vec<u8>) {
 
 // ============================================================================
 // FUNCTION: rfOpen
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED / DEFAULT_RESOURCE_EXTERNAL
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\rfile.cpp:119
@@ -292,6 +354,5 @@ pub(crate) fn check_rfile_str(path: &mut Vec<u8>) {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // COMPONENT_VARIANT_END: WorldServer
