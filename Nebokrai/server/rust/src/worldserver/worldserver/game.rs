@@ -5455,6 +5455,14 @@ pub(crate) struct WorldLoginAccountPlayer {
     pub(crate) owner_id: i32,
 }
 
+/// Неизменяемые route-поля первого login-player lookup по numeric ID.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldLoginPlayerRouteSnapshot {
+    pub(crate) map_key: u32,
+    pub(crate) owner_id: i32,
+    pub(crate) region_id: i32,
+}
+
 /// Первый online-list account, для которого достигнут назначенный GameServer.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldOnlineAccountPlayerRoute {
@@ -12831,6 +12839,60 @@ impl CGame {
         self.map_player(player_id)
     }
 
+    /// Фиксирует route-поля до сериализации и последующих list-переходов.
+    pub(crate) fn login_player_route_snapshot(
+        &self,
+        player_id: u32,
+    ) -> Option<WorldLoginPlayerRouteSnapshot> {
+        let player = self.login_player_by_id(player_id)?;
+        Some(WorldLoginPlayerRouteSnapshot {
+            map_key: player_id,
+            owner_id: player.get_id(),
+            region_id: player.get_region_id(),
+        })
+    }
+
+    /// Сериализует полный mapped `CPlayer` с тем же concrete organizing
+    /// adapter-ом, не меняя login/online/offline списки при safe-block-е.
+    pub(crate) fn encode_map_player_full_snapshot(
+        &mut self,
+        organizing: &COrganizingCtrl,
+        map_key: u32,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<Option<Vec<u8>>, PlayerCodecError> {
+        let Some(mut player) = self.players.remove(&map_key) else {
+            return Ok(None);
+        };
+        let region_types = self.player_organizing_region_types();
+        let mut payload = Vec::new();
+        let encoded = {
+            let mut updater = WorldPlayerFactionInfoContext {
+                game: self,
+                organizing,
+                region_types: &region_types,
+            };
+            player.add_to_byte_array(
+                &mut payload,
+                true,
+                registry,
+                &mut updater,
+                coefficients,
+            )
+        };
+        self.players.insert(map_key, player);
+        encoded.map(|_| Some(payload))
+    }
+
+    /// Сбрасывает `m_bGetFactionData` только у достигнутого map-owner-а.
+    pub(crate) fn reset_map_player_faction_data(&self, map_key: u32) -> bool {
+        let Some(player) = self.map_player(map_key) else {
+            return false;
+        };
+        player.set_faction_data_received(false);
+        true
+    }
+
     /// Возвращает inherited ID первого login-игрока с byte-exact именем.
     pub(crate) fn login_player_id_by_name(&self, name: &[u8]) -> u32 {
         let name = legacy_c_string_prefix(name);
@@ -14990,7 +15052,15 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::Log) {
-        match on_log_message(game, session_factory, message) {
+        match on_log_message(
+            game,
+            organizing,
+            session_factory,
+            registry,
+            coefficients,
+            add_log_text,
+            message,
+        ) {
             WorldLogMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::LogMessage {
                     source,
