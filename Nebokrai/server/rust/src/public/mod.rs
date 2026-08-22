@@ -116,3 +116,8 @@ pub(crate) mod rfile;
     reason = "FilesInfo подключён перед materialization CClientResource и package-opening"
 )]
 pub(crate) mod filesinfo;
+#[allow(
+    dead_code,
+    reason = "read-side CPackage подключён перед CClientResource и rfOpen package-ветвью"
+)]
+pub(crate) mod package;

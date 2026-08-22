@@ -1,6 +1,158 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Частично восстановленный read-side владелец `public/package.cpp`.
+//!
+//! Точная World-пара подтверждает package header из трёх little-endian `u32`,
+//! инвертированные записи индекса размером `0x118`, ASCII-lowercase ключи и
+//! копирование сжатого blob по `dwOffset/dwSize`. Это materialized ниже без
+//! `FILE*`, ручных буферов и read-after-short-read дефектов.
+//!
+//! `DeCompressData` (LZO) и `DeCompress` (zlib) остаются `UNKNOWN` (исследовательский декомпилят хранится локально):
+//! выбор/результат декомпрессора является следующей совместимой границей.
+//! Сырой C++ ниже остаётся доказательной заготовкой, а не Rust-реализацией.
+
+use std::collections::BTreeMap;
+
+const PACKAGE_HEADER_LEN: usize = 12;
+const FILE_INDEX_LEN: usize = 0x118;
+const FILE_INDEX_NAME_LEN: usize = 256;
+
+/// Поля одной подтверждённой `tagFileIndex` записи.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PackageFileIndex {
+    name: Vec<u8>,
+    offset: u32,
+    size: u32,
+    origin_size: u32,
+    valid_size: u32,
+    crc32: u32,
+    compress_type: u32,
+}
+
+impl PackageFileIndex {
+    pub(crate) fn size(&self) -> u32 {
+        self.size
+    }
+    pub(crate) fn origin_size(&self) -> u32 {
+        self.origin_size
+    }
+    pub(crate) fn valid_size(&self) -> u32 {
+        self.valid_size
+    }
+    pub(crate) fn crc32(&self) -> u32 {
+        self.crc32
+    }
+    pub(crate) fn compress_type(&self) -> u32 {
+        self.compress_type
+    }
+}
+
+/// Ошибка safe read-side, не являющаяся историческим bool `CPackage::Open`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PackageReadError {
+    TruncatedHeader,
+    IndexSizeOutsideFile,
+    IndexCountOutsideHeader,
+    IndexNameWithoutNul,
+    DataOutsideFile,
+    BufferTooSmall { required: u32, available: u32 },
+}
+
+/// Владеющий снимок `.pak`, доступный будущему `CClientResource/rfOpen`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PackageArchive {
+    bytes: Vec<u8>,
+    indexes: BTreeMap<Vec<u8>, PackageFileIndex>,
+}
+
+impl PackageArchive {
+    /// Читает подтверждённую read-side часть `CPackage::Open`.
+    pub(crate) fn from_bytes(bytes: Vec<u8>) -> Result<Self, PackageReadError> {
+        if bytes.len() < PACKAGE_HEADER_LEN {
+            return Err(PackageReadError::TruncatedHeader);
+        }
+        let index_head_size = read_u32(&bytes, 4).ok_or(PackageReadError::TruncatedHeader)?;
+        let index_count = read_u32(&bytes, 8).ok_or(PackageReadError::TruncatedHeader)?;
+        let capacity = index_head_size as usize / FILE_INDEX_LEN;
+        if index_count as usize > capacity {
+            return Err(PackageReadError::IndexCountOutsideHeader);
+        }
+        let index_end = PACKAGE_HEADER_LEN
+            .checked_add(index_count as usize * FILE_INDEX_LEN)
+            .ok_or(PackageReadError::IndexSizeOutsideFile)?;
+        if index_end > bytes.len() {
+            return Err(PackageReadError::IndexSizeOutsideFile);
+        }
+
+        let mut indexes = BTreeMap::new();
+        for number in 0..index_count as usize {
+            let start = PACKAGE_HEADER_LEN + number * FILE_INDEX_LEN;
+            let mut raw = [0_u8; FILE_INDEX_LEN];
+            raw.copy_from_slice(&bytes[start..start + FILE_INDEX_LEN]);
+            for byte in &mut raw {
+                *byte = !*byte;
+            }
+            let nul = raw[..FILE_INDEX_NAME_LEN]
+                .iter()
+                .position(|byte| *byte == 0)
+                .ok_or(PackageReadError::IndexNameWithoutNul)?;
+            let name = lowercase_ascii(&raw[..nul]);
+            indexes.insert(
+                name.clone(),
+                PackageFileIndex {
+                    name,
+                    offset: read_u32(&raw, 256).expect("полная tagFileIndex"),
+                    size: read_u32(&raw, 260).expect("полная tagFileIndex"),
+                    origin_size: read_u32(&raw, 264).expect("полная tagFileIndex"),
+                    valid_size: read_u32(&raw, 268).expect("полная tagFileIndex"),
+                    crc32: read_u32(&raw, 272).expect("полная tagFileIndex"),
+                    compress_type: read_u32(&raw, 276).expect("полная tagFileIndex"),
+                },
+            );
+        }
+        Ok(Self { bytes, indexes })
+    }
+
+    pub(crate) fn file_size(&self, name: &[u8]) -> u32 {
+        self.indexes
+            .get(&lowercase_ascii(name))
+            .map_or(0, PackageFileIndex::size)
+    }
+
+    /// Повторяет successful copy-path `ExtractToBuf`, не декомпрессируя blob.
+    pub(crate) fn extract_compressed(
+        &self,
+        name: &[u8],
+        capacity: u32,
+    ) -> Result<Option<(PackageFileIndex, Vec<u8>)>, PackageReadError> {
+        let Some(index) = self.indexes.get(&lowercase_ascii(name)) else {
+            return Ok(None);
+        };
+        if index.size > capacity {
+            return Err(PackageReadError::BufferTooSmall {
+                required: index.size,
+                available: capacity,
+            });
+        }
+        let start = index.offset as usize;
+        let end = start
+            .checked_add(index.size as usize)
+            .ok_or(PackageReadError::DataOutsideFile)?;
+        let payload = self
+            .bytes
+            .get(start..end)
+            .ok_or(PackageReadError::DataOutsideFile)?
+            .to_vec();
+        Ok(Some((index.clone(), payload)))
+    }
+}
+
+fn lowercase_ascii(value: &[u8]) -> Vec<u8> {
+    value.iter().map(u8::to_ascii_lowercase).collect()
+}
+fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    bytes
+        .get(offset..offset + 4)
+        .map(|part| u32::from_le_bytes(part.try_into().expect("ровно четыре байта")))
+}
 
 // COMPONENT_VARIANT_BEGIN: ServerUpdate
 // Точная пара: GameServer/ServerUpdate.exe + GameServer/ServerUpdate.pdb
@@ -772,10 +924,6 @@
 //
 //
 
-
-
-
-
 // COMPONENT_VARIANT_END: GameServer
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
@@ -814,7 +962,7 @@
 
 // ============================================================================
 // FUNCTION: CPackage::ExtractToBuf
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / RESULT_MAPPING_SPLIT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\package.cpp:656
@@ -828,7 +976,7 @@
 
 // ============================================================================
 // FUNCTION: CPackage::GetFileSize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / RESULT_MAPPING_SPLIT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\package.cpp:716
@@ -909,6 +1057,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // COMPONENT_VARIANT_END: WorldServer
