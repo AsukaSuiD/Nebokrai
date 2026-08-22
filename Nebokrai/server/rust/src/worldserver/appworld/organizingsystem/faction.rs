@@ -97,8 +97,14 @@
 //! `0x000C0EE0` до этого принимает и сохраняет faction ID. Rust partial-owner
 //! хранит только эти достигнутые поля: `BTreeMap<i32, TagMemInfo>` заменяет
 //! MSVC tree-node, sentinel, allocator и ручной cleanup, сохраняя signed
-//! numeric порядок. Rust-layout не объявляется копией старого ABI, а полного
-//! `CFaction` constructor-а до остальных полей не существует.
+//! numeric порядок. `with_reached_member_state` materialизует private
+//! constructor для всех уже представленных полей, а `for_creation` — public
+//! constructor и его точный последующий `Initial`. Не назначенные старым
+//! private constructor-ом scalar-ы остаются `Option`, а Rust-layout не
+//! объявляется копией старого ABI.
+//! Public constructor копирует весь входной `std::string`, включая внутренние
+//! NUL: Rust хранит те же bytes, а C-string prefix применяется только в
+//! доказанных wire/lookup границах.
 //! `InitialPropertyByLvl` принимает восстановленный `COrganizingParam` явно,
 //! меняет шесть permission-флагов и maximum до проверки level-record, а
 //! upgrade experience — только после неё. Поэтому отсутствующий уровень
@@ -2862,7 +2868,7 @@ impl CFaction {
 
         let mut faction = Self {
             faction_id,
-            name: legacy_c_string_visible_bytes(faction_name).to_vec(),
+            name: faction_name.to_vec(),
             master_id: Some(master_id),
             members: BTreeMap::from([(master_id, master)]),
             base_property: Some(property),
@@ -9564,7 +9570,7 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 
 // ============================================================================
 // FUNCTION: CFaction::CFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:12
@@ -9572,13 +9578,17 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 // ADDRESS: 004c0d50
 // PROTOTYPE: undefined __thiscall CFaction(void)
 //
+// IMPLEMENTED_OWNER: `CFaction::with_reached_member_state` выше создаёт все
+// представленные constructor-ом пустые map/list/set/string/vector state и
+// сохраняет не назначенные исходным телом scalar-ы как `Option` вместо
+// выдуманных нулей. MSVC allocation/cleanup и virtual ABI не переносятся.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CFaction::CFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:38
@@ -9586,6 +9596,9 @@ fn append_signed_set(output: &mut Vec<u8>, values: &BTreeSet<i32>) {
 // ADDRESS: 004c0ee0
 // PROTOTYPE: undefined __thiscall CFaction(long param_1, long param_2, tagTime * param_3, basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_4)
 //
+// IMPLEMENTED_OWNER: `CFaction::for_creation` выше сохраняет parameter order,
+// полное byte-exact копирование `std::string`, constructor-state и вызов
+// `Initial`; Rust заменяет только MSVC storage и cleanup безопасным ownership.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
