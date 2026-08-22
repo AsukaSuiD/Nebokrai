@@ -916,7 +916,10 @@
 //! setup текущая итерация видит равенство и попадает в исходное `<=`, не пробуя
 //! lock. Try-lock callback вызывается только при строгом `elapsed >
 //! second_interval`; его `false` делает wrapping `last += 1000` и не создаёт
-//! guard, а `true` входит в готовое save-решение. `SaveThreadFunc` удерживает
+//! guard, а `true` входит в готовое save-решение. Exact EXE `0x00419D2C`
+//! подтверждает try-enter, а `0x00419ECD` — обязательный leave уже после
+//! `__beginthreadex`; normal Run-путь поэтому принимает отдельный парный
+//! callback, blocked generator до leave не доходит. `SaveThreadFunc` удерживает
 //! typed guard той же внешней сериализации, пишет точные start/end events
 //! вокруг готового `DoSaveData`
 //! lifecycle и возвращает guard при границе, где исходник не дошёл до unlock.
@@ -4439,6 +4442,8 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     pub(crate) get_tick: &'a mut dyn FnMut() -> u32,
     pub(crate) get_save_point_time: &'a mut dyn FnMut() -> u32,
     pub(crate) try_enter_save: &'a mut dyn FnMut() -> bool,
+    /// Парный `LeaveCriticalSection` normal-path-а `CGame::Run` после launch.
+    pub(crate) leave_save: &'a mut dyn FnMut(),
     pub(crate) get_log_local_time: &'a mut dyn FnMut() -> WorldLogLocalTime,
     pub(crate) put_log_info: &'a mut dyn FnMut(&[u8]),
     pub(crate) get_auction_month_day: &'a mut dyn FnMut() -> i32,
@@ -10239,6 +10244,7 @@ impl CGame {
         now_ms: u32,
         get_save_point_time: &mut GetSavePointTime,
         try_enter: TryEnter,
+        leave_save: &mut dyn FnMut(),
         registry: &GoodsBasePropertiesRegistry,
         organizing_ctrl: &mut COrganizingCtrl,
         coefficients: &PlayerPropertyCoefficients,
@@ -10319,6 +10325,7 @@ impl CGame {
             get_local_time,
             put_log_info,
             launch_save_thread,
+            leave_save,
         );
         WorldRunSavePreGateReport::AfterLock {
             manual_request,
@@ -10362,6 +10369,7 @@ impl CGame {
         get_local_time: &mut GetLocalTime,
         put_log_info: &mut PutLogInfo,
         launch_save_thread: &mut LaunchSaveThread,
+        leave_save: &mut dyn FnMut(),
     ) -> WorldRunSaveTriggerReport<'game>
     where
         GetTick: FnMut() -> u32,
@@ -10387,6 +10395,7 @@ impl CGame {
                     return WorldRunSaveTriggerReport::BlockedSaveAllOrganizations { guard, block };
                 }
             };
+            leave_save();
             guard.release();
             return WorldRunSaveTriggerReport::Complete(
                 WorldRunSaveTriggerDisposition::SaveAllOrganizations(save),
@@ -10456,6 +10465,7 @@ impl CGame {
             None
         };
 
+        leave_save();
         guard.release();
         WorldRunSaveTriggerReport::Complete(WorldRunSaveTriggerDisposition::PlayerData {
             immediate,
@@ -14511,6 +14521,7 @@ impl CGame {
             current_tick_ms,
             &mut callbacks.get_save_point_time,
             try_enter_save,
+            &mut callbacks.leave_save,
             owners.registry,
             owners.organizing,
             owners.coefficients,
