@@ -11,9 +11,9 @@
 //! `CreateChildObject` RVA `0x000D58B0` восстановлен по raw/PDB и точечно
 //! проверен в EXE. `CreateChildObject`, `AddObject`, `RemoveObject`, обе
 //! перегрузки `FindChildObject`, обе `RecursiveFindObject` и обе
-//! `DeleteChildObject`, а также `DeleteAllChildObject` materialизованы
-//! безопасным child-tree owner-ом; `BoardCast`, `DgFindObjectsByTypes`, `AI`
-//! и final destructor остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Статический `CreateObject`
+//! `DeleteChildObject`, `DeleteAllChildObject`, `BoardCast`,
+//! `DgFindObjectsByTypes` и `AI` materialизованы безопасным child-tree
+//! owner-ом; final destructor остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Статический `CreateObject`
 //! RVA `0x000D5470` materialизован отдельным tagged factory-result без erased
 //! pointer/vtable. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
@@ -483,6 +483,64 @@ impl BaseObjectTreeNode {
                 continue;
             }
             Self::delete_child(parent, &child);
+        }
+    }
+
+    /// Выполняет virtual `BoardCast` каждого direct child в list-order.
+    ///
+    /// Raw проходит сам `std::list`, не создавая snapshot. Вызванный virtual
+    /// owner мог удалить текущий list-node и тем самым оставить старый итератор
+    /// dangling; внешняя семантика такого invalidated-итератора не определена.
+    /// Safe owner берёт snapshot до первого callback: все children, существующие
+    /// на входе, получают broadcast в том же порядке, а reentrant mutation не
+    /// создаёт memory defect.
+    pub(crate) fn broadcast_children(
+        parent: &SharedBaseObjectFactoryObject,
+        first: i32,
+        second: i32,
+        broadcast: &mut impl FnMut(&SharedBaseObjectFactoryObject, i32, i32),
+    ) {
+        let children = parent.borrow().children.clone();
+        for child in children {
+            broadcast(&child, first, second);
+        }
+    }
+
+    /// Выполняет `DgFindObjectsByTypes` с точным snapshot direct children.
+    ///
+    /// Совпавший direct child передаётся callback-у вместе с неизменным
+    /// `parameter`; несовпавший рекурсивно ищется в своём поддереве. Как raw,
+    /// родительская связь child здесь не участвует. Дерево этого factory-owner-а
+    /// содержит только базовые пять concrete типов `CreateObject`, поэтому
+    /// рекурсивный base owner соответствует их подтверждённому dispatch.
+    pub(crate) fn dg_find_objects_by_type(
+        parent: &SharedBaseObjectFactoryObject,
+        object_type: i32,
+        parameter: i32,
+        on_found: &mut impl FnMut(&SharedBaseObjectFactoryObject, i32),
+    ) {
+        let children = parent.borrow().children.clone();
+        for child in children {
+            if child.borrow().object.object_type() == object_type {
+                on_found(&child, parameter);
+            } else {
+                Self::dg_find_objects_by_type(&child, object_type, parameter, on_found);
+            }
+        }
+    }
+
+    /// Выполняет virtual `AI` каждого direct child по snapshot исходного list.
+    ///
+    /// Пустой list остаётся no-op. Callback заменяет virtual slot child-а, а
+    /// snapshot сохраняет raw порядок и разрешает callback-у безопасно менять
+    /// дерево, не затрагивая текущий проход.
+    pub(crate) fn run_child_ai(
+        parent: &SharedBaseObjectFactoryObject,
+        run_ai: &mut impl FnMut(&SharedBaseObjectFactoryObject),
+    ) {
+        let children = parent.borrow().children.clone();
+        for child in children {
+            run_ai(&child);
         }
     }
 
@@ -996,7 +1054,7 @@ fn legacy_c_string_prefix(name: &[u8]) -> &[u8] {
 
 // ============================================================================
 // FUNCTION: CBaseObject::BoardCast
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:400
@@ -1004,6 +1062,10 @@ fn legacy_c_string_prefix(name: &[u8]) -> &[u8] {
 // ADDRESS: 004d5750
 // PROTOTYPE: void __thiscall BoardCast(long param_1, long param_2)
 //
+// Реализовано `BaseObjectTreeNode::broadcast_children`: callback представляет
+// virtual child-slot и получает два signed long без изменения. Original
+// обходил list напрямую; snapshot Rust намеренно устраняет только reentrant
+// invalidated-iterator/lifetime defect, сохраняя порядок children на входе.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1046,10 +1108,11 @@ fn legacy_c_string_prefix(name: &[u8]) -> &[u8] {
 // `ret` по `0x00401000`. Остальное тело сохраняется raw до materialization
 // child/factory ownership.
 
-// CLASSIFIED_RAW: `CreateChildObject` RVA `0x000D58B0` передаёт child в
+// IMPLEMENTED: `CreateChildObject` RVA `0x000D58B0` передаёт child в
 // `AddObject` до virtual `Load`, кроме player ID 0 и точного goods
 // `(ID 0, "NoAdd\0")`; результат `Load` игнорируется, а ID/graphics/name затем
-// назначаются в доказанном порядке. Storage и handle намеренно не выбраны.
+// назначаются в доказанном порядке. `BaseObjectTreeNode` теперь задаёт concrete
+// storage/father, а explicit callback остаётся virtual attachment-границей.
 // BLOCKED_MISSING_FACT: достижим ли `CGoods(type=700, id=0, name=nullptr)` и
 // как exact процесс наблюдаемо завершает его безусловное сравнение name?
 
@@ -1057,8 +1120,7 @@ fn legacy_c_string_prefix(name: &[u8]) -> &[u8] {
 // `CreateChildObject` RVA `0x000D58B0`; 17 ссылок являются vtable-ячейками, а
 // все 27 candidate-инструкций `call [register + 0x28]` принадлежат другим
 // классам. Rust поэтому передаёт attachment explicit callback-ом и возвращает
-// safe shared handle, не выдавая это отсутствие caller-а за доказательство
-// конкретного tree-storage.
+// safe shared handle; concrete tree-storage задаёт `BaseObjectTreeNode`.
 
 // ============================================================================
 // FUNCTION: CBaseObject::CreateChildObject
@@ -1073,9 +1135,9 @@ fn legacy_c_string_prefix(name: &[u8]) -> &[u8] {
 // Реализовано `create_base_object_child`: его `Rc<RefCell<tagged owner>>`
 // заменяет erased returned pointer, `attach` воспроизводит virtual `AddObject`
 // до `Load`, а `load` намеренно не возвращает значение, поскольку EXE его
-// игнорирует. У owner-а callback-а остаётся единственная обязанность выбрать
-// concrete parent/child storage и зафиксировать father; без точного caller-а
-// базовый owner этого не выдумывает. `CGoods(id=0, name=nullptr)` вместо
+// игнорирует. Для default `AddObject` callback вызывает
+// `BaseObjectTreeNode::add_child`, который хранит concrete parent/child и
+// фиксирует weak father. `CGoods(id=0, name=nullptr)` вместо
 // старого null-dereference даёт typed error без дальнейших side effects;
 // короткое имя безопасно не совпадает с `NoAdd\0`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
@@ -1117,7 +1179,7 @@ fn legacy_c_string_prefix(name: &[u8]) -> &[u8] {
 
 // ============================================================================
 // FUNCTION: CBaseObject::DgFindObjectsByTypes
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:360
@@ -1125,13 +1187,17 @@ fn legacy_c_string_prefix(name: &[u8]) -> &[u8] {
 // ADDRESS: 004d5c50
 // PROTOTYPE: void __thiscall DgFindObjectsByTypes(long param_1, _func_long_long_long * param_2, long param_3)
 //
+// Реализовано `BaseObjectTreeNode::dg_find_objects_by_type`: snapshot и
+// list-order сохранены; callback вызывается только для direct child
+// совпавшего type, иначе поиск рекурсивно продолжается из child. Father не
+// фильтруется: такая дополнительная проверка из C++ reference противоречит raw.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CBaseObject::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:381
@@ -1139,6 +1205,9 @@ fn legacy_c_string_prefix(name: &[u8]) -> &[u8] {
 // ADDRESS: 004d5cf0
 // PROTOTYPE: void __thiscall AI(void)
 //
+// Реализовано `BaseObjectTreeNode::run_child_ai`: snapshot direct children
+// создаётся перед первым callback, пустой list остаётся no-op, а callback
+// представляет virtual AI child-slot в сохранённом list-order.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
