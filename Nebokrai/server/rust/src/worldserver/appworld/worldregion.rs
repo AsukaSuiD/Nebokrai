@@ -410,6 +410,11 @@ impl CWorldRegion {
         &self.region
     }
 
+    /// Заимствует тот же единственный `CRegion` для достигнутых base-мутаций.
+    pub(crate) const fn region_base_mut(&mut self) -> &mut CRegion {
+        &mut self.region
+    }
+
     /// Возвращает три значения exact City Load guard без выбора реакции для
     /// constructor-uninitialized setup.
     pub(crate) fn city_load_base_guard(

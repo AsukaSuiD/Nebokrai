@@ -66,6 +66,7 @@
 //! `0x00010EB0`, `CGame::GetCreationPlayerVectorByCdkey` RVA `0x00012760` и
 //! полный `CGame::GenerateDBData` RVA `0x00012E50`,
 //! `CGame::GeterateRegionDBData` RVA `0x00012860`,
+//! `CGame::RefreshOwnedCityOrg` RVA `0x000128E0`,
 //! `SaveThreadFunc` RVA `0x00001E30`, полный `CGame::AI` RVA `0x000148A0`,
 //! полный `CGame::ProcessPlayerDataQueue` RVA `0x00013BD0`,
 //! worker `LoadPlayerDataFromDB` RVA `0x000092C0`,
@@ -110,6 +111,16 @@
 //! global singleton и возвращает `Option<&CFaction>` вместо nullable pointer;
 //! нулевой ID по-прежнему отсекается до map lookup. Raw owner после реализации
 //! удалён.
+//!
+//! `RefreshOwnedCityOrg` сначала проверяет обе ступени `GetRegion` и только для
+//! живого owner-а получает country через exact `GetCountryByFaction`. Затем он
+//! вызывает virtual `SetOwnedCityOrg`, присваивает унаследованный country byte и
+//! уже после обеих мутаций рассылает `0x7FE27 + region/faction/union/country`.
+//! Точная дизассемблировка `0x004128E0..0x004129E8` подтверждает, что Windows
+//! owner не сохраняет регион и не использует отдельный governance wire-кодек:
+//! эти добавления старого Linux-донора не перенесены. `BTreeMap`, typed region
+//! owner и готовый `CMessage::send_all` заменяют только STL, virtual ABI и
+//! сетевую инфраструктуру; ignored send-result остаётся наблюдаемым отчётом.
 //!
 //! `LoadSetup` сначала пробует обычный `setup.ini`, а только при ошибке
 //! открытия — декодированный `setup.dat`. Поток читает пары `label + value`,
@@ -1257,7 +1268,7 @@ use crate::worldserver::appworld::incrementlog::incrementlog::{
 use crate::worldserver::appworld::organizingsystem::faction::{
     goods_war_check_for_faction_id, CFaction, FactionDemiseContext, FactionDemiseOutcome,
     FactionDisbandContext, FactionExperienceBlock, FactionMemberInfoRequest,
-    FactionOrganizingInfoContext, FactionUploadIconBlock,
+    FactionInitialPropertyBlock, FactionOrganizingInfoContext, FactionUploadIconBlock,
 };
 use crate::worldserver::appworld::organizingsystem::attackcitysys::{
     AttackCityCallbacks, CAttackCitySys,
@@ -6015,6 +6026,24 @@ pub(crate) enum WorldRegionParamUpdateOutcome {
     RegionNotFound,
     NullRegionPointer,
     Applied,
+}
+
+/// Наблюдаемый снимок успешного `CGame::RefreshOwnedCityOrg`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldOwnedCityRefreshReport {
+    pub(crate) region_id: i32,
+    pub(crate) faction_id: i32,
+    pub(crate) union_id: i32,
+    pub(crate) country_id: u8,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+/// Обе nullable-ступени region lookup и успешная owner-мутация.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldOwnedCityRefreshOutcome {
+    RegionNotFound,
+    NullRegionPointer,
+    Refreshed(WorldOwnedCityRefreshReport),
 }
 
 /// Результат virtual selective decoder-а `CWorldRegion` из server `0x5FA07`.
@@ -14613,6 +14642,52 @@ impl CGame {
         self.regions.get(&region_id)
     }
 
+    /// Обновляет владельца города и рассылает exact `0x7FE27` всем GameServer.
+    pub(crate) fn refresh_owned_city_org(
+        &mut self,
+        organizing: &COrganizingCtrl,
+        region_id: i32,
+        faction_id: i32,
+        union_id: i32,
+    ) -> Result<WorldOwnedCityRefreshOutcome, FactionInitialPropertyBlock> {
+        let Some(assignment) = self.regions.get(&region_id) else {
+            return Ok(WorldOwnedCityRefreshOutcome::RegionNotFound);
+        };
+        if assignment.region.is_none() {
+            return Ok(WorldOwnedCityRefreshOutcome::NullRegionPointer);
+        }
+
+        let country_id = organizing.country_by_faction(faction_id)?.unwrap_or(0);
+        let region = self
+            .regions
+            .get_mut(&region_id)
+            .and_then(|assignment| assignment.region.as_mut())
+            .expect("materialized region owner проверен до country lookup");
+        region
+            .base_mut()
+            .set_owned_city_org(faction_id, union_id);
+        region
+            .base_mut()
+            .region_base_mut()
+            .set_country(country_id);
+
+        let mut message = CMessage::new(0x0007_FE27);
+        message.base_mut().add_long(region_id);
+        message.base_mut().add_long(faction_id);
+        message.base_mut().add_long(union_id);
+        message.base_mut().add_byte(country_id);
+        let delivery = message.send_all(self.current_game_server_sender().as_ref());
+        Ok(WorldOwnedCityRefreshOutcome::Refreshed(
+            WorldOwnedCityRefreshReport {
+                region_id,
+                faction_id,
+                union_id,
+                country_id,
+                delivery,
+            },
+        ))
+    }
+
     /// Возвращает только живой concrete `CRegion` create-role ветки.
     pub(crate) fn creation_region_base(&self, region_id: i32) -> Option<&CRegion> {
         self.regions
@@ -20494,19 +20569,9 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // Полный заменённый псевдокод и inlined MSVC tree traversal удалены; контракт
 // и provenance сохранены в верхнем `//!`.
 
-// ============================================================================
-// FUNCTION: CGame::RefreshOwnedCityOrg
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4445
-// RVA: 0x000128E0
-// ADDRESS: 004128e0
-// PROTOTYPE: void __thiscall RefreshOwnedCityOrg(long param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CGame::RefreshOwnedCityOrg` RVA `0x000128E0` находится выше;
+// exact mutation/wire-порядок подтверждён дизассемблировкой, а Linux-добавления
+// сохранения региона и отдельного codec-а намеренно не перенесены.
 
 // IMPLEMENTED: `CGame::DelItemFromBaiTanList` RVA `0x000129F0` находится
 // выше; оба erase выполняются даже при отсутствии player->IP записи.
