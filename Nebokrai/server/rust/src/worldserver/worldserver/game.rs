@@ -7949,6 +7949,68 @@ impl CGame {
         Ok(legacy_result)
     }
 
+    /// Выполняет отдельный профиль `CityWarPara` из `CGame::ReLoad`.
+    ///
+    /// Exact EXE `0x00416ECC..0x00416F5D` вызывает тот же статический
+    /// `CAttackCitySys::Reload`, но намеренно не проверяет его bool: сразу
+    /// после вызова сериализует live owner в subcode `0x1B`, рассылает
+    /// `0x7F801` и пишет success-log. Это не тот же контракт, что
+    /// `AttackCitySys`, где ложный `Reload` прекращает публикацию.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "CityWarPara сохраняет тот же concrete lifecycle, но отдельный return/log contract"
+    )]
+    fn reload_city_war_parameters<Context, TimerCallback>(
+        &mut self,
+        context: &mut Context,
+        attack_city: &mut CAttackCitySys,
+        timer: &mut CTimer<TimerCallback>,
+        attack_callbacks: AttackCityCallbacks<TimerCallback>,
+        organizing: &mut COrganizingCtrl,
+        country_handler: &mut CCountryHandler,
+        country_parameters: &CCountryParam,
+        organizing_parameters: &COrganizingParam,
+        globe_setup: &GlobeSetupSnapshot,
+        effects: &mut WorldUnionApplicationEffectCallbacks<'_>,
+        update_player: &mut dyn FnMut(i32),
+        now: TagTime,
+        reload_server_resources: bool,
+    ) -> WorldReloadResult
+    where
+        Context: WorldReloadContext + ?Sized,
+        TimerCallback: Copy,
+    {
+        if reload_server_resources {
+            context.load_reload_server_resources(self);
+        }
+        let source = context.read_resource(b"setup/CityWarSys.ini");
+        match reload_attack_city(
+            self,
+            attack_city,
+            source.as_deref(),
+            now,
+            timer,
+            attack_callbacks,
+            organizing_parameters.latest_tax_event_id(),
+            organizing,
+            country_handler,
+            country_parameters,
+            globe_setup,
+            effects,
+            update_player,
+        ) {
+            Ok(_) | Err(AttackCityReloadBlock::Load(_)) => {}
+            Err(block) => return Err(WorldReloadBlock::AttackCity(block)),
+        }
+
+        let mut payload = Vec::new();
+        let _ = attack_city.add_to_byte_array(&mut payload);
+        let legacy_result = payload.len() as u32 as i32;
+        self.send_reload_payload(0x1B, &payload);
+        context.add_log_text(b"Load CityWarPara...OK!");
+        Ok(legacy_result)
+    }
+
     /// Выполняет полный case-insensitive dispatcher `CGame::ReLoad`.
     pub(crate) fn reload<Context: WorldReloadContext + ?Sized>(
         &mut self,
@@ -20846,6 +20908,22 @@ where
                 )
             } else if action.reload_profile == b"AttackCitySys" {
                 game.reload_attack_city(
+                    context,
+                    attack_city,
+                    timer,
+                    attack_city_callbacks,
+                    organizing,
+                    country_handler,
+                    country_parameters,
+                    organizing_parameters,
+                    globe_setup,
+                    application_callbacks,
+                    update_player,
+                    get_timer_local_time(),
+                    action.second_option,
+                )
+            } else if action.reload_profile == b"CityWarPara" {
+                game.reload_city_war_parameters(
                     context,
                     attack_city,
                     timer,
