@@ -4480,10 +4480,13 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CUnion::CUnion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h:8
+// RUST: `CUnion::with_private_constructor_defaults` создаёт пустые строку/map
+// и время; scalar-поля старого конструктора неинициализированы и заменены
+// нейтральными значениями как внутренняя UB без доказанного внешнего эффекта.
 // RVA: 0x000C1E30
 // ADDRESS: 004c1e30
 // PROTOTYPE: undefined __thiscall CUnion(void)
