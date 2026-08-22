@@ -158,17 +158,19 @@
 //! зафиксированных overread-пути возвращают typed `BlockedMissingFact`: их
 //! неизвестная достижимость не заменена продолжением следующих dirty-bits.
 //!
-//! `LoadFactionProperty` открывает отдельное World DB connection и буквально
-//! выполняет `SELECT * FROM CSL_FACTION_BaseProperty ORDER BY id`. Для каждой
-//! строки он сперва запускает public constructor `CFaction`, затем в исходном
-//! порядке заменяет DB property/scalar поля и кладёт объект в signed-key map.
-//! Поэтому staging сохраняет уже готовый prefix до DB/field failure, а duplicate
-//! ID оставляет последнюю строку. Старый leaked overwritten pointer устранён:
-//! он не был виден вне реализации. `GoodsWarLastTime` проходит SQL calendar
-//! time в `SYSTEMTIME`-эквивалент и форматируется без zero-padding как старый
-//! `_sprintf`; `country` сохраняется как `unsigned char`. Пять остальных
-//! частей `LoadAllFaction` намеренно ещё не вызываются из этого narrow owner-а:
-//! их нельзя подменять частично опубликованным `COrganizingCtrl`.
+//! `LoadAllFaction` открывает одно World DB connection и строго вызывает
+//! property, members, leave-words, ability и apply-person owner-ы в этом
+//! порядке. Property буквально читает `SELECT * FROM
+//! CSL_FACTION_BaseProperty ORDER BY id`: public constructor `CFaction`
+//! выполняется до замены DB property/scalar полей. Поэтому staging сохраняет
+//! уже готовый prefix до DB/field failure, а duplicate ID оставляет последнюю
+//! строку. Старый leaked overwritten pointer устранён: он не был виден вне
+//! реализации. `GoodsWarLastTime` проходит SQL calendar time в
+//! `SYSTEMTIME`-эквивалент и форматируется без zero-padding как старый
+//! `_sprintf`; `country` сохраняется как `unsigned char`. После пятого owner-а
+//! точно пересчитываются MemberNums, `InitialPropertyByLvl` и clear dirty mask.
+//! Публикация готовой map в `COrganizingCtrl` принадлежит следующему парному
+//! owner-проходу и здесь не подменяется частичным init-вызовом.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
@@ -182,11 +184,11 @@ use crate::dbaccess::worlddb::rssetup::{
     WorldDatabaseConnectionError, WorldDatabaseSettings, WorldTdsClient,
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
-    CFaction, FactionBaseProperty, FactionDatabaseBaseState, FactionInitialBlock, TagLeaveWord,
-    UnterminatedLeaveWordField,
+    CFaction, FactionBaseProperty, FactionDatabaseBaseState, FactionInitialBlock, TagApplyPerson,
+    TagLeaveWord, TagPronounceWord, UnterminatedLeaveWordField,
 };
 use crate::worldserver::appworld::organizingsystem::organizing::{
-    TagMemInfo, TagTimeValue, UnterminatedMemberField,
+    EPurviewOwnState, TagMemInfo, TagTimeValue, UnterminatedMemberField,
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::COrganizingParam;
 use crate::worldserver::worldserver::game::{CGame, WorldCheckPointBlock};
@@ -194,6 +196,10 @@ use crate::worldserver::worldserver::game::{CGame, WorldCheckPointBlock};
 const SAVE_FACTION_PROPERTY_SQL: &str = "IF EXISTS (SELECT TOP 1 ID FROM CSL_FACTION_BaseProperty WHERE ID = @P16 ORDER BY ID) BEGIN UPDATE TOP (1) CSL_FACTION_BaseProperty SET MasterID = @P1, Levels = @P2, Experience = @P3, OffenseVictorCounts = @P4, DefenceVictorCounts = @P5, VillageWarVictorCounts = @P6, MemberNums = @P7, UnionID = @P8, bPermit = @P9, lPro1 = @P10, lPro2 = @P11, DelRemainTime = @P12, country = @P13, GoodsWarCount = @P14, GoodsWarLastTime = @P15 WHERE ID = @P16; SELECT CAST(@@ROWCOUNT AS int) AS UpdatedRows END ELSE SELECT CAST(0 AS int) AS UpdatedRows";
 const SAVE_FACTION_ABILITY_SQL: &str = "IF EXISTS (SELECT TOP 1 FactionID FROM CSL_FACTION_Ability WHERE FactionID = @P1 ORDER BY FactionID) BEGIN UPDATE TOP (1) CSL_FACTION_Ability SET Pronounce = @P2, IconData = @P3, LastUploadIconDataTime = @P4 WHERE FactionID = @P1 END ELSE BEGIN INSERT INTO CSL_FACTION_Ability (FactionID, Pronounce, IconData, LastUploadIconDataTime) VALUES (@P1, @P2, @P3, @P4) END";
 const LOAD_FACTION_PROPERTY_SQL: &str = "SELECT * FROM CSL_FACTION_BaseProperty ORDER BY id";
+const LOAD_FACTION_MEMBERS_SQL: &str = "SELECT CSL_FACTION_Members.*, CSL_PLAYER_BASE.Name,CSL_PLAYER_BASE.Levels,CSL_PLAYER_BASE.Occupation FROM CSL_FACTION_Members join CSL_PLAYER_BASE on CSL_FACTION_Members.playerid = CSL_PLAYER_BASE.id ORDER BY FactionID";
+const LOAD_FACTION_LEAVE_WORDS_SQL: &str = "SELECT CSL_FACTIONLeaveWord.*,csl_player_base.name FROM CSL_FACTIONLeaveWord join csl_player_base ON CSL_FACTIONLeaveWord.leavewordplayerid=csl_player_base.id WHERE DATEDIFF(day,LeaveWordTime,GETDATE())<=10 ORDER BY FactionID   ";
+const LOAD_FACTION_ABILITY_SQL: &str = "SELECT * FROM CSL_FACTION_Ability ORDER BY FactionID";
+const LOAD_FACTION_APPLY_PERSONS_SQL: &str = "SELECT CSL_Faction_Apply.*,CSL_PLAYER_BASE.Name,CSL_PLAYER_BASE.Levels,CSL_PLAYER_BASE.Occupation FROM CSL_Faction_Apply join csl_player_base on CSL_Faction_Apply.PlayerID=csl_player_base.id ORDER BY FactionID";
 
 /// Безопасный prefix concrete `CFaction`, сформированный private owner-ом
 /// `LoadFactionProperty` до следующих четырёх DB-этапов `LoadAllFaction`.
@@ -211,6 +217,42 @@ pub(crate) enum FactionPropertyLoadOutcome {
         factions: FactionPropertyLoadStaging,
         block: FactionInitialBlock,
     },
+}
+
+/// Безопасная граница старого `strcpy` имени member-а из DB-строки.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FactionMemberLoadBlock {
+    pub(crate) visible_len: usize,
+    pub(crate) capacity: usize,
+}
+
+/// Исход private owner-а `LoadFactionMembers` после готового property staging.
+pub(crate) enum FactionMembersLoadOutcome {
+    ReturnedTrue,
+    ReturnedFalse,
+    BlockedMissingFact(FactionMemberLoadBlock),
+}
+
+/// Безопасная граница короткого binary `Pronounce`: exact memcpy читал бы за
+/// полученный DB chunk, а внешняя реакция повреждённой строки не доказана.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FactionPronounceLoadBlock {
+    pub(crate) actual_size: usize,
+}
+
+pub(crate) enum FactionAbilityLoadOutcome {
+    ReturnedTrue,
+    ReturnedFalse,
+    BlockedMissingFact(FactionPronounceLoadBlock),
+}
+
+/// Итог верхнего `LoadAllFaction` до передачи готовой map парному controller-owner.
+pub(crate) enum FactionLoadOutcome {
+    ReturnedTrue { factions: FactionPropertyLoadStaging },
+    ReturnedFalse { factions: FactionPropertyLoadStaging },
+    BlockedInitial { factions: FactionPropertyLoadStaging, block: FactionInitialBlock },
+    BlockedMember { factions: FactionPropertyLoadStaging, block: FactionMemberLoadBlock },
+    BlockedPronounce { factions: FactionPropertyLoadStaging, block: FactionPronounceLoadBlock },
 }
 
 /// Scalar-поля property-группы одной достигнутой save-копии `CFaction`.
@@ -345,6 +387,10 @@ pub(crate) struct RsFactionNotice {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum RsFactionOperation {
     LoadFactionProperty,
+    LoadFactionMembers,
+    LoadLeaveWords,
+    LoadAbility,
+    LoadFactionApplyPersons,
     SaveFaction,
     DeleteFaction,
     SaveFactionProperty,
@@ -365,6 +411,7 @@ pub(crate) enum RsFactionSaveError {
     MissingSettings,
     Connection(WorldDatabaseConnectionError),
     MissingRequiredValue(&'static str),
+    MissingFaction { faction_id: i32 },
 }
 
 impl fmt::Display for RsFactionSaveError {
@@ -381,6 +428,9 @@ impl fmt::Display for RsFactionSaveError {
             Self::MissingRequiredValue(column) => {
                 write!(formatter, "в faction DB отсутствует обязательное поле {column}")
             }
+            Self::MissingFaction { faction_id } => {
+                write!(formatter, "не найдена faction {faction_id} для member DB-строки")
+            }
         }
     }
 }
@@ -393,7 +443,8 @@ impl Error for RsFactionSaveError {
             Self::MissingConnection
             | Self::MissingPropertyRow
             | Self::MissingSettings
-            | Self::MissingRequiredValue(_) => None,
+            | Self::MissingRequiredValue(_)
+            | Self::MissingFaction { .. } => None,
         }
     }
 }
@@ -425,6 +476,7 @@ impl From<tiberius::error::Error> for RsFactionDatabaseError {
 enum FactionLoadReadError {
     Database(tiberius::error::Error),
     MissingRequiredValue(&'static str),
+    MissingFaction { faction_id: i32 },
 }
 
 impl From<tiberius::error::Error> for FactionLoadReadError {
@@ -438,6 +490,7 @@ impl From<FactionLoadReadError> for RsFactionSaveError {
         match error {
             FactionLoadReadError::Database(error) => Self::Database(error.into()),
             FactionLoadReadError::MissingRequiredValue(column) => Self::MissingRequiredValue(column),
+            FactionLoadReadError::MissingFaction { faction_id } => Self::MissingFaction { faction_id },
         }
     }
 }
@@ -540,8 +593,464 @@ fn read_faction_database_base_state(
     })
 }
 
+async fn load_faction_members_rows(
+    connection: &mut WorldTdsClient,
+    factions: &mut FactionPropertyLoadStaging,
+    notices: &mut VecDeque<RsFactionNotice>,
+) -> FactionMembersLoadOutcome {
+    let stream = match connection.simple_query(LOAD_FACTION_MEMBERS_SQL).await {
+        Ok(stream) => stream,
+        Err(error) => {
+            notices.push_back(RsFactionNotice {
+                operation: RsFactionOperation::LoadFactionMembers,
+                error: RsFactionSaveError::Database(error.into()),
+            });
+            return FactionMembersLoadOutcome::ReturnedFalse;
+        }
+    };
+    let rows = match stream.into_first_result().await {
+        Ok(rows) => rows,
+        Err(error) => {
+            notices.push_back(RsFactionNotice {
+                operation: RsFactionOperation::LoadFactionMembers,
+                error: RsFactionSaveError::Database(error.into()),
+            });
+            return FactionMembersLoadOutcome::ReturnedFalse;
+        }
+    };
+
+    for row in &rows {
+        let faction_id = match read_faction_i32(row, "FactionID") {
+            Ok(faction_id) => faction_id,
+            Err(error) => {
+                notices.push_back(RsFactionNotice {
+                    operation: RsFactionOperation::LoadFactionMembers,
+                    error: error.into(),
+                });
+                return FactionMembersLoadOutcome::ReturnedFalse;
+            }
+        };
+        let Some(faction) = factions.get_mut(&faction_id) else {
+            // Exact owner печатает `LoadGuildMembers: guild id not exist.` и
+            // только MoveNext; остальные поля текущей строки он не читает.
+            notices.push_back(RsFactionNotice {
+                operation: RsFactionOperation::LoadFactionMembers,
+                error: RsFactionSaveError::MissingFaction { faction_id },
+            });
+            continue;
+        };
+        let member = match read_faction_member(row) {
+            Ok(member) => member,
+            Err(error) => {
+                notices.push_back(RsFactionNotice {
+                    operation: RsFactionOperation::LoadFactionMembers,
+                    error: error.into(),
+                });
+                return FactionMembersLoadOutcome::ReturnedFalse;
+            }
+        };
+        let name_length = visible_legacy_text_len(&member.name);
+        if name_length >= 32 {
+            // `strcpy(local_120[32], Name)` выходил за стек. Нет точного
+            // внешнего результата corrupted row, поэтому не дополняем/режем.
+            return FactionMembersLoadOutcome::BlockedMissingFact(FactionMemberLoadBlock {
+                visible_len: name_length,
+                capacity: 32,
+            });
+        }
+        faction.load_database_member(member.member);
+    }
+    FactionMembersLoadOutcome::ReturnedTrue
+}
+
+struct FactionMemberDatabaseRow {
+    name: Vec<u8>,
+    member: TagMemInfo,
+}
+
+fn read_faction_member(row: &Row) -> Result<FactionMemberDatabaseRow, FactionLoadReadError> {
+    let name = read_faction_text(row, "Name")?;
+    let visible_name = visible_legacy_text(&name);
+    if visible_name.len() >= 32 {
+        // Возвращаем исходные bytes в row-промежутке, чтобы caller сохранил
+        // prefix и выразил отдельную safe-границу без DB notice.
+        return Ok(FactionMemberDatabaseRow {
+            name,
+            member: TagMemInfo::from_complete_fields(
+                0,
+                [0; 32],
+                0,
+                0,
+                0,
+                [0; 64],
+                [EPurviewOwnState::No; 11],
+                [0; 64],
+                TagTimeValue {
+                    year: 0,
+                    month: 0,
+                    day_of_week: 0,
+                    day: 0,
+                    hour: 0,
+                    minute: 0,
+                    second: 0,
+                    milliseconds: 0,
+                },
+                false,
+            ),
+        });
+    }
+    let mut member_name = [0; 32];
+    member_name[..visible_name.len()].copy_from_slice(visible_name);
+    let title = read_faction_text(row, "Title")?;
+    let mut member_title = [0; 64];
+    // Exact проверял ANSI `std::string::size() < 0x15`; long title оставлял
+    // C-string пустой, а не обрезанный.
+    let visible_title = visible_legacy_text(&title);
+    if visible_title.len() < 0x15 {
+        member_title[..visible_title.len()].copy_from_slice(visible_title);
+    }
+    Ok(FactionMemberDatabaseRow {
+        name,
+        member: TagMemInfo::from_complete_fields(
+            read_faction_i32(row, "PlayerID")?,
+            member_name,
+            read_faction_i32(row, "Levels")?,
+            read_faction_i32(row, "Occupation")?,
+            read_faction_i32(row, "MemberLvl")?,
+            member_title,
+            read_faction_member_purview(row)?,
+            [0; 64],
+            read_faction_time(row, "LastOnlineTime")?,
+            read_faction_bool(row, "bControbute")?,
+        ),
+    })
+}
+
+fn read_faction_member_purview(
+    row: &Row,
+) -> Result<[EPurviewOwnState; 11], FactionLoadReadError> {
+    const COLUMNS: [&str; 11] = [
+        "PV_Disband",
+        "PV_Exit",
+        "PV_DubJobLvl",
+        "PV_ConMem",
+        "PV_FireOut",
+        "PV_Pronounce",
+        "PV_LeaveWord",
+        "PV_EditLeaveWord",
+        "PV_ObtainTax",
+        "PV_OperCityGate",
+        "PV_EndueROR",
+    ];
+    let mut purview = [EPurviewOwnState::No; 11];
+    for (index, column) in COLUMNS.into_iter().enumerate() {
+        purview[index] = match read_faction_i32(row, column)? {
+            0 => EPurviewOwnState::No,
+            1 => EPurviewOwnState::Forbid,
+            2 => EPurviewOwnState::Permit,
+            // C++ записывал arbitrary signed `long` в enum storage. Safe
+            // Rust не materialize-ит invalid enum и не выдумывает его wire.
+            _ => return Err(FactionLoadReadError::MissingRequiredValue(column)),
+        };
+    }
+    Ok(purview)
+}
+
+fn visible_legacy_text(source: &[u8]) -> &[u8] {
+    source
+        .iter()
+        .position(|byte| *byte == 0)
+        .map_or(source, |end| &source[..end])
+}
+
+fn visible_legacy_text_len(source: &[u8]) -> usize {
+    visible_legacy_text(source).len()
+}
+
+async fn query_faction_rows(
+    connection: &mut WorldTdsClient,
+    sql: &str,
+) -> Result<Vec<Row>, tiberius::error::Error> {
+    connection.simple_query(sql).await?.into_first_result().await
+}
+
+async fn load_faction_property_rows(
+    connection: &mut WorldTdsClient,
+    master_title: &[u8],
+    game: &CGame,
+    parameters: &COrganizingParam,
+    notices: &mut VecDeque<RsFactionNotice>,
+) -> FactionPropertyLoadOutcome {
+    let rows = match query_faction_rows(connection, LOAD_FACTION_PROPERTY_SQL).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            notices.push_back(RsFactionNotice { operation: RsFactionOperation::LoadFactionProperty, error: RsFactionSaveError::Database(error.into()) });
+            return FactionPropertyLoadOutcome::ReturnedFalse { factions: BTreeMap::new() };
+        }
+    };
+    let mut factions = BTreeMap::new();
+    for row in &rows {
+        let state = match read_faction_database_base_state(row) {
+            Ok(state) => state,
+            Err(error) => {
+                notices.push_back(RsFactionNotice { operation: RsFactionOperation::LoadFactionProperty, error: error.into() });
+                return FactionPropertyLoadOutcome::ReturnedFalse { factions };
+            }
+        };
+        let faction_id = state.faction_id;
+        match CFaction::from_database_base_state(state, master_title, game, parameters) {
+            Ok(faction) => { factions.insert(faction_id, faction); }
+            Err(block) => return FactionPropertyLoadOutcome::BlockedMissingFact { factions, block },
+        }
+    }
+    FactionPropertyLoadOutcome::ReturnedTrue { factions }
+}
+
+async fn load_faction_leave_words_rows(
+    connection: &mut WorldTdsClient,
+    factions: &mut FactionPropertyLoadStaging,
+    notices: &mut VecDeque<RsFactionNotice>,
+) -> bool {
+    let rows = match query_faction_rows(connection, LOAD_FACTION_LEAVE_WORDS_SQL).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            notices.push_back(RsFactionNotice {
+                operation: RsFactionOperation::LoadLeaveWords,
+                error: RsFactionSaveError::Database(error.into()),
+            });
+            return false;
+        }
+    };
+    for row in &rows {
+        let faction_id = match read_faction_i32(row, "FactionID") {
+            Ok(value) => value,
+            Err(error) => {
+                notices.push_back(RsFactionNotice {
+                    operation: RsFactionOperation::LoadLeaveWords,
+                    error: error.into(),
+                });
+                return false;
+            }
+        };
+        let Some(faction) = factions.get_mut(&faction_id) else {
+            notices.push_back(RsFactionNotice {
+                operation: RsFactionOperation::LoadLeaveWords,
+                error: RsFactionSaveError::MissingFaction { faction_id },
+            });
+            continue;
+        };
+        let leave_word = match read_faction_leave_word(row) {
+            Ok(value) => value,
+            Err(error) => {
+                notices.push_back(RsFactionNotice {
+                    operation: RsFactionOperation::LoadLeaveWords,
+                    error: error.into(),
+                });
+                return false;
+            }
+        };
+        let _ = faction.load_leave_word(leave_word);
+    }
+    true
+}
+
+fn read_faction_leave_word(row: &Row) -> Result<TagLeaveWord, FactionLoadReadError> {
+    let name = read_faction_text(row, "Name")?;
+    let content = read_faction_text(row, "Content")?;
+    let mut fixed_name = [0; 20];
+    let mut fixed_content = [0; 212];
+    let visible_name = visible_legacy_text(&name);
+    let visible_content = visible_legacy_text(&content);
+    // Exact оставлял пустое Content при length >= 201; Name был ограничен
+    // DB-схемой. Для corrupt Name >=20 owner не создаёт unsafe C-string.
+    if visible_name.len() < fixed_name.len() {
+        fixed_name[..visible_name.len()].copy_from_slice(visible_name);
+    }
+    if visible_content.len() < 0xC9 {
+        fixed_content[..visible_content.len()].copy_from_slice(visible_content);
+    }
+    Ok(TagLeaveWord::from_complete_fields(
+        read_faction_i32(row, "ID")?,
+        read_faction_i32(row, "LeaveWordPlayerID")?,
+        fixed_name,
+        read_faction_time(row, "LeaveWordTime")?,
+        fixed_content,
+    ))
+}
+
+async fn load_faction_apply_persons_rows(
+    connection: &mut WorldTdsClient,
+    factions: &mut FactionPropertyLoadStaging,
+    notices: &mut VecDeque<RsFactionNotice>,
+) -> bool {
+    let rows = match query_faction_rows(connection, LOAD_FACTION_APPLY_PERSONS_SQL).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            notices.push_back(RsFactionNotice {
+                operation: RsFactionOperation::LoadFactionApplyPersons,
+                error: RsFactionSaveError::Database(error.into()),
+            });
+            return false;
+        }
+    };
+    for row in &rows {
+        let faction_id = match read_faction_i32(row, "FactionID") {
+            Ok(value) => value,
+            Err(error) => {
+                notices.push_back(RsFactionNotice {
+                    operation: RsFactionOperation::LoadFactionApplyPersons,
+                    error: error.into(),
+                });
+                return false;
+            }
+        };
+        let Some(faction) = factions.get_mut(&faction_id) else {
+            notices.push_back(RsFactionNotice {
+                operation: RsFactionOperation::LoadFactionApplyPersons,
+                error: RsFactionSaveError::MissingFaction { faction_id },
+            });
+            continue;
+        };
+        let name = match read_faction_text(row, "Name") {
+            Ok(name) => name,
+            Err(error) => {
+                notices.push_back(RsFactionNotice {
+                    operation: RsFactionOperation::LoadFactionApplyPersons,
+                    error: error.into(),
+                });
+                return false;
+            }
+        };
+        let mut fixed_name = [0; 20];
+        let visible_name = visible_legacy_text(&name);
+        if visible_name.len() < fixed_name.len() {
+            fixed_name[..visible_name.len()].copy_from_slice(visible_name);
+        }
+        let person = match (|| {
+            Ok::<_, FactionLoadReadError>(TagApplyPerson::from_complete_fields(
+                read_faction_i32(row, "PlayerID")?,
+                fixed_name,
+                read_faction_i32(row, "Occupation")?,
+                read_faction_i32(row, "Levels")?,
+            ))
+        })() {
+            Ok(value) => value,
+            Err(error) => {
+                notices.push_back(RsFactionNotice {
+                    operation: RsFactionOperation::LoadFactionApplyPersons,
+                    error: error.into(),
+                });
+                return false;
+            }
+        };
+        faction.load_database_apply_person(person);
+    }
+    true
+}
+
+async fn load_faction_ability_rows(
+    connection: &mut WorldTdsClient,
+    factions: &mut FactionPropertyLoadStaging,
+    notices: &mut VecDeque<RsFactionNotice>,
+) -> FactionAbilityLoadOutcome {
+    let rows = match query_faction_rows(connection, LOAD_FACTION_ABILITY_SQL).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            notices.push_back(RsFactionNotice {
+                operation: RsFactionOperation::LoadAbility,
+                error: RsFactionSaveError::Database(error.into()),
+            });
+            return FactionAbilityLoadOutcome::ReturnedFalse;
+        }
+    };
+    for row in &rows {
+        let faction_id = match read_faction_i32(row, "FactionID") {
+            Ok(value) => value,
+            Err(error) => {
+                notices.push_back(RsFactionNotice {
+                    operation: RsFactionOperation::LoadAbility,
+                    error: error.into(),
+                });
+                return FactionAbilityLoadOutcome::ReturnedFalse;
+            }
+        };
+        let Some(faction) = factions.get_mut(&faction_id) else {
+            notices.push_back(RsFactionNotice {
+                operation: RsFactionOperation::LoadAbility,
+                error: RsFactionSaveError::MissingFaction { faction_id },
+            });
+            continue;
+        };
+        match read_faction_ability(row) {
+            Ok((pronounce, icon_time)) => {
+                if let Some(pronounce) = pronounce {
+                    faction.load_database_pronounce(pronounce);
+                }
+                faction.load_database_icon_upload_time(icon_time);
+            }
+            Err(FactionAbilityReadError::ShortPronounce(actual_size)) => {
+                return FactionAbilityLoadOutcome::BlockedMissingFact(
+                    FactionPronounceLoadBlock { actual_size },
+                );
+            }
+            Err(FactionAbilityReadError::Read(error)) => {
+                // Exact LoadAbility считал false private helper-а, печатал
+                // failure и переходил к следующему recordset row.
+                notices.push_back(RsFactionNotice {
+                    operation: RsFactionOperation::LoadAbility,
+                    error: error.into(),
+                });
+            }
+        }
+    }
+    FactionAbilityLoadOutcome::ReturnedTrue
+}
+
+enum FactionAbilityReadError {
+    Read(FactionLoadReadError),
+    ShortPronounce(usize),
+}
+
+fn read_faction_binary<'row>(
+    row: &'row Row,
+    column: &'static str,
+) -> Result<Option<&'row [u8]>, FactionLoadReadError> {
+    match row.try_get::<&[u8], _>(column) {
+        Ok(value) => Ok(value),
+        Err(error) => Err(FactionLoadReadError::Database(error)),
+    }
+}
+
+fn read_faction_ability(
+    row: &Row,
+) -> Result<(Option<TagPronounceWord>, TagTimeValue), FactionAbilityReadError> {
+    let pronounce_bytes = read_faction_binary(row, "Pronounce")
+        .map_err(FactionAbilityReadError::Read)?;
+    let pronounce = match pronounce_bytes {
+        None | Some([]) => None,
+        Some(bytes) => TagPronounceWord::from_database_blob(bytes)
+            .ok_or(FactionAbilityReadError::ShortPronounce(bytes.len()))
+            .map(Some)?,
+    };
+    // Raw `LoadIconData` retrieves this chunk but omits every write to
+    // `m_IconData`; reading it still preserves the same DB-type failure path.
+    let _ = read_faction_binary(row, "IconData").map_err(FactionAbilityReadError::Read)?;
+    let icon_time = read_faction_time(row, "LastUploadIconDataTime")
+        .map_err(FactionAbilityReadError::Read)?;
+    Ok((pronounce, icon_time))
+}
+
 /// Узкая объектная граница достигнутой стадии исходного `CRsFaction`.
 pub(crate) trait RsFactionOwner {
+    /// Выполняет полный exact порядок пяти load-owner-ов на одном World DB
+    /// connection и возвращает ready-to-publish faction staging map.
+    async fn load_all_factions(
+        &mut self,
+        master_title: &[u8],
+        game: &CGame,
+        parameters: &COrganizingParam,
+    ) -> FactionLoadOutcome;
+
     /// Открывает отдельное World DB соединение и materialize-ит только
     /// `LoadFactionProperty`; оставшиеся load-owner-ы пока не смешиваются с
     /// этим staging map.
@@ -630,6 +1139,53 @@ impl TiberiusRsFaction {
 }
 
 impl RsFactionOwner for TiberiusRsFaction {
+    async fn load_all_factions(
+        &mut self,
+        master_title: &[u8],
+        game: &CGame,
+        parameters: &COrganizingParam,
+    ) -> FactionLoadOutcome {
+        let Some(settings) = self.settings.clone() else {
+            self.notices.push_back(RsFactionNotice { operation: RsFactionOperation::LoadFactionProperty, error: RsFactionSaveError::MissingSettings });
+            return FactionLoadOutcome::ReturnedFalse { factions: BTreeMap::new() };
+        };
+        let mut connection = match settings.connect().await {
+            Ok(connection) => connection,
+            Err(error) => {
+                self.notices.push_back(RsFactionNotice { operation: RsFactionOperation::LoadFactionProperty, error: RsFactionSaveError::Connection(error) });
+                return FactionLoadOutcome::ReturnedFalse { factions: BTreeMap::new() };
+            }
+        };
+        let mut factions = match load_faction_property_rows(&mut connection, master_title, game, parameters, &mut self.notices).await {
+            FactionPropertyLoadOutcome::ReturnedTrue { factions } => factions,
+            FactionPropertyLoadOutcome::ReturnedFalse { factions } => return FactionLoadOutcome::ReturnedFalse { factions },
+            FactionPropertyLoadOutcome::BlockedMissingFact { factions, block } => return FactionLoadOutcome::BlockedInitial { factions, block },
+        };
+        match load_faction_members_rows(&mut connection, &mut factions, &mut self.notices).await {
+            FactionMembersLoadOutcome::ReturnedTrue => {}
+            FactionMembersLoadOutcome::ReturnedFalse => return FactionLoadOutcome::ReturnedFalse { factions },
+            FactionMembersLoadOutcome::BlockedMissingFact(block) => return FactionLoadOutcome::BlockedMember { factions, block },
+        }
+        if !load_faction_leave_words_rows(&mut connection, &mut factions, &mut self.notices).await {
+            return FactionLoadOutcome::ReturnedFalse { factions };
+        }
+        match load_faction_ability_rows(&mut connection, &mut factions, &mut self.notices).await {
+            FactionAbilityLoadOutcome::ReturnedTrue => {}
+            FactionAbilityLoadOutcome::ReturnedFalse => return FactionLoadOutcome::ReturnedFalse { factions },
+            FactionAbilityLoadOutcome::BlockedMissingFact(block) => return FactionLoadOutcome::BlockedPronounce { factions, block },
+        }
+        if !load_faction_apply_persons_rows(&mut connection, &mut factions, &mut self.notices).await {
+            return FactionLoadOutcome::ReturnedFalse { factions };
+        }
+        for faction in factions.values_mut() {
+            if faction.complete_database_load(parameters).is_err() {
+                self.notices.push_back(RsFactionNotice { operation: RsFactionOperation::LoadFactionProperty, error: RsFactionSaveError::MissingRequiredValue("CFaction::m_Property") });
+                return FactionLoadOutcome::ReturnedFalse { factions };
+            }
+        }
+        FactionLoadOutcome::ReturnedTrue { factions }
+    }
+
     async fn load_faction_property(
         &mut self,
         master_title: &[u8],

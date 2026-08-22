@@ -2564,6 +2564,41 @@ impl TagPronounceWord {
         }
     }
 
+    /// Копирует fixed `tagPronounceWord` из binary DB chunk безопасным
+    /// field-wise разбором вместо старого `SafeArrayAccessData` + `memcpy`.
+    pub(crate) fn from_database_blob(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < PRONOUNCE_DATA_SIZE {
+            return None;
+        }
+        let bytes = &bytes[..PRONOUNCE_DATA_SIZE];
+        let player_id = i32::from_le_bytes(bytes[0..4].try_into().ok()?);
+        let mut name = [0; PRONOUNCE_NAME_CAPACITY];
+        name.copy_from_slice(&bytes[4..0x18]);
+        let time_values: [u16; 8] = bytes[0x18..0x28]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>()
+            .try_into()
+            .ok()?;
+        let mut content = [0; PRONOUNCE_CONTENT_CAPACITY];
+        content.copy_from_slice(&bytes[0x28..PRONOUNCE_DATA_SIZE]);
+        Some(Self::from_complete_fields(
+            player_id,
+            name,
+            TagTimeValue {
+                year: time_values[0],
+                month: time_values[1],
+                day_of_week: time_values[2],
+                day: time_values[3],
+                hour: time_values[4],
+                minute: time_values[5],
+                second: time_values[6],
+                milliseconds: time_values[7],
+            },
+            content,
+        ))
+    }
+
     fn name_wire_bytes(&self) -> Result<&[u8], UnterminatedPronounceField> {
         let Some(terminator) = self.name.iter().position(|byte| *byte == 0) else {
             return Err(UnterminatedPronounceField {
@@ -2894,6 +2929,53 @@ impl CFaction {
         faction.goods_war_last_win_time = state.goods_war_last_win_time;
         faction.change_data_type = 0;
         Ok(faction)
+    }
+
+    /// Вставляет одну строку private DB owner-а `LoadFactionMembers`.
+    ///
+    /// `std::map::operator[]` заменял duplicate player ID последней строкой;
+    /// Rust сохраняет именно опубликованное значение, но освобождает прежнее
+    /// value обычным ownership вместо старой внутренней lifetime-механики.
+    /// Загрузка не ставит dirty-bit и не публикует сетевых сообщений.
+    pub(crate) fn load_database_member(&mut self, member: TagMemInfo) {
+        self.members.insert(member.id, member);
+    }
+
+    /// Вставляет одну DB-строку `CSL_Faction_Apply` после join с player base.
+    /// Duplicate key сохраняет последнее значение старого `map::operator[]`.
+    pub(crate) fn load_database_apply_person(&mut self, person: TagApplyPerson) {
+        self.apply_persons.insert(person.id, person);
+    }
+
+    /// Применяет ровно `0x828` байт поля `Pronounce` из `LoadFactionPronounce`.
+    /// Загрузка не меняет dirty-bit и не рассылает обновление клиентам.
+    pub(crate) fn load_database_pronounce(&mut self, pronounce: TagPronounceWord) {
+        self.pronounce = pronounce;
+    }
+
+    /// `LoadIconData` в exact EXE читал blob, но не копировал его в `m_IconData`;
+    /// наблюдаемое присваивание относится только к этому времени.
+    pub(crate) fn load_database_icon_upload_time(&mut self, time: TagTimeValue) {
+        self.last_upload_icon_time = time;
+    }
+
+    /// Завершает DB-prefix `LoadAllFaction` перед публикацией в controller map.
+    ///
+    /// Старый owner перезаписывает MemberNums фактическим размером map, затем
+    /// вызывает `InitialPropertyByLvl`, игнорируя его bool, и очищает dirty
+    /// mask. Никаких client/event side effect этот этап не имеет.
+    pub(crate) fn complete_database_load(
+        &mut self,
+        parameters: &COrganizingParam,
+    ) -> Result<(), FactionInitialPropertyBlock> {
+        let property = self
+            .base_property
+            .as_mut()
+            .ok_or(FactionInitialPropertyBlock)?;
+        property.write_signed(0x14, self.members.len() as i32);
+        let _ = self.initial_property_by_level(parameters)?;
+        self.set_change_data(0);
+        Ok(())
     }
 
     /// Возвращает исходный signed `m_lID`.
