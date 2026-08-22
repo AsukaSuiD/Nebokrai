@@ -1,12 +1,19 @@
 //! DB-владелец `CRsGenVar` исторического WorldServer из `rsgenvar.cpp`.
 //!
-//! Статус `Save` RVA `0x000FFE10` — `IMPLEMENTED`; constructor, destructor и
-//! `Load` ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Статусы `Load` RVA `0x000FF5A0` и `Save` `0x000FFE10` — `IMPLEMENTED`;
+//! constructor и destructor ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
 //! исходный путь PDB:
 //! `e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsgenvar.cpp`.
+//!
+//! Exact `Load` открывает самостоятельные connection/recordset, выполняет
+//! literal `SELECT * FROM CSL_GENVAR` и в recordset-order передаёт `VarName`,
+//! `SValue`, `CValue` в `CVariableList::LoadOneVar`. Любой ADO/field отказ
+//! возвращает `false`, оставляя уже применённый prefix; `LoadVarData` в
+//! `CGame::Init` игнорирует этот bool. `WorldDatabaseSettings`/Tiberius
+//! заменяют только ADO/COM lifetime, а ANSI-поля снова кодируются в CP1251.
 //!
 //! Exact EXE `0x004FFE10..0x005002C0` подтверждает цикл по всем переменным.
 //! Пустое имя пропускается. Для остальных строк выполняется буквальный
@@ -36,9 +43,14 @@ use std::error::Error;
 use std::fmt;
 
 use encoding_rs::WINDOWS_1251;
+use tiberius::{Query, Row};
 
-use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
-use crate::worldserver::appworld::script::variablelist::VariableListSaveSource;
+use crate::dbaccess::worlddb::rssetup::{
+    WorldDatabaseConnectionError, WorldDatabaseSettings, WorldTdsClient,
+};
+use crate::worldserver::appworld::script::variablelist::{
+    CVariableList, VariableDatabaseLoadDisposition, VariableListSaveSource,
+};
 
 const LEGACY_SQL_BUFFER_CAPACITY: usize = 1024;
 const SELECT_PREFIX: &[u8] = b"SELECT * FROM CSL_GENVAR WHERE VarName = '";
@@ -50,6 +62,7 @@ const INSERT_SUFFIX: &[u8] = b"')";
 const UPDATE_PREFIX: &[u8] = b"UPDATE CSL_GENVAR SET CValue='";
 const UPDATE_MIDDLE: &[u8] = b"' WHERE VarName = '";
 const UPDATE_SUFFIX: &[u8] = b"'";
+const LOAD_GENERAL_VARIABLES_SQL: &str = "SELECT * FROM CSL_GENVAR";
 
 /// Вид исходного SQL, для которого не доказано поведение buffer overflow.
 #[derive(Clone, Copy, Debug)]
@@ -76,6 +89,13 @@ pub(crate) enum GenVarSaveOutcome {
     BlockedMissingFact(GenVarSqlBufferBlock),
 }
 
+/// Bool-результат самостоятельного `CRsGenVar::Load` с уже применённым prefix.
+#[derive(Debug)]
+pub(crate) enum GenVarLoadOutcome {
+    ReturnedTrue { loaded_rows: usize, applied_rows: usize },
+    ReturnedFalse { loaded_rows: usize, applied_rows: usize },
+}
+
 /// Этап, на котором исходный ADO-вызов отказал.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum GenVarDatabaseOperation {
@@ -87,6 +107,15 @@ pub(crate) enum GenVarDatabaseOperation {
 /// Структурированная замена исходных `PrintErr`/SQL-file ветвей.
 #[derive(Debug)]
 pub(crate) enum RsGenVarNotice {
+    LoadSettingsMissing,
+    LoadConnectionFailed(WorldDatabaseConnectionError),
+    LoadQueryFailed(RsGenVarDatabaseError),
+    LoadRowMissingValue { row_index: usize, column: &'static str },
+    LoadRowFailed {
+        row_index: usize,
+        column: &'static str,
+        error: RsGenVarDatabaseError,
+    },
     SaveFailed {
         variable_index: usize,
         operation: GenVarDatabaseOperation,
@@ -127,6 +156,10 @@ impl From<tiberius::error::Error> for RsGenVarDatabaseError {
 
 /// Узкая объектная граница достигнутого `CRsGenVar::Save`.
 pub(crate) trait RsGenVarOwner {
+    /// Открывает отдельное World DB connection и применяет recordset в его
+    /// исходном порядке к уже опубликованному списку.
+    async fn load_general_variables(&mut self, variables: &mut CVariableList) -> GenVarLoadOutcome;
+
     /// Сохраняет список внутри уже начатой caller-транзакции.
     async fn save<S: VariableListSaveSource>(
         &mut self,
@@ -141,10 +174,73 @@ pub(crate) trait RsGenVarOwner {
 /// Linux/TDS-замена достигнутой части исходного `CRsGenVar`.
 #[derive(Default)]
 pub(crate) struct TiberiusRsGenVar {
+    settings: Option<WorldDatabaseSettings>,
     notices: VecDeque<RsGenVarNotice>,
 }
 
+impl TiberiusRsGenVar {
+    pub(crate) fn new(settings: WorldDatabaseSettings) -> Self {
+        Self {
+            settings: Some(settings),
+            notices: VecDeque::new(),
+        }
+    }
+}
+
 impl RsGenVarOwner for TiberiusRsGenVar {
+    async fn load_general_variables(&mut self, variables: &mut CVariableList) -> GenVarLoadOutcome {
+        let Some(settings) = self.settings.as_ref() else {
+            self.notices.push_back(RsGenVarNotice::LoadSettingsMissing);
+            return GenVarLoadOutcome::ReturnedFalse { loaded_rows: 0, applied_rows: 0 };
+        };
+        let mut connection = match settings.connect().await {
+            Ok(connection) => connection,
+            Err(error) => {
+                self.notices.push_back(RsGenVarNotice::LoadConnectionFailed(error));
+                return GenVarLoadOutcome::ReturnedFalse { loaded_rows: 0, applied_rows: 0 };
+            }
+        };
+        let stream = match Query::new(LOAD_GENERAL_VARIABLES_SQL).query(&mut connection).await {
+            Ok(stream) => stream,
+            Err(error) => {
+                self.notices.push_back(RsGenVarNotice::LoadQueryFailed(error.into()));
+                return GenVarLoadOutcome::ReturnedFalse { loaded_rows: 0, applied_rows: 0 };
+            }
+        };
+        let rows = match stream.into_first_result().await {
+            Ok(rows) => rows,
+            Err(error) => {
+                self.notices.push_back(RsGenVarNotice::LoadQueryFailed(error.into()));
+                return GenVarLoadOutcome::ReturnedFalse { loaded_rows: 0, applied_rows: 0 };
+            }
+        };
+        let mut applied_rows = 0;
+        for (row_index, row) in rows.iter().enumerate() {
+            macro_rules! field {
+                ($column:literal) => {
+                    match read_legacy_text(row, $column) {
+                        Ok(value) => value,
+                        Err(GenVarRowReadError::Missing) => {
+                            self.notices.push_back(RsGenVarNotice::LoadRowMissingValue { row_index, column: $column });
+                            return GenVarLoadOutcome::ReturnedFalse { loaded_rows: row_index, applied_rows };
+                        }
+                        Err(GenVarRowReadError::Database(error)) => {
+                            self.notices.push_back(RsGenVarNotice::LoadRowFailed { row_index, column: $column, error: error.into() });
+                            return GenVarLoadOutcome::ReturnedFalse { loaded_rows: row_index, applied_rows };
+                        }
+                    }
+                };
+            }
+            let name = field!("VarName");
+            let saved = field!("SValue");
+            let current = field!("CValue");
+            if !matches!(variables.load_one_var(&name, &saved, &current), VariableDatabaseLoadDisposition::NameNotDeclared) {
+                applied_rows += 1;
+            }
+        }
+        GenVarLoadOutcome::ReturnedTrue { loaded_rows: rows.len(), applied_rows }
+    }
+
     async fn save<S: VariableListSaveSource>(
         &mut self,
         variables: &S,
@@ -234,6 +330,22 @@ impl RsGenVarOwner for TiberiusRsGenVar {
 
     fn pop_notice(&mut self) -> Option<RsGenVarNotice> {
         self.notices.pop_front()
+    }
+}
+
+enum GenVarRowReadError {
+    Missing,
+    Database(tiberius::error::Error),
+}
+
+fn read_legacy_text(row: &Row, column: &'static str) -> Result<Vec<u8>, GenVarRowReadError> {
+    match row.try_get::<&str, _>(column) {
+        Ok(Some(value)) => {
+            let (encoded, _, _) = WINDOWS_1251.encode(value);
+            Ok(encoded.into_owned())
+        }
+        Ok(None) => Err(GenVarRowReadError::Missing),
+        Err(error) => Err(GenVarRowReadError::Database(error)),
     }
 }
 

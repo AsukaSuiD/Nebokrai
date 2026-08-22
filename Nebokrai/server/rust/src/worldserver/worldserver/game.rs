@@ -1200,7 +1200,7 @@ use crate::dbaccess::worlddb::rsenemyfactions::{
     EnemyFactionSaveSnapshot, RsEnemyFactionsOwner,
 };
 use crate::dbaccess::worlddb::rsfaction::RsFactionOwner;
-use crate::dbaccess::worlddb::rsgenvar::RsGenVarOwner;
+use crate::dbaccess::worlddb::rsgenvar::{GenVarLoadOutcome, RsGenVarOwner};
 use crate::dbaccess::worlddb::rsgodsbattle::{
     GodsBattleFactionXydSnapshot, GodsBattleNpcFactionSnapshot, RsGodsBattleOwner,
     TiberiusRsGodsBattle,
@@ -1818,6 +1818,7 @@ pub(crate) enum WorldGameInitEvent {
     RsSetupOwnerCreated(LoadedSetupIds),
     VoidOwner(WorldGameInitVoidOwner),
     GeneralVariableListLoaded(VariableListLoadReport),
+    GeneralVariableDataLoaded(GenVarLoadOutcome),
     TimeToReturnInitialized(TimeToReturnLoadReport),
     AttackCityInitialized(AttackCityLoadReport),
     AttackCityEnemyRelationsInitialized(AttackCityEnemyRelationReport),
@@ -1971,6 +1972,7 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     type Block;
     type PlayerDatabase: RsPlayerOwner;
     type EnemyFactionsDatabase: RsEnemyFactionsOwner;
+    type GeneralVariableDatabase: RsGenVarOwner;
 
     fn install_crash_reporter(&mut self);
     fn current_time_seconds(&mut self) -> i64;
@@ -2002,6 +2004,8 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     ) -> (&mut Self::PlayerDatabase, Option<&mut WorldTdsClient>);
     /// Отдельный DB-owner `CRsEnemyFactions` с самостоятельным connection.
     fn enemy_factions_database(&mut self) -> &mut Self::EnemyFactionsDatabase;
+    /// Отдельный DB-owner `CRsGenVar`, который сам открывает World connection.
+    fn general_variable_database(&mut self) -> &mut Self::GeneralVariableDatabase;
     /// Возвращает уже открытый Log DB connection техническому increment-owner-у.
     fn increment_log_database(&mut self) -> Option<&mut WorldTdsClient>;
     /// Возвращает уже открытый Log DB connection техническому auction-owner-у.
@@ -10709,12 +10713,17 @@ impl CGame {
         events.push(WorldGameInitEvent::GeneralVariableListLoaded(
             general_variable_load,
         ));
-        // `CRsGenVar::Load` открывает собственную ADO connection. Пока этот
-        // connection-owner не передаётся runtime adapter-ом, оставляем ровно
-        // DB-гидратацию отдельной границей, а не весь lifecycle списка.
-        context.initialize_void_owner(WorldGameInitVoidOwner::LoadGeneralVariableData);
-        events.push(WorldGameInitEvent::VoidOwner(
-            WorldGameInitVoidOwner::LoadGeneralVariableData,
+        let general_variable_data_load = context
+            .general_variable_database()
+            .load_general_variables(
+                general_variables
+                    .as_mut()
+                    .expect("owner опубликован перед CRsGenVar::Load"),
+            )
+            .await;
+        // `LoadVarData` был void: исходный Init не ветвился по bool Load.
+        events.push(WorldGameInitEvent::GeneralVariableDataLoaded(
+            general_variable_data_load,
         ));
 
         let increment_log_days = context.increment_log_days();
