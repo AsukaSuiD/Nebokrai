@@ -948,7 +948,12 @@
 //! `ltDBCountrys` под тем же save-lock. Nullable list-форма сохраняется для
 //! уже готовой Country save-фазы, хотя достигнутый generator создаёт только
 //! `Some`. `ClearDBData` country-list не трогал, поэтому его очистка не
-//! присваивается этому owner-у.
+//! присваивается этому owner-у. После точного `join_save_worker` успешного
+//! `Release` Rust отдельно уничтожает оставшиеся country/enemy snapshot-ы:
+//! штатный `GameThreadFunc` немедленно делает `DeleteGame`, а у plain
+//! snapshot-ов нет destructor side effects. Так исправляется только
+//! внутреннее удержание памяти после последнего DB-потребителя, не меняя
+//! `ClearDBData`, DB-порядок или observable release-последовательность.
 //!
 //! Numeric `GetRegion(long)` выполняет nullable lookup signed ключа в исходном
 //! `std::map<long, tagRegion>` без `operator[]`-вставки. Прямой
@@ -10093,6 +10098,18 @@ impl CGame {
         db_data.regions.clear();
     }
 
+    /// Освобождает snapshot-очереди, которые точный `ClearDBData` не трогал.
+    ///
+    /// Вызывается только после `join_save_worker` в normal `Release`: к этой
+    /// точке штатный `GameThreadFunc` уже не оставляет DB-потребителя и сразу
+    /// уничтожает `CGame`. У самих snapshot-значений нет callback/DB side
+    /// effects, поэтому это исправляет лишь внутреннее удержание owner-ов.
+    fn clear_release_only_db_snapshots(&self) {
+        let mut db_data = self.db_data.lock();
+        db_data.enemy_factions.clear();
+        db_data.countries.clear();
+    }
+
     /// Удваивает одинарные кавычки как исходный `CheckPoint`.
     ///
     /// Вход уже является доказанным видимым C-string prefix; отсутствие NUL в
@@ -11333,6 +11350,7 @@ impl CGame {
 
         let previous_handle = context.join_save_worker();
         events.push(WorldGameReleaseEvent::SaveWorkerJoined { previous_handle });
+        self.clear_release_only_db_snapshots();
 
         context.release_void_owner(WorldGameReleaseVoidOwner::ReleaseGoodsLinks);
         self.goods_links.clear();
