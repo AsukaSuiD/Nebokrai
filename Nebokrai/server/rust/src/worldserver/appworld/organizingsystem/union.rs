@@ -4200,10 +4200,13 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: tagVilWarSetup::tagVilWarSetup
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp
+// RUST: `villagewarsys::new_village_schedule` строит запись только после
+// записи парсером всех значимых полей; Rust не переносит промежуточные
+// неинициализированные ID полей и событий исходника.
 // RVA: 0x00069110
 // ADDRESS: 00469110
 // PROTOTYPE: undefined __thiscall tagVilWarSetup(void)
@@ -4242,10 +4245,12 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: tagVilWarSetup::tagVilWarSetup
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp
+// RUST: `VillageWarSetup: Clone` копирует все значимые поля и упорядоченный
+// `declaring_factions`; копирование списка MSVC заменено `Vec<i32>`.
 // RVA: 0x00069740
 // ADDRESS: 00469740
 // PROTOTYPE: undefined __thiscall tagVilWarSetup(tagVilWarSetup * param_1)
@@ -4256,10 +4261,12 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: tagVilWarSetup::operator=
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp
+// RUST: присваивание достигнутого состояния выражено заменой значения `VillageWarSetup`;
+// `Clone` сохраняет тот же набор полей, без STL self-assignment plumbing.
 // RVA: 0x00069860
 // ADDRESS: 00469860
 // PROTOTYPE: tagVilWarSetup * __thiscall operator=(tagVilWarSetup * param_1)
