@@ -2,8 +2,10 @@
 //!
 //! Статусы `LoadVarList` RVA `0x000A1320`, `LoadOneVar` `0x000A1680`,
 //! `SetVarValue` RVA `0x000A11B0/0x000A1240`, `SaveVarData` RVA `0x000A1930`
-//! и `AddToByteArray` RVA `0x000A1B10` — `IMPLEMENTED`; `LoadVarData` и
-//! остальные функции файла ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `AddToByteArray` RVA `0x000A1B10` и `LoadVarData` `0x000A1630` —
+//! `IMPLEMENTED`; только технические constructor/Release/GetArrayName и
+//! посторонний `CBattleFairyProperty::tagCompose` ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -57,7 +59,9 @@
 use std::error::Error;
 use std::fmt;
 
-use crate::dbaccess::worlddb::rsgenvar::{GenVarSaveOutcome, RsGenVarOwner};
+use crate::dbaccess::worlddb::rsgenvar::{
+    GenVarLoadOutcome, GenVarSaveOutcome, RsGenVarOwner,
+};
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -298,6 +302,19 @@ impl CVariableList {
         destination.extend_from_slice(&payload_length.to_le_bytes());
         destination.extend_from_slice(&payload);
         Ok(())
+    }
+
+    /// Точный `LoadVarData`: передаёт уже загруженный конфигурационный список
+    /// DB-owner-у и не меняет его bool-результат.
+    ///
+    /// Старый код находил `CGame::m_pRsGenVar` через singleton и игнорировал
+    /// итог `CRsGenVar::Load`; Rust делает владельца явным, поэтому caller
+    /// может сохранить это игнорирование или наблюдать результат отдельно.
+    pub(crate) async fn load_var_data<O: RsGenVarOwner>(
+        &mut self,
+        database: &mut O,
+    ) -> GenVarLoadOutcome {
+        database.load_general_variables(self).await
     }
 }
 
@@ -704,7 +721,7 @@ pub(crate) async fn save_var_data<S: VariableListSaveSource, O: RsGenVarOwner>(
 
 // ============================================================================
 // FUNCTION: CVariableList::LoadVarList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\script\variablelist.cpp:177
@@ -718,7 +735,7 @@ pub(crate) async fn save_var_data<S: VariableListSaveSource, O: RsGenVarOwner>(
 
 // ============================================================================
 // FUNCTION: CVariableList::LoadVarData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\script\variablelist.cpp:447
@@ -732,7 +749,7 @@ pub(crate) async fn save_var_data<S: VariableListSaveSource, O: RsGenVarOwner>(
 
 // ============================================================================
 // FUNCTION: CVariableList::LoadOneVar
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\script\variablelist.cpp:60
@@ -746,7 +763,7 @@ pub(crate) async fn save_var_data<S: VariableListSaveSource, O: RsGenVarOwner>(
 
 // ============================================================================
 // FUNCTION: CVariableList::GetOneVar
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\script\variablelist.cpp:144
@@ -760,7 +777,7 @@ pub(crate) async fn save_var_data<S: VariableListSaveSource, O: RsGenVarOwner>(
 
 // ============================================================================
 // FUNCTION: CVariableList::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\script\variablelist.cpp:644
