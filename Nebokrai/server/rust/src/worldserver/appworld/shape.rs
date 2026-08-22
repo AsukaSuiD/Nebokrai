@@ -1,9 +1,9 @@
 //! Владелец базового shape-состояния исторического `WorldServer`.
 //!
-//! Статус достигнутого inherited `CBaseObject::GetName`,
-//! `CShape::GetRegionID` RVA `0x000530F0`, `CShape::SetRegionID` RVA
-//! `0x00053100`, `CShape::SetDir` RVA `0x00053170`, `CShape::SetState` RVA
-//! `0x000531D0`, `CShape::SetPosXY` RVA
+//! Статус достигнутого inherited `CBaseObject::GetName`, полного scalar
+//! accessor-набора `CShape`, `CShape::GetRegionID` RVA `0x000530F0`,
+//! `CShape::SetRegionID` RVA `0x00053100`, `CShape::SetDir` RVA `0x00053170`,
+//! `CShape::SetState` RVA `0x000531D0`, `CShape::SetPosXY` RVA
 //! `0x00053200`, `CShape::GetTileX/GetTileY` RVA `0x000D5120/0x000D5150`,
 //! `CShape::SetTileXY` RVA `0x000D5290`,
 //! `CShape::AddToByteArray` RVA `0x000D5180`,
@@ -55,6 +55,12 @@
 //! размеры старых классов `0x50/0x6C`, а текущий raw — непосредственный
 //! base-constructor call, поэтому дополнительное дизассемблирование не
 //! требовалось.
+//! `SetPosX/SetPosY` не присваивают поле напрямую: exact тела берут вторую
+//! координату через virtual getter и вызывают virtual `SetPosXY`. В
+//! достигнутых World vtable эти slots не override-ятся, поэтому композиция
+//! сохраняет те же X/Y и порядок чтения без искусственного virtual ABI.
+//! Destructor `CShape` только передаёт lifecycle в `CBaseObject`; Rust field
+//! ownership делает это автоматически.
 
 use std::error::Error;
 use std::fmt;
@@ -197,9 +203,19 @@ impl CShape {
         self.pos_x
     }
 
+    /// Повторяет `SetPosX`: сохраняет текущий Y и делегирует `SetPosXY`.
+    pub(crate) const fn set_pos_x(&mut self, pos_x: f32) {
+        self.set_pos_xy(pos_x, self.get_pos_y());
+    }
+
     /// Возвращает bit-exact Y исходного shape.
     pub(crate) const fn get_pos_y(&self) -> f32 {
         self.pos_y
+    }
+
+    /// Повторяет `SetPosY`: сохраняет текущий X и делегирует `SetPosXY`.
+    pub(crate) const fn set_pos_y(&mut self, pos_y: f32) {
+        self.set_pos_xy(self.get_pos_x(), pos_y);
     }
 
     /// Возвращает X-клетку с точным x87 truncation toward zero.
@@ -215,6 +231,16 @@ impl CShape {
     /// Возвращает signed direction исходного shape.
     pub(crate) const fn get_direction(&self) -> i32 {
         self.direction
+    }
+
+    /// Присваивает signed legacy `m_lPos` без дополнительных эффектов.
+    pub(crate) const fn set_position(&mut self, position: i32) {
+        self.position = position;
+    }
+
+    /// Возвращает bit-exact скорость shape.
+    pub(crate) const fn get_speed(&self) -> f32 {
+        self.speed
     }
 
     /// Присваивает signed region ID без проверки и дополнительных эффектов.
@@ -251,6 +277,21 @@ impl CShape {
     /// Присваивает полный unsigned 16-битный shape-state без побочных эффектов.
     pub(crate) const fn set_state(&mut self, state: u16) {
         self.state = state;
+    }
+
+    /// Возвращает полный unsigned 16-битный shape-state.
+    pub(crate) const fn get_state(&self) -> u16 {
+        self.state
+    }
+
+    /// Возвращает полный unsigned 16-битный shape-action.
+    pub(crate) const fn get_action(&self) -> u16 {
+        self.action
+    }
+
+    /// Присваивает полный unsigned 16-битный shape-action.
+    pub(crate) const fn set_action(&mut self, action: u16) {
+        self.action = action;
     }
 
     /// Дописывает base и shape части в точном legacy-порядке.
@@ -406,7 +447,7 @@ fn read_shape_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CShape::GetPosX
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\shape.h:73
@@ -420,7 +461,7 @@ fn read_shape_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CShape::SetPosX
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\shape.h:74
@@ -434,7 +475,7 @@ fn read_shape_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CShape::GetPosY
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\shape.h:75
@@ -448,7 +489,7 @@ fn read_shape_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CShape::SetPosY
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\shape.h:76
@@ -476,7 +517,7 @@ fn read_shape_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CShape::SetPos
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\shape.h:80
@@ -490,7 +531,7 @@ fn read_shape_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CShape::GetSpeed
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\shape.h:81
@@ -520,7 +561,7 @@ fn read_shape_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CShape::GetState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\shape.h:83
@@ -550,7 +591,7 @@ fn read_shape_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CShape::GetAction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\shape.h:85
@@ -564,7 +605,7 @@ fn read_shape_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CShape::SetAction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\shape.h:86
@@ -606,7 +647,7 @@ fn read_shape_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CShape::~CShape
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\shape.cpp:24
@@ -614,6 +655,7 @@ fn read_shape_array<const N: usize>(
 // ADDRESS: 004d5110
 // PROTOTYPE: void __thiscall ~CShape(void)
 //
+// IMPLEMENTED обычным Rust lifecycle `CBaseObject` field-а.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -674,7 +716,7 @@ fn read_shape_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CShape::GetDir
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\shape.h:77
