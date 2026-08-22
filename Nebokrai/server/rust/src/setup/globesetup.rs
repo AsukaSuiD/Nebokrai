@@ -1,7 +1,8 @@
 //! Глобальный gameplay snapshot исторического Miracle.
 //!
 //! Статус World `CGlobeSetup::AddToByteArray` RVA `0x00033470` и
-//! `GetBaseMaxRp` RVA `0x0002EFA0`: `IMPLEMENTED`; loaders, остальные accessors
+//! `GetBaseMaxRp` RVA `0x0002EFA0` и три auction accessors, прочитанные
+//! `CGame::GetOptMoneyJin` RVA `0x00002250`: `IMPLEMENTED`; loaders, остальные accessors
 //! и Game decoder side effects ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -37,6 +38,9 @@
 //! `0x006BA070/72/74/76`; относительно `m_stSetup 0x006B9C80` это PDB-поля
 //! `+0x3F0/+0x3F2/+0x3F4/+0x3F6`. Ветка сохраняет необычный общий случай
 //! переставленных level-порогов, а occupation вне нуля сразу возвращает `0`.
+//! `GetOptMoneyJin` exact `0x0040225E..0x004022D2` читает
+//! `fSxfJinMax/fSxfJinMin/fAuctionFactorC` по `+0xC98/+0xCA0/+0xCB0`;
+//! typed accessors ниже лишь накладывают эти PDB-offsets на тот же snapshot.
 
 use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 
@@ -56,6 +60,9 @@ const BASE_RP_LEVEL_2_OFFSET: usize = 0x3F2;
 const BASE_MAX_RP_LEVEL_1_OFFSET: usize = 0x3F4;
 const BASE_MAX_RP_LEVEL_2_OFFSET: usize = 0x3F6;
 const PLAYER_SPEED_OFFSET: usize = 0x7F8;
+const AUCTION_FEE_MAXIMUM_OFFSET: usize = 0xC98;
+const AUCTION_FEE_MINIMUM_OFFSET: usize = 0xCA0;
+const AUCTION_FACTOR_C_OFFSET: usize = 0xCB0;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -90,11 +97,22 @@ impl GlobeSetupSnapshot {
 
     /// Возвращает bit-exact `fPlayerSpeed` по PDB-offset `+0x7F8`.
     pub(crate) fn player_speed(&self) -> f32 {
-        f32::from_le_bytes(
-            self.bytes[PLAYER_SPEED_OFFSET..PLAYER_SPEED_OFFSET + 4]
-                .try_into()
-                .expect("PDB-offset находится внутри globe snapshot"),
-        )
+        self.read_f32(PLAYER_SPEED_OFFSET)
+    }
+
+    /// Возвращает exact `fSxfJinMax`, используемый комиссией аукциона.
+    pub(crate) fn auction_fee_maximum(&self) -> f32 {
+        self.read_f32(AUCTION_FEE_MAXIMUM_OFFSET)
+    }
+
+    /// Возвращает exact `fSxfJinMin`, используемый комиссией аукциона.
+    pub(crate) fn auction_fee_minimum(&self) -> f32 {
+        self.read_f32(AUCTION_FEE_MINIMUM_OFFSET)
+    }
+
+    /// Возвращает exact `fAuctionFactorC` для выплаты продавцу.
+    pub(crate) fn auction_factor_c(&self) -> f32 {
+        self.read_f32(AUCTION_FACTOR_C_OFFSET)
     }
 
     /// Повторяет exact `GetBaseMaxRp`: RP есть только у occupation `0`.
@@ -167,6 +185,14 @@ impl GlobeSetupSnapshot {
     pub(crate) fn total_jing_li_dan_count(&self) -> u16 {
         u16::from_le_bytes(
             self.bytes[TOTAL_JING_LI_DAN_COUNT_OFFSET..TOTAL_JING_LI_DAN_COUNT_OFFSET + 2]
+                .try_into()
+                .expect("PDB-offset находится внутри globe snapshot"),
+        )
+    }
+
+    fn read_f32(&self, offset: usize) -> f32 {
+        f32::from_le_bytes(
+            self.bytes[offset..offset + 4]
                 .try_into()
                 .expect("PDB-offset находится внутри globe snapshot"),
         )

@@ -5705,6 +5705,79 @@ pub(crate) struct WorldGoodsLink {
     payload: WorldGoodsLinkPayload,
 }
 
+/// Результат exact `CGame::GetOptMoneyJin` для одной аукционной цены.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldAuctionSellerMoney {
+    pub(crate) fee: i32,
+    pub(crate) seller_money_after_fee: i32,
+}
+
+/// Точно отбрасывает дробную часть произведения signed `long` на один `f32`.
+///
+/// EXE оставляет произведение в 80-битном x87 до `_ftol2`. Разложение IEEE-754
+/// в целую мантиссу и степень сохраняет этот результат без промежуточного
+/// округления Rust `f32`; только нештатный overflow/NaN получает определённое
+/// насыщение вместо неопределённого C++ float-to-long cast.
+fn truncate_scaled_legacy_money(amount: i32, factor: f32) -> i32 {
+    let bits = factor.to_bits();
+    let exponent = (bits >> 23) & 0xFF;
+    let fraction = bits & 0x007F_FFFF;
+    if exponent == 0xFF {
+        if fraction != 0 || amount == 0 {
+            return 0;
+        }
+        return if (amount < 0) ^ (bits >> 31 != 0) {
+            i32::MIN
+        } else {
+            i32::MAX
+        };
+    }
+
+    let (mantissa, binary_exponent) = if exponent == 0 {
+        (u128::from(fraction), -149)
+    } else {
+        (
+            u128::from((1 << 23) | fraction),
+            exponent as i32 - 127 - 23,
+        )
+    };
+    let magnitude = u128::from(amount.unsigned_abs()) * mantissa;
+    let magnitude = if binary_exponent >= 0 {
+        let shift = binary_exponent as u32;
+        if shift >= u128::BITS || magnitude > (u128::MAX >> shift) {
+            u128::MAX
+        } else {
+            magnitude << shift
+        }
+    } else {
+        magnitude
+            .checked_shr(binary_exponent.unsigned_abs())
+            .unwrap_or(0)
+    };
+    let negative = (amount < 0) ^ (bits >> 31 != 0);
+    if negative {
+        if magnitude >= 0x8000_0000 {
+            i32::MIN
+        } else {
+            -(magnitude as i32)
+        }
+    } else {
+        magnitude.min(i32::MAX as u128) as i32
+    }
+}
+
+fn truncate_legacy_money(value: f64) -> i32 {
+    if value.is_nan() {
+        0
+    } else if value >= f64::from(i32::MAX) {
+        i32::MAX
+    } else if value <= f64::from(i32::MIN) {
+        i32::MIN
+    } else {
+        value.trunc() as i32
+    }
+}
+
 impl WorldGoodsLink {
     fn placeholder() -> Self {
         Self {
@@ -6631,6 +6704,41 @@ impl CGame {
     /// placeholder для индекса `0`.
     pub(crate) fn find_goods_link(&self, index: u32) -> Option<&WorldGoodsLink> {
         self.goods_links.iter().find(|link| link.index == index)
+    }
+
+    /// Вычисляет комиссию и остаток продавца по exact World auction-контракту.
+    ///
+    /// `None` заменяет единственную исходную проверку nullable `CGoodsNode*`.
+    /// `dwMoneySeller` сначала читается как signed Windows `long`; затем EXE
+    /// умножает его на `fAuctionFactorC`, отбрасывает дробную часть и поочерёдно
+    /// ограничивает `fSxfJinMin/fSxfJinMax`. Целочисленное разложение factor-а
+    /// сохраняет x87-произведение без лишнего `f32`-округления. Невалидные и
+    /// out-of-range setup-значения определённо насыщаются вместо UB старого cast.
+    pub(crate) fn get_opt_money_jin(
+        &self,
+        globe_setup: &GlobeSetupSnapshot,
+        seller_money: Option<u32>,
+    ) -> Option<WorldAuctionSellerMoney> {
+        let seller_money = seller_money? as i32;
+        let mut fee =
+            truncate_scaled_legacy_money(seller_money, globe_setup.auction_factor_c());
+        if f64::from(fee) < f64::from(globe_setup.auction_fee_minimum()) {
+            fee = truncate_legacy_money(f64::from(globe_setup.auction_fee_minimum()));
+        }
+        if f64::from(globe_setup.auction_fee_maximum()) < f64::from(fee) {
+            fee = truncate_legacy_money(f64::from(globe_setup.auction_fee_maximum()));
+        }
+
+        let seller_money_after_fee = if fee <= seller_money {
+            seller_money.wrapping_sub(fee)
+        } else {
+            fee = seller_money;
+            0
+        };
+        Some(WorldAuctionSellerMoney {
+            fee,
+            seller_money_after_fee,
+        })
     }
 
     /// Возвращает byte-exact script buffer по case-sensitive normalized key.
@@ -19460,7 +19568,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::GetOptMoneyJin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5775
@@ -19468,6 +19576,8 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 00402250
 // PROTOTYPE: bool __thiscall GetOptMoneyJin(CGoodsNode * param_1, long * param_2, long * param_3)
 //
+// IMPLEMENTED_OWNER: `CGame::get_opt_money_jin`; `Option<u32>` заменяет
+// nullable goods-owner, а `WorldAuctionSellerMoney` — две output-ссылки.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
