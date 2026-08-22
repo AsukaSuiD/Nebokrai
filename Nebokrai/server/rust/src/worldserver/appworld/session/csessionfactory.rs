@@ -41,9 +41,10 @@
 //! доказанные `hash = key ^ 0xDEADBEEF`, mask/max-index growth и итоговый
 //! `(bucket, signed key)` порядок. Bucket nodes, iterator-vector, allocation и
 //! rehash pointer surgery являются удалённым STL noise. При 32-битном ID-
-//! collision исходник перезаписывал pointer без destructor; displaced owner
-//! поэтому удерживается до process-lifetime factory drop, а не уничтожается
-//! в момент замены.
+//! collision новая запись уже заменяет старую по тому же ключу, поэтому
+//! вытесненный owner недостижим из всех factory lookup. Rust освобождает его
+//! сразу: это устраняет старую pointer-утечку без изменения ID, registry-order
+//! либо какого-либо наблюдаемого session/plug side effect.
 //!
 //! Unserialize читает little-endian DWORD после каждого исходного `offset += 4`,
 //! создаёт owner, ищет его по возвращённому ID и делегирует virtual body. Ноль
@@ -352,8 +353,6 @@ pub(crate) struct CSessionFactory {
     next_plug_id: i32,
     sessions: LegacyMsvcHashRegistry<Box<dyn WorldSessionOwner>>,
     plugs: LegacyMsvcHashRegistry<Box<dyn WorldPlugOwner>>,
-    displaced_sessions: Vec<Box<dyn WorldSessionOwner>>,
-    displaced_plugs: Vec<Box<dyn WorldPlugOwner>>,
 }
 
 impl CSessionFactory {
@@ -364,8 +363,6 @@ impl CSessionFactory {
             next_plug_id: 1,
             sessions: LegacyMsvcHashRegistry::new(),
             plugs: LegacyMsvcHashRegistry::new(),
-            displaced_sessions: Vec::new(),
-            displaced_plugs: Vec::new(),
         }
     }
 
@@ -782,9 +779,7 @@ impl CSessionFactory {
         let session_id = self.next_session_id;
         self.next_session_id = self.next_session_id.wrapping_add(1);
         session.assign_factory_identity(TYPE_SESSION, session_id);
-        if let Some(displaced) = self.sessions.insert_or_replace(session_id, Some(session)) {
-            self.displaced_sessions.push(displaced);
-        }
+        drop(self.sessions.insert_or_replace(session_id, Some(session)));
         session_id
     }
 
@@ -807,9 +802,7 @@ impl CSessionFactory {
         self.next_plug_id = self.next_plug_id.wrapping_add(1);
         plug.assign_factory_identity(TYPE_PLUG, plug_id);
         plug.set_owner(owner_type, owner_id);
-        if let Some(displaced) = self.plugs.insert_or_replace(plug_id, Some(plug)) {
-            self.displaced_plugs.push(displaced);
-        }
+        drop(self.plugs.insert_or_replace(plug_id, Some(plug)));
         plug_id
     }
 
