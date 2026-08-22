@@ -370,6 +370,29 @@ impl CGoodsNode {
         node
     }
 
+    /// Создаёт `LoadMoneyById`-note после сериализации возвращаемого gold.
+    ///
+    /// Exact owner заполнял только amount, GUID, base-index, `STATE_BACK` и
+    /// goods-byte-array. `m_btGoodsType` и `m_dwLvLimit` оставались прежней
+    /// неинициализированной внутренней областью, но этот path никогда не
+    /// вызывает `CGoodsNode::Serialize`: `DoneOutList` извлекает только
+    /// вложенный `CGoods`. Rust оставляет их `None`, поэтому ошибочный новый
+    /// serialize безопасно выявляется вместо чтения мусора.
+    pub(crate) fn from_auction_money_return(
+        amount: i32,
+        guid: CGuid,
+        base_index: u32,
+        goods_bytes: Vec<u8>,
+    ) -> Self {
+        let mut node = Self::new();
+        node.amount = amount;
+        node.guid = guid;
+        node.base_index = base_index;
+        node.goods_state = GoodsState::BACK;
+        node.goods_bytes = goods_bytes;
+        node
+    }
+
     /// Очищает ровно поля исходного `Clear` и освобождает goods-буфер.
     ///
     /// `goods_type` и `level_limit` сохраняются: старый метод не присваивал им

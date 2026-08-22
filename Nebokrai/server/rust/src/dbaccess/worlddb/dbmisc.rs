@@ -5,8 +5,8 @@
 //! `DoneOT_IN_*`, `DoneListIn`, `DoneOutList`, `PopPlayerList` и достигнутой
 //! части `LoadAuction`, caller-контрактов `LoadOwnerBackGoods`,
 //! `LoadOwnerUndoGoods`, `LoadOwnerSuccGoods` и `LoadMoneyById`, а также
-//! Tiberius materialization `LoadGoodsByOwnerId`. Остальные SQL/load-функции
-//! ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Tiberius materialization `LoadGoodsByOwnerId` и `LoadMoneyById`. Остальные
+//! SQL/load-функции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 //!
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
 //! SHA-256 EXE
@@ -60,9 +60,9 @@
 //! остатка лимита. `LoadMoneyById` намеренно не возвращает значение, поскольку
 //! его исходный caller его не использует.
 //! `TiberiusAuctionGoodsReader` открывает отдельное connection и возвращает
-//! полностью собранный batch вместо ADO/COM recordset; async bridge, который
-//! append-ит этот batch в общий output FIFO из World MainLoop, остаётся у
-//! concrete context и не подменяется блокирующим вызовом драйвера.
+//! полностью собранный goods/money batch вместо ADO/COM recordset; async
+//! bridge, который append-ит batch в общий output FIFO из World MainLoop,
+//! остаётся у concrete context и не подменяется блокирующим вызовом драйвера.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
@@ -81,7 +81,7 @@ use crate::public::auctionnode::{
 use crate::public::guid::CGuid;
 use crate::worldserver::appworld::goods::cgoods::{CGoods, GoodsCodecError, GoodsLoadedAddonBlock};
 use crate::worldserver::appworld::goods::cgoodsfactory::{
-    GoodsBasePropertiesRegistry, create_goods_no_probability,
+    GoodsBasePropertiesRegistry, create_goods, create_goods_no_probability,
 };
 
 const OUTPUT_BATCH_LIMIT: i32 = 8;
@@ -867,6 +867,161 @@ impl TiberiusAuctionGoodsReader {
         }
         AuctionGoodsLoadOutcome::Loaded(notes)
     }
+
+    /// Читает `AuctionPlayerMoney` и создаёт exact gold-return notes.
+    ///
+    /// `random` принадлежит World owner-у: исходный `CGoodsFactory::CreateGoods`
+    /// выполнял свой probability-roll до проверки `dwmoney != 0`. Поэтому
+    /// callback вызывается и для нулевой строки, а не заменяется созданием
+    /// deterministic `CreateGoodsNoProbability`.
+    pub(crate) async fn load_money_by_id<Random>(
+        &self,
+        owner_id: i32,
+        money_limit: i32,
+        gold_coin_index: u32,
+        registry: &GoodsBasePropertiesRegistry,
+        random: &mut Random,
+    ) -> AuctionMoneyLoadOutcome
+    where
+        Random: FnMut(i32) -> i32 + ?Sized,
+    {
+        let mut connection = match self.settings.connect().await {
+            Ok(connection) => connection,
+            Err(source) => {
+                return AuctionMoneyLoadOutcome::ReturnedFalse(
+                    AuctionGoodsLoadFailure::Connection(source),
+                );
+            }
+        };
+        let mut query = Query::new(
+            "SELECT CONVERT(bigint,dwmoney) AS dwmoney FROM AuctionPlayerMoney \
+             WHERE dwplayerid=@P1",
+        );
+        query.bind(owner_id);
+        let mut rows = match query.query(&mut connection).await {
+            Ok(rows) => rows,
+            Err(source) => {
+                return AuctionMoneyLoadOutcome::ReturnedFalse(AuctionGoodsLoadFailure::Database {
+                    row_index: None,
+                    source,
+                });
+            }
+        };
+
+        let mut row_index = 0usize;
+        let mut returned_amount = 0_i32;
+        let mut notes = VecDeque::new();
+        loop {
+            let item = match rows.try_next().await {
+                Ok(Some(item)) => item,
+                Ok(None) => break,
+                Err(source) => {
+                    return AuctionMoneyLoadOutcome::ReturnedFalse(
+                        AuctionGoodsLoadFailure::Database {
+                            row_index: Some(row_index),
+                            source,
+                        },
+                    );
+                }
+            };
+            let Some(row) = item.into_row() else {
+                continue;
+            };
+            let money = match row.try_get::<i64, _>("dwmoney") {
+                Ok(Some(money)) => money as u64,
+                Ok(None) => {
+                    return AuctionMoneyLoadOutcome::ReturnedFalse(
+                        AuctionGoodsLoadFailure::MissingRequiredValue {
+                            row_index,
+                            column: "dwmoney",
+                        },
+                    );
+                }
+                Err(source) => {
+                    return AuctionMoneyLoadOutcome::ReturnedFalse(
+                        AuctionGoodsLoadFailure::Database {
+                            row_index: Some(row_index),
+                            source,
+                        },
+                    );
+                }
+            };
+
+            // В exact EXE `CreateGoods` расположен перед `dwmoney != 0`.
+            let created_goods = create_goods(registry, gold_coin_index, random);
+            if let Some(mut goods) = created_goods
+                && money != 0
+            {
+                let limit_as_u64 = (money_limit as i64) as u64;
+                let (note_amount, goods_amount) = if limit_as_u64 < money {
+                    // 004F1F3E: note получает остаток, а вложенный CGoods —
+                    // именно запрошенную порцию. Эта странность наблюдаема
+                    // через последующий `OT_IN_MODIFY_MONEY` и сохранена.
+                    (money.wrapping_sub(limit_as_u64) as i32, money_limit as u32)
+                } else {
+                    (0, money as u32)
+                };
+                let guid = match CGuid::create() {
+                    Ok(guid) => guid,
+                    Err(source) => {
+                        return AuctionMoneyLoadOutcome::BlockedMissingFact(
+                            AuctionMoneyLoadBlock::GuidGeneration { row_index, source },
+                        );
+                    }
+                };
+                goods.set_amount(goods_amount);
+                goods.set_ex_id(&guid);
+                let mut goods_bytes = Vec::new();
+                if let Err(source) = goods.serialize(&mut goods_bytes, true) {
+                    return AuctionMoneyLoadOutcome::BlockedMissingFact(
+                        AuctionMoneyLoadBlock::GoodsSerialize { row_index, source },
+                    );
+                }
+                returned_amount = goods_amount as i32;
+                notes.push_back(Box::new(DbNote {
+                    e_type: OperatorType::OT_OUT_READ_AUCTION_RESULT,
+                    goods: CGoodsNode::from_auction_money_return(
+                        note_amount,
+                        guid,
+                        gold_coin_index,
+                        goods_bytes,
+                    ),
+                    player_id: -1,
+                    money: 0,
+                }));
+            }
+            row_index += 1;
+        }
+        AuctionMoneyLoadOutcome::Loaded {
+            notes,
+            returned_amount,
+        }
+    }
+}
+
+/// `LoadMoneyById` возвращал последнее количество, помещённое во вложенный
+/// gold `CGoods`; caller S2W его буквально игнорирует, но typed owner не
+/// скрывает значение от следующей интеграционной границы.
+pub(crate) enum AuctionMoneyLoadOutcome {
+    Loaded {
+        notes: VecDeque<Box<DbNote>>,
+        returned_amount: i32,
+    },
+    ReturnedFalse(AuctionGoodsLoadFailure),
+    BlockedMissingFact(AuctionMoneyLoadBlock),
+}
+
+/// Безопасные замены недоказанных аварийных границ `LoadMoneyById`.
+#[derive(Debug)]
+pub(crate) enum AuctionMoneyLoadBlock {
+    GuidGeneration {
+        row_index: usize,
+        source: getrandom::Error,
+    },
+    GoodsSerialize {
+        row_index: usize,
+        source: GoodsCodecError,
+    },
 }
 
 struct PendingAuctionGoods {
@@ -1335,7 +1490,11 @@ enum ReadAuctionGoodsRecordError {
 //
 //
 
-// IMPLEMENTED_OWNER: CDbMisc::CDbMisc находится в typed Rust-владельце выше.
+// IMPLEMENTED_OWNER: CDbMisc::LoadMoneyById materialized выше как
+// TiberiusAuctionGoodsReader::load_money_by_id. Exact EXE `004F1F1D..004F1FEF`
+// подтверждает: nested gold amount = min(limit,money), но note amount при
+// money > limit = money-limit; RAW сохранён как доказательство этой quirk.
+// CDbMisc::CDbMisc находится в typed Rust-владельце выше.
 
 // IMPLEMENTED_OWNER: CDbMisc::DoneOT_IN_MODIFY_STATE_A2S находится в typed Rust-владельце выше.
 
