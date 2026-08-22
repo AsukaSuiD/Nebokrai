@@ -1,6 +1,7 @@
 //! Владелец organizing-control исторического `WorldServer`.
 //!
-//! Статус `COrganizingCtrl::AddOneTopInfo` RVA `0x00036960`,
+//! Статус constructor/destructor `COrganizingCtrl` RVA
+//! `0x00036C90/0x00036830`, `COrganizingCtrl::AddOneTopInfo` RVA `0x00036960`,
 //! `SendTopInfoToClient` RVA `0x00033FC0` и
 //! `SendAllTopInfoToInfoToOneClient` RVA `0x000352C0` — `IMPLEMENTED`;
 //! локальные `CreateUnion::{CreateUnion,DoAsyncCall,Release}` RVA
@@ -327,14 +328,19 @@
 //! `Release` RVA `0x00036F40` virtual-удаляет каждое ненулевое значение и
 //! обнуляет slot. `BTreeMap<i32, Option<Box<CFaction>>>` заменяет MSVC tree,
 //! pointer/null и доказанное владение, сохраняя signed key-порядок. Достигнутый
-//! `m_ConfedeOrganizings` выражен симметричным map `CUnion`; Rust-layout не
-//! выдаётся за Windows ABI, а остальные поля singleton-а остаются raw.
+//! `m_ConfedeOrganizings` выражен симметричным map `CUnion`; остальные
+//! доказанные map/list/scalar поля constructor-а materialизованы в том же
+//! lifecycle-owner-е. Rust-layout не выдаётся за Windows ABI.
 //! `COrganizingCtrl::getInstance` в EXE только лениво выделяет process-global
 //! controller. Все достигнутые Rust ingress получают один внешний живой
 //! `&mut COrganizingCtrl` (в том числе через `WorldMainLoopOwners`), поэтому
 //! статическое выделение, повторная попытка `operator_new` и singleton lifetime
 //! устранены как внутренние дефекты без изменения map, wire или порядка
 //! side effects.
+//! Original `Release` не снимал последнее `OnNewDay` calendar-событие перед
+//! self-delete. Rust отменяет именно сохранённый active event до `Drop`: это
+//! устраняет внутренний dangling callback, не добавляя игрового перехода либо
+//! сетевого эффекта shutdown-пути.
 //!
 //! `ReInitialFacFactionByLvl` проходит тот же signed faction-map. Exact EXE
 //! `0x00434C80..0x00434CFE` делает RTTI cast каждого value, пропускает null либо
@@ -2947,6 +2953,15 @@ pub(crate) struct OrganizingNewDayScheduleReport {
     pub(crate) event_id: TimerId,
 }
 
+/// Наблюдаемый до уничтожения Rust owner-а итог shutdown `COrganizingCtrl`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingCtrlReleaseReport {
+    /// Последний поставленный `OnNewDay`, если controller ещё владел им.
+    pub(crate) previous_new_day_event_id: Option<TimerId>,
+    /// Результат снятия именно этого callback из общего timer-owner-а.
+    pub(crate) timer_event_removed: Option<bool>,
+}
+
 /// Результат callback-а `OnNewDay` до внешнего `CCountryHandler::SetNewDay`.
 #[derive(Debug)]
 pub(crate) struct OrganizingNewDayReport {
@@ -3269,7 +3284,11 @@ where
 }
 
 impl COrganizingCtrl {
-    /// Создаёт доказанные пустые organizing-map и `m_TopInfos`.
+    /// Создаёт полный доказанный constructor-state `COrganizingCtrl`.
+    ///
+    /// Пустые signed map/list, default billboard-size, `m_NewDayTime` 14:15
+    /// и отсутствие назначенного event ID соответствуют owner-у до первого
+    /// `Initialize`; MSVC tree/list и vtable не переносятся.
     pub(crate) const fn with_reached_callback_state() -> Self {
         Self {
             factions: BTreeMap::new(),
@@ -3292,10 +3311,21 @@ impl COrganizingCtrl {
     ///
     /// Raw сначала удалял все ненулевые faction/union pointer-ы, затем удалял
     /// собственный singleton. Потребление `self` даёт тот же конец владения и
-    /// освобождает также пустые очереди/снимки через `Drop`, не оставляя
-    /// висячий singleton или повторный `Release` после self-delete.
-    pub(crate) fn release(self) {
+    /// освобождает также пустые очереди/снимки через `Drop`. В отличие от
+    /// original self-delete, active `OnNewDay` сначала снимается из timer-а,
+    /// чтобы callback не пережил свой controller.
+    pub(crate) fn release<Callback>(
+        mut self,
+        timer: &mut CTimer<Callback>,
+    ) -> OrganizingCtrlReleaseReport {
+        let previous_new_day_event_id = self.new_day_event_id.take();
+        let timer_event_removed = previous_new_day_event_id
+            .map(|event_id| timer.kill_time_event(event_id));
         drop(self);
+        OrganizingCtrlReleaseReport {
+            previous_new_day_event_id,
+            timer_event_removed,
+        }
     }
 
     /// Ставит первый `OnNewDay` на ближайшую полночь exact `Initialize`.
@@ -9161,7 +9191,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::~COrganizingCtrl
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:87
@@ -9169,6 +9199,10 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00436830
 // PROTOTYPE: void __thiscall ~COrganizingCtrl(void)
 //
+// IMPLEMENTED_OWNER: `COrganizingCtrl::release` снимает последнее active
+// `OnNewDay` событие, затем owned `BTreeMap`/`VecDeque` и их concrete
+// `Box`-значения освобождаются обычным Rust Drop. MSVC list/tree cleanup и
+// singleton self-delete не имеют самостоятельного игрового контракта.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -9189,7 +9223,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::COrganizingCtrl
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:73
@@ -9197,6 +9231,10 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00436c90
 // PROTOTYPE: undefined __thiscall COrganizingCtrl(void)
 //
+// IMPLEMENTED_OWNER: `with_reached_callback_state` выше создаёт все
+// доказанные пустые map/list, default billboard state, `m_NewDayTime` 14:15
+// и отсутствующий calendar event. Явный lifecycle owner заменяет private
+// singleton allocation, не объявляя Rust layout копией MSVC ABI.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -9230,9 +9268,10 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00436f40
 // PROTOTYPE: void __thiscall Release(void)
 //
-// IMPLEMENTED_OWNER: `COrganizingCtrl::release` выше. Rust потребляет owner,
-// а `Drop` освобождает все map/list owner-ы; raw self-delete и dangling
-// singleton устранены как внутренние lifetime-дефекты.
+// IMPLEMENTED_OWNER: `COrganizingCtrl::release` выше сначала отменяет
+// сохранённый `OnNewDay` callback, затем потребляет owner. Rust Drop
+// освобождает все map/list owner-ы; raw self-delete, dangling singleton и
+// dangling calendar callback устранены как внутренние lifetime-дефекты.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
