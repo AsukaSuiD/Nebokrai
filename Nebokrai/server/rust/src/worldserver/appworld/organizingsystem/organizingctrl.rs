@@ -9013,7 +9013,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::ReSetPermitDemise
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1522
@@ -9021,6 +9021,9 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00434810
 // PROTOTYPE: void __thiscall ReSetPermitDemise(void)
 //
+// IMPLEMENTED_OWNER: `COrganizingCtrl::reset_permit_demise` выше. Обход идёт
+// в signed map-порядке и вызывает `SetPermitDemise(true)` для каждой concrete
+// faction; raw null-dereference заменён typed safe-границей с готовым prefix.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -9514,7 +9517,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::OnNewDay
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:2064
@@ -9522,6 +9525,10 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 0043a490
 // PROTOTYPE: void __stdcall OnNewDay(long param_1)
 //
+// IMPLEMENTED_OWNER: `COrganizingCtrl::on_new_day` выше. Порядок: reset всех
+// faction, date из `m_NewDayTime` с текущим day, `AddDay(1)`, `SetNewDay(day)`
+// и новый `SetTimeEvent(OnNewDay, 0)`. Rust явно передаёт timer/country owner,
+// не воссоздавая process singleton.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
