@@ -893,10 +893,12 @@ impl HonorRanksLoadSink for CHonorRanks {
 
 // ============================================================================
 // FUNCTION: CGame::tagGameServer::~tagGameServer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp
+// RUST: `game::WorldGameServerEntry::ip: Vec<u8>` освобождается структурным
+// Drop; отдельная инфраструктура строки MSVC не нужна.
 // RVA: 0x00006DA0
 // ADDRESS: 00406da0
 // PROTOTYPE: void __thiscall ~tagGameServer(void)
@@ -923,10 +925,12 @@ impl HonorRanksLoadSink for CHonorRanks {
 
 // ============================================================================
 // FUNCTION: tagVilWarSetup::~tagVilWarSetup
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp
+// RUST: `villagewarsys::VillageWarSetup::declaring_factions: Vec<i32>`
+// освобождается структурным Drop вместо `std::list::_Tidy`.
 // RVA: 0x00007470
 // ADDRESS: 00407470
 // PROTOTYPE: void __thiscall ~tagVilWarSetup(void)
@@ -937,10 +941,12 @@ impl HonorRanksLoadSink for CHonorRanks {
 
 // ============================================================================
 // FUNCTION: tagAttackCityTime::~tagAttackCityTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp
+// RUST: `attackcitysys::AttackCityTime::declaring_factions: Vec<i32>`
+// освобождается структурным Drop вместо `std::list::_Tidy`.
 // RVA: 0x00007480
 // ADDRESS: 00407480
 // PROTOTYPE: void __thiscall ~tagAttackCityTime(void)
@@ -1091,10 +1097,12 @@ impl HonorRanksLoadSink for CHonorRanks {
 
 // ============================================================================
 // FUNCTION: CGame::tagSysBroadcast::tagSysBroadcast
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\honorranks.cpp
+// RUST: `game::WorldSystemBroadcast: Clone` копирует все достигнутые поля и
+// `message: Vec<u8>`; служебное копирование `std::string` заменено Rust-типом.
 // RVA: 0x00008FA0
 // ADDRESS: 00408fa0
 // PROTOTYPE: undefined __thiscall tagSysBroadcast(tagSysBroadcast * param_1)

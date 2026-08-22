@@ -6405,6 +6405,9 @@ pub(crate) enum WorldRegionParamDecodeOutcome {
 }
 
 /// Минимальная достигнутая часть исходного `CGame::tagGameServer`.
+///
+/// Его raw-деструктор освобождал только `strIP`; `ip: Vec<u8>` освобождается
+/// структурным Drop без отдельной инфраструктуры строки MSVC.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldGameServerEntry {
     pub(crate) connected: bool,

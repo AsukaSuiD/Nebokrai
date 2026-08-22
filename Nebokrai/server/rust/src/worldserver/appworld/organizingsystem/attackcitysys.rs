@@ -76,7 +76,9 @@
 //! только эта граница остаётся `BLOCKED_MISSING_FACT`. Malformed extraction,
 //! ID overflow и недоказанная
 //! signed calendar arithmetic остаются локальными `BLOCKED_MISSING_FACT`.
-//! STL/ifstream/SEH/allocator noise Rust-кода не имеет.
+//! STL/ifstream/SEH/allocator noise Rust-кода не имеет. Деструктор
+//! `tagAttackCityTime` очищал только list заявившихся фракций; его заменяет
+//! структурный Drop `declaring_factions: Vec<i32>`.
 
 use std::collections::BTreeMap;
 
