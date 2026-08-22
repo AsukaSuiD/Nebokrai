@@ -12,8 +12,8 @@
 //! проверен в EXE. `CreateChildObject`, `AddObject`, `RemoveObject`, обе
 //! перегрузки `FindChildObject`, обе `RecursiveFindObject` и обе
 //! `DeleteChildObject`, `DeleteAllChildObject`, `BoardCast`,
-//! `DgFindObjectsByTypes` и `AI` materialизованы безопасным child-tree
-//! owner-ом; final destructor остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Статический `CreateObject`
+//! `DgFindObjectsByTypes`, `AI`, constructor и destructor materialизованы
+//! безопасным child-tree owner-ом. Статический `CreateObject`
 //! RVA `0x000D5470` materialизован отдельным tagged factory-result без erased
 //! pointer/vtable. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
@@ -89,6 +89,9 @@
 //! exact EXE показывает вызов `0x00401000` с `this+0xC`, а по этому адресу
 //! находится единственный `ret`. Внешнего player-callback нет
 //! (`VERIFIED_DISASSEMBLY`, `0x004D5D80..0x004D5DFD`).
+//! `Drop` у tree-node сначала освобождает parent ownership children в list-order,
+//! затем Rust освобождает base object. Это сохраняет наблюдаемый lifecycle без
+//! base-vtable/CRT cleanup и без dangling child aliases original-а.
 //!
 //! `CreateChildObject` сначала получает объект из `CreateObject`, который уже
 //! назначил входные type/ID, и до решения об attachment копирует ненулевое имя.
@@ -580,6 +583,22 @@ impl BaseObjectTreeNode {
     }
 }
 
+impl Drop for BaseObjectTreeNode {
+    fn drop(&mut self) {
+        // `CBaseObject::~CBaseObject` сперва удаляет children через
+        // `DeleteAllChildObject(nullptr)`, затем освобождает base storage.
+        // Клон list здесь играет его не-владеющий snapshot: до drop каждого
+        // child все его equal entries убираются из parent-list. Повтор одного
+        // raw pointer в original-е приводил бы к dangling delete; `Rc` оставляет
+        // это внутреннее повреждение безопасным и освобождает alias один раз.
+        let children = self.children.clone();
+        for child in children {
+            self.children
+                .retain(|candidate| !Rc::ptr_eq(candidate, &child));
+        }
+    }
+}
+
 impl BaseObjectFactoryObject {
     /// Возвращает исходный type concrete factory-ветви.
     pub(crate) const fn object_type(&self) -> i32 {
@@ -740,7 +759,7 @@ where
     Ok(Some(child))
 }
 
-/// Достигнутая часть исходного `CBaseObject`.
+/// Scalar/base-часть исходного `CBaseObject`.
 pub(crate) struct CBaseObject {
     object_type: i32,
     id: i32,
@@ -752,7 +771,10 @@ pub(crate) struct CBaseObject {
 }
 
 impl CBaseObject {
-    /// Создаёт только уже достигнутые начальные состояния конструктора.
+    /// Создаёт scalar-начальные состояния точного `CBaseObject` constructor-а.
+    ///
+    /// Father и child-list живут в `BaseObjectTreeNode`, где их начальные
+    /// `None`/empty и destruction-order materialизованы отдельным owner-ом.
     pub(crate) const fn with_reached_constructor_defaults() -> Self {
         Self {
             object_type: 0,
@@ -1088,7 +1110,7 @@ fn legacy_c_string_prefix(name: &[u8]) -> &[u8] {
 
 // ============================================================================
 // FUNCTION: CBaseObject::CBaseObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:22
@@ -1096,6 +1118,10 @@ fn legacy_c_string_prefix(name: &[u8]) -> &[u8] {
 // ADDRESS: 004d5790
 // PROTOTYPE: undefined __thiscall CBaseObject(void)
 //
+// Реализовано `CBaseObject::with_reached_constructor_defaults` вместе с
+// `BaseObjectTreeNode::from_object`: scalar/GUID/name/include-child получают
+// доказанные defaults, а empty children и null father — safe `Vec`/`Weak`.
+// MSVC list allocation и vtable — только ABI/CRT plumbing и не переносятся.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1105,8 +1131,8 @@ fn legacy_c_string_prefix(name: &[u8]) -> &[u8] {
 
 // VERIFIED_DISASSEMBLY: `CBaseObject::~CBaseObject` RVA `0x000D5D80` ниже не
 // вызывает наблюдаемый `AddPlayerList`: call по `0x004D5DE9` приходит в один
-// `ret` по `0x00401000`. Остальное тело сохраняется raw до materialization
-// child/factory ownership.
+// `ret` по `0x00401000`. `BaseObjectTreeNode::Drop` materialизует доказанный
+// порядок удаления children до standard Rust cleanup base/factory ownership.
 
 // IMPLEMENTED: `CreateChildObject` RVA `0x000D58B0` передаёт child в
 // `AddObject` до virtual `Load`, кроме player ID 0 и точного goods
@@ -1214,7 +1240,7 @@ fn legacy_c_string_prefix(name: &[u8]) -> &[u8] {
 
 // ============================================================================
 // FUNCTION: CBaseObject::~CBaseObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:33
@@ -1222,6 +1248,12 @@ fn legacy_c_string_prefix(name: &[u8]) -> &[u8] {
 // ADDRESS: 004d5d80
 // PROTOTYPE: void __thiscall ~CBaseObject(void)
 //
+// Реализовано `Drop for BaseObjectTreeNode`: snapshot list сохраняет порядок
+// `DeleteAllChildObject(nullptr)`, перед release child из parent-list удаляются
+// все pointer-equal entries, а `CBaseObject` после этого освобождается обычным
+// Rust ownership. Safe external `Rc` не становится dangling alias; duplicate
+// raw pointer больше не вызывает второй delete. Base-vtable, MSVC list/string
+// allocator и пустой final call не являются наблюдаемой семантикой.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
