@@ -1308,7 +1308,9 @@ use crate::public::timer::{
     TimerRunReport,
 };
 use crate::setup::globesetup::GlobeSetupSnapshot;
-use crate::setup::godsbattleconf::CGodsBattleConf;
+use crate::setup::godsbattleconf::{
+    CGodsBattleConf, GodsBattleLoadError, GodsBattleSerializeError,
+};
 use crate::setup::leitingsetup::{CThingSetup, ThingSetupCodecError};
 use crate::setup::lingbao::{CLingBaoSetup, LingBaoSerializationBlock};
 use crate::setup::newskillmonsterlist::{
@@ -1805,7 +1807,6 @@ pub(crate) enum WorldGameDatabaseOwner {
 /// Void initialization calls, границы которых принадлежат соседним owners.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldGameInitVoidOwner {
-    LoadGodsBattleFactionXyd,
     InitializeOrganizingController,
     InitializeFactionWar,
     InitializeQuestSystem,
@@ -1894,6 +1895,9 @@ pub(crate) enum WorldGameInitEvent {
         succeeded: bool,
     },
     OrganizingParametersLoaded(OrganizingParamLoadReport),
+    GodsBattleFactionXydLoaded {
+        succeeded: bool,
+    },
     CountryParametersLoaded(CountryParamLoadReport),
     CountryHandlerInitialized(CountryHandlerInitializeReport),
     CountryWarInitialized(CountryWarLoadReport),
@@ -4446,7 +4450,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     PlayerGmList,
     RegionLevelSetup,
     AttackCity,
-    GodsBattle,
 }
 
 /// Прямой соседний owner без наблюдаемого return в исходном dispatcher-е.
@@ -4458,7 +4461,6 @@ pub(crate) enum WorldReloadVoidOwner {
     FactionWarParameters,
     Quest,
     CountryParameters,
-    GodsBattleNpcFaction,
 }
 
 /// Владелец точного payload, который следует за успешной reload-операцией.
@@ -4473,7 +4475,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     RegionLevelSetup,
     AttackCity,
     Quest,
-    GodsBattle,
 }
 
 /// Доказанный positional record `setup/regionlist.ini` до virtual region-owner-а.
@@ -6129,6 +6130,8 @@ pub(crate) enum WorldReloadBlock {
     EquipmentComposeSerialization(EquipmentComposeSerializeError),
     CiQingSerialization(CiQingSerializationBlock),
     TaoZhuangSerialization(TaoZhuangSerializationBlock),
+    GodsBattleDatabaseOwnerRequired,
+    GodsBattleSerialization(GodsBattleSerializeError),
     HitLevelFormat(HitLevelFormatError),
     HitLevelSerialization(HitLevelSerializeError),
     TradeListFormat(TradeListFormatError),
@@ -8176,10 +8179,12 @@ impl CGame {
     }
 
     /// Выполняет полный case-insensitive dispatcher `CGame::ReLoad`.
-    pub(crate) fn reload<Context: WorldReloadContext + ?Sized>(
+    pub(crate) async fn reload<Context: WorldReloadContext + ?Sized>(
         &mut self,
         context: &mut Context,
         jjc: &mut CJJcSystem,
+        gods_battle: &mut CGodsBattleConf,
+        rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
         profile: &[u8],
         send_to_game_servers: bool,
         reload_server_resources: bool,
@@ -9233,21 +9238,34 @@ impl CGame {
                 }
             }
             WorldReloadProfile::GodsBattle => {
-                let succeeded = Self::reload_boolean_with_log(
-                    context,
-                    WorldReloadBooleanOwner::GodsBattle,
-                    b"Load Gods-Battle...ok!",
-                    b"Load Gods-Battle...failed!",
+                let string_table = self.string_table.table();
+                let load = gods_battle.load_from_resources(
+                    &mut |section| context.read_resource(section.path()),
+                    &mut |string_id| {
+                        string_table
+                            .get_string_by_id(string_id)
+                            .map(ToOwned::to_owned)
+                    },
                 );
-                context.call_void_owner(WorldReloadVoidOwner::GodsBattleNpcFaction);
-                if succeeded && send_to_game_servers {
-                    self.serialize_reload_owner(
-                        context,
-                        WorldReloadSerializationOwner::GodsBattle,
-                        0x39,
-                        false,
-                        &mut legacy_result,
-                    );
+                if let Err(GodsBattleLoadError::MissingResource { section }) = &load {
+                    let (title, message) = section.missing_notice();
+                    context.notify_reload_operator(title, message);
+                }
+                // VERIFIED_DISASSEMBLY 0x004819EF: LoadFile устанавливает EAX=1
+                // и после missing-file notice тоже приходит в этот epilogue.
+                legacy_result = 1;
+                context.add_log_text(b"Load Gods-Battle...ok!");
+
+                let Some(rs_gods_battle) = rs_gods_battle else {
+                    return Err(WorldReloadBlock::GodsBattleDatabaseOwnerRequired);
+                };
+                let _legacy_result = rs_gods_battle.get_npc_faction(gods_battle).await;
+                if send_to_game_servers {
+                    let mut payload = Vec::new();
+                    gods_battle
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::GodsBattleSerialization)?;
+                    self.send_reload_payload(0x39, &payload);
                 }
             }
         }
@@ -10374,6 +10392,8 @@ impl CGame {
         runtime_directory: &Path,
         context: &mut Context,
         jjc: &mut CJJcSystem,
+        gods_battle: &mut CGodsBattleConf,
+        mut rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
         time_to_return: &mut TimeToReturn,
         time_to_return_callbacks: TimeToReturnCallbacks<TimerCallback>,
         general_variables: &mut Option<CVariableList>,
@@ -10659,7 +10679,18 @@ impl CGame {
             b"HonorElimilate",
         ];
         for &profile in INITIAL_RELOADS {
-            let legacy_result = match self.reload(context, jjc, profile, false, false) {
+            let legacy_result = match self
+                .reload(
+                    context,
+                    jjc,
+                    gods_battle,
+                    rs_gods_battle.as_deref_mut(),
+                    profile,
+                    false,
+                    false,
+                )
+                .await
+            {
                 Ok(result) => result,
                 Err(block) => stop!(WorldGameInitBlockReason::Reload(block)),
             };
@@ -10693,7 +10724,18 @@ impl CGame {
             b"taozhuang",
         ];
         for &profile in SECONDARY_RELOADS {
-            let legacy_result = match self.reload(context, jjc, profile, false, false) {
+            let legacy_result = match self
+                .reload(
+                    context,
+                    jjc,
+                    gods_battle,
+                    rs_gods_battle.as_deref_mut(),
+                    profile,
+                    false,
+                    false,
+                )
+                .await
+            {
                 Ok(result) => result,
                 Err(block) => stop!(WorldGameInitBlockReason::Reload(block)),
             };
@@ -10751,7 +10793,18 @@ impl CGame {
             b"BattleFairyExpConfig".as_slice(),
             b"BattleFairyCombineConfig",
         ] {
-            let legacy_result = match self.reload(context, jjc, profile, false, false) {
+            let legacy_result = match self
+                .reload(
+                    context,
+                    jjc,
+                    gods_battle,
+                    rs_gods_battle.as_deref_mut(),
+                    profile,
+                    false,
+                    false,
+                )
+                .await
+            {
                 Ok(result) => result,
                 Err(block) => stop!(WorldGameInitBlockReason::Reload(block)),
             };
@@ -10791,7 +10844,18 @@ impl CGame {
             organizing_parameters_load,
         ));
 
-        let legacy_result = match self.reload(context, jjc, b"godsBattle", false, false) {
+        let legacy_result = match self
+            .reload(
+                context,
+                jjc,
+                gods_battle,
+                rs_gods_battle.as_deref_mut(),
+                b"godsBattle",
+                false,
+                false,
+            )
+            .await
+        {
             Ok(result) => result,
             Err(block) => stop!(WorldGameInitBlockReason::Reload(block)),
         };
@@ -10799,10 +10863,11 @@ impl CGame {
             profile: b"godsBattle",
             legacy_result,
         });
-        context.initialize_void_owner(WorldGameInitVoidOwner::LoadGodsBattleFactionXyd);
-        events.push(WorldGameInitEvent::VoidOwner(
-            WorldGameInitVoidOwner::LoadGodsBattleFactionXyd,
-        ));
+        let rs_gods_battle = rs_gods_battle
+            .as_deref_mut()
+            .expect("успешный godsBattle reload проверил DB-owner");
+        let succeeded = rs_gods_battle.load_faction_xyd(gods_battle).await;
+        events.push(WorldGameInitEvent::GodsBattleFactionXydLoaded { succeeded });
 
         let attack_city_now = (callbacks.get_timer_local_time)();
         let attack_city_source = context.read_resource(b"setup/CityWarSys.ini");
@@ -13785,6 +13850,8 @@ impl CGame {
             state.reload_flags,
             &mut *callbacks.reload_context,
             owners.jjc,
+            owners.gods_battle,
+            owners.rs_gods_battle.as_deref_mut(),
             &mut *callbacks.get_log_local_time,
             owners.country_war,
             owners.timer,
@@ -13805,7 +13872,8 @@ impl CGame {
             &mut reload_union_application_callbacks,
             &mut *callbacks.update_union_player,
             &mut *callbacks.get_timer_local_time,
-        );
+        )
+        .await;
         let reload = match reload {
             complete @ WorldReloadProfilesReport::Complete { .. } => complete,
             blocked @ (WorldReloadProfilesReport::BlockedMissingFact { .. }
@@ -18039,8 +18107,8 @@ async fn process_world_message<TimerCallback, DbMiscContextOwner, JjcContext>(
     session_factory: &mut CSessionFactory,
     general_variables: Option<&mut CVariableList>,
     gods_battle: &mut CGodsBattleConf,
-    rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
-    gods_battle_database: Option<&mut WorldTdsClient>,
+    mut rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
+    mut gods_battle_database: Option<&mut WorldTdsClient>,
     reload_context: &mut dyn WorldReloadContext,
     add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     update_player: &mut dyn FnMut(i32),
@@ -18076,8 +18144,8 @@ where
             session_factory,
             general_variables,
             gods_battle,
-            rs_gods_battle,
-            gods_battle_database,
+            rs_gods_battle.as_deref_mut(),
+            gods_battle_database.as_deref_mut(),
         )
         .await
         {
@@ -18191,6 +18259,8 @@ where
         match on_gm_message(
             game,
             jjc,
+            gods_battle,
+            rs_gods_battle.as_deref_mut(),
             rs_player,
             player_database.as_deref_mut(),
             reload_context,
@@ -21159,11 +21229,13 @@ where
 }
 
 /// Снимает и обрабатывает полный ordered набор `RELOAD_PROFILE_FLAGS`.
-pub(crate) fn reload_profiles<Context, GetLocalTime, GetTimerLocalTime, TimerCallback>(
+pub(crate) async fn reload_profiles<Context, GetLocalTime, GetTimerLocalTime, TimerCallback>(
     game: &mut CGame,
     flags: &WorldReloadProfileFlags,
     context: &mut Context,
     jjc: &mut CJJcSystem,
+    gods_battle: &mut CGodsBattleConf,
+    mut rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
     mut get_local_time: GetLocalTime,
     country_war: &mut CountryWarSys,
     timer: &mut CTimer<TimerCallback>,
@@ -21280,10 +21352,13 @@ where
                 game.reload(
                     context,
                     jjc,
+                    gods_battle,
+                    rs_gods_battle.as_deref_mut(),
                     action.reload_profile,
                     action.first_option,
                     action.second_option,
                 )
+                .await
             } {
                 Ok(result) => result,
                 Err(block) => {

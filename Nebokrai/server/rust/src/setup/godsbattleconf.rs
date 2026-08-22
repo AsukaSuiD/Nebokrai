@@ -96,17 +96,6 @@ pub(crate) struct CGodsBattleConf {
     die_back_positions: Vec<GodsBattleDieBackPosition>,
 }
 
-/// Шесть resource-байтов exact `CGodsBattleConf::LoadFile` в порядке открытия.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct GodsBattleLoadSources<'a> {
-    pub(crate) npc_names: Option<&'a [u8]>,
-    pub(crate) base_money: Option<&'a [u8]>,
-    pub(crate) revise_money: Option<&'a [u8]>,
-    pub(crate) szl_levels: Option<&'a [u8]>,
-    pub(crate) faction_rules: Option<&'a [u8]>,
-    pub(crate) die_back_positions: Option<&'a [u8]>,
-}
-
 /// Один из строго упорядоченных resource owner-ов GodsBattle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GodsBattleLoadSection {
@@ -254,26 +243,27 @@ pub(crate) struct GodsBattleNpcFactionUpdate {
 }
 
 impl CGodsBattleConf {
-    /// Повторяет `LoadFile` по уже извлечённым resource-байтам.
+    /// Повторяет `LoadFile`, извлекая resource-байты только при достижении
+    /// соответствующей секции.
     ///
     /// `resolve_npc_name` — единственная owner-зависимая часть: exact World
     /// сразу заменяет string-table ID локализованным именем, а отсутствие ID
     /// превращает имя в пустую C-строку. `m_XYD[1..=2]` этот loader не меняет.
-    pub(crate) fn load_from_sources<ResolveNpcName>(
+    pub(crate) fn load_from_resources<ReadResource, ResolveNpcName>(
         &mut self,
-        sources: GodsBattleLoadSources<'_>,
+        read_resource: &mut ReadResource,
         resolve_npc_name: &mut ResolveNpcName,
     ) -> Result<(), GodsBattleLoadError>
     where
+        ReadResource: FnMut(GodsBattleLoadSection) -> Option<Vec<u8>>,
         ResolveNpcName: FnMut(&[u8]) -> Option<Vec<u8>>,
     {
         self.npc_names.clear();
-        let source = sources
-            .npc_names
+        let source = read_resource(GodsBattleLoadSection::NpcNames)
             .ok_or(GodsBattleLoadError::MissingResource {
                 section: GodsBattleLoadSection::NpcNames,
             })?;
-        let mut tokens = gods_battle_tokens(source);
+        let mut tokens = gods_battle_tokens(&source);
         while read_to(&mut tokens, b"*") {
             let faction = gods_battle_i32(
                 &mut tokens,
@@ -298,12 +288,11 @@ impl CGodsBattleConf {
         }
 
         self.base_money.clear();
-        let source = sources
-            .base_money
+        let source = read_resource(GodsBattleLoadSection::BaseMoney)
             .ok_or(GodsBattleLoadError::MissingResource {
                 section: GodsBattleLoadSection::BaseMoney,
             })?;
-        let mut tokens = gods_battle_tokens(source);
+        let mut tokens = gods_battle_tokens(&source);
         while read_to(&mut tokens, b"*") {
             let money_level = gods_battle_u32(
                 &mut tokens,
@@ -328,12 +317,11 @@ impl CGodsBattleConf {
         }
 
         self.revise_money.clear();
-        let source = sources
-            .revise_money
+        let source = read_resource(GodsBattleLoadSection::ReviseMoney)
             .ok_or(GodsBattleLoadError::MissingResource {
                 section: GodsBattleLoadSection::ReviseMoney,
             })?;
-        let mut tokens = gods_battle_tokens(source);
+        let mut tokens = gods_battle_tokens(&source);
         while read_to(&mut tokens, b"*") {
             self.revise_money.push(GodsBattleReviseMoney {
                 level_gap_revise: gods_battle_u32(
@@ -360,12 +348,11 @@ impl CGodsBattleConf {
         }
 
         self.szl_levels.clear();
-        let source = sources
-            .szl_levels
+        let source = read_resource(GodsBattleLoadSection::SzlLevels)
             .ok_or(GodsBattleLoadError::MissingResource {
                 section: GodsBattleLoadSection::SzlLevels,
             })?;
-        let mut tokens = gods_battle_tokens(source);
+        let mut tokens = gods_battle_tokens(&source);
         while read_to(&mut tokens, b"*") {
             self.szl_levels.push(GodsBattleSzlLevel {
                 level: gods_battle_u32(&mut tokens, GodsBattleLoadSection::SzlLevels, "level")?,
@@ -383,12 +370,11 @@ impl CGodsBattleConf {
         }
 
         self.faction_rules.clear();
-        let source = sources
-            .faction_rules
+        let source = read_resource(GodsBattleLoadSection::FactionRules)
             .ok_or(GodsBattleLoadError::MissingResource {
                 section: GodsBattleLoadSection::FactionRules,
             })?;
-        let mut tokens = gods_battle_tokens(source);
+        let mut tokens = gods_battle_tokens(&source);
         while read_to(&mut tokens, b"*") {
             self.faction_rules.push(GodsBattleFactionRule {
                 faction: gods_battle_u32(
@@ -410,12 +396,11 @@ impl CGodsBattleConf {
         }
 
         self.die_back_positions.clear();
-        let source = sources
-            .die_back_positions
+        let source = read_resource(GodsBattleLoadSection::DieBackPositions)
             .ok_or(GodsBattleLoadError::MissingResource {
                 section: GodsBattleLoadSection::DieBackPositions,
             })?;
-        let mut tokens = gods_battle_tokens(source);
+        let mut tokens = gods_battle_tokens(&source);
         while read_to(&mut tokens, b"*") {
             self.die_back_positions.push(GodsBattleDieBackPosition {
                 region: gods_battle_i32(
@@ -844,10 +829,10 @@ fn write_gods_battle_string(
 // ADDRESS: 004810d0
 // PROTOTYPE: int __thiscall LoadFile(void)
 //
-// IMPLEMENTED_OWNER: `CGodsBattleConf::load_from_sources` выше. Точный
-// `int`-return decompiler-а не используется как Rust API: машинный код не
-// устанавливает отдельный logical result в видимой ветви, а безопасный
-// `Result` сообщает missing resource или повреждённое поле, сохраняя exact
+// IMPLEMENTED_OWNER: `CGodsBattleConf::load_from_resources` выше. Точный
+// epilogue `0x004819EF` устанавливает `EAX=1` даже после missing-file ветвей;
+// caller сохраняет этот legacy result отдельно от safe `Result`, который
+// сообщает missing resource или повреждённое поле и сохраняет exact
 // последовательную мутацию уже достигнутых секций.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

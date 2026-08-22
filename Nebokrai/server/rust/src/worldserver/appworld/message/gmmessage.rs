@@ -45,8 +45,10 @@
 use std::ffi::CString;
 
 use crate::dbaccess::worlddb::rsplayer::{RsPlayerOwner, TiberiusRsPlayer};
+use crate::dbaccess::worlddb::rsgodsbattle::TiberiusRsGodsBattle;
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::setup::godsbattleconf::CGodsBattleConf;
 use crate::worldserver::appworld::jjcsystem::CJJcSystem;
 use crate::worldserver::worldserver::game::{
     CGame, WorldNamedRegionLookup, WorldRegionIdRouteScan, WorldReloadBlock, WorldReloadContext,
@@ -263,6 +265,8 @@ pub(crate) enum WorldGmMessageDispatch {
 pub(crate) async fn on_gm_message(
     game: &mut CGame,
     jjc: &mut CJJcSystem,
+    gods_battle: &mut CGodsBattleConf,
+    rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
     rs_player: &mut TiberiusRsPlayer,
     player_database: Option<&mut WorldTdsClient>,
     reload_context: &mut dyn WorldReloadContext,
@@ -349,7 +353,17 @@ pub(crate) async fn on_gm_message(
                 .base_mut()
                 .get_str_bytes(0x100)
                 .expect("literal 0x100 исключает zero-capacity GetStr");
-            let result = game.reload(reload_context, jjc, &profile, true, true);
+            let result = game
+                .reload(
+                    reload_context,
+                    jjc,
+                    gods_battle,
+                    rs_gods_battle,
+                    &profile,
+                    true,
+                    true,
+                )
+                .await;
             WorldGmMessageDispatch::Handled(WorldGmMessageOutcome::Reload {
                 request_id,
                 request_id_complete: decoded_request_id.is_some(),
