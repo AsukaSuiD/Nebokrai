@@ -122,6 +122,17 @@ impl EPurview {
 }
 
 impl ECityState {
+    /// Принимает только четыре значения точного signed `eCityState`.
+    pub(crate) const fn from_wire_value(value: i32) -> Option<Self> {
+        match value {
+            0 => Some(Self::No),
+            1 => Some(Self::Duth),
+            2 => Some(Self::Mass),
+            3 => Some(Self::Fight),
+            _ => None,
+        }
+    }
+
     /// Возвращает исходное signed значение enum для wire и message boundaries.
     pub(crate) const fn wire_value(self) -> i32 {
         self as i32
@@ -129,6 +140,16 @@ impl ECityState {
 }
 
 impl EOperator {
+    /// Принимает только три значения точного signed `eOperator`.
+    pub(crate) const fn from_wire_value(value: i32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Delete),
+            1 => Some(Self::Add),
+            2 => Some(Self::Update),
+            _ => None,
+        }
+    }
+
     /// Возвращает значение исходного `eOperator` для `CBaseMessage::Add(long)`.
     pub(crate) const fn wire_value(self) -> i32 {
         self as i32
@@ -145,6 +166,16 @@ pub(crate) enum EPurviewOwnState {
 }
 
 impl EPurviewOwnState {
+    /// Принимает только три значения точного signed `ePurviewOwnState`.
+    pub(crate) const fn from_wire_value(value: i32) -> Option<Self> {
+        match value {
+            0 => Some(Self::No),
+            1 => Some(Self::Forbid),
+            2 => Some(Self::Permit),
+            _ => None,
+        }
+    }
+
     /// Возвращает доказанное 32-битное значение элемента `listPV`.
     pub(crate) const fn wire_value(self) -> i32 {
         self as i32
@@ -427,8 +458,6 @@ const _: () = {
 //
 //
 
-
-
 // ============================================================================
 // FUNCTION: Unwind@0052d560
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -457,7 +486,6 @@ const _: () = {
 //
 //
 
-
 // ============================================================================
 // FUNCTION: Unwind@0052d5c0
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -471,30 +499,5 @@ const _: () = {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: WorldServer
