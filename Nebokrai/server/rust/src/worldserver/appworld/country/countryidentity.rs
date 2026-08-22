@@ -14,10 +14,16 @@
 //! границу setter-а: embedded NUL завершает значимые bytes имени.
 
 /// Безопасный value-owner исходной identity без vtable/string ABI.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CCountryIdentity {
     id: i32,
     name: Vec<u8>,
+}
+
+impl Default for CCountryIdentity {
+    fn default() -> Self {
+        Self::with_constructor_defaults()
+    }
 }
 
 impl CCountryIdentity {
@@ -57,7 +63,7 @@ impl CCountryIdentity {
 
 // ============================================================================
 // FUNCTION: CCountryIdentity::~CCountryIdentity
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countryidentity.cpp:11
@@ -73,7 +79,7 @@ impl CCountryIdentity {
 
 // ============================================================================
 // FUNCTION: CCountryIdentity::CCountryIdentity
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countryidentity.cpp:7

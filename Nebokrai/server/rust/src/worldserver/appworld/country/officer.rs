@@ -17,13 +17,19 @@
 use super::countryidentity::CCountryIdentity;
 
 /// Безопасная композиция identity и четырёх exact byte-полей officer-а.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct COfficer {
     identity: CCountryIdentity,
     id_type: u8,
     quest_switch: bool,
     appointed: bool,
     salary_received: bool,
+}
+
+impl Default for COfficer {
+    fn default() -> Self {
+        Self::with_constructor_defaults()
+    }
 }
 
 impl COfficer {
@@ -87,7 +93,7 @@ impl COfficer {
 
 // ============================================================================
 // FUNCTION: COfficer::~COfficer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\officer.cpp:5

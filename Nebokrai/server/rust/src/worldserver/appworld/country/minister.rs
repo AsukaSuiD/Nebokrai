@@ -15,9 +15,15 @@
 use super::officer::COfficer;
 
 /// Номинальный minister с полным достигнутым officer-prefix.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CMinister {
     officer: COfficer,
+}
+
+impl Default for CMinister {
+    fn default() -> Self {
+        Self::with_constructor_defaults()
+    }
 }
 
 impl CMinister {
@@ -45,7 +51,7 @@ impl CMinister {
 
 // ============================================================================
 // FUNCTION: CMinister::CMinister
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\minister.cpp:5
@@ -60,7 +66,7 @@ impl CMinister {
 
 // ============================================================================
 // FUNCTION: CMinister::~CMinister
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\minister.cpp:9

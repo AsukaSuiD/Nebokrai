@@ -31,13 +31,19 @@ use crate::worldserver::appworld::country::countryparam::{
 use super::officer::COfficer;
 
 /// Safe nominal owner `CKing` без старого vtable/ABI.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CKing {
     officer: COfficer,
     control_point: i32,
     material_point: i32,
     war_point: i32,
     registered: bool,
+}
+
+impl Default for CKing {
+    fn default() -> Self {
+        Self::with_constructor_defaults()
+    }
 }
 
 impl CKing {
@@ -289,7 +295,7 @@ fn apply_point(
 
 // ============================================================================
 // FUNCTION: CKing::CKing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\king.cpp:9
@@ -297,15 +303,16 @@ fn apply_point(
 // ADDRESS: 004dfcf0
 // PROTOTYPE: undefined __thiscall CKing(void)
 //
-// IMPLEMENTED_OWNER: `CKing::with_constructor_defaults` выше; unsafe
-// `m_bRegister` исправлен в соответствии с верхним owner-комментарием.
+// IMPLEMENTED_OWNER: `CKing::with_constructor_defaults` и `Default` выше;
+// неинициализированный `m_bRegister` исправлен в соответствии с верхним
+// owner-комментарием.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CKing::~CKing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\king.cpp:19
@@ -313,7 +320,7 @@ fn apply_point(
 // ADDRESS: 004dfd20
 // PROTOTYPE: void __thiscall ~CKing(void)
 //
-// IMPLEMENTED_OWNER: normal `Drop` composition заменяет destructor-chain.
+// IMPLEMENTED_OWNER: обычный `Drop` композиции заменяет destructor-chain.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
