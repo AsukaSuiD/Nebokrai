@@ -7,7 +7,8 @@
 //! `0x000566F0`, `QueryGoodsBasePropertiesByOriginalName` RVA `0x00057390`,
 //! `GetGoldCoinIndex/GetYuanBaoIndex/GetJiFenIndex` RVA
 //! `0x00056810/0x000568B0/0x00056950`,
-//! сломанный `UpgradeEquipment` RVA `0x000561C0`,
+//! private `Upgrade` и сломанный `UpgradeEquipment` RVA
+//! `0x00055F20/0x000561C0`,
 //! `CreateGoods/CreateGoodsNoProbability` RVA
 //! `0x00059460/0x000597C0`, `Release/Load` RVA
 //! `0x00058380/0x00059EE0`, `Serialize` RVA `0x00056130` — `IMPLEMENTED`;
@@ -61,8 +62,8 @@
 //! donor-пути; валидный вход и его observable state не меняются.
 //! `UpgradeEquipment` в matching EXE заблокирован exact всегда-нулевым
 //! `CGoods::CanUpgraded`; поэтому исправленное mutation-тело Linux-donor-а не
-//! является поведением этой версии. Private `Upgrade` остаётся raw и
-//! недостижимым из материализованного публичного контура.
+//! является поведением этой версии. Private `Upgrade` материализован отдельным
+//! callback-adapter-ом, но публичный контур по-прежнему не достигает его.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -70,7 +71,7 @@ use std::ffi::CStr;
 use std::fmt;
 use std::path::Path;
 
-use super::cgoods::{CGoods, GoodsCodecError};
+use super::cgoods::{CGoods, FirstAddonModifierAdjustment, GoodsCodecError};
 use super::cgoodsbaseproperties::{
     CGoodsBaseProperties, GoodsBasePropertiesCodecError, ICON_TYPE_CONTAINER, ICON_TYPE_EQUIPPED,
     ICON_TYPE_GROUND,
@@ -84,6 +85,12 @@ pub(crate) type GoodsOriginalNameIndex = BTreeMap<Vec<u8>, u32>;
 
 /// Достигнутый индекс exact legacy localized-name в unsigned goods id.
 pub(crate) type GoodsNameIndex = BTreeMap<Vec<u8>, u32>;
+
+/// Safe-граница private `CGoodsFactory::Upgrade` для malformed destination.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GoodsUpgradeBlock {
+    DestinationAddonHasNoValues { property_type: i32 },
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GoodsRegistryLoadError {
@@ -230,6 +237,45 @@ pub(crate) fn serialize_goods_registry(
             .map_err(GoodsRegistrySerializeError::BaseProperties)?;
     }
     Ok(())
+}
+
+/// Материализует private `CGoodsFactory::Upgrade`.
+///
+/// `random` вызывается ровно тогда, когда source upper-value положительно,
+/// с exact signed wrapping `upper - lower`; callback несёт уже достигнутую
+/// legacy-семантику `random(bound)`. Non-zero `increase` исходника выражен
+/// bool-границей. Пустой destination value-vector был raw dereference и
+/// становится typed block без mutation.
+pub(crate) fn upgrade_goods_addon<Random>(
+    goods: &mut CGoods,
+    source_property_type: i32,
+    destination_property_type: i32,
+    increase: bool,
+    random: &mut Random,
+) -> Result<bool, GoodsUpgradeBlock>
+where
+    Random: FnMut(i32) -> i32,
+{
+    let lower = goods.get_addon_property_value(source_property_type, 1);
+    if lower < 1 {
+        return Ok(false);
+    }
+    let upper = goods.get_addon_property_value(source_property_type, 2);
+    let delta = if upper > 0 {
+        lower.wrapping_add(random(upper.wrapping_sub(lower)))
+    } else {
+        lower
+    };
+
+    match goods.adjust_first_addon_modifier(destination_property_type, delta, increase) {
+        FirstAddonModifierAdjustment::MissingProperty => Ok(false),
+        FirstAddonModifierAdjustment::MissingValue => {
+            Err(GoodsUpgradeBlock::DestinationAddonHasNoValues {
+                property_type: destination_property_type,
+            })
+        }
+        FirstAddonModifierAdjustment::Adjusted => Ok(true),
+    }
 }
 
 fn load_base_properties<ResolveString>(
@@ -644,7 +690,7 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 
 // ============================================================================
 // FUNCTION: CGoodsFactory::Upgrade
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsfactory.cpp:859
@@ -652,6 +698,12 @@ fn create_goods_base(index: u32, properties: &CGoodsBaseProperties) -> Box<CGood
 // ADDRESS: 00455f20
 // PROTOTYPE: int __cdecl Upgrade(CGoods * param_1, GOODS_ADDON_PROPERTIES param_2, GOODS_ADDON_PROPERTIES param_3, int param_4)
 //
+// VERIFIED_DISASSEMBLY: exact `0x00455F20..0x0045603F` вызывает `random` при
+// любом `upper > 0`, передавая signed wrapping `upper - lower`, в отличие от
+// Linux-donor clamp. Реализовано `upgrade_goods_addon`; null goods не входит в
+// typed Rust API, а пустой destination value-vector становится safe block
+// вместо raw dereference. `UpgradeEquipment` этой EXE всё ещё не достигает
+// helper из-за exact `CanUpgraded == 0`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

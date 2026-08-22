@@ -186,6 +186,18 @@ pub(super) struct GoodsAddonProperty {
     values: Vec<GoodsAddonPropertyValue>,
 }
 
+/// Итог safe-доступа `CGoodsFactory::Upgrade` к первому destination-value.
+///
+/// Raw owner находил первый совпавший property и без проверки разыменовывал
+/// `vValues._Myfirst`. Пустой value-vector не является нормальным игровым
+/// состоянием и не получает искусственной mutation в Rust.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum FirstAddonModifierAdjustment {
+    MissingProperty,
+    MissingValue,
+    Adjusted,
+}
+
 /// Достигнутая base-часть исходного `CGoods`.
 pub(crate) struct CGoods {
     shape_base: CShape,
@@ -368,6 +380,43 @@ impl CGoods {
             .iter()
             .find(|property| property.property_type == property_type)
             .map_or(&[], |property| property.values.as_slice())
+    }
+
+    /// Меняет modifier первого addon-value точным private factory-путём.
+    ///
+    /// Сначала выбирается первый property данного numeric-типа, затем его
+    /// первый value. Сложение/вычитание происходят как signed 32-bit x86
+    /// arithmetic; increase ветвь ограничивает только верх `65535`, а
+    /// decrease ветвь — только нижний ноль.
+    pub(super) fn adjust_first_addon_modifier(
+        &mut self,
+        property_type: i32,
+        delta: i32,
+        increase: bool,
+    ) -> FirstAddonModifierAdjustment {
+        let Some(property) = self
+            .addon_properties
+            .iter_mut()
+            .find(|property| property.property_type == property_type)
+        else {
+            return FirstAddonModifierAdjustment::MissingProperty;
+        };
+        let Some(value) = property.values.first_mut() else {
+            return FirstAddonModifierAdjustment::MissingValue;
+        };
+
+        if increase {
+            value.modifier = value.modifier.wrapping_add(delta);
+            if value.modifier > 0xffff {
+                value.modifier = 0xffff;
+            }
+        } else {
+            value.modifier = value.modifier.wrapping_sub(delta);
+            if value.modifier < 0 {
+                value.modifier = 0;
+            }
+        }
+        FirstAddonModifierAdjustment::Adjusted
     }
 
     /// Возвращает exact unsigned stacking-limit для текущих base-properties.
