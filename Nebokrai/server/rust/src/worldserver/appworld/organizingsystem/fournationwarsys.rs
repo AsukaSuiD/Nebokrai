@@ -5,8 +5,9 @@
 //! `0x00093F80`, `OnRefreshRegion`/`OnClearWar`/`RequestWarResultFromGS` RVA
 //! `0x00093B10/0x00093B80/0x00093BF0`, `GetWarRegionIDByTime` RVA
 //! `0x00094200`, `OnSignUpWarStart`/`OnWarEnd` RVA
-//! `0x00094F10/0x00095E90`, `ReLoad` RVA `0x00097370`: `IMPLEMENTED`; loader,
-//! прочие calendar branches и остальной Game runtime ниже остаются
+//! `0x00094F10/0x00095E90`, `Initialize` RVA `0x000963E0` и `ReLoad` RVA
+//! `0x00097370`: `IMPLEMENTED`; прочие calendar branches и остальной Game
+//! runtime ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -1757,7 +1758,7 @@ fn next_war_i32<'a>(
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::Initialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:19
@@ -1765,6 +1766,8 @@ fn next_war_i32<'a>(
 // ADDRESS: 004963e0
 // PROTOTYPE: bool __cdecl Initialize(void)
 //
+// Реализовано выше как `CFourNationWarSys::initialize`: порядок очистки,
+// чтения setup/fund, calendar-регистрации и позднего nation-loader-а сохранён.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
