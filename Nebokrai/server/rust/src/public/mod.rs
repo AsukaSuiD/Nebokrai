@@ -44,6 +44,8 @@ pub(crate) mod auctionroom;
 pub(crate) mod auctionlog;
 
 pub(crate) mod md5;
+pub(crate) mod mystringtable;
+pub(crate) mod stringtable;
 
 #[allow(
     dead_code,

@@ -1,6 +1,148 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Общая byte-exact таблица строк Miracle.
+//!
+//! WorldServer `StringTable::StringTable/load/free/getStringByID` RVA
+//! `0x0004E570/0x0004E5E0/0x0004E020/0x0004D8F0` — `IMPLEMENTED`;
+//! файловая перегрузка `load` RVA `0x0004EA30` разделена на универсальный
+//! resource-reader конкретного процесса и здешний parser. Остальные варианты
+//! и сырой C++ ниже остаются доказательной документацией.
+//!
+//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
+//! исходный owner
+//! `e:\svn\fengyun_russia_dev\public\stringtable.cpp:27,40,157,195,200`.
+//! `BTreeMap<Vec<u8>, Vec<u8>>` заменяет только MSVC `std::map/std::string` и
+//! сохраняет unsigned byte-лексикографический порядок ASCII ID. `load` не
+//! очищает прежнюю таблицу: успешно прочитанный prefix остаётся даже после
+//! последующей syntax-error, а повторный ID заменяет value через `operator[]`.
+//! Комментарий начинается с `;` после whitespace и пропускается до `\n`;
+//! ID содержит только ASCII alphanumeric, value — любые байты между прямыми
+//! кавычками без escape-обработки.
+//!
+//! Exact первая error-ветвь форматировала pointer на ID через `%d`, выдавая
+//! нестабильный адрес вместо текста. Это внутренний диагностический баг без
+//! совместимого результата; Rust сохраняет момент отказа и prefix-мутации, но
+//! пишет сам ID. Last-error не очищается при следующем успехе, как исходный
+//! `mErrorDesc`. Rust ownership/Drop заменяют destructor и allocator plumbing.
+
+use std::collections::BTreeMap;
+
+/// Достигнутый World-owner `StringTable` без зависимости от resource backend.
+#[derive(Default)]
+pub(crate) struct StringTable {
+    entries: BTreeMap<Vec<u8>, Vec<u8>>,
+    last_error: Vec<u8>,
+}
+
+impl StringTable {
+    pub(crate) const fn new() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            last_error: Vec::new(),
+        }
+    }
+
+    /// Возвращает value exact key либо nullable-result исходного map lookup.
+    pub(crate) fn get_string_by_id(&self, id: &[u8]) -> Option<&[u8]> {
+        self.entries.get(id).map(Vec::as_slice)
+    }
+
+    /// Очищает только map; прежний `mErrorDesc` намеренно сохраняется.
+    pub(crate) fn free(&mut self) {
+        self.entries.clear();
+    }
+
+    pub(crate) fn last_error(&self) -> &[u8] {
+        &self.last_error
+    }
+
+    pub(crate) fn entries(&self) -> &BTreeMap<Vec<u8>, Vec<u8>> {
+        &self.entries
+    }
+
+    /// Разбирает один resource-buffer с точными prefix/overwrite эффектами.
+    pub(crate) fn load_bytes(&mut self, source: &[u8]) -> bool {
+        let mut offset = 0usize;
+
+        loop {
+            while offset < source.len() && is_legacy_space(source[offset]) {
+                offset += 1;
+            }
+            if offset >= source.len() {
+                return true;
+            }
+
+            if source[offset] == b';' {
+                while offset < source.len() && source[offset] != b'\n' {
+                    offset += 1;
+                }
+                offset = offset.saturating_add(1);
+                continue;
+            }
+
+            let mut id = Vec::new();
+            while offset < source.len() {
+                let byte = source[offset];
+                if byte == b'"' || !byte.is_ascii_alphanumeric() {
+                    break;
+                }
+                id.push(byte);
+                offset += 1;
+            }
+
+            while offset < source.len() && source[offset] != b'"' {
+                offset += 1;
+            }
+            offset = offset.saturating_add(1);
+            if offset >= source.len() {
+                self.set_missing_value_error(&id);
+                return false;
+            }
+
+            let value_start = offset;
+            while offset < source.len() && source[offset] != b'"' {
+                offset += 1;
+            }
+            if offset >= source.len() {
+                self.set_missing_closing_quote_error(&id);
+                return false;
+            }
+
+            if !id.is_empty() {
+                self.entries.insert(id, source[value_start..offset].to_vec());
+            }
+            offset += 1;
+        }
+    }
+
+    /// Материализует file/resource-overload failure для пустого имени.
+    pub(crate) fn reject_empty_resource_name(&mut self) {
+        self.last_error = b"String::load : invalid file name : [] !".to_vec();
+    }
+
+    /// Материализует file/resource-overload failure открытия.
+    pub(crate) fn reject_missing_resource(&mut self, name: &[u8]) {
+        let mut error = b"Can not open this file : [".to_vec();
+        error.extend_from_slice(name);
+        error.extend_from_slice(b"] !");
+        self.last_error = error;
+    }
+
+    fn set_missing_value_error(&mut self, id: &[u8]) {
+        let mut error = b"Syntax error : no string match to the id : ".to_vec();
+        error.extend_from_slice(id);
+        self.last_error = error;
+    }
+
+    fn set_missing_closing_quote_error(&mut self, id: &[u8]) {
+        let mut error = b"Syntax error : no '\"' match '\"' of id : ".to_vec();
+        error.extend_from_slice(id);
+        error.push(b'.');
+        self.last_error = error;
+    }
+}
+
+fn is_legacy_space(byte: u8) -> bool {
+    byte.is_ascii_whitespace()
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -261,7 +403,7 @@
 
 // ============================================================================
 // FUNCTION: StringTable::getStringByID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\stringtable.cpp:200
@@ -269,13 +411,15 @@
 // ADDRESS: 0044d8f0
 // PROTOTYPE: char * __thiscall getStringByID(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1)
 //
+// IMPLEMENTED_OWNER: `StringTable::get_string_by_id`; `BTreeMap::get` заменяет
+// только MSVC tree traversal и сохраняет nullable miss.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: StringTable::_setLastErrorDesc
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / CORRECTED_INTERNAL_DEFECT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\stringtable.cpp:231
@@ -283,13 +427,16 @@
 // ADDRESS: 0044d930
 // PROTOTYPE: void __thiscall _setLastErrorDesc(char * param_1, ...)
 //
+// IMPLEMENTED_OWNER: три typed error-builder-а `StringTable`; нестабильный
+// pointer-as-`%d` первой parser-ветви исправлен, остальные значимые bytes
+// сохранены без воспроизведения stack buffer/varargs plumbing.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: StringTable::free
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\stringtable.cpp:195
@@ -297,13 +444,14 @@
 // ADDRESS: 0044e020
 // PROTOTYPE: void __thiscall free(void)
 //
+// IMPLEMENTED_OWNER: `StringTable::free`; очищается map, но не `last_error`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: StringTable::~StringTable
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\stringtable.cpp:31
@@ -311,13 +459,15 @@
 // ADDRESS: 0044e3a0
 // PROTOTYPE: void __thiscall ~StringTable(void)
 //
+// IMPLEMENTED_OWNER: обычный Rust `Drop` полей; ручной allocator/tree/string
+// cleanup не является Miracle-семантикой.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: StringTable::StringTable
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\stringtable.cpp:27
@@ -325,13 +475,14 @@
 // ADDRESS: 0044e570
 // PROTOTYPE: undefined __thiscall StringTable(void)
 //
+// IMPLEMENTED_OWNER: `StringTable::new/Default` создают пустые map/error.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: StringTable::load
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\stringtable.cpp:40
@@ -339,13 +490,17 @@
 // ADDRESS: 0044e5e0
 // PROTOTYPE: bool __thiscall load(char * param_1, uint param_2)
 //
+// IMPLEMENTED_OWNER: `StringTable::load_bytes`; parser сохраняет точный
+// `0x0044E5E0..0x0044EA25` order, partial map mutation и duplicate overwrite.
+// ASCII classification заменяет process-locale CRT только для ID/whitespace;
+// quoted value остаётся byte-exact.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: StringTable::load
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / INFRASTRUCTURE_SPLIT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\stringtable.cpp:157
@@ -353,6 +508,9 @@
 // ADDRESS: 0044ea30
 // PROTOTYPE: bool __thiscall load(char * param_1)
 //
+// IMPLEMENTED_OWNER: пустое/missing имя выражают `reject_*`, а чтение bytes
+// остаётся callback-ом конкретного resource backend; parser — `load_bytes`.
+// `Vec` и Rust owner устраняют raw allocation и исходную утечку `CRFile`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

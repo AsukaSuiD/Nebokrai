@@ -1009,6 +1009,7 @@ use crate::public::auctionlog::{
     AuctionBangUpdateOutcome, AuctionLogLoadOutcome, CAuctionLog,
 };
 use crate::public::date::TagTime;
+use crate::public::mystringtable::MyStringTable;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
 use crate::public::readwrite::read_to;
 use crate::public::timer::{
@@ -1570,6 +1571,42 @@ pub(crate) enum WorldGameInitEvent {
     OperatorNotice(WorldGameInitOperatorNotice),
 }
 
+/// Safe-граница единственного legacy `long` count string-table wire.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldStringTableEncodingBlock {
+    pub(crate) entry_count: usize,
+}
+
+/// Наблюдаемый результат exact `CGame::LoadStringTable`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldStringTableLoadReport {
+    pub(crate) package: Vec<u8>,
+    pub(crate) succeeded: bool,
+    pub(crate) log_payload: Vec<u8>,
+}
+
+/// Последняя достигнутая ветвь `CGame::UpdateStringTable`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldStringTableUpdateCompletion {
+    DefaultLanguageFailed,
+    ConfiguredLanguageFailed,
+    EncodingBlocked(WorldStringTableEncodingBlock),
+    Empty,
+    Broadcast {
+        message_type: i32,
+        payload_length: usize,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
+/// Полный результат reload-а; `requested_package` фиксирует игнорируемый
+/// исходной функцией аргумент вместо того, чтобы молча приписать ему смысл.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldStringTableUpdateReport {
+    pub(crate) requested_package: Vec<u8>,
+    pub(crate) completion: WorldStringTableUpdateCompletion,
+}
+
 /// Первая fail/nonreturn граница полного `CGame::Init`.
 #[derive(Debug)]
 pub(crate) enum WorldGameInitBlockReason<ContextBlock> {
@@ -1580,6 +1617,7 @@ pub(crate) enum WorldGameInitBlockReason<ContextBlock> {
     InvalidPlayerLoadThreadCount { count: u32, legacy_exit_code: i32 },
     DefaultLanguageTable,
     ConfiguredLanguageTable,
+    StringTableEncoding(WorldStringTableEncodingBlock),
     DupliRegionSetup,
     Context(ContextBlock),
     Reload(WorldReloadBlock),
@@ -1633,10 +1671,6 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn claim_single_instance(&mut self, title: &[u8]) -> bool;
     fn notify_operator(&mut self, notice: &WorldGameInitOperatorNotice);
 
-    fn clear_string_table(&mut self);
-    fn load_string_table(&mut self, package: &[u8]) -> bool;
-    fn code_string_table(&mut self);
-
     /// Обязана сначала опубликовать новый owner, затем вызвать его `Load`.
     fn create_and_load_dupli_region_setup(&mut self) -> bool;
 
@@ -1663,8 +1697,6 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn auction_log_database(&mut self) -> Option<&mut WorldTdsClient>;
     /// Exact `CGlobeSetup::m_stSetup.dwIncrementLogDays` для history query.
     fn auction_increment_log_days(&mut self) -> u32;
-    fn world_string_by_id(&mut self, string_id: &[u8]) -> Vec<u8>;
-
     /// Для write-worker сохраняет единственный handle, для load-worker
     /// добавляет даже пустой handle в исходный ordered owner.
     fn start_worker(&mut self, kind: WorldGameInitWorkerKind) -> WorldGameInitWorkerHandleState;
@@ -3570,7 +3602,6 @@ pub(crate) enum WorldReloadBooleanOwner {
 /// Прямой соседний owner без наблюдаемого return в исходном dispatcher-е.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldReloadVoidOwner {
-    UpdateStringTable,
     LoadOrganizingParameters,
     ReinitializeFactionsByLevel,
     VillageWar,
@@ -5745,6 +5776,8 @@ pub(crate) struct CGame {
     /// Process-global `CThingSetup` привязан к единственному World `CGame`.
     thing_setup: CThingSetup,
     globe_variables: WorldGlobeVariables,
+    string_table: MyStringTable,
+    string_table_array: Vec<u8>,
     net_client: Option<CMyNetClient>,
     net_server: Option<CMyNetServer>,
     regions: BTreeMap<i32, WorldRegionAssignment>,
@@ -5799,6 +5832,8 @@ impl CGame {
             setup: WorldSetup::for_game(),
             thing_setup: CThingSetup::new(),
             globe_variables: WorldGlobeVariables::default(),
+            string_table: MyStringTable::new(),
+            string_table_array: Vec::new(),
             net_client: None,
             net_server: None,
             regions: BTreeMap::new(),
@@ -5834,6 +5869,132 @@ impl CGame {
             last_ping_game_server_time_ms: legacy_tick_ms(),
             game_server_message_time_ms: 0,
             login_server_message_time_ms: 0,
+        }
+    }
+
+    /// Exact `ClearStringTable`: очищает map и прежний coded buffer.
+    pub(crate) fn clear_string_table(&mut self) {
+        self.string_table.table_mut().free();
+        self.string_table_array.clear();
+    }
+
+    /// Выполняет file-overload через уже выбранный caller-ом resource backend.
+    pub(crate) fn load_string_table_resource(
+        &mut self,
+        package: &[u8],
+        source: Option<&[u8]>,
+    ) -> WorldStringTableLoadReport {
+        let package = legacy_c_string_prefix(package);
+        let succeeded = if package.is_empty() {
+            self.string_table
+                .table_mut()
+                .reject_empty_resource_name();
+            false
+        } else if let Some(source) = source {
+            self.string_table.table_mut().load_bytes(source)
+        } else {
+            self.string_table
+                .table_mut()
+                .reject_missing_resource(package);
+            false
+        };
+
+        let mut log_payload = b"Load language packet [".to_vec();
+        log_payload.extend_from_slice(package);
+        if succeeded {
+            log_payload.extend_from_slice(b"]...OK!");
+        } else {
+            log_payload.extend_from_slice(b"]...FAILED! : ");
+            log_payload.extend_from_slice(self.string_table.table().last_error());
+        }
+
+        WorldStringTableLoadReport {
+            package: package.to_vec(),
+            succeeded,
+            log_payload,
+        }
+    }
+
+    /// Дописывает current ordered table в coded buffer, как исходный owner.
+    pub(crate) fn code_string_table(
+        &mut self,
+    ) -> Result<(), WorldStringTableEncodingBlock> {
+        self.string_table
+            .to_byte_array(&mut self.string_table_array)
+            .map_err(|entry_count| WorldStringTableEncodingBlock { entry_count })
+    }
+
+    pub(crate) fn get_string_table_byte_array(&self) -> &[u8] {
+        &self.string_table_array
+    }
+
+    /// CGame-обёртка превращает nullable miss базового owner-а в пустую строку.
+    pub(crate) fn get_string_by_id(&self, string_id: &[u8]) -> &[u8] {
+        self.string_table
+            .table()
+            .get_string_by_id(legacy_c_string_prefix(string_id))
+            .unwrap_or_default()
+    }
+
+    /// Exact reload всегда игнорирует переданное имя и перечитывает default и
+    /// настроенный packages. Resource I/O остаётся инфраструктурным callback-ом.
+    pub(crate) fn update_string_table<Context: WorldReloadContext + ?Sized>(
+        &mut self,
+        context: &mut Context,
+        requested_package: &[u8],
+    ) -> WorldStringTableUpdateReport {
+        const DEFAULT_LANGUAGE: &[u8] = b"data/Language.lag";
+
+        self.clear_string_table();
+        let source = context.read_resource(DEFAULT_LANGUAGE);
+        let default = self.load_string_table_resource(DEFAULT_LANGUAGE, source.as_deref());
+        context.add_log_text(&default.log_payload);
+        if !default.succeeded {
+            return WorldStringTableUpdateReport {
+                requested_package: requested_package.to_vec(),
+                completion: WorldStringTableUpdateCompletion::DefaultLanguageFailed,
+            };
+        }
+
+        let configured_package = self.setup.language_package.clone();
+        let source = context.read_resource(&configured_package);
+        let configured =
+            self.load_string_table_resource(&configured_package, source.as_deref());
+        context.add_log_text(&configured.log_payload);
+        if !configured.succeeded {
+            return WorldStringTableUpdateReport {
+                requested_package: requested_package.to_vec(),
+                completion: WorldStringTableUpdateCompletion::ConfiguredLanguageFailed,
+            };
+        }
+
+        if let Err(block) = self.code_string_table() {
+            return WorldStringTableUpdateReport {
+                requested_package: requested_package.to_vec(),
+                completion: WorldStringTableUpdateCompletion::EncodingBlocked(block),
+            };
+        }
+        if self.string_table_array.is_empty() {
+            context.add_log_text(
+                b"WARNING : Language packet is NULL, will NOT send to WorldServer.",
+            );
+            return WorldStringTableUpdateReport {
+                requested_package: requested_package.to_vec(),
+                completion: WorldStringTableUpdateCompletion::Empty,
+            };
+        }
+
+        let mut message = CMessage::new(0x0007_F807);
+        message.base_mut().add(&self.string_table_array);
+        let delivery = message.send_all(self.current_game_server_sender().as_ref());
+        context.add_log_text(b"Send the new language packet to all the GameServers.");
+        WorldStringTableUpdateReport {
+            requested_package: requested_package.to_vec(),
+            completion: WorldStringTableUpdateCompletion::Broadcast {
+                message_type: 0x0007_F807,
+                payload_length: self.string_table_array.len(),
+                delivery,
+            },
         }
     }
 
@@ -6519,7 +6680,7 @@ impl CGame {
                 }
             }
             WorldReloadProfile::StringTable => {
-                context.call_void_owner(WorldReloadVoidOwner::UpdateStringTable);
+                let _ = self.update_string_table(context, profile_name);
             }
             WorldReloadProfile::LogSystem => {
                 if Self::reload_boolean_with_log(
@@ -8095,10 +8256,21 @@ impl CGame {
             player_load_thread_count,
         ));
 
-        context.clear_string_table();
+        self.clear_string_table();
         events.push(WorldGameInitEvent::StringTablesCleared);
         const DEFAULT_LANGUAGE: &[u8] = b"data/Language.lag";
-        if !context.load_string_table(DEFAULT_LANGUAGE) {
+        let default_language_source = context.read_resource(DEFAULT_LANGUAGE);
+        let default_language = self.load_string_table_resource(
+            DEFAULT_LANGUAGE,
+            default_language_source.as_deref(),
+        );
+        self.record_game_init_log(
+            &mut events,
+            log,
+            callbacks,
+            &default_language.log_payload,
+        );
+        if !default_language.succeeded {
             self.record_game_init_log(
                 &mut events,
                 log,
@@ -8111,7 +8283,18 @@ impl CGame {
             package: DEFAULT_LANGUAGE.to_vec(),
         });
         let configured_language = self.setup.language_package.clone();
-        if !context.load_string_table(&configured_language) {
+        let configured_language_source = context.read_resource(&configured_language);
+        let configured_language_load = self.load_string_table_resource(
+            &configured_language,
+            configured_language_source.as_deref(),
+        );
+        self.record_game_init_log(
+            &mut events,
+            log,
+            callbacks,
+            &configured_language_load.log_payload,
+        );
+        if !configured_language_load.succeeded {
             self.record_game_init_log(
                 &mut events,
                 log,
@@ -8123,7 +8306,9 @@ impl CGame {
         events.push(WorldGameInitEvent::StringTableLoaded {
             package: configured_language,
         });
-        context.code_string_table();
+        if let Err(block) = self.code_string_table() {
+            stop!(WorldGameInitBlockReason::StringTableEncoding(block));
+        }
         events.push(WorldGameInitEvent::StringTablesCoded);
 
         if !context.create_and_load_dupli_region_setup() {
@@ -8368,7 +8553,7 @@ impl CGame {
         let succeeded = context.initialize_boolean_owner(owner);
         events.push(WorldGameInitEvent::BooleanOwner { owner, succeeded });
         if !succeeded {
-            let localized = context.world_string_by_id(b"XBWS0021");
+            let localized = self.get_string_by_id(b"XBWS0021").to_vec();
             self.record_game_init_log(&mut events, log, callbacks, &localized);
             stop!(WorldGameInitBlockReason::BooleanOwner(owner));
         }
@@ -17731,7 +17916,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::CodeStringTable
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5345
@@ -17739,13 +17924,15 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 00401f00
 // PROTOTYPE: void __thiscall CodeStringTable(void)
 //
+// IMPLEMENTED_OWNER: `CGame::code_string_table`; exact append делегирован
+// достигнутому `MyStringTable::to_byte_array`, без не-Miracle vector plumbing.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGame::GetStringTableByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5350
@@ -17753,6 +17940,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 00401f20
 // PROTOTYPE: vector<unsigned_char,std::allocator<unsigned_char>_> * __thiscall GetStringTableByteArray(void)
 //
+// читает тот же owned buffer напрямую, без внешней дублирующей ссылки.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -17790,7 +17978,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: GetStringByID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.h:944
@@ -17798,6 +17986,8 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 00402fb0
 // PROTOTYPE: char * __cdecl GetStringByID(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1)
 //
+// IMPLEMENTED_OWNER: `CGame::get_string_by_id`; явный game-owner заменяет
+// nullable process-global `g_pGame`, а miss по-прежнему даёт пустые bytes.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -17820,7 +18010,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::LoadStringTable
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / INFRASTRUCTURE_SPLIT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5324
@@ -17828,6 +18018,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 004033f0
 // PROTOTYPE: bool __thiscall LoadStringTable(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1)
 //
+// выполняет process context, parser/error и обе exact log-ветви принадлежат CGame.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -18036,7 +18227,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::ClearStringTable
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5339
@@ -18044,13 +18235,15 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 004087d0
 // PROTOTYPE: void __thiscall ClearStringTable(void)
 //
+// IMPLEMENTED_OWNER: `CGame::clear_string_table`; Rust `clear` заменяет map,
+// vector delete и три сырых iterator pointer assignment-а.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGame::UpdateStringTable
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5355
@@ -18058,6 +18251,9 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 00408820
 // PROTOTYPE: bool __thiscall UpdateStringTable(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1)
 //
+// IMPLEMENTED_OWNER: `CGame::update_string_table`; аргумент намеренно
+// игнорируется, перечитываются default/configured packages, затем exact
+// `0x7F807` raw broadcast и обе исходные log-ветви.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

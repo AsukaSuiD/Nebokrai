@@ -809,7 +809,6 @@ pub(crate) struct WorldGameServerConnectionReport {
 /// Concrete owner-снимки достигнутого prefix-а initial-config.
 pub(crate) struct WorldGameServerInitialConfigurationPrefix<'a> {
     pub(crate) da_kong_xiang_qian: &'a [u8],
-    pub(crate) string_table: &'a [u8],
     pub(crate) valid_words_filter: Option<&'a [u8]>,
     pub(crate) goods_registry: &'a GoodsBasePropertiesRegistry,
     pub(crate) thing_setup: &'a CThingSetup,
@@ -2753,7 +2752,7 @@ pub(crate) fn continue_game_server_initial_configuration_prefix(
         sender.as_ref(),
         socket_id,
         0x2F,
-        snapshots.string_table,
+        game.get_string_table_byte_array(),
     ));
     let language_notice = true;
 

@@ -1,6 +1,54 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Byte-array adapter исходного `MyStringTable`.
+//!
+//! WorldServer `MyStringTable::toByteArray` RVA `0x00055940` —
+//! `IMPLEMENTED`; GameServer decode-вариант ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
+//! исходный owner `e:\svn\fengyun_russia_dev\public\mystringtable.cpp:14`.
+//!
+//! Wire: signed 32-bit count, затем каждая пара ordered map как две
+//! NUL-terminated byte-строки. Исходный метод дописывает в destination и не
+//! очищает его; это сохранено. `BTreeMap`-order предоставляет базовый
+//! `StringTable`, а `Vec` заменяет только MSVC vector plumbing.
+
+use super::stringtable::StringTable;
+
+#[derive(Default)]
+pub(crate) struct MyStringTable {
+    table: StringTable,
+}
+
+impl MyStringTable {
+    pub(crate) const fn new() -> Self {
+        Self {
+            table: StringTable::new(),
+        }
+    }
+
+    pub(crate) const fn table(&self) -> &StringTable {
+        &self.table
+    }
+
+    pub(crate) const fn table_mut(&mut self) -> &mut StringTable {
+        &mut self.table
+    }
+
+    /// Дописывает exact World string-table wire в существующий buffer.
+    pub(crate) fn to_byte_array(&self, destination: &mut Vec<u8>) -> Result<(), usize> {
+        let count = i32::try_from(self.table.entries().len())
+            .map_err(|_| self.table.entries().len())?;
+        destination.extend_from_slice(&count.to_le_bytes());
+        for (id, value) in self.table.entries() {
+            append_c_string(destination, id);
+            append_c_string(destination, value);
+        }
+        Ok(())
+    }
+}
+
+fn append_c_string(destination: &mut Vec<u8>, value: &[u8]) {
+    destination.extend_from_slice(value);
+    destination.push(0);
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -46,7 +94,7 @@
 
 // ============================================================================
 // FUNCTION: MyStringTable::toByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\mystringtable.cpp:14
@@ -54,6 +102,7 @@
 // ADDRESS: 00455940
 // PROTOTYPE: void __thiscall toByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
 //
+// `0x00455940..0x00455A2A` дописывает count и ordered C-string пары без clear.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
