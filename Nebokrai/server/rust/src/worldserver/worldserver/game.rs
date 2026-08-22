@@ -11370,6 +11370,11 @@ impl CGame {
             drop(region);
             events.push(WorldGameReleaseEvent::RegionOwnerReleased { region_id });
         }
+        // `ClearRegionList` удаляет сначала каждый `pRegion`, затем освобождает
+        // узлы самой map. После этого места normal Release больше не читает
+        // region registry, поэтому clear устраняет только внутреннее удержание
+        // пустых Rust map-node до немедленного `DeleteGame`.
+        self.regions.clear();
 
         for (owner, released) in [
             (
