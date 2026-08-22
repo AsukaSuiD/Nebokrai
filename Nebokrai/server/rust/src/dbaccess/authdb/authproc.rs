@@ -120,6 +120,18 @@ pub(crate) enum AuthDatabaseOperation {
     WriteServerInfo,
 }
 
+impl fmt::Display for AuthDatabaseOperation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Initialize => "инициализация worker",
+            Self::Authenticate => "проверка учётной записи",
+            Self::AuthenticateExtended => "расширенная проверка учётной записи",
+            Self::Lock => "блокировка учётной записи",
+            Self::WriteServerInfo => "запись server-info",
+        })
+    }
+}
+
 /// Структурированное событие вместо старого `AddLogText` с COM description.
 pub(crate) struct AuthDatabaseNotice {
     /// Операция, завершившаяся ошибкой.

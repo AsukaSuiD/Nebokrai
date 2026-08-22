@@ -94,7 +94,7 @@ use tokio::net::TcpStream;
 use tokio::task::{JoinError, JoinHandle, JoinSet};
 use tokio::time;
 
-use crate::authserver::appauth::message::message_func::AuthMessageHandlers;
+use crate::authserver::appauth::message::message_func::{AuthMessageHandlers, LoginServerNotice};
 use crate::authserver::src::configreader::{ConfigLoadError, ConfigReader};
 use crate::authserver::src::dbqueue::{
     AuthExResultData, AuthResultData, DbQuest, DbResult, LockResultData, ServerInfo,
@@ -168,6 +168,10 @@ pub(crate) struct AuthRuntimeStep {
     pub(crate) network_errors: Vec<ServerSnapshotError<AuthReceiveError>>,
     /// Системные ошибки listener accept; следующий accept остаётся разрешён.
     pub(crate) accept_errors: Vec<io::Error>,
+    /// События регистрации и отключения LoginServer в порядке handler FIFO.
+    pub(crate) login_server_notices: Vec<LoginServerNotice>,
+    /// Ошибки DB workers, уже сопоставленные с исходным fallback-результатом.
+    pub(crate) database_notices: Vec<AuthDatabaseNotice>,
 }
 
 /// Ошибка, которая не позволяет продолжить управляемый Auth runtime.
@@ -998,8 +1002,19 @@ impl CGame<AuthMessageHandlers> {
             step.server_info_write_queued = server_info.write_queued;
         }
 
+        self.drain_runtime_notices(&mut step);
+
         time::sleep(NET_THREAD_DELAY).await;
         Ok(step)
+    }
+
+    fn drain_runtime_notices(&mut self, step: &mut AuthRuntimeStep) {
+        while let Some(notice) = self.message_handler.pop_notice() {
+            step.login_server_notices.push(notice);
+        }
+        while let Some(notice) = self.pop_auth_database_notice() {
+            step.database_notices.push(notice);
+        }
     }
 
     fn update_server_info(&self) -> Result<ServerInfoUpdate, AuthRuntimeError> {
@@ -1183,6 +1198,7 @@ fn add_legacy_string(message: &mut crate::nets::basemessage::CBaseMessage, value
 pub(crate) async fn game_thread_func<Shutdown>(
     paths: &AuthRuntimePaths,
     shutdown: Shutdown,
+    mut observe_step: impl FnMut(&AuthRuntimeStep),
 ) -> AuthGameThreadReport
 where
     Shutdown: Future<Output = ()>,
@@ -1202,7 +1218,7 @@ where
                 () = &mut shutdown => break None,
                 result = game.run_main_loop_turn() => {
                     match result {
-                        Ok(_step) => {}
+                        Ok(step) => observe_step(&step),
                         Err(error) => break Some(error),
                     }
                 }
@@ -1213,6 +1229,11 @@ where
     };
 
     let release = game.release_auth_runtime().await;
+    let mut final_step = AuthRuntimeStep::default();
+    game.drain_runtime_notices(&mut final_step);
+    if !final_step.login_server_notices.is_empty() || !final_step.database_notices.is_empty() {
+        observe_step(&final_step);
+    }
     drop(game);
     AuthGameThreadReport {
         initialization,

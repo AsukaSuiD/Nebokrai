@@ -21,12 +21,14 @@
 //! `GetLong == 0` без движения курсора.
 //!
 //! Auth/auth-ex читают account, password, client IPv4 и client socket, приводят
-//! обе строки к lower-case через исходный Russian Windows-1251 и ставят owned
-//! DB quest с socket ID текущего LoginServer. `encoding_rs` заменяет ANSI-
-//! преобразование, а неизвестный для таблицы byte сохраняется буквально;
-//! собственная Unicode/locale-таблица не создаётся. Промежуточный общий
-//! `sprintf`-буфер dotted IPv4 использовался только Windows GUI/log путями и не
-//! получает отдельного server-state.
+//! обе строки к lower-case и ставят owned DB quest с socket ID текущего
+//! LoginServer. Точный EXE вызывает `CharLowerA`, а язык преобразования получал
+//! из внешней Windows-сессии и внутри процесса не закреплял. Linux-вариант
+//! фиксирует Windows-1251 русской поставки через `encoding_rs`; для запуска
+//! оригинала под иной системной локалью преобразование байтов `0x80..=0xff`
+//! остаётся внешней границей. Непредставимый одиночный byte сохраняется
+//! буквально. Промежуточный общий `sprintf`-буфер dotted IPv4 использовался
+//! только Windows GUI/log путями и не получает отдельного server-state.
 //!
 //! GM lock читает account и шесть `u16` полей времени в исходном порядке.
 //! GM kick маршрутизирует `0xCF701` по area ID, сохраняя socket отправителя,
@@ -37,9 +39,9 @@
 //! ненулевой result — одну.
 //!
 //! Старые `AddLogText` и MFC `ListBox` не получают Windows/Rust GUI-аналога:
-//! обработчик складывает структурированные события в FIFO, чтобы будущий
-//! Linux logging-owner опубликовал их без административной плоскости. Выходная
-//! команда отказа идёт через owned `ServerCommandHandle`; handler не знает
+//! обработчик складывает структурированные события в FIFO, а управляемый
+//! main-loop снимает их в том же порядке и передаёт процессной диагностике.
+//! Выходная команда отказа идёт через owned `ServerCommandHandle`; handler не знает
 //! внутреннее устройство `CServer`. Недостаток четырёх payload-байт у
 //! `LSGetInfo` сохраняет старый `CBaseMessage::GetLong == 0` без движения
 //! курсора. Реализованные девять доменных функций удалены из сырого блока
@@ -48,6 +50,7 @@
 //! `nets/netauth/message.rs`; временного handler здесь нет.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::fmt;
 use std::net::Ipv4Addr;
 
 use encoding_rs::WINDOWS_1251;
@@ -90,6 +93,42 @@ pub(crate) enum LoginServerNotice {
         /// Исходный socket ID.
         socket_id: i32,
     },
+}
+
+impl fmt::Display for LoginServerNotice {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Connected {
+                address,
+                socket_id,
+                allowed,
+            } => write!(
+                formatter,
+                "соединение {address}, socket {socket_id}, доступ {}",
+                if *allowed {
+                    "разрешён"
+                } else {
+                    "отклонён"
+                }
+            ),
+            Self::Registered {
+                address,
+                area_id,
+                socket_id,
+            } => write!(
+                formatter,
+                "зарегистрирован {address}, area {area_id}, socket {socket_id}"
+            ),
+            Self::Disconnected {
+                address,
+                area_id,
+                socket_id,
+            } => write!(
+                formatter,
+                "отключён {address}, area {area_id}, socket {socket_id}"
+            ),
+        }
+    }
 }
 
 /// Конкретные Auth-handler’ы и принадлежавшее `CGame` состояние LoginServer.

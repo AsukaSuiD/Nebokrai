@@ -67,7 +67,10 @@ mod worldserver;
 use std::error::Error;
 use std::process::ExitCode;
 
-use authserver::src::cgame::{AuthGameThreadReport, AuthRuntimePaths, game_thread_func};
+use authserver::src::cgame::{
+    AuthGameThreadReport, AuthRuntimePaths, AuthRuntimeStep, game_thread_func,
+};
+use nets::servers::ServerIoCompletion;
 use tokio::signal::unix::{SignalKind, signal};
 
 fn main() -> ExitCode {
@@ -104,8 +107,40 @@ async fn run_auth_server(runtime_directory: std::path::PathBuf) -> Result<bool, 
         runtime_directory.display()
     );
     let paths = AuthRuntimePaths::from_runtime_directory(runtime_directory);
-    let report = game_thread_func(&paths, shutdown).await;
+    let report = game_thread_func(&paths, shutdown, report_auth_step).await;
     Ok(report_auth_result(&report))
+}
+
+fn report_auth_step(step: &AuthRuntimeStep) {
+    for notice in &step.login_server_notices {
+        eprintln!("AuthServer: событие LoginServer: {notice}");
+    }
+    for notice in &step.database_notices {
+        eprintln!(
+            "AuthServer: операция DB «{}» завершилась ошибкой: {}",
+            notice.operation, notice.error
+        );
+    }
+    for error in &step.accept_errors {
+        eprintln!("AuthServer: ошибка accept: {error}");
+    }
+    for error in &step.network_errors {
+        eprintln!("AuthServer: ошибка обработки network snapshot: {error:?}");
+    }
+    for completion in &step.io_completions {
+        match completion {
+            ServerIoCompletion::ReceiveEnded {
+                socket_id,
+                error: Some(error),
+            } => eprintln!("AuthServer: ошибка чтения socket {socket_id}: {error}"),
+            ServerIoCompletion::SendEnded {
+                socket_id,
+                result: Err(error),
+            } => eprintln!("AuthServer: ошибка отправки socket {socket_id}: {error}"),
+            ServerIoCompletion::ReceiveEnded { error: None, .. }
+            | ServerIoCompletion::SendEnded { result: Ok(_), .. } => {}
+        }
+    }
 }
 
 fn report_auth_result(report: &AuthGameThreadReport) -> bool {
