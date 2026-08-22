@@ -1,6 +1,6 @@
 //! Владелец региона исторического `WorldServer`.
 //!
-//! Owner `CRegion`; constructor, `New`, resource `Load`, region-wire
+//! Owner `CRegion`; constructor/destructor, `New`, resource `Load`, region-wire
 //! `AddToByteArray` и `DecordFromByteArray` имеют статус `IMPLEMENTED`, а
 //! существенные offsets и возвраты сверены как `VERIFIED_DISASSEMBLY`. Точная
 //! пара:
@@ -46,6 +46,10 @@
 //! current directory, не меняя самого relative path и file-layout.
 //! Число switches, невозможное для 32-bit `int`, останавливается typed
 //! границей до открытия файла; legacy не мог материализовать такой vector.
+//! Destructor exact `0x004D6DAF..0x004D6E57` последовательно освобождает
+//! cell-array, switch-vector, filename и base. Их Rust-owned `Vec` и base
+//! выполняют тот же lifecycle без ручного `Drop`; ранние decompiler-return-ы
+//! и MSVC SSO/free plumbing не являются контрактом Miracle.
 //! `GetRandomPosInRange` сохраняет сначала 1000 случайных попыток, затем scan
 //! X-снаружи/Y-внутри и расширение прямоугольника на 10 клеток с каждой
 //! стороны. `VERIFIED_DISASSEMBLY` по `0x004D6BA3/0x004D6C14` подтверждает, что
@@ -621,7 +625,7 @@ fn read_region_bytes<'a>(
 
 // ============================================================================
 // FUNCTION: CRegion::~CRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\region.cpp:22
@@ -629,6 +633,7 @@ fn read_region_bytes<'a>(
 // ADDRESS: 004d6d90
 // PROTOTYPE: void __thiscall ~CRegion(void)
 //
+// IMPLEMENTED обычным Rust `Drop` всех owned fields и `CBaseObject`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
