@@ -1997,6 +1997,8 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn load_region_parameters(&mut self, game: &mut CGame) -> bool;
     fn country_parameter_source(&mut self) -> Option<Vec<u8>>;
     fn country_war_source(&mut self) -> Option<Vec<u8>>;
+    /// Пять source-слотов `CGlobeSetup::szCountryName` для snapshot FourNation.
+    fn four_nation_country_names(&mut self) -> [Vec<u8>; 5];
     fn use_appellation_function(&mut self) -> bool;
     /// Возвращает достигнутый player DB-owner и его текущий caller-connection.
     fn player_database(
@@ -10427,8 +10429,10 @@ impl CGame {
         ));
 
         const FOUR_NATION_WAR_PATH: &[u8] = b"setup/FourNationWarSys.ini";
+        let four_nation_country_names = context.four_nation_country_names();
         let four_nation_source = context.read_resource(FOUR_NATION_WAR_PATH);
         let four_nation_initialization = match four_nation_war.initialize(
+            four_nation_country_names,
             four_nation_source.as_deref(),
             (callbacks.get_timer_local_time)(),
             timer,
@@ -16393,7 +16397,6 @@ struct WorldFourNationExploitEffects<'a> {
 struct WorldFourNationCountryFailEffects<'a> {
     game: &'a CGame,
     organizing: &'a COrganizingCtrl,
-    globe_setup: &'a GlobeSetupSnapshot,
     format_world_string:
         &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
 }
@@ -17027,14 +17030,6 @@ impl FourNationExploitContext for WorldFourNationExploitEffects<'_> {
 }
 
 impl FourNationCountryFailContext for WorldFourNationCountryFailEffects<'_> {
-    fn country_name(&mut self, country: i32) -> Vec<u8> {
-        u8::try_from(country)
-            .ok()
-            .and_then(|country| self.globe_setup.country_name(country))
-            .map(|name| name[..name.len().min(9)].to_vec())
-            .unwrap_or_default()
-    }
-
     fn format_world_string(
         &mut self,
         string_id: &'static [u8],
@@ -17978,10 +17973,13 @@ where
             let mut effects = WorldFourNationCountryFailEffects {
                 game,
                 organizing: &*organizing,
-                globe_setup,
                 format_world_string: &mut *application_callbacks.format_world_string,
             };
-            dispatch_four_nation_country_fail_message(&mut message, &mut effects)
+            dispatch_four_nation_country_fail_message(
+                &mut message,
+                &*four_nation_war,
+                &mut effects,
+            )
         };
         if let Some(sync) = four_nation_country_fail {
             return ProcessedWorldEvent::CountryMessage {

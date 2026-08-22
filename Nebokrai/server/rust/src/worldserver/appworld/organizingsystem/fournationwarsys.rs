@@ -288,6 +288,7 @@ pub(crate) struct CFourNationWarSys {
     funds: Vec<FourNationWarFund>,
     rects: [FourNationRect; FOUR_NATION_RECT_COUNT as usize],
     morale: [i32; FOUR_NATION_RECT_COUNT as usize],
+    country_names: [[u8; 10]; FOUR_NATION_RECT_COUNT as usize],
 }
 
 pub(crate) trait FourNationWarResultContext {
@@ -315,7 +316,6 @@ pub(crate) trait FourNationExploitContext {
 }
 
 pub(crate) trait FourNationCountryFailContext {
-    fn country_name(&mut self, country: i32) -> Vec<u8>;
     fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8>;
     fn send_top_info(&mut self, text: &[u8]) -> Result<i32, SendMessageError>;
 }
@@ -457,6 +457,7 @@ impl CFourNationWarSys {
     /// effect.
     pub(crate) fn initialize<Callback: Copy, NationSource, Log>(
         &mut self,
+        country_names: [Vec<u8>; FOUR_NATION_RECT_COUNT as usize],
         source: Option<&[u8]>,
         now: TagTime,
         timer: &mut CTimer<Callback>,
@@ -468,6 +469,7 @@ impl CFourNationWarSys {
         NationSource: FnMut(i32) -> Option<Vec<u8>>,
         Log: FnMut(&[u8]),
     {
+        self.snapshot_country_names(country_names);
         self.setups.clear();
         self.funds.clear();
         self.rects = [FourNationRect::default(); FOUR_NATION_RECT_COUNT as usize];
@@ -557,6 +559,7 @@ impl CFourNationWarSys {
     /// и не путает отсутствие события с валидным `TimerId(0)`.
     pub(crate) fn reload<Callback: Copy, NationSource, Log>(
         &mut self,
+        country_names: [Vec<u8>; FOUR_NATION_RECT_COUNT as usize],
         source: Option<&[u8]>,
         now: TagTime,
         timer: &mut CTimer<Callback>,
@@ -594,6 +597,7 @@ impl CFourNationWarSys {
         }
 
         let load = self.initialize(
+            country_names,
             source,
             now,
             timer,
@@ -905,18 +909,19 @@ impl CFourNationWarSys {
     }
 
     pub(crate) fn one_country_fail<Context: FourNationCountryFailContext + ?Sized>(
+        &self,
         country: i32,
         failed_country: i32,
         context: &mut Context,
     ) -> FourNationCountryFailReport {
-        let country_name = context.country_name(country);
+        let country_name = self.country_name(country);
         let (string_id, failed_country_name, formatted) = if country == failed_country {
             let string_id = b"XBWS0036";
             let formatted = context.format_world_string(string_id, &[&country_name]);
             (string_id.as_slice(), None, formatted)
         } else {
             let string_id = b"XBWS0037";
-            let failed_name = context.country_name(failed_country);
+            let failed_name = self.country_name(failed_country);
             let formatted =
                 context.format_world_string(string_id, &[&country_name, &failed_name]);
             (string_id.as_slice(), Some(failed_name), formatted)
@@ -937,6 +942,29 @@ impl CFourNationWarSys {
             text,
             delivery,
         }
+    }
+
+    fn snapshot_country_names(&mut self, country_names: [Vec<u8>; FOUR_NATION_RECT_COUNT as usize]) {
+        for (destination, source) in self.country_names.iter_mut().zip(country_names) {
+            *destination = [0; 10];
+            let visible_length = source
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(source.len())
+                .min(destination.len() - 1);
+            destination[..visible_length].copy_from_slice(&source[..visible_length]);
+        }
+    }
+
+    fn country_name(&self, country: i32) -> Vec<u8> {
+        let Some(name) = usize::try_from(country)
+            .ok()
+            .and_then(|index| self.country_names.get(index))
+        else {
+            return Vec::new();
+        };
+        let visible_length = name.iter().position(|byte| *byte == 0).unwrap_or(name.len());
+        name[..visible_length].to_vec()
     }
 
     pub(crate) fn push_setup(&mut self, setup: FourNationWarSetup) {

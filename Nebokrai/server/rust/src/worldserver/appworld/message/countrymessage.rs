@@ -1584,6 +1584,7 @@ pub(crate) fn dispatch_four_nation_country_fail_message<
     Context: FourNationCountryFailContext + ?Sized,
 >(
     message: &mut CMessage,
+    four_nation_war: &CFourNationWarSys,
     context: &mut Context,
 ) -> Option<WorldFourNationCountryFailSync> {
     if message.message_type() != 0x6031d {
@@ -1595,7 +1596,7 @@ pub(crate) fn dispatch_four_nation_country_fail_message<
     let country = decoded_country.unwrap_or(0);
     let decoded_failed_country = message.base_mut().get_long();
     let failed_country = decoded_failed_country.unwrap_or(0);
-    let report = CFourNationWarSys::one_country_fail(country, failed_country, context);
+    let report = four_nation_war.one_country_fail(country, failed_country, context);
     Some(WorldFourNationCountryFailSync {
         source_map_id,
         source_socket_id,
