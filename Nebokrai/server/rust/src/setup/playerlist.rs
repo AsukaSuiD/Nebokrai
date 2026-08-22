@@ -45,6 +45,10 @@
 //! открытия файла. Форматные ошибки старого formatted extraction могли
 //! использовать неинициализированные locals; Rust прекращает загрузку с typed
 //! error, сохраняя только уже материализованный prefix state.
+//! Деструктор `CPlayerList::tagPropertiesUpgrade` из `organizing.cpp` очищал
+//! только `std::string strNotification`; поле `notification: Vec<u8>` имеет
+//! тот же срок жизни через обычный Rust Drop, без служебной логики аллокатора
+//! MSVC.
 
 use std::collections::BTreeMap;
 use std::error::Error;

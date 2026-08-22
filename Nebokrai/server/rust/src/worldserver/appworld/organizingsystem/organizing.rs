@@ -376,10 +376,12 @@ const _: () = {
 
 // ============================================================================
 // FUNCTION: CPlayerList::tagPropertiesUpgrade::~tagPropertiesUpgrade
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizing.cpp
+// RUST: `setup::playerlist::PlayerPropertiesUpgrade::notification: Vec<u8>`
+// освобождается структурным Drop; отдельный срок жизни строки MSVC не нужен.
 // RVA: 0x00033F90
 // ADDRESS: 00433f90
 // PROTOTYPE: void __thiscall ~tagPropertiesUpgrade(void)

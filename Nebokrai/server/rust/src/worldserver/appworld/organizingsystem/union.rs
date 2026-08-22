@@ -4536,10 +4536,11 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CShape::GetFigure
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.h:126
+// RUST: `shape::CShape::get_figure` возвращает `0` без чтения состояния.
 // RVA: 0x000C1F10
 // ADDRESS: 004c1f10
 // PROTOTYPE: uchar __thiscall GetFigure(void)
