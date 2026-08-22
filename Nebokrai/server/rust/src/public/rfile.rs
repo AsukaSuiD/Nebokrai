@@ -10,11 +10,10 @@
 //! `rf_open` материализует точный выбор package/loose источника для explicit
 //! `CClientResource`; `Option<CRFile>` заменяет nullable старый указатель.
 //! Process-global default-resource принадлежит безопасному
-//! `DefaultClientResourceOwner` в соседнем owner-е. `ReadToStream` также
-//! намеренно не материализован:
-//! его файловая ветвь в точной дизассемблировке возвращает неустойчивое значение
-//! регистра, а практический C++ reference ему противоречит. Это нельзя
-//! превратить в Rust-контракт без дополнительной проверки EXE/PDB.
+//! `DefaultClientResourceOwner` в соседнем owner-е. `ReadToStream` materialized
+//! как `CRFile::read_to_stream`: его память и файл вставляют C-строку до первого
+//! NUL, однако точный EXE возвращает `true` только для memory-ветви. Rust `Vec`
+//! заменяет stream buffer без raw временного массива и unchecked `fread`.
 //!
 //! Сырой C++ ниже остаётся доказательной заготовкой, а не Rust-реализацией.
 
@@ -123,6 +122,58 @@ impl CRFile {
         }
         read_ok
     }
+
+    /// Повторяет `CRFile::ReadToStream` через owned stream-buffer.
+    ///
+    /// Точный `operator<<(char const *)` публикует байты только до первого
+    /// NUL, хотя memory-ветвь затем сдвигает `m_dwPos` на полный `m_dwSize`.
+    /// Это подтверждённое unsigned wrapping сложения оставлено явно: оно может
+    /// изменить следующий cursor-visible вызов и потому не нормализуется молча.
+    /// Файловая ветвь читает от текущей позиции host file и, даже после
+    /// успешной вставки, возвращает `false`: это подтверждено epilogue
+    /// `0x0045AA11: xor al, al`, а не выводится из менее доверенного донора.
+    ///
+    /// Ошибка аллокации или short host read заменяет старые неопределённые
+    /// данные safe `false` без частичной публикации. На корректном ресурсе
+    /// сохраняются bytes, cursor и точное различие return value.
+    pub(crate) fn read_to_stream(&mut self, output: &mut Vec<u8>) -> bool {
+        match &mut self.source {
+            CRFileSource::Memory(data) => {
+                if !append_c_string(output, data) {
+                    return false;
+                }
+                self.position = self.position.wrapping_add(self.size);
+                true
+            }
+            CRFileSource::File(file) => {
+                let mut data = Vec::new();
+                let Ok(size) = usize::try_from(self.size) else {
+                    return false;
+                };
+                if data.try_reserve_exact(size).is_err() {
+                    return false;
+                }
+                data.resize(size, 0);
+                if file.read_exact(&mut data).is_err() {
+                    return false;
+                }
+                let _ = append_c_string(output, &data);
+                false
+            }
+        }
+    }
+}
+
+fn append_c_string(output: &mut Vec<u8>, data: &[u8]) -> bool {
+    let length = data
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(data.len());
+    if output.try_reserve(length).is_err() {
+        return false;
+    }
+    output.extend_from_slice(&data[..length]);
+    true
 }
 
 /// Повторяет побайтовую часть `CheckRFileStr`.
@@ -361,12 +412,18 @@ fn open_loose_file(path: &std::path::Path) -> Option<CRFile> {
 
 // ============================================================================
 // FUNCTION: CRFile::ReadToStream
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\rfile.cpp:79
 // RVA: 0x0005A970
 // ADDRESS: 0045a970
+//
+// `CRFile::read_to_stream` выше заменяет stream/temporary-buffer ownership
+// owned `Vec<u8>`. Exact `0x0045A9A6` задаёт memory return `true`, а машинный
+// epilogue `0x0045AA11..0x0045AA15` задаёт file/empty return `false`; прежняя
+// декомпиляция скрывала этот `xor al, al` как нестабильный register-result.
+// C-string truncation, file-position и memory cursor сохранены отдельно.
 // PROTOTYPE: bool __thiscall ReadToStream(basic_stringstream<char,std::char_traits<char>,std::allocator<char>_> * param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
