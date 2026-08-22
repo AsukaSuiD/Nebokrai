@@ -167,7 +167,8 @@ pub(crate) enum WorldServerAuctionMessageOutcome {
     },
 }
 
-/// Сохранённое сообщение для ещё не восстановленной части S2W owner-а.
+/// Результат S2W auction-dispatcher-а; все literal case текущего owner-а уже
+/// обработаны, а default exact switch является no-op.
 pub(crate) enum WorldServerAuctionMessageDispatch {
     Handled(WorldServerAuctionMessageOutcome),
     Pending(CMessage),
@@ -646,7 +647,9 @@ pub(crate) fn on_msg_s2w_auction(
                 delivery,
             })
         }
-        _ => WorldServerAuctionMessageDispatch::Pending(message),
+        _ => WorldServerAuctionMessageDispatch::Handled(
+            WorldServerAuctionMessageOutcome::NoOp { request_type },
+        ),
     }
 }
 
