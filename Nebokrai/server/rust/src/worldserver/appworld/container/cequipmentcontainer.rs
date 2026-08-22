@@ -9,7 +9,8 @@
 //! `Serialize` RVA `0x000D9530` и разделяемого
 //! с `CVolumeLimitGoodsContainer` `Unserialize` RVA `0x000D8DA0`, а также
 //! read-side family RVA `0x000D9000/0x000D90F0/0x000D9180/0x000D9280/`
-//! `0x000D92F0/0x000D9350/0x000D93E0/0x000DA530` — `IMPLEMENTED`;
+//! `0x000D92F0/0x000D9350/0x000D93E0/0x000DA530` и `AI` RVA `0x000D9210`
+//! — `IMPLEMENTED`;
 //! остальные operations ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Функции остаются именно в этом `.rs`, потому что их точный PDB source-owner —
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:22,36,43,135,158,173,210,237,257,291,470,648,670,694,713,731,745,773,813,834`.
@@ -62,6 +63,9 @@
 //! передаёт ownership первого GUID-совпадения вызывающему.
 //! Weight-family обходит все equipment values без фильтра и сохраняет unsigned
 //! wrapping-сумму; numeric tree-order на коммутативный результат не влияет.
+//! `AI` в том же numeric tree-order вызывает virtual `CGoods::AI` для каждого
+//! non-null товара. Его Rust owner ещё не достигнут, поэтому typed callback
+//! передаётся явно, сохраняя dispatch и порядок без raw vtable.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -324,6 +328,16 @@ impl CEquipmentContainer {
     pub(crate) fn release(&mut self) {
         self.equipment.clear();
         self.container_base.release();
+    }
+
+    /// Обходит товары в exact numeric map-order для virtual `CGoods::AI`.
+    ///
+    /// Товарный AI остаётся owner-ом `CGoods`, поэтому callback передаётся
+    /// явно вместо прежнего virtual dispatch через raw pointer.
+    pub(crate) fn ai(&mut self, mut on_goods_ai: impl FnMut(&mut CGoods)) {
+        for goods in self.equipment.values_mut() {
+            on_goods_ai(goods);
+        }
     }
 
     /// Возвращает товар exact numeric equipment-column либо `None`.
@@ -711,7 +725,7 @@ fn read_equipment_u32(
 
 // ============================================================================
 // FUNCTION: CEquipmentContainer::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:633
@@ -719,6 +733,8 @@ fn read_equipment_u32(
 // ADDRESS: 004d9210
 // PROTOTYPE: void __thiscall AI(void)
 //
+// Реализовано выше как `ai`: exact numeric map-order сохранён, а достигнутый
+// товарный owner передаёт virtual `CGoods::AI` явным callback-ом.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
