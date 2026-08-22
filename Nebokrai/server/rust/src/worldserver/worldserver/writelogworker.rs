@@ -105,6 +105,13 @@ const INSERT_TEAM_LOG_SQL: &str = "INSERT INTO team_log(\
 const INSERT_PLAYER_KILLER_LOG_SQL: &str = "INSERT INTO player_killer_log(\
     player_id,player_name,murderer_id,murderer_name,map_id,pos_x,pos_y,log_type\
 ) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8)";
+const INSERT_GOODS_TRADE_LOG_SQL: &str = "INSERT INTO goods_trade_log(\
+    seller_id,seller_name,seller_cur_money,s_map_id,s_pos_x,s_pos_y,purchaser_id,purchaser_name,\
+    purchaser_cur_money,p_map_id,p_pos_x,p_pos_y,goods_id,goods_name,price,amount,log_type,ip_addr_buyer,ip_addr_seller\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11,@P12,@P13,@P14,@P15,@P16,@P17,@P18,@P19)";
+const INSERT_GOODS_LOG_SQL: &str = "INSERT INTO goods_log(\
+    player_id,player_name,pk_count,cur_money,cur_bank,goods_id,goods_name,goods_num,price,map_id,pos_x,pos_y,log_type,ip_addr\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11,@P12,@P13,@P14)";
 const INSERT_GOODS_UPGRADE_LOG_SQL: &str = "INSERT INTO goods_upgrade_log(\
     player_id,player_name,goods_id,goods_name,gem1_id,gem1_name,gem2_id,gem2_name,gem3_id,gem3_name,gem4_id,gem4_name,map_id,pos_x,pos_y,log_type\
 ) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11,@P12,@P13,@P14,@P15,@P16)";
@@ -626,6 +633,49 @@ pub(crate) async fn execute_world_write_log_command(
             }
             Ok(())
         }
+        WorldWriteLogCommand::GoodsTradeLog(write) => {
+            let mut query = Query::new(INSERT_GOODS_TRADE_LOG_SQL);
+            query.bind(write.seller_id);
+            query.bind(decode_legacy_text(&write.seller_name));
+            query.bind(write.seller_current_money);
+            query.bind(write.seller_map_id);
+            query.bind(write.seller_position_x);
+            query.bind(write.seller_position_y);
+            query.bind(write.purchaser_id);
+            query.bind(decode_legacy_text(&write.purchaser_name));
+            query.bind(write.purchaser_current_money);
+            query.bind(write.purchaser_map_id);
+            query.bind(write.purchaser_position_x);
+            query.bind(write.purchaser_position_y);
+            query.bind(write.goods_id.to_string());
+            query.bind(decode_legacy_text(&write.goods_name));
+            query.bind(write.price);
+            query.bind(write.amount);
+            query.bind(i32::from(write.log_type));
+            query.bind(decode_legacy_text(&write.buyer_ip_address));
+            query.bind(decode_legacy_text(&write.seller_ip_address));
+            query.execute(connection).await?;
+            Ok(())
+        }
+        WorldWriteLogCommand::GoodsLog(write) => {
+            let mut query = Query::new(INSERT_GOODS_LOG_SQL);
+            query.bind(write.player_id);
+            query.bind(decode_legacy_text(&write.player_name));
+            query.bind(i32::from(write.pk_count));
+            query.bind(write.current_money);
+            query.bind(write.current_bank);
+            query.bind(write.goods_id.to_string());
+            query.bind(decode_legacy_text(&write.goods_name));
+            query.bind(write.goods_amount);
+            query.bind(write.price);
+            query.bind(write.map_id);
+            query.bind(write.position_x);
+            query.bind(write.position_y);
+            query.bind(i32::from(write.log_type));
+            query.bind(decode_legacy_text(&write.ip_address));
+            query.execute(connection).await?;
+            Ok(())
+        }
         WorldWriteLogCommand::GoodsCraftLog(write) => {
             match &write.event {
                 WorldGoodsCraftLogEvent::Upgrade {
@@ -789,6 +839,8 @@ fn world_write_log_command_name(command: &WorldWriteLogCommand) -> &'static str 
         WorldWriteLogCommand::AuctionSaleLog(_) => "AuctionSaleLog",
         WorldWriteLogCommand::PlayerProgressLog(_) => "PlayerProgressLog",
         WorldWriteLogCommand::PlayerRelationLog(_) => "PlayerRelationLog",
+        WorldWriteLogCommand::GoodsTradeLog(_) => "GoodsTradeLog",
+        WorldWriteLogCommand::GoodsLog(_) => "GoodsLog",
         WorldWriteLogCommand::GoodsCraftLog(_) => "GoodsCraftLog",
         WorldWriteLogCommand::ChatLog(_) => "ChatLog",
         WorldWriteLogCommand::LegacyEmptyChatSql { .. } => "LegacyEmptyChatSql",

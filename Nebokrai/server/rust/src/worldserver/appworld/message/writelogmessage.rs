@@ -1,12 +1,9 @@
 //! WorldServer dispatcher-owner `OnWriteLogMessage`.
 //!
-//! Весь dispatcher RVA `0x000A8AB0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме
-//! goods upgrade/craft `0x60203..0x60205`, player progress `0x60206..0x60208`,
-//! team/killer `0x60209..0x6020A`,
-//! chat/change-map `0x6020B..0x6020C`, increment-shop `0x6020D`, carriage
-//! `0x6020E`, plain player log `0x6020F`, fairy `0x60210`, reserved no-op
-//! `0x60211..0x60213`, auction
-//! `0x60214..0x60217` и ciqing `0x60218` со статусом `IMPLEMENTED`. Точная пара:
+//! Исходный dispatcher RVA `0x000A8AB0` сохранён ниже как `UNKNOWN` (исследовательский декомпилят хранится локально), а
+//! все его wire-ветки `0x60201..0x60218`, включая reserved no-op
+//! `0x60211..0x60213`, материализованы выше со статусом `IMPLEMENTED`.
+//! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\writelogmessage.cpp:18`.
 //!
@@ -89,6 +86,14 @@
 //! Lookup имени игрока даёт literal `"NULL"`; только upgrade/jewelry goods-name
 //! проходил через `CGame::CheckPoint`. Bind сохраняет штатные bytes без ручного
 //! quoting и не переносит donor-added лимит 32.
+//! Goods trade/basic `0x60201..0x60202` по exact
+//! `0x004A8B74..0x004A8F83` сохраняют wire-порядок всех signed money/map/
+//! coordinate/amount полей, unsigned log-type и little-endian IPv4 bytes.
+//! Trade lookup-ит seller/purchaser после обоих наборов координат и пишет
+//! `"NULL"` независимо для каждого. Basic goods расширяет wire `short pk_count`
+//! через `movzx`, поэтому хранит `u16`; goods amount идёт перед name `0x100`,
+//! затем price/map/x/y. `CheckPoint` для goods-name заменён bind без изменения
+//! штатного текста; donor-added полная payload-validation не перенесена.
 //! Exact outer jump-table VA `0x004AACA8` направляет все три wire ID
 //! `0x60211..0x60213` прямо в epilogue `0x004AAC87`; Rust поэтому считает их
 //! обработанными no-op, не создавая ложный pending owner. Ветка `0x60218` по
@@ -113,6 +118,8 @@ use crate::worldserver::appworld::incrementlog::incrementlog::CIncrementLog;
 use crate::worldserver::worldserver::game::CGame;
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
+const GOODS_TRADE_LOG_MESSAGE: i32 = 0x0006_0201;
+const GOODS_LOG_MESSAGE: i32 = 0x0006_0202;
 const GOODS_UPGRADE_LOG_MESSAGE: i32 = 0x0006_0203;
 const GOODS_GEM_EXCHANGE_LOG_MESSAGE: i32 = 0x0006_0204;
 const GOODS_JEWELRY_MADE_LOG_MESSAGE: i32 = 0x0006_0205;
@@ -323,6 +330,47 @@ pub(crate) enum WorldPlayerRelationLogEvent {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldGoodsTradeLogWrite {
+    pub(crate) log_type: u8,
+    pub(crate) seller_id: i32,
+    pub(crate) seller_name: Vec<u8>,
+    pub(crate) seller_current_money: i32,
+    pub(crate) seller_map_id: i32,
+    pub(crate) seller_position_x: i32,
+    pub(crate) seller_position_y: i32,
+    pub(crate) purchaser_id: i32,
+    pub(crate) purchaser_name: Vec<u8>,
+    pub(crate) purchaser_current_money: i32,
+    pub(crate) purchaser_map_id: i32,
+    pub(crate) purchaser_position_x: i32,
+    pub(crate) purchaser_position_y: i32,
+    pub(crate) goods_id: CGuid,
+    pub(crate) goods_name: Vec<u8>,
+    pub(crate) price: i32,
+    pub(crate) amount: i32,
+    pub(crate) buyer_ip_address: Vec<u8>,
+    pub(crate) seller_ip_address: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldGoodsLogWrite {
+    pub(crate) log_type: u8,
+    pub(crate) player_id: i32,
+    pub(crate) player_name: Vec<u8>,
+    pub(crate) pk_count: u16,
+    pub(crate) current_money: i32,
+    pub(crate) current_bank: i32,
+    pub(crate) goods_id: CGuid,
+    pub(crate) goods_name: Vec<u8>,
+    pub(crate) goods_amount: i32,
+    pub(crate) price: i32,
+    pub(crate) map_id: i32,
+    pub(crate) position_x: i32,
+    pub(crate) position_y: i32,
+    pub(crate) ip_address: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldGoodsCraftLogWrite {
     pub(crate) player_id: i32,
     pub(crate) player_name: Vec<u8>,
@@ -404,6 +452,8 @@ pub(crate) enum WorldWriteLogCommand {
     AuctionSaleLog(WorldAuctionSaleLogWrite),
     PlayerProgressLog(WorldPlayerProgressLogWrite),
     PlayerRelationLog(WorldPlayerRelationLogWrite),
+    GoodsTradeLog(WorldGoodsTradeLogWrite),
+    GoodsLog(WorldGoodsLogWrite),
     GoodsCraftLog(WorldGoodsCraftLogWrite),
     ChatLog(WorldChatLogWrite),
     /// Exact chat jump-table ставил в FIFO очищенный SQL-buffer.
@@ -539,6 +589,22 @@ pub(crate) struct WorldPlayerRelationLogMessageOutcome {
 }
 
 #[derive(Debug)]
+pub(crate) struct WorldGoodsTradeLogMessageOutcome {
+    pub(crate) write: WorldGoodsTradeLogWrite,
+    pub(crate) players_found: [bool; 2],
+    pub(crate) payload_complete: [bool; 17],
+    pub(crate) queue_length_after: usize,
+}
+
+#[derive(Debug)]
+pub(crate) struct WorldGoodsLogMessageOutcome {
+    pub(crate) write: WorldGoodsLogWrite,
+    pub(crate) player_found: bool,
+    pub(crate) payload_complete: [bool; 13],
+    pub(crate) queue_length_after: usize,
+}
+
+#[derive(Debug)]
 pub(crate) enum WorldGoodsCraftPayloadCompleteness {
     Upgrade([bool; 15]),
     GemExchange([bool; 9]),
@@ -602,6 +668,8 @@ pub(crate) enum WorldWriteLogMessageOutcome {
     AuctionSaleLog(WorldAuctionSaleLogMessageOutcome),
     PlayerProgressLog(WorldPlayerProgressLogMessageOutcome),
     PlayerRelationLog(WorldPlayerRelationLogMessageOutcome),
+    GoodsTradeLog(WorldGoodsTradeLogMessageOutcome),
+    GoodsLog(WorldGoodsLogMessageOutcome),
     GoodsCraftLog(WorldGoodsCraftLogMessageOutcome),
     ChatLog(WorldChatLogMessageOutcome),
     ChangeMapLog(WorldChangeMapLogMessageOutcome),
@@ -667,6 +735,16 @@ pub(crate) fn on_write_log_message(
                 on_player_progress_log_message(game, message),
             ),
         );
+    }
+    if message.message_type() == GOODS_TRADE_LOG_MESSAGE {
+        return WorldWriteLogMessageDispatch::Handled(
+            WorldWriteLogMessageOutcome::GoodsTradeLog(on_goods_trade_log_message(game, message)),
+        );
+    }
+    if message.message_type() == GOODS_LOG_MESSAGE {
+        return WorldWriteLogMessageDispatch::Handled(WorldWriteLogMessageOutcome::GoodsLog(
+            on_goods_log_message(game, message),
+        ));
     }
     if matches!(
         message.message_type(),
@@ -838,6 +916,147 @@ fn on_auction_log_message(
         payload_complete,
         queue_length_after,
         live_published,
+    }
+}
+
+fn on_goods_trade_log_message(
+    game: &CGame,
+    mut message: CMessage,
+) -> WorldGoodsTradeLogMessageOutcome {
+    let log_type = message.base_mut().get_char();
+    let seller_id = message.base_mut().get_long();
+    let seller_current_money = message.base_mut().get_long();
+    let seller_map_id = message.base_mut().get_long();
+    let seller_position_x = message.base_mut().get_long();
+    let seller_position_y = message.base_mut().get_long();
+    let purchaser_id = message.base_mut().get_long();
+    let purchaser_current_money = message.base_mut().get_long();
+    let purchaser_map_id = message.base_mut().get_long();
+    let purchaser_position_x = message.base_mut().get_long();
+    let purchaser_position_y = message.base_mut().get_long();
+    let seller_id_value = seller_id.unwrap_or(0);
+    let purchaser_id_value = purchaser_id.unwrap_or(0);
+    let seller = game.map_player(seller_id_value as u32);
+    let purchaser = game.map_player(purchaser_id_value as u32);
+    let players_found = [seller.is_some(), purchaser.is_some()];
+    let seller_name = seller
+        .map(|player| visible_c_string(player.get_name()))
+        .unwrap_or_else(|| b"NULL".to_vec());
+    let purchaser_name = purchaser
+        .map(|player| visible_c_string(player.get_name()))
+        .unwrap_or_else(|| b"NULL".to_vec());
+    let (goods_id, goods_id_complete) = get_guid(&mut message);
+    let price = message.base_mut().get_long();
+    let amount = message.base_mut().get_long();
+    let (goods_name, goods_name_complete) = get_limited_string(&mut message, 0x100);
+    let buyer_ip = message.base_mut().get_long();
+    let seller_ip = message.base_mut().get_long();
+    let write = WorldGoodsTradeLogWrite {
+        log_type: log_type.unwrap_or(0) as u8,
+        seller_id: seller_id_value,
+        seller_name,
+        seller_current_money: seller_current_money.unwrap_or(0),
+        seller_map_id: seller_map_id.unwrap_or(0),
+        seller_position_x: seller_position_x.unwrap_or(0),
+        seller_position_y: seller_position_y.unwrap_or(0),
+        purchaser_id: purchaser_id_value,
+        purchaser_name,
+        purchaser_current_money: purchaser_current_money.unwrap_or(0),
+        purchaser_map_id: purchaser_map_id.unwrap_or(0),
+        purchaser_position_x: purchaser_position_x.unwrap_or(0),
+        purchaser_position_y: purchaser_position_y.unwrap_or(0),
+        goods_id,
+        goods_name,
+        price: price.unwrap_or(0),
+        amount: amount.unwrap_or(0),
+        buyer_ip_address: legacy_ipv4_bytes(buyer_ip.unwrap_or(0)),
+        seller_ip_address: legacy_ipv4_bytes(seller_ip.unwrap_or(0)),
+    };
+    let queue_length_after =
+        game.push_write_log_command(WorldWriteLogCommand::GoodsTradeLog(write.clone()));
+    WorldGoodsTradeLogMessageOutcome {
+        write,
+        players_found,
+        payload_complete: [
+            log_type.is_some(),
+            seller_id.is_some(),
+            seller_current_money.is_some(),
+            seller_map_id.is_some(),
+            seller_position_x.is_some(),
+            seller_position_y.is_some(),
+            purchaser_id.is_some(),
+            purchaser_current_money.is_some(),
+            purchaser_map_id.is_some(),
+            purchaser_position_x.is_some(),
+            purchaser_position_y.is_some(),
+            goods_id_complete,
+            price.is_some(),
+            amount.is_some(),
+            goods_name_complete,
+            buyer_ip.is_some(),
+            seller_ip.is_some(),
+        ],
+        queue_length_after,
+    }
+}
+
+fn on_goods_log_message(game: &CGame, mut message: CMessage) -> WorldGoodsLogMessageOutcome {
+    let log_type = message.base_mut().get_char();
+    let player_id = message.base_mut().get_long();
+    let player_id_value = player_id.unwrap_or(0);
+    let player = game.map_player(player_id_value as u32);
+    let player_found = player.is_some();
+    let player_name = player
+        .map(|player| visible_c_string(player.get_name()))
+        .unwrap_or_else(|| b"NULL".to_vec());
+    let pk_count = message.base_mut().get_short();
+    let current_money = message.base_mut().get_long();
+    let current_bank = message.base_mut().get_long();
+    let (goods_id, goods_id_complete) = get_guid(&mut message);
+    let goods_amount = message.base_mut().get_long();
+    let (goods_name, goods_name_complete) = get_limited_string(&mut message, 0x100);
+    let price = message.base_mut().get_long();
+    let map_id = message.base_mut().get_long();
+    let position_x = message.base_mut().get_long();
+    let position_y = message.base_mut().get_long();
+    let ip = message.base_mut().get_long();
+    let write = WorldGoodsLogWrite {
+        log_type: log_type.unwrap_or(0) as u8,
+        player_id: player_id_value,
+        player_name,
+        pk_count: pk_count.unwrap_or(0) as u16,
+        current_money: current_money.unwrap_or(0),
+        current_bank: current_bank.unwrap_or(0),
+        goods_id,
+        goods_name,
+        goods_amount: goods_amount.unwrap_or(0),
+        price: price.unwrap_or(0),
+        map_id: map_id.unwrap_or(0),
+        position_x: position_x.unwrap_or(0),
+        position_y: position_y.unwrap_or(0),
+        ip_address: legacy_ipv4_bytes(ip.unwrap_or(0)),
+    };
+    let queue_length_after =
+        game.push_write_log_command(WorldWriteLogCommand::GoodsLog(write.clone()));
+    WorldGoodsLogMessageOutcome {
+        write,
+        player_found,
+        payload_complete: [
+            log_type.is_some(),
+            player_id.is_some(),
+            pk_count.is_some(),
+            current_money.is_some(),
+            current_bank.is_some(),
+            goods_id_complete,
+            goods_amount.is_some(),
+            goods_name_complete,
+            price.is_some(),
+            map_id.is_some(),
+            position_x.is_some(),
+            position_y.is_some(),
+            ip.is_some(),
+        ],
+        queue_length_after,
     }
 }
 
@@ -1719,6 +1938,12 @@ fn get_limited_string(message: &mut CMessage, maximum: usize) -> (Vec<u8>, bool)
         .get_str_bytes(maximum)
         .unwrap_or_default();
     (value, complete)
+}
+
+fn legacy_ipv4_bytes(value: i32) -> Vec<u8> {
+    Ipv4Addr::from((value as u32).to_le_bytes())
+        .to_string()
+        .into_bytes()
 }
 
 fn get_auction_log_node(message: &mut CMessage) -> (AuctionLogNode, bool) {
