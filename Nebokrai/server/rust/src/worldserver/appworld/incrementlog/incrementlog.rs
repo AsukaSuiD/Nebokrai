@@ -135,9 +135,9 @@ impl CIncrementLog {
         entry_type: u8,
         money: i32,
         description: &[u8],
-    ) {
+    ) -> bool {
         if player_id == 0 {
-            return;
+            return false;
         }
         let description = description
             .iter()
@@ -153,6 +153,7 @@ impl CIncrementLog {
                 money,
                 description,
             });
+        true
     }
 
     pub(crate) fn entries_by_player(&self, player_id: i32) -> Option<&[IncrementLogEntry]> {

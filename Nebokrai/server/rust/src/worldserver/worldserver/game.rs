@@ -249,9 +249,10 @@
 //! вызывает фактический `RefeashInfoText`, снимает end tick, wrapping добавляет
 //! `DAT_0056e530` и сразу выполняет готовый 600-секундный profiling gate.
 //! Отсутствующий network owner сохраняет исходный no-op только внутри refresh,
-//! после чего profiling-порядок продолжается. Team/Largess/write/load/reback
-//! counts принадлежат соседним owners и передаются явно; они не дублируются в
-//! `CGame`. Непредставимый старым `uint` размер блокирует только refresh после
+//! после чего profiling-порядок продолжается. Write-log count теперь читается
+//! из concrete `CGame` FIFO; Team/Largess/load/reback counts принадлежат
+//! соседним owners и передаются явно. Непредставимый старым `uint` размер
+//! блокирует только refresh после
 //! уже выполненного last-tick присваивания.
 //!
 //! `CGame::ReLoad` RVA `0x00015740`, `reload_conf_log` RVA `0x00002FD0` и
@@ -946,6 +947,12 @@
 //! читал за stack-buffer; это локальный `BLOCKED_MISSING_FACT`, а не основание
 //! для truncation, `unsafe` либо нового fail-closed результата.
 //!
+//! Write-log producer `0x6020D` хранит в `CGame` FIFO структурированных
+//! `IncrementLog` DB-команд вместо готовых SQL literals. Это техническая
+//! замена для параметризованного Tiberius worker-а: packet-поля, enqueue
+//! position и исходный enqueue-before-live-Add сохраняются, а временные
+//! `_sprintf/CheckPoint` buffers и SQL injection не воспроизводятся.
+//!
 //! `ResetHonorElimilateInfo` RVA `0x00014390` проходит `m_mPlayer` в map-order,
 //! сбрасывает достигнутые day/week/month counters по исходной mask-семантике,
 //! затем полностью очищает `m_HonorElimilateList` и повторяет reset под lock
@@ -1189,6 +1196,10 @@ use crate::worldserver::appworld::message::servermessage::{
 };
 use crate::worldserver::appworld::message::teammessage::{
     WorldTeamMessageOutcome, on_team_message,
+};
+use crate::worldserver::appworld::message::writelogmessage::{
+    WorldIncrementLogMessageOutcome, WorldWriteLogCommand,
+    WorldWriteLogMessageDispatch, on_write_log_message,
 };
 use crate::worldserver::appworld::incrementlog::incrementlog::{
     CIncrementLog, IncrementLogLoadOutcome,
@@ -2239,6 +2250,11 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: WorldOtherMessageOutcome,
+    },
+    WriteLogMessage {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: WorldIncrementLogMessageOutcome,
     },
     PlayerMessage {
         source: WorldMessageSource,
@@ -3503,7 +3519,6 @@ pub(crate) struct WorldMainLoopRefreshInitialization {
 pub(crate) struct WorldRefreshExternalCounts {
     pub(crate) team_sessions: i32,
     pub(crate) largess_entries: u32,
-    pub(crate) write_log_queue: u32,
     pub(crate) player_load_queue: u32,
     pub(crate) reback_messages: i32,
 }
@@ -5790,6 +5805,7 @@ pub(crate) struct CGame {
     game_servers: BTreeMap<u32, WorldGameServerEntry>,
     system_broadcasts: VecDeque<WorldSystemBroadcast>,
     goods_links: VecDeque<WorldGoodsLink>,
+    write_log_queue: VecDeque<WorldWriteLogCommand>,
     player_data_queue: CPlayerDataQueue,
     players: BTreeMap<u32, Box<CPlayer>>,
     team_session_ids: BTreeMap<u32, i32>,
@@ -5848,6 +5864,7 @@ impl CGame {
             goods_links: std::iter::repeat_with(WorldGoodsLink::placeholder)
                 .take(INITIAL_GOODS_LINK_PLACEHOLDERS)
                 .collect(),
+            write_log_queue: VecDeque::new(),
             player_data_queue: CPlayerDataQueue::new(),
             players: BTreeMap::new(),
             team_session_ids: BTreeMap::new(),
@@ -6017,6 +6034,20 @@ impl CGame {
         let index = link.index;
         self.goods_links.push_back(link);
         index
+    }
+
+    /// Ставит структурированную DB-команду в хвост исходного write-log FIFO.
+    pub(crate) fn push_write_log_command(&mut self, command: WorldWriteLogCommand) -> usize {
+        self.write_log_queue.push_back(command);
+        self.write_log_queue.len()
+    }
+
+    #[allow(
+        dead_code,
+        reason = "typed dequeue является границей отдельного write-log worker-а, runtime которого ещё RAW"
+    )]
+    pub(crate) fn pop_write_log_command(&mut self) -> Option<WorldWriteLogCommand> {
+        self.write_log_queue.pop_front()
     }
 
     /// Возвращает первое совпадение в list-order, включая constructor-ный
@@ -9555,11 +9586,12 @@ impl CGame {
     /// actions применяются FIFO до следующего сообщения. Async TDS lookup
     /// `0x5FF12` завершается до следующего slot-а, как синхронный ADO EXE;
     /// JJC owner `0x60901..0x60907` и Team owner `0x60001..0x6000C`
-    /// исполняются полностью.
+    /// исполняются полностью. Write-log owner `0x6020D` ставит typed DB-command
+    /// в FIFO и сразу публикует запись в concrete increment-log owner.
     pub(crate) async fn process_message<TimerCallback, JjcContext>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
-        increment_log: &CIncrementLog,
+        increment_log: &mut CIncrementLog,
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
         country_handler: &mut CCountryHandler,
@@ -9836,7 +9868,7 @@ impl CGame {
     >(
         &mut self,
         honor_ranks: &mut CHonorRanks,
-        increment_log: &CIncrementLog,
+        increment_log: &mut CIncrementLog,
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
         country_handler: &mut CCountryHandler,
@@ -11857,6 +11889,8 @@ impl CGame {
             let db_data = self.db_data.lock();
             legacy_refresh_count("m_stDBData.mDBPlayer", db_data.players.len())? as i32
         };
+        let write_log_queue =
+            legacy_refresh_count("m_qWriteLogData", self.write_log_queue.len())?;
 
         Ok(Some(WorldRefreshInfoCurrent {
             connections: net_server.client_count(),
@@ -11870,7 +11904,7 @@ impl CGame {
             saving_players,
             team_sessions: external.team_sessions,
             largess_entries: external.largess_entries,
-            write_log_queue: external.write_log_queue,
+            write_log_queue,
             player_load_queue: external.player_load_queue,
             reback_messages: external.reback_messages,
         }))
@@ -14711,7 +14745,7 @@ impl CountryWarTopInfoContext for WorldCountryWarEffects<'_> {
 async fn process_world_message<TimerCallback, JjcContext>(
     game: &mut CGame,
     honor_ranks: &mut CHonorRanks,
-    increment_log: &CIncrementLog,
+    increment_log: &mut CIncrementLog,
     organizing: &mut COrganizingCtrl,
     organizing_parameters: &COrganizingParam,
     country_handler: &mut CCountryHandler,
@@ -14916,6 +14950,19 @@ where
             legacy_run_result,
             outcome,
         };
+    }
+
+    if selector.owner == Some(WorldMessageOwner::WriteLog) {
+        match on_write_log_message(game, increment_log, add_log_text, message) {
+            WorldWriteLogMessageDispatch::Handled(outcome) => {
+                return ProcessedWorldEvent::WriteLogMessage {
+                    source,
+                    legacy_run_result,
+                    outcome,
+                };
+            }
+            WorldWriteLogMessageDispatch::Pending(pending) => message = pending,
+        }
     }
 
     if selector.owner == Some(WorldMessageOwner::Country) {

@@ -39,8 +39,8 @@
 //! только при ненулевом save-start tick, строит точный operator payload и
 //! заменяет `SetWindowTextA` готовым `WorldLogTextOwner::set_info_text`.
 //! Отсутствующий network owner отсекается в `CGame` до этого вызова, как
-//! исходная guard-пара. Значения чужих team/Largess/write/load/reback owners
-//! передаются snapshot-ом и не превращаются в придуманные поля `CGame`.
+//! исходная guard-пара. Значения team/Largess/load/reback owners и уже
+//! посчитанный caller-ом write FIFO передаются единым snapshot-ом.
 //! Потерянная экспортом вторая строка status-table точечно прочитана из exact
 //! EXE: таблица VA `0x0056A69C` содержит `0x0053FE54 -> "(Normal)"` и
 //! `0x0053FE44 -> "(Abnormal!!!!)"` (`VERIFIED_DISASSEMBLY`).

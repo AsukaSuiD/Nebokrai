@@ -147,6 +147,11 @@ pub(crate) mod appworld {
         pub(crate) mod playermessage;
         pub(crate) mod servermessage;
         pub(crate) mod teammessage;
+        #[allow(
+            dead_code,
+            reason = "increment producer 0x6020D подключён; остальные write-log opcodes остаются RAW"
+        )]
+        pub(crate) mod writelogmessage;
     }
     pub(crate) mod monster;
     pub(crate) mod moveshape;
