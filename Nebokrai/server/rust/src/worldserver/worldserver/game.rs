@@ -166,6 +166,14 @@
 //! `Vec` и resource-context заменяют только STL/file backend; original-name
 //! lookup остаётся явной границей уже загруженного World `CGoodsFactory`.
 //!
+//! `CTaoZhuangSetup` следует той же owned-модели: exact dispatcher
+//! `0x00417CE6..0x00417D91` загружает `data/taozhuang.ini`, сохраняет bool в
+//! legacy return-slot, пишет прежний log и публикует subtype `0x34` только при
+//! success + send-флаге. Loader сохраняет first-wins `std::map`/`std::set`
+//! порядок и exact duplicate-failure logs; дубли ID самих комплектов не
+//! блокируют reload и оставляют первый item, как World EXE. Initial-config
+//! кодирует этот же owned owner, без внешнего TaoZhuang snapshot/callback.
+//!
 //! `CDupliRegionSetup` создаётся и публикуется в `CGame` перед своим `Load`,
 //! как exact Init `0x0041901B..0x00419053`, и остаётся owned даже при
 //! load-failure до общего Release. Init читает точный
@@ -1124,6 +1132,7 @@ use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::public::equipmentcomposelist::{
     EquipmentComposeList, EquipmentComposeSerializeError,
 };
+use crate::public::taozhuangsetup::{CTaoZhuangSetup, TaoZhuangSerializationBlock};
 use crate::public::mystringtable::MyStringTable;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
 use crate::public::wordsfilter::CWordsFilter;
@@ -4170,7 +4179,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     DaKongXiangQian,
     GoodsDestroy,
     HonorEliminate,
-    TaoZhuang,
     GodsBattle,
 }
 
@@ -4218,7 +4226,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     Synthesis,
     DaKongXiangQian,
     GoodsDestroy,
-    TaoZhuang,
     LingBao,
     GodsBattle,
 }
@@ -5829,6 +5836,7 @@ pub(crate) enum WorldReloadBlock {
     ThingSetupCodec(ThingSetupCodecError),
     EquipmentComposeSerialization(EquipmentComposeSerializeError),
     CiQingSerialization(CiQingSerializationBlock),
+    TaoZhuangSerialization(TaoZhuangSerializationBlock),
     CountryWarOwnerRequired,
     CountryWar(CountryWarReloadBlock),
 }
@@ -6593,6 +6601,7 @@ pub(crate) struct CGame {
     dupli_region_setup: Option<CDupliRegionSetup>,
     equipment_compose_list: EquipmentComposeList,
     ci_qing_setup: CCiQingSetup,
+    tao_zhuang_setup: CTaoZhuangSetup,
     net_client: Option<CMyNetClient>,
     net_server: Option<CMyNetServer>,
     regions: BTreeMap<i32, WorldRegionAssignment>,
@@ -6671,6 +6680,10 @@ impl CGame {
         &self.ci_qing_setup
     }
 
+    pub(crate) fn tao_zhuang_setup(&self) -> &CTaoZhuangSetup {
+        &self.tao_zhuang_setup
+    }
+
     pub(crate) fn dupli_region_setup(&self) -> &CDupliRegionSetup {
         self.dupli_region_setup
             .as_ref()
@@ -6689,6 +6702,7 @@ impl CGame {
             dupli_region_setup: None,
             equipment_compose_list: EquipmentComposeList::default(),
             ci_qing_setup: CCiQingSetup::default(),
+            tao_zhuang_setup: CTaoZhuangSetup::default(),
             net_client: None,
             net_server: None,
             regions: BTreeMap::new(),
@@ -8036,17 +8050,24 @@ impl CGame {
                 );
             }
             WorldReloadProfile::TaoZhuang => {
-                self.reload_simple_serialized(
-                    context,
-                    WorldReloadBooleanOwner::TaoZhuang,
-                    WorldReloadSerializationOwner::TaoZhuang,
-                    0x34,
-                    b"Load TaoZhuang config...ok!",
-                    b"Load TaoZhuang config...failed!",
-                    send_to_game_servers,
-                    false,
-                    &mut legacy_result,
-                );
+                const PATH: &[u8] = b"data/taozhuang.ini";
+                let source = context.read_resource(PATH);
+                let succeeded = self
+                    .tao_zhuang_setup
+                    .read_file(source.as_deref(), |payload| context.add_log_text(payload));
+                legacy_result = i32::from(succeeded);
+                context.add_log_text(if succeeded {
+                    b"Load TaoZhuang config...ok!"
+                } else {
+                    b"Load TaoZhuang config...failed!"
+                });
+                if succeeded && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    self.tao_zhuang_setup
+                        .add_byte_to_array(&mut payload)
+                        .map_err(WorldReloadBlock::TaoZhuangSerialization)?;
+                    self.send_reload_payload(0x34, &payload);
+                }
             }
             WorldReloadProfile::CiQing => {
                 const PATH: &[u8] = b"/data/ciqing.ini";

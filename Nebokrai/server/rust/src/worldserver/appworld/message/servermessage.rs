@@ -286,7 +286,7 @@ use crate::nets::servers::ServerCommandHandle;
 use crate::public::dupliregionsetup::DupliRegionSerializeError;
 use crate::public::equipmentcomposelist::EquipmentComposeSerializeError;
 use crate::public::ciqing::CiQingSerializationBlock;
-use crate::public::taozhuangsetup::{CTaoZhuangSetup, TaoZhuangSerializationBlock};
+use crate::public::taozhuangsetup::TaoZhuangSerializationBlock;
 use crate::public::wordsfilter::WordsFilterSerializeError;
 use crate::setup::cbattlefairyexpconfig::{
     BattleFairyExpSerializeError, CBattleFairyExpConfig,
@@ -3914,10 +3914,9 @@ pub(crate) fn continue_game_server_ciqing_ling_bao_configuration(
 pub(crate) fn continue_game_server_tao_zhuang_configuration(
     game: &CGame,
     socket_id: i32,
-    tao_zhuang: &CTaoZhuangSetup,
 ) -> WorldTaoZhuangConfigurationReport {
     let mut payload = Vec::new();
-    if let Err(error) = tao_zhuang.add_byte_to_array(&mut payload) {
+    if let Err(error) = game.tao_zhuang_setup().add_byte_to_array(&mut payload) {
         return WorldTaoZhuangConfigurationReport {
             delivery: None,
             completion: WorldTaoZhuangConfigurationCompletion::TaoZhuang(error),
