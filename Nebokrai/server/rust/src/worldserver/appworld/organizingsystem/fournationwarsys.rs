@@ -183,6 +183,8 @@ pub(crate) trait FourNationWarStartContext {
     fn put_war_log(&mut self, text: &[u8]);
     fn enter_start_notice(&mut self, region_name: &[u8]) -> Vec<u8>;
     fn enter_start_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8>;
+    fn enter_end_notice(&mut self, region_name: &[u8]) -> Vec<u8>;
+    fn enter_end_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8>;
 }
 
 impl From<TagTimeArithmeticBlock> for FourNationWarLoadError {
@@ -522,6 +524,22 @@ impl CFourNationWarSys {
         let notice = context.enter_start_notice(&region_name);
         context.send_organizing_info(&notice, 0xFFFF_FE92, 0xFFFF_0000);
         let log = context.enter_start_log(index, &region_name);
+        context.put_war_log(&log);
+        Ok(())
+    }
+
+    /// `OnEnterEnd`: только `XBWS0029` top-info и `XBWS0030` war-log.
+    pub(crate) fn on_enter_end<Context: FourNationWarStartContext + ?Sized>(
+        &self,
+        index: i32,
+        context: &mut Context,
+    ) -> Result<(), FourNationWarRegionIndexBlock> {
+        let region_id = self.war_region_id_by_time(index)?;
+        if region_id == 0 { return Ok(()); }
+        let Some(region_name) = context.region_name(region_id) else { return Ok(()); };
+        let notice = context.enter_end_notice(&region_name);
+        context.send_organizing_info(&notice, 0xFFFF_FE92, 0xFFFF_0000);
+        let log = context.enter_end_log(index, &region_name);
         context.put_war_log(&log);
         Ok(())
     }
