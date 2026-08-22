@@ -652,33 +652,3 @@ pub(crate) fn on_msg_s2w_auction(
         ),
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\auction.cpp
-
-// ============================================================================
-// FUNCTION: OnMSG_S2W_AUCTION
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\auction.cpp:10
-// RVA: 0x000A5650
-// ADDRESS: 004a5650
-// PROTOTYPE: void __cdecl OnMSG_S2W_AUCTION(CMessage * param_1)
-//
-// IMPLEMENTED_OWNER: `on_msg_s2w_auction` выше покрывает все literal case
-// `0x60801..=0x60814`, включая exact смену opcode, порядок decode/DB/send и
-// сохранённые safe-границы повреждённого wire. Raw switch оставлен только как
-// локальное доказательство уже материализованного owner-а.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-// COMPONENT_VARIANT_END: WorldServer

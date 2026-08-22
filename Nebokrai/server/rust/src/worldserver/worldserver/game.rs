@@ -522,7 +522,7 @@
 //! Суточная
 //! AuctionBang-ветвь передаёт реальный Log DB connection, присваивает день до
 //! update и сохраняет его неатомарный outcome. Неинициализированный исходным
-//! constructor-ом `m_lAucOldDay` остаётся typed `BLOCKED_MISSING_FACT`, а не
+//! constructor-ом `m_lAucOldDay` остаётся явной типизированной ошибкой, а не
 //! получает придуманное стартовое значение. Отдельный init-проход напрямую
 //! вызывает потоковый `CAuctionLog::LoadItem`, сохраняет partial publication и
 //! исходно продолжает инициализацию после `false`, меняя только текст лога.
@@ -581,7 +581,7 @@
 //! сохраняет его в локальный key и передаёт адрес в `m_mPlayer.find`.
 //! Отсутствующий map-owner в старом коде приводил к null-dereference на
 //! `CPlayer+0x744`; safe Rust не назначает ему новое поведение и останавливает
-//! только эту границу до send с локальным `BLOCKED_MISSING_FACT`.
+//! только эту границу до send с локальной типизированной ошибкой.
 //!
 //! `GetOnlinePlayerByID` сначала линейно проходит `m_lOnlinePlayer` в его
 //! list-порядке и только после первого совпадения ищет тот же unsigned ID во
@@ -1112,7 +1112,7 @@
 //! CWorldRegion -> CRegion -> CBaseObject::m_strName`. Typed lookup сохраняет
 //! разницу между отсутствующим map-key и существующим `tagRegion` с null
 //! pointer: первый в enter-ветви означает пустую C-строку, второй исходно
-//! разыменовывался и остаётся локальным `BLOCKED_MISSING_FACT`. Живое имя
+//! разыменовывался и остаётся локальной типизированной ошибкой. Живое имя
 //! заимствуется byte-exact без UTF-8 и без копирования MSVC `std::string` SSO.
 //!
 //! `LoadServerSetup` читает byte-exact whitespace-токены: произвольный header,
@@ -5856,7 +5856,7 @@ impl WorldSetup {
                     return tokens.outcome();
                 };
                 let Some(value) = $parser(raw) else {
-                    // BLOCKED_MISSING_FACT: для лексически неверного numeric/bool
+                    // Для лексически неверного numeric/bool
                     // token не доказана мутация destination старым MSVC iostream.
                     // Найденный setup содержит только корректные такие значения.
                     return tokens.outcome();
@@ -5945,7 +5945,7 @@ impl WorldSetup {
                     return tokens.outcome();
                 };
                 let Some(value) = $parser(raw) else {
-                    // BLOCKED_MISSING_FACT: malformed numeric/bool token не
+                    // Malformed numeric/bool token не
                     // встречается в найденном oracle; MSVC destination не угадываем.
                     return tokens.outcome();
                 };
@@ -7829,8 +7829,8 @@ impl CGame {
         context.add_log_text(&log);
 
         let Some(data) = self.get_script_file_data(path).map(legacy_c_string_prefix) else {
-            // BLOCKED_MISSING_FACT: RVA 0x00013760 передаёт исходный path в
-            // GetScriptFileData после того, как LoadOneScript нормализовал
+            // Оригинал передаёт исходный path в GetScriptFileData после того,
+            // как LoadOneScript нормализовал
             // только map-key. При несовпадении оригинал вызывает lstrlen(NULL).
             return Err(WorldReloadOneScriptBlock {
                 requested_path: path.to_vec(),
@@ -10681,7 +10681,7 @@ impl CGame {
             }
 
             let Some(index) = current_index else {
-                // BLOCKED_MISSING_FACT: при неуспехе первого numeric
+                // При неуспехе первого numeric
                 // extraction exact EXE всё равно использовал неизвестный
                 // stack-key в map::operator[]. Safe Rust не выбирает ключ.
                 blocked_at_record = Some(record_index as usize + 1);
@@ -12210,7 +12210,7 @@ impl CGame {
             .expect("успешно подключённый World client остаётся опубликованным")
             .enable_control_send();
 
-        // BLOCKED_MISSING_FACT: при успешно открытом, но оборванном до первой
+        // При успешно открытом, но оборванном до первой
         // пары setup исходный `dwNumber` не инициализирован. Уже выполненные
         // connect/control-send не откатываем и неизвестный DWORD не выбираем.
         let world_number =
@@ -12318,7 +12318,7 @@ impl CGame {
         let login_port = match spec.login_port {
             Some(port) => port,
             None => {
-                // BLOCKED_MISSING_FACT: старый dwLoginPort здесь был
+                // Старый dwLoginPort здесь был
                 // неинициализирован; неизвестное значение не выбираем.
                 let _legacy_result = client.close();
                 return Err(WorldLoginReconnectError::MissingSetupField("dwLoginPort"));
@@ -12340,7 +12340,7 @@ impl CGame {
         let event_sender = match spec.event_sender.as_ref() {
             Some(server) => server,
             None => {
-                // BLOCKED_MISSING_FACT: исходник после успешного connect
+                // Исходник после успешного connect
                 // разыменовывал обязательный g_pGame->s_pNetServer. Safe Rust
                 // закрывает ещё не опубликованный owner и не имитирует UB.
                 let _legacy_result = client.close();
@@ -12409,7 +12409,7 @@ impl CGame {
         snapshot.base_mut().add_ulong(world_number);
         snapshot.base_mut().add_ulong(declared_online_players);
         for &player_id in &self.online_players {
-            // BLOCKED_MISSING_FACT: World RVA 0x000083D0 выполнял
+            // Оригинал выполнял
             // При отсутствии узла используется ноль; иначе node->second, затем чтение со смещением 0x744.
             // Достижимость/реакция null-dereference не доказана; safe Rust не
             // отправляет частичный snapshot и не выдаёт эту ошибку за legacy.
@@ -14277,7 +14277,7 @@ impl CGame {
         };
 
         let Some(release_interval_ms) = self.setup.release_login_player_time_ms else {
-            // BLOCKED_MISSING_FACT: constructor не задавал это поле, а safe Rust
+            // Constructor не задавал это поле, а safe Rust
             // не выбирает значение для исходного чтения неинициализированного DWORD.
             return WorldMainLoopTailStageReport::BlockedMissingReleaseInterval { pacing };
         };
@@ -14834,7 +14834,7 @@ impl CGame {
         state: &mut WorldMainLoopLargessState,
     ) -> WorldMainLoopLargessGateReport {
         let Some(load_interval_ms) = self.setup.load_largess_time_ms else {
-            // BLOCKED_MISSING_FACT: constructor не задавал dwLoadLargessTime;
+            // Constructor не задавал dwLoadLargessTime;
             // неизвестное C++-чтение не позволяет назначить последующий counter.
             return WorldMainLoopLargessGateReport::BlockedMissingFact {
                 field: "dwLoadLargessTime",
@@ -14849,7 +14849,7 @@ impl CGame {
             };
         }
         if self.setup.world_number.is_none() {
-            // BLOCKED_MISSING_FACT: TransferLargessThread форматировал `%d`
+            // TransferLargessThread форматировал `%d`
             // непосредственно из исходно неинициализированного dwNumber.
             return WorldMainLoopLargessGateReport::BlockedMissingFact {
                 field: "dwNumber",
@@ -17294,7 +17294,7 @@ impl CGame {
     ) -> Result<(), WorldLocalMessageQueueBlock> {
         let message_type = message.message_type();
         let Some(net_server) = self.net_server.as_ref() else {
-            // BLOCKED_MISSING_FACT: exact owner безусловно разыменовывал
+            // Исходный owner безусловно разыменовывал
             // обязательный s_pNetServer. Safe Rust не подменяет этот путь
             // прямым вызовом handler-а и сохраняет границу FIFO.
             return Err(WorldLocalMessageQueueBlock { message_type });
@@ -22157,932 +22157,3 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Vec<u8> {
     CGame::to_strlwr(&mut copy);
     copy
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.h
-
-// IMPLEMENTED: `ShowSaveInfo` RVA `0x00001720` находится выше.
-
-// ============================================================================
-// IMPLEMENTED: `DeleteGame` RVA `0x00001780` находится выше; Rust `Drop` заменяет deleting destructor и обнуляет owned slot.
-
-// ============================================================================
-// IMPLEMENTED: `GetGame` RVA `0x000017A0` находится выше; nullable global pointer заменён заимствованием из owned slot.
-
-// IMPLEMENTED: `CGame::SendGlobeVariableToGS` RVA `0x000017E0` находится
-// выше. Точный конструктор и полный проход ссылок доказали отсутствие producer-а
-// четырёх исходно неинициализированных `long`; безопасная замена нулями описана
-// owner-комментарием.
-
-// IMPLEMENTED: `CGame::SendMsg2GameServer` RVA `0x00001B10` находится выше.
-
-// IMPLEMENTED: `CGame::CheckInvalidString` RVA `0x00001B30` находится выше;
-// process-global singleton заменён owned `CWordsFilter` без изменения dispatch.
-
-// ============================================================================
-// FUNCTION: CGame::GetPlayerEquipID
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4602
-// RVA: 0x00001B50
-// ADDRESS: 00401b50
-// PROTOTYPE: void __thiscall GetPlayerEquipID(CPlayer * param_1, ulong * param_2, ulong * param_3, ulong * param_4, ulong * param_5, ulong * param_6, ulong * param_7, ulong * param_8, ulong * param_9, ulong * param_10, ulong * param_11, ulong * param_12, uchar * param_13, uchar * param_14, uchar * param_15, uchar * param_16, uchar * param_17, uchar * param_18, uchar * param_19, uchar * param_20, uchar * param_21, uchar * param_22, uchar * param_23)
-//
-// IMPLEMENTED_OWNER: `CGame::get_player_equip_id` делегирует достигнутому
-// `CPlayer::equipment_wire_snapshot`; один typed snapshot заменяет 22 output-
-// ссылки, не меняя порядок slots и byte-cast уровней.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED выше: SaveThreadFunc, WorldServer RVA 0x00001E30.
-
-// ============================================================================
-// FUNCTION: CGame::CodeStringTable
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5345
-// RVA: 0x00001F00
-// ADDRESS: 00401f00
-// PROTOTYPE: void __thiscall CodeStringTable(void)
-//
-// IMPLEMENTED_OWNER: `CGame::code_string_table`; exact append делегирован
-// достигнутому `MyStringTable::to_byte_array`, без не-Miracle vector plumbing.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::GetStringTableByteArray
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5350
-// RVA: 0x00001F20
-// ADDRESS: 00401f20
-// PROTOTYPE: vector<unsigned_char,std::allocator<unsigned_char>_> * __thiscall GetStringTableByteArray(void)
-//
-// читает тот же owned buffer напрямую, без внешней дублирующей ссылки.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: SendErrLog
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5399
-// RVA: 0x00001F30
-// ADDRESS: 00401f30
-// PROTOTYPE: void __cdecl SendErrLog(char param_1, long param_2, long param_3, char * param_4)
-//
-// IMPLEMENTED_OWNER: `CGame::send_err_log` выше. `Option<&[u8]>` заменяет
-// nullable pointer, bytes до первого NUL — старую C-строку, а `CMessage`/
-// current Login owner — process-global send без Win32 lifetime. Exact opcode,
-// signed поля, NUL, неприоритетный send и игнорирование send-result сохранены.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: `CGame::ToStrlwr` RVA `0x00002000` находится выше; exact
-// switch-table и обе доказанные странности сохранены byte-for-byte.
-
-// ============================================================================
-// FUNCTION: CGame::GetOptMoneyJin
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5775
-// RVA: 0x00002250
-// ADDRESS: 00402250
-// PROTOTYPE: bool __thiscall GetOptMoneyJin(CGoodsNode * param_1, long * param_2, long * param_3)
-//
-// IMPLEMENTED_OWNER: `CGame::get_opt_money_jin`; `Option<u32>` заменяет
-// nullable goods-owner, а `WorldAuctionSellerMoney` — две output-ссылки.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: GetStringByID
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.h:944
-// RVA: 0x00002FB0
-// ADDRESS: 00402fb0
-// PROTOTYPE: char * __cdecl GetStringByID(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1)
-//
-// IMPLEMENTED_OWNER: `CGame::get_string_by_id`; явный game-owner заменяет
-// nullable process-global `g_pGame`, а miss по-прежнему даёт пустые bytes.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: `reload_conf_log` RVA `0x00002FD0` находится выше.
-
-// ============================================================================
-// FUNCTION: ConnectLoginServerFunc
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4883
-// RVA: 0x000033B0
-// ADDRESS: 004033b0
-// PROTOTYPE: uint __stdcall ConnectLoginServerFunc(void * param_1)
-//
-// IMPLEMENTED_OWNER: `CGame::connect_login_server_func` выше. Tokio sleep
-// заменяет только `Sleep(8000)`, а AtomicBool — process-global exit flag;
-// initial/after-failure проверки, cadence и условие успеха сохранены.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::LoadStringTable
-// STATUS: IMPLEMENTED / INFRASTRUCTURE_SPLIT
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5324
-// RVA: 0x000033F0
-// ADDRESS: 004033f0
-// PROTOTYPE: bool __thiscall LoadStringTable(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1)
-//
-// выполняет process context, parser/error и обе exact log-ветви принадлежат CGame.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::CreateConnectLoginThread
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:2246
-// RVA: 0x00004320
-// ADDRESS: 00404320
-// PROTOTYPE: void __thiscall CreateConnectLoginThread(void)
-//
-// IMPLEMENTED_OWNER: `CGame::create_connect_login_thread` и
-// `WorldLoginReconnectWorker` сначала выставляют exit предыдущего worker-а,
-// затем полностью join-ят его и лишь потом создают следующий. Новый worker
-// получает snapshot setup и отправитель общей World FIFO, а не `CGame*`; его
-// 8-sec pause, одна попытка после pause и after-failure stop-check совпадают
-// с `ConnectLoginServerFunc`. `JoinHandle` освобождается ownership-ом вместо
-// `CloseHandle`; ошибку создания Rust возвращает typed-результатом, не создавая
-// фиктивный null HANDLE.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: `CGame::ClearCreationPlayer` RVA `0x00004B30` находится выше;
-// весь подтверждённый PDB `std::list<long>` очищается одним `VecDeque::clear`.
-
-// IMPLEMENTED: `CGame::ClearRestorePlayer` RVA `0x00004B70` и
-// `CGame::ClearDeletionPlayer` RVA `0x00004BB0` находятся выше; `VecDeque`
-// заменяет только полный STL list-node traversal и освобождение.
-
-// IMPLEMENTED: `CGame::ClearOfflinePlayer` RVA `0x00004BF0` находится выше;
-// весь `std::list<unsigned int>` очищается одним `VecDeque::clear`.
-
-// CGame::tagSetup::tagSetup RVA 0x00004C30: IMPLEMENTED выше.
-// Создание/освобождение std::string заменено обычным владением Vec<u8>.
-//
-// IMPLEMENTED: `CGame::IsNameExistInMapPlayer` RVA `0x00005190` находится
-// выше; custom lowercase, map-order и safe char[260] граница сохранены.
-
-// IMPLEMENTED: `CGame::GetCreationPlayerCountInCdkey` RVA `0x000052D0`
-// находится выше; map/list order, `_strcmpi` и `u8` wrapping сохранены.
-
-// IMPLEMENTED: `CGame::GetCreationPlayerByName` RVA `0x00005390` находится
-// выше; map/creation-list contract и safe char[260] граница сохранены.
-
-// IMPLEMENTED: `CGame::DeleteRestorePlayer` RVA `0x000054E0` и
-// `CGame::IsRestorePlayerExist` RVA `0x00005530` находятся выше; удаляется
-// только первый list-node, а проверка сохраняет линейный поиск.
-
-// IMPLEMENTED: `CGame::GetDeletionPlayerTime` RVA `0x00005560` находится
-// выше; первый совпавший record возвращает signed time, отсутствие — `0`.
-
-// IMPLEMENTED: `CGame::GetOnlinePlayerIDByName` RVA `0x00005590` находится
-// выше; map/list traversal и CRT ASCII-case-insensitive сравнение сохранены.
-
-// ============================================================================
-// FUNCTION: CGame::GetMapPlayerIDByName
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:3408
-// RVA: 0x00005640
-// ADDRESS: 00405640
-// PROTOTYPE: ulong __thiscall GetMapPlayerIDByName(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::GetOnlinePlayerByCdkey
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:3477
-// RVA: 0x000056D0
-// ADDRESS: 004056d0
-// PROTOTYPE: CPlayer * __thiscall GetOnlinePlayerByCdkey(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::IsNameExistInDBCreation
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4101
-// RVA: 0x00005790
-// ADDRESS: 00405790
-// PROTOTYPE: bool __thiscall IsNameExistInDBCreation(char * param_1)
-//
-// IMPLEMENTED_OWNER: `CGame::is_name_exist_in_db_creation` выше сохраняет
-// list-order и legacy lowercase поверх Rust mutex.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::IsNameExistInDBData
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4131
-// RVA: 0x000058D0
-// ADDRESS: 004058d0
-// PROTOTYPE: bool __thiscall IsNameExistInDBData(char * param_1)
-//
-// IMPLEMENTED_OWNER: `CGame::is_name_exist_in_db_data` выше сохраняет
-// unsigned map-order и legacy lowercase поверх Rust mutex.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::FindGoodsLink
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4181
-// RVA: 0x00005A10
-// ADDRESS: 00405a10
-// PROTOTYPE: tagGoodsLink * __thiscall FindGoodsLink(ulong param_1)
-//
-// `0x00405A10..0x00405A33` выполняет первый linear list-order match по
-// `dwIndex +8`. Constructor-ные 500 нулевых записей сохранены явно.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::AddOrginGoodsToPlayer
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4755
-// RVA: 0x00005A40
-// ADDRESS: 00405a40
-// PROTOTYPE: void __thiscall AddOrginGoodsToPlayer(CPlayer * param_1)
-//
-// IMPLEMENTED_OWNER: `CGame::add_origin_goods_to_player` и
-// `CPlayer::add_origin_equipment` выше сохраняют exact list/factory/GUID/add.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: `CGame::GetTeamSessionID` RVA `0x000070C0` находится выше;
-// exact PDB map `unsigned long -> long` сохранён как `BTreeMap<u32, i32>`.
-
-// IMPLEMENTED: `CGame::GetMapPlayer` RVA `0x00007100` находится выше;
-// входной unsigned ID подтверждён как точный map-key по `0x00407105`.
-
-// IMPLEMENTED: `CGame::DeleteDeletionPlayer` RVA `0x00007140` находится
-// выше; удаляется только первый record совпавшего unsigned player ID.
-
-// IMPLEMENTED: `CGame::GetLoginPlayerIDByName` RVA `0x00007270` находится
-// выше; login-list order, map lookup и case-sensitive C-string сохранены.
-
-// IMPLEMENTED: `CGame::RemoveOfflinePlayer` RVA `0x00007330` находится выше;
-// `VecDeque::retain` сохраняет удаление всех совпадений исходного `list::remove`.
-
-// IMPLEMENTED: `CGame::RemoveLoginPlayer` RVA `0x00007340` находится выше;
-// удаляется только первый list-узел совпавшего ID.
-
-// IMPLEMENTED: `CGame::GetLoginPlayerByID` RVA `0x00007390` находится выше;
-// list-record взят из PDB, а входной map-key подтверждён по exact EXE.
-
-// ============================================================================
-// FUNCTION: CGame::ValidateDBPlayerIDinCdkey
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:3894
-// RVA: 0x000073F0
-// ADDRESS: 004073f0
-// PROTOTYPE: bool __thiscall ValidateDBPlayerIDinCdkey(char * param_1, uint param_2)
-//
-// Реализация находится в `CGame::validate_db_player_id_in_cdkey` выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::ValidatePlayerIDinCdkey
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5078
-// RVA: 0x00007490
-// ADDRESS: 00407490
-// PROTOTYPE: bool __thiscall ValidatePlayerIDinCdkey(char * param_1, uint param_2)
-//
-// Реализация находится в `CGame::validate_player_id_in_cdkey` выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: name-overload `CGame::GetRegion` RVA `0x00008680` находится
-// выше как `named_region_lookup`; exact traversal/strcmp подтверждены, а raw
-// MSVC tree plumbing удалён.
-
-// ============================================================================
-// IMPLEMENTED: `CGame::SaveCityRegion` RVA `0x00008750` находится выше; signed map-order и type `2` сохранены, две UB-границы локализованы.
-
-// ============================================================================
-// FUNCTION: CGame::ClearStringTable
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5339
-// RVA: 0x000087D0
-// ADDRESS: 004087d0
-// PROTOTYPE: void __thiscall ClearStringTable(void)
-//
-// IMPLEMENTED_OWNER: `CGame::clear_string_table`; Rust `clear` заменяет map,
-// vector delete и три сырых iterator pointer assignment-а.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::UpdateStringTable
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5355
-// RVA: 0x00008820
-// ADDRESS: 00408820
-// PROTOTYPE: bool __thiscall UpdateStringTable(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1)
-//
-// IMPLEMENTED_OWNER: `CGame::update_string_table`; аргумент намеренно
-// игнорируется, перечитываются default/configured packages, затем exact
-// `0x7F807` raw broadcast и обе исходные log-ветви.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::IsNameExitInFaction
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5763
-// RVA: 0x000089A0
-// ADDRESS: 004089a0
-// PROTOTYPE: bool __thiscall IsNameExitInFaction(char * param_1)
-//
-// IMPLEMENTED_OWNER: `CGame::is_name_exit_in_faction` выше делегирует exact
-// `FindOrgaByName` owner-у; typed overflow/null block заменяет потерянный raw
-// return, который декомпилятор ошибочно принял за security-cookie результат.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::LoadServerResource
-// STATUS: IMPLEMENTED / RUNTIME_LOG_SINK
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:567
-// RVA: 0x00009110
-// ADDRESS: 00409110
-// PROTOTYPE: bool __thiscall LoadServerResource(void)
-//
-// VERIFIED_NOTE: сохранённый raw ниже ошибочно обрывается после освобождения
-// cwd-buffer. Exact тело продолжается до `0x004092BB`: удаляет прежний global
-// `CClientResource`, создаёт новый с `GAME_RES=2`, cwd и `FilesInfo.ril`, вызывает
-// `LoadEx`, игнорирует его bool, пишет `Load package file OK!` и возвращает
-// `true`. Полный safe путь materialized как `CGame::load_server_resource`:
-// `DefaultClientResourceOwner` заменяет process-global pointer без `static
-// mut`, `std::env::current_dir` заменяет Win32 cwd plumbing, а caller передаёт
-// только actual log sink.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: LoadPlayerDataFromDB
-// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5119
-// RVA: 0x000092C0
-// ADDRESS: 004092c0
-// PROTOTYPE: uint __stdcall LoadPlayerDataFromDB(void * param_1)
-//
-// Реализация находится в `run_player_load_worker` и
-// `process_player_load_batch` выше; `WorldPlayerLoadDataAdapter` вызывает
-// полный `CPlayer::LoadData`, а его exact bool-смысл передаёт worker-у.
-// `WorldPlayerLoadWorkerPool` в `playerloadworker.rs` владеет системными
-// потоками, двумя exit-флагами и ordered join без process-global singleton-а.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: DoSaveLog
-// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5230
-// RVA: 0x000095E0
-// ADDRESS: 004095e0
-// PROTOTYPE: void __cdecl DoSaveLog(void)
-//
-// IMPLEMENTED_OWNER: `WorldWriteLogWorker` в `writelogworker.rs` соединяет
-// exact GetSize/Pop/Execute batch с 1-ms polling, drain-on-exit и 10-sec
-// reconnect; отмена reconnect на shutdown исправляет внутреннее зависание.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0040985c
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5255
-// RVA: 0x0000985C
-// ADDRESS: 0040985c
-// PROTOTYPE: undefined Catch@0040985c()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@00409899
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5313
-// RVA: 0x00009899
-// ADDRESS: 00409899
-// PROTOTYPE: undefined Catch@00409899()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@00409a34
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5294
-// RVA: 0x00009A34
-// ADDRESS: 00409a34
-// PROTOTYPE: undefined Catch@00409a34()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::DeleteMapPlayer
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:2962
-// RVA: 0x0000D350
-// ADDRESS: 0040d350
-// PROTOTYPE: void __thiscall DeleteMapPlayer(uint param_1)
-//
-// IMPLEMENTED_OWNER: `CGame::delete_map_player`; `Box` уничтожается перед
-// удалением map-entry, а miss остаётся no-op.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED выше: CGame::ClearMapPlayerForOffline, WorldServer RVA
-// 0x0000D3A0. Полный заменённый raw и MSVC tree traversal удалены.
-
-// ============================================================================
-// IMPLEMENTED: `CGame::ClearMapPlayer` RVA `0x0000D450` находится выше; `BTreeMap::pop_first` сохраняет unsigned key-order и owned deletion.
-
-// ============================================================================
-// FUNCTION: CGame::ClearDBData
-// STATUS: IMPLEMENTED + VERIFIED_DISASSEMBLY
-// RVA: 0x0000D490; exact continuous body `0x0040D490..0x0040D76B`.
-// Реализация и компактная карта происхождения находятся выше.
-
-// ============================================================================
-// FUNCTION: ProcessWriteLogDataFunc
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5088
-// RVA: 0x0000D770
-// ADDRESS: 0040d770
-// PROTOTYPE: uint __stdcall ProcessWriteLogDataFunc(void * param_1)
-//
-// IMPLEMENTED_OWNER: `WorldWriteLogWorker::start` создаёт owned системный поток,
-// ранний `bUseLogSys=false` возвращает `Disabled`, Tokio Handle заменяет COM
-// apartment для TDS, `request_exit`/`join` заменяют глобальный флаг и CRT handle.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: `CGame::DelItemToIpList` RVA `0x0000D830` находится выше;
-// ошибочный raw template-type `CPlayer*` заменён доказанным signed refcount.
-
-// ============================================================================
-// IMPLEMENTED + VERIFIED_DISASSEMBLY: полный `CGame::Release` RVA `0x0000E7F0` находится выше; exact body имеет единственный `ret` в `0x0040ED87`.
-
-// ============================================================================
-// FUNCTION: CGame::LoadSetup
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:587
-// RVA: 0x0000F890
-//
-// Positional open/decode/extraction и различающиеся plain/encoded title готовы
-// выше. Callback заменяет `FindWindowA/SetWindowTextA`; занятый title возвращает
-// false в `CGame::Init`, где сохраняются точные `ERROR` и message bytes.
-//
-// ============================================================================
-// FUNCTION: FindScriptFile
-// STATUS: IMPLEMENTED / SAFE_INFRASTRUCTURE_REPLACEMENT
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:1081
-// RVA: 0x000106E0
-// ADDRESS: 004106e0
-// PROTOTYPE: void __cdecl FindScriptFile(char * param_1, list<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>,std::allocator<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>_>_> * param_2)
-//
-// IMPLEMENTED_OWNER: `find_script_files`; `walkdir` заменяет Win32 handles и
-// recursion, а default `WorldReloadContext::script_files` подключает host-
-// fallback, не закрывая будущий package-resource override.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// IMPLEMENTED: `CGame::ReLoadAllRegionSetup` RVA `0x000108F0` находится выше; exact EXE подтверждает единый успешный return.
-
-// ============================================================================
-// FUNCTION: CGame::AppendMapPlayer
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:2943
-// RVA: 0x00010A40
-// ADDRESS: 00410a40
-// PROTOTYPE: void __thiscall AppendMapPlayer(CPlayer * param_1)
-//
-// Реализация находится в `CGame::append_map_player`. `Box<CPlayer>` сохраняет
-// владение incoming pointer на collision-ветви; replaced STL tree-body удалён.
-
-// ============================================================================
-// FUNCTION: CGame::CloneMapPlayer
-// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:3058
-// RVA: 0x00010AB0
-// ADDRESS: 00410ab0
-// PROTOTYPE: CPlayer * __thiscall CloneMapPlayer(uint param_1)
-//
-// Реализация находится в `CGame::clone_map_player`. Exact диапазон
-// `0x00410AB0..0x00410B98` подтвердил входной `player_id` как map-key,
-// `vector.data()`, нулевой cursor, оба `include_child=true` и уничтожение
-// decoder-копии при `false`.
-
-// IMPLEMENTED: `CGame::AppendCreationPlayer` RVA `0x00010BA0` находится выше.
-// Duplicate уничтожает incoming; existing-owner сохраняет list-мутацию и
-// возвращает непринятый `Box` caller-у. Его продолжение принадлежит
-// `OnLogMessage`, поэтому append-owner не имитирует ни UAF, ни последующую leak.
-
-// ============================================================================
-// FUNCTION: CGame::CloneCreationPlayer
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:3200
-// RVA: 0x00010C70
-// ADDRESS: 00410c70
-// PROTOTYPE: CPlayer * __thiscall CloneCreationPlayer(uint param_1)
-//
-// list сравнивается по тем же 32 битам с unsigned ID, затем используется общий
-// достигнутый `clone_map_player`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: `CGame::AppendRestorePlayer` RVA `0x00010CA0` и
-// `CGame::AppendDeletionPlayer` RVA `0x00010CF0` находятся выше. Оба оставляют
-// первый duplicate неизменным и дописывают только новый ID в хвост.
-
-// IMPLEMENTED: `CGame::AppendOfflinePlayer` RVA `0x00010DF0` находится выше;
-// exact PDB задаёт `m_lID` как signed long, list хранит тот же шаблон как u32.
-
-// IMPLEMENTED: `CGame::AppendLoginPlayer` RVA `0x00010E50` находится выше;
-// raw-имя `tagDeletionPlayer` было ошибкой типов, точный PDB задаёт login-пару.
-
-// ============================================================================
-// FUNCTION: CGame::CloneSavingPlayer
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:3870
-// RVA: 0x00010EB0
-// ADDRESS: 00410eb0
-// PROTOTYPE: CPlayer * __thiscall CloneSavingPlayer(uint param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED выше: `CGame::AppendDBCreationPlayer` RVA `0x00010FB0`;
-// duplicate continuation имеет статус `VERIFIED_DISASSEMBLY`.
-
-// IMPLEMENTED: `CGame::AppendDBCountry` RVA `0x00011070` находится выше.
-// Rust принимает уже материализованный non-null country snapshot.
-
-// ============================================================================
-// FUNCTION: CGame::AppendSaveFaction
-// STATUS: IMPLEMENTED
-// RVA: 0x000110D0; реализация находится выше.
-
-// ============================================================================
-// FUNCTION: CGame::AppendSaveUnion
-// STATUS: IMPLEMENTED
-// RVA: 0x00011130; реализация находится выше.
-
-// ============================================================================
-// FUNCTION: CGame::AppendDelFaction
-// STATUS: IMPLEMENTED
-// RVA: 0x00011190; реализация находится выше.
-
-// ============================================================================
-// FUNCTION: CGame::AppendDelUnion
-// STATUS: IMPLEMENTED
-// RVA: 0x000111F0; реализация находится выше.
-
-// ============================================================================
-// FUNCTION: CGame::AppendRegionParam
-// STATUS: IMPLEMENTED
-// RVA: 0x00011250; Rust принимает уже материализованный non-null DB snapshot.
-
-// ============================================================================
-// FUNCTION: CGame::AddGoodsLink
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4164
-// RVA: 0x000112B0
-// ADDRESS: 004112b0
-// PROTOTYPE: void __thiscall AddGoodsLink(tagGoodsLink * param_1)
-//
-// `0x004112B0..0x00411336` удаляет голову только при MSVC list max-size
-// `0x0CCCCCCC`, назначает unchanged-записи process-global wrapping index с
-// initial `1` и копирует POD в хвост. `VecDeque` заменяет только STL plumbing;
-// Rust освобождает owned `CGoods` при крайне редком удалении вместо утечки.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::OnGameServerLost
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4313
-// RVA: 0x00011340
-// ADDRESS: 00411340
-// PROTOTYPE: void __thiscall OnGameServerLost(ulong param_1)
-//
-// IMPLEMENTED_OWNER: `CGame::on_game_server_lost`; typed report сохраняет
-// affected region/player order, каждый list-transition и Login delivery.
-// Exact `0x0041165D..0x004116D2` подтвердил, что raw `return` после удаления
-// login-node был ошибкой decompiler-а: цикл продолжает offline append и следующий
-// affected player. Null region-owner исправлен только как внутренний UB.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// IMPLEMENTED: `CGame::ReLoadOneRegionSetup` RVA `0x000120F0` находится выше; exact EXE подтверждает отдельные true/false epilogue.
-
-// ============================================================================
-// IMPLEMENTED: `CGame::LoadRegionList` RVA `0x00012220` находится выше; все поставочные subtype/load/serialize, включая COUNTRY type `3` через `WorldCountryWarRegion`, вызываются напрямую.
-
-// ============================================================================
-// FUNCTION: CGame::GetCreationPlayerVectorByCdkey
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:3129
-// RVA: 0x00012760
-// ADDRESS: 00412760
-// PROTOTYPE: void __thiscall GetCreationPlayerVectorByCdkey(char * param_1, vector<long,std::allocator<long>_> * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: CGame::GeterateRegionDBData, WorldServer RVA 0x00012860.
-// Полный заменённый псевдокод и inlined MSVC tree traversal удалены; контракт
-// и provenance сохранены в верхнем `//!`.
-
-// IMPLEMENTED: `CGame::RefreshOwnedCityOrg` RVA `0x000128E0` находится выше;
-// exact mutation/wire-порядок подтверждён дизассемблировкой, а Linux-добавления
-// сохранения региона и отдельного codec-а намеренно не перенесены.
-
-// IMPLEMENTED: `CGame::DelItemFromBaiTanList` RVA `0x000129F0` находится
-// выше; оба erase выполняются даже при отсутствии player->IP записи.
-
-// IMPLEMENTED выше: CGame::GenerateDBData, WorldServer RVA 0x00012E50.
-// Полный заменённый raw и STL traversal удалены.
-
-// ============================================================================
-// IMPLEMENTED: `CGame::GetScriptFileData` RVA `0x000132E0` находится выше.
-
-// ============================================================================
-// IMPLEMENTED: `CGame::LoadOneScript` RVA `0x00013440` находится выше.
-
-// ============================================================================
-// IMPLEMENTED: `CGame::ReLoadOneScript` RVA `0x00013760` находится выше.
-
-// ============================================================================
-// FUNCTION: CGame::ProcessPlayerDataQueue
-// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4910
-// RVA: 0x00013BD0
-// ADDRESS: 00413bd0
-// PROTOTYPE: void __thiscall ProcessPlayerDataQueue(void)
-//
-// Полная реализация и локальная спецификация находятся в
-// `CGame::process_player_data_queue` выше. Exact virtual slot `+0x84`
-// подтверждён как `CShape::SetState(0)`; заменённое C++/STL/SEH тело удалено.
-
-// VERIFIED_DISASSEMBLY, IMPLEMENTED: `CGame::AddItemToBaiTanList` RVA
-// `0x00014140` и `CGame::DoneBaiTanList` RVA `0x000141F0` находятся выше;
-// заменённый STL traversal и raw с потерянными pair-присваиваниями удалены.
-
-// ============================================================================
-// FUNCTION: CGame::ResetHonorElimilateInfo
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5986
-// RVA: 0x00014390
-// ADDRESS: 00414390
-// PROTOTYPE: bool __thiscall ResetHonorElimilateInfo(ulong param_1)
-//
-// Реализовано выше через reached player/queue owners и Rust-коллекции.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// IMPLEMENTED: `CGame::LoadScriptFileData` RVA `0x00014450` находится выше.
-
-// ============================================================================
-// FUNCTION: CGame::AI
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:2346
-// RVA: 0x000148A0
-// ADDRESS: 004148a0
-// PROTOTYPE: int __thiscall AI(void)
-//
-// Реализация и локальная спецификация находятся в `CGame::ai` выше.
-// `BTreeMap` сохраняет signed-key order region map, `VecDeque` — list order;
-// virtual region slot остаётся явным callback-ом. Rust-owned message/string и
-// готовые network helpers заменяют только STL/SEH/allocation mechanics.
-//
-
-// IMPLEMENTED: CGame::ProcessTimeOutLoginPlayer RVA `0x00014A60` находится выше.
-// VERIFIED_DISASSEMBLY: exact EXE `0x00414BE4..0x00414D37` подтверждает
-// продолжение RemoveOnline/AppendOffline/friend loop после erase.
-//
-
-// IMPLEMENTED: CGame::SetEnemyFactions, WorldServer RVA 0x00014D90.
-// Полный заменённый псевдокод и inlined STL cleanup удалены; контракт и
-// provenance сохранены в верхнем `//!`.
-
-// ============================================================================
-// IMPLEMENTED: destructor `CGame` RVA `0x00014EF0` выражен автоматическим Drop полей после обязательного Release; STL/EH cleanup удалён как compiler/library noise.
-
-// ============================================================================
-// FUNCTION: CGame::CGame
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:520
-// RVA: 0x00015210
-// ADDRESS: 00415210
-// PROTOTYPE: undefined __thiscall CGame(void)
-//
-// IMPLEMENTED_OWNER: `CGame::new` выше сохраняет достигнутые empty-owners,
-// `tagSetup` defaults, 500 goods-link placeholder-ов, nullable DB/network
-// owner-ы, login/ping state и отдельный initial ping tick. Rust `BTreeMap`,
-// `VecDeque`, `Option`, `Mutex` и owned values заменяют только STL/Win32
-// lifetime mechanics; безопасно нулевой globe-wire payload документирован в
-// верхнем контракте как исправление ненаблюдаемого uninitialized-memory defect.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// IMPLEMENTED: `CreateGame` RVA `0x00015660` находится выше; `Box<CGame>` заменяет `operator_new` и nullable global publication.
-
-// ============================================================================
-// IMPLEMENTED: полный `CGame::ReLoad` RVA `0x00015740` находится выше; exact EXE подтверждает единый epilogue и возвращаемый length-accumulator.
-
-// ============================================================================
-// IMPLEMENTED: `CGame::Init` RVA `0x00018EE0` находится выше.
-// Полный raw owner удалён после переноса; соседние owners остаются ниже.
-
-// IMPLEMENTED: `CGame::MainLoop` RVA `0x00019A00` находится выше.
-// Полная ordered-композиция заканчивается legacy result `1`; технические
-// SEH/stack cleanup и Windows wait/process-handle mechanics удалены.
-//
-
-// ============================================================================
-// IMPLEMENTED: полный `GameThreadFunc` RVA `0x0001A310` находится выше; typed runtime adapter сохраняет Init/MainLoop/barrier/Release/Delete/event/close порядок.
-
-// ============================================================================
-// FUNCTION: tagAppCrashMgr::tagAppCrashMgr
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp
-// RVA: 0x00020660
-// ADDRESS: 00420660
-// PROTOTYPE: undefined __thiscall tagAppCrashMgr(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: tagAppCrashMgr::~tagAppCrashMgr
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp
-// RVA: 0x000206D0
-// ADDRESS: 004206d0
-// PROTOTYPE: void __thiscall ~tagAppCrashMgr(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_0053bc30
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp
-// RVA: 0x0013BC30
-// ADDRESS: 0053bc30
-// PROTOTYPE: undefined FUN_0053bc30()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: WorldServer

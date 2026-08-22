@@ -16,8 +16,8 @@
 //!
 //! Serializer буквально дописывает полный `0x20` defence block, count и gates.
 //! Последние три defence DWORD ни constructor, ни loader не задают даже в пяти
-//! поставочных `.city`; safe serializer поэтому оставляет локальный
-//! `BLOCKED_MISSING_FACT`, а не подставляет два видимых лишних token-а или нули.
+//! поставочных `.city`; safe serializer поэтому возвращает локальную ошибку,
+//! а не подставляет два видимых лишних token-а или нули.
 //! City Load принимает успех лишь при успешных War/City loads, включённом base
 //! return setup и совпадении own ID с обоими return-region ID; offsets guard-а
 //! `+0xC8/+0xAC/+0x138/+0x8` подтверждены disassembly.
@@ -331,8 +331,8 @@ impl CWorldCityRegion {
         if state != ECityState::Fight && state != ECityState::Mass {
             return Ok(());
         }
-        // BLOCKED_MISSING_FACT: RVA 0x00079DA0 разыменовывает `pPlayer` без
-        // проверки только в активном state; достижимая реакция null неизвестна.
+        // Оригинал разыменовывает `pPlayer` без проверки только в активном
+        // state; достижимая реакция null неизвестна.
         let player = player.ok_or(WorldCityRegionEnterBlock::ActiveStateMissingPlayer)?;
         let mut tile_x = player
             .get_tile_x()
@@ -444,27 +444,3 @@ fn append_city_c_string(destination: &mut Vec<u8>, value: &[u8]) {
     destination.extend_from_slice(&value[..end]);
     destination.push(0);
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\worldcityregion.cpp
-
-// ============================================================================
-// FUNCTION: CWorldCityRegion::SetEnterPosXY
-// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\worldcityregion.cpp:147
-// RVA: 0x00079DA0
-// ADDRESS: 00479da0
-// PROTOTYPE: void __thiscall SetEnterPosXY(CPlayer * param_1)
-//
-// IMPLEMENTED выше. Exact `0x00479DE3..0x00479E76` доказывает оставленные
-// нулевыми span X/Y attacker-ветки; defender использует `right-left` и
-// `bottom-top`. `0x00479EEE..0x00479F0C` подтверждает SetRegionID `+0x54`,
-// затем SetTileXY `+0x94`. Missing destination сохраняет прежние tile игрока,
-// но новый region ID всё равно присваивается.
-
-// COMPONENT_VARIANT_END: WorldServer

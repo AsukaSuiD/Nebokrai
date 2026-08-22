@@ -2496,7 +2496,7 @@ pub(crate) async fn on_server_message(
 
             let relay = match world_number {
                 None => {
-                    // BLOCKED_MISSING_FACT: до успешного LoadSetup старый
+                    // До успешного LoadSetup старый
                     // dwNumber был неинициализирован. Реакция его чтения не
                     // назначается; доказанное GetLong уже выполнено выше.
                     WorldLoginServerTupleRelay::WorldNumberUnavailable {
@@ -4290,26 +4290,3 @@ fn send_region_change_failure(
     let sender = game.current_game_server_sender();
     response.send_to_socket(sender.as_ref(), socket_id)
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\servermessage.cpp
-
-// ============================================================================
-// FUNCTION: OnServerMessage
-// STATUS: IMPLEMENTED_SOURCE_REFERENCE
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\servermessage.cpp:87
-// RVA: 0x000ADCF0
-// ADDRESS: 004adcf0
-// PROTOTYPE: void __cdecl OnServerMessage(CMessage * param_1)
-//
-// Полная typed-реализация находится в `on_server_message` выше. Exact switch
-// включает `0x3FC03`, `0x4FC01..=0x4FC03`, `0x5FA01..=0x5FA07`, `0x5FA09`,
-// `0x5FA0A..=0x5FA0D` и `0x5FA0F..=0x5FA10`; opcode `0x5FA08/0x5FA0E`
-// в машинной таблице отсутствуют.
-
-// COMPONENT_VARIANT_END: WorldServer

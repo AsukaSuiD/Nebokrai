@@ -8,7 +8,7 @@
 //! обычное 32-битное сложение с единицей без overflow gate; `AtomicI32`
 //! заменяет только возможную межпоточную data race и сохраняет wrapping bits.
 //! Декомпилятор: Ghidra 12.1.2; точная пара указана у raw provenance ниже.
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Сырой C++ ниже является комментарием, а не Rust-реализацией.
 //!
 //! Поздний Rust-донор верно определил начальное значение и назначение owner-а,
 //! но его fail-closed overflow был новым поведением и здесь не перенесён.
@@ -120,72 +120,3 @@ impl CopyNumberTimerState {
         report.next_event_id = Some(event_id);
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\misc.cpp
-
-// ============================================================================
-// FUNCTION: GetCopyNum
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\misc.cpp:9
-// RVA: 0x000A0DC0
-// ADDRESS: 004a0dc0
-// PROTOTYPE: int __cdecl GetCopyNum(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: AddCopyNum
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\misc.cpp:14
-// RVA: 0x000A0DD0
-// ADDRESS: 004a0dd0
-// PROTOTYPE: void __cdecl AddCopyNum(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: ClearCopyNum
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\misc.cpp:19
-// RVA: 0x000A0DE0
-// ADDRESS: 004a0de0
-// PROTOTYPE: void __stdcall ClearCopyNum(long param_1)
-//
-// IMPLEMENTED_OWNER: `CopyNumberTimerState::prepare_reset/finish_reset` выше;
-// reset предшествует `AddDay(1)` и повторной регистрации с parameter `0`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: RegisterClearShengSiShiSuCopyNumTime
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\misc.cpp:33
-// RVA: 0x000A0E50
-// ADDRESS: 004a0e50
-// PROTOTYPE: void __cdecl RegisterClearShengSiShiSuCopyNumTime(void)
-//
-// IMPLEMENTED_OWNER: `CopyNumberTimerState::register` выше; milliseconds
-// намеренно сохраняются, поскольку exact обнуляет только WORD секунд.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: WorldServer

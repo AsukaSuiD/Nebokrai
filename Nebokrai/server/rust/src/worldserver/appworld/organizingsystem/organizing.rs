@@ -29,7 +29,7 @@
 //! Plain `char` хранится как byte-exact `u8`; фиксированные массивы не
 //! заменяются `String`/`Vec`, а C-string view заканчивается на первом NUL и
 //! включает его. Отсутствующий NUL был бы старым чтением за границей массива;
-//! безопасная граница возвращает локальный `BLOCKED_MISSING_FACT`, не
+//! безопасная граница возвращает локальную типизированную ошибку, не
 //! придумывая наблюдаемую реакцию.
 //!
 //! `CFaction::Initial` RVA `0x000BD950` полностью заполняет локальный
@@ -327,7 +327,7 @@ fn terminated_field<'a>(
     name: &'static str,
 ) -> Result<&'a [u8], UnterminatedMemberField> {
     let Some(terminator) = field.iter().position(|byte| *byte == 0) else {
-        // BLOCKED_MISSING_FACT: исходные char*-overload-ы продолжали бы чтение
+        // Исходные char*-overload-ы продолжали бы чтение
         // за фиксированным массивом. Достижимость и наблюдаемая реакция такого
         // состояния не доказаны и не заменяются добавленным NUL или unsafe.
         return Err(UnterminatedMemberField { field: name });
@@ -352,154 +352,3 @@ const _: () = {
     assert!(offset_of!(TagMemInfo, last_online_time) == 0xDC);
     assert!(offset_of!(TagMemInfo, contribute) == 0xEC);
 };
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizing.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizing.h
-
-// ============================================================================
-// FUNCTION: Catch@00433ca1
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizing.cpp
-// RVA: 0x00033CA1
-// ADDRESS: 00433ca1
-// PROTOTYPE: undefined Catch@00433ca1()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayerList::tagPropertiesUpgrade::~tagPropertiesUpgrade
-// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizing.cpp
-// RUST: `setup::playerlist::PlayerPropertiesUpgrade::notification: Vec<u8>`
-// освобождается структурным Drop; отдельный срок жизни строки MSVC не нужен.
-// RVA: 0x00033F90
-// ADDRESS: 00433f90
-// PROTOTYPE: void __thiscall ~tagPropertiesUpgrade(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: `public:_enum_eCrOrgResult___thiscall_COrganizingCtrl::CreateConfederation(long,long,std::basic_string<char,std::char_traits<char>,std::allocator<char>_>&)'::__l28::CreateUnion::Release`adjustor{4}'
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizing.cpp
-// RVA: 0x00034FF0
-// ADDRESS: 00434ff0
-// PROTOTYPE: void __thiscall Release`adjustor{4}'(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: `public:_bool___thiscall_COrganizingCtrl::TransferIOwnerCity(long,long,long)'::__l42::PlayerTransferOwnerCity::Release`adjustor{4}'
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizing.cpp
-// RVA: 0x00035000
-// ADDRESS: 00435000
-// PROTOTYPE: void __thiscall Release`adjustor{4}'(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0043579a
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizing.cpp
-// RVA: 0x0003579A
-// ADDRESS: 0043579a
-// PROTOTYPE: undefined Catch@0043579a()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004358ba
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizing.cpp
-// RVA: 0x000358BA
-// ADDRESS: 004358ba
-// PROTOTYPE: undefined Catch@004358ba()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0043622e
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizing.cpp
-// RVA: 0x0003622E
-// ADDRESS: 0043622e
-// PROTOTYPE: undefined Catch@0043622e()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@0052d560
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizing.cpp
-// RVA: 0x0012D560
-// ADDRESS: 0052d560
-// PROTOTYPE: undefined Unwind@0052d560()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@0052d580
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizing.cpp
-// RVA: 0x0012D580
-// ADDRESS: 0052d580
-// PROTOTYPE: undefined Unwind@0052d580()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@0052d5c0
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizing.cpp
-// RVA: 0x0012D5C0
-// ADDRESS: 0052d5c0
-// PROTOTYPE: undefined Unwind@0052d5c0()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: WorldServer

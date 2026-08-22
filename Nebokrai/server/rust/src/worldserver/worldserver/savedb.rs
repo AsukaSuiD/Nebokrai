@@ -104,9 +104,9 @@
 //! `save_new_characters_from_world_snapshot` теперь применяет эту судьбу к
 //! реальному `VecDeque<Box<CPlayer>>`: `Commit` немедленно уничтожает owner и
 //! удаляет текущий node, `Failure` сохраняет node и продвигает cursor.
-//! Safe-state не содержит null pointer. Вложенный `BLOCKED_MISSING_FACT` не
-//! получает придуманного commit/rollback/log и запрещает продолжать lifecycle
-//! на этом connection.
+//! Safe-state не содержит null pointer. Если вложенный owner останавливается
+//! на неизвестном исходе старого UB, orchestration не придумывает
+//! commit/rollback/log и запрещает продолжать lifecycle на этом connection.
 //!
 //! Exact `0x0041C874..0x0041C890` отдельно подтверждает: итоговый `Charactor
 //! CREATED` получает ранний `_Mysize` creation-list до traversal, а не число
@@ -257,7 +257,7 @@
 //! `do_save_data_through_unions` теперь вызывает эти владельцы строго в
 //! подтверждённом порядке: setup-ID, VarData, New, Restore, Delete Character,
 //! Delete Union, Delete Faction, Save Faction и Save Union. Каждая
-//! `BLOCKED_MISSING_FACT` останавливает передачу connection следующей фазе;
+//! Неизвестный исход старого UB останавливает передачу connection следующей фазе;
 //! отчёты и уже применённые container cleanup остаются доступны caller-у.
 //!
 //! Save Region отдельно сохраняет начальный `_Mysize`, затем без lock обходит
@@ -1558,7 +1558,7 @@ pub(crate) enum DoSaveDataThroughUnionsDisposition {
         phase: DoSaveDataPhase,
         block: WorldSnapshotSaveBlock,
     },
-    /// Текущий phase-report содержит конкретный вложенный `BLOCKED_MISSING_FACT`.
+    /// Текущий phase-report содержит конкретную нерешённую границу вложенного owner-а.
     BlockedPhase(DoSaveDataPhase),
     /// Logger остановил lifecycle до следующего DB/container эффекта.
     BlockedLog {
@@ -5076,107 +5076,3 @@ async fn run_transaction_command(
     connection.simple_query(sql).await?.into_results().await?;
     Ok(())
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\savedb.cpp
-
-// ============================================================================
-// FUNCTION: CPlayerRanks::tagRank::~tagRank
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\savedb.cpp
-// RVA: 0x0001B7F0
-// ADDRESS: 0041b7f0
-// PROTOTYPE: void __thiscall ~tagRank(void)
-//
-// IMPLEMENTED_OWNER: `PlayerRankEntry` в `playerranks.rs`: Rust `Drop`
-// освобождает owned byte-векторы без отдельного MSVC SSO/heap plumbing.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayerRanks::tagRank::tagRank
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\savedb.cpp
-// RVA: 0x0001B920
-// ADDRESS: 0041b920
-// PROTOTYPE: undefined __thiscall tagRank(tagRank * param_1)
-//
-// IMPLEMENTED_OWNER: `PlayerRankEntry::clone` копирует ID, оба byte-string и
-// occupation/level в том же составе записи; C++ exception cleanup заменён
-// безопасным ownership Rust.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0041bcde
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\savedb.cpp
-// RVA: 0x0001BCDE
-// ADDRESS: 0041bcde
-// PROTOTYPE: undefined Catch@0041bcde()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: DoSaveData
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\savedb.cpp:22
-// RVA: 0x0001C610
-// ADDRESS: 0041c610
-// PROTOTYPE: void __cdecl DoSaveData(void)
-//
-// IMPLEMENTED_OWNER: `do_save_data_lifecycle` связывает open/phase/final
-// порядок, а `CGame::save_thread_func` удерживает save-barrier и передаёт
-// финальный monitoring packet точному `SendErrLog` current Login owner-у.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-// ============================================================================
-// FUNCTION: Unwind@0052ca80
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\savedb.cpp
-// RVA: 0x0012CA80
-// ADDRESS: 0052ca80
-// PROTOTYPE: undefined Unwind@0052ca80()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-// ============================================================================
-// FUNCTION: FUN_0053bc00
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\savedb.cpp
-// RVA: 0x0013BC00
-// ADDRESS: 0053bc00
-// PROTOTYPE: undefined FUN_0053bc00()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: WorldServer

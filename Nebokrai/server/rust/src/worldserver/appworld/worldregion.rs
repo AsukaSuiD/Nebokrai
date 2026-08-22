@@ -93,8 +93,8 @@
 //! caller-а. Доказанный loose corpus содержит 872 `.rs`, во всех 872 есть
 //! полный восьмиполейный setup; 741 файл содержит forbidden-goods records.
 //! `AddSetupToByteArray` пишет ровно 32 setup bytes, signed count и каждую
-//! byte-exact C-строку с NUL. Неинициализированное поле остаётся локальным
-//! `BLOCKED_MISSING_FACT`, а не превращается в придуманный fail-closed wire.
+//! byte-exact C-строку с NUL. Неинициализированное поле остаётся явной
+//! неизвестностью, а не превращается в придуманный fail-closed wire.
 //!
 //! NPC serializer сохраняет `0x24` bytes значимых scalar/padding полей, затем
 //! name/script C-строки. Monster group сохраняет девять DWORD, варианты —
@@ -111,8 +111,8 @@
 //! DWORD. В 32 monster-файлах неизвестный `id` доказанно завершает variant
 //! phase после пропуска секции. В 12 weather-файлах после index `400` нет
 //! обязательного color-token: оригинал читает два неизвестных stack-байта за
-//! NUL следующего `time`, поэтому только эта граница оставлена
-//! `BLOCKED_MISSING_FACT`. После setup serializer дописывает все девять DWORD
+//! NUL следующего `time`, поэтому serializer возвращает локальную ошибку.
+//! После setup serializer дописывает все девять DWORD
 //! `m_Param`.
 //! Exact PDB называет NPC как `bShowList/lPicID/rectRange/lNum/lDir/lTime`,
 //! а monster group — как `lIndex/rectRange/lNum/lResetTime/lStartTime/lDir`.
@@ -973,7 +973,7 @@ impl CWorldRegion {
             });
         };
         let Some(param) = source.get(offset..end) else {
-            // BLOCKED_MISSING_FACT: старый безразмерный helper читал 0x24
+            // Старый безразмерный helper читал 0x24
             // байта за caller-pointer; реакция на короткий источник неизвестна.
             return Err(WorldRegionParamDecodeError::UnexpectedEnd {
                 offset,
@@ -1335,7 +1335,7 @@ fn append_region_param(destination: &mut Vec<u8>, param: RegionParamState) {
 
 fn translate_color_code(value: &[u8]) -> Result<u32, WorldRegionTextLoadError> {
     let Some(value) = value.get(..6) else {
-        // BLOCKED_MISSING_FACT: в 12 поставочных `.weather` после index 400
+        // В 12 поставочных `.weather` после index 400
         // отсутствует color-token. RVA 0x00077A70 читает следующий `time` в
         // char-buffer, а RVA 0x00073E00 затем читает ещё два байта за его NUL;
         // их прежнее stack-содержимое неизвестно и безопасно не имитируется.
@@ -1455,61 +1455,3 @@ fn assign_next_i32(tokens: &mut RegionSetupTokens<'_>, field: &mut Option<i32>) 
         *field = Some(value);
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\worldregion.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\worldregion.h
-
-// ============================================================================
-// IMPLEMENTED: `CWorldRegion::AddSetupToByteArray` RVA `0x00074390` находится выше.
-
-// ============================================================================
-// FUNCTION: CWorldRegion::InitOwnerRelation
-// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\worldregion.cpp:366
-// RVA: 0x000759D0
-// ADDRESS: 004759d0
-// PROTOTYPE: void __thiscall InitOwnerRelation(void)
-//
-// Реализовано выше как `init_owner_relation`; exact lookup/mutation/call order
-// и прямое присваивание inherited country byte сохранены.
-//
-
-// ============================================================================
-// FUNCTION: CWorldRegion::GetReturnPoint
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\worldregion.cpp:566
-// RVA: 0x00075AA0
-// ADDRESS: 00475aa0
-// PROTOTYPE: void __thiscall GetReturnPoint(CPlayer * param_1, long * param_2, long * param_3, long * param_4, long * param_5, long * param_6, long * param_7)
-//
-// IMPLEMENTED выше. `nullptr` даёт шесть нулей; local setup имеет приоритет,
-// иначе country maps сохраняют исходную zero-insertion семантику `operator[]`.
-
-// ============================================================================
-// FUNCTION: CWorldRegion::SetEnterPosXY
-// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\worldregion.cpp:595
-// RVA: 0x00075C30
-// ADDRESS: 00475c30
-// PROTOTYPE: void __thiscall SetEnterPosXY(CPlayer * param_1)
-//
-// IMPLEMENTED выше. Exact `0x00475CE6..0x00475D04` подтверждает virtual
-// `SetRegionID` slot `+0x54`, затем `SetTileXY(long,long)` slot `+0x94`.
-// Отсутствующий destination сохраняет исходные tile `-1/-1`, но region ID
-// всё равно присваивается. GetGame/GetRegion и process-global random переданы
-// caller-ом как узкие safe callbacks без изменения порядка owner-операций.
-
-// ============================================================================
-// IMPLEMENTED: `CWorldRegion::LoadSetup` RVA `0x00075EA0` находится выше; resource open/operator notice выполняет caller.
-
-// COMPONENT_VARIANT_END: WorldServer

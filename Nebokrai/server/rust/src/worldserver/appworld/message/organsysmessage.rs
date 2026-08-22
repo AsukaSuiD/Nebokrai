@@ -1,4 +1,4 @@
-//! Статус корпуса: `IMPLEMENTED_PARTIAL` для достигнутых organizing opcode,
+//! Dispatcher полностью реализует нормальные достижимые organizing opcode,
 //! включая смерть faction-master-а `0x60101`, создание фракции `0x60103`,
 //! initial organizing data `0x60104`, список фракций страны `0x60107`,
 //! подачу заявки `0x60108`, отмену
@@ -19,10 +19,7 @@
 //! `0x60136`, city-war application `0x60137`, её result ingress `0x60138` и
 //! Goods War command `0x60139`, faction-win `0x6013A` и player quest routes
 //! `0x6013B/0x6013C`, run-script `0x6013D`, faction parameter `0x6013E` и
-//! межрегиональный маршрут `0x60144`;
-//! остальной owner — `UNKNOWN` (исследовательский декомпилят хранится локально).
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! межрегиональный маршрут `0x60144`.
 //!
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
 //! `OnOrgasysMessage` RVA `0x000A6110`. Exact диапазоны
@@ -210,7 +207,7 @@
 //! распознаёт `1/2/3`, поэтому type `0` пишет count `0`, `1` отдаёт members,
 //! `2` — offense; defense недостижим. Отрицательный type исходник не отсекал
 //! и индексировал память перед process-static массивом; Rust останавливает
-//! этот внутренний out-of-bounds как локальный `BLOCKED_MISSING_FACT`.
+//! этот внутренний выход за границы массива типизированной ошибкой.
 //! Exact `0x004A799C..0x004A79FE` для `0x60126` читает `(faction ID,
 //! player ID)`, ищет online player, декодирует в него полный snapshot с
 //! текущего message cursor и только затем повторно разрешает faction. При
@@ -4431,9 +4428,9 @@ pub(crate) fn dispatch_faction_billboard(
         }));
     }
     let Ok(title_index) = usize::try_from(billboard_type) else {
-        // BLOCKED_MISSING_FACT: EXE проверяет только `2 < type`, после чего
-        // отрицательный type индексирует process-static `std::string[3]` до
-        // массива. Результат такого out-of-bounds чтения не имитируется.
+        // Оригинал проверяет только `2 < type`, поэтому отрицательный selector
+        // индексирует process-static `std::string[3]` до начала массива.
+        // Результат такого out-of-bounds чтения не имитируется.
         return Some(Err(OrganizingFactionBillboardBlock {
             request_id,
             billboard_type,
@@ -7388,94 +7385,3 @@ fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
         .unwrap_or(value.len());
     &value[..end]
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\organsysmessage.cpp
-
-// ============================================================================
-// FUNCTION: OnOrgasysMessage
-// STATUS: IMPLEMENTED_PARTIAL
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\organsysmessage.cpp:30
-// RVA: 0x000A6110
-// ADDRESS: 004a6110
-// PROTOTYPE: void __cdecl OnOrgasysMessage(CMessage * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004ac1b5
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\organsysmessage.cpp
-// RVA: 0x000AC1B5
-// ADDRESS: 004ac1b5
-// PROTOTYPE: undefined Catch@004ac1b5()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004ac2a9
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\organsysmessage.cpp
-// RVA: 0x000AC2A9
-// ADDRESS: 004ac2a9
-// PROTOTYPE: undefined Catch@004ac2a9()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004ac3c6
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\organsysmessage.cpp
-// RVA: 0x000AC3C6
-// ADDRESS: 004ac3c6
-// PROTOTYPE: undefined Catch@004ac3c6()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@00532c30
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\organsysmessage.cpp
-// RVA: 0x00132C30
-// ADDRESS: 00532c30
-// PROTOTYPE: undefined Unwind@00532c30()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: WorldServer

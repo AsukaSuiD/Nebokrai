@@ -166,8 +166,8 @@
 //! и `GAP_WEAPON_LEVEL = 0x30`. Временные массивы принадлежат
 //! `PlayerDbProjection`, поэтому DB-await не заимствует stack-temporary.
 //! Неинициализированные country/contribute, отрицательная/короткая variable-
-//! data, embedded NUL friend-name и недоказанные goods-границы остаются
-//! локальными typed `BLOCKED_MISSING_FACT`, а не получают значения по умолчанию.
+//! data, embedded NUL friend-name и недоказанные goods-границы возвращают
+//! локальные типизированные ошибки, а не получают значения по умолчанию.
 //! Обратная reached-проекция binary DB-полей также материализована: hotkeys
 //! пишутся в их 24 DWORD-offset, skill/friend/tattoo сохраняют исходную
 //! append/insert-семантику, state делегируется `CMoveShape`, а script payload
@@ -258,7 +258,7 @@
 //!
 //! Safe slice/cursor сохраняет исходную раннюю очистку коллекций и уже
 //! выполненные scalar/entry-мутации. Короткий source останавливает только
-//! конкретную границу с `BLOCKED_MISSING_FACT`: старые helpers длину source
+//! конкретную операцию типизированной ошибкой: старые helpers длину source
 //! не получали, а воспроизводить overread через `unsafe` запрещено. Количество
 //! Rust-элементов вне диапазона 32-битного `_Mysize` также возвращается как
 //! typed ошибка до записи соответствующего count и элементов.
@@ -300,7 +300,7 @@
 //! называет это inherited `CMoveShape::m_bIsGod`. После ответа disassembly
 //! прекращён. Decoder буквально потребляет входной fight-state DWORD, но
 //! независимо от него назначает live `m_lFightStateCount = 2`. Отрицательный
-//! pet count сохранил локальный `BLOCKED_MISSING_FACT`: старый цикл с условием
+//! pet count возвращает локальную ошибку: старый цикл с условием
 //! `count != 0` уходил в signed overflow/overread, поэтому безопасный Rust не
 //! назначает ему придуманное завершение. Pet/carriage strings ограничены
 //! исходными scratch-буферами `0x94`, session ID — фиксированными `0x40`.
@@ -326,7 +326,7 @@
 //! `PlayerPropertyCoefficients` заменяет только process-global static; порядок
 //! чтений, записей и вызов после codec-а, включая `include_child=false`, не
 //! меняются. Occupation вне `0..3` оставляет уже скопированные Str/Dex/Con/Int
-//! и останавливается локальным `BLOCKED_MISSING_FACT`, потому что оригинал
+//! и останавливается локальной ошибкой, потому что оригинал
 //! индексировал соседнюю static memory за пределами PDB-массива.
 //!
 //! Exact `0x0045AFC0..0x0045B259` восстановил потерянный x87 stack: burden
@@ -3069,7 +3069,7 @@ impl CPlayer {
         let occupation = self.base_property.read_u8(BASE_PROPERTY_OCCUPATION_OFFSET);
         let occupation = usize::from(occupation);
         if occupation >= 3 {
-            // BLOCKED_MISSING_FACT: original индексировал соседнюю static
+            // Оригинал индексировал соседнюю static
             // память за `float[3]`; safe Rust не назначает ей коэффициент.
             return Err(
                 PlayerCodecError::OccupationOutsidePropertyCoefficientRange {
@@ -3272,7 +3272,7 @@ impl CPlayer {
 
         let ex_state_length = read_player_i32(source, cursor, "m_vExStates length")?;
         if ex_state_length < 0 {
-            // BLOCKED_MISSING_FACT: старый signed length уходил в pointer
+            // Старый signed length уходил в pointer
             // arithmetic и `_AddToByteArray`; результат для high-bit wire не
             // определён согласованным псевдокодом.
             return Err(PlayerCodecError::NegativeLength {
@@ -3476,7 +3476,7 @@ impl CPlayer {
         self.variable_num = read_player_i32(source, cursor, "m_lVariableNum")?;
         self.variable_data_length = read_player_i32(source, cursor, "m_lVariableDataLength")?;
         if self.variable_data_length < 0 {
-            // BLOCKED_MISSING_FACT: original передавал high-bit length в
+            // Оригинал передавал high-bit length в
             // `operator new` и безразмерный `_GetBufferFromByteArray`.
             return Err(PlayerCodecError::NegativeLength {
                 field: "m_lVariableDataLength",
@@ -3500,7 +3500,7 @@ impl CPlayer {
 
         let pet_count = read_player_i32(source, cursor, "m_vUncreatedPets count")?;
         if pet_count < 0 {
-            // BLOCKED_MISSING_FACT: исходный `for (count; count != 0; --count)`
+            // Исходный `for (count; count != 0; --count)`
             // для отрицательного значения уходит в signed overflow/overread.
             return Err(PlayerCodecError::NegativeLength {
                 field: "m_vUncreatedPets count",
@@ -4179,7 +4179,7 @@ fn read_player_c_string(
         return Ok(bytes[..length].to_vec());
     }
 
-    // BLOCKED_MISSING_FACT: legacy helper писал до NUL в фиксированный stack
+    // Legacy helper писал до NUL в фиксированный stack
     // buffer. Ни overflow, ни чтение за source безопасный Rust не имитирует.
     Err(PlayerCodecError::UnterminatedString {
         field,
@@ -4233,7 +4233,7 @@ fn read_player_array<const N: usize>(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
-        // BLOCKED_MISSING_FACT: legacy helper не получал длину source и читал
+        // Legacy helper не получал длину source и читал
         // дальше. Safe Rust останавливает только эту локальную границу.
         return Err(PlayerCodecError::UnexpectedEnd {
             field,
@@ -4247,408 +4247,3 @@ fn read_player_array<const N: usize>(
         .try_into()
         .expect("slice содержит ровно запрошенное число байт"))
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.h
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp
-
-// ============================================================================
-// FUNCTION: CPlayer::ClearOwnedRegion
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.h:533
-// RVA: 0x00033B50
-// ADDRESS: 00433b50
-// PROTOTYPE: void __thiscall ClearOwnedRegion(void)
-//
-// IMPLEMENTED_OWNER: `PlayerOrganizingState::clear_owned_regions` выше
-// делегирует exact clear безопасному `VecDeque` owner-у.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::GetMoney
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:786
-// RVA: 0x0005AEA0
-// ADDRESS: 0045aea0
-// PROTOTYPE: ulong __thiscall GetMoney(void)
-//
-// IMPLEMENTED_OWNER: `money` делегирует точному `CWallet::GetGoldCoinsAmount`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SetFairyContainerEnabled
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:947
-// RVA: 0x0005AEB0
-// ADDRESS: 0045aeb0
-// PROTOTYPE: void __thiscall SetFairyContainerEnabled(bool param_1)
-//
-// `0x0045AEB0..0x0045AEBA` пишет один byte в `CPlayer+0x6B4`, то есть
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SetFosterNum
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:952
-// RVA: 0x0005AEC0
-// ADDRESS: 0045aec0
-// PROTOTYPE: void __thiscall SetFosterNum(ulong param_1)
-//
-// `0x0045AEC0..0x0045AEDC` подтверждает unsigned `cmp/jae` и clamp к `5`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SetHatcherNum
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:959
-// RVA: 0x0005AEE0
-// ADDRESS: 0045aee0
-// PROTOTYPE: void __thiscall SetHatcherNum(ulong param_1)
-//
-// `0x0045AEE0..0x0045AEFC` подтверждает тот же unsigned clamp к `5`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::UpdateProperty
-// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:312
-// RVA: 0x0005AFC0
-// ADDRESS: 0045afc0
-// PROTOTYPE: void __thiscall UpdateProperty(void)
-//
-// Реализация находится в `CPlayer::update_property`; full codec вызывает её
-// после encoder/decoder даже при `include_child=false`.
-
-// ============================================================================
-// FUNCTION: CPlayer::ReSetHonorElimilateNum
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:1009
-// RVA: 0x0005B260
-// ADDRESS: 0045b260
-// PROTOTYPE: bool __thiscall ReSetHonorElimilateNum(tagTime param_1)
-//
-// IMPLEMENTED_OWNER: `CPlayer::reset_honor_eliminate_num` выше; local-time
-// снимок передаётся caller-ом, а календарный обход сохраняет исходные границы.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::AddByteArrayLeiTing
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:1129
-// RVA: 0x0005B690
-// ADDRESS: 0045b690
-// PROTOTYPE: void __thiscall AddByteArrayLeiTing(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// IMPLEMENTED выше; пять scalar, unsigned count и восемь bytes каждого
-// `tagThing` сохраняются в исходном deque-order.
-
-// ============================================================================
-// FUNCTION: CPlayer::AddOrgSysToByteArray
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:482
-// RVA: 0x0005B870
-// ADDRESS: 0045b870
-// PROTOTYPE: bool __thiscall AddOrgSysToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Реализация находится в `CPlayer::add_org_sys_to_byte_array`; singleton
-// organizing-controller передаётся через `PlayerOrganizingUpdater`.
-
-// ============================================================================
-// FUNCTION: CPlayer::CheckGoodsInPacket
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:766
-// RVA: 0x0005BA90
-// ADDRESS: 0045ba90
-// PROTOTYPE: long __thiscall CheckGoodsInPacket(char * param_1)
-//
-// IMPLEMENTED выше; locked-фильтр остаётся во второй packet `Find` фазе.
-
-// ============================================================================
-// FUNCTION: CPlayer::AddByteCiQing
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:985
-// RVA: 0x0005BB80
-// ADDRESS: 0045bb80
-// PROTOTYPE: void __thiscall AddByteCiQing(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// IMPLEMENTED выше; `BTreeSet<u32>` заменяет только STL tree/storage.
-
-// ============================================================================
-// FUNCTION: CPlayer::AddQuestDataToByteArray
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:808
-// RVA: 0x0005BC10
-// ADDRESS: 0045bc10
-// PROTOTYPE: bool __thiscall AddQuestDataToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// IMPLEMENTED выше; mapped values идут по unsigned key-order и normal tail
-// возвращает `true`.
-
-// ============================================================================
-// FUNCTION: CPlayer::AddToByteArray
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:343
-// RVA: 0x0005BD10
-// ADDRESS: 0045bd10
-// PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, bool param_2)
-//
-// Полная реализация находится в `CPlayer::add_to_byte_array`; partial owner-ы
-// сохранены отдельными методами только по исходным wire-границам.
-
-// ============================================================================
-// FUNCTION: CPlayer::UpdateFactionInfo
-// STATUS: IMPLEMENTED_PARTIAL / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:715
-// RVA: 0x0005C1D0
-// ADDRESS: 0045c1d0
-// PROTOTYPE: void __thiscall UpdateFactionInfo(void)
-//
-// IMPLEMENTED_OWNER: `CPlayer::update_faction_info` выше сохраняет exact reset,
-// двойной `SetPlayerOrganizing`, payload `0x7FE06` и GS-маршрутизацию.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::ChangeName
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:849
-// RVA: 0x0005D1C0
-// ADDRESS: 0045d1c0
-// PROTOTYPE: int __thiscall ChangeName(char * param_1)
-//
-// IMPLEMENTED_OWNER: ordered orchestration находится в
-// `CGame::change_map_player_name`; финальная inherited name-мутация — в
-// `CPlayer::set_validated_name`. Exact `0x0045D1C0..0x0045D39A` подтвердил
-// return-коды `1/8/2/3/4/5/6/7/0`, case-sensitive `strstr` текущего имени с
-// `CGlobeSetup::tagSetup::strSpeStr +0x520` и неизменный original input после
-// проверки его временной `std::string`-копии.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::DeByteCiQing
-// STATUS: VERIFIED_DISASSEMBLY, IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:997
-// RVA: 0x0005D9E0
-// ADDRESS: 0045d9e0
-// PROTOTYPE: void __thiscall DeByteCiQing(uchar * param_1, long * param_2)
-//
-// IMPLEMENTED выше. Exact `0x0045DA1D..0x0045DA49` подтверждает unsigned
-// count, source load каждого `u32` и передачу именно этого value в set insert.
-
-// ============================================================================
-// FUNCTION: CPlayer::AddOwnedRegion
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:758
-// RVA: 0x0005DD10
-// ADDRESS: 0045dd10
-// PROTOTYPE: void __thiscall AddOwnedRegion(long param_1, ushort param_2)
-//
-// IMPLEMENTED_OWNER: `PlayerOrganizingState::add_owned_region` выше сохраняет
-// unique-by-region-ID и append-order. Wire padding детерминированно обнулён:
-// exact `0x0045DD18..0x0045DD57` подтверждает исходный stack leak.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::UpdateLeiTing
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:1053
-// RVA: 0x0005DD80
-// ADDRESS: 0045dd80
-// PROTOTYPE: void __thiscall UpdateLeiTing(ulong param_1, tm * param_2)
-//
-// IMPLEMENTED_OWNER: `CPlayer::update_lei_ting` выше сохраняет reset/time/
-// update-kind/daily-list порядок; CRT time и setup singleton заменены явными
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::DecodeByteArrayLeiTing
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:1146
-// RVA: 0x0005DE40
-// ADDRESS: 0045de40
-// PROTOTYPE: void __thiscall DecodeByteArrayLeiTing(uchar * param_1, long * param_2)
-//
-// IMPLEMENTED выше; scalar mutations предшествуют clear deque, затем count и
-// восемь bytes каждого `tagThing` читаются последовательно.
-
-// ============================================================================
-// FUNCTION: CPlayer::LoadData
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:145
-// RVA: 0x0005E390
-// ADDRESS: 0045e390
-// PROTOTYPE: bool __thiscall LoadData(void)
-//
-// IMPLEMENTED_OWNER: `CPlayer::load_data` выше сохраняет exact DB/post-load
-// порядок через явные setup-owner-ы.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::LoadDefaultProperty
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:194
-// RVA: 0x0005E560
-// ADDRESS: 0045e560
-// PROTOTYPE: void __thiscall LoadDefaultProperty(uchar param_1, uchar param_2, uchar param_3)
-//
-// IMPLEMENTED_OWNER: `CPlayer::load_default_property` выше сохраняет exact
-// singleton/data/random/property/daily/time порядок через явные Rust owners.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::DecordQuestDataFromByteArray
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:820
-// RVA: 0x0005E970
-// ADDRESS: 0045e970
-// PROTOTYPE: bool __thiscall DecordQuestDataFromByteArray(uchar * param_1, long * param_2)
-//
-// IMPLEMENTED выше; signed `count > 0`, key/value quest ID и overwrite
-// duplicate semantics исходного `map::operator[]` сохранены.
-
-// ============================================================================
-// FUNCTION: CPlayer::AddQuestFromDB
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:842
-// RVA: 0x0005EA00
-// ADDRESS: 0045ea00
-// PROTOTYPE: void __thiscall AddQuestFromDB(ushort param_1, uchar param_2)
-//
-// `0x0045EA00..0x0045EA28` собирает `u16 quest + u8 complete`, получает
-// `map::operator[]` и перезаписывает mapped DWORD. Rust не хранит только
-// служебный padding-байт, который ни один serializer не выдаёт.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::ChangeCountry
-// STATUS: IMPLEMENTED_SOURCE_REFERENCE
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:884
-// RVA: 0x0005EA30
-// ADDRESS: 0045ea30
-// PROTOTYPE: int __thiscall ChangeCountry(uchar param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::CPlayer
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:26
-// RVA: 0x0005EB10
-// ADDRESS: 0045eb10
-// PROTOTYPE: undefined __thiscall CPlayer(void)
-//
-// Реализовано выше как достигнутое constructor-state
-// строки/коллекции, type `400`, defaults и volume сохранены; недостигнутый
-// layout остаётся typed partial owner-ом, а не копией Windows ABI.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::DecordFromByteArray
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:521
-// RVA: 0x0005F520
-// ADDRESS: 0045f520
-// PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2, bool param_3)
-//
-// Полная реализация находится в `CPlayer::decord_from_byte_array`; ранние
-// очистки и partial mutations принадлежат достигнутым wire-owner-ам.
-
-// ============================================================================
-// FUNCTION: Catch@004d72e3
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp
-// RVA: 0x000D72E3
-// ADDRESS: 004d72e3
-// PROTOTYPE: undefined Catch@004d72e3()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: WorldServer

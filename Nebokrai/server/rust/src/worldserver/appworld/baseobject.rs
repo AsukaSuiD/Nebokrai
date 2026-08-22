@@ -62,7 +62,7 @@
 //! читается.
 //! Старые pointer/`long&` заменены `&[u8]` и `&mut usize`. Безразмерный helper
 //! мог читать за источником, а локальный `char[256]` — переполняться; safe Rust
-//! возвращает typed `BLOCKED_MISSING_FACT` только на этих границах, сохраняет
+//! возвращает типизированную ошибку только на этих границах, сохраняет
 //! уже выполненные scalar-присваивания и cursor, но не назначает старому UB
 //! fail-closed результат. Имя присваивается лишь после найденного NUL, как после
 //! завершения исходного временного buffer.
@@ -122,7 +122,7 @@
 //!
 //! Для `CGoods(type=700, id=0, name=nullptr)` raw переходит к шестибайтовому
 //! сравнению без null-проверки. Достижимость и наблюдаемая реакция этого
-//! старого null-dereference не доказаны (`BLOCKED_MISSING_FACT`); safe Rust не
+//! старого null-dereference не доказаны; safe Rust не
 //! получает придуманного detached/attached либо fail-closed исхода.
 //!
 //! Точечный xref-аудит exact EXE не нашёл project-call-site
@@ -888,7 +888,7 @@ fn read_legacy_i32(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
-        // BLOCKED_MISSING_FACT: оригинал сначала сдвигал `long&`, затем читал
+        // Оригинал сначала сдвигал `long&`, затем читал
         // безразмерный pointer. Результат за концом источника неизвестен;
         // безопасный Rust не проходит через несуществующие байты.
         return Err(BaseObjectDecodeError::UnexpectedEnd {
@@ -909,7 +909,7 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
     loop {
         let offset = *cursor;
         let Some(byte) = source.get(offset).copied() else {
-            // BLOCKED_MISSING_FACT: World helper RVA `0x000A3190` не знал
+            // World helper не знал
             // длину источника и продолжал чтение до NUL. Реакция при
             // отсутствующем terminator неизвестна, поэтому байт и cursor не
             // придумываются.
@@ -923,7 +923,7 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
         *cursor = offset + 1;
 
         if name.len() == LEGACY_NAME_CAPACITY {
-            // BLOCKED_MISSING_FACT: helper уже потребил этот байт перед
+            // Helper уже потребил этот байт перед
             // записью за local `char[256]`; достижимость и результат такого
             // повреждения stack не доказаны.
             return Err(BaseObjectDecodeError::LegacyNameOverflow {
@@ -945,328 +945,3 @@ fn legacy_c_string_prefix(name: &[u8]) -> &[u8] {
         .unwrap_or(name.len());
     &name[..prefix_len]
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.h
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp
-
-// IMPLEMENTED: `CBaseObject::SetName` RVA `0x0000D320` находится выше;
-// owned bytes сохраняют точный C-string prefix без STL storage.
-
-
-// ============================================================================
-// FUNCTION: CBaseObject::DeleteChildObject
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:280
-// RVA: 0x000D5420
-// ADDRESS: 004d5420
-// PROTOTYPE: void __thiscall DeleteChildObject(CBaseObject * param_1)
-//
-// Реализовано `BaseObjectTreeNode::delete_child`: сначала удаляются все
-// pointer-equal entries parent-list, затем parent отпускает strong ownership.
-// Безопасный внешний `Rc` не становится dangling alias старого delete.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseObject::DeleteChildObject
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:291
-// RVA: 0x000D5440
-// ADDRESS: 004d5440
-// PROTOTYPE: void __thiscall DeleteChildObject(long param_1, long param_2, CGUID * param_3)
-//
-// Реализовано `BaseObjectTreeNode::delete_child_by_type_and_id`: exact lookup
-// читает только type/ID, затем вызывает pointer-вариант для первого list hit.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseObject::CreateObject
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:157
-// RVA: 0x000D5470
-// ADDRESS: 004d5470
-// PROTOTYPE: CBaseObject * __cdecl CreateObject(long param_1, long param_2)
-//
-// IMPLEMENTED_OWNER: `create_base_object` выше сохраняет пять literal
-// type-ветвей и post-constructor ID assignment. `Box<BaseObjectFactoryObject>`
-// заменяет только erased base-pointer/vtable безопасным tagged ownership.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: `CBaseObject::AddToByteArray` RVA `0x000D55C0` находится выше;
-// `Vec` сохраняет append-порядок и wire bytes без STL storage.
-
-// ============================================================================
-// FUNCTION: CBaseObject::FindChildObject
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:84
-// RVA: 0x000D5620
-// ADDRESS: 004d5620
-// PROTOTYPE: bool __thiscall FindChildObject(CBaseObject * param_1)
-//
-// Реализовано `BaseObjectTreeNode::find_child`: `Rc::ptr_eq` сохраняет pointer
-// identity без unsafe raw pointer, а порядок списка для bool не наблюдается.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseObject::FindChildObject
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:100
-// RVA: 0x000D5650
-// ADDRESS: 004d5650
-// PROTOTYPE: CBaseObject * __thiscall FindChildObject(long param_1, long param_2, CGUID * param_3)
-//
-// Реализовано `BaseObjectTreeNode::find_child_by_type_and_id`: GUID-аргумент
-// в exact теле не читается, а `Vec` сохраняет первый list-order hit.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseObject::RecursiveFindObject
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:115
-// RVA: 0x000D5680
-// ADDRESS: 004d5680
-// PROTOTYPE: CBaseObject * __thiscall RecursiveFindObject(long param_1, long param_2)
-//
-// Реализовано `BaseObjectTreeNode::recursive_find_by_type_and_id`: root
-// проверяется до children, затем используется exact preorder списка.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseObject::RecursiveFindObject
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:136
-// RVA: 0x000D56D0
-// ADDRESS: 004d56d0
-// PROTOTYPE: CBaseObject * __thiscall RecursiveFindObject(long param_1, char * param_2)
-//
-// Реализовано `BaseObjectTreeNode::recursive_find_by_type_and_name`: сравнение
-// выполняется по C-string prefix, затем по exact preorder tree.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseObject::BoardCast
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:400
-// RVA: 0x000D5750
-// ADDRESS: 004d5750
-// PROTOTYPE: void __thiscall BoardCast(long param_1, long param_2)
-//
-// Реализовано `BaseObjectTreeNode::broadcast_children`: callback представляет
-// virtual child-slot и получает два signed long без изменения. Original
-// обходил list напрямую; snapshot Rust намеренно устраняет только reentrant
-// invalidated-iterator/lifetime defect, сохраняя порядок children на входе.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseObject::RemoveObject
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:321
-// RVA: 0x000D5780
-// ADDRESS: 004d5780
-// PROTOTYPE: void __thiscall RemoveObject(CBaseObject * param_1)
-//
-// Реализовано `BaseObjectTreeNode::remove_child`: `Vec::retain` удаляет все
-// pointer-equal nodes, как `std::list::remove`, и не меняет child father.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseObject::CBaseObject
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:22
-// RVA: 0x000D5790
-// ADDRESS: 004d5790
-// PROTOTYPE: undefined __thiscall CBaseObject(void)
-//
-// Реализовано `CBaseObject::with_reached_constructor_defaults` вместе с
-// `BaseObjectTreeNode::from_object`: scalar/GUID/name/include-child получают
-// доказанные defaults, а empty children и null father — safe `Vec`/`Weak`.
-// MSVC list allocation и vtable — только ABI/CRT plumbing и не переносятся.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// VERIFIED_DISASSEMBLY: `CBaseObject::DecordFromByteArray` RVA `0x000D5820`
-// находится выше; normal return `true` подтверждён `mov al, 1` по `0x004D589D`.
-
-// VERIFIED_DISASSEMBLY: `CBaseObject::~CBaseObject` RVA `0x000D5D80` ниже не
-// вызывает наблюдаемый `AddPlayerList`: call по `0x004D5DE9` приходит в один
-// `ret` по `0x00401000`. `BaseObjectTreeNode::Drop` materialизует доказанный
-// порядок удаления children до standard Rust cleanup base/factory ownership.
-
-// IMPLEMENTED: `CreateChildObject` RVA `0x000D58B0` передаёт child в
-// `AddObject` до virtual `Load`, кроме player ID 0 и точного goods
-// `(ID 0, "NoAdd\0")`; результат `Load` игнорируется, а ID/graphics/name затем
-// назначаются в доказанном порядке. `BaseObjectTreeNode` теперь задаёт concrete
-// storage/father, а explicit callback остаётся virtual attachment-границей.
-// BLOCKED_MISSING_FACT: достижим ли `CGoods(type=700, id=0, name=nullptr)` и
-// как exact процесс наблюдаемо завершает его безусловное сравнение name?
-
-// VERIFIED_DISASSEMBLY: в exact World EXE нет project-call-site
-// `CreateChildObject` RVA `0x000D58B0`; 17 ссылок являются vtable-ячейками, а
-// все 27 candidate-инструкций `call [register + 0x28]` принадлежат другим
-// классам. Rust поэтому передаёт attachment explicit callback-ом и возвращает
-// safe shared handle; concrete tree-storage задаёт `BaseObjectTreeNode`.
-
-// ============================================================================
-// FUNCTION: CBaseObject::CreateChildObject
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:204
-// RVA: 0x000D58B0
-// ADDRESS: 004d58b0
-// PROTOTYPE: CBaseObject * __thiscall CreateChildObject(long param_1, long param_2, char * param_3, long param_4)
-//
-// Реализовано `create_base_object_child`: его `Rc<RefCell<tagged owner>>`
-// заменяет erased returned pointer, `attach` воспроизводит virtual `AddObject`
-// до `Load`, а `load` намеренно не возвращает значение, поскольку EXE его
-// игнорирует. Для default `AddObject` callback вызывает
-// `BaseObjectTreeNode::add_child`, который хранит concrete parent/child и
-// фиксирует weak father. `CGoods(id=0, name=nullptr)` вместо
-// старого null-dereference даёт typed error без дальнейших side effects;
-// короткое имя безопасно не совпадает с `NoAdd\0`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseObject::AddObject
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:340
-// RVA: 0x000D5AD0
-// ADDRESS: 004d5ad0
-// PROTOTYPE: void __thiscall AddObject(CBaseObject * param_1)
-//
-// Реализовано `BaseObjectTreeNode::add_child`: assignment weak father идёт до
-// append strong child. Duplicate insertion сохранён; cycle безопасно
-// отклоняется до мутации как внутренний lifetime defect original-а.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseObject::DeleteAllChildObject
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:303
-// RVA: 0x000D5B90
-// ADDRESS: 004d5b90
-// PROTOTYPE: void __thiscall DeleteAllChildObject(CBaseObject * param_1)
-//
-// Реализовано `BaseObjectTreeNode::delete_all_children_except`: snapshot
-// children и порядок default delete сохранены; safe aliases не инвалидируются.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseObject::DgFindObjectsByTypes
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:360
-// RVA: 0x000D5C50
-// ADDRESS: 004d5c50
-// PROTOTYPE: void __thiscall DgFindObjectsByTypes(long param_1, _func_long_long_long * param_2, long param_3)
-//
-// Реализовано `BaseObjectTreeNode::dg_find_objects_by_type`: snapshot и
-// list-order сохранены; callback вызывается только для direct child
-// совпавшего type, иначе поиск рекурсивно продолжается из child. Father не
-// фильтруется: такая дополнительная проверка из C++ reference противоречит raw.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseObject::AI
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:381
-// RVA: 0x000D5CF0
-// ADDRESS: 004d5cf0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Реализовано `BaseObjectTreeNode::run_child_ai`: snapshot direct children
-// создаётся перед первым callback, пустой list остаётся no-op, а callback
-// представляет virtual AI child-slot в сохранённом list-order.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseObject::~CBaseObject
-// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:33
-// RVA: 0x000D5D80
-// ADDRESS: 004d5d80
-// PROTOTYPE: void __thiscall ~CBaseObject(void)
-//
-// Реализовано `Drop for BaseObjectTreeNode`: snapshot list сохраняет порядок
-// `DeleteAllChildObject(nullptr)`, перед release child из parent-list удаляются
-// все pointer-equal entries, а `CBaseObject` после этого освобождается обычным
-// Rust ownership. Safe external `Rc` не становится dangling alias; duplicate
-// raw pointer больше не вызывает второй delete. Base-vtable, MSVC list/string
-// allocator и пустой final call не являются наблюдаемой семантикой.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: WorldServer

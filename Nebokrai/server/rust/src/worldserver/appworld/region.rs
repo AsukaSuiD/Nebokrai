@@ -59,7 +59,7 @@
 //! поэтому owner сохраняет число, порядок и bounds вызовов без собственной RNG.
 //! Неинициализированные country/notify и небезопасные отрицательные/overflow
 //! размеры или координатная арифметика останавливают только safe-границу с
-//! локальным `BLOCKED_MISSING_FACT`. CRT/STL allocation и cleanup-noise выражены
+//! локальной типизированной ошибкой. CRT/STL allocation и cleanup-noise выражены
 //! владением Rust и отдельно не восстанавливаются.
 
 use std::fs::File;
@@ -412,7 +412,7 @@ impl CRegion {
         R: FnMut(i32) -> i32,
     {
         if self.width < 0 || self.height < 0 {
-            // BLOCKED_MISSING_FACT: RVA 0x000D6AA0 передавал отрицательный
+            // Оригинал передавал отрицательный
             // dimension в `random(long)` и signed-арифметику. Достижимость и
             // реакция старого helper-а для такого region-state не доказаны.
             return Err(RegionRandomPositionBlock::InvalidRegionDimensions {
@@ -498,7 +498,7 @@ impl CRegion {
                 });
             }
 
-            // BLOCKED_MISSING_FACT: исходные signed операции при overflow дают
+            // Исходные signed операции при overflow дают
             // неопределённое C++-поведение; безопасный owner не назначает ему
             // wrap либо fail-closed результат без доказательства достижимости.
             left = checked_region_sub(left, 10, "left - 10")?;
@@ -536,7 +536,7 @@ impl CRegion {
         self.switches.clear();
         let (Ok(width), Ok(height)) = (usize::try_from(self.width), usize::try_from(self.height))
         else {
-            // BLOCKED_MISSING_FACT: RVA 0x000D7000 умножал signed dimensions
+            // Оригинал умножал signed dimensions
             // с wrap и передавал результат allocator-у. Реакция CRT на такой
             // размер не задаёт безопасное серверное поведение.
             return Err(RegionLoadError::InvalidDimensions {
@@ -608,8 +608,8 @@ fn read_region_bytes<'a>(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
-        // BLOCKED_MISSING_FACT: `CRFile::ReadData` result was ignored. Safe Rust
-        // cannot expose the original buffer contents after a short read.
+        // Результат `CRFile::ReadData` игнорировался. Safe Rust не может
+        // воспроизвести содержимое старого буфера после короткого чтения.
         return Err(RegionLoadError::UnexpectedEnd {
             field,
             offset,
@@ -620,56 +620,3 @@ fn read_region_bytes<'a>(
     *cursor = end;
     Ok(bytes)
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\region.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\region.h
-
-// ============================================================================
-// FUNCTION: CRegion::~CRegion
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\region.cpp:22
-// RVA: 0x000D6D90
-// ADDRESS: 004d6d90
-// PROTOTYPE: void __thiscall ~CRegion(void)
-//
-// IMPLEMENTED обычным Rust `Drop` всех owned fields и `CBaseObject`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRegion::Save
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\region.cpp:85
-// RVA: 0x000D6E70
-// ADDRESS: 004d6e70
-// PROTOTYPE: int __thiscall Save(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRegion::DecordFromByteArray
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\region.cpp:159
-// RVA: 0x000D7720
-// ADDRESS: 004d7720
-// PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2, bool param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: WorldServer

@@ -29,7 +29,7 @@
 //! Поэтому короткий source после успешного base-wire сохраняет очищенный и
 //! частично декодированный container, cursor, уже назначенные ранние hatch-
 //! time и старые значения ещё не достигнутого хвоста. Безразмерное legacy-
-//! чтение выражено локальной typed `BLOCKED_MISSING_FACT`, а не дополнением
+//! чтение возвращает локальную типизированную ошибку, а не дополняет данные
 //! нулями. Volume `0x0E` задаёт будущий `CPlayer::DecordFromByteArray` отдельно
 //! между `Release` и этим decoder-ом; constructor не получает его заранее.
 //! Folded `Add/Find/Remove` имеют общие RVA с `CBattleFairyContainer` и являются
@@ -182,7 +182,8 @@ fn read_hatch_time(source: &[u8], cursor: &mut usize) -> Result<u32, VolumeConta
         .into());
     };
     let Some(bytes) = source.get(offset..end) else {
-        // BLOCKED_MISSING_FACT: legacy owner не получал длину source.
+        // Legacy owner не получал длину source; реакция на короткий буфер
+        // определялась выходом за его границы и не имитируется.
         return Err(AmountContainerCodecError::UnexpectedEnd {
             field: "CFairyContainer hatch time",
             offset,
@@ -198,75 +199,3 @@ fn read_hatch_time(source: &[u8], cursor: &mut usize) -> Result<u32, VolumeConta
             .expect("проверенный четырёхбайтовый диапазон hatch-time"),
     ))
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cfairycontainer.cpp
-
-// ============================================================================
-// FUNCTION: CFairyContainer::CFairyContainer
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cfairycontainer.cpp:14
-// RVA: 0x000D7A70
-// ADDRESS: 004d7a70
-// PROTOTYPE: undefined __thiscall CFairyContainer(void)
-//
-// IMPLEMENTED выше; base volume равен нулю, пять hatch-time обнулены.
-
-// ============================================================================
-// FUNCTION: CFairyContainer::Serialize
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cfairycontainer.cpp:89
-// RVA: 0x000D7AD0
-// ADDRESS: 004d7ad0
-// PROTOTYPE: int __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, int param_2)
-//
-// IMPLEMENTED выше; каждый hatch-time обнуляется сразу после записи.
-
-// ============================================================================
-// FUNCTION: CFairyContainer::~CFairyContainer
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cfairycontainer.cpp:22
-// RVA: 0x000D7B20
-// ADDRESS: 004d7b20
-// PROTOTYPE: void __thiscall ~CFairyContainer(void)
-//
-// IMPLEMENTED обычным Rust ownership/Drop; vtable/EH cleanup удалён.
-
-// ============================================================================
-// FUNCTION: CFairyContainer::Unserialize
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cfairycontainer.cpp:102
-// RVA: 0x000D7B80
-// ADDRESS: 004d7b80
-// PROTOTYPE: int __thiscall Unserialize(uchar * param_1, long * param_2, int param_3)
-//
-// IMPLEMENTED выше; base-result сохраняется, пять DWORD читаются после base-wire.
-
-// ============================================================================
-// FUNCTION: CFairyContainer::AddFromDB
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cfairycontainer.cpp:50
-// RVA: 0x000D7C10
-// ADDRESS: 004d7c10
-// PROTOTYPE: int __thiscall AddFromDB(CGoods * param_1, ulong param_2)
-//
-// IMPLEMENTED выше; exact collision-first проверка и base-result сохранены,
-// различающий derived owner debug-file технически опущен.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: WorldServer

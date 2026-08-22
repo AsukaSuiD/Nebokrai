@@ -29,8 +29,8 @@
 //!
 //! `Initialize` в exact EXE является прямым jump на `Load`; общий epilogue
 //! `0x0044458D` всегда возвращает `true`, в том числе после missing resource.
-//! Это `VERIFIED_DISASSEMBLY`. Malformed numeric input оставлен локальным
-//! `BLOCKED_MISSING_FACT`: formatted extraction мог продолжить с прежними либо
+//! Этот возврат подтверждён машинным кодом. Malformed numeric input оставлен
+//! локальной ошибкой: formatted extraction мог продолжить с прежними либо
 //! неинициализированными locals, поэтому safe Rust сохраняет уже выполненные
 //! мутации и останавливает только эту границу.
 //!
