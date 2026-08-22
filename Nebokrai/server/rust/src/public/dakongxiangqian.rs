@@ -1,6 +1,327 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Правила вставки больших отверстий исторического Miracle.
+//!
+//! Статус World `CDaKongXiangQian::LoadFile` RVA `0x0008CAD0` и
+//! `AddToByteArray` RVA `0x0008BDC0`: `IMPLEMENTED`; GameServer decoder и
+//! runtime query ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
+//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
+//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Owner читает marker-oriented `data/dakongxiangqian.ini`: main vector и
+//! три ordered attribute map очищаются до открытия, а `DaKongDeluxModify`
+//! сохраняется и дополняется отдельным optional resource. `BTreeMap` заменяет
+//! только MSVC map plumbing, сохраняя order wire `0x2B`; parser намеренно
+//! принимает частичный текст как исходный formatted-stream owner.
+
+use std::collections::BTreeMap;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DaKongInfo {
+    pub(crate) probability: i32,
+    pub(crate) red: i32,
+    pub(crate) green: i32,
+    pub(crate) blue: i32,
+    pub(crate) yellow: i32,
+    pub(crate) cyan: i32,
+    pub(crate) purple: i32,
+    pub(crate) delux: i32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DaKongExternalAttribute {
+    pub(crate) property_type: i32,
+    pub(crate) probability: i32,
+    pub(crate) minimum: i32,
+    pub(crate) maximum: i32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DaKongDeluxModify {
+    pub(crate) property_type: i32,
+    pub(crate) add_type: i32,
+}
+
+type ExternalAttributeMap = BTreeMap<u32, Vec<DaKongExternalAttribute>>;
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CDaKongXiangQian {
+    info: Vec<DaKongInfo>,
+    external_attributes: [ExternalAttributeMap; 3],
+    delux_modify: Vec<DaKongDeluxModify>,
+    key: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DaKongLoadReport {
+    pub(crate) delux_modify_missing: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DaKongLoadError {
+    MissingMainFile,
+}
+
+impl DaKongLoadError {
+    pub(crate) const fn log_payload(self) -> &'static [u8] {
+        match self {
+            Self::MissingMainFile => b"error:file DaKongXiangQian.ini is not exist:",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DaKongSerializeError {
+    CountOverflow,
+}
+
+impl CDaKongXiangQian {
+    /// Exact pre-open transition: deluxe modifiers deliberately persist.
+    pub(crate) fn clear_primary_state(&mut self) {
+        self.info.clear();
+        for attributes in &mut self.external_attributes {
+            attributes.clear();
+        }
+    }
+
+    /// Replaces the owner-internal `rfOpen` calls with supplied resources.
+    pub(crate) fn load_from_resources(
+        &mut self,
+        main: Option<&[u8]>,
+        delux_modify: Option<&[u8]>,
+    ) -> Result<DaKongLoadReport, DaKongLoadError> {
+        self.clear_primary_state();
+        let Some(main) = main else {
+            return Err(DaKongLoadError::MissingMainFile);
+        };
+
+        self.load_main(main);
+        let mut report = DaKongLoadReport::default();
+        if let Some(delux_modify) = delux_modify {
+            self.load_delux_modify(delux_modify);
+        } else {
+            report.delux_modify_missing = true;
+        }
+        Ok(report)
+    }
+
+    fn load_main(&mut self, source: &[u8]) {
+        let mut parser = MarkedTextParser::new(source);
+        let Some(info_count) = parser.marked_i32() else {
+            return;
+        };
+        for _ in 0..positive_count(info_count) {
+            let Some(values) = parser.marked_i32s::<8>() else {
+                return;
+            };
+            self.info.push(DaKongInfo {
+                probability: values[0],
+                red: values[1],
+                green: values[2],
+                blue: values[3],
+                yellow: values[4],
+                cyan: values[5],
+                purple: values[6],
+                delux: values[7],
+            });
+        }
+
+        let Some(group_count) = parser.marked_i32() else {
+            return;
+        };
+        for group in 0..positive_count(group_count) {
+            let Some(goods_count) = parser.marked_i32() else {
+                return;
+            };
+            for _ in 0..positive_count(goods_count) {
+                let Some(goods_id) = parser.marked_i32() else {
+                    return;
+                };
+                let Some(attribute_count) = parser.marked_i32() else {
+                    return;
+                };
+                for _ in 0..positive_count(attribute_count) {
+                    let Some(values) = parser.marked_i32s::<4>() else {
+                        return;
+                    };
+                    if let Some(attributes) = self.external_attributes.get_mut(group) {
+                        attributes
+                            .entry(goods_id as u32)
+                            .or_default()
+                            .push(DaKongExternalAttribute {
+                                property_type: values[0],
+                                probability: values[1],
+                                minimum: values[2],
+                                maximum: values[3],
+                            });
+                    }
+                }
+            }
+        }
+    }
+
+    fn load_delux_modify(&mut self, source: &[u8]) {
+        let mut parser = WhitespaceParser::new(source);
+        let Some(count) = parser.i32() else {
+            return;
+        };
+        for _ in 0..positive_count(count) {
+            let (Some(property_type), Some(_property_name), Some(add_type), Some(_add_name)) =
+                (parser.i32(), parser.token(), parser.i32(), parser.token())
+            else {
+                return;
+            };
+            self.delux_modify.push(DaKongDeluxModify {
+                property_type,
+                add_type,
+            });
+        }
+    }
+
+    /// Wire: info, map1, map2, map3, then the accumulated deluxe vector.
+    pub(crate) fn add_to_byte_array(
+        &self,
+        destination: &mut Vec<u8>,
+    ) -> Result<(), DaKongSerializeError> {
+        write_count(destination, self.info.len())?;
+        for info in &self.info {
+            for value in [
+                info.probability,
+                info.red,
+                info.green,
+                info.blue,
+                info.yellow,
+                info.cyan,
+                info.purple,
+                info.delux,
+            ] {
+                destination.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        for attributes in &self.external_attributes {
+            write_count(destination, attributes.len())?;
+            for (&goods_id, values) in attributes {
+                destination.extend_from_slice(&(goods_id as i32).to_le_bytes());
+                write_count(destination, values.len())?;
+                for value in values {
+                    for field in [
+                        value.property_type,
+                        value.probability,
+                        value.minimum,
+                        value.maximum,
+                    ] {
+                        destination.extend_from_slice(&field.to_le_bytes());
+                    }
+                }
+            }
+        }
+        write_count(destination, self.delux_modify.len())?;
+        for value in &self.delux_modify {
+            destination.extend_from_slice(&value.property_type.to_le_bytes());
+            destination.extend_from_slice(&value.add_type.to_le_bytes());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn set_key(&mut self, enabled: bool) -> bool {
+        self.key = enabled;
+        enabled
+    }
+
+    pub(crate) const fn key(&self) -> bool {
+        self.key
+    }
+}
+
+fn write_count(destination: &mut Vec<u8>, count: usize) -> Result<(), DaKongSerializeError> {
+    let count = i32::try_from(count).map_err(|_| DaKongSerializeError::CountOverflow)?;
+    destination.extend_from_slice(&count.to_le_bytes());
+    Ok(())
+}
+
+fn positive_count(value: i32) -> usize {
+    usize::try_from(value).unwrap_or_default()
+}
+
+struct WhitespaceParser<'a> {
+    remaining: &'a [u8],
+}
+
+impl<'a> WhitespaceParser<'a> {
+    fn new(source: &'a [u8]) -> Self {
+        Self { remaining: source }
+    }
+
+    fn token(&mut self) -> Option<&'a [u8]> {
+        let start = self
+            .remaining
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())?;
+        self.remaining = &self.remaining[start..];
+        let end = self
+            .remaining
+            .iter()
+            .position(u8::is_ascii_whitespace)
+            .unwrap_or(self.remaining.len());
+        let (token, remaining) = self.remaining.split_at(end);
+        self.remaining = remaining;
+        Some(token)
+    }
+
+    fn i32(&mut self) -> Option<i32> {
+        parse_legacy_i32(self.token()?)
+    }
+}
+
+struct MarkedTextParser<'a> {
+    tokens: WhitespaceParser<'a>,
+}
+
+impl<'a> MarkedTextParser<'a> {
+    fn new(source: &'a [u8]) -> Self {
+        Self {
+            tokens: WhitespaceParser::new(source),
+        }
+    }
+
+    fn marked_i32(&mut self) -> Option<i32> {
+        while let Some(token) = self.tokens.token() {
+            if token.len() >= 2 && token[0] == b'#' {
+                return self.tokens.i32();
+            }
+        }
+        None
+    }
+
+    fn marked_i32s<const N: usize>(&mut self) -> Option<[i32; N]> {
+        while let Some(token) = self.tokens.token() {
+            if token.len() >= 2 && token[0] == b'#' {
+                let mut values = [0; N];
+                for value in &mut values {
+                    *value = self.tokens.i32()?;
+                }
+                return Some(values);
+            }
+        }
+        None
+    }
+}
+
+fn parse_legacy_i32(token: &[u8]) -> Option<i32> {
+    let mut bytes = token.iter().copied().peekable();
+    let negative = matches!(bytes.peek(), Some(b'-'));
+    if matches!(bytes.peek(), Some(b'-' | b'+')) {
+        bytes.next();
+    }
+    let mut parsed = false;
+    let mut result = 0_i32;
+    for byte in bytes {
+        let Some(digit) = byte.checked_sub(b'0').filter(|digit| *digit <= 9) else {
+            break;
+        };
+        parsed = true;
+        result = result.saturating_mul(10).saturating_add(i32::from(digit));
+    }
+    parsed.then_some(if negative { result.saturating_neg() } else { result })
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -228,7 +549,7 @@
 
 // ============================================================================
 // FUNCTION: CDaKongXiangQian::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:518
@@ -270,7 +591,7 @@
 
 // ============================================================================
 // FUNCTION: CDaKongXiangQian::LoadFile
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:360

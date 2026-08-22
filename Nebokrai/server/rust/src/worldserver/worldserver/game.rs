@@ -217,6 +217,12 @@
 //! собственные exact diagnostics в log (включая missing-file, без operator
 //! notice) и после успеха публикует тот же base wire subtype `0x20`.
 //!
+//! `CDaKongXiangQian` — внешний owner `data/dakongxiangqian.ini`: три map и
+//! основной vector очищаются до открытия, parser сохраняет permissive marked
+//! stream исходника, а `data/DaKongDeluxModify.ini` остаётся optional и
+//! накапливается между reload. Успех публикует exact subtype `0x2B`; generic
+//! callback не может скрыть эти два разных lifecycle.
+//!
 //! `CBattleFairyProperty` аналогично остаётся внешним runtime owner-ом:
 //! `BattleFairyCombineConfig` читает `BattleFairyReleate/CombineConfig.ini`,
 //! не меняет старый compose-vector при missing resource и после успешного
@@ -1205,6 +1211,9 @@ use crate::public::equipmentcomposelist::{
     EquipmentComposeList, EquipmentComposeSerializeError,
 };
 use crate::public::taozhuangsetup::{CTaoZhuangSetup, TaoZhuangSerializationBlock};
+use crate::public::dakongxiangqian::{
+    CDaKongXiangQian, DaKongSerializeError,
+};
 use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelFormatError, HitLevelSerializeError};
 use crate::setup::honorelimilateconfig::HonorElimilateConfig;
 use crate::setup::contributesetup::{
@@ -4257,7 +4266,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     TimeToReturn,
     PreciousBox,
     ChangeBody,
-    DaKongXiangQian,
     GodsBattle,
 }
 
@@ -4291,7 +4299,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     Quest,
     PreciousBox,
     ChangeBody,
-    DaKongXiangQian,
     LingBao,
     GodsBattle,
 }
@@ -4341,6 +4348,8 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn honor_eliminate_config(&mut self) -> &mut HonorElimilateConfig;
     /// Derived owner обычных духов с отдельным XML источником и base wire.
     fn fairy_exp_conf(&mut self) -> &mut CFairyExpConf;
+    /// Конфигурация большого отверстия, общая для initial-config и reload wire.
+    fn da_kong_xiang_qian(&mut self) -> &mut CDaKongXiangQian;
     /// Возвращает исходный 32-битный result; bool owners обязаны дать `0/1`.
     fn call_boolean_owner(&mut self, owner: WorldReloadBooleanOwner) -> u32;
     fn call_void_owner(&mut self, owner: WorldReloadVoidOwner);
@@ -5930,6 +5939,7 @@ pub(crate) enum WorldReloadBlock {
     NewSkillMonsterSerialization(NewSkillMonsterSerializeError),
     BattleFairyExpSerialization(BattleFairyExpSerializeError),
     FairyExpSerialization(BattleFairyExpSerializeError),
+    DaKongSerialization(DaKongSerializeError),
     BattleFairyCombineSerialization(BattleFairyComposeWireError),
     SynthesisSerialization(SynthesisSerializeError),
     EquipmentComposeSerialization(EquipmentComposeSerializeError),
@@ -8455,17 +8465,43 @@ impl CGame {
                 }
             }
             WorldReloadProfile::DaKongXiangQian => {
-                self.reload_simple_serialized(
-                    context,
-                    WorldReloadBooleanOwner::DaKongXiangQian,
-                    WorldReloadSerializationOwner::DaKongXiangQian,
-                    0x2B,
-                    b"Load DaKongXiangQian.ini...ok!",
-                    b"Load DaKongXiangQian.ini...failed!",
-                    send_to_game_servers,
-                    true,
-                    &mut legacy_result,
-                );
+                const MAIN_PATH: &[u8] = b"data/dakongxiangqian.ini";
+                const DELUX_PATH: &[u8] = b"data/DaKongDeluxModify.ini";
+                let load_result = match context.read_resource(MAIN_PATH) {
+                    Some(main) => {
+                        let delux = context.read_resource(DELUX_PATH);
+                        context
+                            .da_kong_xiang_qian()
+                            .load_from_resources(Some(&main), delux.as_deref())
+                    }
+                    None => context.da_kong_xiang_qian().load_from_resources(None, None),
+                };
+                let loaded = match load_result {
+                    Ok(report) => {
+                        if report.delux_modify_missing {
+                            context.add_log_text(b"error:file DaKongDeluxModify.ini not exist!!");
+                        }
+                        true
+                    }
+                    Err(error) => {
+                        context.add_log_text(error.log_payload());
+                        false
+                    }
+                };
+                context.add_log_text(if loaded {
+                    b"Load DaKongXiangQian.ini...ok!"
+                } else {
+                    b"Load DaKongXiangQian.ini...failed!"
+                });
+                if loaded && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    context
+                        .da_kong_xiang_qian()
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::DaKongSerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(0x2B, &payload);
+                }
             }
             WorldReloadProfile::EquipmentCompose => {
                 const PATH: &[u8] = b"data/EquipmentCompose.ini";

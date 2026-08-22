@@ -76,6 +76,12 @@ pub(crate) mod date;
 
 #[allow(
     dead_code,
+    reason = "DaKong owner подключён к World reload и initial-config до runtime query прохода"
+)]
+pub(crate) mod dakongxiangqian;
+
+#[allow(
+    dead_code,
     reason = "duplicate-region serializer подключён к initial-config до точного loader-а и RNG"
 )]
 pub(crate) mod dupliregionsetup;
