@@ -46,7 +46,8 @@ pub(crate) struct WorldMiscAuctionMessageOutcome {
     pub(crate) serialize_block: Option<GoodsNodeSerializeError>,
 }
 
-/// Сохранённое сообщение для ещё не восстановленного DB owner-а.
+/// Результат M2W auction-dispatcher-а; все literal case текущего owner-а уже
+/// обработаны, а default exact switch является no-op.
 pub(crate) enum WorldMiscAuctionMessageDispatch {
     Handled(WorldMiscAuctionMessageOutcome),
     Pending(CMessage),
@@ -285,7 +286,16 @@ pub(crate) fn on_msg_m2w_auction(
                 serialize_block: None,
             })
         }
-        _ => WorldMiscAuctionMessageDispatch::Pending(message),
+        _ => WorldMiscAuctionMessageDispatch::Handled(WorldMiscAuctionMessageOutcome {
+            request_type,
+            response_type: None,
+            route_map_id: None,
+            wire: Vec::new(),
+            delivery: None,
+            queue_operation: None,
+            unserialize_block: None,
+            serialize_block: None,
+        }),
     }
 }
 
