@@ -1,9 +1,10 @@
 //! Конфигурация Gods Battle исторического Miracle.
 //!
-//! Статус World `CGodsBattleConf::AddByteToArray` RVA `0x0007E990`, runtime
-//! accessors/mutations RVA `0x0007E460/0x0007E480/0x0007EC50` и два accessor-а
-//! RVA `0x000DEA50/0x000DEBA0`: `IMPLEMENTED`; loaders и persistence call-site
-//! ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Статус World `CGodsBattleConf::LoadFile` RVA `0x000810D0`,
+//! `AddByteToArray` RVA `0x0007E990`, runtime accessors/mutations RVA
+//! `0x0007E460/0x0007E480/0x0007EC50` и два accessor-а RVA
+//! `0x000DEA50/0x000DEBA0`: `IMPLEMENTED`; persistence call-site ниже остаётся
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
 //! SHA-256 PDB
@@ -20,6 +21,12 @@
 //! кодировку, а typed fields исключают C++ padding и raw-memory lifetime.
 //! Неизменяемая ссылка даёт serializer-у согласованный state; синхронизация
 //! общего runtime owner-а не встраивается в сам wire-value.
+//! Loader читает шесть token-stream файлов последовательно, очищая конкретную
+//! секцию непосредственно перед её open. Поэтому отсутствие или безопасная
+//! format-ошибка позднего файла сохраняет уже обновлённые ранние секции и
+//! прежние поздние — это намеренно не transactional reload позднего Linux
+//! donor-а. Исходное formatted чтение повреждённых чисел использовало
+//! неинициализированный stack; Rust останавливается на последней полной записи.
 //!
 //! Exact EXE подтверждает спорную decompiler-типизацию: `0x004DEA50` читает
 //! `[ecx+0x60]`, `0x004DEBA0` — `[ecx+0x64]`, а `SetFactionXYD` пишет те же
@@ -28,6 +35,8 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+
+use crate::public::readwrite::read_to;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GodsBattleFactionNpcName {
@@ -87,6 +96,149 @@ pub(crate) struct CGodsBattleConf {
     die_back_positions: Vec<GodsBattleDieBackPosition>,
 }
 
+/// Шесть resource-байтов exact `CGodsBattleConf::LoadFile` в порядке открытия.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct GodsBattleLoadSources<'a> {
+    pub(crate) npc_names: Option<&'a [u8]>,
+    pub(crate) base_money: Option<&'a [u8]>,
+    pub(crate) revise_money: Option<&'a [u8]>,
+    pub(crate) szl_levels: Option<&'a [u8]>,
+    pub(crate) faction_rules: Option<&'a [u8]>,
+    pub(crate) die_back_positions: Option<&'a [u8]>,
+}
+
+/// Один из строго упорядоченных resource owner-ов GodsBattle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GodsBattleLoadSection {
+    NpcNames,
+    BaseMoney,
+    ReviseMoney,
+    SzlLevels,
+    FactionRules,
+    DieBackPositions,
+}
+
+impl GodsBattleLoadSection {
+    pub(crate) const fn path(self) -> &'static [u8] {
+        match self {
+            Self::NpcNames => b"data/gbNpc.ini",
+            Self::BaseMoney => b"data/baseSZL.ini",
+            Self::ReviseMoney => b"data/reviseSZL.ini",
+            Self::SzlLevels => b"data/SZLlev.ini",
+            Self::FactionRules => b"data/ZYFP.ini",
+            Self::DieBackPositions => b"data/DiePos.ini",
+        }
+    }
+
+    /// Exact Win32 notice из соответствующей missing-file ветки World.
+    pub(crate) const fn missing_notice(self) -> (&'static [u8], &'static [u8]) {
+        match self {
+            Self::NpcNames => (b"error", b"Can't find file: data/gbNpc.ini "),
+            Self::BaseMoney => (b"Error", b"Can't find file : data/baseSZL.ini"),
+            Self::ReviseMoney => (b"Error", b"Can't find file: data/reviseSZL.ini"),
+            Self::SzlLevels => (b"Error", b"Can't find file: data/SZLlev.ini"),
+            Self::FactionRules => (b"Error", b"Can't find file: data/ZYFP.ini"),
+            Self::DieBackPositions => (b"Error", b"Can't find file: data/DiePos.ini"),
+        }
+    }
+}
+
+/// Безопасный outcome raw последовательного loader-а.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GodsBattleLoadError {
+    MissingResource { section: GodsBattleLoadSection },
+    UnexpectedEnd {
+        section: GodsBattleLoadSection,
+        field: &'static str,
+    },
+    InvalidNumber {
+        section: GodsBattleLoadSection,
+        field: &'static str,
+        token: Vec<u8>,
+    },
+}
+
+impl fmt::Display for GodsBattleLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingResource { section } => write!(
+                formatter,
+                "отсутствует GodsBattle resource {}",
+                String::from_utf8_lossy(section.path())
+            ),
+            Self::UnexpectedEnd { section, field } => write!(
+                formatter,
+                "в GodsBattle resource {} отсутствует поле {field}",
+                String::from_utf8_lossy(section.path())
+            ),
+            Self::InvalidNumber {
+                section,
+                field,
+                token,
+            } => write!(
+                formatter,
+                "поле {field} в GodsBattle resource {} не является числом: {}",
+                String::from_utf8_lossy(section.path()),
+                String::from_utf8_lossy(token)
+            ),
+        }
+    }
+}
+
+impl Error for GodsBattleLoadError {}
+
+fn gods_battle_tokens(source: &[u8]) -> impl Iterator<Item = &[u8]> {
+    source
+        .split(u8::is_ascii_whitespace)
+        .filter(|token| !token.is_empty())
+}
+
+fn gods_battle_token<'a>(
+    tokens: &mut impl Iterator<Item = &'a [u8]>,
+    section: GodsBattleLoadSection,
+    field: &'static str,
+) -> Result<&'a [u8], GodsBattleLoadError> {
+    tokens.next().ok_or(GodsBattleLoadError::UnexpectedEnd { section, field })
+}
+
+fn gods_battle_u32<'a>(
+    tokens: &mut impl Iterator<Item = &'a [u8]>,
+    section: GodsBattleLoadSection,
+    field: &'static str,
+) -> Result<u32, GodsBattleLoadError> {
+    let token = gods_battle_token(tokens, section, field)?;
+    let text = std::str::from_utf8(token).map_err(|_| GodsBattleLoadError::InvalidNumber {
+        section,
+        field,
+        token: token.to_vec(),
+    })?;
+    text.parse::<u32>()
+        .map_err(|_| GodsBattleLoadError::InvalidNumber {
+            section,
+            field,
+            token: token.to_vec(),
+        })
+}
+
+fn gods_battle_i32<'a>(
+    tokens: &mut impl Iterator<Item = &'a [u8]>,
+    section: GodsBattleLoadSection,
+    field: &'static str,
+) -> Result<i32, GodsBattleLoadError> {
+    let token = gods_battle_token(tokens, section, field)?;
+    let text = std::str::from_utf8(token).map_err(|_| GodsBattleLoadError::InvalidNumber {
+        section,
+        field,
+        token: token.to_vec(),
+    })?;
+    text.parse::<i32>()
+        .map_err(|_| GodsBattleLoadError::InvalidNumber {
+            section,
+            field,
+            token: token.to_vec(),
+        })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GodsBattleFactionXydUpdate {
     FactionA { previous: u32, current: u32 },
@@ -102,6 +254,210 @@ pub(crate) struct GodsBattleNpcFactionUpdate {
 }
 
 impl CGodsBattleConf {
+    /// Повторяет `LoadFile` по уже извлечённым resource-байтам.
+    ///
+    /// `resolve_npc_name` — единственная owner-зависимая часть: exact World
+    /// сразу заменяет string-table ID локализованным именем, а отсутствие ID
+    /// превращает имя в пустую C-строку. `m_XYD[1..=2]` этот loader не меняет.
+    pub(crate) fn load_from_sources<ResolveNpcName>(
+        &mut self,
+        sources: GodsBattleLoadSources<'_>,
+        resolve_npc_name: &mut ResolveNpcName,
+    ) -> Result<(), GodsBattleLoadError>
+    where
+        ResolveNpcName: FnMut(&[u8]) -> Option<Vec<u8>>,
+    {
+        self.npc_names.clear();
+        let source = sources
+            .npc_names
+            .ok_or(GodsBattleLoadError::MissingResource {
+                section: GodsBattleLoadSection::NpcNames,
+            })?;
+        let mut tokens = gods_battle_tokens(source);
+        while read_to(&mut tokens, b"*") {
+            let faction = gods_battle_i32(
+                &mut tokens,
+                GodsBattleLoadSection::NpcNames,
+                "faction",
+            )?;
+            let name_id = gods_battle_token(
+                &mut tokens,
+                GodsBattleLoadSection::NpcNames,
+                "StringTable ID",
+            )?;
+            let monsters = gods_battle_token(
+                &mut tokens,
+                GodsBattleLoadSection::NpcNames,
+                "monsters",
+            )?;
+            self.npc_names.push(GodsBattleFactionNpcName {
+                faction,
+                name: resolve_npc_name(name_id).unwrap_or_default(),
+                monsters: monsters.to_vec(),
+            });
+        }
+
+        self.base_money.clear();
+        let source = sources
+            .base_money
+            .ok_or(GodsBattleLoadError::MissingResource {
+                section: GodsBattleLoadSection::BaseMoney,
+            })?;
+        let mut tokens = gods_battle_tokens(source);
+        while read_to(&mut tokens, b"*") {
+            let money_level = gods_battle_u32(
+                &mut tokens,
+                GodsBattleLoadSection::BaseMoney,
+                "money level",
+            )?;
+            let add = gods_battle_u32(&mut tokens, GodsBattleLoadSection::BaseMoney, "add")?;
+            let subtract = gods_battle_u32(
+                &mut tokens,
+                GodsBattleLoadSection::BaseMoney,
+                "subtract",
+            )?;
+            // `std::map::operator[]` exact owner-а заменяет duplicate key.
+            self.base_money.insert(
+                money_level,
+                GodsBattleBaseMoney {
+                    money_level,
+                    add,
+                    subtract,
+                },
+            );
+        }
+
+        self.revise_money.clear();
+        let source = sources
+            .revise_money
+            .ok_or(GodsBattleLoadError::MissingResource {
+                section: GodsBattleLoadSection::ReviseMoney,
+            })?;
+        let mut tokens = gods_battle_tokens(source);
+        while read_to(&mut tokens, b"*") {
+            self.revise_money.push(GodsBattleReviseMoney {
+                level_gap_revise: gods_battle_u32(
+                    &mut tokens,
+                    GodsBattleLoadSection::ReviseMoney,
+                    "level gap revise",
+                )?,
+                money_level_gap_revise: gods_battle_u32(
+                    &mut tokens,
+                    GodsBattleLoadSection::ReviseMoney,
+                    "money level gap revise",
+                )?,
+                revise_min: gods_battle_u32(
+                    &mut tokens,
+                    GodsBattleLoadSection::ReviseMoney,
+                    "revise min",
+                )?,
+                revise_max: gods_battle_u32(
+                    &mut tokens,
+                    GodsBattleLoadSection::ReviseMoney,
+                    "revise max",
+                )?,
+            });
+        }
+
+        self.szl_levels.clear();
+        let source = sources
+            .szl_levels
+            .ok_or(GodsBattleLoadError::MissingResource {
+                section: GodsBattleLoadSection::SzlLevels,
+            })?;
+        let mut tokens = gods_battle_tokens(source);
+        while read_to(&mut tokens, b"*") {
+            self.szl_levels.push(GodsBattleSzlLevel {
+                level: gods_battle_u32(&mut tokens, GodsBattleLoadSection::SzlLevels, "level")?,
+                min_szl: gods_battle_u32(
+                    &mut tokens,
+                    GodsBattleLoadSection::SzlLevels,
+                    "minimum SZL",
+                )?,
+                max_szl: gods_battle_u32(
+                    &mut tokens,
+                    GodsBattleLoadSection::SzlLevels,
+                    "maximum SZL",
+                )?,
+            });
+        }
+
+        self.faction_rules.clear();
+        let source = sources
+            .faction_rules
+            .ok_or(GodsBattleLoadError::MissingResource {
+                section: GodsBattleLoadSection::FactionRules,
+            })?;
+        let mut tokens = gods_battle_tokens(source);
+        while read_to(&mut tokens, b"*") {
+            self.faction_rules.push(GodsBattleFactionRule {
+                faction: gods_battle_u32(
+                    &mut tokens,
+                    GodsBattleLoadSection::FactionRules,
+                    "faction",
+                )?,
+                country_a: gods_battle_u32(
+                    &mut tokens,
+                    GodsBattleLoadSection::FactionRules,
+                    "country A",
+                )?,
+                country_b: gods_battle_u32(
+                    &mut tokens,
+                    GodsBattleLoadSection::FactionRules,
+                    "country B",
+                )?,
+            });
+        }
+
+        self.die_back_positions.clear();
+        let source = sources
+            .die_back_positions
+            .ok_or(GodsBattleLoadError::MissingResource {
+                section: GodsBattleLoadSection::DieBackPositions,
+            })?;
+        let mut tokens = gods_battle_tokens(source);
+        while read_to(&mut tokens, b"*") {
+            self.die_back_positions.push(GodsBattleDieBackPosition {
+                region: gods_battle_i32(
+                    &mut tokens,
+                    GodsBattleLoadSection::DieBackPositions,
+                    "region",
+                )?,
+                faction: gods_battle_u32(
+                    &mut tokens,
+                    GodsBattleLoadSection::DieBackPositions,
+                    "faction",
+                )?,
+                destination_region: gods_battle_i32(
+                    &mut tokens,
+                    GodsBattleLoadSection::DieBackPositions,
+                    "destination region",
+                )?,
+                left: gods_battle_i32(
+                    &mut tokens,
+                    GodsBattleLoadSection::DieBackPositions,
+                    "left",
+                )?,
+                top: gods_battle_i32(
+                    &mut tokens,
+                    GodsBattleLoadSection::DieBackPositions,
+                    "top",
+                )?,
+                right: gods_battle_i32(
+                    &mut tokens,
+                    GodsBattleLoadSection::DieBackPositions,
+                    "right",
+                )?,
+                bottom: gods_battle_i32(
+                    &mut tokens,
+                    GodsBattleLoadSection::DieBackPositions,
+                    "bottom",
+                )?,
+            });
+        }
+        Ok(())
+    }
+
     pub(crate) fn push_npc(&mut self, npc: GodsBattleFactionNpcName) {
         self.npc_names.push(npc);
     }
@@ -474,7 +830,7 @@ fn write_gods_battle_string(
 
 // ============================================================================
 // FUNCTION: CGodsBattleConf::LoadFile
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:10
@@ -482,6 +838,11 @@ fn write_gods_battle_string(
 // ADDRESS: 004810d0
 // PROTOTYPE: int __thiscall LoadFile(void)
 //
+// IMPLEMENTED_OWNER: `CGodsBattleConf::load_from_sources` выше. Точный
+// `int`-return decompiler-а не используется как Rust API: машинный код не
+// устанавливает отдельный logical result в видимой ветви, а безопасный
+// `Result` сообщает missing resource или повреждённое поле, сохраняя exact
+// последовательную мутацию уже достигнутых секций.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
