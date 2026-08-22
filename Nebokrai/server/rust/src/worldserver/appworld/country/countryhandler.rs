@@ -38,8 +38,12 @@
 //! обход после erase; это подтверждено exact EXE `0x00445060..0x004450AD`.
 //! Затем country-map обходится в unsigned key-order. Concrete `CCountry::AI`
 //! вызывается только при ненулевом king ID и непустом king name; его typed
-//! report сохраняется рядом с map key. Null country исходно разыменовывался и
-//! получает локальный `BLOCKED_MISSING_FACT`, а не молчаливый skip.
+//! report сохраняется рядом с map key. Raw разыменовывал null country, но
+//! nullable slot Rust появляется только внутри синхронного
+//! `take_country_owner`/`restore_country_owner` для снятия borrow-alias.
+//! Повторный вход `Run` в этот промежуток не является игровым состоянием;
+//! отсутствие owner-а поэтому пропускается как устранённый internal lifecycle
+//! defect, а не публикуется новым external `CountryRunBlock`.
 //! `send_info_to_client` строит `0x7FA03` из четырёх consecutive unsigned long
 //! и C-строки; один overload target `0x00423C00` для обоих нулей/title/color
 //! подтверждён exact EXE.
@@ -92,12 +96,10 @@ struct CountryTopInfo {
     info: Vec<u8>,
 }
 
-/// Safe-граница исходного null country pointer во время `Run`.
+/// Наблюдаемые блоки `CCountryHandler::Run` после устранения внутреннего
+/// null-slot lifecycle-дефекта.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum CountryRunBlock {
-    NullCountry {
-        map_key: u8,
-    },
     Ai {
         map_key: u8,
         source: CountryAiBlock,
@@ -471,7 +473,7 @@ impl CCountryHandler {
         let mut ai_reports = Vec::new();
         for (&map_key, country) in &mut self.countries {
             let Some(country) = country.as_deref_mut() else {
-                return Err(CountryRunBlock::NullCountry { map_key });
+                continue;
             };
             if country.king.id != 0 && !country.king.name.is_empty() {
                 let report = country
