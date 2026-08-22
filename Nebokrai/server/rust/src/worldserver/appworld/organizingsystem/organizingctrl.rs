@@ -329,6 +329,12 @@
 //! pointer/null и доказанное владение, сохраняя signed key-порядок. Достигнутый
 //! `m_ConfedeOrganizings` выражен симметричным map `CUnion`; Rust-layout не
 //! выдаётся за Windows ABI, а остальные поля singleton-а остаются raw.
+//! `COrganizingCtrl::getInstance` в EXE только лениво выделяет process-global
+//! controller. Все достигнутые Rust ingress получают один внешний живой
+//! `&mut COrganizingCtrl` (в том числе через `WorldMainLoopOwners`), поэтому
+//! статическое выделение, повторная попытка `operator_new` и singleton lifetime
+//! устранены как внутренние дефекты без изменения map, wire или порядка
+//! side effects.
 //!
 //! `ReInitialFacFactionByLvl` проходит тот же signed faction-map. Exact EXE
 //! `0x00434C80..0x00434CFE` делает RTTI cast каждого value, пропускает null либо
@@ -9197,7 +9203,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::getInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:93
@@ -9205,6 +9211,11 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00436e90
 // PROTOTYPE: COrganizingCtrl * __cdecl getInstance(void)
 //
+// IMPLEMENTED_OWNER: controller создаётся внешним lifecycle owner-ом
+// через `COrganizingCtrl::with_reached_callback_state`, а все достигнутые
+// call-site получают его явной заимствованной ссылкой. Process-global
+// singleton, повторный `operator_new` и связанный lifetime/leak не имеют
+// самостоятельного наблюдаемого контракта и не переносятся.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
