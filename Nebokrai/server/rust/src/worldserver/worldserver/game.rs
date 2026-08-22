@@ -1241,8 +1241,8 @@ use crate::dbaccess::worlddb::rsgodsbattle::{
 };
 use crate::dbaccess::worlddb::rsjjcsys::RsJjcSysOwner;
 use crate::dbaccess::worlddb::rsplayer::{
-    HonorRanksLoadOutcome, PlayerRanksStatBlock, PlayerRanksStatOutcome, RsPlayerOwner,
-    TiberiusRsPlayer,
+    HonorRanksLoadOutcome, LeiTingDatabaseResetRequest, PlayerRanksStatBlock,
+    PlayerRanksStatOutcome, RsPlayerOwner, TiberiusRsPlayer,
 };
 use crate::dbaccess::worlddb::rsregion::{
     RegionDatabaseParameters, RegionParameterLoadTarget, RegionSaveSnapshot, RsRegionOwner,
@@ -1629,6 +1629,9 @@ use crate::worldserver::worldserver::worldserver::{
 };
 use crate::worldserver::worldserver::loginreconnectworker::{
     WorldLoginReconnectWorker, WorldLoginReconnectWorkerCompletion,
+};
+use crate::worldserver::worldserver::leitingresetworker::{
+    WorldLeiTingResetWorker, WorldLeiTingResetWorkerEvent,
 };
 use crate::worldserver::worldserver::writelogworker::WorldWriteLogWorkerSpec;
 
@@ -4211,6 +4214,73 @@ pub(crate) struct WorldMainLoopConfiguration {
     pub(crate) jjc: JjcRunConfig,
 }
 
+/// Platform/log дополнение к `LeiTingContext`, необходимое concrete DB-worker-у.
+/// Сам доменный `CLeiTing` по-прежнему не знает о Tokio либо system threads.
+pub(crate) trait WorldLeiTingRuntimeContext: LeiTingContext {
+    /// Точный synchronous false-путь `_beginthreadex` остаётся operator-visible.
+    fn on_database_reset_spawn_failed(
+        &mut self,
+        request: LeiTingDatabaseResetRequest,
+        error: io::Error,
+    );
+
+    /// Доставляет begin/end и DB-итог уже запущенного detached worker-а.
+    fn on_database_reset_worker_event(&mut self, event: WorldLeiTingResetWorkerEvent);
+}
+
+/// Узкий adapter, связывающий подтверждённый `CLeiTing::Run` с одним
+/// `WorldLeiTingResetWorker`, не передавая mutable game-owner в поток.
+struct WorldLeiTingWorkerContext<'a, Context> {
+    context: &'a mut Context,
+    worker: &'a WorldLeiTingResetWorker,
+    runtime: tokio::runtime::Handle,
+}
+
+impl<Context: WorldLeiTingRuntimeContext> LeiTingContext
+    for WorldLeiTingWorkerContext<'_, Context>
+{
+    type Block = Context::Block;
+
+    fn add_update_start_log(&mut self) {
+        self.context.add_update_start_log();
+    }
+
+    fn local_time_from_timestamp(
+        &mut self,
+        timestamp: u32,
+    ) -> Result<LeiTingLocalTime, Self::Block> {
+        self.context.local_time_from_timestamp(timestamp)
+    }
+
+    fn current_week_day(&mut self) -> u16 {
+        self.context.current_week_day()
+    }
+
+    fn send_all(&mut self, message: &CMessage) {
+        self.context.send_all(message);
+    }
+
+    fn add_database_begin_log(&mut self) {
+        self.context.add_database_begin_log();
+    }
+
+    fn mktime(&mut self, local_time: &mut LeiTingLocalTime) -> Result<i32, Self::Block> {
+        self.context.mktime(local_time)
+    }
+
+    fn reset_all_lei_ting_in_database(&mut self, update_kind: u32, stamp: i32) {
+        let request = LeiTingDatabaseResetRequest { update_kind, stamp };
+        if let Err(error) = self.worker.dispatch(request, self.runtime.clone()) {
+            self.context
+                .on_database_reset_spawn_failed(request, error);
+        }
+    }
+
+    fn add_update_end_log(&mut self) {
+        self.context.add_update_end_log();
+    }
+}
+
 /// Все process-global состояния, которые исходный MainLoop мутировал напрямую.
 pub(crate) struct WorldMainLoopStateOwners<'a> {
     pub(crate) initialization: &'a mut WorldMainLoopInitializationState,
@@ -4278,6 +4348,8 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) goods_war: &'a mut CGoodsWarMember,
     pub(crate) village_war_callbacks: VillageWarCallbacks<TimerCallback>,
     pub(crate) lei_ting: &'a mut CLeiTing,
+    pub(crate) lei_ting_reset_worker: &'a WorldLeiTingResetWorker,
+    pub(crate) tokio_runtime: tokio::runtime::Handle,
     pub(crate) db_misc: &'a mut CDbMisc,
     pub(crate) net_sessions: &'a CNetSessionManager,
     pub(crate) union_application_runtime: &'a WorldUnionApplicationRuntimeOwner,
@@ -13548,14 +13620,30 @@ impl CGame {
         lei_ting: &mut CLeiTing,
         globe_setup: &GlobeSetupSnapshot,
         context: &mut Context,
+        reset_worker: &WorldLeiTingResetWorker,
+        runtime: tokio::runtime::Handle,
         mut get_local_time: GetLocalTime,
     ) -> Result<LeiTingRunReport, LeiTingBlock<Context::Block>>
     where
-        Context: LeiTingContext,
+        Context: WorldLeiTingRuntimeContext,
         GetLocalTime: FnMut() -> LeiTingLocalTime,
     {
+        while let Some(event) = reset_worker.try_next_event() {
+            context.on_database_reset_worker_event(event);
+        }
         let current = get_local_time();
-        lei_ting.run(current, self, globe_setup, context)
+        let result = {
+            let mut worker_context = WorldLeiTingWorkerContext {
+                context,
+                worker: reset_worker,
+                runtime,
+            };
+            lei_ting.run(current, self, globe_setup, &mut worker_context)
+        };
+        while let Some(event) = reset_worker.try_next_event() {
+            context.on_database_reset_worker_event(event);
+        }
+        result
     }
 
     /// Выполняет соседний `DoneOutList -> Pop/DoneListIn -> LoadAuction` batch.
@@ -14158,7 +14246,7 @@ impl CGame {
     where
         TimerCallback: Copy + PartialEq,
         FactionContext: FactionWarStopContext,
-        LeiTingContextOwner: LeiTingContext,
+        LeiTingContextOwner: WorldLeiTingRuntimeContext,
         DbMiscContextOwner: DbMiscContext,
         JjcContext: JjcRunContext,
     {
@@ -14526,6 +14614,8 @@ impl CGame {
                 owners.lei_ting,
                 owners.globe_setup,
                 owners.lei_ting_context,
+                owners.lei_ting_reset_worker,
+                owners.tokio_runtime.clone(),
                 &mut *callbacks.get_lei_ting_local_time,
             )
             .map_err(|block| Box::new(WorldMainLoopBlock::LeiTing(block)))?;
