@@ -1235,7 +1235,9 @@ use crate::dbaccess::worlddb::rsplayer::{
     HonorRanksLoadOutcome, PlayerRanksStatBlock, PlayerRanksStatOutcome, RsPlayerOwner,
     TiberiusRsPlayer,
 };
-use crate::dbaccess::worlddb::rsregion::{RegionSaveSnapshot, RsRegionOwner};
+use crate::dbaccess::worlddb::rsregion::{
+    RegionDatabaseParameters, RegionParameterLoadTarget, RegionSaveSnapshot, RsRegionOwner,
+};
 use crate::dbaccess::worlddb::rssetup::{
     LoadedSetupIds, RsSetupOwner, WorldDatabaseSettings, WorldDatabaseSettingsParts,
     WorldTdsClient,
@@ -16704,6 +16706,32 @@ pub(crate) fn delete_game(game: &mut Option<Box<CGame>>) -> WorldDeleteGameRepor
     WorldDeleteGameReport {
         owner_was_present,
         legacy_result: 1,
+    }
+}
+
+impl RegionParameterLoadTarget for CGame {
+    fn has_region_parameter_target(&self, region_id: i32) -> bool {
+        self.regions
+            .get(&region_id)
+            .is_some_and(|assignment| assignment.region.is_some())
+    }
+
+    fn apply_region_database_parameters(&mut self, parameters: RegionDatabaseParameters) -> bool {
+        let Some(region) = self
+            .regions
+            .get_mut(&parameters.region_id)
+            .and_then(|assignment| assignment.region.as_mut())
+        else {
+            return false;
+        };
+        region.base_mut().set_param_from_db(
+            parameters.owned_faction_id,
+            parameters.owned_union_id,
+            parameters.current_tax_rate,
+            parameters.today_total_tax,
+            parameters.total_tax,
+        );
+        true
     }
 }
 
