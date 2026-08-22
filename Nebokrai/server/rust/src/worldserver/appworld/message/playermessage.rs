@@ -11,7 +11,8 @@
 //! общий `CMessage::SendAll`, не делают `Update`, не читают payload и не
 //! проверяют socket/map ownership или хвост. Эти дополнительные проверки и
 //! `SendAllCurrentMaps` из старого Linux-донора в EXE отсутствуют и не
-//! перенесены. Неизвестный opcode остаётся owned pending без mutation/send.
+//! перенесены. Неизвестный opcode завершает exact owner без mutation/send и
+//! без передачи следующему dispatcher-у; Rust представляет это `NoOp`.
 //!
 //! Compiler catch/unwind-записи не являются отдельными source-owner-ами;
 //! после машинной сверки они свёрнуты вместе с реализованным RAW.
@@ -25,12 +26,18 @@ const ADD_SKILL: i32 = 0x0005_FC03;
 const USE_SKILL: i32 = 0x0005_FC04;
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldPlayerMessageOutcome {
-    pub(crate) request_type: i32,
-    pub(crate) response_type: i32,
-    pub(crate) appended_map_id: Option<i32>,
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
+pub(crate) enum WorldPlayerMessageOutcome {
+    /// Default полного exact `OnPlayerMessage` без side effects.
+    NoOp {
+        request_type: i32,
+    },
+    Relay {
+        request_type: i32,
+        response_type: i32,
+        appended_map_id: Option<i32>,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
 }
 
 pub(crate) enum WorldPlayerMessageDispatch {
@@ -49,7 +56,11 @@ pub(crate) fn on_player_message(
         DELETE_SKILL => (0x0007_FA09, false),
         ADD_SKILL => (0x0007_FA0A, false),
         USE_SKILL => (0x0007_FA0B, false),
-        _ => return WorldPlayerMessageDispatch::Pending(message),
+        _ => {
+            return WorldPlayerMessageDispatch::Handled(WorldPlayerMessageOutcome::NoOp {
+                request_type,
+            });
+        }
     };
 
     message.set_message_type(response_type);
@@ -60,7 +71,7 @@ pub(crate) fn on_player_message(
     });
     let wire = message.as_wire_bytes().to_vec();
     let delivery = message.send_all(game.current_game_server_sender().as_ref());
-    WorldPlayerMessageDispatch::Handled(WorldPlayerMessageOutcome {
+    WorldPlayerMessageDispatch::Handled(WorldPlayerMessageOutcome::Relay {
         request_type,
         response_type,
         appended_map_id,

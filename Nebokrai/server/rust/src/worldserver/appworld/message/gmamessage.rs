@@ -15,6 +15,8 @@
 //! `Send(false)`. Payload не читается, `Update` и ownership/tail gates
 //! отсутствуют. До setup `dwNumber` в оригинале был неинициализирован; Rust не
 //! выбирает произвольные биты и возвращает typed safe-block без внешнего send.
+//! Любой opcode вне четырёх exact case завершает dispatcher без чтения,
+//! отправки и fallback-маршрута; Rust представляет это `NoOp`.
 //!
 //! Декомпилятор: Ghidra 12.1.2. Сырой C++ ниже сохранён как локальная
 //! документация, а не как Rust-реализация.
@@ -61,6 +63,10 @@ pub(crate) enum WorldGmaKickPlayerDisposition {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldGmaMessageOutcome {
+    /// Default полного exact `OnGMAMessage` без side effects.
+    NoOp {
+        request_type: i32,
+    },
     KickPlayer {
         request_type: i32,
         request_id: i32,
@@ -145,7 +151,7 @@ pub(crate) fn on_gma_message(
                 Some((map_id, world_number)),
             )
         }
-        _ => WorldGmaMessageDispatch::Pending(message),
+        _ => WorldGmaMessageDispatch::Handled(WorldGmaMessageOutcome::NoOp { request_type }),
     }
 }
 
