@@ -5,7 +5,11 @@
 //! `0x00103B50`, `SaveScriptFlag` RVA `0x00104240`, `SaveSkillField` RVA
 //! `0x00104BE0`, `SaveFriendField` RVA `0x00104E20` и `SaveStateField` RVA
 //! `0x00105C10`, `SaveThingField` RVA `0x00105700` и `SaveCiQingField` RVA
-//! `0x00106A60`, `SaveQuestData` RVA `0x00106270`,
+//! `0x00106A60`, обратные `LoadHotKeyField/LoadStateField/LoadScriptFlag`
+//! RVA `0x00103D40/0x00103FC0/0x00104470`, `LoadQuestData` RVA `0x00104790`,
+//! `LoadCiQingField/LoadSkillField/LoadThingField/LoadFriendField` RVA
+//! `0x0010EFF0/0x0010F8E0/0x00110260/0x00111050`, `SaveQuestData` RVA
+//! `0x00106270`,
 //! `CreatePlayerAbilities` RVA `0x00106CE0`, внешний
 //! `CreatePlayer` RVA `0x0010ED40`, внешний `SavePlayer` RVA `0x0010EE70`,
 //! `GetPlayerID` RVA `0x00102080`, `GetCDKey` RVA `0x0010EA20`,
@@ -106,6 +110,14 @@
 //! `ListThing` содержит элементы в логическом deque-order без count; load делит
 //! размер на восемь. Его отдельный empty-field путь с `GetDailyThingList`
 //! зависит от load-параметра и не является частью save-кодека.
+//! Все восемь load-кодеков теперь также `IMPLEMENTED`: integer records
+//! читаются little-endian, а неполный хвост skill/ciqing/thing/quest намеренно
+//! игнорируется, как исходное целочисленное деление длины. `HotKey` по-прежнему
+//! требует ровно `0x60` байт, пустые state/script сохраняют прежнее состояние,
+//! friends добавляются с `online=false`, а Thing empty/fyEnergy ветвь остаётся
+//! у `CPlayer`, где доступен `CThingSetup`. Единственный unchecked `strlen`
+//! без NUL до конца friend-blob заменён typed malformed-границей; чтение за
+//! SAFEARRAY и use-after-unaccess не воспроизводятся.
 //!
 //! Текущий raw задаёт byte-exact имена и порядок всех 84 обращений
 //! `Fields::Item`; PDB полностью закрывает source-типы `tagBaseProperty` и
@@ -2080,6 +2092,158 @@ pub(crate) fn save_thing_field<S: PlayerAbilityFieldSink>(
     sink.append_binary_field(PlayerAbilityBinaryField::Thing, &bytes)
 }
 
+/// Safe-границы исходных unchecked binary-field loader-ов.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerAbilityBlobDecodeBlock {
+    HotKeySize {
+        actual_bytes: usize,
+    },
+    FriendNameWithoutTerminator {
+        offset: usize,
+        available_bytes: usize,
+    },
+    ScriptPayloadTooLarge {
+        actual_bytes: usize,
+    },
+}
+
+impl fmt::Display for PlayerAbilityBlobDecodeBlock {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::HotKeySize { actual_bytes } => write!(
+                formatter,
+                "HotKey содержит {actual_bytes} байт вместо обязательных 96"
+            ),
+            Self::FriendNameWithoutTerminator {
+                offset,
+                available_bytes,
+            } => write!(
+                formatter,
+                "ListFriendName с offset {offset} не содержит NUL в оставшихся {available_bytes} байтах"
+            ),
+            Self::ScriptPayloadTooLarge { actual_bytes } => write!(
+                formatter,
+                "VariableList payload содержит {actual_bytes} байт и не помещается в signed long"
+            ),
+        }
+    }
+}
+
+impl Error for PlayerAbilityBlobDecodeBlock {}
+
+/// Owned-результат непустого `VariableList`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct LoadedPlayerScriptFlag {
+    pub(crate) variable_num: i32,
+    pub(crate) variable_data: Vec<u8>,
+}
+
+/// Декодирует exact `LoadHotKeyField`: только blob длиной `0x60` допустим.
+pub(crate) fn load_hot_key_field(
+    blob: &[u8],
+) -> Result<[u32; 24], PlayerAbilityBlobDecodeBlock> {
+    if blob.len() != 0x60 {
+        return Err(PlayerAbilityBlobDecodeBlock::HotKeySize {
+            actual_bytes: blob.len(),
+        });
+    }
+
+    Ok(std::array::from_fn(|index| {
+        let offset = index * size_of::<u32>();
+        u32::from_le_bytes(
+            blob[offset..offset + size_of::<u32>()]
+                .try_into()
+                .expect("проверены все 96 байт HotKey"),
+        )
+    }))
+}
+
+/// Декодирует `ListSkill`; неполный хвост игнорируется как `size / 4` в EXE.
+pub(crate) fn load_skill_field(blob: &[u8]) -> Vec<PlayerAbilitySkill> {
+    blob.chunks_exact(4)
+        .map(|entry| PlayerAbilitySkill {
+            id: u16::from_le_bytes(entry[0..2].try_into().expect("полный tagSkill")),
+            level: u16::from_le_bytes(entry[2..4].try_into().expect("полный tagSkill")),
+        })
+        .collect()
+}
+
+/// Декодирует `VariableList`; `0..=3` байта оставляют player-state прежним.
+pub(crate) fn load_script_flag(
+    blob: &[u8],
+) -> Result<Option<LoadedPlayerScriptFlag>, PlayerAbilityBlobDecodeBlock> {
+    let Some(header) = blob.get(..4) else {
+        return Ok(None);
+    };
+    let payload = &blob[4..];
+    if i32::try_from(payload.len()).is_err() {
+        return Err(PlayerAbilityBlobDecodeBlock::ScriptPayloadTooLarge {
+            actual_bytes: payload.len(),
+        });
+    }
+    let variable_num = i32::from_le_bytes(header.try_into().expect("проверены 4 байта"));
+    Ok(Some(LoadedPlayerScriptFlag {
+        variable_num,
+        variable_data: payload.to_vec(),
+    }))
+}
+
+/// Декодирует opaque `ListState`; пустое поле не вызывает `SetExStates`.
+pub(crate) fn load_state_field(blob: &[u8]) -> Option<Vec<u8>> {
+    (!blob.is_empty()).then(|| blob.to_vec())
+}
+
+/// Декодирует последовательность C-строк `ListFriendName` в list-order.
+pub(crate) fn load_friend_field(
+    blob: &[u8],
+) -> Result<Vec<Vec<u8>>, PlayerAbilityBlobDecodeBlock> {
+    let mut names = Vec::new();
+    let mut offset = 0usize;
+    while offset < blob.len() {
+        let remaining = &blob[offset..];
+        let Some(name_length) = remaining.iter().position(|byte| *byte == 0) else {
+            return Err(PlayerAbilityBlobDecodeBlock::FriendNameWithoutTerminator {
+                offset,
+                available_bytes: remaining.len(),
+            });
+        };
+        names.push(remaining[..name_length].to_vec());
+        offset += name_length + 1;
+    }
+    Ok(names)
+}
+
+/// Декодирует `ciqing`; неполный хвост игнорируется, set убирает дубликаты.
+pub(crate) fn load_ci_qing_field(blob: &[u8]) -> BTreeSet<u32> {
+    blob.chunks_exact(4)
+        .map(|entry| u32::from_le_bytes(entry.try_into().expect("полный tattoo ID")))
+        .collect()
+}
+
+/// Декодирует непустой `ListThing`; empty/default-ветвь принадлежит caller-у.
+pub(crate) fn load_thing_field(blob: &[u8]) -> Vec<PlayerThing> {
+    blob.chunks_exact(8)
+        .map(|entry| PlayerThing {
+            tid: u16::from_le_bytes(entry[0..2].try_into().expect("полный tagThing")),
+            count: u16::from_le_bytes(entry[2..4].try_into().expect("полный tagThing")),
+            max_count: u16::from_le_bytes(
+                entry[4..6].try_into().expect("полный tagThing"),
+            ),
+            point: u16::from_le_bytes(entry[6..8].try_into().expect("полный tagThing")),
+        })
+        .collect()
+}
+
+/// Декодирует `QuestData`; неполный хвост игнорируется как `size / 3` в EXE.
+pub(crate) fn load_quest_data(blob: &[u8]) -> Vec<PlayerQuestSaveEntry> {
+    blob.chunks_exact(3)
+        .map(|entry| PlayerQuestSaveEntry {
+            quest_id: u16::from_le_bytes(entry[0..2].try_into().expect("полный quest value")),
+            complete: entry[2],
+        })
+        .collect()
+}
+
 impl RsPlayerOwner for TiberiusRsPlayer {
     async fn get_player_count_in_db_by_cdkey(
         &mut self,
@@ -3981,7 +4145,7 @@ async fn execute_batch(
 //
 
 // FUNCTION: CRsPlayer::LoadHotKeyField
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_PARTIAL
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2010
@@ -3989,6 +4153,7 @@ async fn execute_batch(
 // ADDRESS: 00503d40
 // PROTOTYPE: bool __thiscall LoadHotKeyField(CPlayer * param_1, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_2)
 //
+// IMPLEMENTED_OWNER: `load_hot_key_field` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -4009,7 +4174,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadStateField
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_PARTIAL
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2167
@@ -4017,6 +4182,7 @@ async fn execute_batch(
 // ADDRESS: 00503fc0
 // PROTOTYPE: bool __thiscall LoadStateField(CPlayer * param_1, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_2)
 //
+// IMPLEMENTED_OWNER: `load_state_field` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -4037,7 +4203,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadScriptFlag
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_PARTIAL
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2331
@@ -4045,6 +4211,7 @@ async fn execute_batch(
 // ADDRESS: 00504470
 // PROTOTYPE: bool __thiscall LoadScriptFlag(CPlayer * param_1, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_2)
 //
+// IMPLEMENTED_OWNER: `load_script_flag` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -4082,7 +4249,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadQuestData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_PARTIAL
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2741
@@ -4090,6 +4257,8 @@ async fn execute_batch(
 // ADDRESS: 00504790
 // PROTOTYPE: bool __thiscall LoadQuestData(CPlayer * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
 //
+// IMPLEMENTED_OWNER: binary `load_quest_data` выше; DB query остаётся частью
+// полного `LoadPlayer` owner-прохода.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -4294,7 +4463,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadCiQingField
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_PARTIAL
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:3254
@@ -4302,6 +4471,7 @@ async fn execute_batch(
 // ADDRESS: 0050eff0
 // PROTOTYPE: bool __thiscall LoadCiQingField(CPlayer * param_1, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_2)
 //
+// IMPLEMENTED_OWNER: `load_ci_qing_field` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -4350,7 +4520,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadSkillField
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_PARTIAL
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2041
@@ -4358,6 +4528,7 @@ async fn execute_batch(
 // ADDRESS: 0050f8e0
 // PROTOTYPE: bool __thiscall LoadSkillField(CPlayer * param_1, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_2)
 //
+// IMPLEMENTED_OWNER: `load_skill_field` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -4407,7 +4578,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadThingField
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_PARTIAL
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:3332
@@ -4415,6 +4586,7 @@ async fn execute_batch(
 // ADDRESS: 00510260
 // PROTOTYPE: bool __thiscall LoadThingField(CPlayer * param_1, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_2, ulong param_3)
 //
+// IMPLEMENTED_OWNER: binary `load_thing_field` выше и reached daily-ветвь
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -4491,7 +4663,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadFriendField
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_PARTIAL
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2240
@@ -4499,6 +4671,7 @@ async fn execute_batch(
 // ADDRESS: 00511050
 // PROTOTYPE: bool __thiscall LoadFriendField(CPlayer * param_1, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_2)
 //
+// IMPLEMENTED_OWNER: `load_friend_field` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

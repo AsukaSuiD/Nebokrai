@@ -7,6 +7,7 @@
 //! DB mutation helpers `SetFairyContainerEnabled/SetFosterNum/SetHatcherNum`
 //! RVA `0x0005AEB0/0x0005AEC0/0x0005AEE0` и `AddQuestFromDB` RVA
 //! `0x0005EA00`,
+//! применение binary DB-полей из `CRsPlayer::Load*Field`,
 //! `CPlayer::UpdateFactionInfo` RVA `0x0005C1D0`,
 //! `CPlayer::LoadDefaultProperty` RVA `0x0005E560`,
 //! `CPlayer::ClearOwnedRegion` RVA `0x00033B50` и
@@ -164,6 +165,12 @@
 //! Неинициализированные country/contribute, отрицательная/короткая variable-
 //! data, embedded NUL friend-name и недоказанные goods-границы остаются
 //! локальными typed `BLOCKED_MISSING_FACT`, а не получают значения по умолчанию.
+//! Обратная reached-проекция binary DB-полей также материализована: hotkeys
+//! пишутся в их 24 DWORD-offset, skill/friend/tattoo сохраняют исходную
+//! append/insert-семантику, state делегируется `CMoveShape`, а script payload
+//! получает безопасный owned lifetime вместо старой ветви delete/early-return.
+//! Непустой `ListThing` очищает deque даже при одном неполном хвосте; пустой
+//! вызывает daily setup только при `dwfyEnergy == 0`, как точный DB-owner.
 
 //! PDB задаёт `SaveData` как public `bool`-метод с единственным connection
 //! `cn`, RVA `0x0005B4E0`, длина `0xA0`; исходный владелец —
@@ -339,11 +346,11 @@ use crate::dbaccess::worlddb::dbgoods::{DbGoodsOwner, PlayerGoodsFiledSnapshot};
 use crate::dbaccess::worlddb::goodslistener::{GoodsContainerTraversalSnapshot, TraversedGoods};
 use crate::dbaccess::worlddb::rsjjcsys::{PlayerJjcDataSnapshot, RsJjcSysOwner};
 use crate::dbaccess::worlddb::rsplayer::{
-    EmbeddedFriendNameNul, PlayerAbilityCreationSnapshot, PlayerAbilitySaveSnapshot,
-    PlayerAbilityScalarSnapshot, PlayerAbilitySkill, PlayerBaseSaveSnapshot,
-    PlayerCreationBaseSnapshot, PlayerCreationSnapshot, PlayerFriendName, PlayerQuestSaveEntry,
-    PlayerQuestSaveSnapshot, PlayerSaveOutcome, PlayerSaveSnapshot, PlayerScriptFlagSnapshot,
-    PlayerThing as DbPlayerThing, RsPlayerOwner,
+    EmbeddedFriendNameNul, LoadedPlayerScriptFlag, PlayerAbilityCreationSnapshot,
+    PlayerAbilitySaveSnapshot, PlayerAbilityScalarSnapshot, PlayerAbilitySkill,
+    PlayerBaseSaveSnapshot, PlayerCreationBaseSnapshot, PlayerCreationSnapshot, PlayerFriendName,
+    PlayerQuestSaveEntry, PlayerQuestSaveSnapshot, PlayerSaveOutcome, PlayerSaveSnapshot,
+    PlayerScriptFlagSnapshot, PlayerThing as DbPlayerThing, RsPlayerOwner,
 };
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
@@ -2001,6 +2008,97 @@ impl CPlayer {
     pub(crate) fn set_hatcher_num(&mut self, value: u32) {
         self.base_property
             .write_u32(BASE_PROPERTY_HATCHER_NUM_OFFSET, value.min(5));
+    }
+
+    /// Публикует все 24 DWORD `HotKey` после exact-size проверки DB-owner-а.
+    pub(crate) fn apply_loaded_hot_keys(&mut self, hot_keys: &[u32; 24]) {
+        for (index, hot_key) in hot_keys.iter().copied().enumerate() {
+            self.base_property
+                .write_u32(BASE_PROPERTY_HOT_KEYS_OFFSET + index * 4, hot_key);
+        }
+    }
+
+    /// Добавляет `ListSkill` в исходном list-order без несуществующей очистки.
+    pub(crate) fn append_loaded_skills(&mut self, skills: &[PlayerAbilitySkill]) {
+        self.new_skills
+            .extend(skills.iter().map(|skill| PlayerSkill {
+                skill_id: skill.id,
+                level: skill.level,
+            }));
+    }
+
+    /// Заменяет достигнутые `m_lVariable*` безопасным owned payload-ом.
+    pub(crate) fn apply_loaded_script_flag(&mut self, script: LoadedPlayerScriptFlag) {
+        self.variable_num = script.variable_num;
+        self.variable_data_length = i32::try_from(script.variable_data.len())
+            .expect("DB-owner уже ограничил VariableList signed long");
+        self.variable_data = Some(script.variable_data);
+    }
+
+    /// Повторяет непустой вызов `CMoveShape::SetExStates`.
+    pub(crate) fn apply_loaded_ex_states(&mut self, ex_states: Vec<u8>) {
+        debug_assert!(!ex_states.is_empty());
+        self.move_shape_base.set_ex_states(&ex_states);
+    }
+
+    /// Добавляет DB-friends и сбрасывает runtime-only online-флаг каждого.
+    pub(crate) fn append_loaded_friends(&mut self, names: Vec<Vec<u8>>) {
+        self.friends.extend(names.into_iter().map(|name| PlayerFriend {
+            name,
+            online: false,
+        }));
+    }
+
+    /// Вставляет DB tattoo ID с unsigned set-семантикой исходного owner-а.
+    pub(crate) fn extend_loaded_ci_qing(&mut self, ids: BTreeSet<u32>) {
+        self.ci_qing_ids.extend(ids);
+    }
+
+    /// Публикует `ListThing` и сохраняет отдельную empty/fyEnergy daily-ветвь.
+    pub(crate) fn apply_loaded_things(
+        &mut self,
+        field_was_empty: bool,
+        things: Vec<DbPlayerThing>,
+        fy_energy: u32,
+        thing_setup: &CThingSetup,
+        mut get_week_day: impl FnMut() -> u16,
+    ) {
+        if !field_was_empty {
+            self.daily_things = things
+                .into_iter()
+                .map(|thing| PlayerThing {
+                    thing_id: thing.tid,
+                    count: thing.count,
+                    max_count: thing.max_count,
+                    point: thing.point,
+                })
+                .collect();
+            return;
+        }
+        if fy_energy != 0 {
+            return;
+        }
+
+        let mut daily = self
+            .daily_things
+            .iter()
+            .map(|thing| LeiTingDailyThing {
+                thing_id: thing.thing_id,
+                count: thing.count,
+                max_count: thing.max_count,
+                point: thing.point,
+            })
+            .collect();
+        thing_setup.get_daily_thing_list(&mut get_week_day, &mut daily);
+        self.daily_things = daily
+            .into_iter()
+            .map(|thing| PlayerThing {
+                thing_id: thing.thing_id,
+                count: thing.count,
+                max_count: thing.max_count,
+                point: thing.point,
+            })
+            .collect();
     }
 
     /// Вставляет/заменяет DB quest по unsigned key, как `map::operator[]`
