@@ -1372,6 +1372,9 @@ use crate::worldserver::appworld::message::countrymessage::{
     dispatch_four_nation_country_fail_message, dispatch_four_nation_war_result_message,
     dispatch_four_nation_war_time_message, on_country_message,
 };
+use crate::worldserver::appworld::message::auction::{
+    WorldServerAuctionMessageDispatch, WorldServerAuctionMessageOutcome, on_msg_s2w_auction,
+};
 use crate::worldserver::appworld::message::gmamessage::{
     WorldGmaMessageDispatch, WorldGmaMessageOutcome, on_gma_message,
 };
@@ -2664,6 +2667,11 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: WorldMiscAuctionMessageOutcome,
+    },
+    ServerAuctionMessage {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: WorldServerAuctionMessageOutcome,
     },
     TeamMessage {
         source: WorldMessageSource,
@@ -17740,6 +17748,19 @@ where
                 };
             }
             WorldMiscAuctionMessageDispatch::Pending(pending) => message = pending,
+        }
+    }
+
+    if selector.owner == Some(WorldMessageOwner::ServerAuction) {
+        match on_msg_s2w_auction(game, &*auction_log, message) {
+            WorldServerAuctionMessageDispatch::Handled(outcome) => {
+                return ProcessedWorldEvent::ServerAuctionMessage {
+                    source,
+                    legacy_run_result,
+                    outcome,
+                };
+            }
+            WorldServerAuctionMessageDispatch::Pending(pending) => message = pending,
         }
     }
 
