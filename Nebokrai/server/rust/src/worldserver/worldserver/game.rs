@@ -5455,6 +5455,15 @@ pub(crate) struct WorldLoginAccountPlayer {
     pub(crate) owner_id: i32,
 }
 
+/// Первый online-list account, для которого достигнут назначенный GameServer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldOnlineAccountPlayerRoute {
+    pub(crate) team_id: i32,
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) game_server_index: u32,
+}
+
 /// Владеющая копия точного 8-байтного `CGame::tagDeletionPlayer`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DeletionPlayerSnapshot {
@@ -12406,6 +12415,33 @@ impl CGame {
             return None;
         }
         self.map_player(player_id)
+    }
+
+    /// Повторяет online-list scan `0x4FB07`: account-match без назначенного
+    /// GameServer не завершает поиск, а переходит к следующему list-node.
+    pub(crate) fn online_player_route_by_account(
+        &self,
+        account: &[u8],
+    ) -> Option<WorldOnlineAccountPlayerRoute> {
+        let account = legacy_c_string_prefix(account);
+        for &online_id in &self.online_players {
+            let Some(player) = self.map_player(online_id) else {
+                continue;
+            };
+            if !legacy_c_string_prefix(player.get_account()).eq_ignore_ascii_case(account) {
+                continue;
+            }
+            let Some(game_server) = self.get_region_game_server(player.get_region_id()) else {
+                continue;
+            };
+            return Some(WorldOnlineAccountPlayerRoute {
+                team_id: player.get_team_id(),
+                owner_type: player.get_type(),
+                owner_id: player.get_id(),
+                game_server_index: game_server.index,
+            });
+        }
+        None
     }
 
     /// Выполняет concrete `CPlayer::UpdateFactionInfo` для map-owner-а.

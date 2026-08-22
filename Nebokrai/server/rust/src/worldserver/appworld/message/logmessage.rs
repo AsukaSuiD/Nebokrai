@@ -1,7 +1,8 @@
 //! WorldServer dispatcher-owner `OnLogMessage`.
 //!
 //! Корпус остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме restore-role leaf `0x4FB03` и
-//! account login-cleanup leaf `0x4FB06` со статусом `IMPLEMENTED`. Точная пара:
+//! account cleanup leaf-ов `0x4FB06/0x4FB07` со статусом `IMPLEMENTED`.
+//! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\logmessage.cpp:30`.
 //! Exact `0x004B1692..0x004B171F` читает account через `GetStr(..., 0x14)`,
@@ -12,6 +13,10 @@
 //! находит первое `_strcmpi` совпадение в login-list и строго выполняет
 //! `team exit -> RemovePlayerLoadData -> RemoveLoginPlayer ->
 //! AppendOfflinePlayer`.
+//! Exact `0x004B106E..0x004B12C9` сначала ищет online account с достигнутым
+//! GameServer: посылает `0x7F903 + player_id`, выполняет team-exit и немедленно
+//! возвращается. Только без такого маршрута он чистит первый login account и
+//! всегда отвечает LoginServer `0x1FF06 + account\0 + ""\0 + char(0)`.
 //! Добавленные Linux-донором peer/ownership/DB-preflight gates в EXE
 //! отсутствуют и не перенесены; как и account-wide cancellation/in-flight
 //! lifecycle из его очереди. `VecDeque` заменяет только старые list/deque
@@ -29,8 +34,11 @@ use crate::worldserver::worldserver::game::{
 
 const RESTORE_ROLE_REQUEST: i32 = 0x0004_FB03;
 const ACCOUNT_LOGIN_CLEANUP_REQUEST: i32 = 0x0004_FB06;
+const ACCOUNT_DISCONNECT_REQUEST: i32 = 0x0004_FB07;
 const RESTORE_ROLE_RESPONSE: i32 = 0x0001_FF04;
 const RESTORE_ROLE_STATUS: i8 = 0x15;
+const ACCOUNT_DISCONNECT_GAME_RESPONSE: i32 = 0x0007_F903;
+const ACCOUNT_DISCONNECT_LOGIN_RESPONSE: i32 = 0x0001_FF06;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldRestoreRoleOutcome {
@@ -61,9 +69,37 @@ pub(crate) enum WorldAccountLoginCleanupOutcome {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldAccountDisconnectOutcome {
+    OnlineRouted {
+        account: Vec<u8>,
+        player_id: u32,
+        game_server_index: u32,
+        response_type: i32,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+        team_id: i32,
+        team_session_id: i32,
+        team_exit: WorldLoginTimeoutTeamExit,
+    },
+    LoginAcknowledged {
+        account: Vec<u8>,
+        released_player_id: Option<u32>,
+        team_id: Option<i32>,
+        team_session_id: Option<i32>,
+        team_exit: Option<WorldLoginTimeoutTeamExit>,
+        login_removed: bool,
+        offline_inserted: bool,
+        response_type: i32,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldLogMessageOutcome {
     RestoreRole(WorldRestoreRoleOutcome),
     AccountLoginCleanup(WorldAccountLoginCleanupOutcome),
+    AccountDisconnect(WorldAccountDisconnectOutcome),
 }
 
 pub(crate) enum WorldLogMessageDispatch {
@@ -81,6 +117,7 @@ pub(crate) fn on_log_message(
         ACCOUNT_LOGIN_CLEANUP_REQUEST => {
             account_login_cleanup(game, session_factory, message)
         }
+        ACCOUNT_DISCONNECT_REQUEST => account_disconnect(game, session_factory, message),
         _ => WorldLogMessageDispatch::Pending(message),
     }
 }
@@ -158,6 +195,98 @@ fn account_login_cleanup(
             player_load_removed,
             login_removed,
             offline_inserted,
+        },
+    ))
+}
+
+fn account_disconnect(
+    game: &mut CGame,
+    session_factory: &mut CSessionFactory,
+    mut message: CMessage,
+) -> WorldLogMessageDispatch {
+    let account = message
+        .base_mut()
+        .get_str_bytes(0x100)
+        .expect("literal 0x100 исключает zero-capacity GetStr");
+
+    if let Some(player) = game.online_player_route_by_account(&account) {
+        let player_id = player.owner_id as u32;
+        let mut response = CMessage::new(ACCOUNT_DISCONNECT_GAME_RESPONSE);
+        response.base_mut().add_ulong(player_id);
+        let wire = response.as_wire_bytes().to_vec();
+        let delivery = game.send_msg_to_game_server(
+            player.game_server_index as i32,
+            &response,
+        );
+        let team_session_id = game.get_team_session_id(player.team_id as u32);
+        let team_exit = game.exit_team_player(
+            session_factory,
+            team_session_id,
+            player.owner_type,
+            player.owner_id,
+        );
+        return WorldLogMessageDispatch::Handled(
+            WorldLogMessageOutcome::AccountDisconnect(
+                WorldAccountDisconnectOutcome::OnlineRouted {
+                    account,
+                    player_id,
+                    game_server_index: player.game_server_index,
+                    response_type: ACCOUNT_DISCONNECT_GAME_RESPONSE,
+                    wire,
+                    delivery,
+                    team_id: player.team_id,
+                    team_session_id,
+                    team_exit,
+                },
+            ),
+        );
+    }
+
+    let mut released_player_id = None;
+    let mut team_id = None;
+    let mut team_session_id = None;
+    let mut team_exit = None;
+    let mut login_removed = false;
+    let mut offline_inserted = false;
+    if let Some(player) = game.login_player_by_account(&account) {
+        let session_id = game.get_team_session_id(player.team_id as u32);
+        let exit = game.exit_team_player(
+            session_factory,
+            session_id,
+            player.owner_type,
+            player.owner_id,
+        );
+        let player_id = player.owner_id as u32;
+        login_removed = game.remove_login_player(player_id);
+        offline_inserted = game.append_offline_player_id(player_id);
+        released_player_id = Some(player_id);
+        team_id = Some(player.team_id);
+        team_session_id = Some(session_id);
+        team_exit = Some(exit);
+    }
+
+    let mut response = CMessage::new(ACCOUNT_DISCONNECT_LOGIN_RESPONSE);
+    response.base_mut().add(&account);
+    response.base_mut().add_char(0);
+    response.base_mut().add_char(0);
+    response.base_mut().add_char(0);
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = response.send(
+        game.current_login_client().map(|client| client.send_queue()),
+        false,
+    );
+    WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::AccountDisconnect(
+        WorldAccountDisconnectOutcome::LoginAcknowledged {
+            account,
+            released_player_id,
+            team_id,
+            team_session_id,
+            team_exit,
+            login_removed,
+            offline_inserted,
+            response_type: ACCOUNT_DISCONNECT_LOGIN_RESPONSE,
+            wire,
+            delivery,
         },
     ))
 }
