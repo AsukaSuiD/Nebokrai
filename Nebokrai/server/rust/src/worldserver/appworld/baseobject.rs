@@ -10,7 +10,9 @@
 //! child-tree, destructor-а и передачи factory-результата внутри
 //! `CreateChildObject` RVA `0x000D58B0` восстановлен по raw/PDB и точечно
 //! проверен в EXE, но его Rust-storage ещё не материализован; соответствующие
-//! тела ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! тела ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Статический `CreateObject` RVA
+//! `0x000D5470` materialизован отдельным tagged factory-result без erased
+//! pointer/vtable. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
 //! SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -106,11 +108,11 @@
 //! ID внутри `Load` отбрасывается. Входное имя доступно `Load` благодаря
 //! ранней копии, а ненулевой graphics ID назначается только после вызова;
 //! поздняя повторная копия имени отбрасывает его возможное изменение.
-//! `BaseObjectFactoryType` материализует только подтверждённое сопоставление
-//! пяти literal type и concrete factory class. Он не подменяет сам factory:
-//! разнородные `CRegion/CPlayer/CNpc/CMonster/CGoods` пока имеют отдельные
-//! Rust owner-ы и не могут безопасно стать `Box<CBaseObject>` без потери их
-//! virtual `Load` и derived-state.
+//! `BaseObjectFactoryType` и `BaseObjectFactoryObject` materialизуют
+//! подтверждённое сопоставление пяти literal type и concrete factory class.
+//! Tagged `Box` сохраняет heap-owner результата без erased `CBaseObject*`:
+//! разнородные `CRegion/CPlayer/CNpc/CMonster/CGoods` остаются собственными
+//! Rust owner-ами и не теряют derived-state либо virtual `Load`.
 //!
 //! Для `CGoods(type=700, id=0, name=nullptr)` raw переходит к шестибайтовому
 //! сравнению без null-проверки. Достижимость и наблюдаемая реакция этого
@@ -155,6 +157,11 @@
 use std::error::Error;
 use std::fmt;
 
+use super::goods::cgoods::CGoods;
+use super::monster::CMonster;
+use super::npc::CNpc;
+use super::player::CPlayer;
+use super::region::CRegion;
 use crate::public::guid::CGuid;
 
 const LEGACY_NAME_CAPACITY: usize = 0x100;
@@ -234,6 +241,83 @@ impl BaseObjectFactoryType {
             Self::Goods => 700,
         }
     }
+}
+
+/// Safe tagged owner результата `CBaseObject::CreateObject`.
+///
+/// Старый factory возвращал base-pointer на пять разнородных heap-объектов.
+/// `Box` сохраняет единое владение результатом, а enum заменяет только erased
+/// pointer/vtable: concrete object и его последующий `Load` не теряются.
+pub(crate) enum BaseObjectFactoryObject {
+    Region(CRegion),
+    Player(CPlayer),
+    Npc(CNpc),
+    Monster(CMonster),
+    Goods(CGoods),
+}
+
+impl BaseObjectFactoryObject {
+    /// Возвращает исходный type concrete factory-ветви.
+    pub(crate) const fn object_type(&self) -> i32 {
+        match self {
+            Self::Region(object) => object.get_type(),
+            Self::Player(object) => object.get_type(),
+            Self::Npc(object) => object.get_type(),
+            Self::Monster(object) => object.get_type(),
+            Self::Goods(object) => object.get_type(),
+        }
+    }
+
+    /// Возвращает назначенный static factory signed object ID.
+    pub(crate) const fn object_id(&self) -> i32 {
+        match self {
+            Self::Region(object) => object.get_id(),
+            Self::Player(object) => object.get_id(),
+            Self::Npc(object) => object.get_id(),
+            Self::Monster(object) => object.get_id(),
+            Self::Goods(object) => object.get_id(),
+        }
+    }
+
+    fn set_object_id(&mut self, id: i32) {
+        match self {
+            Self::Region(object) => object.set_id(id),
+            Self::Player(object) => object.set_id(id),
+            Self::Npc(object) => object.set_id(id),
+            Self::Monster(object) => object.set_id(id),
+            Self::Goods(object) => object.set_id(id),
+        }
+    }
+}
+
+/// Материализует точные пять ветвей `CBaseObject::CreateObject`.
+///
+/// Каждый concrete constructor уже ставит свой literal type. Как и EXE, ID
+/// назначается только после construction; финальная запись того же type не
+/// меняет наблюдаемого состояния и не требует искусственного virtual ABI.
+pub(crate) fn create_base_object(
+    object_type: i32,
+    object_id: i32,
+) -> Option<Box<BaseObjectFactoryObject>> {
+    let mut object = match BaseObjectFactoryType::from_wire_value(object_type)? {
+        BaseObjectFactoryType::Region => {
+            BaseObjectFactoryObject::Region(CRegion::with_constructor_base_and_type())
+        }
+        BaseObjectFactoryType::Player => {
+            BaseObjectFactoryObject::Player(CPlayer::with_clone_decode_constructor_state())
+        }
+        BaseObjectFactoryType::Npc => {
+            BaseObjectFactoryObject::Npc(CNpc::with_constructor_base_and_type())
+        }
+        BaseObjectFactoryType::Monster => {
+            BaseObjectFactoryObject::Monster(CMonster::with_constructor_base_and_type())
+        }
+        BaseObjectFactoryType::Goods => {
+            BaseObjectFactoryObject::Goods(CGoods::with_constructor_base_and_type())
+        }
+    };
+    object.set_object_id(object_id);
+    Some(Box::new(object))
 }
 
 /// Достигнутая часть исходного `CBaseObject`.
@@ -455,7 +539,7 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 
 // ============================================================================
 // FUNCTION: CBaseObject::CreateObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:157
@@ -463,6 +547,9 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
 // ADDRESS: 004d5470
 // PROTOTYPE: CBaseObject * __cdecl CreateObject(long param_1, long param_2)
 //
+// IMPLEMENTED_OWNER: `create_base_object` выше сохраняет пять literal
+// type-ветвей и post-constructor ID assignment. `Box<BaseObjectFactoryObject>`
+// заменяет только erased base-pointer/vtable безопасным tagged ownership.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
