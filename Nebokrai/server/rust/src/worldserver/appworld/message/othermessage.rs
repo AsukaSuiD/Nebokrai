@@ -25,6 +25,9 @@
 //! маршрутизует то же сообщение; `0x5FD06..09` только переписывают type и
 //! делают `SendAll`. `0x5FD0E` ровно один раз читает и отбрасывает signed long.
 //! Donor-added ownership/tail validation отсутствует в EXE и не перенесена.
+//! Полный exact `switch` завершается общим epilogue после `0x5FD10`: любой
+//! иной opcode не читает payload, не отправляет ответ и не передаётся
+//! следующему owner-у. Rust materialизует это `NoOp`.
 //! `0x5FD0B` отражает первые два signed long, добавляет прежнее значение
 //! `s_nCopyNum` и только при ненулевом третьем поле увеличивает global до
 //! `SendToSocket`; это сохраняет peek/reserve и side-effect-before-send.
@@ -280,9 +283,13 @@ pub(crate) struct WorldIncrementLogPageOutcome {
     pub(crate) delivery: Option<Result<i32, SendMessageError>>,
 }
 
-/// Один обработанный результат частично восстановленного other-owner-а.
+/// Один обработанный результат полного other-owner-а.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldOtherMessageOutcome {
+    /// Default полного exact `switch`: message остаётся без side effects.
+    NoOp {
+        request_type: i32,
+    },
     Chat(WorldOtherChatOutcome),
     Transport {
         request_type: i32,
@@ -337,7 +344,7 @@ pub(crate) enum WorldOtherMessageDispatch {
     Pending(CMessage),
 }
 
-/// Исполняет достигнутые transport/cursor/honor ветви other-owner-а.
+/// Исполняет все transport/cursor/honor ветви other-owner-а.
 pub(crate) async fn on_other_message(
     game: &mut CGame,
     organizing: &COrganizingCtrl,
@@ -650,7 +657,9 @@ pub(crate) async fn on_other_message(
                 },
             ))
         }
-        _ => WorldOtherMessageDispatch::Pending(message),
+        request_type => WorldOtherMessageDispatch::Handled(WorldOtherMessageOutcome::NoOp {
+            request_type,
+        }),
     }
 }
 
