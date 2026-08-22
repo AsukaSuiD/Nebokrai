@@ -106,6 +106,11 @@
 //! ID внутри `Load` отбрасывается. Входное имя доступно `Load` благодаря
 //! ранней копии, а ненулевой graphics ID назначается только после вызова;
 //! поздняя повторная копия имени отбрасывает его возможное изменение.
+//! `BaseObjectFactoryType` материализует только подтверждённое сопоставление
+//! пяти literal type и concrete factory class. Он не подменяет сам factory:
+//! разнородные `CRegion/CPlayer/CNpc/CMonster/CGoods` пока имеют отдельные
+//! Rust owner-ы и не могут безопасно стать `Box<CBaseObject>` без потери их
+//! virtual `Load` и derived-state.
 //!
 //! Для `CGoods(type=700, id=0, name=nullptr)` raw переходит к шестибайтовому
 //! сравнению без null-проверки. Достижимость и наблюдаемая реакция этого
@@ -192,6 +197,45 @@ impl fmt::Display for BaseObjectDecodeError {
 
 impl Error for BaseObjectDecodeError {}
 
+/// Ровно пять literal type, принимаемых `CBaseObject::CreateObject`.
+///
+/// Это discriminator factory, а не полный wire-enum: прочие signed type могут
+/// существовать в сохранённых объектах, но exact factory возвращает для них
+/// null. Значения подтверждены ветвями `0x004D5470..0x004D55B3`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BaseObjectFactoryType {
+    Region,
+    Player,
+    Npc,
+    Monster,
+    Goods,
+}
+
+impl BaseObjectFactoryType {
+    /// Возвращает concrete owner только для пяти factory-ветвей original-а.
+    pub(crate) const fn from_wire_value(value: i32) -> Option<Self> {
+        match value {
+            200 => Some(Self::Region),
+            400 => Some(Self::Player),
+            500 => Some(Self::Npc),
+            600 => Some(Self::Monster),
+            700 => Some(Self::Goods),
+            _ => None,
+        }
+    }
+
+    /// Возвращает исходный signed `long`, записываемый после factory constructor-а.
+    pub(crate) const fn wire_value(self) -> i32 {
+        match self {
+            Self::Region => 200,
+            Self::Player => 400,
+            Self::Npc => 500,
+            Self::Monster => 600,
+            Self::Goods => 700,
+        }
+    }
+}
+
 /// Достигнутая часть исходного `CBaseObject`.
 pub(crate) struct CBaseObject {
     object_type: i32,
@@ -219,6 +263,11 @@ impl CBaseObject {
     /// Возвращает signed Windows `long` type без преобразования битов.
     pub(crate) const fn get_type(&self) -> i32 {
         self.object_type
+    }
+
+    /// Идентифицирует factory-вариант, не превращая неизвестный type в default.
+    pub(crate) const fn factory_type(&self) -> Option<BaseObjectFactoryType> {
+        BaseObjectFactoryType::from_wire_value(self.object_type)
     }
 
     /// Присваивает signed Windows `long` type без дополнительных эффектов.
