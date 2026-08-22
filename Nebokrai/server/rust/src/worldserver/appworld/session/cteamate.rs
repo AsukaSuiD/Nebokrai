@@ -1,153 +1,198 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Участник World-команды `CTeamate`.
+//!
+//! Все десять функций owner-а восстановлены по точной паре
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`: `SetOwnerRegionID`
+//! RVA `0x000DEB80`, `OnChangeState` `0x000DEBB0`, `PlayerStillExisted`
+//! `0x000DEBD0`, `IsPlugAvailable` `0x000DEBE0`, `GetOwnerName` `0x000DED00`,
+//! `Serialize` `0x000DED20`, constructor/destructor `0x000DED90/0x000DEDD0`,
+//! `SetOwnerName` `0x000DEE70`, `Unserialize` `0x000DEEA0`. Исходный owner:
+//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\cteamate.cpp`.
+//!
+//! Constructor задаёт plug type `5`, region/timestamp `0`, existence `1` и
+//! пустое byte-exact имя. `SetOwnerRegionID` сначала меняет поле, затем
+//! синхронно публикует state `6`; safe Rust сохраняет это через немедленно
+//! дренируемый factory effect базового `CPlug`. Проверка существования хранит
+//! исходный минутный unsigned gate, повторные вызовы `timeGetTime` и пакет
+//! `0x7FD09 [plug ID, owner type, owner ID]`; добавленные Linux-донором pending
+//! map/peer validation и требование успешной отправки в EXE отсутствуют.
+//!
+//! Wire suffix — region `long`, имя и NUL после базового plug header. Owned
+//! `Vec<u8>` заменяет `std::string`, не навязывает UTF-8 и обрезает setter по
+//! первому NUL. Старый `_GetStringFromByteArray` писал в `char[256]`; safe
+//! decoder принимает только найденный в этой границе NUL и возвращает `0` при
+//! коротком/переполненном входе, сохраняя уже прочитанные поля и cursor.
 
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\cteamate.cpp
+use crate::nets::networld::message::CMessage;
+use crate::worldserver::appworld::session::cplug::{CPlug, read_i32};
+use crate::worldserver::appworld::session::csessionfactory::{
+    WorldPlugOwner, WorldPlugSessionEffect, WorldTeamateOwner,
+};
+use crate::worldserver::worldserver::game::{CGame, legacy_tick_ms};
 
-// ============================================================================
-// FUNCTION: CTeamate::SetOwnerRegionID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\cteamate.cpp:100
-// RVA: 0x000DEB80
-// ADDRESS: 004deb80
-// PROTOTYPE: void __thiscall SetOwnerRegionID(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+const TEAMATE_PLUG_TYPE: u32 = 5;
+const EXISTENCE_QUERY_INTERVAL_MS: u32 = 60_000;
 
-// ============================================================================
-// FUNCTION: CTeamate::OnChangeState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\cteamate.cpp:157
-// RVA: 0x000DEBB0
-// ADDRESS: 004debb0
-// PROTOTYPE: int __thiscall OnChangeState(long param_1, long param_2, uchar * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+/// Конкретный factory-owned участник команды.
+pub(crate) struct CTeamate {
+    plug: CPlug,
+    owner_region_id: i32,
+    owner_name: Vec<u8>,
+    last_queried_timestamp_ms: u32,
+    player_still_existed: i32,
+}
 
-// ============================================================================
-// FUNCTION: CTeamate::PlayerStillExisted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\cteamate.cpp:186
-// RVA: 0x000DEBD0
-// ADDRESS: 004debd0
-// PROTOTYPE: void __thiscall PlayerStillExisted(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl CTeamate {
+    pub(crate) const fn new() -> Self {
+        let mut plug = CPlug::new();
+        plug.set_plug_type(TEAMATE_PLUG_TYPE);
+        Self {
+            plug,
+            owner_region_id: 0,
+            owner_name: Vec::new(),
+            last_queried_timestamp_ms: 0,
+            player_still_existed: 1,
+        }
+    }
 
-// ============================================================================
-// FUNCTION: CTeamate::IsPlugAvailable
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\cteamate.cpp:40
-// RVA: 0x000DEBE0
-// ADDRESS: 004debe0
-// PROTOTYPE: int __thiscall IsPlugAvailable(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn owner_region_id(&self) -> i32 {
+        self.owner_region_id
+    }
 
-// ============================================================================
-// FUNCTION: CTeamate::GetOwnerName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\cteamate.cpp:35
-// RVA: 0x000DED00
-// ADDRESS: 004ded00
-// PROTOTYPE: char * __thiscall GetOwnerName(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn owner_name(&self) -> &[u8] {
+        &self.owner_name
+    }
 
-// ============================================================================
-// FUNCTION: CTeamate::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\cteamate.cpp:111
-// RVA: 0x000DED20
-// ADDRESS: 004ded20
-// PROTOTYPE: int __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    /// Выполняет точный минутный availability/probe lifecycle.
+    pub(crate) fn is_plug_available(&mut self, game: &CGame) -> i32 {
+        let now = legacy_tick_ms();
+        if self.last_queried_timestamp_ms == 0 {
+            self.player_still_existed = 1;
+            self.last_queried_timestamp_ms = now;
+            return 1;
+        }
+        if now <= self
+            .last_queried_timestamp_ms
+            .wrapping_add(EXISTENCE_QUERY_INTERVAL_MS)
+        {
+            return 1;
+        }
 
-// ============================================================================
-// FUNCTION: CTeamate::CTeamate
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\cteamate.cpp:14
-// RVA: 0x000DED90
-// ADDRESS: 004ded90
-// PROTOTYPE: undefined __thiscall CTeamate(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+        let result = if self.player_still_existed == 0 {
+            0
+        } else {
+            if let Some(game_server) = game.player_game_server(self.plug.owner_id()) {
+                let map_id = game_server.index as i32;
+                self.player_still_existed = 0;
+                let mut message = CMessage::new(0x0007_FD09);
+                message.base_mut().add_long(self.plug.object_id());
+                message.base_mut().add_long(self.plug.owner_type());
+                message.base_mut().add_long(self.plug.owner_id());
+                let _ = game.send_msg_to_game_server(map_id, &message);
+            }
+            1
+        };
+        self.last_queried_timestamp_ms = legacy_tick_ms();
+        result
+    }
 
-// ============================================================================
-// FUNCTION: CTeamate::~CTeamate
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\cteamate.cpp:22
-// RVA: 0x000DEDD0
-// ADDRESS: 004dedd0
-// PROTOTYPE: void __thiscall ~CTeamate(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    /// Исходный callback только пытается найти plug в той же session и
+    /// независимо от результата возвращает `1`.
+    pub(crate) const fn on_change_state(&self, _plug_id: i32) -> i32 {
+        1
+    }
 
-// ============================================================================
-// FUNCTION: CTeamate::SetOwnerName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\cteamate.cpp:27
-// RVA: 0x000DEE70
-// ADDRESS: 004dee70
-// PROTOTYPE: void __thiscall SetOwnerName(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn serialize(&self, output: &mut Vec<u8>) -> i32 {
+        if self.plug.serialize(output) == 0 {
+            return 0;
+        }
+        output.extend_from_slice(&self.owner_region_id.to_le_bytes());
+        output.extend_from_slice(&self.owner_name);
+        output.push(0);
+        1
+    }
 
-// ============================================================================
-// FUNCTION: CTeamate::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\cteamate.cpp:126
-// RVA: 0x000DEEA0
-// ADDRESS: 004deea0
-// PROTOTYPE: int __thiscall Unserialize(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    fn unserialize_suffix(&mut self, stream: &[u8], offset: &mut i32) -> i32 {
+        if self.plug.unserialize(stream, offset) == 0 {
+            return 0;
+        }
+        let Some(region_id) = read_i32(stream, offset) else {
+            return 0;
+        };
+        self.owner_region_id = region_id;
 
+        let attempted_offset = *offset;
+        let Ok(start) = usize::try_from(attempted_offset) else {
+            return 0;
+        };
+        let Some(legacy_end) = start.checked_add(0x100) else {
+            return 0;
+        };
+        let search_end = stream.len().min(legacy_end);
+        let Some(relative_nul) = stream[start..search_end]
+            .iter()
+            .position(|byte| *byte == 0)
+        else {
+            *offset = i32::try_from(search_end).unwrap_or(i32::MAX);
+            return 0;
+        };
+        let end = start + relative_nul;
+        self.owner_name.clear();
+        self.owner_name.extend_from_slice(&stream[start..end]);
+        let Some(next) = end.checked_add(1).and_then(|value| i32::try_from(value).ok()) else {
+            return 0;
+        };
+        *offset = next;
+        1
+    }
+}
 
+impl WorldPlugOwner for CTeamate {
+    fn assign_factory_identity(&mut self, object_type: i32, object_id: i32) {
+        self.plug.assign_factory_identity(object_type, object_id);
+    }
 
-// COMPONENT_VARIANT_END: WorldServer
+    fn set_owner(&mut self, owner_type: i32, owner_id: i32) {
+        self.plug.set_owner(owner_type, owner_id);
+    }
+
+    fn unserialize(&mut self, stream: &[u8], offset: &mut i32) -> i32 {
+        self.unserialize_suffix(stream, offset)
+    }
+
+    fn as_teamate_mut(&mut self) -> Option<&mut dyn WorldTeamateOwner> {
+        Some(self)
+    }
+}
+
+impl WorldTeamateOwner for CTeamate {
+    fn exit(&mut self) {
+        self.plug.exit();
+    }
+
+    fn set_owner_region_id(&mut self, region_id: i32) {
+        self.owner_region_id = region_id;
+        self.plug.change_state(6, &region_id.to_le_bytes());
+    }
+
+    fn set_owner_name(&mut self, owner_name: &[u8]) {
+        let prefix_length = owner_name
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(owner_name.len());
+        self.owner_name.clear();
+        self.owner_name
+            .extend_from_slice(&owner_name[..prefix_length]);
+    }
+
+    fn player_still_existed(&mut self, existed: i32) {
+        self.player_still_existed = existed;
+    }
+
+    fn take_session_effects(&mut self) -> Vec<WorldPlugSessionEffect> {
+        self.plug.take_session_effects()
+    }
+
+    fn confirm_exit(&mut self) {
+        self.plug.confirm_exit();
+    }
+}

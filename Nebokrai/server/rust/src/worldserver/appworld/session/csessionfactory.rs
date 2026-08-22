@@ -16,15 +16,15 @@
 //! как `stdext::hash_map<long, pointer>`, а enum-значения —
 //! `ST_NORMAL_SESSION=0`, `ST_TEAM=1`, шесть `PLUG_TYPE=0..5` и
 //! `TYPE_SESSION/TYPE_PLUG=10/11`; exact EXE data задаёт обоим ID initial `1`.
-//! Factory выбирает только `CSession` либо
-//! `CTeam` и только `CTeamate`; сами constructors, virtual API и unserialize-
-//! тела принадлежат соседним сырым owners. Rust оставляет их явными trait-
-//! границами, но сохраняет factory-owned lifetime через `Box` и вызывает
-//! `Drop` ровно там, где исходник звал scalar deleting destructor.
+//! Factory выбирает только `CSession` либо `CTeam` и только `CTeamate`.
+//! Конкретный plug-owner уже материализован и строится самой фабрикой;
+//! constructors и virtual API ещё сырых `CSession/CTeam` остаются явной
+//! allocator/trait-границей. Factory-owned lifetime выражен через `Box`, а
+//! `Drop` вызывается ровно там, где исходник звал scalar deleting destructor.
 //! Подключённый `OnTeamMessage` использует те же registry через узкие
 //! `WorldTeamSessionOwner/WorldTeamateOwner` проекции: это safe-эквивалент
 //! точных RTTI-переходов, а не отдельное team-состояние. До реализации
-//! конкретных `CTeam/CTeamate` default-проекция возвращает исходный RTTI miss.
+//! конкретного `CTeam` default-проекция возвращает исходный RTTI miss.
 //!
 //! `AI` проходит только session registry. Null value стирается сразу;
 //! недоступная session сначала получает `Abort`, завершённая — `End`, затем
@@ -58,6 +58,8 @@
 
 use std::error::Error;
 use std::fmt;
+
+use crate::worldserver::appworld::session::cteamate::CTeamate;
 
 const LEGACY_HASH_XOR: u32 = 0xDEAD_BEEF;
 const TYPE_SESSION: i32 = 10;
@@ -116,6 +118,13 @@ pub(crate) trait WorldSessionOwner {
     fn end(&mut self) -> i32;
     fn ai(&mut self);
     fn insert_plug(&mut self, plug_id: i32) -> i32;
+    fn on_plug_change_state(
+        &mut self,
+        plug_id: i32,
+        state: i32,
+        value: &[u8],
+        recursive: i32,
+    ) -> i32;
     fn unserialize(&mut self, stream: &[u8], offset: &mut i32) -> i32;
 
     /// Возвращает доказанный `CTeam`-интерфейс либо RTTI-failure как `None`.
@@ -135,7 +144,7 @@ pub(crate) trait WorldTeamSessionOwner {
     fn on_plug_change_state(&mut self, plug_id: i32, state: i32, value: &[u8]);
 }
 
-/// Virtual contract, принадлежащий ещё сырому `CPlug/CTeamate` owner-у.
+/// Общий virtual contract factory-owned plug-а.
 pub(crate) trait WorldPlugOwner {
     fn assign_factory_identity(&mut self, object_type: i32, object_id: i32);
     fn set_owner(&mut self, owner_type: i32, owner_id: i32);
@@ -153,9 +162,26 @@ pub(crate) trait WorldTeamateOwner {
     fn set_owner_region_id(&mut self, region_id: i32);
     fn set_owner_name(&mut self, owner_name: &[u8]);
     fn player_still_existed(&mut self, existed: i32);
+
+    /// Забирает синхронные обращения plug-а к его session после мутации поля.
+    fn take_session_effects(&mut self) -> Vec<WorldPlugSessionEffect> {
+        Vec::new()
+    }
+
+    /// Завершает `Exit` только после найденной session, как исходный owner.
+    fn confirm_exit(&mut self) {}
 }
 
-/// Allocation/constructor-граница четырёх соседних class owners.
+/// Safe-форма немедленного `CPlug -> CSessionFactory -> CSession` вызова.
+pub(crate) struct WorldPlugSessionEffect {
+    pub(crate) session_id: i32,
+    pub(crate) plug_id: i32,
+    pub(crate) state: i32,
+    pub(crate) value: Vec<u8>,
+    pub(crate) end_after_session_lookup: bool,
+}
+
+/// Allocation/constructor-граница ещё сырых `CSession/CTeam` owners.
 pub(crate) trait WorldSessionFactoryAllocator {
     fn construct_session(
         &mut self,
@@ -165,7 +191,6 @@ pub(crate) trait WorldSessionFactoryAllocator {
         lifetime_ms: u32,
     ) -> Option<Box<dyn WorldSessionOwner>>;
 
-    fn construct_plug(&mut self, plug_type: WorldPlugType) -> Option<Box<dyn WorldPlugOwner>>;
 }
 
 struct LegacyMsvcHashEntry<T> {
@@ -369,10 +394,32 @@ impl CSessionFactory {
         plug_id: i32,
         operation: impl FnOnce(&mut dyn WorldTeamateOwner) -> ResultValue,
     ) -> Option<ResultValue> {
-        self.plugs
-            .get_mut(plug_id)?
-            .as_teamate_mut()
-            .map(operation)
+        let (result, effects) = {
+            let teamate = self.plugs.get_mut(plug_id)?.as_teamate_mut()?;
+            let result = operation(teamate);
+            (result, teamate.take_session_effects())
+        };
+        for effect in effects {
+            let session_found = self.sessions.get_mut(effect.session_id).is_some_and(|session| {
+                session.on_plug_change_state(
+                    effect.plug_id,
+                    effect.state,
+                    &effect.value,
+                    0,
+                );
+                true
+            });
+            if session_found && effect.end_after_session_lookup {
+                if let Some(teamate) = self
+                    .plugs
+                    .get_mut(plug_id)
+                    .and_then(|plug| plug.as_teamate_mut())
+                {
+                    teamate.confirm_exit();
+                }
+            }
+        }
+        Some(result)
     }
 
     /// Вызывает virtual `CSession::End` без придуманного downcast-а к team.
@@ -413,25 +460,19 @@ impl CSessionFactory {
     }
 
     /// Создаёт единственный поддержанный `CTeamate` и публикует plug owner.
-    pub(crate) fn create_plug<Allocator>(
+    pub(crate) fn create_plug(
         &mut self,
         plug_type: i32,
         owner_type: i32,
         owner_id: i32,
-        allocator: &mut Allocator,
-    ) -> i32
-    where
-        Allocator: WorldSessionFactoryAllocator + ?Sized,
-    {
+    ) -> i32 {
         let Some(plug_type) = WorldPlugType::from_legacy(plug_type) else {
             return 0;
         };
         if plug_type != WorldPlugType::Teamate {
             return 0;
         }
-        let Some(mut plug) = allocator.construct_plug(plug_type) else {
-            return 0;
-        };
+        let mut plug: Box<dyn WorldPlugOwner> = Box::new(CTeamate::new());
 
         let plug_id = self.next_plug_id;
         self.next_plug_id = self.next_plug_id.wrapping_add(1);
@@ -551,22 +592,18 @@ impl CSessionFactory {
     }
 
     /// Читает plug header и делегирует virtual `CPlug::Unserialize`.
-    pub(crate) fn unserialize_plug<Allocator>(
+    pub(crate) fn unserialize_plug(
         &mut self,
         stream: Option<&[u8]>,
         offset: &mut i32,
-        allocator: &mut Allocator,
-    ) -> Result<i32, WorldSessionFactoryInputBlock>
-    where
-        Allocator: WorldSessionFactoryAllocator + ?Sized,
-    {
+    ) -> Result<i32, WorldSessionFactoryInputBlock> {
         let Some(stream) = stream else {
             return Ok(0);
         };
         let plug_type = read_i32(stream, offset)?;
         let owner_type = read_i32(stream, offset)?;
         let owner_id = read_i32(stream, offset)?;
-        let plug_id = self.create_plug(plug_type, owner_type, owner_id, allocator);
+        let plug_id = self.create_plug(plug_type, owner_type, owner_id);
         let Some(plug) = self.plugs.get_mut(plug_id) else {
             return Ok(0);
         };

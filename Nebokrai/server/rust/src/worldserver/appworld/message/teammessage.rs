@@ -14,9 +14,9 @@
 //! Старый Linux-донор использован для имён и формы. Его peer-проверки, eager-
 //! разбор payload, duplicate-team gate и cleanup при ошибке `InsertPlug`
 //! отсутствуют в EXE и не перенесены. Единственные registry остаются внутри
-//! `CSessionFactory`; узкие team/teamate trait-проекции выражают исходные RTTI
-//! и virtual границы. Недостаточный scalar payload даёт typed malformed до
-//! относящегося к нему эффекта.
+//! `CSessionFactory`; конкретный `CTeamate` и узкая team trait-проекция
+//! выражают исходные RTTI/virtual границы. Недостаточный scalar payload даёт
+//! typed malformed до относящегося к нему эффекта.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::appworld::session::csessionfactory::{
@@ -153,9 +153,7 @@ pub(crate) fn on_team_message<Allocator: WorldSessionFactoryAllocator + ?Sized>(
                     team_id, session_id, plug_id: existing, inserted: None,
                 };
             }
-            let plug_id = factory.create_plug(
-                TEAMATE_PLUG_TYPE, owner_type, owner_id, allocator,
-            );
+            let plug_id = factory.create_plug(TEAMATE_PLUG_TYPE, owner_type, owner_id);
             let initialized = factory.with_teamate(plug_id, |teamate| {
                 teamate.set_owner_region_id(region_id);
                 teamate.set_owner_name(&owner_name);

@@ -202,11 +202,13 @@ pub(crate) mod appworld {
         pub(crate) mod variablelist;
     }
     pub(crate) mod session {
+        pub(crate) mod cplug;
         #[allow(
             dead_code,
             reason = "CSessionFactory подключён к World MainLoop до переноса CSession/CTeam owners"
         )]
         pub(crate) mod csessionfactory;
+        pub(crate) mod cteamate;
     }
     pub(crate) mod skills {
         #[allow(
