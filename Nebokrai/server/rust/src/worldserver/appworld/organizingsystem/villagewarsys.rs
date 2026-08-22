@@ -351,6 +351,7 @@ pub(crate) struct VillageWarLoadReport {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum VillageWarLoadError {
+    ResourceMissing,
     MissingValue { field: &'static str },
     InvalidValue { field: &'static str },
     TimeParse(TagTimeParseBlock),
@@ -424,7 +425,7 @@ impl CVillageWarSys {
     ) -> Result<VillageWarLoadReport, VillageWarLoadError> {
         self.village_wars.clear();
         let Some(source) = source else {
-            return Ok(VillageWarLoadReport::default());
+            return Err(VillageWarLoadError::ResourceMissing);
         };
         let mut report = VillageWarLoadReport {
             resource_found: true,

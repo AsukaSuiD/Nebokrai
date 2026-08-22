@@ -1508,7 +1508,7 @@ use crate::worldserver::appworld::organizingsystem::union::{
     UnionApplicationSessionReport, UnionFormatArgument,
 };
 use crate::worldserver::appworld::organizingsystem::villagewarsys::{
-    CVillageWarSys, VillageWarCallbacks,
+    CVillageWarSys, VillageWarCallbacks, VillageWarLoadError, VillageWarLoadReport,
 };
 use crate::worldserver::appworld::player::{
     CPlayer, PlayerCodecError, PlayerCountryChangeReport, PlayerExploitUpdate,
@@ -1818,6 +1818,7 @@ pub(crate) enum WorldGameInitEvent {
     AttackCityInitialized(AttackCityLoadReport),
     AttackCityEnemyRelationsInitialized(AttackCityEnemyRelationReport),
     FourNationWarInitialized(FourNationWarLoadReport),
+    VillageWarInitialized(VillageWarLoadReport),
     FactionWarInitialized(FactionWarInitializationReport),
     QuestSystemInitialized(QuestSystemLoadReport),
     JjcConfigurationLoaded(JjcConfigurationLoadReport),
@@ -1925,6 +1926,7 @@ pub(crate) enum WorldGameInitBlockReason<ContextBlock> {
     AttackCityLoad(AttackCityLoadError),
     AttackCityEnemyRelation(ContextBlock),
     FourNationWarLoad(FourNationWarLoadError),
+    VillageWarLoad(VillageWarLoadError),
     OrganizingParameters(OrganizingParamLoadError),
     CountryParameters(CountryParamLoadError),
     CountryHandler,
@@ -9951,6 +9953,8 @@ impl CGame {
         attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
         four_nation_war: &mut CFourNationWarSys,
         four_nation_war_callbacks: FourNationWarCallbacks<TimerCallback>,
+        village_war: &mut CVillageWarSys,
+        village_war_callbacks: VillageWarCallbacks<TimerCallback>,
         faction_war: &mut CFactionWarSys,
         faction_enemy_context: &mut FactionEnemyContext,
         player_ranks: &mut CPlayerRanks,
@@ -10428,18 +10432,36 @@ impl CGame {
             four_nation_initialization,
         ));
 
-        let owner = WorldGameInitBooleanOwner::InitializeVillageWar;
-        let succeeded = context.initialize_boolean_owner(owner);
-        events.push(WorldGameInitEvent::BooleanOwner { owner, succeeded });
-        if !succeeded {
-            self.record_game_init_log(
-                &mut events,
-                log,
-                callbacks,
-                b"Load setup/villageWarSys.ini failed!",
-            );
-            stop!(WorldGameInitBlockReason::BooleanOwner(owner));
-        }
+        let village_war_source = context.read_resource(b"setup/villageWarSys.ini");
+        let village_war_initialization = match village_war.initialize(
+            village_war_source.as_deref(),
+            (callbacks.get_timer_local_time)(),
+            timer,
+            village_war_callbacks,
+        ) {
+            Ok(report) => report,
+            Err(source) => {
+                let owner = WorldGameInitBooleanOwner::InitializeVillageWar;
+                events.push(WorldGameInitEvent::BooleanOwner {
+                    owner,
+                    succeeded: false,
+                });
+                self.record_game_init_log(
+                    &mut events,
+                    log,
+                    callbacks,
+                    b"Load setup/villageWarSys.ini failed!",
+                );
+                stop!(WorldGameInitBlockReason::VillageWarLoad(source));
+            }
+        };
+        events.push(WorldGameInitEvent::BooleanOwner {
+            owner: WorldGameInitBooleanOwner::InitializeVillageWar,
+            succeeded: true,
+        });
+        events.push(WorldGameInitEvent::VillageWarInitialized(
+            village_war_initialization,
+        ));
 
         context.initialize_void_owner(WorldGameInitVoidOwner::InitializeOrganizingController);
         events.push(WorldGameInitEvent::VoidOwner(
