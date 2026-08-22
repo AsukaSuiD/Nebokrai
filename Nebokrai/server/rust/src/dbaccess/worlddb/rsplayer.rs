@@ -25,8 +25,9 @@
 //! `DeletePlayer` RVA `0x00101A60`, а также `LoadHonorRanksByType` RVA
 //! `0x0010FB90`, внешний `LoadHonorRanks` RVA `0x001113B0`, `InsertHonorRanks`
 //! RVA `0x00101680`, `SaveHonorRanksByType` RVA `0x00105080` и внешний
-//! `SaveHonorRanks` RVA `0x00105E20` и `StatRanks` RVA `0x00109570` —
-//! `IMPLEMENTED`; `LoadPlayer` имеет статус
+//! `SaveHonorRanks` RVA `0x00105E20`, `StatRanks` RVA `0x00109570`,
+//! `DbLetTingUpdate` RVA `0x00110520` и `ResetAllLeitingInDB` RVA
+//! `0x00110F70` — `IMPLEMENTED`; `LoadPlayer` имеет статус
 //! `IMPLEMENTED_PARTIAL/VERIFIED_DISASSEMBLY`; constructor, destructor
 //! и остальные функции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -151,6 +152,21 @@
 //! значения и floats без изменения. SQL Server выполняет окончательное
 //! приведение к типам доказанной исходной таблицы; число затронутых строк, как
 //! и у старого Update, не проверяется.
+//!
+//! `DbLetTingUpdate` проверен по exact `0x00510520`: worker сначала снимает
+//! текущий `GetDailyThingList`, кодирует каждый `tagThing` как восемь байт
+//! `u16` в deque-order, после чего открывает отдельное соединение и проходит
+//! все строки updatable recordset без транзакции. Kind `1` очищает только
+//! младшие четыре бита `baseblfyenergy`; kind `2` дополнительно обнуляет
+//! `LTUp60Cnt` и всё `baseblfyenergy`. В обоих случаях `ListThing`, signed
+//! `dwLT60Stamp`, `basefyEnergy=0` и `wRemainJLDanCnt` обновляются до
+//! единственного `Recordset::Update` текущей строки. TDS-замена добавляет
+//! `ID` лишь как ключ текущей ADO-строки и сохраняет отдельный statement на
+//! строку, исходный natural order, partial commit и отсутствие retry/rollback.
+//! `ResetAllLeitingInDB` передаёт два DWORD в ровно один `_beginthreadex`;
+//! Rust worker владеет payload и immutable setup через `Arc` и освобождает системный
+//! thread resource по `JoinHandle::drop`, устраняя внутреннюю утечку HANDLE
+//! без изменения fire-and-forget DB-семантики.
 //!
 //! После успешного INSERT исходный owner вызывал `CRsJJcSys::SaveJJcData`.
 //! Точная сигнатура действительно передавала текущий connection по значению,
@@ -508,7 +524,7 @@ use crate::dbaccess::worlddb::rssetup::{
     WorldDatabaseConnectionError, WorldDatabaseSettings, WorldTdsClient,
 };
 use crate::public::date::{TagTime, TagTimeArithmeticBlock};
-use crate::setup::leitingsetup::CThingSetup;
+use crate::setup::leitingsetup::{CThingSetup, LeiTingDailyThing};
 use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use crate::worldserver::appworld::player::{CPlayer, PlayerLoadDataOwner};
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
@@ -518,6 +534,9 @@ const LEGACY_SQL_BUFFER_CAPACITY: usize = 1024;
 const CREATE_PLAYER_BASE_PREFIX: &[u8] = b"INSERT INTO CSL_PLAYER_BASE (id,name,Account,levels,occupation,sex,Country,HEAD,\t\t\t\t\t HELM,BODY,GLOV,BOOT,WEAPON,BACK,\t\t\t\t\t HEADGEAR,FROCK,WING,MANTEAU,FAIRY,\t\t\t\t\t HelmLevel,BodyLevel,GlovLevel,BootLevel,WeaponLevel,BackLevel,\t\t\t\t\t HEADGEARLevel,FROCKLevel,WINGLevel,MANTEAULevel,FAIRYLevel,\t\t\t\t\t Region) \t\t\t\t VALUES (";
 const SAVE_PLAYER_BASE_SQL: &str = "IF EXISTS (SELECT TOP 1 id FROM CSL_PLAYER_BASE WHERE id = @P30) BEGIN UPDATE TOP (1) CSL_PLAYER_BASE SET [Name] = @P1, [Levels] = @P2, [Occupation] = @P3, [Sex] = @P4, [Country] = @P5, [HEAD] = @P6, [HELM] = @P7, [BODY] = @P8, [GLOV] = @P9, [BOOT] = @P10, [WEAPON] = @P11, [BACK] = @P12, [HEADGEAR] = @P13, [FROCK] = @P14, [WING] = @P15, [MANTEAU] = @P16, [FAIRY] = @P17, [HelmLevel] = @P18, [BodyLevel] = @P19, [GlovLevel] = @P20, [BootLevel] = @P21, [WeaponLevel] = @P22, [BackLevel] = @P23, [HEADGEARLevel] = @P24, [FROCKLevel] = @P25, [WINGLevel] = @P26, [MANTEAULevel] = @P27, [FAIRYLevel] = @P28, [Region] = @P29 WHERE id = @P30; SELECT CAST(@@ROWCOUNT AS int) AS UpdatedRows END ELSE SELECT CAST(0 AS int) AS UpdatedRows";
 const VALUE_GROUP_BREAK: &[u8] = b",\t\t\t\t\t ";
+const LEI_TING_RESET_SELECT_SQL: &str = "SELECT ID, LTUp60Cnt, basefyEnergy, baseblfyenergy, dwLT60Stamp, wRemainJLDanCnt, ListThing FROM csl_player_ability";
+const LEI_TING_DAILY_RESET_SQL: &str = "UPDATE CSL_PLAYER_ABILITY SET ListThing=@P1,dwLT60Stamp=@P2,basefyEnergy=@P3,wRemainJLDanCnt=@P4,baseblfyenergy=@P5 WHERE ID=@P6";
+const LEI_TING_MONTHLY_RESET_SQL: &str = "UPDATE CSL_PLAYER_ABILITY SET ListThing=@P1,dwLT60Stamp=@P2,basefyEnergy=@P3,wRemainJLDanCnt=@P4,LTUp60Cnt=@P5,baseblfyenergy=@P6 WHERE ID=@P7";
 
 const HONOR_RANKS_SELECT_PREFIX: &str = "select * from CSL_HonorRanks where SortDate = '";
 const HONOR_RANKS_INSERT_PREFIX: &str = "insert into CSL_HonorRanks(SortDate) values('";
@@ -1388,6 +1407,33 @@ pub(crate) struct TiberiusRsPlayer {
     notices: VecDeque<RsPlayerNotice>,
 }
 
+/// Исходный двух-DWORD payload `ResetAllLeitingInDB`.
+///
+/// В EXE worker принимает его как `void *`: первое слово — kind, второе —
+/// signed `mktime` stamp. Rust не переносит heap-allocation без владельца,
+/// но сохраняет порядок и ширину обоих полей в явном значении.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct LeiTingDatabaseResetRequest {
+    pub(crate) update_kind: u32,
+    pub(crate) stamp: i32,
+}
+
+/// Наблюдаемый bool-итог `CRsPlayer::DbLetTingUpdate`.
+#[derive(Debug)]
+pub(crate) enum LeiTingDatabaseResetOutcome {
+    ReturnedTrue { updated_rows: usize },
+    ReturnedFalse(LeiTingDatabaseResetFailure),
+}
+
+/// Причина exact false-ветви, сохранённая без исходного catch-all/SEH.
+#[derive(Debug)]
+pub(crate) enum LeiTingDatabaseResetFailure {
+    UnsupportedUpdateKind(u32),
+    Connection(WorldDatabaseConnectionError),
+    Database(tiberius::error::Error),
+    MissingRequiredValue { column: &'static str },
+}
+
 /// Caller-owned связка полного `CRsPlayer::LoadPlayer` для `CPlayer::LoadData`.
 pub(crate) struct TiberiusPlayerLoadData<'owner, J, G, WeekDay> {
     pub(crate) player_owner: &'owner mut TiberiusRsPlayer,
@@ -2207,6 +2253,18 @@ pub(crate) fn save_thing_field<S: PlayerAbilityFieldSink>(
     sink.append_binary_field(PlayerAbilityBinaryField::Thing, &bytes)
 }
 
+/// Кодирует worker-local `GetDailyThingList` в exact `ListThing` blob.
+fn encode_lei_ting_daily_things(things: &VecDeque<LeiTingDailyThing>) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(things.len() * 8);
+    for thing in things {
+        bytes.extend_from_slice(&thing.thing_id.to_le_bytes());
+        bytes.extend_from_slice(&thing.count.to_le_bytes());
+        bytes.extend_from_slice(&thing.max_count.to_le_bytes());
+        bytes.extend_from_slice(&thing.point.to_le_bytes());
+    }
+    bytes
+}
+
 /// Safe-границы исходных unchecked binary-field loader-ов.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerAbilityBlobDecodeBlock {
@@ -2732,6 +2790,124 @@ impl TiberiusRsPlayer {
             settings: settings.clone(),
             notices: VecDeque::new(),
         }
+    }
+
+    /// Выполняет один фоновый проход `DbLetTingUpdate` на отдельном соединении.
+    ///
+    /// Exact `0x00510520` строит `ListThing` до `CreateCn/OpenCn`, затем без
+    /// transaction проходит updatable recordset `csl_player_ability`; успешные
+    /// ранние строки сохраняются даже если последующая строка даёт ошибку.
+    /// TDS не предоставляет этот ADO recordset API, поэтому `ID` добавлен
+    /// только как технический ключ текущей строки, а каждый `UPDATE` остаётся
+    /// отдельным statement в том же исходном порядке без `ORDER BY` и rollback.
+    /// Снятие list происходит внутри worker-вызова, а не при его постановке.
+    pub(crate) async fn db_lei_ting_update(
+        &self,
+        request: LeiTingDatabaseResetRequest,
+        thing_setup: &CThingSetup,
+        total_jing_li_dan_count: u16,
+    ) -> LeiTingDatabaseResetOutcome {
+        if request.update_kind != 1 && request.update_kind != 2 {
+            return LeiTingDatabaseResetOutcome::ReturnedFalse(
+                LeiTingDatabaseResetFailure::UnsupportedUpdateKind(request.update_kind),
+            );
+        }
+
+        let mut daily_things = VecDeque::new();
+        thing_setup.get_daily_thing_list(
+            || Local::now().weekday().num_days_from_sunday() as u16,
+            &mut daily_things,
+        );
+        let list_thing = encode_lei_ting_daily_things(&daily_things);
+
+        let mut connection = match self.settings.connect().await {
+            Ok(connection) => connection,
+            Err(error) => {
+                return LeiTingDatabaseResetOutcome::ReturnedFalse(
+                    LeiTingDatabaseResetFailure::Connection(error),
+                );
+            }
+        };
+        let rows = match connection.simple_query(LEI_TING_RESET_SELECT_SQL).await {
+            Ok(stream) => match stream.into_first_result().await {
+                Ok(rows) => rows,
+                Err(error) => {
+                    return LeiTingDatabaseResetOutcome::ReturnedFalse(
+                        LeiTingDatabaseResetFailure::Database(error),
+                    );
+                }
+            },
+            Err(error) => {
+                return LeiTingDatabaseResetOutcome::ReturnedFalse(
+                    LeiTingDatabaseResetFailure::Database(error),
+                );
+            }
+        };
+
+        let mut updated_rows = 0;
+        for row in rows {
+            let player_id = match row.try_get::<i32, _>("ID") {
+                Ok(Some(value)) => value,
+                Ok(None) => {
+                    return LeiTingDatabaseResetOutcome::ReturnedFalse(
+                        LeiTingDatabaseResetFailure::MissingRequiredValue { column: "ID" },
+                    );
+                }
+                Err(error) => {
+                    return LeiTingDatabaseResetOutcome::ReturnedFalse(
+                        LeiTingDatabaseResetFailure::Database(error),
+                    );
+                }
+            };
+            let base_bl_fy_energy = if request.update_kind == 1 {
+                match row.try_get::<i32, _>("baseblfyenergy") {
+                    Ok(Some(value)) => value as u32,
+                    Ok(None) => {
+                        return LeiTingDatabaseResetOutcome::ReturnedFalse(
+                            LeiTingDatabaseResetFailure::MissingRequiredValue {
+                                column: "baseblfyenergy",
+                            },
+                        );
+                    }
+                    Err(error) => {
+                        return LeiTingDatabaseResetOutcome::ReturnedFalse(
+                            LeiTingDatabaseResetFailure::Database(error),
+                        );
+                    }
+                }
+            } else {
+                0
+            };
+
+            let query = if request.update_kind == 1 {
+                let mut query = Query::new(LEI_TING_DAILY_RESET_SQL);
+                query.bind(list_thing.as_slice());
+                query.bind(request.stamp);
+                query.bind(0_i64);
+                query.bind(i32::from(total_jing_li_dan_count));
+                query.bind(i64::from(base_bl_fy_energy & !0x0f));
+                query.bind(player_id);
+                query
+            } else {
+                let mut query = Query::new(LEI_TING_MONTHLY_RESET_SQL);
+                query.bind(list_thing.as_slice());
+                query.bind(request.stamp);
+                query.bind(0_i64);
+                query.bind(i32::from(total_jing_li_dan_count));
+                query.bind(0_i64);
+                query.bind(0_i64);
+                query.bind(player_id);
+                query
+            };
+            if let Err(error) = query.execute(&mut connection).await {
+                return LeiTingDatabaseResetOutcome::ReturnedFalse(
+                    LeiTingDatabaseResetFailure::Database(error),
+                );
+            }
+            updated_rows += 1;
+        }
+
+        LeiTingDatabaseResetOutcome::ReturnedTrue { updated_rows }
     }
 
     /// Загружает и публикует одну ordered ability-строку по signed player ID.
@@ -5339,7 +5515,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::DbLetTingUpdate
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:3369
@@ -5347,6 +5523,9 @@ async fn execute_batch(
 // ADDRESS: 00510520
 // PROTOTYPE: uint __stdcall DbLetTingUpdate(void * param_1)
 //
+// IMPLEMENTED_OWNER: `TiberiusRsPlayer::db_lei_ting_update` выше сохраняет
+// отдельное connection, worker-time daily list, per-row порядок, partial
+// commit и kind-specific bit mask; `ID` заменяет только hidden ADO row key.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -5381,7 +5560,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::ResetAllLeitingInDB
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:3468
@@ -5389,6 +5568,8 @@ async fn execute_batch(
 // ADDRESS: 00510f70
 // PROTOTYPE: bool __thiscall ResetAllLeitingInDB(ulong param_1, long param_2)
 //
+// IMPLEMENTED_OWNER: `WorldLeiTingResetWorker::dispatch` создаёт один
+// detached Rust thread с owned payload/config и не переносит Win32 HANDLE leak.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

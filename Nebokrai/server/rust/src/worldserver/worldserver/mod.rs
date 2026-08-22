@@ -4,6 +4,11 @@ pub(crate) mod game;
 pub(crate) mod honorranks;
 #[allow(
     dead_code,
+    reason = "LeiTing DB worker готов для concrete LeiTingContext runtime-owner"
+)]
+pub(crate) mod leitingresetworker;
+#[allow(
+    dead_code,
     reason = "reconnect-worker готов для runtime-owner полного CGame lifecycle"
 )]
 pub(crate) mod loginreconnectworker;
