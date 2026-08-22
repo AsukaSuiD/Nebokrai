@@ -42,6 +42,11 @@
 //! сохранённый iterator перед erase, присваивает его current, а затем выполняет
 //! общий increment ещё раз. Поэтому после orphan-removal один следующий fight
 //! пропускается до следующего `Run`; Rust сохраняет этот double-increment.
+//! Аналогично `GetOneOpponent` в `0x0048387A..0x00483908` при удалении записи
+//! без server ID сначала переходит к её successor, а затем выполняет общий
+//! increment loop-а. Следующий queue entry не рассматривается в этом подборе;
+//! это может менять выбранного соперника и поэтому сохранено безопасным
+//! индексным проходом вместо iterator/use-after-erase оригинала.
 //!
 //! `ResetJJc` намеренно не читает настроенную секунду. Более странный факт
 //! подтверждён exact EXE `0x00484202..0x00484249` и
@@ -768,23 +773,29 @@ impl CJJcSystem {
         let mut removed_unroutable_players = Vec::new();
         let candidates = self.queue.keys().copied().collect::<Vec<_>>();
 
-        for candidate_id in candidates {
+        let mut candidate_index = 0;
+        while candidate_index < candidates.len() {
+            let candidate_id = candidates[candidate_index];
             if candidate_id == player_id || self.is_player_in_pk(candidate_id, config) {
+                candidate_index += 1;
                 continue;
             }
             let Some(candidate) = game.map_player(candidate_id as u32) else {
+                candidate_index += 1;
                 continue;
             };
             let Some(server) = game.player_game_server(candidate_id) else {
                 context.log(JjcLogEvent::PlayerGameServerUnavailable {
                     player_id: candidate_id,
                 });
+                candidate_index += 1;
                 continue;
             };
             if !server.connected {
                 context.log(JjcLogEvent::PlayerGameServerUnavailable {
                     player_id: candidate_id,
                 });
+                candidate_index += 1;
                 continue;
             }
             if server.index == 0 {
@@ -798,7 +809,13 @@ impl CJJcSystem {
                 {
                     self.queue.remove(&candidate_id);
                     removed_unroutable_players.push(candidate_id);
+                    // `GetOneOpponent` увеличивал iterator до erase, затем
+                    // запускал общий increment loop-а. Сохраняем наблюдаемый
+                    // пропуск successor без alias на удалённую BTreeMap entry.
+                    candidate_index += 2;
+                    continue;
                 }
+                candidate_index += 1;
                 continue;
             }
 
@@ -815,6 +832,7 @@ impl CJJcSystem {
                 best_distance = distance as u32;
                 opponent_id = candidate_id;
             }
+            candidate_index += 1;
         }
         (opponent_id, removed_unroutable_players)
     }
