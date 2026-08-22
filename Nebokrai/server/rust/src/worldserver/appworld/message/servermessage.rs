@@ -304,7 +304,7 @@ use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelSerializeError};
 use crate::setup::honorelimilateconfig::HonorElimilateConfig;
 use crate::setup::incrementshoplist::{CIncrementShopList, IncrementShopSerializeError};
 use crate::setup::lingbao::{CLingBaoSetup, LingBaoSerializationBlock};
-use crate::setup::leitingsetup::{CThingSetup, ThingSetupCodecError};
+use crate::setup::leitingsetup::ThingSetupCodecError;
 use crate::setup::logsystem::{CLogSystem, LogSystemSerializeError};
 use crate::setup::monsterlist::{
     MonsterDropRegistry, MonsterListSerializeError, MonsterRegistry, serialize_monster_list,
@@ -809,7 +809,6 @@ pub(crate) struct WorldGameServerConnectionReport {
 pub(crate) struct WorldGameServerInitialConfigurationPrefix<'a> {
     pub(crate) da_kong_xiang_qian: &'a [u8],
     pub(crate) goods_registry: &'a GoodsBasePropertiesRegistry,
-    pub(crate) thing_setup: &'a CThingSetup,
 }
 
 /// Получатель одного `0x7F801` initial-config сообщения.
@@ -2790,7 +2789,7 @@ pub(crate) fn continue_game_server_initial_configuration_prefix(
         &goods,
     ));
     let mut thing_setup = Vec::new();
-    if let Err(error) = snapshots.thing_setup.add_to_byte_array(&mut thing_setup) {
+    if let Err(error) = game.thing_setup().add_to_byte_array(&mut thing_setup) {
         return WorldInitialConfigurationPrefixReport {
             deliveries,
             language_notice,
