@@ -3459,9 +3459,31 @@ impl COrganizingCtrl {
     ) -> usize {
         let published_factions = factions.len();
         for (faction_id, faction) in factions {
-            self.factions.insert(faction_id, Some(Box::new(faction)));
+            self.add_faction_organizing(faction_id, faction);
         }
         published_factions
+    }
+
+    /// Публикует faction ровно по `AddFactionOrganizing`: замена map-key
+    /// выполняется первой; при уже существующем верхнем союзе dirty-mask не
+    /// трогается, иначе вызывается `SetChangeData(0)`. Rust освобождает
+    /// вытесненный owner вместо исходной pointer-leak при повторном ключе.
+    fn add_faction_organizing(&mut self, faction_id: i32, faction: CFaction) {
+        let has_live_superior = faction
+            .superior_organizing()
+            .filter(|union_id| *union_id > 0)
+            .and_then(|union_id| self.confederations.get(&union_id))
+            .is_some_and(|union| union.is_some());
+        self.factions.insert(faction_id, Some(Box::new(faction)));
+        if !has_live_superior {
+            if let Some(faction) = self
+                .factions
+                .get_mut(&faction_id)
+                .and_then(Option::as_deref_mut)
+            {
+                faction.set_change_data(0);
+            }
+        }
     }
 
     /// Выполняет exact ordered `ReSetPermitDemise` без сетевых/DB эффектов.
@@ -9073,7 +9095,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::AddFactionOrganizing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:234
@@ -9081,6 +9103,10 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00437030
 // PROTOTYPE: void __thiscall AddFactionOrganizing(long param_1, COrganizing * param_2)
 //
+// IMPLEMENTED_OWNER: `add_faction_organizing` выше. Точный порядок: сначала
+// map assignment, затем lookup положительного superior-union; существующий
+// non-null union подавляет `SetChangeData(0)`, остальные случаи очищают mask.
+// Вытесненный raw pointer безопасно освобождается: его утечка ненаблюдаема.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
