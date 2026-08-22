@@ -49,12 +49,17 @@ pub(crate) struct CContributeSetup {
 }
 
 impl CContributeSetup {
+    /// Очищает только item-vector, сохраняя positional scalar prefix.
+    pub(crate) fn clear_items(&mut self) {
+        self.items.clear();
+    }
+
     /// Очищает items до открытия, но не трогает scalar prefix.
     pub(crate) fn load_from_file(
         &mut self,
         path: impl AsRef<Path>,
     ) -> Result<usize, ContributeSetupFileLoadError> {
-        self.items.clear();
+        self.clear_items();
         let source = std::fs::read(path).map_err(ContributeSetupFileLoadError::Io)?;
         self.load_from_bytes(&source)
             .map_err(ContributeSetupFileLoadError::Format)
@@ -65,7 +70,7 @@ impl CContributeSetup {
         &mut self,
         source: &[u8],
     ) -> Result<usize, ContributeSetupFormatError> {
-        self.items.clear();
+        self.clear_items();
         let mut tokens = source
             .split(u8::is_ascii_whitespace)
             .filter(|token| !token.is_empty());
@@ -272,7 +277,7 @@ fn invalid_long(field: &'static str, token: &[u8]) -> ContributeSetupFormatError
 
 // ============================================================================
 // FUNCTION: CContributeSetup::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\contributesetup.cpp:103
@@ -280,13 +285,14 @@ fn invalid_long(field: &'static str, token: &[u8]) -> ContributeSetupFormatError
 // ADDRESS: 00492ee0
 // PROTOTYPE: bool __cdecl AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
 //
+// IMPLEMENTED_OWNER: `CContributeSetup::add_to_byte_array` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CContributeSetup::LoadContributeSetup
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\contributesetup.cpp:43
@@ -294,6 +300,9 @@ fn invalid_long(field: &'static str, token: &[u8]) -> ContributeSetupFormatError
 // ADDRESS: 004937d0
 // PROTOTYPE: int __cdecl LoadContributeSetup(char * param_1)
 //
+// IMPLEMENTED_OWNER: `load_from_bytes` вместе с owned `CGame` reload path.
+// Exact `0x004937F4..0x00493808` очищает только item-vector до `rfOpen`;
+// отсутствующий ресурс возвращает `0`, каждый открытый stream — `1`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

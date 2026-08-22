@@ -181,6 +181,14 @@
 //! config использует этот же owner. Прежние HitLevel boolean/serialization
 //! callbacks и внешний snapshot удалены.
 //!
+//! `CContributeSetup` теперь owned `CGame`: dispatcher
+//! `0x004171CA..0x004172B1` читает `data/ContributeSetup.ini`, сохраняет bool
+//! load-result в legacy return-slot и при success + send-флаге публикует
+//! subtype `5`. Missing resource показывает `ERROR`, очищает только item-
+//! vector, но оставляет 11 scalar-параметров прежними, как exact loader.
+//! Initial-config читает тот же owner; внешние Contribute callbacks/snapshot
+//! удалены.
+//!
 //! `CDupliRegionSetup` создаётся и публикуется в `CGame` перед своим `Load`,
 //! как exact Init `0x0041901B..0x00419053`, и остаётся owned даже при
 //! load-failure до общего Release. Init читает точный
@@ -1141,6 +1149,9 @@ use crate::public::equipmentcomposelist::{
 };
 use crate::public::taozhuangsetup::{CTaoZhuangSetup, TaoZhuangSerializationBlock};
 use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelFormatError, HitLevelSerializeError};
+use crate::setup::contributesetup::{
+    CContributeSetup, ContributeSetupFormatError, ContributeSetupSerializeError,
+};
 use crate::public::mystringtable::MyStringTable;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
 use crate::public::wordsfilter::CWordsFilter;
@@ -4174,7 +4185,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     AttackCity,
     FourNationWar,
     IncrementShop,
-    Contribute,
     Prison,
     TimeToReturn,
     PreciousBox,
@@ -4222,7 +4232,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     FourNationWar,
     Quest,
     IncrementShop,
-    Contribute,
     Prison,
     PreciousBox,
     FairyExp,
@@ -5845,6 +5854,8 @@ pub(crate) enum WorldReloadBlock {
     TaoZhuangSerialization(TaoZhuangSerializationBlock),
     HitLevelFormat(HitLevelFormatError),
     HitLevelSerialization(HitLevelSerializeError),
+    ContributeFormat(ContributeSetupFormatError),
+    ContributeSerialization(ContributeSetupSerializeError),
     CountryWarOwnerRequired,
     CountryWar(CountryWarReloadBlock),
 }
@@ -6611,6 +6622,7 @@ pub(crate) struct CGame {
     ci_qing_setup: CCiQingSetup,
     tao_zhuang_setup: CTaoZhuangSetup,
     hit_level_setup: CHitLevelSetup,
+    contribute_setup: CContributeSetup,
     net_client: Option<CMyNetClient>,
     net_server: Option<CMyNetServer>,
     regions: BTreeMap<i32, WorldRegionAssignment>,
@@ -6697,6 +6709,10 @@ impl CGame {
         &self.hit_level_setup
     }
 
+    pub(crate) fn contribute_setup(&self) -> &CContributeSetup {
+        &self.contribute_setup
+    }
+
     pub(crate) fn dupli_region_setup(&self) -> &CDupliRegionSetup {
         self.dupli_region_setup
             .as_ref()
@@ -6717,6 +6733,7 @@ impl CGame {
             ci_qing_setup: CCiQingSetup::default(),
             tao_zhuang_setup: CTaoZhuangSetup::default(),
             hit_level_setup: CHitLevelSetup::default(),
+            contribute_setup: CContributeSetup::default(),
             net_client: None,
             net_server: None,
             regions: BTreeMap::new(),
@@ -7914,17 +7931,35 @@ impl CGame {
                 );
             }
             WorldReloadProfile::Contribute => {
-                self.reload_simple_serialized(
-                    context,
-                    WorldReloadBooleanOwner::Contribute,
-                    WorldReloadSerializationOwner::Contribute,
-                    5,
-                    b"Load ContributeSetup.ini...OK!",
-                    b"Load ContributeSetup.ini...FAILED!",
-                    send_to_game_servers,
-                    true,
-                    &mut legacy_result,
-                );
+                const PATH: &[u8] = b"data/ContributeSetup.ini";
+                let succeeded = match context.read_resource(PATH) {
+                    Some(source) => self
+                        .contribute_setup
+                        .load_from_bytes(&source)
+                        .map(|_| true)
+                        .map_err(WorldReloadBlock::ContributeFormat)?,
+                    None => {
+                        self.contribute_setup.clear_items();
+                        let mut message = b"file '".to_vec();
+                        message.extend_from_slice(PATH);
+                        message.extend_from_slice(b"' can't found!");
+                        context.notify_reload_operator(b"ERROR", &message);
+                        false
+                    }
+                };
+                legacy_result = i32::from(succeeded);
+                context.add_log_text(if succeeded {
+                    b"Load ContributeSetup.ini...OK!"
+                } else {
+                    b"Load ContributeSetup.ini...FAILED!"
+                });
+                if succeeded && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    self.contribute_setup
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::ContributeSerialization)?;
+                    self.send_reload_payload(5, &payload);
+                }
             }
             WorldReloadProfile::Prison => {
                 self.reload_simple_serialized(

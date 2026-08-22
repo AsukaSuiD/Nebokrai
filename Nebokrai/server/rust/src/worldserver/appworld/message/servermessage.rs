@@ -291,7 +291,7 @@ use crate::public::wordsfilter::WordsFilterSerializeError;
 use crate::setup::cbattlefairyexpconfig::{
     BattleFairyExpSerializeError, CBattleFairyExpConfig,
 };
-use crate::setup::contributesetup::{CContributeSetup, ContributeSetupSerializeError};
+use crate::setup::contributesetup::ContributeSetupSerializeError;
 use crate::setup::emotion::{CEmotion, EmotionSerializeError};
 use crate::setup::goodsdestructionconfig::{GoodsDestroySerializeError, GoodsDestroySetup};
 use crate::setup::gmlist::{CGMList, GmListSerializationBlock};
@@ -2997,10 +2997,9 @@ pub(crate) fn continue_game_server_increment_shop_configuration(
 pub(crate) fn continue_game_server_contribute_configuration(
     game: &CGame,
     socket_id: i32,
-    contribute: &CContributeSetup,
 ) -> WorldContributeConfigurationReport {
     let mut payload = Vec::new();
-    if let Err(error) = contribute.add_to_byte_array(&mut payload) {
+    if let Err(error) = game.contribute_setup().add_to_byte_array(&mut payload) {
         return WorldContributeConfigurationReport {
             delivery: None,
             completion: WorldContributeConfigurationCompletion::ContributeSetup(error),
