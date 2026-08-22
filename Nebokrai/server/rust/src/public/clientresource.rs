@@ -1,13 +1,20 @@
 //! Частично восстановленный read-side `CClientResource`.
 //!
 //! `GetPackage` и `IsFileExist` materialized поверх точных `FilesInfo` и
-//! `PackageArchive`: `BTreeMap<u32, _>` заменяет только STL-владение. Полный
-//! `LoadEx` остаётся RAW из-за неустановленного return эпилога; готовый
-//! registry принимает уже прочитанные `.ril` и `.pak` owners.
+//! `PackageArchive`: `BTreeMap<u32, _>` заменяет только STL-владение.
+//! `load_world_server_directory` воспроизводит доказанный успешный путь
+//! `LoadEx`: читает `FilesInfo.ril`, сворачивает package ID как `std::map` и
+//! затем открывает записи в key-order из `Package`. Неопределённый в EXE
+//! bool-эпилог `LoadEx` намеренно не выдан за Rust-result: filesystem и
+//! format ошибки выражены отдельным report-API.
 
-use std::{collections::BTreeMap, fs, io, path::Path};
+use std::{
+    collections::BTreeMap,
+    fs, io,
+    path::{Path, PathBuf},
+};
 
-use crate::public::filesinfo::{FileInfo, FilesInfo};
+use crate::public::filesinfo::{FileInfo, FilesInfo, FilesInfoParseError};
 use crate::public::package::PackageArchive;
 use crate::public::package::PackageReadError;
 
@@ -15,6 +22,42 @@ use crate::public::package::PackageReadError;
 pub(crate) enum ClientResourceReadError {
     MissingPackage { package_type: u32 },
     Package(PackageReadError),
+}
+
+/// Ошибка чтения `FilesInfo.ril` на safe disk-boundary, не legacy bool `LoadEx`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ClientResourceLoadError {
+    FileInfoOpen { path: PathBuf, kind: io::ErrorKind },
+    FileInfoParse(FilesInfoParseError),
+}
+
+/// Результат одной package-записи после того, как `std::map` уже свёл ID.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ClientResourcePackageLoad {
+    Loaded {
+        package_type: u32,
+        path: PathBuf,
+    },
+    SkippedEmptyName {
+        package_type: u32,
+    },
+    OpenFailed {
+        package_type: u32,
+        path: PathBuf,
+        kind: io::ErrorKind,
+    },
+    ParseFailed {
+        package_type: u32,
+        path: PathBuf,
+        source: PackageReadError,
+    },
+}
+
+/// Наблюдаемый ход read-side `LoadEx` без ложного отображения его bool-epilogue.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ClientResourceLoadReport {
+    pub(crate) resource: ClientResource,
+    pub(crate) packages: Vec<ClientResourcePackageLoad>,
 }
 
 /// Связанный read-side owner одного World resource набора.
@@ -31,6 +74,73 @@ impl ClientResource {
             files_info,
             packages,
         }
+    }
+
+    /// Загружает новый World resource owner из exact `cwd` layout.
+    ///
+    /// `CGame::LoadServerResource` всегда создаёт новый `CClientResource`, так
+    /// что здесь нет старых map-записей между вызовами. После успешного `.ril`
+    /// пути `LoadEx` сначала строит `std::map` по package ID: дубликат ID
+    /// заменяет прежнее имя, а `LoadPackage(false)` идёт в sorted key-order.
+    /// Пустое имя пропускает `CPackage::Open`. Неоткрытый/повреждённый пакет
+    /// остаётся в report, а остальные пакеты продолжают обрабатываться — это
+    /// сохраняет порядок его side effects без unsafe `FILE*` lifetime.
+    pub(crate) fn load_world_server_directory(
+        root: &Path,
+    ) -> Result<ClientResourceLoadReport, ClientResourceLoadError> {
+        let file_info_path = root.join("FilesInfo.ril");
+        let file_info_bytes =
+            fs::read(&file_info_path).map_err(|error| ClientResourceLoadError::FileInfoOpen {
+                path: file_info_path.clone(),
+                kind: error.kind(),
+            })?;
+        let files_info = FilesInfo::from_ril(&file_info_bytes)
+            .map_err(ClientResourceLoadError::FileInfoParse)?;
+
+        // `map::operator[]` в exact `LoadEx` оставляет по одному последнему
+        // имени на ID. Последующий `LoadPackage` обходит именно этот map.
+        let package_names = files_info
+            .package_infos()
+            .iter()
+            .map(|info| (info.id, info.file_name.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let mut packages = BTreeMap::new();
+        let mut package_loads = Vec::with_capacity(package_names.len());
+        for (package_type, file_name) in package_names {
+            if file_name.is_empty() {
+                package_loads.push(ClientResourcePackageLoad::SkippedEmptyName { package_type });
+                continue;
+            }
+
+            let path = package_path(root, &file_name);
+            let bytes = match fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    package_loads.push(ClientResourcePackageLoad::OpenFailed {
+                        package_type,
+                        path,
+                        kind: error.kind(),
+                    });
+                    continue;
+                }
+            };
+            match PackageArchive::from_bytes(bytes) {
+                Ok(package) => {
+                    packages.insert(package_type, package);
+                    package_loads.push(ClientResourcePackageLoad::Loaded { package_type, path });
+                }
+                Err(source) => package_loads.push(ClientResourcePackageLoad::ParseFailed {
+                    package_type,
+                    path,
+                    source,
+                }),
+            }
+        }
+
+        Ok(ClientResourceLoadReport {
+            resource: Self::new(files_info, packages),
+            packages: package_loads,
+        })
     }
 
     /// Повторяет nullable `CClientResource::GetPackage`.
@@ -59,18 +169,34 @@ impl ClientResource {
 
     /// Достижимая package-ветвь `rfOpen`: loose-файлы здесь намеренно не
     /// выбираются, потому что их current-folder/open error owner отдельный.
-    pub(crate) fn read_packaged(&self, path: &[u8]) -> Result<Option<Vec<u8>>, ClientResourceReadError> {
+    pub(crate) fn read_packaged(
+        &self,
+        path: &[u8],
+    ) -> Result<Option<Vec<u8>>, ClientResourceReadError> {
         let mut normalized = path.to_vec();
         for byte in &mut normalized {
             byte.make_ascii_lowercase();
-            if *byte == b'/' { *byte = b'\\'; }
+            if *byte == b'/' {
+                *byte = b'\\';
+            }
         }
-        if normalized.first() != Some(&b'\\') { normalized.insert(0, b'\\'); }
-        let Some(info) = self.files_info.file_info_by_text(&normalized) else { return Ok(None); };
-        if info.package_type() & 1 != 0 { return Ok(None); }
-        let package = self.package(info.package_type())
-            .ok_or(ClientResourceReadError::MissingPackage { package_type: info.package_type() })?;
-        package.extract_decoded(&normalized).map_err(ClientResourceReadError::Package)
+        if normalized.first() != Some(&b'\\') {
+            normalized.insert(0, b'\\');
+        }
+        let Some(info) = self.files_info.file_info_by_text(&normalized) else {
+            return Ok(None);
+        };
+        if info.package_type() & 1 != 0 {
+            return Ok(None);
+        }
+        let package =
+            self.package(info.package_type())
+                .ok_or(ClientResourceReadError::MissingPackage {
+                    package_type: info.package_type(),
+                })?;
+        package
+            .extract_decoded(&normalized)
+            .map_err(ClientResourceReadError::Package)
     }
 
     /// Loose fallback `rfOpen` для absent index либо установленного bit 0.
@@ -78,14 +204,38 @@ impl ClientResource {
         let mut normalized = path.to_vec();
         for byte in &mut normalized {
             byte.make_ascii_lowercase();
-            if *byte == b'/' { *byte = b'\\'; }
+            if *byte == b'/' {
+                *byte = b'\\';
+            }
         }
-        if normalized.first() != Some(&b'\\') { normalized.insert(0, b'\\'); }
-        if self.files_info.file_info_by_text(&normalized).is_some_and(|info| info.package_type() & 1 == 0) { return Ok(None); }
+        if normalized.first() != Some(&b'\\') {
+            normalized.insert(0, b'\\');
+        }
+        if self
+            .files_info
+            .file_info_by_text(&normalized)
+            .is_some_and(|info| info.package_type() & 1 == 0)
+        {
+            return Ok(None);
+        }
         let mut file = root.to_path_buf();
-        for part in normalized[1..].split(|byte| *byte == b'\\') { if !part.is_empty() { file.push(String::from_utf8_lossy(part).as_ref()); } }
+        for part in normalized[1..].split(|byte| *byte == b'\\') {
+            if !part.is_empty() {
+                file.push(String::from_utf8_lossy(part).as_ref());
+            }
+        }
         fs::read(file).map(Some)
     }
+}
+
+/// Строит literal `cwd + "\\Package" + package file name` из `LoadPackage`.
+///
+/// PDB-вариант хранит путь как narrow `char`; текущий World resource-contract
+/// подтверждён для ASCII, поэтому lossy adapter ограничен только host-path
+/// boundary и не меняет byte keys `.ril`/`.pak` в памяти.
+fn package_path(root: &Path, file_name: &[u8]) -> PathBuf {
+    root.join("Package")
+        .join(String::from_utf8_lossy(file_name).as_ref())
 }
 
 // COMPONENT_VARIANT_BEGIN: ServerUpdate
@@ -252,7 +402,7 @@ impl ClientResource {
 
 // ============================================================================
 // FUNCTION: CClientResource::LoadPackage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED / RESULT_MAPPING_SPLIT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\clientresource.cpp:127
@@ -322,7 +472,7 @@ impl ClientResource {
 
 // ============================================================================
 // FUNCTION: CClientResource::LoadEx
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED / RESULT_MAPPING_SPLIT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\clientresource.cpp:259

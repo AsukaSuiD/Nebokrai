@@ -5,9 +5,11 @@
 //! копирование сжатого blob по `dwOffset/dwSize`. Это materialized ниже без
 //! `FILE*`, ручных буферов и read-after-short-read дефектов.
 //!
-//! `DeCompressData` (LZO) и `DeCompress` (zlib) остаются `UNKNOWN` (исследовательский декомпилят хранится локально):
-//! выбор/результат декомпрессора является следующей совместимой границей.
-//! Сырой C++ ниже остаётся доказательной заготовкой, а не Rust-реализацией.
+//! `DeCompressData` (LZO) и `DeCompress` (zlib) materialized через
+//! поддерживаемые Rust-библиотеки; сохраняются исходный выбор по bit 2 и
+//! размер output-buffer. Их legacy C return-code mapping не выдаётся за
+//! внешний bool: malformed data возвращается типизированной safe-ошибкой.
+//! Сырой C++ ниже остаётся доказательной заготовкой.
 
 use std::collections::BTreeMap;
 
@@ -221,7 +223,7 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 
 // ============================================================================
 // FUNCTION: DeCompressData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / RESULT_MAPPING_SPLIT
 // COMPONENT: ServerUpdate
 // ARTIFACT: GameServer/ServerUpdate.exe + GameServer/ServerUpdate.pdb
 // SOURCE: d:\йЈЋдє‘\fengyun_els\src\public\package.cpp:50
@@ -235,7 +237,7 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 
 // ============================================================================
 // FUNCTION: DeCompress
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / RESULT_MAPPING_SPLIT
 // COMPONENT: ServerUpdate
 // ARTIFACT: GameServer/ServerUpdate.exe + GameServer/ServerUpdate.pdb
 // SOURCE: d:\йЈЋдє‘\fengyun_els\src\public\package.cpp:66
@@ -901,7 +903,7 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 
 // ============================================================================
 // FUNCTION: DeCompressData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / RESULT_MAPPING_SPLIT
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\package.cpp:50
@@ -915,7 +917,7 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 
 // ============================================================================
 // FUNCTION: DeCompress
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / RESULT_MAPPING_SPLIT
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\package.cpp:66
@@ -965,7 +967,7 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 
 // ============================================================================
 // FUNCTION: DeCompressData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / RESULT_MAPPING_SPLIT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\package.cpp:50
@@ -979,7 +981,7 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 
 // ============================================================================
 // FUNCTION: DeCompress
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / RESULT_MAPPING_SPLIT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\package.cpp:66
