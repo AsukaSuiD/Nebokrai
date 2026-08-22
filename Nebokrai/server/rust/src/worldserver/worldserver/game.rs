@@ -228,6 +228,11 @@
 //! и только missing `index` повторно очищает partial result. После успеха
 //! CGame публикует его exact `0x24` wire.
 //!
+//! `PreciousBoxConf` читает `data/preciousboxconf.xml` в `_box_conf` и очищает
+//! также serializer map `_box`, как World EXE. В этом варианте не найдено
+//! XML→range materializer-а: reload подтверждённо посылает пустой `0x1E` wire,
+//! сохраняя подробные XML diagnostics и lookup исходных goods через owner context.
+//!
 //! `CBattleFairyProperty` аналогично остаётся внешним runtime owner-ом:
 //! `BattleFairyCombineConfig` читает `BattleFairyReleate/CombineConfig.ini`,
 //! не меняет старый compose-vector при missing resource и после успешного
@@ -1255,6 +1260,9 @@ use crate::setup::newskillmonsterlist::{
     NewSkillMonsterConf, NewSkillMonsterSerializeError,
 };
 use crate::setup::playerlist::{CPlayerList, PlayerListFormatError, PlayerListSerializeError};
+use crate::setup::preciousboxconf::{
+    PreciousBoxConf, PreciousBoxSerializeError,
+};
 use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};
 use crate::setup::regionrouter::RegionRouter;
 use crate::public::tools::{ini_decode, put_string_to_file};
@@ -4272,7 +4280,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     AttackCity,
     FourNationWar,
     TimeToReturn,
-    PreciousBox,
     GodsBattle,
 }
 
@@ -4304,7 +4311,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     VillageWar,
     FourNationWar,
     Quest,
-    PreciousBox,
     LingBao,
     GodsBattle,
 }
@@ -4358,6 +4364,8 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn da_kong_xiang_qian(&mut self) -> &mut CDaKongXiangQian;
     /// Ограничения товаров смены тела, общие для initial-config и reload wire.
     fn change_body_conf(&mut self) -> &mut CChangeBodyConf;
+    /// Raw XML state и отдельный serializer state PreciousBox.
+    fn precious_box_conf(&mut self) -> &mut PreciousBoxConf;
     /// Возвращает исходный 32-битный result; bool owners обязаны дать `0/1`.
     fn call_boolean_owner(&mut self, owner: WorldReloadBooleanOwner) -> u32;
     fn call_void_owner(&mut self, owner: WorldReloadVoidOwner);
@@ -5949,6 +5957,7 @@ pub(crate) enum WorldReloadBlock {
     FairyExpSerialization(BattleFairyExpSerializeError),
     DaKongSerialization(DaKongSerializeError),
     ChangeBodySerialization(ChangeBodySerializeError),
+    PreciousBoxSerialization(PreciousBoxSerializeError),
     BattleFairyCombineSerialization(BattleFairyComposeWireError),
     SynthesisSerialization(SynthesisSerializeError),
     EquipmentComposeSerialization(EquipmentComposeSerializeError),
@@ -8296,17 +8305,42 @@ impl CGame {
                 );
             }
             WorldReloadProfile::PreciousBox => {
-                self.reload_simple_serialized(
-                    context,
-                    WorldReloadBooleanOwner::PreciousBox,
-                    WorldReloadSerializationOwner::PreciousBox,
-                    0x1E,
-                    b"Load PreciousBoxConf.xml...OK!",
-                    b"Load PreciousBoxConf.xml...FAILED!",
-                    send_to_game_servers,
-                    true,
-                    &mut legacy_result,
-                );
+                const PATH: &[u8] = b"data/preciousboxconf.xml";
+                let source = context.read_resource(PATH);
+                // Убираем Rust-only mutable aliasing, не создавая копию owner state.
+                let mut owner = std::mem::take(context.precious_box_conf());
+                let load_result = owner.load_from_bytes(source.as_deref(), |original_name| {
+                    context.query_goods_id_by_original_name(original_name)
+                });
+                *context.precious_box_conf() = owner;
+                let loaded = match load_result {
+                    Ok(report) => {
+                        for diagnostic in report.diagnostics() {
+                            context.add_log_text(&diagnostic.log_payload());
+                        }
+                        true
+                    }
+                    Err(error) => {
+                        if let Some(diagnostic) = error.log_payload() {
+                            context.add_log_text(diagnostic);
+                        }
+                        false
+                    }
+                };
+                context.add_log_text(if loaded {
+                    b"Load PreciousBoxConf.xml...OK!"
+                } else {
+                    b"Load PreciousBoxConf.xml...FAILED!"
+                });
+                if loaded && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    context
+                        .precious_box_conf()
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::PreciousBoxSerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(0x1E, &payload);
+                }
             }
             WorldReloadProfile::FairyExp => {
                 const PATH: &[u8] = b"data/fairyexp.xml";
