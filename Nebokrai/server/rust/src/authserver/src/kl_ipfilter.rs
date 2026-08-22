@@ -28,17 +28,12 @@
 //! allow-list разрешает найденное совпадение, deny-list — его отсутствие.
 //!
 //! `load` читал whitespace-token до EOF и добавлял их в исходном порядке.
-//! Canonical token разбирается узким байтовым compatibility-layer: ровно четыре
-//! десятичных octet `0..255`, включая ведущие нули. `Ipv4Addr::from_str` здесь
-//! не подходит, потому что его грамматика ведущих нулей не является старым
-//! `atoi`-контрактом; отдельная parser-библиотека для четырёх bounded octet не
-//! даёт совместимой гарантии лучше этого локального слоя.
-//!
-//! BLOCKED_MISSING_FACT: исходный `atoi` также принимал знак и числовой prefix,
-//! а затем сужал результат до `unsigned char`; overflow является CRT-границей.
-//! Неканонический token поэтому возвращает отдельную неизвестность, а не
-//! автоматически выбранную реакцию оригинала. Ошибка чтения после успешного
-//! открытия также не воспроизводит частично заполненный `std::list`.
+//! Token разбирается узким байтовым compatibility-layer: ровно четыре части,
+//! каждая принимает знак и десятичный prefix как `atoi`, затем безопасно
+//! сужается до младшего byte. Переполнение насыщается в signed `i32` до
+//! сужения: это детерминированная замена внутренней CRT/UB-границы, не имеющей
+//! необходимого сетевого эффекта. Ошибка чтения после успешного открытия также
+//! не воспроизводит частично заполненный `std::list`.
 
 use std::error::Error;
 use std::fmt;
@@ -46,13 +41,13 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-/// Ошибка чтения либо неразрешённой CRT-границы списка IP-шаблонов.
+/// Ошибка чтения либо структурно некорректной записи списка IP-шаблонов.
 #[derive(Debug)]
 pub(crate) enum IpFilterLoadError {
     /// Файл не удалось прочитать целиком.
     Io(io::Error),
-    /// Token не принадлежит доказанной canonical-грамматике.
-    LegacyAtoiBoundaryUnknown {
+    /// Token содержит не четыре разделённые точками части.
+    InvalidPattern {
         /// Номер token с нуля без раскрытия его байтов в ошибке.
         token_index: usize,
     },
@@ -62,9 +57,9 @@ impl fmt::Display for IpFilterLoadError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => write!(formatter, "не удалось прочитать список IP: {error}"),
-            Self::LegacyAtoiBoundaryUnknown { token_index } => write!(
+            Self::InvalidPattern { token_index } => write!(
                 formatter,
-                "IP-token {token_index} требует не восстановленной семантики MSVC atoi"
+                "IP-token {token_index} не содержит ровно четыре части"
             ),
         }
     }
@@ -74,7 +69,7 @@ impl Error for IpFilterLoadError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
-            Self::LegacyAtoiBoundaryUnknown { .. } => None,
+            Self::InvalidPattern { .. } => None,
         }
     }
 }
@@ -87,8 +82,7 @@ pub(crate) fn load_ip_patterns(path: impl AsRef<Path>) -> Result<Vec<[u8; 4]>, I
         .filter(|token| !token.is_empty())
         .enumerate()
         .map(|(token_index, token)| {
-            parse_canonical_pattern(token)
-                .ok_or(IpFilterLoadError::LegacyAtoiBoundaryUnknown { token_index })
+            parse_legacy_pattern(token).ok_or(IpFilterLoadError::InvalidPattern { token_index })
         })
         .collect()
 }
@@ -123,17 +117,44 @@ impl<const ALLOW_MATCH: bool> IpFilter<ALLOW_MATCH> {
     }
 }
 
-fn parse_canonical_pattern(token: &[u8]) -> Option<[u8; 4]> {
+fn parse_legacy_pattern(token: &[u8]) -> Option<[u8; 4]> {
     let mut result = [0; 4];
     let mut parts = token.split(|byte| *byte == b'.');
     for octet in &mut result {
         let part = parts.next()?;
-        if part.is_empty() || !part.iter().all(u8::is_ascii_digit) {
-            return None;
-        }
-        *octet = part.iter().try_fold(0_u8, |value, digit| {
-            value.checked_mul(10)?.checked_add(*digit - b'0')
-        })?;
+        *octet = legacy_atoi(part) as u8;
     }
     parts.next().is_none().then_some(result)
+}
+
+fn legacy_atoi(input: &[u8]) -> i32 {
+    let mut cursor = 0;
+    while input.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+        cursor += 1;
+    }
+    let negative = match input.get(cursor) {
+        Some(b'-') => {
+            cursor += 1;
+            true
+        }
+        Some(b'+') => {
+            cursor += 1;
+            false
+        }
+        _ => false,
+    };
+    let mut magnitude = 0_i64;
+    let mut has_digit = false;
+    while let Some(digit) = input.get(cursor).filter(|byte| byte.is_ascii_digit()) {
+        has_digit = true;
+        magnitude = magnitude
+            .saturating_mul(10)
+            .saturating_add(i64::from(*digit - b'0'));
+        cursor += 1;
+    }
+    if !has_digit {
+        return 0;
+    }
+    let signed = if negative { -magnitude } else { magnitude };
+    signed.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }

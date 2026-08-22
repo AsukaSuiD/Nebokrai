@@ -2,10 +2,9 @@
 //! `nets/netauth/mynetserverclient_auth.cpp`.
 //!
 //! Статус владельца: `IMPLEMENTED` для constructor state, `OnAccept`,
-//! `OnClose` и корректного/неполного `OnReceive` envelope. Malformed-границы,
-//! на которых исходный x86 уходил в небезопасную арифметику, оставлены
-//! локальными ошибками `BLOCKED_MISSING_FACT`, а не объявлены исходным
-//! fail-closed.
+//! `OnClose` и полного safe `OnReceive` envelope. Malformed-границы, на которых
+//! исходный x86 уходил в небезопасную арифметику, детерминированно очищают
+//! accumulator и возвращают локальную ошибку без воспроизведения UB.
 //!
 //! Точная пара: `AuthServer/authserver.exe + AuthServer/authserver.pdb`;
 //! SHA-256 EXE
@@ -58,8 +57,8 @@ pub(crate) enum AuthReceiveError {
     LengthChecksumMismatch,
     /// CRC нормализованного внутреннего сообщения не совпал; вход отброшен.
     MessageChecksumMismatch,
-    /// Безопасная реакция оригинала для этой длины envelope не доказана.
-    EnvelopeLengthReactionUnknown(u32),
+    /// Длина envelope меньше header либо не представима положительным long.
+    InvalidEnvelopeLength(u32),
     /// Внутренний Auth message-owner отказался создавать сообщение.
     CreateMessage(CreateMessageError),
 }
@@ -148,13 +147,8 @@ impl CMyNetServerClientAuth {
             };
             let minimum_length = SERVER_ENVELOPE_LEN + MESSAGE_HEADER_LEN;
             if total_length_usize < minimum_length || total_length > i32::MAX as u32 {
-                // BLOCKED_MISSING_FACT: Auth RVA 0x00015C10 смешивает signed
-                // compare с `uint total_len`, затем вычисляет `len - 12` и
-                // передаёт его фабрике. Для <28 и sign-bit реакция процесса
-                // требует отдельной машинной проверки.
-                return Err(AuthReceiveError::EnvelopeLengthReactionUnknown(
-                    total_length,
-                ));
+                client.discard_receive_data();
+                return Err(AuthReceiveError::InvalidEnvelopeLength(total_length));
             }
             if frame.len() < total_length_usize {
                 break;

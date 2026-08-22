@@ -2,10 +2,9 @@
 //! `nets/netauth/message.cpp`.
 //!
 //! Статус владельца: `IMPLEMENTED` для 16-байтового сообщения, runtime-
-//! metadata, несжатого create-пути, Auth-таблицы обработчиков и отправки через
-//! `CServer::SendBySocketID`. Один элемент таблицы `0x10F101` остаётся локальным
-//! `BLOCKED_MISSING_FACT`: экспорт связывает его с `operator_delete`, но
-//! наблюдаемое назначение и достижимость такого handler не доказаны.
+//! metadata, несжатого create-пути, полной Auth-таблицы обработчиков и отправки
+//! через `CServer::SendBySocketID`. Exact EXE подтверждает, что элемент
+//! `0x10F101` указывает на пустой handler `0x004117E0` (`ret`).
 //!
 //! Точная пара: `AuthServer/authserver.exe + AuthServer/authserver.pdb`;
 //! SHA-256 EXE
@@ -24,8 +23,9 @@
 //! обнуляет socket ID, map ID, IPv4 и receive tick. Create-путь буквально
 //! копирует четыре слова входного header, затем нормализует длину по реально
 //! добавленному payload. Вход короче 16 bytes в оригинале приводит к чтению за
-//! границей и unsigned-underflow `len - 16`; безопасный Rust выделяет эту
-//! неизвестную реакцию отдельной ошибкой, не называя её исходным fail-closed.
+//! границей и unsigned-underflow `len - 16`; это внутренний memory defect без
+//! необходимого wire-эффекта, поэтому Rust детерминированно отклоняет такой
+//! буфер до чтения header.
 //!
 //! `GetStr` очищает результат, читает bytes до первого NUL и включает NUL в
 //! движение курсора. Если NUL до конца сообщения нет, результат снова
@@ -55,15 +55,15 @@ use crate::public::crc32static::data_crc32;
 
 const MESSAGE_HEADER_LEN: usize = 16;
 const SERVER_ENVELOPE_LEN: usize = 12;
-const BLOCKED_DELETE_HANDLER_OPCODE: u32 = 0x0010_F101;
+const NOOP_HANDLER_OPCODE: u32 = 0x0010_F101;
 
 /// Ошибка восстановления Auth-сообщения из внутреннего wire-буфера.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum CreateMessageError {
-    /// Исходный код разыменовывал header и вычитал 16 из нулевой длины.
-    EmptyInputReactionUnknown,
-    /// Реакция C++ на ненулевой буфер короче header не была безопасно задана.
-    HeaderTooShortReactionUnknown,
+    /// Внутренний wire-буфер пуст и не содержит обязательного header.
+    EmptyInput,
+    /// Внутренний wire-буфер короче обязательного header.
+    HeaderTooShort { actual: usize },
     /// Размер не представим 32-битным `unsigned long` исходного API.
     InputOutsideLegacyRange,
 }
@@ -87,11 +87,9 @@ impl fmt::Display for SendMessageError {
 
 impl std::error::Error for SendMessageError {}
 
-/// Локально не закрытая ветка исходной таблицы обработчиков.
+/// Ошибка достигнутого Auth-dispatch.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum DispatchError {
-    /// Для `0x10F101` экспорт показывает `operator_delete`, но смысл не доказан.
-    DeleteHandlerAt10f101Unresolved,
     /// Исходящий ответ handler’а не представим в legacy wire-диапазоне.
     OutgoingMessage(SendMessageError),
 }
@@ -99,9 +97,6 @@ pub(crate) enum DispatchError {
 impl fmt::Display for DispatchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::DeleteHandlerAt10f101Unresolved => {
-                formatter.write_str("назначение обработчика opcode 0x10F101 ещё не восстановлено")
-            }
             Self::OutgoingMessage(error) => {
                 write!(
                     formatter,
@@ -116,7 +111,6 @@ impl std::error::Error for DispatchError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::OutgoingMessage(error) => Some(error),
-            Self::DeleteHandlerAt10f101Unresolved => None,
         }
     }
 }
@@ -199,17 +193,13 @@ impl CMessage {
         recv_time_ms: u32,
     ) -> Result<Self, CreateMessageError> {
         if wire.is_empty() {
-            // BLOCKED_MISSING_FACT: Auth RVA 0x00013760 не проверяет pointer
-            // или длину перед чтением header и unsigned `len - 16`.
-            return Err(CreateMessageError::EmptyInputReactionUnknown);
+            return Err(CreateMessageError::EmptyInput);
         }
         if wire.len() > u32::MAX as usize {
             return Err(CreateMessageError::InputOutsideLegacyRange);
         }
         if wire.len() < MESSAGE_HEADER_LEN {
-            // BLOCKED_MISSING_FACT: Auth RVA 0x00013760 читает header[0..16]
-            // и вызывает Add(wire + 16, len - 16) без этой проверки.
-            return Err(CreateMessageError::HeaderTooShortReactionUnknown);
+            return Err(CreateMessageError::HeaderTooShort { actual: wire.len() });
         }
 
         let header = wire[..MESSAGE_HEADER_LEN]
@@ -322,13 +312,10 @@ impl CMessage {
         sender: &ServerCommandHandle,
     ) -> Result<i32, DispatchError> {
         let opcode = self.message_type() as u32;
-        if opcode == BLOCKED_DELETE_HANDLER_OPCODE {
-            // BLOCKED_MISSING_FACT: Auth RVA 0x000141A0 записывает для
-            // `0x10F101` адрес, распознанный как `operator_delete`. `CGame`
-            // после `Run` всё равно виртуально уничтожает сообщение, поэтому
-            // буквальное освобождение означало бы double-free. До точечной
-            // проверки call target и достижимости Rust не придумывает handler.
-            return Err(DispatchError::DeleteHandlerAt10f101Unresolved);
+        if opcode == NOOP_HANDLER_OPCODE {
+            // Auth `InitMsgFuncPool` 0x00414252..0x00414268 связывает opcode с
+            // exact target 0x004117E0; тело target — один `ret`.
+            return Ok(1);
         }
         if let Some(kind) = AuthMessageKind::from_opcode(opcode) {
             handler.handle(kind, self, sender)?;

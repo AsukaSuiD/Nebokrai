@@ -198,7 +198,7 @@ pub(crate) enum AuthRuntimeError {
     Host(ServerHostError),
     /// Управляемая Tokio-задача была отменена извне либо завершилась panic.
     Task(JoinError),
-    /// Message dispatch достиг локально не восстановленного обработчика.
+    /// Message dispatch не смог сформировать подтверждённый исходящий ответ.
     Dispatch(DispatchError),
     /// Исходящее Auth-сообщение не представимо в legacy wire-диапазоне.
     MessageBuild(SendMessageError),
@@ -216,7 +216,7 @@ impl fmt::Display for AuthRuntimeError {
             }
             Self::Dispatch(error) => write!(
                 formatter,
-                "обработка Auth-сообщения остановлена на неизвестном пути: {error}"
+                "обработка Auth-сообщения остановлена ошибкой ответа: {error}"
             ),
             Self::MessageBuild(error) => {
                 write!(formatter, "не удалось построить Auth-сообщение: {error}")
