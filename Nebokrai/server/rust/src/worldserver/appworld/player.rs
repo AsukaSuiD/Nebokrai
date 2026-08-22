@@ -9,6 +9,7 @@
 //! `0x0005EA00`,
 //! применение binary DB-полей из `CRsPlayer::Load*Field`,
 //! `CPlayer::UpdateFactionInfo` RVA `0x0005C1D0`,
+//! `CPlayer::LoadData` RVA `0x0005E390`,
 //! `CPlayer::LoadDefaultProperty` RVA `0x0005E560`,
 //! `CPlayer::ClearOwnedRegion` RVA `0x00033B50` и
 //! `CPlayer::AddOwnedRegion` RVA `0x0005DD10`
@@ -304,6 +305,12 @@
 //! только в WorldServer encoder-варианте. Обязательный завершающий
 //! `UpdateProperty` не входит в suffix и реализован отдельной следующей
 //! owner-границей.
+//! `LoadData` теперь также замкнут через явный `PlayerLoadDataOwner`: только
+//! после его `true` последовательно пересчитываются base RP, recovery из
+//! player map, level-upgrade, полный property, clamp текущего RP, graphics ID
+//! и player speed. DB transport остаётся ответственностью `CRsPlayer`, но
+//! process-global singleton больше не скрывает границу этого единственного
+//! вызова.
 //!
 //! `UpdateProperty` RVA `0x0005AFC0` теперь имеет статус
 //! `VERIFIED_DISASSEMBLY, IMPLEMENTED`, поэтому полные
@@ -730,6 +737,14 @@ struct PlayerProperty {
 }
 
 impl PlayerProperty {
+    fn read_u16(&self, offset: usize) -> u16 {
+        u16::from_le_bytes(
+            self.wire[offset..offset + 2]
+                .try_into()
+                .expect("PDB-offset находится внутри tagProperty"),
+        )
+    }
+
     fn read_u32(&self, offset: usize) -> u32 {
         u32::from_le_bytes(
             self.wire[offset..offset + 4]
@@ -868,6 +883,32 @@ pub(crate) struct PlayerPropertyCoefficients {
     pub(crate) int_to_element: [f32; 3],
     pub(crate) int_to_max_mp: [f32; 3],
     pub(crate) int_to_resistant: [f32; 3],
+}
+
+/// DB-владелец единственного вызова `CRsPlayer::LoadPlayer(this)`.
+pub(crate) trait PlayerLoadDataOwner {
+    type Block;
+
+    async fn load_player(&mut self, player: &mut CPlayer) -> Result<bool, Self::Block>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PlayerLoadDataReport {
+    pub(crate) base_max_rp: u16,
+    pub(crate) player_property_key: u32,
+    pub(crate) player_property_inserted: bool,
+    pub(crate) upgrade_applied: bool,
+    pub(crate) rp_clamped: bool,
+    pub(crate) graphics_id: i32,
+    pub(crate) player_speed: f32,
+}
+
+#[derive(Debug)]
+pub(crate) enum PlayerLoadDataOutcome<LoadBlock> {
+    ReturnedFalse,
+    Loaded(PlayerLoadDataReport),
+    BlockedDatabase(LoadBlock),
+    BlockedProperty(PlayerCodecError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3273,6 +3314,89 @@ impl CPlayer {
         Ok(true)
     }
 
+    /// Выполняет exact post-load часть `CPlayer::LoadData` после DB-owner-а.
+    pub(crate) async fn load_data<L: PlayerLoadDataOwner>(
+        &mut self,
+        loader: &mut L,
+        player_list: &mut CPlayerList,
+        globe_setup: &GlobeSetupSnapshot,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> PlayerLoadDataOutcome<L::Block> {
+        match loader.load_player(self).await {
+            Ok(false) => return PlayerLoadDataOutcome::ReturnedFalse,
+            Err(block) => return PlayerLoadDataOutcome::BlockedDatabase(block),
+            Ok(true) => {}
+        }
+
+        let occupation = self.base_property.read_u8(BASE_PROPERTY_OCCUPATION_OFFSET);
+        let level = self.base_property.read_u8(BASE_PROPERTY_LEVEL_OFFSET);
+        let sex = self.base_property.read_u8(BASE_PROPERTY_SEX_OFFSET);
+
+        let base_max_rp = globe_setup.base_max_rp(occupation, level);
+        self.base_property
+            .write_u16(BASE_PROPERTY_MAX_RP_OFFSET, base_max_rp);
+
+        let PlayerCreationPropertiesLookup {
+            key: player_property_key,
+            inserted: player_property_inserted,
+            properties,
+        } = player_list.creation_properties(sex, occupation);
+        self.base_property.write_u16(
+            BASE_PROPERTY_HP_RECOVER_SPEED_OFFSET,
+            properties.base_hp_recover_speed,
+        );
+        self.base_property.write_u16(
+            BASE_PROPERTY_MP_RECOVER_SPEED_OFFSET,
+            properties.base_mp_recover_speed,
+        );
+
+        let upgrade = player_list.properties_upgrade(occupation, level);
+        let upgrade_applied = upgrade.is_some();
+        if let Some(upgrade) = upgrade {
+            self.base_property
+                .write_u32(BASE_PROPERTY_MAX_HP_OFFSET, upgrade.base_maximum_hp);
+            self.base_property
+                .write_u32(BASE_PROPERTY_MAX_MP_OFFSET, upgrade.base_maximum_mp);
+            self.base_property
+                .write_u32(BASE_PROPERTY_STR_OFFSET, upgrade.base_strength);
+            self.base_property
+                .write_u32(BASE_PROPERTY_DEX_OFFSET, upgrade.base_dexterity);
+            self.base_property
+                .write_u32(BASE_PROPERTY_CON_OFFSET, upgrade.base_constitution);
+            self.base_property
+                .write_u32(BASE_PROPERTY_INT_OFFSET, upgrade.base_intelligence);
+            self.base_property
+                .write_u16(BASE_PROPERTY_BURDEN_OFFSET, upgrade.base_burden);
+        }
+
+        if let Err(block) = self.update_property(coefficients) {
+            return PlayerLoadDataOutcome::BlockedProperty(block);
+        }
+
+        let maximum_rp = self.property.read_u16(PROPERTY_MAX_RP_OFFSET);
+        let current_rp = self.base_property.read_u16(BASE_PROPERTY_RP_OFFSET);
+        let rp_clamped = maximum_rp < current_rp;
+        if rp_clamped {
+            self.base_property
+                .write_u16(BASE_PROPERTY_RP_OFFSET, maximum_rp);
+        }
+
+        let graphics_id = i32::from(sex) + 1 + i32::from(occupation) * 2;
+        self.move_shape_base.set_graphics_id(graphics_id);
+        let player_speed = globe_setup.player_speed();
+        self.move_shape_base.set_speed(player_speed);
+
+        PlayerLoadDataOutcome::Loaded(PlayerLoadDataReport {
+            base_max_rp,
+            player_property_key,
+            player_property_inserted,
+            upgrade_applied,
+            rp_clamped,
+            graphics_id,
+            player_speed,
+        })
+    }
+
     /// Передаёт полный снимок игрока DB-owner-у и возвращает его точный итог.
     ///
     /// `snapshot` должен быть материализован из этой же player-сущности.
@@ -3908,7 +4032,7 @@ fn read_player_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CPlayer::LoadData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:145
@@ -3916,6 +4040,8 @@ fn read_player_array<const N: usize>(
 // ADDRESS: 0045e390
 // PROTOTYPE: bool __thiscall LoadData(void)
 //
+// IMPLEMENTED_OWNER: `CPlayer::load_data` выше сохраняет exact DB/post-load
+// порядок через явные setup-owner-ы.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

@@ -1,7 +1,8 @@
 //! Глобальный gameplay snapshot исторического Miracle.
 //!
-//! Статус World `CGlobeSetup::AddToByteArray` RVA `0x00033470`:
-//! `IMPLEMENTED`; loaders, accessors и Game decoder side effects ниже остаются
+//! Статус World `CGlobeSetup::AddToByteArray` RVA `0x00033470` и
+//! `GetBaseMaxRp` RVA `0x0002EFA0`: `IMPLEMENTED`; loaders, остальные accessors
+//! и Game decoder side effects ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
@@ -32,6 +33,10 @@
 //! byte-count с signed word в самом начале `m_stSetup` через `CMP AX`/`JL`.
 //! Поэтому misleading `btMaxCharactersNum` публикуется как `i16` по `+0`, а
 //! не как Rust byte: отрицательная настройка остаётся немедленным отказом.
+//! `GetBaseMaxRp` exact `0x0042EFA0..0x0042EFD8` читает static-адреса
+//! `0x006BA070/72/74/76`; относительно `m_stSetup 0x006B9C80` это PDB-поля
+//! `+0x3F0/+0x3F2/+0x3F4/+0x3F6`. Ветка сохраняет необычный общий случай
+//! переставленных level-порогов, а occupation вне нуля сразу возвращает `0`.
 
 use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 
@@ -46,6 +51,10 @@ const SPECIAL_STRING_LENGTH: usize = 0x40;
 const DELETION_DAYS_OFFSET: usize = 0x51C;
 const TOTAL_JING_LI_DAN_COUNT_OFFSET: usize = 0x1110;
 const MAXIMUM_CHARACTERS_OFFSET: usize = 0;
+const BASE_RP_LEVEL_1_OFFSET: usize = 0x3F0;
+const BASE_RP_LEVEL_2_OFFSET: usize = 0x3F2;
+const BASE_MAX_RP_LEVEL_1_OFFSET: usize = 0x3F4;
+const BASE_MAX_RP_LEVEL_2_OFFSET: usize = 0x3F6;
 const PLAYER_SPEED_OFFSET: usize = 0x7F8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -86,6 +95,31 @@ impl GlobeSetupSnapshot {
                 .try_into()
                 .expect("PDB-offset находится внутри globe snapshot"),
         )
+    }
+
+    /// Повторяет exact `GetBaseMaxRp`: RP есть только у occupation `0`.
+    pub(crate) fn base_max_rp(&self, occupation: u8, level: u8) -> u16 {
+        if occupation != 0 {
+            return 0;
+        }
+        let read_u16 = |offset| {
+            u16::from_le_bytes(
+                self.bytes[offset..offset + 2]
+                    .try_into()
+                    .expect("PDB-offset находится внутри globe snapshot"),
+            )
+        };
+        let level = u16::from(level);
+        let level_1 = read_u16(BASE_RP_LEVEL_1_OFFSET);
+        let level_2 = read_u16(BASE_RP_LEVEL_2_OFFSET);
+        if level < level_1 {
+            if level < level_2 {
+                return 0;
+            }
+        } else if level < level_2 {
+            return read_u16(BASE_MAX_RP_LEVEL_1_OFFSET);
+        }
+        read_u16(BASE_MAX_RP_LEVEL_2_OFFSET)
     }
 
     /// Возвращает C-string prefix одного exact `szCountryName[5][0x40]`.
@@ -159,7 +193,7 @@ impl GlobeSetupSnapshot {
 
 // ============================================================================
 // FUNCTION: CGlobeSetup::GetBaseMaxRp
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\globesetup.cpp:865
@@ -167,6 +201,7 @@ impl GlobeSetupSnapshot {
 // ADDRESS: 0041d610
 // PROTOTYPE: ushort __cdecl GetBaseMaxRp(uchar param_1, uchar param_2)
 //
+// IMPLEMENTED_OWNER: `GlobeSetupSnapshot::base_max_rp` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -201,7 +236,7 @@ impl GlobeSetupSnapshot {
 
 // ============================================================================
 // FUNCTION: CGlobeSetup::GetBaseMaxRp
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\globesetup.cpp:865
@@ -209,6 +244,7 @@ impl GlobeSetupSnapshot {
 // ADDRESS: 0042efa0
 // PROTOTYPE: ushort __cdecl GetBaseMaxRp(uchar param_1, uchar param_2)
 //
+// IMPLEMENTED_OWNER: `GlobeSetupSnapshot::base_max_rp` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

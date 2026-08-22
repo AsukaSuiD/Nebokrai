@@ -1,7 +1,8 @@
 //! Базовые свойства игрока и progression setup исторического Miracle.
 //!
-//! Статус World `CPlayerList::AddToByteArray` RVA `0x0002C4D0`:
-//! `IMPLEMENTED`; loaders, lookup-ы и Game decoder ниже остаются
+//! Статус World `CPlayerList::AddToByteArray` RVA `0x0002C4D0` и
+//! `GetPropertiesUpgrade` RVA `0x0002CAE0`: `IMPLEMENTED`; loaders, остальные
+//! lookup-ы и Game decoder ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -31,6 +32,10 @@
 //! `+0/+2/+8` внутри старого list-value и list-order обход. Typed record и
 //! ordered `Vec` сохраняют значения без копирования MSVC string layout.
 //! Отсутствующий ключ `sex + occupation*2` по-прежнему вставляет нулевую запись.
+//! `GetPropertiesUpgrade` exact `0x0042CAE0..0x0042CB6C` выбирает три static map
+//! только для occupation `0/1/2`, передаёт `find` второй аргумент level и
+//! копирует найденный mapped value; отсутствующий level либо иной occupation
+//! возвращает `0` без вставки.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -154,6 +159,21 @@ impl CPlayerList {
             inserted,
             properties,
         }
+    }
+
+    /// Повторяет `GetPropertiesUpgrade`: выбор map по occupation и find level.
+    pub(crate) fn properties_upgrade(
+        &self,
+        occupation: u8,
+        level: u8,
+    ) -> Option<&PlayerPropertiesUpgrade> {
+        let upgrades = match occupation {
+            0 => &self.fighter_upgrades,
+            1 => &self.hunter_upgrades,
+            2 => &self.taoist_upgrades,
+            _ => return None,
+        };
+        upgrades.get(&u32::from(level))
     }
 
     /// Дописывает exact пять секций `CPlayerList::AddToByteArray`.
@@ -320,7 +340,7 @@ fn append_legacy_string(destination: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CPlayerList::GetPropertiesUpgrade
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\playerlist.cpp:396
@@ -328,6 +348,7 @@ fn append_legacy_string(destination: &mut Vec<u8>, value: &[u8]) {
 // ADDRESS: 004c6560
 // PROTOTYPE: int __cdecl GetPropertiesUpgrade(eOccupation param_1, ulong param_2, tagPropertiesUpgrade * param_3)
 //
+// IMPLEMENTED_OWNER: `CPlayerList::properties_upgrade` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -524,7 +545,7 @@ fn append_legacy_string(destination: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CPlayerList::GetPropertiesUpgrade
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\playerlist.cpp:396
@@ -532,6 +553,7 @@ fn append_legacy_string(destination: &mut Vec<u8>, value: &[u8]) {
 // ADDRESS: 0042cae0
 // PROTOTYPE: int __cdecl GetPropertiesUpgrade(eOccupation param_1, ulong param_2, tagPropertiesUpgrade * param_3)
 //
+// IMPLEMENTED_OWNER: `CPlayerList::properties_upgrade` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
