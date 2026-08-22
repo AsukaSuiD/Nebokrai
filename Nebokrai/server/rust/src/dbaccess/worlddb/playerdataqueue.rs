@@ -21,8 +21,9 @@
 //! назначает ему двадцатибайтовую нормализацию.
 //!
 //! Старые `CRITICAL_SECTION + std::deque<tagPlayerDataQueue*>` заменены
-//! `parking_lot::Mutex<VecDeque<_>>`. `GetSize` и `PopPlayerData` по-прежнему
-//! берут блокировку независимо: поэтому snapshot может быть ненулевым, а
+//! cloneable `Arc<parking_lot::Mutex<VecDeque<_>>>`; `Arc` отделяет только
+//! lifetime общей worker/main FIFO от `CGame`. `GetSize` и `PopPlayerData`
+//! по-прежнему берут блокировку независимо: поэтому snapshot может быть ненулевым, а
 //! последующий pop вернуть `None`, если другой consumer успел забрать запись.
 //! FIFO-порядок и передача владения при pop сохранены. Typed push не может
 //! получить старый null record и потому соответствует только исходной
@@ -37,6 +38,7 @@
 //! порядок без ручных STL/allocator/destructor internals.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 
@@ -88,15 +90,16 @@ impl PlayerDataQueueEntry {
     }
 }
 
-/// Потокобезопасная FIFO загруженных player-record-ов.
+/// Потокобезопасная cloneable FIFO загруженных player-record-ов.
+#[derive(Clone)]
 pub(crate) struct CPlayerDataQueue {
-    entries: Mutex<VecDeque<PlayerDataQueueEntry>>,
+    entries: Arc<Mutex<VecDeque<PlayerDataQueueEntry>>>,
 }
 
 impl CPlayerDataQueue {
-    pub(crate) const fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            entries: Mutex::new(VecDeque::new()),
+            entries: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -138,7 +141,7 @@ impl CPlayerDataQueue {
 
 // IMPLEMENTED: `CPlayerDataQueue::ResetHonorElimilateInfo` RVA 0x000E6110
 // находится выше. `Mutex<VecDeque<_>>` заменяет только исходный critical
-// section и deque traversal; player-мутации и их порядок сохранены.
+// section/deque traversal и shared lifetime; player-мутации и их порядок сохранены.
 
 // IMPLEMENTED: `CPlayerDataQueue::Clear` RVA 0x000E6230 находится выше.
 // VERIFIED_DISASSEMBLY:

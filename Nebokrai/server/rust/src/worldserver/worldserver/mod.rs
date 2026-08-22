@@ -7,10 +7,15 @@ pub(crate) mod honorranks;
     reason = "PlayerRanks serializer подключён к initial-config до DB/timer lifecycle"
 )]
 pub(crate) mod playerranks;
+#[allow(
+    dead_code,
+    reason = "concrete player-load thread pool готов для runtime-owner полного CGame lifecycle"
+)]
+pub(crate) mod playerloadworker;
 pub(crate) mod savedb;
 pub(crate) mod worldserver;
 #[allow(
     dead_code,
-    reason = "typed DB/batch consumer готов; внешний thread/reconnect lifecycle ещё RAW"
+    reason = "concrete write-log worker подключён к CGame Init/Release context-границам"
 )]
 pub(crate) mod writelogworker;

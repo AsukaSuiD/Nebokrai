@@ -10,16 +10,19 @@
 //! Exact x86-layout записи подтверждён обращениями `+0x14/+0x18`: сначала
 //! `char szCdkey[20]`, затем signed `long nPlayerID` и `unsigned long
 //! dwClientIP`. Старые `CRITICAL_SECTION + deque<tagPlayerLoadQueue*>`
-//! заменены `parking_lot::Mutex<VecDeque<_>>`; FIFO, поиск первого совпадения
-//! и область блокировки сохранены. Rust-владелец безопасно уничтожает запись
-//! после remove/clear вместо сохранения внутренних утечек старого raw-pointer
-//! контейнера. Добавленные Linux-донором limit, condition-variable,
+//! заменены cloneable `Arc<parking_lot::Mutex<VecDeque<_>>>`; FIFO, поиск
+//! первого совпадения и область блокировки сохранены. `Arc` отделяет только
+//! lifetime shared очереди от `CGame`, чтобы точный системный worker мог её
+//! использовать. Rust-владелец безопасно уничтожает запись после remove/clear
+//! вместо сохранения внутренних утечек старого raw-pointer контейнера.
+//! Добавленные Linux-донором limit, condition-variable,
 //! in-flight/cancellation maps и account-wide remove в EXE отсутствуют.
 //!
 //! Декомпилятор: Ghidra 12.1.2. Сырой C++ ниже сохранён как локальная
 //! документация, а не как Rust-реализация.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 
@@ -76,15 +79,16 @@ pub(crate) enum PlayerLoadPushOutcome {
     Duplicate(PlayerLoadQueueEntry),
 }
 
-/// Потокобезопасная FIFO ожидающих DB-load запросов.
+/// Потокобезопасная cloneable FIFO ожидающих DB-load запросов.
+#[derive(Clone)]
 pub(crate) struct CPlayerLoadQueue {
-    entries: Mutex<VecDeque<PlayerLoadQueueEntry>>,
+    entries: Arc<Mutex<VecDeque<PlayerLoadQueueEntry>>>,
 }
 
 impl CPlayerLoadQueue {
-    pub(crate) const fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            entries: Mutex::new(VecDeque::new()),
+            entries: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 

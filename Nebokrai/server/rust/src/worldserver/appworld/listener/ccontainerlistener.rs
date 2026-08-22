@@ -28,7 +28,7 @@ pub(crate) enum TraversedContainerObject<'object> {
 }
 
 /// Safe Rust-форма виртуального контракта `CContainerListener`.
-pub(crate) trait CContainerListener {
+pub(crate) trait CContainerListener: Send {
     /// Базовый owner всегда разрешает продолжить traversal точным значением `1`.
     fn on_traversing_container(&mut self, _object: TraversedContainerObject<'_>) -> i32 {
         1

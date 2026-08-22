@@ -11,21 +11,22 @@
 //!
 //! Original vector хранит не владеющие `CContainerListener*`, отвергает null
 //! и повторный pointer, а destructor/`Release` освобождает только сам vector.
-//! Rust сохраняет эту семантику через стандартные `Rc/Weak`: контейнер не
+//! Rust сохраняет эту семантику через стандартные `Arc/Weak`: контейнер не
 //! продлевает жизнь listener-а, duplicate определяется по identity control
-//! block-а, а dangling pointer не возникает. Compiler/STL capacity и ручной
-//! `delete` не переносятся.
+//! block-а, а dangling pointer не возникает. `Mutex` делает listener-owner
+//! законно переносимым вместе с загруженным `CPlayer` между DB и game
+//! потоками; порядок callbacks от этого не меняется. Compiler/STL capacity и
+//! ручной `delete` не переносятся.
 
-use std::cell::RefCell;
-use std::rc::{Rc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use crate::worldserver::appworld::listener::ccontainerlistener::CContainerListener;
 
-pub(crate) type SharedContainerListener = Rc<RefCell<dyn CContainerListener>>;
+pub(crate) type SharedContainerListener = Arc<Mutex<dyn CContainerListener>>;
 
 /// Безопасное owning-состояние исходного `CContainer`, не копия его ABI.
 pub(crate) struct CContainerState {
-    listeners: Vec<Weak<RefCell<dyn CContainerListener>>>,
+    listeners: Vec<Weak<Mutex<dyn CContainerListener>>>,
 }
 
 impl CContainerState {
@@ -41,7 +42,7 @@ impl CContainerState {
         let Some(listener) = listener else {
             return 0;
         };
-        let weak = Rc::downgrade(listener);
+        let weak = Arc::downgrade(listener);
         if self.listeners.iter().any(|current| current.ptr_eq(&weak)) {
             return 0;
         }
