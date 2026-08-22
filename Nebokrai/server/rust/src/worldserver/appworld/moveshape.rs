@@ -123,6 +123,10 @@ impl CMoveShape {
         self.shape_base.set_direction(direction)
     }
 
+    pub(crate) const fn set_speed(&mut self, speed: f32) {
+        self.shape_base.set_speed(speed);
+    }
+
     /// Ставит shape в центр клетки через единственный shape-owner.
     pub(crate) fn set_tile_xy(&mut self, tile_x: i32, tile_y: i32) {
         self.shape_base.set_tile_xy(tile_x, tile_y);

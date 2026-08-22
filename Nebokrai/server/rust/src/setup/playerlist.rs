@@ -23,6 +23,14 @@
 //! offsets и порядок сохраняются без объявления Rust layout копией MSVC ABI.
 //! `BTreeMap`/`Vec` заменяют process-global STL owners; legacy-строки остаются
 //! byte arrays и завершаются на первом NUL.
+//!
+//! Create-role дополнительно достигает process-global `m_listOrginEquip` и
+//! прямого `m_mapPlayerList::operator[]`. PDB задаёт `tagOrginEquip` как byte
+//! occupation, `u16` equipment position и `std::string`; exact
+//! `CGame::AddOrginGoodsToPlayer` `0x00405A80..0x00405B13` подтверждает offsets
+//! `+0/+2/+8` внутри старого list-value и list-order обход. Typed record и
+//! ordered `Vec` сохраняют значения без копирования MSVC string layout.
+//! Отсутствующий ключ `sex + occupation*2` по-прежнему вставляет нулевую запись.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -75,6 +83,21 @@ pub(crate) struct PlayerPropertiesUpgrade {
     pub(crate) notification: Vec<u8>,
 }
 
+/// Одна логическая запись точного `CPlayerList::tagOrginEquip`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerOriginEquipment {
+    pub(crate) occupation: u8,
+    pub(crate) place_position: u16,
+    pub(crate) original_name: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerCreationPropertiesLookup {
+    pub(crate) key: u32,
+    pub(crate) inserted: bool,
+    pub(crate) properties: PlayerBaseProperties,
+}
+
 pub(crate) type PlayerBasePropertiesMap = BTreeMap<u32, PlayerBaseProperties>;
 pub(crate) type PlayerPropertiesUpgradeMap = BTreeMap<u32, PlayerPropertiesUpgrade>;
 
@@ -82,6 +105,7 @@ pub(crate) type PlayerPropertiesUpgradeMap = BTreeMap<u32, PlayerPropertiesUpgra
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CPlayerList {
     player_properties: PlayerBasePropertiesMap,
+    origin_equipment: Vec<PlayerOriginEquipment>,
     player_experience: Vec<u32>,
     fighter_upgrades: PlayerPropertiesUpgradeMap,
     hunter_upgrades: PlayerPropertiesUpgradeMap,
@@ -99,10 +123,36 @@ impl CPlayerList {
     ) -> Self {
         Self {
             player_properties,
+            origin_equipment: Vec::new(),
             player_experience,
             fighter_upgrades,
             hunter_upgrades,
             taoist_upgrades,
+        }
+    }
+
+    /// Заменяет отдельно загружаемый owner `playerOrginEquip.ini`.
+    pub(crate) fn set_origin_equipment(&mut self, equipment: Vec<PlayerOriginEquipment>) {
+        self.origin_equipment = equipment;
+    }
+
+    pub(crate) fn origin_equipment(&self) -> &[PlayerOriginEquipment] {
+        &self.origin_equipment
+    }
+
+    /// Выполняет exact create-role `map::operator[]` lookup.
+    pub(crate) fn creation_properties(
+        &mut self,
+        sex: u8,
+        occupation: u8,
+    ) -> PlayerCreationPropertiesLookup {
+        let key = u32::from(sex).wrapping_add(u32::from(occupation).wrapping_mul(2));
+        let inserted = !self.player_properties.contains_key(&key);
+        let properties = *self.player_properties.entry(key).or_default();
+        PlayerCreationPropertiesLookup {
+            key,
+            inserted,
+            properties,
         }
     }
 

@@ -28,6 +28,10 @@
 //! соседний `dwDelDays` по `+0x51C` читает World player-list owner;
 //! player rename и LeiTing owners читают их прямо из того же snapshot без
 //! отдельного дублирующего state.
+//! Create-role exact `0x004B17C9..0x004B17D3` сравнивает zero-extended DB
+//! byte-count с signed word в самом начале `m_stSetup` через `CMP AX`/`JL`.
+//! Поэтому misleading `btMaxCharactersNum` публикуется как `i16` по `+0`, а
+//! не как Rust byte: отрицательная настройка остаётся немедленным отказом.
 
 use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 
@@ -41,6 +45,8 @@ const SPECIAL_STRING_OFFSET: usize = 0x520;
 const SPECIAL_STRING_LENGTH: usize = 0x40;
 const DELETION_DAYS_OFFSET: usize = 0x51C;
 const TOTAL_JING_LI_DAN_COUNT_OFFSET: usize = 0x1110;
+const MAXIMUM_CHARACTERS_OFFSET: usize = 0;
+const PLAYER_SPEED_OFFSET: usize = 0x7F8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -62,6 +68,24 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn bytes_mut(&mut self) -> &mut [u8; GLOBE_SETUP_BLOB_LENGTH] {
         &mut self.bytes
+    }
+
+    /// Возвращает exact signed `short btMaxCharactersNum` ветки create-role.
+    pub(crate) fn maximum_characters(&self) -> i16 {
+        i16::from_le_bytes(
+            self.bytes[MAXIMUM_CHARACTERS_OFFSET..MAXIMUM_CHARACTERS_OFFSET + 2]
+                .try_into()
+                .expect("PDB-offset находится внутри globe snapshot"),
+        )
+    }
+
+    /// Возвращает bit-exact `fPlayerSpeed` по PDB-offset `+0x7F8`.
+    pub(crate) fn player_speed(&self) -> f32 {
+        f32::from_le_bytes(
+            self.bytes[PLAYER_SPEED_OFFSET..PLAYER_SPEED_OFFSET + 4]
+                .try_into()
+                .expect("PDB-offset находится внутри globe snapshot"),
+        )
     }
 
     /// Возвращает C-string prefix одного exact `szCountryName[5][0x40]`.

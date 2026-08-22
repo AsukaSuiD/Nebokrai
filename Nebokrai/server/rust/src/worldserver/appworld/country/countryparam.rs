@@ -309,6 +309,19 @@ impl CCountryParam {
         }
     }
 
+    /// Возвращает первый unconditional `m_mpStartRegions::operator[]` create-role.
+    pub(crate) fn start_region_or_insert(&mut self, country: u8) -> i32 {
+        *self.start_regions.entry(country).or_insert(0)
+    }
+
+    /// Возвращает rect/direction, которые create-role читает только после
+    /// успешного lookup живого region-owner-а.
+    pub(crate) fn start_area_or_insert(&mut self, country: u8) -> (CountryRect, i32) {
+        let rect = *self.start_rects.entry(country).or_default();
+        let direction = *self.start_directions.entry(country).or_insert(0);
+        (rect, direction)
+    }
+
     pub(crate) const fn max_country_power(&self) -> Option<i32> {
         self.parameters[MAX_COUNTRY_POWER]
     }

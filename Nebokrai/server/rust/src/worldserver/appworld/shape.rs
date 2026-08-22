@@ -237,6 +237,11 @@ impl CShape {
         true
     }
 
+    /// Присваивает bit-exact аргумент virtual `CShape::SetSpeed`.
+    pub(crate) const fn set_speed(&mut self, speed: f32) {
+        self.speed = speed;
+    }
+
     /// Ставит shape в центр двух signed tile-координат.
     pub(crate) fn set_tile_xy(&mut self, tile_x: i32, tile_y: i32) {
         self.pos_x = tile_x as f32 + 0.5;
@@ -499,7 +504,7 @@ fn read_shape_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CShape::SetSpeed
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\shape.h:82
@@ -507,6 +512,8 @@ fn read_shape_array<const N: usize>(
 // ADDRESS: 004531b0
 // PROTOTYPE: void __thiscall SetSpeed(float param_1)
 //
+// IMPLEMENTED_OWNER: `CShape::set_speed` выше; concrete Rust owner сохраняет
+// однополевое присваивание без собственного virtual ABI.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

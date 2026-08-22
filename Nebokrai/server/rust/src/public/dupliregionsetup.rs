@@ -1,7 +1,7 @@
 //! Список дублирующих регионов исторического Miracle.
 //!
-//! Статус World `CDupliRegionSetup::AddToByteArray` RVA `0x000506B0`:
-//! `IMPLEMENTED`; loader, random selection и Game decoder ниже остаются
+//! Статус World `CDupliRegionSetup::AddToByteArray` RVA `0x000506B0` и
+//! `GetRandomRegion` RVA `0x00050A00`: `IMPLEMENTED`; loader и Game decoder ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -14,8 +14,12 @@
 //! `duplicate_region_id`). `Vec` заменяет старый `std::list`, поскольку
 //! наблюдаемый контракт требует только порядка и размера. Typed поля исключают
 //! C++ layout/padding, а переполнение count возвращается до изменения buffer-а.
-//! Поведение повреждённого ini и связь `random()` с общим RNG пока не доказаны
-//! достаточно точно и намеренно не маскируются удобной новой семантикой.
+//! `GetRandomRegion` сначала кладёт исходный signed ID во временный vector,
+//! затем дописывает все его duplicate ID в list-order и ровно один раз вызывает
+//! общий `random(count)`. `Vec` и переданный caller-ом RNG adapter заменяют
+//! только STL/process-global plumbing. Контракт adapter-а исходный: при
+//! положительном bound он возвращает индекс `0..bound`. Поведение повреждённого
+//! ini пока не доказано и не маскируется удобной новой семантикой.
 
 use std::error::Error;
 use std::fmt;
@@ -40,6 +44,27 @@ impl CDupliRegionSetup {
 
     pub(crate) fn entries(&self) -> &[DupliRegionEntry] {
         &self.entries
+    }
+
+    /// Выбирает исходный region либо один из его duplicate в точном list-order.
+    pub(crate) fn get_random_region(
+        &self,
+        region_id: i32,
+        mut random: impl FnMut(i32) -> i32,
+    ) -> i32 {
+        let mut candidates = Vec::with_capacity(1 + self.entries.len());
+        candidates.push(region_id);
+        candidates.extend(
+            self.entries
+                .iter()
+                .filter(|entry| entry.region_id == region_id)
+                .map(|entry| entry.duplicate_region_id),
+        );
+        let bound = i32::try_from(candidates.len())
+            .expect("32-битный legacy list не превышает i32::MAX записей");
+        let selected = random(bound);
+        candidates[usize::try_from(selected)
+            .expect("legacy random(count) возвращает неотрицательный индекс")]
     }
 
     /// Дописывает exact `count + insertion-order 8-byte records`.
@@ -178,7 +203,7 @@ impl Error for DupliRegionSerializeError {}
 
 // ============================================================================
 // FUNCTION: CDupliRegionSetup::GetRandomRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\dupliregionsetup.cpp:79
@@ -186,6 +211,10 @@ impl Error for DupliRegionSerializeError {}
 // ADDRESS: 00450a00
 // PROTOTYPE: long __thiscall GetRandomRegion(long param_1)
 //
+// IMPLEMENTED_OWNER: `CDupliRegionSetup::get_random_region` выше. Exact
+// `0x00450A1E..0x00450ACC` подтверждает начальный source ID, list-order append,
+// один `random(vector.size())`, сохранение выбранного значения до удаления
+// временного vector и signed 32-bit return.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
