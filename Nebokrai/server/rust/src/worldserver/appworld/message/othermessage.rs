@@ -1,9 +1,10 @@
 //! WorldServer dispatcher-owner `OnOtherMessage`.
 //!
-//! Весь dispatcher RVA `0x000AC680` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме локального
+//! Статус dispatcher-а RVA `0x000AC680`: `IMPLEMENTED`. Материализованы
 //! transport leaves `0x5FD02`, `0x5FD06..0x5FD09`, goods-link publish/lookup
 //! `0x5FD03/0x5FD04`, increment-log page `0x5FD0A`, copy-number `0x5FD0B`,
-//! cursor-only `0x5FD0E`, player rename `0x5FD05`, LeiTing update `0x5FD10`,
+//! cursor-only `0x5FD0E`, chat relay `0x5FD01`, player rename `0x5FD05`,
+//! LeiTing update `0x5FD10`,
 //! honor-reset `0x5FD0C` и eliminate update `0x5FD0D` со статусом
 //! `IMPLEMENTED`. Reset читает один Windows `long`, получает текущий `CGame`
 //! и вызывает `ResetHonorElimilateInfo`.
@@ -51,6 +52,14 @@
 //! owner/tail/type/count проверки в exact EXE отсутствуют и не перенесены.
 //! Malformed goods и невозможные позиции `std::string` остаются typed safe-
 //! границами; уже добавленные prefix-ссылки при rewrite-ошибке не откатываются.
+//! Chat-ветка сохраняет условное чтение строк: faction name/content читаются
+//! только после найденной faction, а private sender/content — только после
+//! найденного online-адресата и его region GameServer. Ответы `0x7FA01`
+//! сохраняют status `0/1/2`, исходные owner type/ID и прежний порядок строк;
+//! faction delivery делегирован точному `CFaction::talk`. Typed write-log FIFO
+//! и Tiberius заменяют только SQL-строку/ADO, не меняя `bUseLogSys`,
+//! `bFactionChat`/`bPrivateChat`, sender lookup и координатную семантику.
+//! Сырой C++ ниже сохранён как локальная документация, а не как реализация.
 
 use crate::dbaccess::worlddb::rsplayer::TiberiusRsPlayer;
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
@@ -64,7 +73,15 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
 use crate::worldserver::appworld::incrementlog::incrementlog::{
     CIncrementLog, IncrementLogPageBlock,
 };
+use crate::worldserver::appworld::message::writelogmessage::{
+    WorldChatLogWrite, WorldWriteLogCommand,
+};
+use crate::worldserver::appworld::organizingsystem::faction::FactionTalkDelivery;
+use crate::worldserver::appworld::organizingsystem::organizingctrl::{
+    COrganizingCtrl, FreePlayerLookup,
+};
 use crate::worldserver::appworld::player::PlayerCodecError;
+use crate::worldserver::appworld::shape::ShapeTileCoordinateBlock;
 use crate::worldserver::worldserver::game::{
     CGame, WorldHonorEliminatorRegistration, WorldPlayerNameChangeReport,
     WorldPlayerNameLookupError, WorldGoodsLink, WorldGoodsLinkPayload,
@@ -72,10 +89,90 @@ use crate::worldserver::worldserver::game::{
 use crate::worldserver::worldserver::honorranks::{
     CHonorRanks, HonorRankPushBlock, HonorRanksKilledPlayerReport,
 };
+use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
 const HONOR_ELIMINATE_RESET: i32 = 0x0005_FD0C;
 const HONOR_ELIMINATE_UPDATE: i32 = 0x0005_FD0D;
 const HONOR_ELIMINATE_ACKNOWLEDGEMENT: i32 = 0x0007_FA16;
+const WORLD_CHAT_REQUEST: i32 = 0x0005_FD01;
+const PRIVATE_CHAT_RESPONSE: i32 = 0x0007_FA01;
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldPrivateChatDelivery {
+    pub(crate) status: i8,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldOtherChatLogOutcome {
+    Disabled,
+    MissingSender {
+        sender_player_id: u32,
+        operator_log: AddLogTextDisposition,
+    },
+    CoordinateBlocked {
+        sender_player_id: u32,
+        source: ShapeTileCoordinateBlock,
+    },
+    Queued {
+        record: WorldChatLogWrite,
+        queue_length_after: usize,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldOtherChatOutcome {
+    Unsupported {
+        chat_type: i32,
+        owner_type: i32,
+        owner_id: i32,
+        header_complete: [bool; 3],
+    },
+    FactionUnavailable {
+        owner_type: i32,
+        owner_id: i32,
+        header_complete: [bool; 3],
+        lookup: FreePlayerLookup,
+    },
+    FactionMissing {
+        owner_type: i32,
+        owner_id: i32,
+        faction_id: i32,
+        header_complete: [bool; 3],
+    },
+    FactionDelivered {
+        owner_type: i32,
+        owner_id: i32,
+        faction_id: i32,
+        header_complete: [bool; 3],
+        sender_name: Vec<u8>,
+        content: Vec<u8>,
+        deliveries: Vec<FactionTalkDelivery>,
+        log: WorldOtherChatLogOutcome,
+    },
+    PrivateUnavailable {
+        owner_type: i32,
+        owner_id: i32,
+        header_complete: [bool; 3],
+        target_name: Vec<u8>,
+        target_player_id: u32,
+        response: WorldPrivateChatDelivery,
+    },
+    PrivateDelivered {
+        owner_type: i32,
+        owner_id: i32,
+        header_complete: [bool; 3],
+        target_name: Vec<u8>,
+        target_player_id: u32,
+        target_map_id: i32,
+        sender_name: Vec<u8>,
+        content: Vec<u8>,
+        recipient: WorldPrivateChatDelivery,
+        acknowledgement: WorldPrivateChatDelivery,
+        log: WorldOtherChatLogOutcome,
+    },
+}
 
 /// Наблюдаемый итог одной уже восстановленной ветки `OnOtherMessage`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -186,6 +283,7 @@ pub(crate) struct WorldIncrementLogPageOutcome {
 /// Один обработанный результат частично восстановленного other-owner-а.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldOtherMessageOutcome {
+    Chat(WorldOtherChatOutcome),
     Transport {
         request_type: i32,
         response_type: i32,
@@ -242,6 +340,7 @@ pub(crate) enum WorldOtherMessageDispatch {
 /// Исполняет достигнутые transport/cursor/honor ветви other-owner-а.
 pub(crate) async fn on_other_message(
     game: &mut CGame,
+    organizing: &COrganizingCtrl,
     honor_ranks: &mut CHonorRanks,
     increment_log: &CIncrementLog,
     globe_setup: &GlobeSetupSnapshot,
@@ -250,9 +349,20 @@ pub(crate) async fn on_other_message(
     rs_player: &mut TiberiusRsPlayer,
     player_database: Option<&mut WorldTdsClient>,
     check_invalid_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
+    faction_chat_log_enabled: bool,
+    private_chat_log_enabled: bool,
+    add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     mut message: CMessage,
 ) -> WorldOtherMessageDispatch {
     match message.message_type() {
+        WORLD_CHAT_REQUEST => WorldOtherMessageDispatch::Handled(handle_chat_message(
+            game,
+            organizing,
+            faction_chat_log_enabled,
+            private_chat_log_enabled,
+            add_log_text,
+            &mut message,
+        )),
         0x0005_FD02 => {
             let decoded_target_map_id = message.base_mut().get_long();
             let target_map_id = decoded_target_map_id.unwrap_or(0);
@@ -546,6 +656,287 @@ pub(crate) async fn on_other_message(
     }
 }
 
+fn handle_chat_message(
+    game: &CGame,
+    organizing: &COrganizingCtrl,
+    faction_chat_log_enabled: bool,
+    private_chat_log_enabled: bool,
+    add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
+    message: &mut CMessage,
+) -> WorldOtherMessageOutcome {
+    let decoded_chat_type = message.base_mut().get_long();
+    let decoded_owner_type = message.base_mut().get_long();
+    let decoded_owner_id = message.base_mut().get_long();
+    let chat_type = decoded_chat_type.unwrap_or(0);
+    let owner_type = decoded_owner_type.unwrap_or(0);
+    let owner_id = decoded_owner_id.unwrap_or(0);
+    let header_complete = [
+        decoded_chat_type.is_some(),
+        decoded_owner_type.is_some(),
+        decoded_owner_id.is_some(),
+    ];
+
+    if chat_type == 2 {
+        let lookup = organizing.is_free_player(owner_id);
+        let faction_id = match lookup {
+            FreePlayerLookup::Faction(faction_id) => faction_id,
+            FreePlayerLookup::NoFaction | FreePlayerLookup::BlockedNullFaction { .. } => {
+                return WorldOtherMessageOutcome::Chat(
+                    WorldOtherChatOutcome::FactionUnavailable {
+                        owner_type,
+                        owner_id,
+                        header_complete,
+                        lookup,
+                    },
+                );
+            }
+        };
+        let Some(faction) = organizing.faction_by_id(faction_id) else {
+            return WorldOtherMessageOutcome::Chat(WorldOtherChatOutcome::FactionMissing {
+                owner_type,
+                owner_id,
+                faction_id,
+                header_complete,
+            });
+        };
+
+        let sender_name = message
+            .base_mut()
+            .get_str_bytes(0x100)
+            .expect("literal 0x100 исключает zero-capacity GetStr");
+        let content = message
+            .base_mut()
+            .get_str_bytes(0x400)
+            .expect("literal 0x400 исключает zero-capacity GetStr");
+        let deliveries = faction.talk(game, owner_id, &sender_name, &content);
+        let log = finish_chat_log(
+            game,
+            faction_chat_log_enabled,
+            &sender_name,
+            &content,
+            0,
+            b"<Faction>",
+            2,
+            add_log_text,
+        );
+        return WorldOtherMessageOutcome::Chat(WorldOtherChatOutcome::FactionDelivered {
+            owner_type,
+            owner_id,
+            faction_id,
+            header_complete,
+            sender_name,
+            content,
+            deliveries,
+            log,
+        });
+    }
+
+    if chat_type == 4 {
+        let target_name = message
+            .base_mut()
+            .get_str_bytes(0x100)
+            .expect("literal 0x100 исключает zero-capacity GetStr");
+        let target_player_id = game.online_player_id_by_name(&target_name);
+        let target_region_id = (target_player_id != 0)
+            .then(|| game.online_player_by_id(target_player_id))
+            .flatten()
+            .map(|player| player.get_region_id());
+        let target_map_id = target_region_id
+            .and_then(|region_id| game.get_region_game_server(region_id))
+            .map(|game_server| game_server.index as i32);
+        let Some(target_map_id) = target_map_id else {
+            let response = send_private_chat_message(
+                game,
+                message.socket_id(),
+                None,
+                0,
+                owner_type,
+                owner_id,
+                &[],
+                &[],
+                &[],
+            );
+            return WorldOtherMessageOutcome::Chat(WorldOtherChatOutcome::PrivateUnavailable {
+                owner_type,
+                owner_id,
+                header_complete,
+                target_name,
+                target_player_id,
+                response,
+            });
+        };
+
+        let sender_name = message
+            .base_mut()
+            .get_str_bytes(0x100)
+            .expect("literal 0x100 исключает zero-capacity GetStr");
+        let content = message
+            .base_mut()
+            .get_str_bytes(0x400)
+            .expect("literal 0x400 исключает zero-capacity GetStr");
+        let recipient = send_private_chat_message(
+            game,
+            message.socket_id(),
+            Some(target_map_id),
+            1,
+            owner_type,
+            owner_id,
+            &target_name,
+            &sender_name,
+            &content,
+        );
+        let acknowledgement = send_private_chat_message(
+            game,
+            message.socket_id(),
+            None,
+            2,
+            owner_type,
+            owner_id,
+            &target_name,
+            &sender_name,
+            &content,
+        );
+        let receiver_id = game.map_player_id_by_name(&target_name) as i32;
+        let log = finish_chat_log(
+            game,
+            private_chat_log_enabled,
+            &sender_name,
+            &content,
+            receiver_id,
+            &target_name,
+            5,
+            add_log_text,
+        );
+        return WorldOtherMessageOutcome::Chat(WorldOtherChatOutcome::PrivateDelivered {
+            owner_type,
+            owner_id,
+            header_complete,
+            target_name,
+            target_player_id,
+            target_map_id,
+            sender_name,
+            content,
+            recipient,
+            acknowledgement,
+            log,
+        });
+    }
+
+    WorldOtherMessageOutcome::Chat(WorldOtherChatOutcome::Unsupported {
+        chat_type,
+        owner_type,
+        owner_id,
+        header_complete,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_private_chat_message(
+    game: &CGame,
+    source_socket_id: i32,
+    target_map_id: Option<i32>,
+    status: i8,
+    owner_type: i32,
+    owner_id: i32,
+    target_name: &[u8],
+    sender_name: &[u8],
+    content: &[u8],
+) -> WorldPrivateChatDelivery {
+    let mut response = CMessage::new(PRIVATE_CHAT_RESPONSE);
+    response.base_mut().add_char(status);
+    response.base_mut().add_long(owner_type);
+    response.base_mut().add_long(owner_id);
+    if status != 0 {
+        add_c_string(&mut response, target_name);
+        add_c_string(&mut response, sender_name);
+        add_c_string(&mut response, content);
+    }
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = if let Some(target_map_id) = target_map_id {
+        game.send_msg_to_game_server(target_map_id, &response)
+    } else {
+        response.send_to_socket(game.current_game_server_sender().as_ref(), source_socket_id)
+    };
+    WorldPrivateChatDelivery {
+        status,
+        wire,
+        delivery,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_chat_log(
+    game: &CGame,
+    enabled: bool,
+    sender_name: &[u8],
+    content: &[u8],
+    receiver_id: i32,
+    receiver_name: &[u8],
+    log_type: u8,
+    add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
+) -> WorldOtherChatLogOutcome {
+    let sender_player_id = game.map_player_id_by_name(sender_name);
+    let Some(sender) = game.map_player(sender_player_id) else {
+        let signed_sender_player_id = sender_player_id as i32;
+        let mut text = if log_type == 2 {
+            format!("CHAT_FACTION : {signed_sender_player_id} pPlayer").into_bytes()
+        } else {
+            format!("CHAT_PRIVATE : {signed_sender_player_id} pPlayer").into_bytes()
+        };
+        text.extend_from_slice(b"\xCE\xAANULL");
+        if log_type == 2 {
+            text.push(b'!');
+        } else {
+            text.extend_from_slice(format!(" => {receiver_id} !").as_bytes());
+        }
+        return WorldOtherChatLogOutcome::MissingSender {
+            sender_player_id,
+            operator_log: add_log_text(&text),
+        };
+    };
+    if !enabled {
+        return WorldOtherChatLogOutcome::Disabled;
+    }
+
+    // Exact `_sprintf` вычислял Y до X; первая невозможная x87-конверсия
+    // остаётся наблюдаемой typed safe-границей в том же порядке.
+    let position_y = match sender.get_tile_y() {
+        Ok(value) => value,
+        Err(source) => {
+            return WorldOtherChatLogOutcome::CoordinateBlocked {
+                sender_player_id,
+                source,
+            };
+        }
+    };
+    let position_x = match sender.get_tile_x() {
+        Ok(value) => value,
+        Err(source) => {
+            return WorldOtherChatLogOutcome::CoordinateBlocked {
+                sender_player_id,
+                source,
+            };
+        }
+    };
+    let record = WorldChatLogWrite {
+        sender_id: sender_player_id as i32,
+        sender_name: sender_name.to_vec(),
+        map_id: sender.get_region_id(),
+        position_x,
+        position_y,
+        receiver_id,
+        receiver_name: receiver_name.to_vec(),
+        content: content.to_vec(),
+        log_type,
+    };
+    let queue_length_after =
+        game.push_write_log_command(WorldWriteLogCommand::ChatLog(record.clone()));
+    WorldOtherChatLogOutcome::Queued {
+        record,
+        queue_length_after,
+    }
+}
+
 fn handle_goods_link_publish(game: &mut CGame, message: &mut CMessage) -> WorldOtherMessageOutcome {
     let link_type = message.base_mut().get_long().unwrap_or(0);
     let first_parameter = message.base_mut().get_long().unwrap_or(0);
@@ -774,7 +1165,7 @@ fn add_c_string(message: &mut CMessage, bytes: &[u8]) {
 
 // ============================================================================
 // FUNCTION: OnOtherMessage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\othermessage.cpp:43

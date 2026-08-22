@@ -3370,6 +3370,9 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     pub(crate) update_union_player: &'a mut dyn FnMut(i32),
     pub(crate) check_invalid_organizing_string:
         &'a mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
+    /// Внешние feature-gates exact `CLogSystem::bFactionChat/bPrivateChat`.
+    pub(crate) faction_chat_log_enabled: bool,
+    pub(crate) private_chat_log_enabled: bool,
     /// Внешний feature-gate `CLogSystem::FactionCreateEnabled`.
     pub(crate) faction_create_log_enabled: bool,
     pub(crate) write_faction_create_log:
@@ -9640,6 +9643,8 @@ impl CGame {
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
         check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
+        faction_chat_log_enabled: bool,
+        private_chat_log_enabled: bool,
         faction_create_log_enabled: bool,
         write_faction_create_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
         faction_title_log_enabled: bool,
@@ -9735,6 +9740,8 @@ impl CGame {
                             application_runtime,
                             application_callbacks,
                             &mut *check_invalid_organizing_string,
+                            faction_chat_log_enabled,
+                            private_chat_log_enabled,
                             faction_create_log_enabled,
                             &mut *write_faction_create_log,
                             faction_title_log_enabled,
@@ -9826,6 +9833,8 @@ impl CGame {
                     application_runtime,
                     application_callbacks,
                     &mut *check_invalid_organizing_string,
+                    faction_chat_log_enabled,
+                    private_chat_log_enabled,
                     faction_create_log_enabled,
                     &mut *write_faction_create_log,
                     faction_title_log_enabled,
@@ -9920,6 +9929,8 @@ impl CGame {
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
         check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
+        faction_chat_log_enabled: bool,
+        private_chat_log_enabled: bool,
         faction_create_log_enabled: bool,
         write_faction_create_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
         faction_title_log_enabled: bool,
@@ -10012,6 +10023,8 @@ impl CGame {
             application_runtime,
             application_callbacks,
             check_invalid_organizing_string,
+            faction_chat_log_enabled,
+            private_chat_log_enabled,
             faction_create_log_enabled,
             write_faction_create_log,
             faction_title_log_enabled,
@@ -11306,6 +11319,8 @@ impl CGame {
             owners.union_application_runtime,
             &mut union_application_callbacks,
             &mut *callbacks.check_invalid_organizing_string,
+            callbacks.faction_chat_log_enabled,
+            callbacks.private_chat_log_enabled,
             callbacks.faction_create_log_enabled,
             &mut *callbacks.write_faction_create_log,
             callbacks.faction_title_log_enabled,
@@ -14800,6 +14815,8 @@ async fn process_world_message<TimerCallback, JjcContext>(
     application_runtime: &WorldUnionApplicationRuntimeOwner,
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
+    faction_chat_log_enabled: bool,
+    private_chat_log_enabled: bool,
     faction_create_log_enabled: bool,
     write_faction_create_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
     faction_title_log_enabled: bool,
@@ -14914,8 +14931,13 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::Other) {
+        let faction_chat_log_enabled =
+            game.setup.use_log_system && faction_chat_log_enabled;
+        let private_chat_log_enabled =
+            game.setup.use_log_system && private_chat_log_enabled;
         match on_other_message(
             game,
+            organizing,
             honor_ranks,
             increment_log,
             globe_setup,
@@ -14924,6 +14946,9 @@ where
             rs_player,
             player_database.as_deref_mut(),
             check_invalid_organizing_string,
+            faction_chat_log_enabled,
+            private_chat_log_enabled,
+            add_log_text,
             message,
         )
         .await
