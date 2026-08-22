@@ -17770,7 +17770,7 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::ServerAuction) {
-        match on_msg_s2w_auction(game, &*auction_log, db_misc, message) {
+        match on_msg_s2w_auction(game, auction_log, db_misc, message) {
             WorldServerAuctionMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::ServerAuctionMessage {
                     source,

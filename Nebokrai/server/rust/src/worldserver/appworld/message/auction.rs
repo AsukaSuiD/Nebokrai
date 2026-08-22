@@ -1,7 +1,7 @@
 //! WorldServer dispatcher-owner `OnMSG_S2W_AUCTION`.
 //!
 //! Статус владельца: `IMPLEMENTED` для relay/DB queue/BaiTan/auction-bang
-//! ветвей `0x60801..07/09/0F..14`; `0x60808/0A..0E` остаются owned `Pending`
+//! ветвей `0x60801..07/09..0C/0F..14`; `0x60808/0A/0D/0E` остаются owned `Pending`
 //! до concrete GlobeSetup, SQL-load, auction notice и player-virtual
 //! владельцев. Точная пара: `WorldServer/Nworldserver.exe +
 //! WorldServer/WorldServer.pdb`, исходный owner
@@ -17,17 +17,26 @@
 //! online player и region GameServer, но не `bConnected`. Стандартные owned
 //! buffers и `Result` заменяют allocator/exception plumbing, не меняя wire
 //! layout и order side effects.
+//! `0x6080B` сначала мутирует page, затем строит `0x80409`; C-string без NUL
+//! остаётся typed boundary после этой мутации. `0x6080C` строит `0x8040A` в
+//! доказанном порядке second-ID, first-ID, log data, только потом `Update`.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::dbaccess::worlddb::dbmisc::{CDbMisc, DbNote, OperatorType};
-use crate::public::auctionlog::CAuctionLog;
+use crate::public::auctionlog::{
+    AuctionGoodsLogWriteOutcome, AuctionLogPageBlock, AuctionLogPageWriteDisposition,
+    AuctionLogTimeBlock, CAuctionLog,
+};
 use crate::public::auctionnode::{GoodsNodeSerializeError, GoodsNodeUnserializeError, GoodsState};
+use crate::public::guid::CGuid;
 use crate::worldserver::worldserver::game::{CGame, WorldBaiTanRemoval};
 
 const AUCTION_GAME_SERVER: u32 = 5;
 const INSERT_AUCTION_ITEM: i32 = 0x0006_0801;
 const MODIFY_AUCTION_STATE: i32 = 0x0006_0804;
 const MODIFY_AUCTION_SALE: i32 = 0x0006_0806;
+const REQUEST_AUCTION_HISTORY: i32 = 0x0006_080B;
+const REQUEST_AUCTION_GOODS_LOG: i32 = 0x0006_080C;
 const FORWARD_INSERT_RESULT: i32 = 0x0006_0802;
 const FORWARD_SEARCH_RESULT: i32 = 0x0006_0803;
 const FORWARD_BUY: i32 = 0x0006_0805;
@@ -65,6 +74,34 @@ pub(crate) enum WorldServerAuctionMessageOutcome {
         map_id: u32,
         delivery: Result<i32, SendMessageError>,
     },
+    AuctionHistoryPage {
+        player_id: i32,
+        direction: i32,
+        compute_result: bool,
+        write: AuctionLogPageWriteDisposition,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+    AuctionHistoryPageBlocked {
+        player_id: i32,
+        direction: i32,
+        compute_result: bool,
+        source: AuctionLogPageBlock,
+    },
+    AuctionGoodsLog {
+        first_id: i32,
+        player_id: i32,
+        guid: CGuid,
+        write: AuctionGoodsLogWriteOutcome,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+    AuctionGoodsLogBlocked {
+        first_id: i32,
+        player_id: i32,
+        guid: CGuid,
+        source: AuctionLogTimeBlock,
+    },
     BaiTanRequestAdded {
         ip: u32,
         player_id: i32,
@@ -96,7 +133,7 @@ pub(crate) enum WorldServerAuctionMessageDispatch {
 /// Исполняет доказанные S2W auction-ветви, не требующие сырого DB owner-а.
 pub(crate) fn on_msg_s2w_auction(
     game: &mut CGame,
-    auction_log: &CAuctionLog,
+    auction_log: &mut CAuctionLog,
     db_misc: &CDbMisc,
     mut message: CMessage,
 ) -> WorldServerAuctionMessageDispatch {
@@ -254,6 +291,75 @@ pub(crate) fn on_msg_s2w_auction(
                 request_type,
                 operation: OperatorType::OT_IN_MODIFY_STATE_A2S,
             })
+        }
+        REQUEST_AUCTION_HISTORY => {
+            let player_id = message.base_mut().get_long().unwrap_or(0);
+            let direction = message.base_mut().get_long().unwrap_or(0);
+            let compute_result = auction_log.compute_page(direction, player_id);
+            let mut response = CMessage::new(0x0008_0409);
+            let write = match auction_log.add_byte_at_current_page(player_id, Some(&mut response)) {
+                Ok(write) => write,
+                Err(source) => {
+                    return WorldServerAuctionMessageDispatch::Handled(
+                        WorldServerAuctionMessageOutcome::AuctionHistoryPageBlocked {
+                            player_id,
+                            direction,
+                            compute_result,
+                            source,
+                        },
+                    );
+                }
+            };
+            let wire = response.as_wire_bytes().to_vec();
+            let delivery = response.send_to_map_id(
+                game.current_game_server_sender().as_ref(),
+                message.map_id(),
+            );
+            WorldServerAuctionMessageDispatch::Handled(
+                WorldServerAuctionMessageOutcome::AuctionHistoryPage {
+                    player_id,
+                    direction,
+                    compute_result,
+                    write,
+                    wire,
+                    delivery,
+                },
+            )
+        }
+        REQUEST_AUCTION_GOODS_LOG => {
+            let first_id = message.base_mut().get_long().unwrap_or(0);
+            let player_id = message.base_mut().get_long().unwrap_or(0);
+            let guid = message.base_mut().get_guid().unwrap_or(CGuid::GUID_INVALID);
+            let mut response = CMessage::new(0x0008_040A);
+            response.base_mut().add_long(player_id);
+            response.base_mut().add_long(first_id);
+            let write = auction_log.add_byte_goods_log(player_id, guid, Some(&mut response));
+            if let AuctionGoodsLogWriteOutcome::BlockedMissingFact(source) = write {
+                return WorldServerAuctionMessageDispatch::Handled(
+                    WorldServerAuctionMessageOutcome::AuctionGoodsLogBlocked {
+                        first_id,
+                        player_id,
+                        guid,
+                        source,
+                    },
+                );
+            }
+            response.base_mut().update();
+            let wire = response.as_wire_bytes().to_vec();
+            let delivery = response.send_to_map_id(
+                game.current_game_server_sender().as_ref(),
+                message.map_id(),
+            );
+            WorldServerAuctionMessageDispatch::Handled(
+                WorldServerAuctionMessageOutcome::AuctionGoodsLog {
+                    first_id,
+                    player_id,
+                    guid,
+                    write,
+                    wire,
+                    delivery,
+                },
+            )
         }
         FORWARD_SYNC => {
             let source_map_id = message.map_id() as u8;
