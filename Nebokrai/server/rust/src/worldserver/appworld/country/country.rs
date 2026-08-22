@@ -142,6 +142,9 @@
 //! `m_bIsGod == false`. Exact multimap с level-key и обратным обходом
 //! даёт убывание level и обратный online-order для равных level;
 //! owned `Vec` и standard sort заменяют только MSVC STL/allocation.
+//! Точный EXE `0x004CA70A..0x004CA72A` перед каждым построением освобождает
+//! прежний order-vector, обнуляет его три pointer-поля и вызывает
+//! `InitialOLPlayersList`; повторный запрос не является legacy early-return.
 //! Page-start сохраняет wrapping формулу `(page * 3 - 3) * 4`, а
 //! `0x7FF08` несёт не более 12 записей. Exact `0x004CAFF0..0x004CB004`
 //! возвращает king ID, а не count, как Linux-донор; donor также
@@ -4427,7 +4430,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::Sort
-// STATUS: IMPLEMENTED_SOURCE_REFERENCE
+// STATUS: IMPLEMENTED + VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:174
@@ -4435,6 +4438,11 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 // ADDRESS: 004ca6e0
 // PROTOTYPE: bool __thiscall Sort(void)
 //
+// VERIFIED_DISASSEMBLY: `0x004CA70A..0x004CA71C` удаляет прежний
+// `m_OrderPlayers` buffer, `0x004CA71F..0x004CA727` обнуляет три vector
+// pointer-поля, а `0x004CA72A` всегда вызывает `InitialOLPlayersList`.
+// Поэтому Rust materializes новый local `Vec` на каждый `GetPlayersList`, не
+// сохраняя ошибочный ранний выход декомпилятора как внешний quirk.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
