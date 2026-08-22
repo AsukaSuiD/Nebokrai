@@ -38,13 +38,12 @@
 //! и возвращает явный `ReconnectCancelled`: зависание Release было внутренним
 //! дефектом lifetime, а не контрактом данных Miracle.
 
-use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -55,6 +54,7 @@ use tokio::runtime::Handle;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 use crate::dbaccess::worlddb::rssetup::{WorldDatabaseSettings, WorldTdsClient};
+use crate::dbaccess::worlddb::writelogqueue::WorldWriteLogQueue;
 use crate::public::date::TagTime;
 use crate::worldserver::appworld::message::writelogmessage::{
     WorldAuctionSaleLogEvent, WorldFairyLogEvent, WorldGoodsCraftLogEvent,
@@ -148,30 +148,7 @@ const INSERT_PLAYER_DELETE_LOG_SQL: &str = "INSERT INTO player_delete_log(\
 const WRITE_LOG_POLL_INTERVAL: Duration = Duration::from_millis(1);
 const WRITE_LOG_RECONNECT_INTERVAL: Duration = Duration::from_secs(10);
 
-/// Cloneable FIFO-owner для producer-а главного цикла и отдельного DB worker-а.
-///
-/// `std::sync::Mutex` заменяет Win32 critical section; poisoned lock является
-/// Rust-only отказом, поэтому очередь продолжает владеть уже принятыми данными.
-#[derive(Clone, Default)]
-pub(crate) struct WorldWriteLogQueue {
-    commands: Arc<Mutex<VecDeque<WorldWriteLogCommand>>>,
-}
-
 impl WorldWriteLogQueue {
-    pub(crate) fn push(&self, command: WorldWriteLogCommand) -> usize {
-        let mut commands = self.lock();
-        commands.push_back(command);
-        commands.len()
-    }
-
-    pub(crate) fn pop(&self) -> Option<WorldWriteLogCommand> {
-        self.lock().pop_front()
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.lock().len()
-    }
-
     async fn process_batch(
         &self,
         connection: &mut WorldTdsClient,
@@ -197,11 +174,6 @@ impl WorldWriteLogQueue {
         WorldWriteLogBatchProgress::Complete(batch)
     }
 
-    fn lock(&self) -> MutexGuard<'_, VecDeque<WorldWriteLogCommand>> {
-        self.commands
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
 }
 
 /// Owned-вход отдельного worker-а: setup snapshot и cloneable FIFO уже

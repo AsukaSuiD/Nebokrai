@@ -81,3 +81,8 @@ pub(crate) mod rssetup;
     reason = "CRsUnion::DelConfederation подключён к Delete Union фазе DoSaveData"
 )]
 pub(crate) mod rsunion;
+#[allow(
+    dead_code,
+    reason = "CWriteLogQueue подключена к typed World write-log worker и всем log producers"
+)]
+pub(crate) mod writelogqueue;
