@@ -1015,7 +1015,7 @@ use crate::dbaccess::worlddb::dbmisc::{
     CDbMisc, DbMiscContext, DbMiscDoneInReport, DbMiscDoneOutBlock, DbMiscDoneOutReport,
     DbMiscLoadAuctionReport,
 };
-use crate::dbaccess::worlddb::largess::LargessOwner;
+use crate::dbaccess::worlddb::largess::{LargessOwner, LoadLargessReport};
 use crate::dbaccess::worlddb::playerdataqueue::{
     CPlayerDataQueue, PlayerDataQueueEntry,
 };
@@ -6309,6 +6309,16 @@ impl CGame {
     /// Ставит структурированную DB-команду в хвост исходного write-log FIFO.
     pub(crate) fn push_write_log_command(&self, command: WorldWriteLogCommand) -> usize {
         self.write_log_queue.push(command)
+    }
+
+    /// Ставит единственную созданную `CLargess::LoadLargess` запись в общий FIFO.
+    pub(crate) fn publish_largess_load_log(
+        &self,
+        report: &mut LoadLargessReport,
+    ) -> Option<usize> {
+        report.write_log.take().map(|record| {
+            self.push_write_log_command(WorldWriteLogCommand::LargessLog(record))
+        })
     }
 
     /// Копирует четыре credential-поля отдельного Log DB connection-owner-а.

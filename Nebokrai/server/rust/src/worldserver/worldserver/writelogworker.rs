@@ -56,6 +56,9 @@ use crate::worldserver::appworld::message::writelogmessage::{
 const INSERT_INCREMENT_LOG_SQL: &str = "INSERT INTO increment_log(\
     context_id,type,money,description,player_id,player_acc,player_lel,item_name,item_amount,ip_addr\
 ) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10)";
+const INSERT_LARGESS_LOG_SQL: &str = "INSERT INTO goods_largess_log(\
+    cdkey,PlayerId,send_time,goods_id,goods_index,goods_name,goods_lel,goods_num,sent_num,cur_sent_num,res\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11)";
 const INSERT_CARRIAGE_LOG_SQL: &str = "INSERT INTO carriage_log(\
     player_id,carriage_idx,carriage_region_id,carriage_coordinate_x,carriage_coordinate_y,event_type,event_time\
 ) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7)";
@@ -345,6 +348,22 @@ pub(crate) async fn execute_world_write_log_command(
             query.bind(decode_legacy_text(&record.item_name));
             query.bind(record.item_amount);
             query.bind(decode_legacy_text(&record.ip_address));
+            query.execute(connection).await?;
+            Ok(())
+        }
+        WorldWriteLogCommand::LargessLog(record) => {
+            let mut query = Query::new(INSERT_LARGESS_LOG_SQL);
+            query.bind(decode_legacy_c_text(&record.account));
+            query.bind(record.player_id);
+            query.bind(decode_legacy_c_text(&record.send_time));
+            query.bind(decode_legacy_c_text(&record.goods_id));
+            query.bind(record.goods_index as i32);
+            query.bind(decode_legacy_c_text(&record.goods_name));
+            query.bind(record.goods_level);
+            query.bind(record.send_num);
+            query.bind(record.sent_num);
+            query.bind(record.current_sent_num);
+            query.bind(decode_legacy_c_text(&record.result));
             query.execute(connection).await?;
             Ok(())
         }
@@ -846,6 +865,7 @@ fn decode_legacy_c_text(bytes: &[u8]) -> String {
 fn world_write_log_command_name(command: &WorldWriteLogCommand) -> &'static str {
     match command {
         WorldWriteLogCommand::IncrementLog(_) => "IncrementLog",
+        WorldWriteLogCommand::LargessLog(_) => "LargessLog",
         WorldWriteLogCommand::CarriageLog(_) => "CarriageLog",
         WorldWriteLogCommand::PlainLog(_) => "PlainLog",
         WorldWriteLogCommand::CiqingLog(_) => "CiqingLog",

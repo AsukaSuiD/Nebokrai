@@ -109,6 +109,7 @@
 
 use std::net::Ipv4Addr;
 
+use crate::dbaccess::worlddb::largess::LargessWriteLog;
 use crate::nets::networld::message::CMessage;
 use crate::public::auctionlog::{AuctionLogNode, AuctionLogSystemTime, CAuctionLog};
 use crate::public::date::TagTime;
@@ -451,6 +452,7 @@ pub(crate) struct WorldPlayerDeleteLogWrite {
 #[derive(Clone, Debug)]
 pub(crate) enum WorldWriteLogCommand {
     IncrementLog(WorldIncrementLogWrite),
+    LargessLog(LargessWriteLog),
     CarriageLog(WorldCarriageLogWrite),
     PlainLog(WorldPlainLogWrite),
     CiqingLog(WorldCiqingLogWrite),

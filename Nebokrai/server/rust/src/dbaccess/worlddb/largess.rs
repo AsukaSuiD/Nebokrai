@@ -58,8 +58,9 @@
 //! `false`, truncation либо продолжение. Текущий local time заведомо помещается
 //! в `char[32]`, а оба UPDATE — в `char[256]`. `Vec`, `BTreeMap`, Rust `Drop`
 //! и structured notices заменяют только `std::string`, MSVC tree, COM lifetime
-//! и log-механику; CD-key в `Debug` намеренно скрыт, но остаётся доступен
-//! будущему точному log-owner-у.
+//! и log-механику; CD-key в `Debug` намеренно скрыт. `LargessWriteLog` хранит
+//! исходные одиннадцать значений, `CGame::publish_largess_load_log` ставит их
+//! в общий FIFO, а write-log worker выполняет параметризованный INSERT.
 //!
 //! Два leaf-а выдачи также восстановлены. `AddGoldCoin` вызывает bank-wallet
 //! на позиции `0`. `AddOneLargess` обходит весь inherited depot limit; только
@@ -842,7 +843,7 @@ fn format_local_time() -> String {
 
 // ============================================================================
 // FUNCTION: CLargess::LoadLargess
-// STATUS: IMPLEMENTED_PARTIAL/VERIFIED_DISASSEMBLY
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:417
@@ -850,8 +851,8 @@ fn format_local_time() -> String {
 // ADDRESS: 004e6ec0
 // PROTOTYPE: void __cdecl LoadLargess(CPlayer * param_1)
 //
-// IMPLEMENTED_OWNER: `TiberiusLargess::load_largess` выше; выдача и map-
-// мутации полны, typed write-log ещё подключается к World FIFO отдельным шагом.
+// IMPLEMENTED_OWNER: `TiberiusLargess::load_largess` выше; typed write-log
+// публикуется через `CGame::publish_largess_load_log` в общий World FIFO.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
