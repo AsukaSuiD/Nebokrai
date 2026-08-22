@@ -3,7 +3,7 @@
 //!
 //! Статусы `SaveFacitonXYD` RVA `0x000ED0F0`, caller-connection overload
 //! `SaveNpcFaction` RVA `0x000ED4B0` и `GetTopTenSZLPlayer` RVA `0x000EE3E0` —
-//! `IMPLEMENTED`; constructor, destructor и оставшиеся load-владельцы ниже
+//! `IMPLEMENTED`; constructor, destructor, catch и COM/compiler cleanup ниже
 //! остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
