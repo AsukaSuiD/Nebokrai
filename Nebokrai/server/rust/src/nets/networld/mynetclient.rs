@@ -90,10 +90,8 @@ const CLOSE_MESSAGE_TYPE: i32 = 0x0003_FC01;
 pub(crate) enum ReceiveError {
     /// CRC little-endian слова `total_len` не совпал со вторым словом envelope.
     LengthChecksumMismatch { expected: u32, actual: u32 },
-    /// Signed-ветвление оригинала не задаёт безопасную реакцию на этот размер.
-    SignedFrameLengthReactionUnknown { declared: u32 },
-    /// Короткий frame ведёт в underflow либо чтение неполного message header.
-    ShortFrameReactionUnknown { declared: u32 },
+    /// Длина меньше полного frame либо не представима положительным long.
+    InvalidFrameLength { declared: u32 },
     /// Создание нормализованного World-сообщения завершилось ошибкой.
     Message(CreateMessageError),
     /// CRC нормализованного сообщения не совпал с третьим словом envelope.
@@ -103,7 +101,7 @@ pub(crate) enum ReceiveError {
         actual: u32,
     },
     /// Размер накопителя вышел за signed 32-битную границу исходного `m_nSize`.
-    PendingSizeOverflowReactionUnknown,
+    PendingSizeOutsideLegacyRange,
 }
 
 /// Результат одного Linux read/send ожидания World-to-Login клиента.
@@ -308,9 +306,7 @@ impl CMyNetClient {
             .checked_add(received.len())
             .filter(|size| *size <= i32::MAX as usize);
         let Some(pending_size) = pending_size else {
-            // BLOCKED_MISSING_FACT: исходный signed `m_nSize` не задаёт
-            // пригодную реакцию на арифметическое переполнение накопителя.
-            return self.discard_pending(ReceiveError::PendingSizeOverflowReactionUnknown);
+            return self.discard_pending(ReceiveError::PendingSizeOutsideLegacyRange);
         };
         self.receive_buffer
             .reserve(pending_size - self.receive_buffer.len());
@@ -339,12 +335,7 @@ impl CMyNetClient {
             }
 
             if (declared as i32) < 0 {
-                // BLOCKED_MISSING_FACT: World RVA 0x00029C30 проверяет
-                // отрицательную declared length только внутри signed-ветки
-                // неполного frame; при накопленных bytes путь вычисляет
-                // unsigned `total_len - 12`.
-                return self
-                    .discard_pending(ReceiveError::SignedFrameLengthReactionUnknown { declared });
+                return self.discard_pending(ReceiveError::InvalidFrameLength { declared });
             }
 
             let frame_len = declared as usize;
@@ -355,9 +346,7 @@ impl CMyNetClient {
                 return self.discard_pending(ReceiveError::Message(CreateMessageError::EmptyInput));
             }
             if frame_len < MIN_SERVER_FRAME_LEN {
-                // BLOCKED_MISSING_FACT: 0..11 переполняет `total_len - 12`,
-                // 13..27 передаёт CreateMessageWithoutRLE неполный header.
-                return self.discard_pending(ReceiveError::ShortFrameReactionUnknown { declared });
+                return self.discard_pending(ReceiveError::InvalidFrameLength { declared });
             }
 
             let expected_content_crc = u32::from_le_bytes(

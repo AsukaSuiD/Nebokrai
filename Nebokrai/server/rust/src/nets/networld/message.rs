@@ -32,7 +32,7 @@
 //! копирование и освобождение временного буфера; локальный owned `Vec<u8>`
 //! устраняет общую память и не оставляет под этим create-lock внешнего эффекта.
 //! Ненулевой вход короче 16-байтового header и переполнение старого умножения
-//! остаются локальными safe-границами, а не объявляются поведением оригинала.
+//! безопасно отклоняются до чтения или выделения.
 //!
 //! Все четыре send-функции строят один envelope
 //! `[total_len, crc(total_len), crc(message), message]`. `SendToSocket`,
@@ -82,12 +82,12 @@ static SEND_SERIALIZER: Mutex<()> = Mutex::new(());
 pub(crate) enum CreateMessageError {
     /// Нулевой decode-result либо нулевой несжатый вход не создаёт сообщение.
     EmptyInput,
-    /// Реакция C++ на ненулевой буфер короче header безопасно не определена.
-    HeaderTooShortReactionUnknown,
+    /// Внутренний wire-буфер короче обязательного header.
+    HeaderTooShort { actual: usize },
     /// Размер не представим 32-битным `unsigned long` исходного API.
     InputOutsideLegacyRange,
-    /// `compressed_len * 8` переполнял старую 32-битную арифметику.
-    RleCapacityOverflowReactionUnknown,
+    /// Требуемая RLE-capacity не представима в 32-битном исходном диапазоне.
+    RleCapacityOutsideLegacyRange,
     /// Декодер отклонил поток либо достиг malformed-границы своего владельца.
     Rle(RleDecodeError),
 }
@@ -165,7 +165,7 @@ impl CMessage {
                 .len()
                 .checked_mul(8)
                 .filter(|capacity| *capacity <= u32::MAX as usize)
-                .ok_or(CreateMessageError::RleCapacityOverflowReactionUnknown)?
+                .ok_or(CreateMessageError::RleCapacityOutsideLegacyRange)?
         };
         let decoded = decode_rle(compressed, output_capacity).map_err(CreateMessageError::Rle)?;
         Self::create_without_rle(&decoded, recv_time_ms)
@@ -183,11 +183,7 @@ impl CMessage {
             return Err(CreateMessageError::InputOutsideLegacyRange);
         }
         if wire.len() < MESSAGE_HEADER_LEN {
-            // BLOCKED_MISSING_FACT: World RVA 0x00022F20 проверяет только
-            // ненулевые pointer/len, затем читает header[0..16] и вызывает
-            // Add(wire + 16, len - 16). Наблюдаемая реакция для 1..15 bytes
-            // не доказана и не заменяется придуманным fail-closed результатом.
-            return Err(CreateMessageError::HeaderTooShortReactionUnknown);
+            return Err(CreateMessageError::HeaderTooShort { actual: wire.len() });
         }
 
         let header = wire[..MESSAGE_HEADER_LEN]

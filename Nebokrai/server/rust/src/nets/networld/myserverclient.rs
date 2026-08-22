@@ -3,8 +3,8 @@
 //!
 //! Статус владельца: `IMPLEMENTED` для constructor/destructor ownership,
 //! `OnClose` и корректного/неполного `OnReceive`. Небезопасные malformed-
-//! границы длины и короткого внутреннего header оставлены локальными
-//! `BLOCKED_MISSING_FACT`, а не объявлены исходным fail-closed.
+//! границы длины и короткого внутреннего header детерминированно очищают
+//! accumulator и возвращают локальную ошибку.
 //!
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
 //! SHA-256 EXE
@@ -68,10 +68,8 @@ const GAME_SERVER_DISCONNECTED: i32 = 0x0003_FC02;
 pub(crate) enum GameServerReceiveError {
     /// CRC little-endian слова `total_len` не совпал со вторым словом envelope.
     LengthChecksumMismatch { expected: u32, actual: u32 },
-    /// Signed-ветвление оригинала не задаёт безопасную реакцию на эту длину.
-    SignedFrameLengthReactionUnknown { declared: u32 },
-    /// `total_len < 12` приводит к недоказанному unsigned вычитанию.
-    ShortFrameReactionUnknown { declared: u32 },
+    /// Длина меньше envelope либо не представима положительным Windows `long`.
+    InvalidFrameLength { declared: u32 },
     /// Конкретный World message-owner не смог безопасно создать сообщение.
     Message(CreateMessageError),
     /// CRC нормализованного сообщения не совпал с третьим словом envelope.
@@ -164,12 +162,9 @@ impl CMyServerClient {
                 });
             }
 
-            // BLOCKED_MISSING_FACT: World RVA 0x0002BD00 сравнивает
-            // `m_nSize < (int)total_len`, а отрицательность проверяет только
-            // внутри этой ветки. Для sign-bit при положительном accumulator
-            // путь перед `len - 12` не задаёт безопасной реакции.
             if (declared as i32) < 0 {
-                return Err(GameServerReceiveError::SignedFrameLengthReactionUnknown { declared });
+                client.discard_receive_data();
+                return Err(GameServerReceiveError::InvalidFrameLength { declared });
             }
 
             let frame_length = declared as usize;
@@ -177,18 +172,15 @@ impl CMyServerClient {
                 break;
             }
             if frame_length < SERVER_ENVELOPE_LEN {
-                // BLOCKED_MISSING_FACT: исходный `total_len - 12` был
-                // unsigned и передавался CreateMessageWithoutRLE.
-                return Err(GameServerReceiveError::ShortFrameReactionUnknown { declared });
+                client.discard_receive_data();
+                return Err(GameServerReceiveError::InvalidFrameLength { declared });
             }
 
             let message_wire = &frame[SERVER_ENVELOPE_LEN..frame_length];
             let message = match CMessage::create_without_rle(message_wire, recv_time_ms) {
                 Ok(message) => message,
                 Err(error) => {
-                    if matches!(error, CreateMessageError::EmptyInput) {
-                        client.discard_receive_data();
-                    }
+                    client.discard_receive_data();
                     return Err(GameServerReceiveError::Message(error));
                 }
             };
