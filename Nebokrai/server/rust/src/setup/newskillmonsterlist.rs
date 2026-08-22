@@ -113,7 +113,6 @@ impl NewSkillMonsterConf {
                         }
                         root_seen = true;
                     } else if depth == 1 && name == b"monsterlist" {
-                        monsterlist_seen = true;
                         return Err(NewSkillMonsterLoadError::MissingMonster);
                     } else if depth == 2 && name == b"monster" {
                         let Some(key) = attribute(&empty, b"strorgname") else {
