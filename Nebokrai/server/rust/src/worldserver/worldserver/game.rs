@@ -8117,6 +8117,36 @@ impl CGame {
         Ok(Some(Box::new(cloned)))
     }
 
+    /// Клонирует map-owner только если ID ещё состоит в creation-list.
+    ///
+    /// Exact caller сначала линейно проходил весь `m_lCreationPlayer`, а при
+    /// первом совпадении без дополнительной мутации вызывал `CloneMapPlayer`.
+    pub(crate) fn clone_creation_player(
+        &mut self,
+        player_id: u32,
+        registry: &GoodsBasePropertiesRegistry,
+        organizing_ctrl: &COrganizingCtrl,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<Option<Box<CPlayer>>, PlayerCodecError> {
+        if !self
+            .creation_players
+            .iter()
+            .any(|creation_id| *creation_id as u32 == player_id)
+        {
+            return Ok(None);
+        }
+        self.clone_map_player(player_id, registry, organizing_ctrl, coefficients)
+    }
+
+    /// Уничтожает единственного player-owner-а по exact unsigned map-key.
+    ///
+    /// `Box`/`BTreeMap::remove` заменяют virtual deleting destructor и erase;
+    /// bool сообщает caller-у только наблюдаемый факт наличия, которого старый
+    /// void API наружу не выдавал.
+    pub(crate) fn delete_map_player(&mut self, player_id: u32) -> bool {
+        self.players.remove(&player_id).is_some()
+    }
+
     /// Повторяет `CloneSavingPlayer` под save-list lock через тот же clone-codec.
     pub(crate) fn clone_saving_player(
         &self,
@@ -8170,7 +8200,7 @@ impl CGame {
             .collect::<Vec<_>>();
         for player_id in creation_ids {
             if let Some(player) =
-                self.clone_map_player(player_id, registry, organizing_ctrl, coefficients)?
+                self.clone_creation_player(player_id, registry, organizing_ctrl, coefficients)?
             {
                 self.append_db_creation_player(player);
             }
@@ -10975,7 +11005,7 @@ impl CGame {
         self.remove_offline_player(player_id);
         let login_time_ms = get_tick();
         self.append_login_player(player_id, login_time_ms);
-        let replaced_existing_player = self.players.remove(&player_id).is_some();
+        let replaced_existing_player = self.delete_map_player(player_id);
         let append_outcome = self.append_map_player(player, |_| {});
         let WorldMapPlayerAppendOutcome::Inserted {
             player_id: inserted_player_id,
@@ -19995,7 +20025,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::DeleteMapPlayer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:2962
@@ -20003,6 +20033,8 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 0040d350
 // PROTOTYPE: void __thiscall DeleteMapPlayer(uint param_1)
 //
+// IMPLEMENTED_OWNER: `CGame::delete_map_player`; `Box` уничтожается перед
+// удалением map-entry, а miss остаётся no-op.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -20106,7 +20138,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::CloneCreationPlayer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:3200
@@ -20114,6 +20146,8 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 00410c70
 // PROTOTYPE: CPlayer * __thiscall CloneCreationPlayer(uint param_1)
 //
+// list сравнивается по тем же 32 битам с unsigned ID, затем используется общий
+// достигнутый `clone_map_player`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
