@@ -1236,7 +1236,7 @@ fn next_war_i32<'a>(
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::OnEnterEnd
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:491
@@ -1244,6 +1244,7 @@ fn next_war_i32<'a>(
 // ADDRESS: 004958f0
 // PROTOTYPE: void __stdcall OnEnterEnd(long param_1)
 //
+// IMPLEMENTED_OWNER: `CFourNationWarSys::on_enter_end` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
