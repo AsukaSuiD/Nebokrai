@@ -1537,7 +1537,8 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::{
     COrganizingParam, OrganizingParamLoadError, OrganizingParamLoadReport,
-    OrganizingTaxScheduleBlock, OrganizingTodayTaxRefreshReport, PreparedTodayTaxRefresh,
+    OrganizingParamReleaseReport, OrganizingTaxScheduleBlock,
+    OrganizingTodayTaxRefreshReport, PreparedTodayTaxRefresh,
 };
 use crate::worldserver::appworld::organizingsystem::union::{
     CUnion, UnionApplicationEndpointBlock, UnionApplicationSessionBlock,
@@ -2107,7 +2108,6 @@ pub(crate) enum WorldGameReleaseVoidOwner {
     ReleaseOrganizingController,
     ReleaseAttackCity,
     ReleaseVillageWar,
-    ReleaseOrganizingParameters,
     ReleaseQuestSystem,
     ReleaseFactionWar,
     ReleaseTimer,
@@ -2169,6 +2169,7 @@ pub(crate) enum WorldGameReleaseEvent {
     },
     DbDataCleared,
     PlayerRanksReleased(PlayerRanksReleaseReport),
+    OrganizingParametersReleased(OrganizingParamReleaseReport),
     SaveWorkerJoined {
         previous_handle: WorldSaveThreadHandleState,
     },
@@ -2223,6 +2224,9 @@ pub(crate) trait WorldGameReleaseContext {
     fn release_database_owner(&mut self, owner: WorldGameReleaseDatabaseOwner) -> bool;
     /// Снимает rank-event с ещё живого timer-а, затем уничтожает rank-owner.
     fn release_player_ranks(&mut self) -> PlayerRanksReleaseReport;
+    /// Снимает events, которые поставил `COrganizingParam`, затем уничтожает
+    /// его раньше общего timer-owner-а.
+    fn release_organizing_parameters(&mut self) -> OrganizingParamReleaseReport;
 
     /// Ждёт и закрывает даже исходный пустой `g_hSavingThread`, затем обнуляет owner.
     fn join_save_worker(&mut self) -> WorldSaveThreadHandleState;
@@ -11398,11 +11402,14 @@ impl CGame {
             WorldGameReleaseVoidOwner::ReleaseOrganizingController,
             WorldGameReleaseVoidOwner::ReleaseAttackCity,
             WorldGameReleaseVoidOwner::ReleaseVillageWar,
-            WorldGameReleaseVoidOwner::ReleaseOrganizingParameters,
         ] {
             context.release_void_owner(owner);
             events.push(WorldGameReleaseEvent::VoidOwner(owner));
         }
+        let organizing_parameters = context.release_organizing_parameters();
+        events.push(WorldGameReleaseEvent::OrganizingParametersReleased(
+            organizing_parameters,
+        ));
         self.quest_system = CQuestSystem::default();
         events.push(WorldGameReleaseEvent::VoidOwner(
             WorldGameReleaseVoidOwner::ReleaseQuestSystem,
