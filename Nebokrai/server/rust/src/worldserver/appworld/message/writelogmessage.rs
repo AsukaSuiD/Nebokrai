@@ -1,8 +1,9 @@
 //! WorldServer dispatcher-owner `OnWriteLogMessage`.
 //!
 //! Весь dispatcher RVA `0x000A8AB0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме
-//! increment-shop `0x6020D`, carriage `0x6020E`, plain player log `0x6020F`,
-//! fairy `0x60210`, reserved no-op `0x60211..0x60213`, auction
+//! player progress `0x60206..0x60208`, increment-shop `0x6020D`, carriage
+//! `0x6020E`, plain player log `0x6020F`, fairy `0x60210`, reserved no-op
+//! `0x60211..0x60213`, auction
 //! `0x60214..0x60217` и ciqing `0x60218` со статусом `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\writelogmessage.cpp:18`.
@@ -55,6 +56,13 @@
 //! устраняют только внутренний memory/SQL defect. Если системный генератор GUID
 //! откажет, точное содержимое старого out-buffer неизвестно и проход явно
 //! возвращает safe block без придуманной DB/live записи.
+//! Player progress `0x60206..0x60208` по exact
+//! `0x004A94AC..0x004A96CB` читает level/experience/death payload в трёх
+//! разных порядках. Player ID и long-поля попадают в SQL как signed `%d`, а
+//! оба level и log-type расширяются из char через `movzx`; отсутствующий player
+//! даёт буквальное имя `"NULL"`. Старый Linux-донор ошибочно сменил player ID
+//! на `%u`; это расхождение не перенесено. Параметризация исправляет только
+//! неэкранированное имя и не добавляет отсутствующую в машине валидацию.
 //! Exact outer jump-table VA `0x004AACA8` направляет все три wire ID
 //! `0x60211..0x60213` прямо в epilogue `0x004AAC87`; Rust поэтому считает их
 //! обработанными no-op, не создавая ложный pending owner. Ветка `0x60218` по
@@ -79,6 +87,9 @@ use crate::worldserver::appworld::incrementlog::incrementlog::CIncrementLog;
 use crate::worldserver::worldserver::game::CGame;
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
+const PLAYER_LEVEL_LOG_MESSAGE: i32 = 0x0006_0206;
+const PLAYER_EXP_LOG_MESSAGE: i32 = 0x0006_0207;
+const PLAYER_DIED_LOG_MESSAGE: i32 = 0x0006_0208;
 const INCREMENT_LOG_MESSAGE: i32 = 0x0006_020D;
 const CARRIAGE_LOG_MESSAGE: i32 = 0x0006_020E;
 const PLAIN_LOG_MESSAGE: i32 = 0x0006_020F;
@@ -222,6 +233,37 @@ pub(crate) enum WorldAuctionSaleLogEvent {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerProgressLogWrite {
+    pub(crate) player_id: i32,
+    pub(crate) player_name: Vec<u8>,
+    pub(crate) event: WorldPlayerProgressLogEvent,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WorldPlayerProgressLogEvent {
+    Level {
+        experience: i32,
+        old_level: u8,
+        current_level: u8,
+        map_id: i32,
+        position_x: i32,
+        position_y: i32,
+    },
+    Experience {
+        experience: i32,
+        map_id: i32,
+        position_x: i32,
+        position_y: i32,
+        log_type: u8,
+    },
+    Died {
+        map_id: i32,
+        position_x: i32,
+        position_y: i32,
+    },
+}
+
 /// Typed очередь сохраняет старый FIFO, но оставляет SQL transport Tiberius-у.
 #[derive(Clone, Debug)]
 pub(crate) enum WorldWriteLogCommand {
@@ -232,6 +274,7 @@ pub(crate) enum WorldWriteLogCommand {
     FairyLog(WorldFairyLogWrite),
     AuctionLog(WorldAuctionLogWrite),
     AuctionSaleLog(WorldAuctionSaleLogWrite),
+    PlayerProgressLog(WorldPlayerProgressLogWrite),
 }
 
 #[derive(Debug)]
@@ -339,6 +382,21 @@ pub(crate) struct WorldAuctionSaleLogMessageOutcome {
 }
 
 #[derive(Debug)]
+pub(crate) enum WorldPlayerProgressPayloadCompleteness {
+    Level([bool; 7]),
+    Experience([bool; 6]),
+    Died([bool; 4]),
+}
+
+#[derive(Debug)]
+pub(crate) struct WorldPlayerProgressLogMessageOutcome {
+    pub(crate) write: WorldPlayerProgressLogWrite,
+    pub(crate) player_found: bool,
+    pub(crate) payload_complete: WorldPlayerProgressPayloadCompleteness,
+    pub(crate) queue_length_after: usize,
+}
+
+#[derive(Debug)]
 pub(crate) enum WorldWriteLogMessageOutcome {
     IncrementLog(WorldIncrementLogMessageOutcome),
     CarriageLog(WorldCarriageLogMessageOutcome),
@@ -347,6 +405,7 @@ pub(crate) enum WorldWriteLogMessageOutcome {
     FairyLog(WorldFairyLogMessageOutcome),
     AuctionLog(WorldAuctionLogMessageOutcome),
     AuctionSaleLog(WorldAuctionSaleLogMessageOutcome),
+    PlayerProgressLog(WorldPlayerProgressLogMessageOutcome),
     ReservedNoOp { message_type: i32 },
 }
 
@@ -398,6 +457,16 @@ pub(crate) fn on_write_log_message(
                 dispatch_time,
                 message,
             )),
+        );
+    }
+    if matches!(
+        message.message_type(),
+        PLAYER_LEVEL_LOG_MESSAGE | PLAYER_EXP_LOG_MESSAGE | PLAYER_DIED_LOG_MESSAGE
+    ) {
+        return WorldWriteLogMessageDispatch::Handled(
+            WorldWriteLogMessageOutcome::PlayerProgressLog(
+                on_player_progress_log_message(game, message),
+            ),
         );
     }
     if message.message_type() == PLAIN_LOG_MESSAGE {
@@ -540,6 +609,109 @@ fn on_auction_log_message(
         payload_complete,
         queue_length_after,
         live_published,
+    }
+}
+
+fn on_player_progress_log_message(
+    game: &CGame,
+    mut message: CMessage,
+) -> WorldPlayerProgressLogMessageOutcome {
+    let (player_id, event, payload_complete) = match message.message_type() {
+        PLAYER_LEVEL_LOG_MESSAGE => {
+            let player_id = message.base_mut().get_long();
+            let experience = message.base_mut().get_long();
+            let old_level = message.base_mut().get_char();
+            let current_level = message.base_mut().get_char();
+            let map_id = message.base_mut().get_long();
+            let position_x = message.base_mut().get_long();
+            let position_y = message.base_mut().get_long();
+            (
+                player_id,
+                WorldPlayerProgressLogEvent::Level {
+                    experience: experience.unwrap_or(0),
+                    old_level: old_level.unwrap_or(0) as u8,
+                    current_level: current_level.unwrap_or(0) as u8,
+                    map_id: map_id.unwrap_or(0),
+                    position_x: position_x.unwrap_or(0),
+                    position_y: position_y.unwrap_or(0),
+                },
+                WorldPlayerProgressPayloadCompleteness::Level([
+                    player_id.is_some(),
+                    experience.is_some(),
+                    old_level.is_some(),
+                    current_level.is_some(),
+                    map_id.is_some(),
+                    position_x.is_some(),
+                    position_y.is_some(),
+                ]),
+            )
+        }
+        PLAYER_EXP_LOG_MESSAGE => {
+            let log_type = message.base_mut().get_char();
+            let player_id = message.base_mut().get_long();
+            let experience = message.base_mut().get_long();
+            let map_id = message.base_mut().get_long();
+            let position_x = message.base_mut().get_long();
+            let position_y = message.base_mut().get_long();
+            (
+                player_id,
+                WorldPlayerProgressLogEvent::Experience {
+                    experience: experience.unwrap_or(0),
+                    map_id: map_id.unwrap_or(0),
+                    position_x: position_x.unwrap_or(0),
+                    position_y: position_y.unwrap_or(0),
+                    log_type: log_type.unwrap_or(0) as u8,
+                },
+                WorldPlayerProgressPayloadCompleteness::Experience([
+                    log_type.is_some(),
+                    player_id.is_some(),
+                    experience.is_some(),
+                    map_id.is_some(),
+                    position_x.is_some(),
+                    position_y.is_some(),
+                ]),
+            )
+        }
+        PLAYER_DIED_LOG_MESSAGE => {
+            let player_id = message.base_mut().get_long();
+            let map_id = message.base_mut().get_long();
+            let position_x = message.base_mut().get_long();
+            let position_y = message.base_mut().get_long();
+            (
+                player_id,
+                WorldPlayerProgressLogEvent::Died {
+                    map_id: map_id.unwrap_or(0),
+                    position_x: position_x.unwrap_or(0),
+                    position_y: position_y.unwrap_or(0),
+                },
+                WorldPlayerProgressPayloadCompleteness::Died([
+                    player_id.is_some(),
+                    map_id.is_some(),
+                    position_x.is_some(),
+                    position_y.is_some(),
+                ]),
+            )
+        }
+        _ => unreachable!("player progress decoder вызывается только для трёх wire ID"),
+    };
+    let player_id = player_id.unwrap_or(0);
+    let player = game.map_player(player_id as u32);
+    let player_found = player.is_some();
+    let player_name = player
+        .map(|player| visible_c_string(player.get_name()))
+        .unwrap_or_else(|| b"NULL".to_vec());
+    let write = WorldPlayerProgressLogWrite {
+        player_id,
+        player_name,
+        event,
+    };
+    let queue_length_after =
+        game.push_write_log_command(WorldWriteLogCommand::PlayerProgressLog(write.clone()));
+    WorldPlayerProgressLogMessageOutcome {
+        write,
+        player_found,
+        payload_complete,
+        queue_length_after,
     }
 }
 

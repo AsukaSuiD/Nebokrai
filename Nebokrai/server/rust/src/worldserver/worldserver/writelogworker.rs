@@ -45,7 +45,8 @@ use tokio_util::compat::TokioAsyncWriteCompatExt;
 use crate::dbaccess::worlddb::rssetup::{WorldDatabaseSettings, WorldTdsClient};
 use crate::public::date::TagTime;
 use crate::worldserver::appworld::message::writelogmessage::{
-    WorldAuctionSaleLogEvent, WorldFairyLogEvent, WorldWriteLogCommand,
+    WorldAuctionSaleLogEvent, WorldFairyLogEvent, WorldPlayerProgressLogEvent,
+    WorldWriteLogCommand,
 };
 
 const INSERT_INCREMENT_LOG_SQL: &str = "INSERT INTO increment_log(\
@@ -89,6 +90,15 @@ const INSERT_AUCTION_SALE_CANCEL_LOG_SQL: &str = "INSERT INTO AuctionSaleLog(\
 const INSERT_AUCTION_SALE_RECEIVE_LOG_SQL: &str = "INSERT INTO AuctionSaleLog(\
     dwOpt,dwPlayerId,dwAmount,guid,date\
 ) VALUES('receive',@P1,@P2,@P3,@P4)";
+const INSERT_PLAYER_LEVEL_LOG_SQL: &str = "INSERT INTO player_level_log(\
+    player_id,player_name,exp,old_level,cur_level,map_id,pos_x,pos_y\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8)";
+const INSERT_PLAYER_EXP_LOG_SQL: &str = "INSERT INTO player_exp_log(\
+    player_id,player_name,exp,map_id,pos_x,pos_y,log_type\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7)";
+const INSERT_PLAYER_DIED_LOG_SQL: &str = "INSERT INTO player_died_log(\
+    player_id,player_name,map_id,pos_x,pos_y\
+) VALUES(@P1,@P2,@P3,@P4,@P5)";
 
 /// Cloneable FIFO-owner для producer-а главного цикла и отдельного DB worker-а.
 ///
@@ -501,6 +511,60 @@ pub(crate) async fn execute_world_write_log_command(
             }
             Ok(())
         }
+        WorldWriteLogCommand::PlayerProgressLog(write) => {
+            match &write.event {
+                WorldPlayerProgressLogEvent::Level {
+                    experience,
+                    old_level,
+                    current_level,
+                    map_id,
+                    position_x,
+                    position_y,
+                } => {
+                    let mut query = Query::new(INSERT_PLAYER_LEVEL_LOG_SQL);
+                    query.bind(write.player_id);
+                    query.bind(decode_legacy_text(&write.player_name));
+                    query.bind(*experience);
+                    query.bind(i32::from(*old_level));
+                    query.bind(i32::from(*current_level));
+                    query.bind(*map_id);
+                    query.bind(*position_x);
+                    query.bind(*position_y);
+                    query.execute(connection).await?;
+                }
+                WorldPlayerProgressLogEvent::Experience {
+                    experience,
+                    map_id,
+                    position_x,
+                    position_y,
+                    log_type,
+                } => {
+                    let mut query = Query::new(INSERT_PLAYER_EXP_LOG_SQL);
+                    query.bind(write.player_id);
+                    query.bind(decode_legacy_text(&write.player_name));
+                    query.bind(*experience);
+                    query.bind(*map_id);
+                    query.bind(*position_x);
+                    query.bind(*position_y);
+                    query.bind(i32::from(*log_type));
+                    query.execute(connection).await?;
+                }
+                WorldPlayerProgressLogEvent::Died {
+                    map_id,
+                    position_x,
+                    position_y,
+                } => {
+                    let mut query = Query::new(INSERT_PLAYER_DIED_LOG_SQL);
+                    query.bind(write.player_id);
+                    query.bind(decode_legacy_text(&write.player_name));
+                    query.bind(*map_id);
+                    query.bind(*position_x);
+                    query.bind(*position_y);
+                    query.execute(connection).await?;
+                }
+            }
+            Ok(())
+        }
     }
 }
 
@@ -546,5 +610,6 @@ fn world_write_log_command_name(command: &WorldWriteLogCommand) -> &'static str 
         WorldWriteLogCommand::FairyLog(_) => "FairyLog",
         WorldWriteLogCommand::AuctionLog(_) => "AuctionLog",
         WorldWriteLogCommand::AuctionSaleLog(_) => "AuctionSaleLog",
+        WorldWriteLogCommand::PlayerProgressLog(_) => "PlayerProgressLog",
     }
 }
