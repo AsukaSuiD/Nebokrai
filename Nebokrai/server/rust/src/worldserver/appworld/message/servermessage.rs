@@ -295,6 +295,7 @@ use crate::public::wordsfilter::WordsFilterSerializeError;
 use crate::setup::cbattlefairyexpconfig::{
     BattleFairyExpSerializeError, CBattleFairyExpConfig,
 };
+use crate::setup::fairyexpconf::CFairyExpConf;
 use crate::setup::contributesetup::ContributeSetupSerializeError;
 use crate::setup::emotion::EmotionSerializeError;
 use crate::setup::goodsdestructionconfig::{GoodsDestroySerializeError, GoodsDestroySetup};
@@ -776,6 +777,15 @@ pub(crate) enum WorldGameServerConnectionContinuation {
         socket_id: i32,
         game_server_index: u32,
     },
+    InitialConfigurationComplete {
+        socket_id: i32,
+        game_server_index: u32,
+    },
+    InitialConfigurationBlocked {
+        socket_id: i32,
+        game_server_index: u32,
+        owner: &'static str,
+    },
     ReconnectPlayerDataPending {
         socket_id: i32,
         game_server_index: u32,
@@ -815,6 +825,7 @@ pub(crate) struct WorldGameServerConnectionReport {
     pub(crate) globe_variables: Option<WorldGlobeVariablesDelivery>,
     pub(crate) login_log: Option<WorldGameServerConnectedLog>,
     pub(crate) reconnect: Option<WorldGameServerReconnectReport>,
+    pub(crate) initial_configuration: Option<WorldInitialConfigurationRunReport>,
     pub(crate) continuation: WorldGameServerConnectionContinuation,
 }
 
@@ -838,6 +849,18 @@ pub(crate) struct WorldInitialConfigurationDelivery {
     pub(crate) payload_length: usize,
     pub(crate) target: WorldInitialConfigurationTarget,
     pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldInitialConfigurationRunCompletion {
+    Complete,
+    Blocked { owner: &'static str },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldInitialConfigurationRunReport {
+    pub(crate) deliveries: Vec<WorldInitialConfigurationDelivery>,
+    pub(crate) completion: WorldInitialConfigurationRunCompletion,
 }
 
 /// Следующая точная позиция после достигнутого initial-config prefix-а.
@@ -2706,6 +2729,7 @@ pub(crate) fn on_game_server_connected(
         globe_variables: None,
         login_log: None,
         reconnect: None,
+        initial_configuration: None,
         continuation: WorldGameServerConnectionContinuation::NotConfigured,
     };
 
@@ -3118,7 +3142,7 @@ pub(crate) fn continue_game_server_precious_box_configuration(
 pub(crate) fn continue_game_server_fairy_exp_configuration(
     game: &CGame,
     socket_id: i32,
-    fairy_exp: &CBattleFairyExpConfig,
+    fairy_exp: &CFairyExpConf,
 ) -> WorldFairyExpConfigurationReport {
     let mut payload = Vec::new();
     if let Err(error) = fairy_exp.add_to_byte_array(&mut payload) {

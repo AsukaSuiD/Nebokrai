@@ -1316,6 +1316,10 @@ use crate::setup::lingbao::{CLingBaoSetup, LingBaoSerializationBlock};
 use crate::setup::newskillmonsterlist::{
     NewSkillMonsterConf, NewSkillMonsterSerializeError,
 };
+use crate::setup::gmlist::CGMList;
+use crate::setup::logsystem::CLogSystem;
+use crate::setup::monsterlist::{MonsterDropRegistry, MonsterRegistry};
+use crate::setup::regionsetup::CRegionSetup;
 use crate::setup::playerlist::{CPlayerList, PlayerListFormatError, PlayerListSerializeError};
 use crate::setup::preciousboxconf::{
     PreciousBoxConf, PreciousBoxSerializeError,
@@ -1510,8 +1514,10 @@ use crate::worldserver::appworld::message::organsysmessage::{
 };
 use crate::worldserver::appworld::message::servermessage::{
     WorldLoginClientReplacement, WorldServerMessageDispatch, WorldServerMessageError,
-    WorldServerMessageOutcome, on_login_client_reconnected, on_server_message,
+    WorldServerMessageOutcome, WorldInitialConfigurationRunCompletion,
+    WorldInitialConfigurationRunReport, on_login_client_reconnected, on_server_message,
 };
+use crate::worldserver::appworld::message::servermessage as servermessage;
 use crate::worldserver::appworld::message::teammessage::{
     WorldTeamMessageOutcome, on_team_message,
 };
@@ -4584,6 +4590,11 @@ pub(crate) type WorldReloadOneScriptResult = Result<bool, WorldReloadOneScriptBl
 
 /// Resource/domain границы, непосредственно вызываемые готовым `CGame::ReLoad`.
 pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
+    /// Общие setup owners, читаемые и reload-ом, и initial-config `0x5FA01`.
+    fn monster_registries(&mut self) -> (&MonsterRegistry, &MonsterDropRegistry);
+    fn log_system(&mut self) -> &CLogSystem;
+    fn region_setup(&mut self) -> &CRegionSetup;
+    fn gm_list(&mut self) -> &CGMList;
     /// Отдельный mutable owner исторических static `CPlayerList` data.
     ///
     /// Он остаётся вне `CGame`, поскольку тот же экземпляр участвует в
@@ -8277,6 +8288,176 @@ impl CGame {
         self.send_reload_payload(0x1B, &payload);
         context.add_log_text(b"Load CityWarPara...OK!");
         Ok(legacy_result)
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "initial-config использует те же live owners, что Init/reload/MainLoop"
+    )]
+    fn send_initial_game_server_configuration<Context: WorldReloadContext + ?Sized>(
+        &self,
+        context: &mut Context,
+        socket_id: i32,
+        game_server_index: u32,
+        registry: &GoodsBasePropertiesRegistry,
+        player_list: &CPlayerList,
+        skills: &CSkillFactory,
+        globe_setup: &GlobeSetupSnapshot,
+        region_router: &RegionRouter,
+        country_parameters: &CCountryParam,
+        country_handler: &CCountryHandler,
+        gods_battle: &CGodsBattleConf,
+        four_nation_war: &CFourNationWarSys,
+        honor_ranks: &CHonorRanks,
+        player_ranks: &CPlayerRanks,
+        general_variables: Option<&CVariableList>,
+        attack_city: &CAttackCitySys,
+        village_war: &CVillageWarSys,
+        country_war: &CountryWarSys,
+    ) -> WorldInitialConfigurationRunReport {
+        let mut deliveries = Vec::new();
+        macro_rules! blocked {
+            ($owner:literal) => {
+                return WorldInitialConfigurationRunReport {
+                    deliveries,
+                    completion: WorldInitialConfigurationRunCompletion::Blocked {
+                        owner: $owner,
+                    },
+                }
+            };
+        }
+        macro_rules! optional_step {
+            ($report:expr, $pending:pat, $owner:literal) => {{
+                let report = $report;
+                if let Some(delivery) = report.delivery {
+                    deliveries.push(delivery);
+                }
+                if !matches!(report.completion, $pending) {
+                    blocked!($owner);
+                }
+            }};
+        }
+
+        let mut da_kong = Vec::new();
+        if context
+            .da_kong_xiang_qian()
+            .add_to_byte_array(&mut da_kong)
+            .is_err()
+        {
+            blocked!("CDaKongXiangQian");
+        }
+        let prefix = servermessage::continue_game_server_initial_configuration_prefix(
+            self,
+            socket_id,
+            servermessage::WorldGameServerInitialConfigurationPrefix {
+                da_kong_xiang_qian: &da_kong,
+                goods_registry: registry,
+            },
+        );
+        deliveries.extend(prefix.deliveries);
+        if !matches!(
+            prefix.completion,
+            servermessage::WorldInitialConfigurationPrefixCompletion::MonsterListPending { .. }
+        ) {
+            blocked!("initial prefix");
+        }
+
+        let (monster_registry, monster_drop_registry) = context.monster_registries();
+        let monsters = servermessage::continue_game_server_monster_configuration(
+            self,
+            socket_id,
+            monster_registry,
+            monster_drop_registry,
+        );
+        if let Some(delivery) = monsters.delivery {
+            deliveries.push(delivery);
+        }
+        if !matches!(
+            monsters.completion,
+            servermessage::WorldMonsterConfigurationCompletion::HitLevelSetupPending { .. }
+        ) {
+            blocked!("CMonsterList");
+        }
+        optional_step!(servermessage::continue_game_server_hit_level_configuration(self, socket_id), servermessage::WorldHitLevelConfigurationCompletion::PlayerListPending { .. }, "CHitLevelSetup");
+        optional_step!(servermessage::continue_game_server_player_list_configuration(self, socket_id, player_list), servermessage::WorldPlayerListConfigurationCompletion::EmotionPending { .. }, "CPlayerList");
+        optional_step!(servermessage::continue_game_server_emotion_configuration(self, socket_id), servermessage::WorldEmotionConfigurationCompletion::SkillFactoryPending { .. }, "CEmotion");
+        optional_step!(servermessage::continue_game_server_skill_configuration(self, socket_id, skills), servermessage::WorldSkillConfigurationCompletion::TradeListPending { .. }, "CSkillFactory");
+        optional_step!(servermessage::continue_game_server_trade_list_configuration(self, socket_id), servermessage::WorldTradeListConfigurationCompletion::IncrementShopListPending { .. }, "CTradeList");
+        optional_step!(servermessage::continue_game_server_increment_shop_configuration(self, socket_id), servermessage::WorldIncrementShopConfigurationCompletion::ContributeSetupPending { .. }, "CIncrementShopList");
+        optional_step!(servermessage::continue_game_server_contribute_configuration(self, socket_id), servermessage::WorldContributeConfigurationCompletion::PrisonConfigurationPending { .. }, "CContributeSetup");
+        optional_step!(servermessage::continue_game_server_prison_configuration(self, socket_id), servermessage::WorldPrisonConfigurationCompletion::PreciousBoxConfigurationPending { .. }, "PrisonConf");
+        optional_step!(servermessage::continue_game_server_precious_box_configuration(self, socket_id, context.precious_box_conf()), servermessage::WorldPreciousBoxConfigurationCompletion::FairyExpConfigurationPending { .. }, "PreciousBoxConf");
+        optional_step!(servermessage::continue_game_server_fairy_exp_configuration(self, socket_id, context.fairy_exp_conf()), servermessage::WorldFairyExpConfigurationCompletion::SynthesisConfigurationPending { .. }, "CFairyExpConf");
+        optional_step!(servermessage::continue_game_server_synthesis_configuration(self, socket_id, context.synthesis()), servermessage::WorldSynthesisConfigurationCompletion::EquipmentComposeConfigurationPending { .. }, "CSynthesis");
+        optional_step!(servermessage::continue_game_server_equipment_compose_configuration(self, socket_id), servermessage::WorldEquipmentComposeConfigurationCompletion::NewSkillMonsterConfigurationPending { .. }, "EquipmentComposeList");
+        optional_step!(servermessage::continue_game_server_new_skill_monster_configuration(self, socket_id, context.new_skill_monster_conf()), servermessage::WorldNewSkillMonsterConfigurationCompletion::GoodsDestroyConfigurationPending { .. }, "CNewSkillMonsterConf");
+        optional_step!(servermessage::continue_game_server_goods_destroy_configuration(self, socket_id, context.goods_destroy_setup()), servermessage::WorldGoodsDestroyConfigurationCompletion::GlobeSetupConfigurationPending { .. }, "CGoodsDestroySetup");
+        optional_step!(servermessage::continue_game_server_globe_setup_configuration(self, socket_id, globe_setup, region_router), servermessage::WorldGlobeSetupConfigurationCompletion::LogSystemConfigurationPending { .. }, "CGlobeSetup");
+        optional_step!(servermessage::continue_game_server_log_system_configuration(self, socket_id, context.log_system()), servermessage::WorldLogSystemConfigurationCompletion::CountryParamConfigurationPending { .. }, "CLogSystem");
+        optional_step!(servermessage::continue_game_server_country_param_configuration(self, socket_id, country_parameters), servermessage::WorldCountryParamConfigurationCompletion::CountryHandlerConfigurationPending { .. }, "CCountryParam");
+        optional_step!(servermessage::continue_game_server_country_handler_configuration(self, socket_id, country_handler), servermessage::WorldCountryHandlerConfigurationCompletion::GodsBattleConfigurationPending { .. }, "CCountryHandler");
+        optional_step!(servermessage::continue_game_server_gods_battle_configuration(self, socket_id, gods_battle), servermessage::WorldGodsBattleConfigurationCompletion::RegionSnapshotsPending { .. }, "CGodsBattleConf");
+
+        let regions = servermessage::continue_game_server_region_configurations(
+            self,
+            socket_id,
+            game_server_index,
+            |milliseconds| std::thread::sleep(Duration::from_millis(u64::from(milliseconds))),
+        );
+        deliveries.extend(regions.deliveries.into_iter().map(|entry| entry.delivery));
+        if !matches!(regions.completion, servermessage::WorldRegionConfigurationCompletion::RegionSetupConfigurationPending { .. }) {
+            blocked!("CWorldRegion");
+        }
+        optional_step!(servermessage::continue_game_server_region_setup_configuration(self, socket_id, context.region_setup()), servermessage::WorldRegionSetupConfigurationCompletion::DupliRegionSetupPending { .. }, "CRegionSetup");
+        optional_step!(servermessage::continue_game_server_dupli_region_configuration(self, socket_id), servermessage::WorldDupliRegionConfigurationCompletion::HonorEliminateConfigurationPending { .. }, "CDupliRegionSetup");
+
+        let honor_eliminate = servermessage::continue_game_server_honor_eliminate_configuration(self, socket_id, *context.honor_eliminate_config());
+        deliveries.push(honor_eliminate.delivery);
+        let honor = servermessage::continue_game_server_honor_ranks_configuration(self, socket_id, honor_ranks);
+        deliveries.extend(honor.deliveries.into_iter().map(|entry| entry.delivery));
+        if !matches!(honor.completion, servermessage::WorldHonorRanksConfigurationCompletion::FunctionListPending { .. }) {
+            blocked!("CHonorRanks");
+        }
+        let raw_scripts = servermessage::continue_game_server_raw_script_lists_configuration(self, socket_id);
+        deliveries.extend(raw_scripts.deliveries.into_iter().map(|entry| entry.delivery));
+        if !matches!(raw_scripts.completion, servermessage::WorldRawScriptListsConfigurationCompletion::GeneralVariableListPending { .. }) {
+            blocked!("raw script lists");
+        }
+        optional_step!(servermessage::continue_game_server_general_variable_configuration(self, socket_id, general_variables), servermessage::WorldGeneralVariableConfigurationCompletion::ScriptFilesPending { .. }, "CVariableList");
+        let scripts = servermessage::continue_game_server_script_files_configuration(self, socket_id);
+        deliveries.extend(scripts.deliveries.into_iter().map(|entry| entry.delivery));
+        if !matches!(scripts.completion, servermessage::WorldScriptFilesConfigurationCompletion::QuestSystemPending { .. }) {
+            blocked!("script files");
+        }
+        optional_step!(servermessage::continue_game_server_quest_configuration(self, socket_id), servermessage::WorldQuestConfigurationCompletion::PlayerRanksPending { .. }, "CQuestSystem");
+        optional_step!(servermessage::continue_game_server_player_ranks_configuration(self, socket_id, player_ranks), servermessage::WorldPlayerRanksConfigurationCompletion::GmListPending { .. }, "CPlayerRanks");
+        optional_step!(servermessage::continue_game_server_gm_list_configuration(self, socket_id, game_server_index, context.gm_list()), servermessage::WorldGmListConfigurationCompletion::GameServerIndexPending { .. }, "CGMList");
+
+        let index = servermessage::continue_game_server_index_configuration(self, socket_id, game_server_index);
+        deliveries.push(index.delivery);
+        optional_step!(servermessage::continue_game_server_four_nation_war_configuration(self, socket_id, four_nation_war), servermessage::WorldFourNationWarConfigurationCompletion::BattleFairyExpConfigurationPending { .. }, "CFourNationWarSys");
+        optional_step!(servermessage::continue_game_server_battle_fairy_exp_configuration(self, socket_id, context.battle_fairy_exp_config()), servermessage::WorldBattleFairyExpConfigurationCompletion::BattleFairyPropertyPending { .. }, "CBattleFairyExpConfig");
+        optional_step!(servermessage::continue_game_server_battle_fairy_property_configuration(self, socket_id, context.battle_fairy_property()), servermessage::WorldBattleFairyPropertyConfigurationCompletion::CiQingLingBaoConfigurationPending { .. }, "CBattleFairyProperty");
+        optional_step!(servermessage::continue_game_server_ciqing_ling_bao_configuration(self, socket_id, context.ling_bao_setup()), servermessage::WorldCiQingLingBaoConfigurationCompletion::TaoZhuangConfigurationPending { .. }, "CCiQingSetup/CLingBaoSetup");
+        optional_step!(servermessage::continue_game_server_tao_zhuang_configuration(self, socket_id), servermessage::WorldTaoZhuangConfigurationCompletion::AttackCityConfigurationPending { .. }, "CTaoZhuangSetup");
+
+        let attack = servermessage::continue_game_server_attack_city_configuration(self, socket_id, attack_city);
+        deliveries.push(attack.delivery);
+        let village = servermessage::continue_game_server_village_war_configuration(self, socket_id, village_war);
+        deliveries.push(village.delivery);
+        let country = servermessage::continue_game_server_country_war_configuration(self, socket_id, country_war);
+        deliveries.push(country.delivery);
+        let identity = servermessage::finish_game_server_initial_configuration(self, socket_id);
+        if let Some(delivery) = identity.delivery {
+            deliveries.push(delivery);
+        }
+        if !matches!(identity.completion, servermessage::WorldGameServerIdentityCompletion::InitialConfigurationComplete { .. }) {
+            blocked!("GameServer identity");
+        }
+        WorldInitialConfigurationRunReport {
+            deliveries,
+            completion: WorldInitialConfigurationRunCompletion::Complete,
+        }
     }
 
     fn load_skill_factory_cache<Context: WorldReloadContext + ?Sized>(
@@ -12256,6 +12437,7 @@ impl CGame {
     pub(crate) async fn process_message<TimerCallback, DbMiscContextOwner, JjcContext>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
+        player_ranks: &CPlayerRanks,
         increment_log: &mut CIncrementLog,
         auction_log: &mut CAuctionLog,
         db_misc: &CDbMisc,
@@ -12360,6 +12542,7 @@ impl CGame {
                         events.push(process_world_message(
                             self,
                             honor_ranks,
+                            player_ranks,
                             increment_log,
                             auction_log,
                             db_misc,
@@ -12459,6 +12642,7 @@ impl CGame {
                 events.push(process_world_message(
                     self,
                     honor_ranks,
+                    player_ranks,
                     increment_log,
                     auction_log,
                     db_misc,
@@ -12562,6 +12746,7 @@ impl CGame {
     >(
         &mut self,
         honor_ranks: &mut CHonorRanks,
+        player_ranks: &CPlayerRanks,
         increment_log: &mut CIncrementLog,
         auction_log: &mut CAuctionLog,
         db_misc: &CDbMisc,
@@ -12663,6 +12848,7 @@ impl CGame {
         };
         let outcome = match self.process_message(
             honor_ranks,
+            player_ranks,
             increment_log,
             auction_log,
             db_misc,
@@ -14166,6 +14352,7 @@ impl CGame {
         };
         let process_message = match self.process_message_main_loop_stage(
             owners.honor_ranks,
+            owners.player_ranks,
             owners.increment_log,
             owners.auction_log,
             &*owners.db_misc,
@@ -18206,6 +18393,7 @@ impl CountryWarTopInfoContext for WorldCountryWarEffects<'_> {
 async fn process_world_message<TimerCallback, DbMiscContextOwner, JjcContext>(
     game: &mut CGame,
     honor_ranks: &mut CHonorRanks,
+    player_ranks: &CPlayerRanks,
     increment_log: &mut CIncrementLog,
     auction_log: &mut CAuctionLog,
     db_misc: &CDbMisc,
@@ -18274,7 +18462,7 @@ async fn process_world_message<TimerCallback, DbMiscContextOwner, JjcContext>(
         &WorldSaveThreadLaunchRequest,
     ) -> WorldSaveThreadHandleState,
     session_factory: &mut CSessionFactory,
-    general_variables: Option<&mut CVariableList>,
+    mut general_variables: Option<&mut CVariableList>,
     gods_battle: &mut CGodsBattleConf,
     skills: &mut CSkillFactory,
     mut rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
@@ -18312,7 +18500,7 @@ where
             launch_save_thread,
             add_log_text,
             session_factory,
-            general_variables,
+            general_variables.as_deref_mut(),
             globe_setup,
             gods_battle,
             rs_gods_battle.as_deref_mut(),
@@ -18320,7 +18508,51 @@ where
         )
         .await
         {
-            WorldServerMessageDispatch::Handled(outcome) => {
+            WorldServerMessageDispatch::Handled(mut outcome) => {
+                if let WorldServerMessageOutcome::GameServerConnection(report) = &mut outcome {
+                    if let servermessage::WorldGameServerConnectionContinuation::InitialConfigurationPending {
+                        socket_id,
+                        game_server_index,
+                    } = report.continuation.clone()
+                    {
+                        let configuration = game.send_initial_game_server_configuration(
+                            reload_context,
+                            socket_id,
+                            game_server_index,
+                            registry,
+                            player_list,
+                            skills,
+                            globe_setup,
+                            region_router,
+                            country_parameters,
+                            country_handler,
+                            gods_battle,
+                            four_nation_war,
+                            honor_ranks,
+                            player_ranks,
+                            general_variables.as_deref(),
+                            attack_city,
+                            village_war,
+                            country_war,
+                        );
+                        report.continuation = match configuration.completion {
+                            WorldInitialConfigurationRunCompletion::Complete => {
+                                servermessage::WorldGameServerConnectionContinuation::InitialConfigurationComplete {
+                                    socket_id,
+                                    game_server_index,
+                                }
+                            }
+                            WorldInitialConfigurationRunCompletion::Blocked { owner } => {
+                                servermessage::WorldGameServerConnectionContinuation::InitialConfigurationBlocked {
+                                    socket_id,
+                                    game_server_index,
+                                    owner,
+                                }
+                            }
+                        };
+                        report.initial_configuration = Some(configuration);
+                    }
+                }
                 return ProcessedWorldEvent::ServerMessage {
                     source,
                     legacy_run_result,
