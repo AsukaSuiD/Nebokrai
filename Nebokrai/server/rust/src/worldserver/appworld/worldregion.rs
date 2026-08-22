@@ -114,6 +114,12 @@
 //! NUL следующего `time`, поэтому только эта граница оставлена
 //! `BLOCKED_MISSING_FACT`. После setup serializer дописывает все девять DWORD
 //! `m_Param`.
+//! Exact PDB называет NPC как `bShowList/lPicID/rectRange/lNum/lDir/lTime`,
+//! а monster group — как `lIndex/rectRange/lNum/lResetTime/lStartTime/lDir`.
+//! `LoadNpcList` присваивает `lTime = 0`; Rust держит все эти значения
+//! именованно и строит wire prefix в исходном x86 порядке. Особый prefix
+//! `tagMonsterList` остаётся отдельным compatibility-слоем из-за захваченного
+//! старого MSVC `std::string`.
 
 use super::country::countryparam::CCountryParam;
 use super::organizingsystem::faction::{
@@ -286,24 +292,80 @@ pub(crate) enum WorldRegionParamDecodeError {
     },
 }
 
-#[derive(Clone, Debug)]
+/// Доказанные scalar-поля PDB `CWorldRegion::tagNpc`.
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct WorldRegionNpc {
-    header: [u8; 0x24],
+    show_list: bool,
+    picture_id: i32,
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+    count: i32,
+    direction: i32,
+    time: i32,
     name: Vec<u8>,
     script: Vec<u8>,
 }
 
-#[derive(Clone, Debug)]
+impl WorldRegionNpc {
+    /// Сохраняет доказанные три padding bytes после old `bool` нулевыми,
+    /// как прежняя safe Rust-реконструкция.
+    fn wire_header(&self) -> [u8; 0x24] {
+        let mut bytes = [0; 0x24];
+        bytes[0] = u8::from(self.show_list);
+        for (offset, value) in [
+            (4, self.picture_id),
+            (8, self.left),
+            (0x0C, self.top),
+            (0x10, self.right),
+            (0x14, self.bottom),
+            (0x18, self.count),
+            (0x1C, self.direction),
+            (0x20, self.time),
+        ] {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        bytes
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct WorldRegionMonsterVariant {
     legacy_prefix: [u8; 0x22],
     name: Vec<u8>,
     script: Vec<u8>,
 }
 
-#[derive(Clone, Debug)]
+/// Доказанные scalar-поля PDB `CWorldRegion::tagMonster`.
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct WorldRegionMonster {
-    header: [u8; 0x24],
+    index: i32,
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+    count: i32,
+    reset_time: i32,
+    start_time: i32,
+    direction: i32,
     variants: Vec<WorldRegionMonsterVariant>,
+}
+
+impl WorldRegionMonster {
+    const fn wire_scalars(&self) -> [i32; 9] {
+        [
+            self.index,
+            self.left,
+            self.top,
+            self.right,
+            self.bottom,
+            self.count,
+            self.reset_time,
+            self.start_time,
+            self.direction,
+        ]
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -574,29 +636,27 @@ impl CWorldRegion {
         let mut tokens = RegionSetupTokens::new(bytes);
         let mut loaded = Vec::new();
         while tokens.seek_to(b"#") {
-            let visible = tokens.next_i32_field("tagNpc.bDisplay")? != 0;
+            let visible = tokens.next_i32_field("tagNpc.bShowList")? != 0;
             let left = tokens.next_i32_field("tagNpc.left")?;
             let top = tokens.next_i32_field("tagNpc.top")?;
             let right = tokens.next_i32_field("tagNpc.right")?;
             let bottom = tokens.next_i32_field("tagNpc.bottom")?;
             let string_id = tokens.next_bytes_field("tagNpc.stringID")?;
-            let graphics_id = tokens.next_i32_field("tagNpc.lGraphicsID")?;
-            let count = tokens.next_i32_field("tagNpc.lCount")?;
+            let graphics_id = tokens.next_i32_field("tagNpc.lPicID")?;
+            let count = tokens.next_i32_field("tagNpc.lNum")?;
             let direction = tokens.next_i32_field("tagNpc.lDir")?;
             let script = normalize_legacy_script(tokens.next_bytes_field("tagNpc.strScript")?);
 
-            let mut header = [0; 0x24];
-            header[0] = u8::from(visible);
-            write_i32_at(&mut header, 4, graphics_id);
-            write_i32_at(&mut header, 8, left);
-            write_i32_at(&mut header, 0x0C, top);
-            write_i32_at(&mut header, 0x10, right);
-            write_i32_at(&mut header, 0x14, bottom);
-            write_i32_at(&mut header, 0x18, count);
-            write_i32_at(&mut header, 0x1C, direction);
-            write_i32_at(&mut header, 0x20, 0);
             loaded.push(WorldRegionNpc {
-                header,
+                show_list: visible,
+                picture_id: graphics_id,
+                left,
+                top,
+                right,
+                bottom,
+                count,
+                direction,
+                time: 0,
                 name: legacy_c_string_prefix(&resolve_name(string_id)).to_vec(),
                 script,
             });
@@ -639,7 +699,15 @@ impl CWorldRegion {
             fields[6] = fields[6].wrapping_mul(1000);
             fields[7] = fields[7].wrapping_mul(1000);
             monsters.push(WorldRegionMonster {
-                header: i32_fields_to_bytes(fields),
+                index: fields[0],
+                left: fields[1],
+                top: fields[2],
+                right: fields[3],
+                bottom: fields[4],
+                count: fields[5],
+                reset_time: fields[6],
+                start_time: fields[7],
+                direction: fields[8],
                 variants: Vec::new(),
             });
         }
@@ -649,9 +717,7 @@ impl CWorldRegion {
         while let Some(token) = tokens.next_bytes_optional() {
             if token == b"id" {
                 let id = tokens.next_i32_field("tagMonsterList.id")?;
-                current = monsters
-                    .iter()
-                    .position(|monster| read_i32_at(&monster.header, 0) == id);
+                current = monsters.iter().position(|monster| monster.index == id);
                 if current.is_none() {
                     // Доказанная странность поставки: если `id` не найден,
                     // RVA 0x00076AC0 остаётся во внешнем scanner-е, пропускает
@@ -693,9 +759,9 @@ impl CWorldRegion {
             });
         }
 
-        let total = monsters.iter().fold(0i32, |sum, monster| {
-            sum.wrapping_add(read_i32_at(&monster.header, 0x14))
-        });
+        let total = monsters
+            .iter()
+            .fold(0i32, |sum, monster| sum.wrapping_add(monster.count));
         self.monsters = monsters;
         Ok(total)
     }
@@ -1021,13 +1087,15 @@ impl CWorldRegion {
 
         append_count(destination, "m_listNpc", self.npcs.len())?;
         for npc in &self.npcs {
-            destination.extend_from_slice(&npc.header);
+            destination.extend_from_slice(&npc.wire_header());
             append_c_string(destination, &npc.name);
             append_c_string(destination, &npc.script);
         }
         append_count(destination, "m_listMonster", self.monsters.len())?;
         for monster in &self.monsters {
-            destination.extend_from_slice(&monster.header);
+            for scalar in monster.wire_scalars() {
+                destination.extend_from_slice(&scalar.to_le_bytes());
+            }
             append_count(
                 destination,
                 "tagMonster.vectorMonsterList",
@@ -1149,26 +1217,6 @@ const MONSTER_GROUP_FIELDS: [&str; 9] = [
     "tagMonster.lStartTime",
     "tagMonster.lDir",
 ];
-
-fn i32_fields_to_bytes(fields: [i32; 9]) -> [u8; 0x24] {
-    let mut bytes = [0; 0x24];
-    for (index, value) in fields.into_iter().enumerate() {
-        write_i32_at(&mut bytes, index * 4, value);
-    }
-    bytes
-}
-
-fn write_i32_at<const N: usize>(destination: &mut [u8; N], offset: usize, value: i32) {
-    destination[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-}
-
-fn read_i32_at<const N: usize>(source: &[u8; N], offset: usize) -> i32 {
-    i32::from_le_bytes(
-        source[offset..offset + 4]
-            .try_into()
-            .expect("четыре байта внутри фиксированного record"),
-    )
-}
 
 fn legacy_monster_variant_prefix(
     cumulative_odds: u16,
