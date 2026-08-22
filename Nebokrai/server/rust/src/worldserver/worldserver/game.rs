@@ -22229,7 +22229,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // IMPLEMENTED: `CGame::ReLoadOneRegionSetup` RVA `0x000120F0` находится выше; exact EXE подтверждает отдельные true/false epilogue.
 
 // ============================================================================
-// IMPLEMENTED: `CGame::LoadRegionList` RVA `0x00012220` находится выше; поставочные subtype/load/serialize вызываются напрямую, COUNTRY type `3` остаётся raw-границей.
+// IMPLEMENTED: `CGame::LoadRegionList` RVA `0x00012220` находится выше; все поставочные subtype/load/serialize, включая COUNTRY type `3` через `WorldCountryWarRegion`, вызываются напрямую.
 
 // ============================================================================
 // FUNCTION: CGame::GetCreationPlayerVectorByCdkey

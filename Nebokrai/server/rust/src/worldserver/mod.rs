@@ -148,7 +148,7 @@ pub(crate) mod appworld {
         pub(crate) mod auction;
         #[allow(
             dead_code,
-            reason = "M2W auction relay подключён к ProcessMessage; DB-ветви остаются pending"
+            reason = "M2W auction `0x15EB01..=0x15EB08` подключён к ProcessMessage вместе с точными DbMisc-ветвями"
         )]
         pub(crate) mod onmsg_m2w_auction;
         pub(crate) mod gmamessage;
@@ -179,7 +179,7 @@ pub(crate) mod appworld {
         pub(crate) mod teammessage;
         #[allow(
             dead_code,
-            reason = "increment producer 0x6020D подключён; остальные write-log opcodes остаются RAW"
+            reason = "все достигнутые write-log opcode `0x60201..=0x60218` подключены к ProcessMessage"
         )]
         pub(crate) mod writelogmessage;
     }
