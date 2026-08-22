@@ -105,6 +105,12 @@ const INSERT_TEAM_LOG_SQL: &str = "INSERT INTO team_log(\
 const INSERT_PLAYER_KILLER_LOG_SQL: &str = "INSERT INTO player_killer_log(\
     player_id,player_name,murderer_id,murderer_name,map_id,pos_x,pos_y,log_type\
 ) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8)";
+const INSERT_CHAT_LOG_SQL: &str = "INSERT INTO chat_log(\
+    sender_id,sender_name,map_id,pos_x,pos_y,receiver_id,receiver_name,content,log_type\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9)";
+const INSERT_CHANGE_MAP_LOG_SQL: &str = "INSERT INTO change_map_log(\
+    player_id,player_name,money,bank,s_map_id,s_pos_x,s_pos_y,d_map_id,d_pos_x,d_pos_y,log_type\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11)";
 
 /// Cloneable FIFO-owner для producer-а главного цикла и отдельного DB worker-а.
 ///
@@ -611,6 +617,43 @@ pub(crate) async fn execute_world_write_log_command(
             }
             Ok(())
         }
+        WorldWriteLogCommand::ChatLog(write) => {
+            let mut query = Query::new(INSERT_CHAT_LOG_SQL);
+            query.bind(write.sender_id);
+            query.bind(decode_legacy_text(&write.sender_name));
+            query.bind(write.map_id);
+            query.bind(write.position_x);
+            query.bind(write.position_y);
+            query.bind(write.receiver_id);
+            query.bind(decode_legacy_text(&write.receiver_name));
+            query.bind(decode_legacy_text(&write.content));
+            query.bind(i32::from(write.log_type));
+            query.execute(connection).await?;
+            Ok(())
+        }
+        WorldWriteLogCommand::LegacyEmptyChatSql { log_type: _ } => {
+            // Exact jump-table ставил очищенный `_Dest` в FIFO; ExecuteCn затем
+            // исполнял именно пустую строку. Query сохраняет тот же DB-запрос,
+            // оставляя transport-specific success/failure самому SQL Server.
+            Query::new("").execute(connection).await?;
+            Ok(())
+        }
+        WorldWriteLogCommand::ChangeMapLog(write) => {
+            let mut query = Query::new(INSERT_CHANGE_MAP_LOG_SQL);
+            query.bind(write.player_id);
+            query.bind(decode_legacy_text(&write.player_name));
+            query.bind(write.money);
+            query.bind(write.bank);
+            query.bind(write.source_map_id);
+            query.bind(write.source_position_x);
+            query.bind(write.source_position_y);
+            query.bind(write.destination_map_id);
+            query.bind(write.destination_position_x);
+            query.bind(write.destination_position_y);
+            query.bind(i32::from(write.log_type));
+            query.execute(connection).await?;
+            Ok(())
+        }
     }
 }
 
@@ -658,5 +701,8 @@ fn world_write_log_command_name(command: &WorldWriteLogCommand) -> &'static str 
         WorldWriteLogCommand::AuctionSaleLog(_) => "AuctionSaleLog",
         WorldWriteLogCommand::PlayerProgressLog(_) => "PlayerProgressLog",
         WorldWriteLogCommand::PlayerRelationLog(_) => "PlayerRelationLog",
+        WorldWriteLogCommand::ChatLog(_) => "ChatLog",
+        WorldWriteLogCommand::LegacyEmptyChatSql { .. } => "LegacyEmptyChatSql",
+        WorldWriteLogCommand::ChangeMapLog(_) => "ChangeMapLog",
     }
 }

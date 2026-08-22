@@ -2,7 +2,7 @@
 //!
 //! Весь dispatcher RVA `0x000A8AB0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме
 //! player progress `0x60206..0x60208`, team/killer `0x60209..0x6020A`,
-//! increment-shop `0x6020D`, carriage
+//! chat/change-map `0x6020B..0x6020C`, increment-shop `0x6020D`, carriage
 //! `0x6020E`, plain player log `0x6020F`, fairy `0x60210`, reserved no-op
 //! `0x60211..0x60213`, auction
 //! `0x60214..0x60217` и ciqing `0x60218` со статусом `IMPLEMENTED`. Точная пара:
@@ -70,6 +70,17 @@
 //! Team читает обе, но machine `_sprintf` дважды передаёт последний `pos_y`,
 //! поэтому DB `pos_x == pos_y`; этот наблюдаемый quirk сохранён явно, тогда как
 //! Linux-донор молча использовал прочитанный `pos_x`.
+//! Chat/change-map `0x6020B..0x6020C` по exact
+//! `0x004A9909..0x004A9D38` используют signed long и unsigned chat/log type.
+//! Chat отбрасывает пустой content до enqueue; private type `5` единственный
+//! дочитывает receiver ID, остальные подтверждённые типы получают exact метки
+//! `<public>/<Region>/<team>/<GM-code>/<world>/<country>`. Jump-table типов
+//! `2`, `3` и значений вне `0..8` неожиданно попадает прямо в общий enqueue с
+//! пустым SQL-buffer. `PushWriteLogData` `0x004ECC40` пустую строку не
+//! фильтрует, поэтому этот DB-worker quirk сохранён отдельной typed-командой;
+//! Linux-донор ошибочно делал ранний `return`. Параметризация заменила только
+//! `FixSingleQuotes` и неэкранированные имена. Change-map сохраняет обычный
+//! wire-порядок source/destination координат и не добавляет валидацию.
 //! Exact outer jump-table VA `0x004AACA8` направляет все три wire ID
 //! `0x60211..0x60213` прямо в epilogue `0x004AAC87`; Rust поэтому считает их
 //! обработанными no-op, не создавая ложный pending owner. Ветка `0x60218` по
@@ -99,6 +110,8 @@ const PLAYER_EXP_LOG_MESSAGE: i32 = 0x0006_0207;
 const PLAYER_DIED_LOG_MESSAGE: i32 = 0x0006_0208;
 const TEAM_LOG_MESSAGE: i32 = 0x0006_0209;
 const PLAYER_KILLER_LOG_MESSAGE: i32 = 0x0006_020A;
+const CHAT_LOG_MESSAGE: i32 = 0x0006_020B;
+const CHANGE_MAP_LOG_MESSAGE: i32 = 0x0006_020C;
 const INCREMENT_LOG_MESSAGE: i32 = 0x0006_020D;
 const CARRIAGE_LOG_MESSAGE: i32 = 0x0006_020E;
 const PLAIN_LOG_MESSAGE: i32 = 0x0006_020F;
@@ -298,6 +311,34 @@ pub(crate) enum WorldPlayerRelationLogEvent {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldChatLogWrite {
+    pub(crate) sender_id: i32,
+    pub(crate) sender_name: Vec<u8>,
+    pub(crate) map_id: i32,
+    pub(crate) position_x: i32,
+    pub(crate) position_y: i32,
+    pub(crate) receiver_id: i32,
+    pub(crate) receiver_name: Vec<u8>,
+    pub(crate) content: Vec<u8>,
+    pub(crate) log_type: u8,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldChangeMapLogWrite {
+    pub(crate) player_id: i32,
+    pub(crate) player_name: Vec<u8>,
+    pub(crate) money: i32,
+    pub(crate) bank: i32,
+    pub(crate) source_map_id: i32,
+    pub(crate) source_position_x: i32,
+    pub(crate) source_position_y: i32,
+    pub(crate) destination_map_id: i32,
+    pub(crate) destination_position_x: i32,
+    pub(crate) destination_position_y: i32,
+    pub(crate) log_type: u8,
+}
+
 /// Typed очередь сохраняет старый FIFO, но оставляет SQL transport Tiberius-у.
 #[derive(Clone, Debug)]
 pub(crate) enum WorldWriteLogCommand {
@@ -310,6 +351,10 @@ pub(crate) enum WorldWriteLogCommand {
     AuctionSaleLog(WorldAuctionSaleLogWrite),
     PlayerProgressLog(WorldPlayerProgressLogWrite),
     PlayerRelationLog(WorldPlayerRelationLogWrite),
+    ChatLog(WorldChatLogWrite),
+    /// Exact chat jump-table ставил в FIFO очищенный SQL-buffer.
+    LegacyEmptyChatSql { log_type: u8 },
+    ChangeMapLog(WorldChangeMapLogWrite),
 }
 
 #[derive(Debug)]
@@ -440,6 +485,44 @@ pub(crate) struct WorldPlayerRelationLogMessageOutcome {
 }
 
 #[derive(Debug)]
+pub(crate) enum WorldChatPayloadCompleteness {
+    FixedReceiver([bool; 6]),
+    PrivateReceiver([bool; 7]),
+}
+
+#[derive(Debug)]
+pub(crate) enum WorldChatLogMessageOutcome {
+    Queued {
+        write: WorldChatLogWrite,
+        sender_found: bool,
+        receiver_found: Option<bool>,
+        payload_complete: WorldChatPayloadCompleteness,
+        queue_length_after: usize,
+    },
+    EmptyContent {
+        log_type: u8,
+        sender_id: i32,
+        sender_found: bool,
+        payload_complete: [bool; 6],
+    },
+    LegacyEmptySqlQueued {
+        log_type: u8,
+        sender_id: i32,
+        sender_found: bool,
+        payload_complete: [bool; 6],
+        queue_length_after: usize,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) struct WorldChangeMapLogMessageOutcome {
+    pub(crate) write: WorldChangeMapLogWrite,
+    pub(crate) player_found: bool,
+    pub(crate) payload_complete: [bool; 10],
+    pub(crate) queue_length_after: usize,
+}
+
+#[derive(Debug)]
 pub(crate) enum WorldWriteLogMessageOutcome {
     IncrementLog(WorldIncrementLogMessageOutcome),
     CarriageLog(WorldCarriageLogMessageOutcome),
@@ -450,6 +533,8 @@ pub(crate) enum WorldWriteLogMessageOutcome {
     AuctionSaleLog(WorldAuctionSaleLogMessageOutcome),
     PlayerProgressLog(WorldPlayerProgressLogMessageOutcome),
     PlayerRelationLog(WorldPlayerRelationLogMessageOutcome),
+    ChatLog(WorldChatLogMessageOutcome),
+    ChangeMapLog(WorldChangeMapLogMessageOutcome),
     ReservedNoOp { message_type: i32 },
 }
 
@@ -521,6 +606,16 @@ pub(crate) fn on_write_log_message(
             WorldWriteLogMessageOutcome::PlayerRelationLog(
                 on_player_relation_log_message(game, message),
             ),
+        );
+    }
+    if message.message_type() == CHAT_LOG_MESSAGE {
+        return WorldWriteLogMessageDispatch::Handled(WorldWriteLogMessageOutcome::ChatLog(
+            on_chat_log_message(game, message),
+        ));
+    }
+    if message.message_type() == CHANGE_MAP_LOG_MESSAGE {
+        return WorldWriteLogMessageDispatch::Handled(
+            WorldWriteLogMessageOutcome::ChangeMapLog(on_change_map_log_message(game, message)),
         );
     }
     if message.message_type() == PLAIN_LOG_MESSAGE {
@@ -824,6 +919,188 @@ fn on_player_relation_log_message(
             map_id.is_some(),
             position_x.is_some(),
             position_y.is_some(),
+        ],
+        queue_length_after,
+    }
+}
+
+fn on_chat_log_message(game: &CGame, mut message: CMessage) -> WorldChatLogMessageOutcome {
+    let decoded_log_type = message.base_mut().get_char();
+    let decoded_sender_id = message.base_mut().get_long();
+    let log_type = decoded_log_type.unwrap_or(0) as u8;
+    let sender_id = decoded_sender_id.unwrap_or(0);
+    let sender = game.map_player(sender_id as u32);
+    let sender_found = sender.is_some();
+    let sender_name = sender
+        .map(|player| visible_c_string(player.get_name()))
+        .unwrap_or_else(|| b"NULL".to_vec());
+    let map_id = message.base_mut().get_long();
+    let position_x = message.base_mut().get_long();
+    let position_y = message.base_mut().get_long();
+    let (content, content_complete) = get_limited_string(&mut message, 0x200);
+    let common_completeness = [
+        decoded_log_type.is_some(),
+        decoded_sender_id.is_some(),
+        map_id.is_some(),
+        position_x.is_some(),
+        position_y.is_some(),
+        content_complete,
+    ];
+
+    if content.is_empty() {
+        return WorldChatLogMessageOutcome::EmptyContent {
+            log_type,
+            sender_id,
+            sender_found,
+            payload_complete: common_completeness,
+        };
+    }
+
+    let (receiver_id, receiver_name, receiver_found, payload_complete) = match log_type {
+        0 => (
+            0,
+            b"<public>".to_vec(),
+            None,
+            WorldChatPayloadCompleteness::FixedReceiver(common_completeness),
+        ),
+        1 => (
+            0,
+            b"<Region>".to_vec(),
+            None,
+            WorldChatPayloadCompleteness::FixedReceiver(common_completeness),
+        ),
+        4 => (
+            0,
+            b"<team>".to_vec(),
+            None,
+            WorldChatPayloadCompleteness::FixedReceiver(common_completeness),
+        ),
+        5 => {
+            let decoded_receiver_id = message.base_mut().get_long();
+            let receiver_id = decoded_receiver_id.unwrap_or(0);
+            let receiver = game.map_player(receiver_id as u32);
+            let receiver_found = receiver.is_some();
+            let receiver_name = receiver
+                .map(|player| visible_c_string(player.get_name()))
+                .unwrap_or_else(|| b"NULL".to_vec());
+            (
+                receiver_id,
+                receiver_name,
+                Some(receiver_found),
+                WorldChatPayloadCompleteness::PrivateReceiver([
+                    common_completeness[0],
+                    common_completeness[1],
+                    common_completeness[2],
+                    common_completeness[3],
+                    common_completeness[4],
+                    common_completeness[5],
+                    decoded_receiver_id.is_some(),
+                ]),
+            )
+        }
+        6 => (
+            0,
+            b"<GM-code>".to_vec(),
+            None,
+            WorldChatPayloadCompleteness::FixedReceiver(common_completeness),
+        ),
+        7 => (
+            0,
+            b"<world>".to_vec(),
+            None,
+            WorldChatPayloadCompleteness::FixedReceiver(common_completeness),
+        ),
+        8 => (
+            0,
+            b"<country>".to_vec(),
+            None,
+            WorldChatPayloadCompleteness::FixedReceiver(common_completeness),
+        ),
+        _ => {
+            let queue_length_after = game.push_write_log_command(
+                WorldWriteLogCommand::LegacyEmptyChatSql { log_type },
+            );
+            return WorldChatLogMessageOutcome::LegacyEmptySqlQueued {
+                log_type,
+                sender_id,
+                sender_found,
+                payload_complete: common_completeness,
+                queue_length_after,
+            };
+        }
+    };
+
+    let write = WorldChatLogWrite {
+        sender_id,
+        sender_name,
+        map_id: map_id.unwrap_or(0),
+        position_x: position_x.unwrap_or(0),
+        position_y: position_y.unwrap_or(0),
+        receiver_id,
+        receiver_name,
+        content,
+        log_type,
+    };
+    let queue_length_after =
+        game.push_write_log_command(WorldWriteLogCommand::ChatLog(write.clone()));
+    WorldChatLogMessageOutcome::Queued {
+        write,
+        sender_found,
+        receiver_found,
+        payload_complete,
+        queue_length_after,
+    }
+}
+
+fn on_change_map_log_message(
+    game: &CGame,
+    mut message: CMessage,
+) -> WorldChangeMapLogMessageOutcome {
+    let log_type = message.base_mut().get_char();
+    let player_id = message.base_mut().get_long();
+    let player_id_value = player_id.unwrap_or(0);
+    let player = game.map_player(player_id_value as u32);
+    let player_found = player.is_some();
+    let player_name = player
+        .map(|player| visible_c_string(player.get_name()))
+        .unwrap_or_else(|| b"NULL".to_vec());
+    let money = message.base_mut().get_long();
+    let bank = message.base_mut().get_long();
+    let source_map_id = message.base_mut().get_long();
+    let source_position_x = message.base_mut().get_long();
+    let source_position_y = message.base_mut().get_long();
+    let destination_map_id = message.base_mut().get_long();
+    let destination_position_x = message.base_mut().get_long();
+    let destination_position_y = message.base_mut().get_long();
+    let write = WorldChangeMapLogWrite {
+        player_id: player_id_value,
+        player_name,
+        money: money.unwrap_or(0),
+        bank: bank.unwrap_or(0),
+        source_map_id: source_map_id.unwrap_or(0),
+        source_position_x: source_position_x.unwrap_or(0),
+        source_position_y: source_position_y.unwrap_or(0),
+        destination_map_id: destination_map_id.unwrap_or(0),
+        destination_position_x: destination_position_x.unwrap_or(0),
+        destination_position_y: destination_position_y.unwrap_or(0),
+        log_type: log_type.unwrap_or(0) as u8,
+    };
+    let queue_length_after =
+        game.push_write_log_command(WorldWriteLogCommand::ChangeMapLog(write.clone()));
+    WorldChangeMapLogMessageOutcome {
+        write,
+        player_found,
+        payload_complete: [
+            log_type.is_some(),
+            player_id.is_some(),
+            money.is_some(),
+            bank.is_some(),
+            source_map_id.is_some(),
+            source_position_x.is_some(),
+            source_position_y.is_some(),
+            destination_map_id.is_some(),
+            destination_position_x.is_some(),
+            destination_position_y.is_some(),
         ],
         queue_length_after,
     }
