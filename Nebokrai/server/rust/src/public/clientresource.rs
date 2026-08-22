@@ -145,6 +145,17 @@ impl DefaultClientResourceOwner {
         rf_open(path, context)
     }
 
+    /// Читает полный newly-opened `CRFile` для World resource-context.
+    ///
+    /// `rfOpen` всегда создаёт cursor с позицией ноль. Неудача открытия или
+    /// `ReadData` повторяет nullable file-result и преобразуется в `None`,
+    /// как того ждут существующие resource consumers.
+    pub(crate) fn read_resource(&self, path: &[u8]) -> Option<Vec<u8>> {
+        let mut file = self.open(path)?;
+        let mut data = vec![0; usize::try_from(file.size()).ok()?];
+        file.read_data(&mut data).then_some(data)
+    }
+
     /// Exact Release удаляет global pointer только если он был установлен.
     pub(crate) fn clear(&mut self) -> bool {
         self.installed.take().is_some()
