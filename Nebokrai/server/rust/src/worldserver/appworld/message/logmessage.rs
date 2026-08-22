@@ -128,7 +128,7 @@ use crate::worldserver::worldserver::game::{
     CGame, WorldCreationPlayerAppendOutcome, WorldLoadedPlayerRouteOrder,
     WorldLoginTimeoutTeamExit,
     WorldOnlinePlayerAppendOutcome, WorldOnlinePlayerRemoveOutcome, WorldOriginGoodsBlock,
-    WorldOriginGoodsReport, WorldPlayerIdBlock, WorldPlayerLoadRequestBlock,
+    WorldOriginGoodsReport, WorldPlayerLoadRequestBlock,
     WorldPlayerLoadRequestOutcome, WorldPlayerNameLookupError,
     WorldProcessPlayerDataQueueError, WorldProcessPlayerDataQueueOutcome,
     WorldReturnedPlayerDecode, legacy_tick_ms,
@@ -206,7 +206,6 @@ pub(crate) enum WorldCreateRoleBlock {
     PlayerName(WorldPlayerNameLookupError),
     OrganizingName(OrganizingNameLookupBlock),
     DefaultProperty(PlayerDefaultPropertyBlock),
-    PlayerId(WorldPlayerIdBlock),
     OriginGoods(WorldOriginGoodsBlock),
     AppendCollision(WorldCreateRoleAppendCollision),
     Snapshot(PlayerDbProjectionBlock),
@@ -1002,12 +1001,7 @@ async fn create_role(
         request.face_picture,
     );
     player.set_creation_service_defaults();
-    let player_id = match game.allocate_player_id() {
-        Ok(player_id) => player_id,
-        Err(source) => {
-            return create_role_blocked(request, WorldCreateRoleBlock::PlayerId(source));
-        }
-    };
+    let player_id = game.allocate_player_id();
     player.set_id(player_id);
     let origin_goods = match game.add_origin_goods_to_player(
         &mut player,

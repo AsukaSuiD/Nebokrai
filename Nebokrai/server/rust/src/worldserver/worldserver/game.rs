@@ -837,11 +837,13 @@
 //! Clear очищает весь список, Delete удаляет первое совпадение, оба Append
 //! оставляют первый duplicate без изменения, а deletion-time lookup возвращает
 //! время первого совпадения либо `0`. `LoadedSetupIds` записывает результаты
-//! constructor-load в ранее неинициализированные `m_nPlayerID/m_nLeaveWordID`;
-//! до этого Rust хранит `None` и не читает старое UB.
+//! constructor-load в `m_nPlayerID/m_nLeaveWordID`. Хотя exact constructor
+//! оставлял оба scalar неинициализированными, `CGame::Init` обязательно
+//! получает их из `CRsSetup` до main loop, а пустой recordset и catch каждого
+//! load-а дают `0`. Поэтому Rust начинает с тех же нулей: это устраняет
+//! внутреннее UB без нового внешнего отказа до обязательной init-фазы.
 //! `CFaction::LeaveWord` RVA `0x000BCA40` увеличивает `m_nLeaveWordID` обычным
-//! signed x86 `add 1`; `allocate_leave_word_id` сохраняет wrapping, а
-//! неинициализированное constructor-state отделяет typed-результатом.
+//! signed x86 `add 1`; `allocate_leave_word_id` сохраняет wrapping.
 //!
 //! Player-prefix `GenerateDBData` сначала копирует оба scalar ID, затем обходит
 //! signed creation-list, unsigned restore-list, deletion-list и unsigned
@@ -6564,14 +6566,9 @@ pub(crate) struct DeletionPlayerSnapshot {
 /// Локальные safe-границы полного `CGame::GenerateDBData`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldGenerateDbDataBlock {
-    UninitializedLeaveWordId,
-    UninitializedPlayerId,
     PlayerCodec(PlayerCodecError),
     Organizing(OrganizingSaveDataBlock),
 }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldLeaveWordIdBlock;
 
 impl From<PlayerCodecError> for WorldGenerateDbDataBlock {
     fn from(error: PlayerCodecError) -> Self {
@@ -6593,13 +6590,14 @@ pub(crate) struct WorldGenerateDbDataReport {
 
 /// Материализованная достигнутая часть исходного `CGame::tagDBData`.
 ///
-/// Неинициализированные конструктором scalar ID представлены `Option`; Rust-
-/// layout не является копией 32-битного MSVC ABI. Exact `DoSaveData` не имеет
+/// Scalar ID получают safe нулевой baseline до обязательного constructor-load
+/// `CRsSetup`; Rust-layout не является копией 32-битного MSVC ABI. Exact
+/// `DoSaveData` не имеет
 /// Village/City War snapshot-полей или save-фаз, поэтому они здесь не
 /// резервируются по одному лишь имени пустых DB-адаптеров.
 struct WorldDbData {
-    player_id: Option<u32>,
-    leave_word_id: Option<i32>,
+    player_id: u32,
+    leave_word_id: i32,
     creation_players: VecDeque<Box<CPlayer>>,
     restore_players: VecDeque<u32>,
     deletion_players: VecDeque<DeletionPlayerSnapshot>,
@@ -6616,8 +6614,8 @@ struct WorldDbData {
 impl WorldDbData {
     const fn new() -> Self {
         Self {
-            player_id: None,
-            leave_word_id: None,
+            player_id: 0,
+            leave_word_id: 0,
             creation_players: VecDeque::new(),
             restore_players: VecDeque::new(),
             deletion_players: VecDeque::new(),
@@ -6644,12 +6642,9 @@ pub(crate) struct WorldDbDataSaveSession<'game> {
 }
 
 impl WorldDbDataSaveSession<'_> {
-    /// Возвращает два scalar ID одного frozen snapshot либо его точную дыру.
-    pub(crate) const fn setup_ids(&self) -> Option<(u32, i32)> {
-        match (self.data.player_id, self.data.leave_word_id) {
-            (Some(player_id), Some(leave_word_id)) => Some((player_id, leave_word_id)),
-            _ => None,
-        }
+    /// Возвращает два scalar ID одного frozen snapshot.
+    pub(crate) const fn setup_ids(&self) -> (u32, i32) {
+        (self.data.player_id, self.data.leave_word_id)
     }
 
     pub(crate) fn creation_players_len(&self) -> usize {
@@ -6851,10 +6846,6 @@ pub(crate) struct WorldOriginGoodsBlock {
     pub(crate) source: PlayerOriginEquipmentBlock,
 }
 
-/// Safe-граница constructor-loaded process-wide player ID.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldPlayerIdBlock;
-
 /// Результат точной nullable insertion-границы `AppendMapPlayer`.
 pub(crate) enum WorldMapPlayerAppendOutcome {
     Inserted {
@@ -6974,8 +6965,8 @@ pub(crate) struct CGame {
     creation_players: VecDeque<i32>,
     restore_players: VecDeque<u32>,
     deletion_players: VecDeque<DeletionPlayerSnapshot>,
-    player_id: Option<u32>,
-    leave_word_id: Option<i32>,
+    player_id: u32,
+    leave_word_id: i32,
     online_players: VecDeque<u32>,
     offline_players: VecDeque<u32>,
     login_players: VecDeque<WorldLoginPlayerEntry>,
@@ -7114,8 +7105,8 @@ impl CGame {
             creation_players: VecDeque::new(),
             restore_players: VecDeque::new(),
             deletion_players: VecDeque::new(),
-            player_id: None,
-            leave_word_id: None,
+            player_id: 0,
+            leave_word_id: 0,
             online_players: VecDeque::new(),
             offline_players: VecDeque::new(),
             login_players: VecDeque::new(),
@@ -9360,25 +9351,20 @@ impl CGame {
 
     /// Применяет два constructor-load результата `CRsSetup` к live `CGame`.
     pub(crate) const fn apply_loaded_setup_ids(&mut self, loaded: LoadedSetupIds) {
-        self.player_id = Some(loaded.player_id);
-        self.leave_word_id = Some(loaded.leave_world_id);
+        self.player_id = loaded.player_id;
+        self.leave_word_id = loaded.leave_world_id;
     }
 
     /// Выделяет следующий signed leave-word ID с точным x86 wrapping.
-    pub(crate) fn allocate_leave_word_id(&mut self) -> Result<i32, WorldLeaveWordIdBlock> {
-        let leave_word_id = self
-            .leave_word_id
-            .as_mut()
-            .ok_or(WorldLeaveWordIdBlock)?;
-        *leave_word_id = leave_word_id.wrapping_add(1);
-        Ok(*leave_word_id)
+    pub(crate) fn allocate_leave_word_id(&mut self) -> i32 {
+        self.leave_word_id = self.leave_word_id.wrapping_add(1);
+        self.leave_word_id
     }
 
     /// Выполняет точный `++m_nPlayerID` create-role ветки с x86 wrapping.
-    pub(crate) fn allocate_player_id(&mut self) -> Result<i32, WorldPlayerIdBlock> {
-        let player_id = self.player_id.as_mut().ok_or(WorldPlayerIdBlock)?;
-        *player_id = player_id.wrapping_add(1);
-        Ok(*player_id as i32)
+    pub(crate) fn allocate_player_id(&mut self) -> i32 {
+        self.player_id = self.player_id.wrapping_add(1);
+        self.player_id as i32
     }
 
     /// Полностью очищает live restore-list.
@@ -9554,16 +9540,12 @@ impl CGame {
         organizing_ctrl: &COrganizingCtrl,
         coefficients: &PlayerPropertyCoefficients,
     ) -> Result<(), WorldGenerateDbDataBlock> {
-        let leave_word_id = self
-            .leave_word_id
-            .ok_or(WorldGenerateDbDataBlock::UninitializedLeaveWordId)?;
-        let player_id = self
-            .player_id
-            .ok_or(WorldGenerateDbDataBlock::UninitializedPlayerId)?;
+        let leave_word_id = self.leave_word_id;
+        let player_id = self.player_id;
 
         let db_data = self.db_data.get_mut();
-        db_data.player_id = Some(player_id);
-        db_data.leave_word_id = Some(leave_word_id);
+        db_data.player_id = player_id;
+        db_data.leave_word_id = leave_word_id;
 
         let creation_ids = self
             .creation_players

@@ -784,8 +784,6 @@ pub(crate) struct SetupIdSnapshot {
 /// Локальная граница передачи frozen owner-данных в `DoSaveData`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldSnapshotSaveBlock {
-    /// `tagDBData` ещё не получил оба scalar ID через `GenerateDBData`.
-    MissingSetupIds,
     /// `CHonorRanks::GenerateSaveData` ещё не создал отдельную DB-копию.
     MissingHonorRanks,
     /// На 64-битном Rust-хосте создан контейнер, невозможный в 32-битном EXE.
@@ -1998,9 +1996,7 @@ pub(crate) async fn save_setup_ids_from_world_snapshot<O: RsSetupOwner>(
     setup: &mut O,
     connection: &mut WorldTdsClient,
 ) -> Result<SetupIdSaveReport, WorldSnapshotSaveBlock> {
-    let (player_id, leave_world_id) = world
-        .setup_ids()
-        .ok_or(WorldSnapshotSaveBlock::MissingSetupIds)?;
+    let (player_id, leave_world_id) = world.setup_ids();
     Ok(save_setup_ids(
         setup,
         connection,

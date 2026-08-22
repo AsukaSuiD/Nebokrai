@@ -612,7 +612,7 @@ use super::organizing::{
 use super::organizingparam::COrganizingParam;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::worldserver::game::{
-    CGame, WorldLeaveWordIdBlock, WorldLocalMessageQueueBlock, WorldRegionNameLookup,
+    CGame, WorldLocalMessageQueueBlock, WorldRegionNameLookup,
 };
 
 const MEMBER_UPDATE_MESSAGE_TYPE: i32 = 0x7FE0D;
@@ -1658,7 +1658,6 @@ pub(crate) enum FactionEditLeaveWordOutcome {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FactionLeaveWordBlock {
     MissingBaseProperty,
-    LeaveWordId(WorldLeaveWordIdBlock),
     OfflineAuthorNameUnknown {
         player_id: i32,
         allocated_leave_word_id: i32,
@@ -5787,9 +5786,7 @@ impl CFaction {
         let input_truncated = content.len() > LEAVE_WORD_CONTENT_LIMIT;
         content.truncate(LEAVE_WORD_CONTENT_LIMIT);
         let visible_content = legacy_c_string_visible_bytes(content);
-        let leave_word_id = game
-            .allocate_leave_word_id()
-            .map_err(FactionLeaveWordBlock::LeaveWordId)?;
+        let leave_word_id = game.allocate_leave_word_id();
 
         let Some(player) = game.online_player_by_id(player_id as u32) else {
             return Err(FactionLeaveWordBlock::OfflineAuthorNameUnknown {
