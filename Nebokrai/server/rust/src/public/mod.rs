@@ -121,3 +121,8 @@ pub(crate) mod filesinfo;
     reason = "read-side CPackage подключён перед CClientResource и rfOpen package-ветвью"
 )]
 pub(crate) mod package;
+#[allow(
+    dead_code,
+    reason = "CClientResource read-side подключён перед exact LoadEx disk owner-ом"
+)]
+pub(crate) mod clientresource;

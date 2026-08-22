@@ -1,6 +1,55 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Частично восстановленный read-side `CClientResource`.
+//!
+//! `GetPackage` и `IsFileExist` materialized поверх точных `FilesInfo` и
+//! `PackageArchive`: `BTreeMap<u32, _>` заменяет только STL-владение. Полный
+//! `LoadEx` остаётся RAW из-за неустановленного return эпилога; готовый
+//! registry принимает уже прочитанные `.ril` и `.pak` owners.
+
+use std::collections::BTreeMap;
+
+use crate::public::filesinfo::{FileInfo, FilesInfo};
+use crate::public::package::PackageArchive;
+
+/// Связанный read-side owner одного World resource набора.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ClientResource {
+    files_info: FilesInfo,
+    packages: BTreeMap<u32, PackageArchive>,
+}
+
+impl ClientResource {
+    /// Принимает результаты exact `.ril` и `.pak` owner-ов в порядке `LoadEx`.
+    pub(crate) fn new(files_info: FilesInfo, packages: BTreeMap<u32, PackageArchive>) -> Self {
+        Self {
+            files_info,
+            packages,
+        }
+    }
+
+    /// Повторяет nullable `CClientResource::GetPackage`.
+    pub(crate) fn package(&self, package_type: u32) -> Option<&PackageArchive> {
+        self.packages.get(&package_type)
+    }
+
+    /// Повторяет `IsFileExist` после normalizing lookup text.
+    pub(crate) fn file_info(&self, path: &[u8]) -> Option<&FileInfo> {
+        let mut normalized = path.to_vec();
+        for byte in &mut normalized {
+            byte.make_ascii_lowercase();
+            if *byte == b'/' {
+                *byte = b'\\';
+            }
+        }
+        if normalized.first() != Some(&b'\\') {
+            normalized.insert(0, b'\\');
+        }
+        self.files_info.file_info_by_text(&normalized)
+    }
+
+    pub(crate) fn is_file_exist(&self, path: &[u8]) -> bool {
+        self.file_info(path).is_some()
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: ServerUpdate
 // Точная пара: GameServer/ServerUpdate.exe + GameServer/ServerUpdate.pdb
@@ -142,10 +191,6 @@
 //
 //
 
-
-
-
-
 // COMPONENT_VARIANT_END: GameServer
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
@@ -156,7 +201,7 @@
 
 // ============================================================================
 // FUNCTION: CClientResource::GetPackage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\clientresource.cpp:455
@@ -184,7 +229,7 @@
 
 // ============================================================================
 // FUNCTION: CClientResource::IsFileExist
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / ASCII_CONTRACT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\clientresource.cpp:792
@@ -293,14 +338,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: WorldServer
