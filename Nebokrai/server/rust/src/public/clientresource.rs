@@ -254,9 +254,11 @@ impl ClientResource {
     /// что здесь нет старых map-записей между вызовами. После успешного `.ril`
     /// пути `LoadEx` сначала строит `std::map` по package ID: дубликат ID
     /// заменяет прежнее имя, а `LoadPackage(false)` идёт в sorted key-order.
-    /// Пустое имя пропускает `CPackage::Open`. Неоткрытый/повреждённый пакет
-    /// остаётся в report, а остальные пакеты продолжают обрабатываться — это
-    /// сохраняет порядок его side effects без unsafe `FILE*` lifetime.
+    /// Пустое имя пропускает `CPackage::Open`. Для непустого имени точный
+    /// `OpenFileHandle` добавляет literal `.pak` к имени из `.ril`, поэтому
+    /// `data` открывается как `Package/data.pak`. Неоткрытый/повреждённый
+    /// пакет остаётся в report, а остальные пакеты продолжают обрабатываться
+    /// — это сохраняет порядок его side effects без unsafe `FILE*` lifetime.
     pub(crate) fn load_world_server_directory(
         root: &Path,
     ) -> Result<ClientResourceLoadReport, ClientResourceLoadError> {
@@ -405,14 +407,15 @@ impl ClientResource {
     }
 }
 
-/// Строит literal `cwd + "\\Package" + package file name` из `LoadPackage`.
+/// Строит exact `cwd + "\\Package" + package file name + ".pak"`.
 ///
 /// PDB-вариант хранит путь как narrow `char`; текущий World resource-contract
 /// подтверждён для ASCII, поэтому lossy adapter ограничен только host-path
 /// boundary и не меняет byte keys `.ril`/`.pak` в памяти.
 fn package_path(root: &Path, file_name: &[u8]) -> PathBuf {
-    root.join("Package")
-        .join(String::from_utf8_lossy(file_name).as_ref())
+    let mut package_name = String::from_utf8_lossy(file_name).into_owned();
+    package_name.push_str(".pak");
+    root.join("Package").join(package_name)
 }
 
 // COMPONENT_VARIANT_BEGIN: ServerUpdate
@@ -587,6 +590,7 @@ fn package_path(root: &Path, file_name: &[u8]) -> PathBuf {
 // ADDRESS: 0044f5c0
 // PROTOTYPE: bool __thiscall LoadPackage(bool param_1)
 //
+// `Package/<имя>.pak`, empty-name skip, sorted unique package IDs and one
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
