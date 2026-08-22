@@ -48,6 +48,12 @@
 //! `ifstream`, STL и singleton plumbing. Неполные/нечисловые восемь параметров
 //! в оригинале оставляли чтение неинициализированного stack `long`; Rust
 //! локально блокирует такой malformed input вместо выдуманного значения.
+//! Оба старых ленивых доступа к singleton (`get_instance` и
+//! `get_country_war_sys`) не несут самостоятельной игровой семантики: один
+//! `CountryWarSys::default()` создаётся внешним lifecycle owner-ом, а
+//! достигнутые пути получают этот же живой `&mut CountryWarSys` через
+//! `WorldMainLoopOwners`. Так исключены статическое выделение и lifetime/leak
+//! оригинала без изменения состояния, wire или порядка side effects.
 //!
 //! Регистрация событий также буквально сохраняет порядок EXE. Просроченный
 //! `EndTime` оставляет первый clear-event на `ClearTime`, ставит второй на
@@ -1679,7 +1685,7 @@ where
 
 // ============================================================================
 // FUNCTION: CountryWarSys::get_instance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:38
@@ -1687,6 +1693,10 @@ where
 // ADDRESS: 0048f410
 // PROTOTYPE: CountryWarSys * __cdecl get_instance(void)
 //
+// IMPLEMENTED_OWNER: единственный живой `CountryWarSys` создаётся через
+// `Default` и передаётся явной заимствованной ссылкой в
+// `WorldMainLoopOwners`; static singleton/`operator_new` не имеет
+// наблюдаемого контракта и намеренно не переносится.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1708,7 +1718,7 @@ where
 
 // ============================================================================
 // FUNCTION: get_country_war_sys
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countrywarsys.cpp:775
@@ -1716,6 +1726,9 @@ where
 // ADDRESS: 0048f4f0
 // PROTOTYPE: CountryWarSys * __cdecl get_country_war_sys(void)
 //
+// IMPLEMENTED_OWNER: alias исходного singleton-доступа заменён той же
+// явной owner-ссылкой `WorldMainLoopOwners::country_war`; отдельного global
+// storage в Rust нет.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

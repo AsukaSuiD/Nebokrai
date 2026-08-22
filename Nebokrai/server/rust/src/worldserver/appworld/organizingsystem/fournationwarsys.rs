@@ -49,6 +49,13 @@
 //! fail-closed публикацию; это новая политика, а не контракт EXE. Rust хранит
 //! morale в instance-owner-е вместо process-global массива, сохраняя порядок
 //! mutation/read/send и не копируя static storage.
+//! Два старых ленивых доступа к singleton (`getInstance` и
+//! `GetFourNationWarSys`) не добавляют наблюдаемого поведения: один
+//! `CFourNationWarSys::default()` создаётся внешним lifecycle owner-ом, а
+//! достигнутые пути получают тот же живой `&mut CFourNationWarSys` через
+//! `WorldMainLoopOwners`. Поэтому статическое выделение и leak/lifetime
+//! исходника
+//! не переносятся.
 //!
 //! Exact `0x00493F80..0x004941B1` сначала ищет map-player. Для найденного
 //! игрока он либо отправляет `0x7FE46 { player_id:i32, increment:i32 }` его
@@ -1548,7 +1555,7 @@ fn next_war_i32<'a>(
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::getInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.h:65
@@ -1556,13 +1563,17 @@ fn next_war_i32<'a>(
 // ADDRESS: 00493ea0
 // PROTOTYPE: CFourNationWarSys * __cdecl getInstance(void)
 //
+// IMPLEMENTED_OWNER: экземпляр создаётся через `Default` у внешнего
+// lifecycle owner-а и передаётся как `WorldMainLoopOwners::four_nation_war`;
+// static singleton/`operator_new` не имеет самостоятельного внешнего
+// контракта.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: GetFourNationWarSys
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:889
@@ -1570,6 +1581,9 @@ fn next_war_i32<'a>(
 // ADDRESS: 00493ec0
 // PROTOTYPE: CFourNationWarSys * __cdecl GetFourNationWarSys(void)
 //
+// IMPLEMENTED_OWNER: alias старого singleton-доступа заменён явной
+// owner-ссылкой `WorldMainLoopOwners::four_nation_war`; отдельного global
+// storage в Rust нет.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
