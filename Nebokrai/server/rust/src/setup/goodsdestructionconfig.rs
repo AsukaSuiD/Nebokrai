@@ -1,8 +1,8 @@
 //! Ограничения уничтожения предметов исторического Miracle.
 //!
-//! Статус World `CGoodsDestroySetup::AddToByteArray` RVA `0x0003F810`:
-//! `IMPLEMENTED`; text loader, singleton, Game decoder и queries ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Статус World `CGoodsDestroySetup::LoadConfig` RVA `0x0003FBC0` и
+//! `AddToByteArray` RVA `0x0003F810`: `IMPLEMENTED`; singleton, Game decoder
+//! и queries ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
 //! SHA-256 PDB
@@ -15,9 +15,20 @@
 //! vector значимы. Bool передаётся четырьмя байтами как `0/1`, а не одним
 //! байтом. Owned bytes и `Vec` заменяют MSVC string/vector lifetime, сохраняя
 //! byte-exact original names.
+//! `LoadConfig` очищает только оба vector до открытия файла, но сохраняет
+//! прежний enabled flag при ошибке открытия. После `#` игнорируется text label
+//! и читается numeric bool, затем идут `* label u16` и после первого `<end>`
+//! независимые `+ original-name` записи. Открытый файл без `#` остаётся
+//! успешным пустым состоянием с прежним enabled flag. Malformed extraction
+//! раньше могла использовать stack-мусор; Rust останавливает owner на typed
+//! error, не выдумывая такие значения.
 
 use std::error::Error;
 use std::fmt;
+use std::io;
+use std::path::Path;
+
+use crate::public::readwrite::read_to;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GoodsDestroySetup {
@@ -42,6 +53,47 @@ impl GoodsDestroySetup {
     pub(crate) fn clear_lists(&mut self) {
         self.goods_types.clear();
         self.original_names.clear();
+    }
+
+    /// Загружает exact token grammar уже открытого `GoodsDestroyConf.ini`.
+    pub(crate) fn load_from_bytes(
+        &mut self,
+        source: &[u8],
+    ) -> Result<GoodsDestroyLoadReport, GoodsDestroyFormatError> {
+        self.clear_lists();
+        let mut tokens = source
+            .split(u8::is_ascii_whitespace)
+            .filter(|token| !token.is_empty());
+        if !read_to(&mut tokens, b"#") {
+            return Ok(GoodsDestroyLoadReport::default());
+        }
+
+        let _label = next_token(&mut tokens, "метка enabled")?;
+        self.enabled = read_legacy_bool(&mut tokens, "enabled")?;
+        let mut report = GoodsDestroyLoadReport::default();
+        while read_to(&mut tokens, b"*") {
+            let _label = next_token(&mut tokens, "метка типа предмета")?;
+            self.goods_types
+                .push(read_u16(&mut tokens, "тип уничтожаемого предмета")?);
+            report.goods_types += 1;
+        }
+        while read_to(&mut tokens, b"+") {
+            self.original_names
+                .push(next_token(&mut tokens, "исходное имя предмета")?.to_vec());
+            report.original_names += 1;
+        }
+        Ok(report)
+    }
+
+    /// File-adapter с exact clear-before-open переходом owner-а.
+    pub(crate) fn load_from_file(
+        &mut self,
+        path: impl AsRef<Path>,
+    ) -> Result<GoodsDestroyLoadReport, GoodsDestroyFileLoadError> {
+        self.clear_lists();
+        let source = std::fs::read(path).map_err(GoodsDestroyFileLoadError::Io)?;
+        self.load_from_bytes(&source)
+            .map_err(GoodsDestroyFileLoadError::Format)
     }
 
     pub(crate) fn add_to_byte_array(
@@ -72,6 +124,102 @@ impl GoodsDestroySetup {
         }
         Ok(())
     }
+}
+
+/// Число полностью materialized vector entries loader-а.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GoodsDestroyLoadReport {
+    pub(crate) goods_types: usize,
+    pub(crate) original_names: usize,
+}
+
+/// Safe граница formatted extraction `LoadConfig`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GoodsDestroyFormatError {
+    UnexpectedEnd { field: &'static str },
+    InvalidBoolean { token: Vec<u8> },
+    InvalidGoodsType { token: Vec<u8> },
+}
+
+impl fmt::Display for GoodsDestroyFormatError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd { field } => write!(formatter, "отсутствует поле {field}"),
+            Self::InvalidBoolean { token } => write!(
+                formatter,
+                "enabled не является legacy numeric bool: {}",
+                String::from_utf8_lossy(token)
+            ),
+            Self::InvalidGoodsType { token } => write!(
+                formatter,
+                "тип предмета не является unsigned short: {}",
+                String::from_utf8_lossy(token)
+            ),
+        }
+    }
+}
+
+impl Error for GoodsDestroyFormatError {}
+
+#[derive(Debug)]
+pub(crate) enum GoodsDestroyFileLoadError {
+    Io(io::Error),
+    Format(GoodsDestroyFormatError),
+}
+
+impl fmt::Display for GoodsDestroyFileLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => error.fmt(formatter),
+            Self::Format(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for GoodsDestroyFileLoadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Format(error) => Some(error),
+        }
+    }
+}
+
+fn next_token<'source>(
+    tokens: &mut impl Iterator<Item = &'source [u8]>,
+    field: &'static str,
+) -> Result<&'source [u8], GoodsDestroyFormatError> {
+    tokens
+        .next()
+        .ok_or(GoodsDestroyFormatError::UnexpectedEnd { field })
+}
+
+fn read_legacy_bool<'source>(
+    tokens: &mut impl Iterator<Item = &'source [u8]>,
+    field: &'static str,
+) -> Result<bool, GoodsDestroyFormatError> {
+    let token = next_token(tokens, field)?;
+    match token {
+        b"0" => Ok(false),
+        b"1" => Ok(true),
+        _ => Err(GoodsDestroyFormatError::InvalidBoolean {
+            token: token.to_vec(),
+        }),
+    }
+}
+
+fn read_u16<'source>(
+    tokens: &mut impl Iterator<Item = &'source [u8]>,
+    field: &'static str,
+) -> Result<u16, GoodsDestroyFormatError> {
+    let token = next_token(tokens, field)?;
+    let text = std::str::from_utf8(token).map_err(|_| GoodsDestroyFormatError::InvalidGoodsType {
+        token: token.to_vec(),
+    })?;
+    text.parse::<u16>()
+        .map_err(|_| GoodsDestroyFormatError::InvalidGoodsType {
+            token: token.to_vec(),
+        })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -248,7 +396,9 @@ fn write_count(
 
 // ============================================================================
 // FUNCTION: CGoodsDestroySetup::LoadConfig
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// IMPLEMENTED_OWNER: `GoodsDestroySetup::load_from_bytes` и filesystem adapter
+// выше.
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\goodsdestructionconfig.cpp:28

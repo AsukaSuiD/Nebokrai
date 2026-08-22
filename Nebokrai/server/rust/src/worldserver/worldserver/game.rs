@@ -1177,6 +1177,9 @@ use crate::setup::contributesetup::{
     CContributeSetup, ContributeSetupFormatError, ContributeSetupSerializeError,
 };
 use crate::setup::emotion::{CEmotion, EmotionFormatError, EmotionSerializeError};
+use crate::setup::goodsdestructionconfig::{
+    GoodsDestroyFormatError, GoodsDestroySerializeError, GoodsDestroySetup,
+};
 use crate::setup::incrementshoplist::{
     CIncrementShopList, IncrementShopGoodsQuery, IncrementShopGoodsResult,
     IncrementShopSerializeError,
@@ -4217,7 +4220,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     BattleFairyCombine,
     Synthesis,
     DaKongXiangQian,
-    GoodsDestroy,
     HonorEliminate,
     GodsBattle,
 }
@@ -4258,7 +4260,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     BattleFairyCombine,
     Synthesis,
     DaKongXiangQian,
-    GoodsDestroy,
     LingBao,
     GodsBattle,
 }
@@ -4294,6 +4295,8 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     /// Он остаётся вне `CGame`, поскольку тот же экземпляр участвует в
     /// create-role и DB-load runtime; это исключает расходящиеся config копии.
     fn player_list(&mut self) -> &mut CPlayerList;
+    /// Отдельный owner правил уничтожения предметов, разделяемый с initial-config.
+    fn goods_destroy_setup(&mut self) -> &mut GoodsDestroySetup;
     /// Возвращает исходный 32-битный result; bool owners обязаны дать `0/1`.
     fn call_boolean_owner(&mut self, owner: WorldReloadBooleanOwner) -> u32;
     fn call_void_owner(&mut self, owner: WorldReloadVoidOwner);
@@ -5878,6 +5881,8 @@ pub(crate) enum WorldReloadBlock {
     EmotionSerialization(EmotionSerializeError),
     PlayerListFormat(PlayerListFormatError),
     PlayerListSerialization(PlayerListSerializeError),
+    GoodsDestroyFormat(GoodsDestroyFormatError),
+    GoodsDestroySerialization(GoodsDestroySerializeError),
     EquipmentComposeSerialization(EquipmentComposeSerializeError),
     CiQingSerialization(CiQingSerializationBlock),
     TaoZhuangSerialization(TaoZhuangSerializationBlock),
@@ -8305,17 +8310,34 @@ impl CGame {
                 }
             }
             WorldReloadProfile::GoodsDestroy => {
-                self.reload_simple_serialized(
-                    context,
-                    WorldReloadBooleanOwner::GoodsDestroy,
-                    WorldReloadSerializationOwner::GoodsDestroy,
-                    0x23,
-                    b"Load GoodsDestroyConf.ini...ok!",
-                    b"Load GoodsDestroyConf.ini...failed!",
-                    send_to_game_servers,
-                    false,
-                    &mut legacy_result,
-                );
+                const PATH: &[u8] = b"data/GoodsDestroyConf.ini";
+                let loaded = match context.read_resource(PATH) {
+                    Some(source) => {
+                        context
+                            .goods_destroy_setup()
+                            .load_from_bytes(&source)
+                            .map_err(WorldReloadBlock::GoodsDestroyFormat)?;
+                        true
+                    }
+                    None => {
+                        context.goods_destroy_setup().clear_lists();
+                        false
+                    }
+                };
+                context.add_log_text(if loaded {
+                    b"Load GoodsDestroyConf.ini...ok!"
+                } else {
+                    b"Load GoodsDestroyConf.ini...failed!"
+                });
+                if loaded && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    context
+                        .goods_destroy_setup()
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::GoodsDestroySerialization)?;
+                    // Dispatcher не переписывал legacy result для GoodsDestroy.
+                    self.send_reload_payload(0x23, &payload);
+                }
             }
             WorldReloadProfile::HonorEliminate => {
                 let _ = Self::reload_boolean_with_log(
