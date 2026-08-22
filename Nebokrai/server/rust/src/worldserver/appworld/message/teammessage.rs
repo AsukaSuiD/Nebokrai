@@ -14,13 +14,13 @@
 //! Старый Linux-донор использован для имён и формы. Его peer-проверки, eager-
 //! разбор payload, duplicate-team gate и cleanup при ошибке `InsertPlug`
 //! отсутствуют в EXE и не перенесены. Единственные registry остаются внутри
-//! `CSessionFactory`; конкретный `CTeamate` и узкая team trait-проекция
+//! `CSessionFactory`; конкретные `CTeam`/`CTeamate` и узкие trait-проекции
 //! выражают исходные RTTI/virtual границы. Недостаточный scalar payload даёт
 //! typed malformed до относящегося к нему эффекта.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::appworld::session::csessionfactory::{
-    CSessionFactory, WorldSessionFactoryAllocator, WorldSessionFactoryInputBlock,
+    CSessionFactory, WorldSessionFactoryInputBlock,
 };
 use crate::worldserver::worldserver::game::CGame;
 
@@ -90,10 +90,9 @@ pub(crate) enum WorldTeamMessageOutcome {
 }
 
 /// Исполняет весь exact `OnTeamMessage` поверх единого session factory.
-pub(crate) fn on_team_message<Allocator: WorldSessionFactoryAllocator + ?Sized>(
-    game: &CGame,
+pub(crate) fn on_team_message(
+    game: &mut CGame,
     factory: &mut CSessionFactory,
-    allocator: &mut Allocator,
     message: &mut CMessage,
 ) -> WorldTeamMessageOutcome {
     let message_type = message.message_type();
@@ -123,7 +122,7 @@ pub(crate) fn on_team_message<Allocator: WorldSessionFactoryAllocator + ?Sized>(
             let Ok(mut offset) = i32::try_from(*cursor) else {
                 return WorldTeamMessageOutcome::Malformed { message_type, cursor: *cursor };
             };
-            let outcome = factory.unserialize_session(Some(wire), &mut offset, allocator);
+            let outcome = factory.unserialize_session(game, Some(wire), &mut offset);
             if let Ok(next_cursor) = usize::try_from(offset) {
                 *cursor = next_cursor;
             }
@@ -135,7 +134,7 @@ pub(crate) fn on_team_message<Allocator: WorldSessionFactoryAllocator + ?Sized>(
             WorldTeamMessageOutcome::TeamEnded {
                 team_id,
                 session_id,
-                result: factory.end_session(session_id),
+                result: factory.end_session(game, session_id),
             }
         }
         0x0006_0003 => {
@@ -145,7 +144,7 @@ pub(crate) fn on_team_message<Allocator: WorldSessionFactoryAllocator + ?Sized>(
             let Some(region_id) = message.base_mut().get_long() else { malformed!() };
             let owner_name = message.base_mut().get_str_bytes(0x100)
                 .expect("ненулевая legacy-граница GetStr");
-            let existing = factory.with_team(session_id, |team| {
+            let existing = factory.with_team(game, session_id, |team| {
                 team.query_plug_by_owner(owner_type, owner_id)
             }).flatten();
             if existing.is_some() {
@@ -154,11 +153,11 @@ pub(crate) fn on_team_message<Allocator: WorldSessionFactoryAllocator + ?Sized>(
                 };
             }
             let plug_id = factory.create_plug(TEAMATE_PLUG_TYPE, owner_type, owner_id);
-            let initialized = factory.with_teamate(plug_id, |teamate| {
+            let initialized = factory.with_teamate(game, plug_id, |teamate| {
                 teamate.set_owner_region_id(region_id);
                 teamate.set_owner_name(&owner_name);
             }).is_some();
-            let inserted = initialized.then(|| factory.insert_plug(session_id, plug_id));
+            let inserted = initialized.then(|| factory.insert_plug(game, session_id, plug_id));
             WorldTeamMessageOutcome::TeamateAdded {
                 team_id,
                 session_id,
@@ -170,11 +169,11 @@ pub(crate) fn on_team_message<Allocator: WorldSessionFactoryAllocator + ?Sized>(
             let (team_id, session_id) = team_session!();
             let Some(owner_type) = message.base_mut().get_long() else { malformed!() };
             let Some(owner_id) = message.base_mut().get_long() else { malformed!() };
-            let plug_id = factory.with_team(session_id, |team| {
+            let plug_id = factory.with_team(game, session_id, |team| {
                 team.query_plug_by_owner(owner_type, owner_id)
             }).flatten();
             let exited = plug_id.and_then(|plug_id| {
-                factory.with_teamate(plug_id, |teamate| teamate.exit())
+                factory.with_teamate(game, plug_id, |teamate| teamate.exit())
             }).is_some();
             WorldTeamMessageOutcome::TeamateExited {
                 team_id, session_id, plug_id, exited,
@@ -185,11 +184,11 @@ pub(crate) fn on_team_message<Allocator: WorldSessionFactoryAllocator + ?Sized>(
             let Some(owner_type) = message.base_mut().get_long() else { malformed!() };
             let Some(owner_id) = message.base_mut().get_long() else { malformed!() };
             let Some(region_id) = message.base_mut().get_long() else { malformed!() };
-            let plug_id = factory.with_team(session_id, |team| {
+            let plug_id = factory.with_team(game, session_id, |team| {
                 team.query_plug_by_owner(owner_type, owner_id)
             }).flatten();
             let updated = plug_id.and_then(|plug_id| {
-                factory.with_teamate(plug_id, |teamate| teamate.set_owner_region_id(region_id))
+                factory.with_teamate(game, plug_id, |teamate| teamate.set_owner_region_id(region_id))
             }).is_some();
             WorldTeamMessageOutcome::TeamateRegionUpdated {
                 team_id, session_id, plug_id, updated,
@@ -198,7 +197,7 @@ pub(crate) fn on_team_message<Allocator: WorldSessionFactoryAllocator + ?Sized>(
         0x0006_0006 => {
             let (team_id, session_id) = team_session!();
             let Some(player_id) = message.base_mut().get_long() else { malformed!() };
-            let updated = factory.with_team(session_id, |team| {
+            let updated = factory.with_team(game, session_id, |team| {
                 if team.query_plug_by_owner(PLAYER_OWNER_TYPE, player_id).is_some() {
                     team.set_leader(player_id);
                     true
@@ -213,18 +212,14 @@ pub(crate) fn on_team_message<Allocator: WorldSessionFactoryAllocator + ?Sized>(
         0x0006_0007 => {
             let (team_id, session_id) = team_session!();
             let Some(player_id) = message.base_mut().get_long() else { malformed!() };
-            let kicked = factory.with_team(session_id, |team| team.kick_player(player_id)).is_some();
+            let kicked = factory.with_team(game, session_id, |team| team.kick_player(player_id)).is_some();
             WorldTeamMessageOutcome::PlayerKicked {
                 team_id, session_id, player_id, kicked,
             }
         }
         0x0006_0008 => {
             let (team_id, session_id) = team_session!();
-            let serialized = factory.with_team(session_id, |team| {
-                let mut bytes = Vec::new();
-                team.serialize(&mut bytes);
-                bytes
-            });
+            let serialized = factory.serialize_team(session_id);
             let delivery = serialized.as_ref().map(|bytes| {
                 let mut response = CMessage::new(0x0007_FD08);
                 response.base_mut().add(bytes);
@@ -242,7 +237,7 @@ pub(crate) fn on_team_message<Allocator: WorldSessionFactoryAllocator + ?Sized>(
             let Some(_) = message.base_mut().get_long() else { malformed!() };
             let Some(_) = message.base_mut().get_long() else { malformed!() };
             let Some(existed) = message.base_mut().get_long() else { malformed!() };
-            let marked = existed != 0 && factory.with_teamate(plug_id, |teamate| {
+            let marked = existed != 0 && factory.with_teamate(game, plug_id, |teamate| {
                 teamate.player_still_existed(1)
             }).is_some();
             WorldTeamMessageOutcome::TeamateExistenceMarked { plug_id, marked }
@@ -250,7 +245,7 @@ pub(crate) fn on_team_message<Allocator: WorldSessionFactoryAllocator + ?Sized>(
         0x0006_000A => {
             let (team_id, session_id) = team_session!();
             let Some(requested) = message.base_mut().get_long() else { malformed!() };
-            let updated = factory.with_team(session_id, |team| {
+            let updated = factory.with_team(game, session_id, |team| {
                 if requested != team.allocation_scheme() && requested < 2 {
                     team.set_allocation_scheme(requested);
                     true
@@ -266,7 +261,7 @@ pub(crate) fn on_team_message<Allocator: WorldSessionFactoryAllocator + ?Sized>(
             let (team_id, session_id) = team_session!();
             let Some(owner_type) = message.base_mut().get_long() else { malformed!() };
             let Some(owner_id) = message.base_mut().get_long() else { malformed!() };
-            let plug_id = factory.with_team(session_id, |team| {
+            let plug_id = factory.with_team(game, session_id, |team| {
                 team.query_plug_by_owner(owner_type, owner_id)
             }).flatten();
             let Some(plug_id_value) = plug_id else {
@@ -276,7 +271,7 @@ pub(crate) fn on_team_message<Allocator: WorldSessionFactoryAllocator + ?Sized>(
             };
             let text = message.base_mut().get_str_bytes(0x200)
                 .expect("ненулевая legacy-граница GetStr");
-            let updated = factory.with_team(session_id, |team| {
+            let updated = factory.with_team(game, session_id, |team| {
                 team.on_plug_change_state(plug_id_value, 8, &text)
             }).is_some();
             WorldTeamMessageOutcome::PlugStateUpdated {
@@ -288,15 +283,15 @@ pub(crate) fn on_team_message<Allocator: WorldSessionFactoryAllocator + ?Sized>(
             let Some(owner_type) = message.base_mut().get_long() else { malformed!() };
             let Some(owner_id) = message.base_mut().get_long() else { malformed!() };
             let Some(value) = message.base_mut().get_float() else { malformed!() };
-            let plug_id = factory.with_team(session_id, |team| {
+            let plug_id = factory.with_team(game, session_id, |team| {
                 team.query_plug_by_owner(owner_type, owner_id)
             }).flatten();
             let teamate_id = plug_id.filter(|plug_id| {
-                factory.with_teamate(*plug_id, |_| ()).is_some()
+                factory.with_teamate(game, *plug_id, |_| ()).is_some()
             });
             let updated = teamate_id
                 .and_then(|plug_id| {
-                    factory.with_team(session_id, |team| {
+                    factory.with_team(game, session_id, |team| {
                         team.on_plug_change_state(plug_id, 9, &value.to_le_bytes())
                     })
                 })

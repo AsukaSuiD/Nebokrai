@@ -203,11 +203,13 @@ pub(crate) mod appworld {
     }
     pub(crate) mod session {
         pub(crate) mod cplug;
+        pub(crate) mod csession;
         #[allow(
             dead_code,
-            reason = "CSessionFactory подключён к World MainLoop до переноса CSession/CTeam owners"
+            reason = "factory сохраняет весь восстановленный virtual API, включая пока недостигнутые ветви"
         )]
         pub(crate) mod csessionfactory;
+        pub(crate) mod cteam;
         pub(crate) mod cteamate;
     }
     pub(crate) mod skills {

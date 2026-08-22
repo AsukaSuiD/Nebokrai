@@ -16,15 +16,12 @@
 //! как `stdext::hash_map<long, pointer>`, а enum-значения —
 //! `ST_NORMAL_SESSION=0`, `ST_TEAM=1`, шесть `PLUG_TYPE=0..5` и
 //! `TYPE_SESSION/TYPE_PLUG=10/11`; exact EXE data задаёт обоим ID initial `1`.
-//! Factory выбирает только `CSession` либо `CTeam` и только `CTeamate`.
-//! Конкретный plug-owner уже материализован и строится самой фабрикой;
-//! constructors и virtual API ещё сырых `CSession/CTeam` остаются явной
-//! allocator/trait-границей. Factory-owned lifetime выражен через `Box`, а
-//! `Drop` вызывается ровно там, где исходник звал scalar deleting destructor.
-//! Подключённый `OnTeamMessage` использует те же registry через узкие
-//! `WorldTeamSessionOwner/WorldTeamateOwner` проекции: это safe-эквивалент
-//! точных RTTI-переходов, а не отдельное team-состояние. До реализации
-//! конкретного `CTeam` default-проекция возвращает исходный RTTI miss.
+//! Factory напрямую строит конкретные `CSession`, `CTeam` и `CTeamate`.
+//! Factory-owned lifetime выражен через `Box`, а `Drop` вызывается ровно там,
+//! где исходник звал scalar deleting destructor. Подключённый `OnTeamMessage`
+//! использует те же registry через узкие `WorldTeamSessionOwner` и
+//! `WorldTeamateOwner` проекции: это safe-эквивалент точных RTTI-переходов, а
+//! не отдельное team-состояние.
 //!
 //! `AI` проходит только session registry. Null value стирается сразу;
 //! недоступная session сначала получает `Abort`, завершённая — `End`, затем
@@ -59,7 +56,11 @@
 use std::error::Error;
 use std::fmt;
 
+use crate::nets::networld::message::CMessage;
+use crate::worldserver::appworld::session::csession::{WorldSessionEffect, WorldSessionPlug};
+use crate::worldserver::appworld::session::cteam::CTeam;
 use crate::worldserver::appworld::session::cteamate::CTeamate;
+use crate::worldserver::worldserver::game::CGame;
 
 const LEGACY_HASH_XOR: u32 = 0xDEAD_BEEF;
 const TYPE_SESSION: i32 = 10;
@@ -117,6 +118,10 @@ pub(crate) trait WorldSessionOwner {
     fn is_session_ended(&mut self) -> i32;
     fn end(&mut self) -> i32;
     fn ai(&mut self);
+    fn ai_prefix(&mut self) {
+        self.ai();
+    }
+    fn ai_suffix(&mut self) {}
     fn insert_plug(&mut self, plug_id: i32) -> i32;
     fn on_plug_change_state(
         &mut self,
@@ -126,6 +131,23 @@ pub(crate) trait WorldSessionOwner {
         recursive: i32,
     ) -> i32;
     fn unserialize(&mut self, stream: &[u8], offset: &mut i32) -> i32;
+    fn take_effects(&mut self) -> Vec<WorldSessionEffect> {
+        Vec::new()
+    }
+    fn take_pending_unserialize_plugs(&mut self) -> u32 {
+        0
+    }
+    fn insert_plug_identity(&mut self, _plug: WorldSessionPlug) {}
+    fn can_insert_plug(&self) -> bool {
+        false
+    }
+    fn session_plugs(&self) -> &[WorldSessionPlug] {
+        &[]
+    }
+    fn remove_plug_id(&mut self, _plug_id: i32) {}
+    fn should_traverse_plugs(&self) -> bool {
+        false
+    }
 
     /// Возвращает доказанный `CTeam`-интерфейс либо RTTI-failure как `None`.
     fn as_team_mut(&mut self) -> Option<&mut dyn WorldTeamSessionOwner> {
@@ -148,6 +170,14 @@ pub(crate) trait WorldTeamSessionOwner {
 pub(crate) trait WorldPlugOwner {
     fn assign_factory_identity(&mut self, object_type: i32, object_id: i32);
     fn set_owner(&mut self, owner_type: i32, owner_id: i32);
+    fn object_id(&self) -> i32;
+    fn owner_type(&self) -> i32;
+    fn owner_id(&self) -> i32;
+    fn set_session(&mut self, session_id: i32);
+    fn is_plug_available(&mut self, game: &CGame) -> i32;
+    fn is_plug_ended(&self) -> i32;
+    fn on_change_state(&mut self, plug_id: i32, state: i32, value: &[u8]) -> i32;
+    fn serialize(&self, output: &mut Vec<u8>) -> i32;
     fn unserialize(&mut self, stream: &[u8], offset: &mut i32) -> i32;
 
     /// Возвращает доказанный `CTeamate`-интерфейс либо RTTI-failure как `None`.
@@ -162,6 +192,8 @@ pub(crate) trait WorldTeamateOwner {
     fn set_owner_region_id(&mut self, region_id: i32);
     fn set_owner_name(&mut self, owner_name: &[u8]);
     fn player_still_existed(&mut self, existed: i32);
+    fn owner_region_id(&self) -> i32;
+    fn owner_name(&self) -> &[u8];
 
     /// Забирает синхронные обращения plug-а к его session после мутации поля.
     fn take_session_effects(&mut self) -> Vec<WorldPlugSessionEffect> {
@@ -179,18 +211,6 @@ pub(crate) struct WorldPlugSessionEffect {
     pub(crate) state: i32,
     pub(crate) value: Vec<u8>,
     pub(crate) end_after_session_lookup: bool,
-}
-
-/// Allocation/constructor-граница ещё сырых `CSession/CTeam` owners.
-pub(crate) trait WorldSessionFactoryAllocator {
-    fn construct_session(
-        &mut self,
-        session_type: WorldSessionType,
-        minimum_plugs: u32,
-        maximum_plugs: u32,
-        lifetime_ms: u32,
-    ) -> Option<Box<dyn WorldSessionOwner>>;
-
 }
 
 struct LegacyMsvcHashEntry<T> {
@@ -362,10 +382,26 @@ impl CSessionFactory {
     }
 
     /// Делегирует `CSession::InsertPlug` найденной ненулевой session.
-    pub(crate) fn insert_plug(&mut self, session_id: i32, plug_id: i32) -> i32 {
-        self.sessions
-            .get_mut(session_id)
-            .map_or(0, |session| session.insert_plug(plug_id))
+    pub(crate) fn insert_plug(&mut self, game: &mut CGame, session_id: i32, plug_id: i32) -> i32 {
+        let Some(plug) = self.plugs.get_mut(plug_id) else {
+            return 0;
+        };
+        let identity = WorldSessionPlug {
+            plug_id,
+            owner_type: plug.owner_type(),
+            owner_id: plug.owner_id(),
+        };
+        let Some(session) = self.sessions.get_mut(session_id) else {
+            return 0;
+        };
+        if !session.can_insert_plug() || plug.is_plug_available(game) == 0 {
+            return 0;
+        }
+        plug.set_session(session_id);
+        session.insert_plug_identity(identity);
+        let _ = session.on_plug_change_state(plug_id, 0, &[], 0);
+        self.drain_session_effects(game, session_id);
+        1
     }
 
     /// Проверяет тот же RTTI-переход `CSession -> CTeam`, не выдавая owner.
@@ -376,21 +412,44 @@ impl CSessionFactory {
             .is_some()
     }
 
+    /// Строит точный session/team header и затем plug wire в list-order.
+    pub(crate) fn serialize_team(&mut self, session_id: i32) -> Option<Vec<u8>> {
+        let (mut output, plug_ids) = {
+            let session = self.sessions.get_mut(session_id)?;
+            let plug_ids = session
+                .session_plugs()
+                .iter()
+                .map(|plug| plug.plug_id)
+                .collect::<Vec<_>>();
+            let mut output = Vec::new();
+            session.as_team_mut()?.serialize(&mut output);
+            (output, plug_ids)
+        };
+        for plug_id in plug_ids {
+            let plug = self.plugs.get(plug_id)?;
+            if plug.serialize(&mut output) == 0 {
+                return None;
+            }
+        }
+        Some(output)
+    }
+
     /// Делегирует операцию живому `CTeam` из единого factory registry.
     pub(crate) fn with_team<ResultValue>(
         &mut self,
+        game: &mut CGame,
         session_id: i32,
         operation: impl FnOnce(&mut dyn WorldTeamSessionOwner) -> ResultValue,
     ) -> Option<ResultValue> {
-        self.sessions
-            .get_mut(session_id)?
-            .as_team_mut()
-            .map(operation)
+        let result = self.sessions.get_mut(session_id)?.as_team_mut().map(operation)?;
+        self.drain_session_effects(game, session_id);
+        Some(result)
     }
 
     /// Делегирует операцию живому `CTeamate` из единого factory registry.
     pub(crate) fn with_teamate<ResultValue>(
         &mut self,
+        game: &mut CGame,
         plug_id: i32,
         operation: impl FnOnce(&mut dyn WorldTeamateOwner) -> ResultValue,
     ) -> Option<ResultValue> {
@@ -399,7 +458,9 @@ impl CSessionFactory {
             let result = operation(teamate);
             (result, teamate.take_session_effects())
         };
+        let mut affected_sessions = Vec::new();
         for effect in effects {
+            affected_sessions.push(effect.session_id);
             let session_found = self.sessions.get_mut(effect.session_id).is_some_and(|session| {
                 session.on_plug_change_state(
                     effect.plug_id,
@@ -419,35 +480,303 @@ impl CSessionFactory {
                 }
             }
         }
+        affected_sessions.sort_unstable();
+        affected_sessions.dedup();
+        for session_id in affected_sessions {
+            self.drain_session_effects(game, session_id);
+        }
         Some(result)
     }
 
     /// Вызывает virtual `CSession::End` без придуманного downcast-а к team.
-    pub(crate) fn end_session(&mut self, session_id: i32) -> Option<i32> {
-        self.sessions
-            .get_mut(session_id)
-            .map(|session| session.end())
+    pub(crate) fn end_session(&mut self, game: &mut CGame, session_id: i32) -> Option<i32> {
+        let result = self.sessions.get_mut(session_id).map(|session| session.end())?;
+        self.drain_session_effects(game, session_id);
+        Some(result)
+    }
+
+    fn drain_session_effects(&mut self, game: &mut CGame, session_id: i32) {
+        loop {
+            let effects = self
+                .sessions
+                .get_mut(session_id)
+                .map(|session| session.take_effects())
+                .unwrap_or_default();
+            if effects.is_empty() {
+                break;
+            }
+            for effect in effects {
+                match effect {
+                    WorldSessionEffect::TeamStarted { team_id } => {
+                        game.publish_team_session(team_id, session_id);
+                    }
+                    WorldSessionEffect::TeamEnded { team_id } => {
+                        let mut message = CMessage::new(0x0007_FD02);
+                        message.base_mut().add_long(team_id as i32);
+                        let _ = message.send_all(game.current_game_server_sender().as_ref());
+                        game.remove_team_session(team_id);
+                    }
+                    WorldSessionEffect::KickPlayer { team_id, player_id } => {
+                        if let Some(map_id) = game
+                            .player_game_server(player_id)
+                            .map(|server| server.index as i32)
+                        {
+                            let mut message = CMessage::new(0x0007_FD06);
+                            message.base_mut().add_long(team_id as i32);
+                            message.base_mut().add_long(player_id);
+                            let _ = game.send_msg_to_game_server(map_id, &message);
+                        }
+                    }
+                    WorldSessionEffect::PlugState {
+                        team_id,
+                        plug_id,
+                        state,
+                        value,
+                        include_sender,
+                    } => self.dispatch_team_plug_state(
+                        game,
+                        session_id,
+                        team_id,
+                        plug_id,
+                        state,
+                        &value,
+                        include_sender,
+                    ),
+                }
+            }
+        }
+    }
+
+    fn dispatch_team_plug_state(
+        &mut self,
+        game: &CGame,
+        session_id: i32,
+        team_id: u32,
+        plug_id: i32,
+        state: i32,
+        value: &[u8],
+        include_sender: bool,
+    ) {
+        let plug_ids: Vec<i32> = self
+            .sessions
+            .get(session_id)
+            .map(|session| {
+                session
+                    .session_plugs()
+                    .iter()
+                    .map(|plug| plug.plug_id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !plug_ids.contains(&plug_id) {
+            return;
+        }
+        let Some(source) = self.plugs.get_mut(plug_id) else {
+            return;
+        };
+        if source.is_plug_available(game) == 0 {
+            return;
+        }
+
+        for target_id in plug_ids.iter().copied() {
+            if target_id == plug_id && !include_sender {
+                continue;
+            }
+            let Some(target) = self.plugs.get_mut(target_id) else {
+                continue;
+            };
+            if target.is_plug_available(game) != 0 && target.is_plug_ended() == 0 {
+                let _ = target.on_change_state(plug_id, state, value);
+            }
+        }
+
+        let source_identity = self.plugs.get(plug_id).map(|plug| {
+            (plug.owner_type(), plug.owner_id())
+        });
+        match state {
+            0 => {
+                let Some((owner_type, owner_id)) = source_identity else {
+                    return;
+                };
+                let Some((region_id, owner_name)) = self.with_teamate_snapshot(plug_id) else {
+                    return;
+                };
+                let mut message = CMessage::new(0x0007_FD03);
+                message.base_mut().add_long(team_id as i32);
+                message.base_mut().add_long(owner_type);
+                message.base_mut().add_long(owner_id);
+                message.base_mut().add_long(region_id);
+                message.base_mut().add(&owner_name);
+                message.base_mut().add_byte(0);
+                self.send_to_team_game_servers(game, &plug_ids, plug_id, &message);
+            }
+            1 | 2 => {
+                let Some((owner_type, owner_id)) = source_identity else {
+                    return;
+                };
+                let mut message = CMessage::new(0x0007_FD04);
+                message.base_mut().add_long(team_id as i32);
+                message.base_mut().add_long(owner_type);
+                message.base_mut().add_long(owner_id);
+                self.send_to_team_game_servers(game, &plug_ids, plug_id, &message);
+            }
+            4 => {
+                let Some(player_id) = value.get(..4).map(|bytes| {
+                    i32::from_le_bytes(bytes.try_into().expect("ровно DWORD"))
+                }) else {
+                    return;
+                };
+                let player_exists = self.sessions.get(session_id).is_some_and(|session| {
+                    session
+                        .session_plugs()
+                        .iter()
+                        .any(|plug| plug.owner_type == 400 && plug.owner_id == player_id)
+                });
+                if player_id == 0 || !player_exists {
+                    return;
+                }
+                let mut message = CMessage::new(0x0007_FD07);
+                message.base_mut().add_long(team_id as i32);
+                message.base_mut().add_long(player_id);
+                self.send_to_team_game_servers(
+                    game,
+                    &plug_ids,
+                    if include_sender { 0 } else { plug_id },
+                    &message,
+                );
+            }
+            5 => {
+                let Some(scheme) = value.get(..4).map(|bytes| {
+                    i32::from_le_bytes(bytes.try_into().expect("ровно DWORD"))
+                }) else {
+                    return;
+                };
+                let mut message = CMessage::new(0x0007_FD0A);
+                message.base_mut().add_long(team_id as i32);
+                message.base_mut().add_long(scheme);
+                self.send_to_team_game_servers(game, &plug_ids, plug_id, &message);
+            }
+            6 => {
+                let Some(region_id) = value.get(..4).map(|bytes| {
+                    i32::from_le_bytes(bytes.try_into().expect("ровно DWORD"))
+                }) else {
+                    return;
+                };
+                let Some((owner_type, owner_id)) = source_identity else {
+                    return;
+                };
+                if region_id == 0 || self.with_teamate_snapshot(plug_id).is_none() {
+                    return;
+                }
+                let mut message = CMessage::new(0x0007_FD05);
+                message.base_mut().add_long(team_id as i32);
+                message.base_mut().add_long(owner_type);
+                message.base_mut().add_long(owner_id);
+                message.base_mut().add_long(region_id);
+                self.send_to_team_game_servers(game, &plug_ids, -1, &message);
+            }
+            8 => {
+                let Some((owner_type, owner_id)) = source_identity else {
+                    return;
+                };
+                if self.with_teamate_snapshot(plug_id).is_none() {
+                    return;
+                }
+                let mut message = CMessage::new(0x0007_FD0B);
+                message.base_mut().add_long(team_id as i32);
+                message.base_mut().add_long(owner_type);
+                message.base_mut().add_long(owner_id);
+                message.base_mut().add(value);
+                message.base_mut().add_byte(0);
+                self.send_to_team_game_servers(game, &plug_ids, plug_id, &message);
+            }
+            9 => {
+                let Some(state_bits) = value.get(..4).map(|bytes| {
+                    i32::from_le_bytes(bytes.try_into().expect("ровно DWORD"))
+                }) else {
+                    return;
+                };
+                let Some((owner_type, owner_id)) = source_identity else {
+                    return;
+                };
+                if self.with_teamate_snapshot(plug_id).is_none() {
+                    return;
+                }
+                let mut message = CMessage::new(0x0007_FD0C);
+                message.base_mut().add_long(team_id as i32);
+                message.base_mut().add_long(owner_type);
+                message.base_mut().add_long(owner_id);
+                message.base_mut().add_long(state_bits);
+                self.send_to_team_game_servers(game, &plug_ids, plug_id, &message);
+            }
+            _ => {}
+        }
+    }
+
+    fn with_teamate_snapshot(&mut self, plug_id: i32) -> Option<(i32, Vec<u8>)> {
+        let teamate = self.plugs.get_mut(plug_id)?.as_teamate_mut()?;
+        let region_id = teamate.owner_region_id();
+        let owner_name = teamate.owner_name().to_vec();
+        Some((region_id, owner_name))
+    }
+
+    fn send_to_team_game_servers(
+        &self,
+        game: &CGame,
+        plug_ids: &[i32],
+        source_plug_id: i32,
+        message: &CMessage,
+    ) {
+        let source_map = self
+            .plugs
+            .get(source_plug_id)
+            .and_then(|plug| game.player_game_server(plug.owner_id()))
+            .map(|server| server.index);
+        let mut maps = Vec::new();
+        for plug_id in plug_ids.iter().copied() {
+            if plug_id == source_plug_id {
+                continue;
+            }
+            let Some(map_id) = self
+                .plugs
+                .get(plug_id)
+                .and_then(|plug| game.player_game_server(plug.owner_id()))
+                .map(|server| server.index)
+            else {
+                continue;
+            };
+            if Some(map_id) == source_map || maps.contains(&map_id) {
+                continue;
+            }
+            maps.push(map_id);
+            let _ = game.send_msg_to_game_server(map_id as i32, message);
+        }
     }
 
     /// Создаёт `CSession`/`CTeam`, назначает type/ID и публикует owner.
-    pub(crate) fn create_session<Allocator>(
+    pub(crate) fn create_session(
         &mut self,
         minimum_plugs: u32,
         maximum_plugs: u32,
         lifetime_ms: u32,
         session_type: i32,
-        allocator: &mut Allocator,
-    ) -> i32
-    where
-        Allocator: WorldSessionFactoryAllocator + ?Sized,
-    {
+    ) -> i32 {
         let Some(session_type) = WorldSessionType::from_legacy(session_type) else {
             return 0;
         };
-        let Some(mut session) =
-            allocator.construct_session(session_type, minimum_plugs, maximum_plugs, lifetime_ms)
-        else {
-            return 0;
+        let mut session: Box<dyn WorldSessionOwner> = match session_type {
+            WorldSessionType::Normal => Box::new(
+                crate::worldserver::appworld::session::csession::CSession::new(
+                    minimum_plugs,
+                    maximum_plugs,
+                    lifetime_ms,
+                ),
+            ),
+            WorldSessionType::Team => Box::new(CTeam::new(
+                minimum_plugs,
+                maximum_plugs,
+                lifetime_ms,
+            )),
         };
 
         let session_id = self.next_session_id;
@@ -485,7 +814,7 @@ impl CSessionFactory {
     }
 
     /// Исполняет exact ordered session traversal и erase-after-destructor.
-    pub(crate) fn ai(&mut self) -> WorldSessionFactoryAiReport {
+    pub(crate) fn ai(&mut self, game: &mut CGame) -> WorldSessionFactoryAiReport {
         let mut events = Vec::new();
         let mut index = 0;
         while index < self.sessions.entries.len() {
@@ -507,6 +836,21 @@ impl CSessionFactory {
                     .as_mut()
                     .expect("session остаётся живой до Abort")
                     .abort();
+                self.drain_session_effects(game, session_id);
+                let plug_ids = self.sessions.entries[index]
+                    .value
+                    .as_ref()
+                    .map(|session| {
+                        session
+                            .session_plugs()
+                            .iter()
+                            .map(|plug| plug.plug_id)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                for plug_id in plug_ids {
+                    let _ = self.garbage_collect(TYPE_PLUG, plug_id);
+                }
                 let session = self.sessions.entries[index]
                     .value
                     .take()
@@ -531,6 +875,21 @@ impl CSessionFactory {
                     .as_mut()
                     .expect("session остаётся живой до End")
                     .end();
+                self.drain_session_effects(game, session_id);
+                let plug_ids = self.sessions.entries[index]
+                    .value
+                    .as_ref()
+                    .map(|session| {
+                        session
+                            .session_plugs()
+                            .iter()
+                            .map(|plug| plug.plug_id)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                for plug_id in plug_ids {
+                    let _ = self.garbage_collect(TYPE_PLUG, plug_id);
+                }
                 let session = self.sessions.entries[index]
                     .value
                     .take()
@@ -547,8 +906,65 @@ impl CSessionFactory {
             self.sessions.entries[index]
                 .value
                 .as_mut()
-                .expect("session остаётся живой до AI")
-                .ai();
+                .expect("session остаётся живой до AI prefix")
+                .ai_prefix();
+            self.drain_session_effects(game, session_id);
+
+            let traverse = self.sessions.entries[index]
+                .value
+                .as_ref()
+                .is_some_and(|session| session.should_traverse_plugs());
+            if traverse {
+                let plug_ids = self.sessions.entries[index]
+                    .value
+                    .as_ref()
+                    .map(|session| {
+                        session
+                            .session_plugs()
+                            .iter()
+                            .map(|plug| plug.plug_id)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                for plug_id in plug_ids {
+                    let disposition = match self.plugs.get_mut(plug_id) {
+                        None => 0,
+                        Some(plug) => {
+                            if plug.is_plug_available(game) == 0 {
+                                2
+                            } else if plug.is_plug_ended() != 0 {
+                                1
+                            } else {
+                                3
+                            }
+                        }
+                    };
+                    match disposition {
+                        0 => {
+                            if let Some(session) = self.sessions.entries[index].value.as_mut() {
+                                session.remove_plug_id(plug_id);
+                            }
+                        }
+                        state @ (1 | 2) => {
+                            if let Some(session) = self.sessions.entries[index].value.as_mut() {
+                                let _ = session.on_plug_change_state(plug_id, state, &[], 0);
+                            }
+                            self.drain_session_effects(game, session_id);
+                            let _ = self.garbage_collect(TYPE_PLUG, plug_id);
+                            if let Some(session) = self.sessions.entries[index].value.as_mut() {
+                                session.remove_plug_id(plug_id);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            self.sessions.entries[index]
+                .value
+                .as_mut()
+                .expect("session остаётся живой до AI suffix")
+                .ai_suffix();
+            self.drain_session_effects(game, session_id);
             events.push(WorldSessionFactoryAiEvent::Ran { session_id });
             index += 1;
         }
@@ -566,6 +982,25 @@ impl CSessionFactory {
                 let Some(index) = self.sessions.position(object_id) else {
                     return WorldSessionFactoryGarbageCollect::Missing;
                 };
+                let plug_ids = self.sessions.entries[index]
+                    .value
+                    .as_ref()
+                    .map(|session| {
+                        session
+                            .session_plugs()
+                            .iter()
+                            .map(|plug| plug.plug_id)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                for plug_id in plug_ids {
+                    let Some(plug_index) = self.plugs.position(plug_id) else {
+                        continue;
+                    };
+                    let plug = self.plugs.entries[plug_index].value.take();
+                    drop(plug);
+                    self.plugs.entries.remove(plug_index);
+                }
                 let owner = self.sessions.entries[index].value.take();
                 let had_owner = owner.is_some();
                 drop(owner);
@@ -615,15 +1050,12 @@ impl CSessionFactory {
     }
 
     /// Читает session header и делегирует virtual `CSession::Unserialize`.
-    pub(crate) fn unserialize_session<Allocator>(
+    pub(crate) fn unserialize_session(
         &mut self,
+        game: &mut CGame,
         stream: Option<&[u8]>,
         offset: &mut i32,
-        allocator: &mut Allocator,
-    ) -> Result<i32, WorldSessionFactoryInputBlock>
-    where
-        Allocator: WorldSessionFactoryAllocator + ?Sized,
-    {
+    ) -> Result<i32, WorldSessionFactoryInputBlock> {
         let Some(stream) = stream else {
             return Ok(0);
         };
@@ -636,12 +1068,24 @@ impl CSessionFactory {
             maximum_plugs,
             lifetime_ms,
             session_type,
-            allocator,
         );
-        let Some(session) = self.sessions.get_mut(session_id) else {
-            return Ok(0);
+        let (unserialized, plug_count) = {
+            let Some(session) = self.sessions.get_mut(session_id) else {
+                return Ok(0);
+            };
+            let unserialized = session.unserialize(stream, offset);
+            let plug_count = session.take_pending_unserialize_plugs();
+            (unserialized, plug_count)
         };
-        if session.unserialize(stream, offset) != 0 {
+        if unserialized != 0 {
+            self.drain_session_effects(game, session_id);
+            for _ in 0..plug_count {
+                let plug_id = self.unserialize_plug(Some(stream), offset)?;
+                if plug_id == 0 {
+                    break;
+                }
+                let _ = self.insert_plug(game, session_id, plug_id);
+            }
             return Ok(session_id);
         }
         let _ = self.garbage_collect(TYPE_SESSION, session_id);

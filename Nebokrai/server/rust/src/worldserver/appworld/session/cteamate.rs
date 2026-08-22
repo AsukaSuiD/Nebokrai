@@ -58,6 +58,26 @@ impl CTeamate {
         self.owner_region_id
     }
 
+    pub(crate) const fn object_id(&self) -> i32 {
+        self.plug.object_id()
+    }
+
+    pub(crate) const fn owner_type(&self) -> i32 {
+        self.plug.owner_type()
+    }
+
+    pub(crate) const fn owner_id(&self) -> i32 {
+        self.plug.owner_id()
+    }
+
+    pub(crate) const fn set_session(&mut self, session_id: i32) {
+        self.plug.set_session(session_id);
+    }
+
+    pub(crate) const fn is_plug_ended(&self) -> i32 {
+        self.plug.is_plug_ended()
+    }
+
     pub(crate) fn owner_name(&self) -> &[u8] {
         &self.owner_name
     }
@@ -155,6 +175,38 @@ impl WorldPlugOwner for CTeamate {
         self.plug.set_owner(owner_type, owner_id);
     }
 
+    fn object_id(&self) -> i32 {
+        self.object_id()
+    }
+
+    fn owner_type(&self) -> i32 {
+        self.owner_type()
+    }
+
+    fn owner_id(&self) -> i32 {
+        self.owner_id()
+    }
+
+    fn set_session(&mut self, session_id: i32) {
+        self.set_session(session_id);
+    }
+
+    fn is_plug_available(&mut self, game: &CGame) -> i32 {
+        self.is_plug_available(game)
+    }
+
+    fn is_plug_ended(&self) -> i32 {
+        self.is_plug_ended()
+    }
+
+    fn on_change_state(&mut self, plug_id: i32, _state: i32, _value: &[u8]) -> i32 {
+        CTeamate::on_change_state(self, plug_id)
+    }
+
+    fn serialize(&self, output: &mut Vec<u8>) -> i32 {
+        CTeamate::serialize(self, output)
+    }
+
     fn unserialize(&mut self, stream: &[u8], offset: &mut i32) -> i32 {
         self.unserialize_suffix(stream, offset)
     }
@@ -186,6 +238,14 @@ impl WorldTeamateOwner for CTeamate {
 
     fn player_still_existed(&mut self, existed: i32) {
         self.player_still_existed = existed;
+    }
+
+    fn owner_region_id(&self) -> i32 {
+        self.owner_region_id
+    }
+
+    fn owner_name(&self) -> &[u8] {
+        &self.owner_name
     }
 
     fn take_session_effects(&mut self) -> Vec<WorldPlugSessionEffect> {

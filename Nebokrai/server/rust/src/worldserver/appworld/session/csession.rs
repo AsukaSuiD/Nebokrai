@@ -1,292 +1,271 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Базовый session-owner WorldServer.
+//!
+//! Восстановлены исходные функции `CSession` RVA `0x000DD5A0..0x000DDBA0`
+//! из `e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp`
+//! по точной паре `Nworldserver.exe + WorldServer.pdb`. Два catch-helper-а
+//! `0x0007BD79/0x0007BF56` являются STL/unwind noise и заменены владением
+//! `Vec`/`Drop`.
+//!
+//! Сохраняются full signed lifecycle-флаги, unsigned wrapping tick/lifetime,
+//! list-order plug-ов, wire header `[type,min,max,remaining_lifetime]` и
+//! безусловные повторные `End/Abort` callbacks. `Vec<WorldSessionPlug>`
+//! заменяет `std::list<long>` и дополнительно к ID кэширует неизменяемую owner
+//! identity: это позволяет Rust-owner-у выполнять virtual owner lookup без
+//! обратного raw pointer-а в factory и не меняет порядок или wire.
+//! Переход `0x004DDAE7 -> 0x004DDA55` в exact EXE подтверждает продолжение
+//! обхода после удаления plug-а; показанный RAW ранний `return` был ошибкой
+//! структурирования декомпилятора.
+//!
+//! Обращения к plug registry и `CGame`, которые C++ выполнял через globals,
+//! представлены ordered `WorldSessionEffect`. `CSessionFactory` забирает их
+//! сразу после virtual-вызова; очередь не является новым игровым состоянием.
 
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp
+use crate::worldserver::appworld::baseobject::CBaseObject;
+use crate::worldserver::appworld::session::csessionfactory::WorldSessionOwner;
+use crate::worldserver::worldserver::game::legacy_tick_ms;
 
-// ============================================================================
-// FUNCTION: Catch@0047bd79
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp
-// RVA: 0x0007BD79
-// ADDRESS: 0047bd79
-// PROTOTYPE: undefined Catch@0047bd79()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldSessionPlug {
+    pub(crate) plug_id: i32,
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+}
 
-// ============================================================================
-// FUNCTION: Catch@0047bf56
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp
-// RVA: 0x0007BF56
-// ADDRESS: 0047bf56
-// PROTOTYPE: undefined Catch@0047bf56()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldSessionEffect {
+    TeamStarted { team_id: u32 },
+    TeamEnded { team_id: u32 },
+    KickPlayer { team_id: u32, player_id: i32 },
+    PlugState {
+        team_id: u32,
+        plug_id: i32,
+        state: i32,
+        value: Vec<u8>,
+        include_sender: bool,
+    },
+}
 
-// ============================================================================
-// FUNCTION: CSession::Start
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:99
-// RVA: 0x000DD5A0
-// ADDRESS: 004dd5a0
-// PROTOTYPE: int __thiscall Start(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) struct CSession {
+    object: CBaseObject,
+    session_type: u32,
+    ended: i32,
+    started: i32,
+    aborted: i32,
+    maximum_plugs: u32,
+    minimum_plugs: u32,
+    starting_timestamp_ms: u32,
+    lifetime_ms: u32,
+    plugs: Vec<WorldSessionPlug>,
+}
 
-// ============================================================================
-// FUNCTION: CSession::IsSessionEnded
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:234
-// RVA: 0x000DD5C0
-// ADDRESS: 004dd5c0
-// PROTOTYPE: int __thiscall IsSessionEnded(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl CSession {
+    pub(crate) const fn new(
+        minimum_plugs: u32,
+        maximum_plugs: u32,
+        lifetime_ms: u32,
+    ) -> Self {
+        Self {
+            object: CBaseObject::with_reached_constructor_defaults(),
+            session_type: 0,
+            ended: 0,
+            started: 0,
+            aborted: 0,
+            maximum_plugs,
+            minimum_plugs,
+            starting_timestamp_ms: 0,
+            lifetime_ms,
+            plugs: Vec::new(),
+        }
+    }
 
-// ============================================================================
-// FUNCTION: CSession::OnPlugInserted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:288
-// RVA: 0x000DD5E0
-// ADDRESS: 004dd5e0
-// PROTOTYPE: int __thiscall OnPlugInserted(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn assign_factory_identity(&mut self, object_type: i32, object_id: i32) {
+        self.object.set_type(object_type);
+        self.object.set_id(object_id);
+    }
 
-// ============================================================================
-// FUNCTION: CSession::OnPlugAborted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:307
-// RVA: 0x000DD620
-// ADDRESS: 004dd620
-// PROTOTYPE: int __thiscall OnPlugAborted(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn object_id(&self) -> i32 {
+        self.object.get_id()
+    }
 
-// ============================================================================
-// FUNCTION: CSession::OnPlugEnded
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:328
-// RVA: 0x000DD670
-// ADDRESS: 004dd670
-// PROTOTYPE: int __thiscall OnPlugEnded(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn set_session_type(&mut self, session_type: u32) {
+        self.session_type = session_type;
+    }
 
-// ============================================================================
-// FUNCTION: CSession::GetPlugList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:363
-// RVA: 0x000DD6C0
-// ADDRESS: 004dd6c0
-// PROTOTYPE: list<long,std::allocator<long>_> * __thiscall GetPlugList(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn plugs(&self) -> &[WorldSessionPlug] {
+        &self.plugs
+    }
 
-// ============================================================================
-// FUNCTION: CSession::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:393
-// RVA: 0x000DD6D0
-// ADDRESS: 004dd6d0
-// PROTOTYPE: int __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn plugs_mut(&mut self) -> &mut Vec<WorldSessionPlug> {
+        &mut self.plugs
+    }
 
-// ============================================================================
-// FUNCTION: CSession::IsSessionAvailable
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:190
-// RVA: 0x000DD760
-// ADDRESS: 004dd760
-// PROTOTYPE: int __thiscall IsSessionAvailable(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn maximum_plugs(&self) -> u32 {
+        self.maximum_plugs
+    }
 
-// ============================================================================
-// FUNCTION: CSession::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:109
-// RVA: 0x000DD770
-// ADDRESS: 004dd770
-// PROTOTYPE: int __thiscall End(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn started(&self) -> i32 {
+        self.started
+    }
 
-// ============================================================================
-// FUNCTION: CSession::Abort
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:129
-// RVA: 0x000DD7C0
-// ADDRESS: 004dd7c0
-// PROTOTYPE: int __thiscall Abort(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn ended_flag(&self) -> i32 {
+        self.ended
+    }
 
-// ============================================================================
-// FUNCTION: CSession::OnPlugChangeState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:149
-// RVA: 0x000DD810
-// ADDRESS: 004dd810
-// PROTOTYPE: int __thiscall OnPlugChangeState(long param_1, long param_2, uchar * param_3, int param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn aborted(&self) -> i32 {
+        self.aborted
+    }
 
-// ============================================================================
-// FUNCTION: CSession::QueryPlugByOwner
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:247
-// RVA: 0x000DD8B0
-// ADDRESS: 004dd8b0
-// PROTOTYPE: CPlug * __thiscall QueryPlugByOwner(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn start(&mut self) -> i32 {
+        self.starting_timestamp_ms = legacy_tick_ms();
+        self.started = 1;
+        1
+    }
 
-// ============================================================================
-// FUNCTION: CSession::QueryPlugByID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:269
-// RVA: 0x000DD910
-// ADDRESS: 004dd910
-// PROTOTYPE: CPlug * __thiscall QueryPlugByID(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn is_session_ended(&self) -> i32 {
+        ((self.started != 0) && (self.ended != 0)) as i32
+    }
 
-// ============================================================================
-// FUNCTION: CSession::Release
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:349
-// RVA: 0x000DD940
-// ADDRESS: 004dd940
-// PROTOTYPE: void __thiscall Release(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn is_session_available(&self) -> i32 {
+        (self.minimum_plugs as usize <= self.plugs.len()) as i32
+    }
 
-// ============================================================================
-// FUNCTION: CSession::~CSession
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:45
-// RVA: 0x000DD9A0
-// ADDRESS: 004dd9a0
-// PROTOTYPE: void __thiscall ~CSession(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn end(&mut self) -> i32 {
+        self.starting_timestamp_ms = 0;
+        self.ended = 1;
+        1
+    }
 
-// ============================================================================
-// FUNCTION: CSession::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:52
-// RVA: 0x000DDA00
-// ADDRESS: 004dda00
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn abort(&mut self) -> i32 {
+        self.starting_timestamp_ms = 0;
+        self.aborted = 1;
+        1
+    }
 
-// ============================================================================
-// FUNCTION: CSession::CSession
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:18
-// RVA: 0x000DDB00
-// ADDRESS: 004ddb00
-// PROTOTYPE: undefined __thiscall CSession(ulong param_1, ulong param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    /// Выполняет только local prefix `AI`; plug traversal принадлежит factory.
+    pub(crate) fn ai(&mut self) -> bool {
+        if self.started != 1 || self.ended != 0 || self.aborted != 0 {
+            return false;
+        }
+        if self.lifetime_ms != 0
+            && self.starting_timestamp_ms.wrapping_add(self.lifetime_ms) <= legacy_tick_ms()
+        {
+            self.end();
+            return true;
+        }
+        false
+    }
 
-// ============================================================================
-// FUNCTION: CSession::InsertPlug
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp:209
-// RVA: 0x000DDBA0
-// ADDRESS: 004ddba0
-// PROTOTYPE: int __thiscall InsertPlug(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn can_insert_plug(&self) -> bool {
+        self.started != 0
+            && self.ended == 0
+            && self.aborted == 0
+            && self.plugs.len() < self.maximum_plugs as usize
+    }
 
+    pub(crate) fn insert_plug_identity(&mut self, plug: WorldSessionPlug) {
+        self.plugs.push(plug);
+    }
 
-// COMPONENT_VARIANT_END: WorldServer
+    pub(crate) fn remove_plug_id(&mut self, plug_id: i32) {
+        if let Some(index) = self.plugs.iter().position(|plug| plug.plug_id == plug_id) {
+            self.plugs.remove(index);
+        }
+    }
+
+    pub(crate) fn query_plug_by_owner(&self, owner_type: i32, owner_id: i32) -> Option<i32> {
+        self.plugs
+            .iter()
+            .find(|plug| plug.owner_type == owner_type && plug.owner_id == owner_id)
+            .map(|plug| plug.plug_id)
+    }
+
+    pub(crate) fn query_plug_by_id(&self, plug_id: i32) -> Option<i32> {
+        self.plugs
+            .iter()
+            .any(|plug| plug.plug_id == plug_id)
+            .then_some(plug_id)
+    }
+
+    pub(crate) fn serialize(&self, output: &mut Vec<u8>) -> i32 {
+        let remaining_lifetime = if self.lifetime_ms == 0 {
+            0
+        } else {
+            self.starting_timestamp_ms
+                .wrapping_add(self.lifetime_ms)
+                .wrapping_sub(legacy_tick_ms())
+        };
+        output.extend_from_slice(&self.session_type.to_le_bytes());
+        output.extend_from_slice(&self.minimum_plugs.to_le_bytes());
+        output.extend_from_slice(&self.maximum_plugs.to_le_bytes());
+        output.extend_from_slice(&remaining_lifetime.to_le_bytes());
+        1
+    }
+
+    pub(crate) const fn unserialize(&mut self, stream: Option<&[u8]>) -> i32 {
+        stream.is_some() as i32
+    }
+}
+
+impl WorldSessionOwner for CSession {
+    fn assign_factory_identity(&mut self, object_type: i32, object_id: i32) {
+        self.assign_factory_identity(object_type, object_id);
+    }
+
+    fn is_session_available(&mut self) -> i32 {
+        CSession::is_session_available(self)
+    }
+
+    fn abort(&mut self) -> i32 {
+        CSession::abort(self)
+    }
+
+    fn is_session_ended(&mut self) -> i32 {
+        CSession::is_session_ended(self)
+    }
+
+    fn end(&mut self) -> i32 {
+        CSession::end(self)
+    }
+
+    fn ai(&mut self) {
+        let _ = CSession::ai(self);
+    }
+
+    fn insert_plug(&mut self, _plug_id: i32) -> i32 {
+        0
+    }
+
+    fn on_plug_change_state(
+        &mut self,
+        plug_id: i32,
+        _state: i32,
+        _value: &[u8],
+        _recursive: i32,
+    ) -> i32 {
+        self.query_plug_by_id(plug_id).is_some() as i32
+    }
+
+    fn unserialize(&mut self, stream: &[u8], _offset: &mut i32) -> i32 {
+        self.unserialize(Some(stream))
+    }
+
+    fn insert_plug_identity(&mut self, plug: WorldSessionPlug) {
+        CSession::insert_plug_identity(self, plug);
+    }
+
+    fn can_insert_plug(&self) -> bool {
+        CSession::can_insert_plug(self)
+    }
+
+    fn session_plugs(&self) -> &[WorldSessionPlug] {
+        CSession::plugs(self)
+    }
+
+    fn remove_plug_id(&mut self, plug_id: i32) {
+        CSession::remove_plug_id(self, plug_id);
+    }
+
+    fn should_traverse_plugs(&self) -> bool {
+        self.started == 1 && self.ended == 0 && self.aborted == 0
+    }
+}

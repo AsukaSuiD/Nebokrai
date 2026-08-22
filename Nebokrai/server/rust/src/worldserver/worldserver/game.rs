@@ -1242,7 +1242,7 @@ use crate::worldserver::appworld::script::variablelist::{
     CVariableList, VariableListSaveSource,
 };
 use crate::worldserver::appworld::session::csessionfactory::{
-    CSessionFactory, WorldSessionFactoryAiReport, WorldSessionFactoryAllocator,
+    CSessionFactory, WorldSessionFactoryAiReport,
 };
 use crate::worldserver::appworld::worldcityregion::{
     CWorldCityRegion, WorldCityRegionLoadError, WorldCityRegionSerializationBlock,
@@ -9622,7 +9622,7 @@ impl CGame {
     ) -> Result<WorldProcessMessageOutcome, WorldProcessMessageError>
     where
         TimerCallback: Copy,
-        TeamOwner: WorldRegionChangeTeamOwner + WorldSessionFactoryAllocator + ?Sized,
+        TeamOwner: WorldRegionChangeTeamOwner + ?Sized,
         JjcContext: JjcRunContext + ?Sized,
     {
         let server_started_at = legacy_tick_ms();
@@ -9906,7 +9906,7 @@ impl CGame {
     ) -> WorldProcessMessageStageReport
     where
         TimerCallback: Copy,
-        TeamOwner: WorldRegionChangeTeamOwner + WorldSessionFactoryAllocator + ?Sized,
+        TeamOwner: WorldRegionChangeTeamOwner + ?Sized,
         JjcContext: JjcRunContext + ?Sized,
         GetTick: FnMut() -> u32,
     {
@@ -10024,7 +10024,7 @@ impl CGame {
     where
         GetTick: FnMut() -> u32,
     {
-        let ai = factory.ai();
+        let ai = factory.ai(self);
         let finished_at_ms = get_tick();
         let elapsed_ms = finished_at_ms.wrapping_sub(clocks.stage_started_at_ms);
         profile_state.session_factory_time_ms = profile_state
@@ -10711,6 +10711,16 @@ impl CGame {
         self.team_session_ids.get(&team_id).copied().unwrap_or(0)
     }
 
+    /// Воспроизводит `m_mTeamSessionID[teamID] = sessionID` из `CTeam::Start`.
+    pub(crate) fn publish_team_session(&mut self, team_id: u32, session_id: i32) {
+        self.team_session_ids.insert(team_id, session_id);
+    }
+
+    /// Удаляет найденный team key без проверки прежнего session pointer-а.
+    pub(crate) fn remove_team_session(&mut self, team_id: u32) {
+        self.team_session_ids.remove(&team_id);
+    }
+
     /// Обходит весь login-list по одному общему tick snapshot и освобождает
     /// только просроченные записи, у которых ещё существует player-owner.
     pub(crate) fn process_time_out_login_player<GetTick, TeamOwner>(
@@ -10952,9 +10962,7 @@ impl CGame {
         LeiTingContextOwner: LeiTingContext,
         DbMiscContextOwner: DbMiscContext,
         JjcContext: JjcRunContext,
-        TeamOwner: WorldLoginTimeoutTeamOwner
-            + WorldRegionChangeTeamOwner
-            + WorldSessionFactoryAllocator,
+        TeamOwner: WorldLoginTimeoutTeamOwner + WorldRegionChangeTeamOwner,
     {
         let profile_initialization = initialize_main_loop_profile_if_needed(
             state.initialization,
@@ -14705,7 +14713,7 @@ async fn process_world_message<TimerCallback, TeamOwner, JjcContext>(
 ) -> ProcessedWorldEvent
 where
     TimerCallback: Copy,
-    TeamOwner: WorldRegionChangeTeamOwner + WorldSessionFactoryAllocator + ?Sized,
+    TeamOwner: WorldRegionChangeTeamOwner + ?Sized,
     JjcContext: JjcRunContext + ?Sized,
 {
     let message_type = message.message_type();
@@ -14823,7 +14831,7 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::Team) {
-        let outcome = on_team_message(game, session_factory, team_owner, &mut message);
+        let outcome = on_team_message(game, session_factory, &mut message);
         return ProcessedWorldEvent::TeamMessage {
             source,
             legacy_run_result,
