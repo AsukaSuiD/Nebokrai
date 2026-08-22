@@ -161,7 +161,7 @@ impl CNpc {
 
 // ============================================================================
 // FUNCTION: CNpc::CNpc
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\npc.cpp:11
@@ -169,6 +169,11 @@ impl CNpc {
 // ADDRESS: 004e04f0
 // PROTOTYPE: undefined __thiscall CNpc(void)
 //
+// IMPLEMENTED_OWNER: `CNpc::with_constructor_base_and_type` выше создаёт
+// единственный достигнутый `CMoveShape` base-подобъект и затем назначает
+// signed object type `500`. Пустой `m_listScript` не материализован отдельно:
+// его элементы `tagEnemyFaction*` и их жизненный цикл ещё не восстановлены;
+// Rust не выдаёт отсутствие такого storage за полный constructor.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
