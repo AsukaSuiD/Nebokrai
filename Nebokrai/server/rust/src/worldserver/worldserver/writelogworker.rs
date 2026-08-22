@@ -45,7 +45,7 @@ use tokio_util::compat::TokioAsyncWriteCompatExt;
 use crate::dbaccess::worlddb::rssetup::{WorldDatabaseSettings, WorldTdsClient};
 use crate::public::date::TagTime;
 use crate::worldserver::appworld::message::writelogmessage::{
-    WorldFairyLogEvent, WorldWriteLogCommand,
+    WorldAuctionSaleLogEvent, WorldFairyLogEvent, WorldWriteLogCommand,
 };
 
 const INSERT_INCREMENT_LOG_SQL: &str = "INSERT INTO increment_log(\
@@ -77,6 +77,18 @@ const INSERT_FAIRY_SYNCRETIZE_LOG_SQL: &str = "INSERT INTO fairy_syncretize_log(
     sec_goodsname,sec_level,sec_grow_rate,west_patch,child_main_ability,child_goodsid,\
     child_goodsname,child_sy_times,child_row_rate,sy_time\
 ) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11,@P12,@P13,@P14,@P15,@P16)";
+const INSERT_AUCTION_LOG_SQL: &str = "INSERT INTO AuctionLog(\
+    dwBaseId,guidKey,opttype,moneytype,moneynum,amount,sxf,strdescri,guid,playerid,bNotice,log_time\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11,@P12)";
+const INSERT_AUCTION_SALE_OPER_LOG_SQL: &str = "INSERT INTO AuctionSaleLog(\
+    dwOpt,dwPlayerId,dwBaseIndex,guid,dwAmount,dwMoney,dwTimeType,dwFwf,date\
+) VALUES('oper',@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8)";
+const INSERT_AUCTION_SALE_CANCEL_LOG_SQL: &str = "INSERT INTO AuctionSaleLog(\
+    dwOpt,dwPlayerId,guid,date\
+) VALUES('cancel',@P1,@P2,@P3)";
+const INSERT_AUCTION_SALE_RECEIVE_LOG_SQL: &str = "INSERT INTO AuctionSaleLog(\
+    dwOpt,dwPlayerId,dwAmount,guid,date\
+) VALUES('receive',@P1,@P2,@P3,@P4)";
 
 /// Cloneable FIFO-owner для producer-а главного цикла и отдельного DB worker-а.
 ///
@@ -426,6 +438,69 @@ pub(crate) async fn execute_world_write_log_command(
             }
             Ok(())
         }
+        WorldWriteLogCommand::AuctionLog(write) => {
+            let record = &write.record;
+            let mut query = Query::new(INSERT_AUCTION_LOG_SQL);
+            query.bind(record.base_id);
+            query.bind(record.guid_key.to_string());
+            query.bind(record.operation_type);
+            query.bind(record.money_type);
+            query.bind(record.money_num);
+            query.bind(record.amount);
+            query.bind(record.fee);
+            query.bind(decode_legacy_c_text(&record.description));
+            query.bind(record.guid.to_string());
+            query.bind(record.player_id);
+            query.bind(record.notice);
+            query.bind(calendar_log_event_time(write.log_time));
+            query.execute(connection).await?;
+            Ok(())
+        }
+        WorldWriteLogCommand::AuctionSaleLog(write) => {
+            let event_time = calendar_log_event_time(write.event_time);
+            match &write.event {
+                WorldAuctionSaleLogEvent::Oper {
+                    player_id,
+                    base_index,
+                    guid,
+                    amount,
+                    money,
+                    time_type,
+                    fee,
+                } => {
+                    let mut query = Query::new(INSERT_AUCTION_SALE_OPER_LOG_SQL);
+                    query.bind(i64::from(*player_id));
+                    query.bind(i64::from(*base_index));
+                    query.bind(guid.to_string());
+                    query.bind(i64::from(*amount));
+                    query.bind(i64::from(*money));
+                    query.bind(i64::from(*time_type));
+                    query.bind(i64::from(*fee));
+                    query.bind(event_time);
+                    query.execute(connection).await?;
+                }
+                WorldAuctionSaleLogEvent::Cancel { player_id, guid } => {
+                    let mut query = Query::new(INSERT_AUCTION_SALE_CANCEL_LOG_SQL);
+                    query.bind(i64::from(*player_id));
+                    query.bind(guid.to_string());
+                    query.bind(event_time);
+                    query.execute(connection).await?;
+                }
+                WorldAuctionSaleLogEvent::Receive {
+                    player_id,
+                    amount,
+                    guid,
+                } => {
+                    let mut query = Query::new(INSERT_AUCTION_SALE_RECEIVE_LOG_SQL);
+                    query.bind(i64::from(*player_id));
+                    query.bind(i64::from(*amount));
+                    query.bind(guid.to_string());
+                    query.bind(event_time);
+                    query.execute(connection).await?;
+                }
+            }
+            Ok(())
+        }
     }
 }
 
@@ -434,6 +509,13 @@ fn legacy_log_event_time(time: TagTime) -> String {
     format!(
         "{}-{}-{} {}:{}:{}",
         time.year, time.day_of_week, time.day, time.hour, time.minute, time.second,
+    )
+}
+
+fn calendar_log_event_time(time: TagTime) -> String {
+    format!(
+        "{}-{}-{} {}:{}:{}",
+        time.year, time.month, time.day, time.hour, time.minute, time.second,
     )
 }
 
@@ -450,6 +532,11 @@ fn decode_legacy_text(bytes: &[u8]) -> String {
     WINDOWS_1251.decode(bytes).0.into_owned()
 }
 
+fn decode_legacy_c_text(bytes: &[u8]) -> String {
+    let end = bytes.iter().position(|byte| *byte == 0).unwrap_or(bytes.len());
+    decode_legacy_text(&bytes[..end])
+}
+
 fn world_write_log_command_name(command: &WorldWriteLogCommand) -> &'static str {
     match command {
         WorldWriteLogCommand::IncrementLog(_) => "IncrementLog",
@@ -457,5 +544,7 @@ fn world_write_log_command_name(command: &WorldWriteLogCommand) -> &'static str 
         WorldWriteLogCommand::PlainLog(_) => "PlainLog",
         WorldWriteLogCommand::CiqingLog(_) => "CiqingLog",
         WorldWriteLogCommand::FairyLog(_) => "FairyLog",
+        WorldWriteLogCommand::AuctionLog(_) => "AuctionLog",
+        WorldWriteLogCommand::AuctionSaleLog(_) => "AuctionSaleLog",
     }
 }

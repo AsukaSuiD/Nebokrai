@@ -9606,12 +9606,14 @@ impl CGame {
     /// actions применяются FIFO до следующего сообщения. Async TDS lookup
     /// `0x5FF12` завершается до следующего slot-а, как синхронный ADO EXE;
     /// JJC owner `0x60901..0x60907` и Team owner `0x60001..0x6000C`
-    /// исполняются полностью. Write-log owner `0x6020D` ставит typed DB-command
-    /// в FIFO и сразу публикует запись в concrete increment-log owner.
+    /// исполняются полностью. Write-log owners `0x6020D/0x60214` ставят typed
+    /// DB-command в FIFO и сразу публикуют запись в concrete increment/auction
+    /// live-owner.
     pub(crate) async fn process_message<TimerCallback, JjcContext>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
         increment_log: &mut CIncrementLog,
+        auction_log: &mut CAuctionLog,
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
         country_handler: &mut CCountryHandler,
@@ -9706,6 +9708,7 @@ impl CGame {
                             self,
                             honor_ranks,
                             increment_log,
+                            auction_log,
                             organizing,
                             organizing_parameters,
                             country_handler,
@@ -9796,6 +9799,7 @@ impl CGame {
                     self,
                     honor_ranks,
                     increment_log,
+                    auction_log,
                     organizing,
                     organizing_parameters,
                     country_handler,
@@ -9889,6 +9893,7 @@ impl CGame {
         &mut self,
         honor_ranks: &mut CHonorRanks,
         increment_log: &mut CIncrementLog,
+        auction_log: &mut CAuctionLog,
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
         country_handler: &mut CCountryHandler,
@@ -9980,6 +9985,7 @@ impl CGame {
         let outcome = match self.process_message(
             honor_ranks,
             increment_log,
+            auction_log,
             organizing,
             organizing_parameters,
             country_handler,
@@ -11273,6 +11279,7 @@ impl CGame {
         let process_message = match self.process_message_main_loop_stage(
             owners.honor_ranks,
             owners.increment_log,
+            owners.auction_log,
             owners.organizing,
             owners.organizing_parameters,
             owners.country,
@@ -14766,6 +14773,7 @@ async fn process_world_message<TimerCallback, JjcContext>(
     game: &mut CGame,
     honor_ranks: &mut CHonorRanks,
     increment_log: &mut CIncrementLog,
+    auction_log: &mut CAuctionLog,
     organizing: &mut COrganizingCtrl,
     organizing_parameters: &COrganizingParam,
     country_handler: &mut CCountryHandler,
@@ -14973,7 +14981,7 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::WriteLog) {
-        match on_write_log_message(game, increment_log, add_log_text, message) {
+        match on_write_log_message(game, increment_log, auction_log, add_log_text, message) {
             WorldWriteLogMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::WriteLogMessage {
                     source,

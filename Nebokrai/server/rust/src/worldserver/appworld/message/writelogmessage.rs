@@ -2,8 +2,8 @@
 //!
 //! Весь dispatcher RVA `0x000A8AB0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме
 //! increment-shop `0x6020D`, carriage `0x6020E`, plain player log `0x6020F`,
-//! fairy `0x60210`, reserved no-op `0x60211..0x60213` и ciqing `0x60218` со
-//! статусом `IMPLEMENTED`. Точная пара:
+//! fairy `0x60210`, reserved no-op `0x60211..0x60213`, auction
+//! `0x60214..0x60217` и ciqing `0x60218` со статусом `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\writelogmessage.cpp:18`.
 //!
@@ -43,6 +43,18 @@
 //! знаками. Fairy-time сохраняет тот же наблюдаемый weekday-вместо-month quirk,
 //! что carriage. `CheckPoint` и неэкранированный grow goods-id заменены bind:
 //! SQL injection/breakage были внутренним дефектом, не контрактом Miracle.
+//! Auction `0x60214` по exact `0x004AA88C..0x004AA9BD` копирует wire-node
+//! `0x150`, заменяет только `guidKey` новым системным GUID, ставит signed INSERT
+//! в FIFO и сразу после enqueue публикует тот же node в live `CAuctionLog`.
+//! SQL получает normal `year-month-day` caller-time, а live node сохраняет
+//! собственный wire `SYSTEMTIME`. Donor-валидация полей, принудительный
+//! `bNotice=0` и commit-before-live меняли этот контракт и не перенесены.
+//! Sale `0x60215..0x60217` по exact `0x004AA9C2..0x004AAC24` сохраняет три
+//! разных payload-порядка и `%u`-трактовку всех long. Отсутствие NUL в raw
+//! `strDescri[256]` больше не даёт читать память за node: owned bytes и bind
+//! устраняют только внутренний memory/SQL defect. Если системный генератор GUID
+//! откажет, точное содержимое старого out-buffer неизвестно и проход явно
+//! возвращает safe block без придуманной DB/live записи.
 //! Exact outer jump-table VA `0x004AACA8` направляет все три wire ID
 //! `0x60211..0x60213` прямо в epilogue `0x004AAC87`; Rust поэтому считает их
 //! обработанными no-op, не создавая ложный pending owner. Ветка `0x60218` по
@@ -59,6 +71,7 @@
 use std::net::Ipv4Addr;
 
 use crate::nets::networld::message::CMessage;
+use crate::public::auctionlog::{AuctionLogNode, AuctionLogSystemTime, CAuctionLog};
 use crate::public::date::TagTime;
 use crate::public::guid::CGuid;
 use crate::public::tools::put_string_to_file;
@@ -72,6 +85,10 @@ const PLAIN_LOG_MESSAGE: i32 = 0x0006_020F;
 const FAIRY_LOG_MESSAGE: i32 = 0x0006_0210;
 const RESERVED_WRITE_LOG_MESSAGES: std::ops::RangeInclusive<i32> =
     0x0006_0211..=0x0006_0213;
+const AUCTION_LOG_MESSAGE: i32 = 0x0006_0214;
+const AUCTION_SALE_OPER_LOG_MESSAGE: i32 = 0x0006_0215;
+const AUCTION_SALE_CANCEL_LOG_MESSAGE: i32 = 0x0006_0216;
+const AUCTION_SALE_RECEIVE_LOG_MESSAGE: i32 = 0x0006_0217;
 const CIQING_LOG_MESSAGE: i32 = 0x0006_0218;
 
 /// Параметры одной исходной INSERT-команды без самодельного SQL quoting.
@@ -171,6 +188,40 @@ pub(crate) enum WorldFairyLogEvent {
     },
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct WorldAuctionLogWrite {
+    pub(crate) record: AuctionLogNode,
+    pub(crate) log_time: TagTime,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct WorldAuctionSaleLogWrite {
+    pub(crate) event_time: TagTime,
+    pub(crate) event: WorldAuctionSaleLogEvent,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum WorldAuctionSaleLogEvent {
+    Oper {
+        player_id: u32,
+        base_index: u32,
+        guid: CGuid,
+        amount: u32,
+        money: u32,
+        time_type: u32,
+        fee: u32,
+    },
+    Cancel {
+        player_id: u32,
+        guid: CGuid,
+    },
+    Receive {
+        player_id: u32,
+        amount: u32,
+        guid: CGuid,
+    },
+}
+
 /// Typed очередь сохраняет старый FIFO, но оставляет SQL transport Tiberius-у.
 #[derive(Clone, Debug)]
 pub(crate) enum WorldWriteLogCommand {
@@ -179,6 +230,8 @@ pub(crate) enum WorldWriteLogCommand {
     PlainLog(WorldPlainLogWrite),
     CiqingLog(WorldCiqingLogWrite),
     FairyLog(WorldFairyLogWrite),
+    AuctionLog(WorldAuctionLogWrite),
+    AuctionSaleLog(WorldAuctionSaleLogWrite),
 }
 
 #[derive(Debug)]
@@ -257,12 +310,43 @@ pub(crate) enum WorldFairyLogMessageOutcome {
 }
 
 #[derive(Debug)]
+pub(crate) enum WorldAuctionLogMessageOutcome {
+    Queued {
+        write: WorldAuctionLogWrite,
+        payload_complete: bool,
+        queue_length_after: usize,
+        live_published: bool,
+    },
+    BlockedGuidGeneration {
+        record: AuctionLogNode,
+        log_time: TagTime,
+        payload_complete: bool,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum WorldAuctionSalePayloadCompleteness {
+    Oper([bool; 7]),
+    Cancel([bool; 2]),
+    Receive([bool; 3]),
+}
+
+#[derive(Debug)]
+pub(crate) struct WorldAuctionSaleLogMessageOutcome {
+    pub(crate) write: WorldAuctionSaleLogWrite,
+    pub(crate) payload_complete: WorldAuctionSalePayloadCompleteness,
+    pub(crate) queue_length_after: usize,
+}
+
+#[derive(Debug)]
 pub(crate) enum WorldWriteLogMessageOutcome {
     IncrementLog(WorldIncrementLogMessageOutcome),
     CarriageLog(WorldCarriageLogMessageOutcome),
     PlainLog(WorldPlainLogMessageOutcome),
     CiqingLog(WorldCiqingLogMessageOutcome),
     FairyLog(WorldFairyLogMessageOutcome),
+    AuctionLog(WorldAuctionLogMessageOutcome),
+    AuctionSaleLog(WorldAuctionSaleLogMessageOutcome),
     ReservedNoOp { message_type: i32 },
 }
 
@@ -275,9 +359,11 @@ pub(crate) enum WorldWriteLogMessageDispatch {
 pub(crate) fn on_write_log_message(
     game: &mut CGame,
     increment_log: &mut CIncrementLog,
+    auction_log: &mut CAuctionLog,
     add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     mut message: CMessage,
 ) -> WorldWriteLogMessageDispatch {
+    let dispatch_time = TagTime::local_now();
     if RESERVED_WRITE_LOG_MESSAGES.contains(&message.message_type()) {
         return WorldWriteLogMessageDispatch::Handled(
             WorldWriteLogMessageOutcome::ReservedNoOp {
@@ -294,6 +380,25 @@ pub(crate) fn on_write_log_message(
         return WorldWriteLogMessageDispatch::Handled(WorldWriteLogMessageOutcome::FairyLog(
             on_fairy_log_message(game, add_log_text, message),
         ));
+    }
+    if message.message_type() == AUCTION_LOG_MESSAGE {
+        return WorldWriteLogMessageDispatch::Handled(WorldWriteLogMessageOutcome::AuctionLog(
+            on_auction_log_message(game, auction_log, dispatch_time, message),
+        ));
+    }
+    if matches!(
+        message.message_type(),
+        AUCTION_SALE_OPER_LOG_MESSAGE
+            | AUCTION_SALE_CANCEL_LOG_MESSAGE
+            | AUCTION_SALE_RECEIVE_LOG_MESSAGE
+    ) {
+        return WorldWriteLogMessageDispatch::Handled(
+            WorldWriteLogMessageOutcome::AuctionSaleLog(on_auction_sale_log_message(
+                game,
+                dispatch_time,
+                message,
+            )),
+        );
     }
     if message.message_type() == PLAIN_LOG_MESSAGE {
         return WorldWriteLogMessageDispatch::Handled(WorldWriteLogMessageOutcome::PlainLog(
@@ -406,6 +511,114 @@ pub(crate) fn on_write_log_message(
             live_published,
         },
     ))
+}
+
+fn on_auction_log_message(
+    game: &CGame,
+    auction_log: &mut CAuctionLog,
+    log_time: TagTime,
+    mut message: CMessage,
+) -> WorldAuctionLogMessageOutcome {
+    let (mut record, payload_complete) = get_auction_log_node(&mut message);
+    let Ok(guid_key) = CGuid::create() else {
+        return WorldAuctionLogMessageOutcome::BlockedGuidGeneration {
+            record,
+            log_time,
+            payload_complete,
+        };
+    };
+    record.guid_key = guid_key;
+    let write = WorldAuctionLogWrite {
+        record: record.clone(),
+        log_time,
+    };
+    let queue_length_after =
+        game.push_write_log_command(WorldWriteLogCommand::AuctionLog(write.clone()));
+    let live_published = auction_log.add_item(record);
+    WorldAuctionLogMessageOutcome::Queued {
+        write,
+        payload_complete,
+        queue_length_after,
+        live_published,
+    }
+}
+
+fn on_auction_sale_log_message(
+    game: &CGame,
+    event_time: TagTime,
+    mut message: CMessage,
+) -> WorldAuctionSaleLogMessageOutcome {
+    let (event, payload_complete) = match message.message_type() {
+        AUCTION_SALE_OPER_LOG_MESSAGE => {
+            let player_id = message.base_mut().get_long();
+            let base_index = message.base_mut().get_long();
+            let (guid, guid_complete) = get_guid(&mut message);
+            let amount = message.base_mut().get_long();
+            let money = message.base_mut().get_long();
+            let time_type = message.base_mut().get_long();
+            let fee = message.base_mut().get_long();
+            (
+                WorldAuctionSaleLogEvent::Oper {
+                    player_id: player_id.unwrap_or(0) as u32,
+                    base_index: base_index.unwrap_or(0) as u32,
+                    guid,
+                    amount: amount.unwrap_or(0) as u32,
+                    money: money.unwrap_or(0) as u32,
+                    time_type: time_type.unwrap_or(0) as u32,
+                    fee: fee.unwrap_or(0) as u32,
+                },
+                WorldAuctionSalePayloadCompleteness::Oper([
+                    player_id.is_some(),
+                    base_index.is_some(),
+                    guid_complete,
+                    amount.is_some(),
+                    money.is_some(),
+                    time_type.is_some(),
+                    fee.is_some(),
+                ]),
+            )
+        }
+        AUCTION_SALE_CANCEL_LOG_MESSAGE => {
+            let player_id = message.base_mut().get_long();
+            let (guid, guid_complete) = get_guid(&mut message);
+            (
+                WorldAuctionSaleLogEvent::Cancel {
+                    player_id: player_id.unwrap_or(0) as u32,
+                    guid,
+                },
+                WorldAuctionSalePayloadCompleteness::Cancel([
+                    player_id.is_some(),
+                    guid_complete,
+                ]),
+            )
+        }
+        AUCTION_SALE_RECEIVE_LOG_MESSAGE => {
+            let player_id = message.base_mut().get_long();
+            let amount = message.base_mut().get_long();
+            let (guid, guid_complete) = get_guid(&mut message);
+            (
+                WorldAuctionSaleLogEvent::Receive {
+                    player_id: player_id.unwrap_or(0) as u32,
+                    amount: amount.unwrap_or(0) as u32,
+                    guid,
+                },
+                WorldAuctionSalePayloadCompleteness::Receive([
+                    player_id.is_some(),
+                    amount.is_some(),
+                    guid_complete,
+                ]),
+            )
+        }
+        _ => unreachable!("auction sale decoder вызывается только для трёх wire ID"),
+    };
+    let write = WorldAuctionSaleLogWrite { event_time, event };
+    let queue_length_after =
+        game.push_write_log_command(WorldWriteLogCommand::AuctionSaleLog(write.clone()));
+    WorldAuctionSaleLogMessageOutcome {
+        write,
+        payload_complete,
+        queue_length_after,
+    }
 }
 
 fn on_fairy_log_message(
@@ -705,6 +918,63 @@ fn get_limited_string(message: &mut CMessage, maximum: usize) -> (Vec<u8>, bool)
         .get_str_bytes(maximum)
         .unwrap_or_default();
     (value, complete)
+}
+
+fn get_auction_log_node(message: &mut CMessage) -> (AuctionLogNode, bool) {
+    let mut bytes = [0_u8; 0x150];
+    let complete = message.base_mut().get(&mut bytes);
+    let long = |offset: usize| {
+        i32::from_le_bytes(
+            bytes[offset..offset + 4]
+                .try_into()
+                .expect("offset поля проверен PDB-layout аукционного node"),
+        )
+    };
+    let word = |offset: usize| {
+        u16::from_le_bytes(
+            bytes[offset..offset + 2]
+                .try_into()
+                .expect("offset SYSTEMTIME проверен PDB-layout аукционного node"),
+        )
+    };
+    let mut description = [0_u8; 0x100];
+    description.copy_from_slice(&bytes[0x30..0x130]);
+    let guid = CGuid::from_legacy_bytes(
+        bytes[0x130..0x140]
+            .try_into()
+            .expect("GUID занимает exact 16 байт"),
+    );
+    let guid_key = CGuid::from_legacy_bytes(
+        bytes[0x140..0x150]
+            .try_into()
+            .expect("guidKey занимает exact 16 байт"),
+    );
+    (
+        AuctionLogNode {
+            base_id: long(0x00),
+            operation_type: long(0x04),
+            money_type: long(0x08),
+            money_num: long(0x0c),
+            player_id: long(0x10),
+            amount: long(0x14),
+            fee: long(0x18),
+            notice: long(0x1c),
+            time: AuctionLogSystemTime {
+                year: word(0x20),
+                month: word(0x22),
+                day_of_week: word(0x24),
+                day: word(0x26),
+                hour: word(0x28),
+                minute: word(0x2a),
+                second: word(0x2c),
+                milliseconds: word(0x2e),
+            },
+            description,
+            guid,
+            guid_key,
+        },
+        complete,
+    )
 }
 
 fn get_guid(message: &mut CMessage) -> (CGuid, bool) {
