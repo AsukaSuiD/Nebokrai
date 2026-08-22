@@ -181,6 +181,8 @@ pub(crate) trait FourNationWarStartContext {
     fn war_start_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8>;
     fn send_organizing_info(&mut self, text: &[u8], color: u32, trailing: u32);
     fn put_war_log(&mut self, text: &[u8]);
+    fn enter_start_notice(&mut self, region_name: &[u8]) -> Vec<u8>;
+    fn enter_start_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8>;
 }
 
 impl From<TagTimeArithmeticBlock> for FourNationWarLoadError {
@@ -496,6 +498,30 @@ impl CFourNationWarSys {
         let notice = context.war_start_notice(&region_name);
         context.send_organizing_info(&notice, 0xFFFF_FE92, 0xFFFF_0000);
         let log = context.war_start_log(index, &region_name);
+        context.put_war_log(&log);
+        Ok(())
+    }
+
+    /// `OnEnterStart`: `CIS_Mass`, broadcast `0x7FE3F`, `XBWS0027/0028`.
+    pub(crate) fn on_enter_start<Context: FourNationWarStartContext + ?Sized>(
+        &mut self,
+        index: i32,
+        context: &mut Context,
+    ) -> Result<(), FourNationWarRegionIndexBlock> {
+        let setup_count = self.setups.len();
+        let setup = self.setups.get_mut(usize::try_from(index).map_err(|_| {
+            FourNationWarRegionIndexBlock { index, setup_count }
+        })?).ok_or(FourNationWarRegionIndexBlock { index, setup_count })?;
+        setup.region_state = 2;
+        let mut message = CMessage::new(0x7FE3F);
+        message.base_mut().add_long(index);
+        context.send_all(&message);
+        let Some(region_name) = context.region_name(setup.region_id) else {
+            return Ok(());
+        };
+        let notice = context.enter_start_notice(&region_name);
+        context.send_organizing_info(&notice, 0xFFFF_FE92, 0xFFFF_0000);
+        let log = context.enter_start_log(index, &region_name);
         context.put_war_log(&log);
         Ok(())
     }
@@ -1177,7 +1203,7 @@ fn next_war_i32<'a>(
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::OnEnterStart
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:463
@@ -1185,6 +1211,7 @@ fn next_war_i32<'a>(
 // ADDRESS: 00495610
 // PROTOTYPE: void __stdcall OnEnterStart(long param_1)
 //
+// IMPLEMENTED_OWNER: `CFourNationWarSys::on_enter_start` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
