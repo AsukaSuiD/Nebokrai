@@ -181,6 +181,17 @@ pub(crate) fn rf_open(path: &[u8], resource: Option<RFileResource<'_>>) -> Optio
         .map(CRFile::from_memory)
 }
 
+/// Закрывает nullable результат `rf_open`.
+///
+/// Владение `CRFile` уже принадлежит вызывающему коду, поэтому `Drop` корректно
+/// освобождает и memory buffer, и файловый дескриптор. В точном C++ пути
+/// памяти ранний `return` оставлял сам объект `CRFile` неосвобождённым; это
+/// внутренний lifetime-дефект без требуемого внешнего эффекта и намеренно не
+/// переносится.
+pub(crate) fn rf_close(file: Option<CRFile>) {
+    drop(file);
+}
+
 fn c_string_prefix(value: &[u8]) -> &[u8] {
     value
         .iter()
@@ -240,7 +251,7 @@ fn open_loose_file(path: &std::path::Path) -> Option<CRFile> {
 
 // ============================================================================
 // FUNCTION: rfClose
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / OWNERSHIP_SUBSTITUTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\rfile.cpp:208
@@ -332,7 +343,7 @@ fn open_loose_file(path: &std::path::Path) -> Option<CRFile> {
 
 // ============================================================================
 // FUNCTION: rfClose
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / OWNERSHIP_SUBSTITUTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\rfile.cpp:208
