@@ -1279,6 +1279,9 @@ use crate::setup::preciousboxconf::{
 };
 use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};
 use crate::setup::regionrouter::RegionRouter;
+use crate::setup::timetoreturn::{
+    TimeToReturn, TimeToReturnCallbacks, TimeToReturnLoadError, TimeToReturnLoadReport,
+};
 use crate::public::tools::{ini_decode, put_string_to_file};
 use crate::transport::bind_tcp_ipv4;
 use crate::worldserver::appworld::country::country::{
@@ -1814,6 +1817,7 @@ pub(crate) enum WorldGameInitEvent {
     GoodsWarMemberLoaded(GoodsWarDatabaseLoadReport),
     RsSetupOwnerCreated(LoadedSetupIds),
     VoidOwner(WorldGameInitVoidOwner),
+    TimeToReturnInitialized(TimeToReturnLoadReport),
     AttackCityInitialized(AttackCityLoadReport),
     AttackCityEnemyRelationsInitialized(AttackCityEnemyRelationReport),
     FourNationWarInitialized(FourNationWarLoadReport),
@@ -1922,6 +1926,7 @@ pub(crate) enum WorldGameInitBlockReason<ContextBlock> {
     Reload(WorldReloadBlock),
     JjcConfiguration(JjcConfigurationLoadReport),
     BooleanOwner(WorldGameInitBooleanOwner),
+    TimeToReturnLoad(TimeToReturnLoadError),
     AttackCityLoad(AttackCityLoadError),
     AttackCityEnemyRelation(ContextBlock),
     FourNationWarLoad(FourNationWarLoadError),
@@ -9947,6 +9952,8 @@ impl CGame {
         runtime_directory: &Path,
         context: &mut Context,
         jjc: &mut CJJcSystem,
+        time_to_return: &mut TimeToReturn,
+        time_to_return_callbacks: TimeToReturnCallbacks<TimerCallback>,
         organizing_parameters: &mut COrganizingParam,
         attack_city: &mut CAttackCitySys,
         attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
@@ -10273,18 +10280,36 @@ impl CGame {
             });
         }
 
-        let owner = WorldGameInitBooleanOwner::InitializeTimeToReturn;
-        let succeeded = context.initialize_boolean_owner(owner);
-        events.push(WorldGameInitEvent::BooleanOwner { owner, succeeded });
-        if !succeeded {
-            self.record_game_init_log(
-                &mut events,
-                log,
-                callbacks,
-                b"Load CityRetern Timing FAILED...",
-            );
-            stop!(WorldGameInitBlockReason::BooleanOwner(owner));
-        }
+        let time_to_return_source = context.read_resource(b"setup/TimeToReturn.ini");
+        let time_to_return_initialization = match time_to_return.initialize(
+            time_to_return_source.as_deref(),
+            (callbacks.get_timer_local_time)(),
+            timer,
+            time_to_return_callbacks,
+        ) {
+            Ok(report) => report,
+            Err(source) => {
+                let owner = WorldGameInitBooleanOwner::InitializeTimeToReturn;
+                events.push(WorldGameInitEvent::BooleanOwner {
+                    owner,
+                    succeeded: false,
+                });
+                self.record_game_init_log(
+                    &mut events,
+                    log,
+                    callbacks,
+                    b"Load CityRetern Timing FAILED...",
+                );
+                stop!(WorldGameInitBlockReason::TimeToReturnLoad(source));
+            }
+        };
+        events.push(WorldGameInitEvent::BooleanOwner {
+            owner: WorldGameInitBooleanOwner::InitializeTimeToReturn,
+            succeeded: true,
+        });
+        events.push(WorldGameInitEvent::TimeToReturnInitialized(
+            time_to_return_initialization,
+        ));
 
         const INVALID_STRINGS: &[u8] = b"setup/InvalidStr.ini";
         const CHAR_CODES: &[u8] = b"setup/charcode.ini";
