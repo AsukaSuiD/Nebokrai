@@ -2,9 +2,11 @@
 //!
 //! Статус `CSkillFactory::Serialize` RVA `0x00060E90` и безопасной замены
 //! `ClearSkillCache` RVA `0x00060DC0`, `StringToUsage` `0x00060F80`,
-//! `ClearUsageCache` `0x00061E00`, content-половины `LoadConfigration`
-//! `0x00062050` и `LoadUsage` `0x000628E0`: `IMPLEMENTED`; перечисление
-//! ресурсов и файловые загрузчики cache ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `ClearUsageCache` `0x00061E00`, `LoadConfigration` `0x00062050`,
+//! `LoadUsage` `0x000628E0`, `LoadSkillCache` `0x00062510` и
+//! `LoadUsageCache` `0x00062A70`: `IMPLEMENTED`. Resource-owner перечисляет
+//! и открывает файлы снаружи; factory принимает полученный список в его
+//! исходном порядке.
 //! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
@@ -27,8 +29,11 @@
 //! `LoadUsage`, а `StringToUsage` возвращает `SKILL_USAGE_UNKNOW`
 //! `0x7fff_ffff`.
 //! `LoadConfigration`/`LoadUsage` получают уже прочитанные байты от внешнего
-//! resource-owner-а: это заменяет только `CRFile`, `stringstream` и MessageBox,
-//! сохраняя порядок публикации skill/usage и нормальный результат legacy.
+//! resource-owner-а: это заменяет только `CRFile`, `stringstream` и MessageBox.
+//! Cache loaders очищают карту до загрузки и после первой ошибки. У
+//! `LoadSkillCache` есть подтверждённый EXE-quirk: любой path с byte-substring
+//! `rhg_314` пропускается до открытия. Остальной порядок списка и normal
+//! legacy-result сохранены.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -183,6 +188,82 @@ impl CSkillFactory {
         })
     }
 
+    /// Safe owner exact `LoadSkillCache` после перечисления файлов resource
+    /// subsystem. Входной порядок намеренно не сортируется: им определялась
+    /// итоговая замена равных composite key. Любой path с `rhg_314` EXE
+    /// пропускал до `LoadConfigration`, включая отсутствующий resource.
+    pub(crate) fn load_skill_cache<'a, I>(&mut self, resources: I) -> SkillFactoryCacheLoadReport
+    where
+        I: IntoIterator<Item = SkillFactoryCacheResource<'a>>,
+    {
+        self.clear_skill_cache();
+        let mut report = SkillFactoryCacheLoadReport::default();
+
+        for resource in resources {
+            if contains_bytes(resource.path, b"rhg_314") {
+                report.skipped_resources += 1;
+                continue;
+            }
+            let result = resource
+                .contents
+                .ok_or_else(|| SkillFactoryCacheLoadError::ResourceOpen {
+                    path: resource.path.to_vec(),
+                })
+                .and_then(|source| {
+                    self.load_configuration(source)
+                        .map(|loaded| loaded.loaded_levels)
+                        .map_err(SkillFactoryCacheLoadError::Content)
+                });
+            match result {
+                Ok(loaded_levels) => {
+                    report.loaded_resources += 1;
+                    report.loaded_records += loaded_levels;
+                }
+                Err(error) => {
+                    self.clear_skill_cache();
+                    report.failure = Some(error);
+                    return report;
+                }
+            }
+        }
+        report
+    }
+
+    /// Safe owner exact `LoadUsageCache` после перечисления файлов resource
+    /// subsystem. В отличие от skill cache, каждый переданный `.usage` файл
+    /// открывается; на первой ошибке EXE стирал уже загруженный prefix.
+    pub(crate) fn load_usage_cache<'a, I>(&mut self, resources: I) -> SkillFactoryCacheLoadReport
+    where
+        I: IntoIterator<Item = SkillFactoryCacheResource<'a>>,
+    {
+        self.clear_usage_cache();
+        let mut report = SkillFactoryCacheLoadReport::default();
+
+        for resource in resources {
+            let result = resource
+                .contents
+                .ok_or_else(|| SkillFactoryCacheLoadError::ResourceOpen {
+                    path: resource.path.to_vec(),
+                })
+                .and_then(|source| {
+                    self.load_usage(source)
+                        .map_err(SkillFactoryCacheLoadError::Content)
+                });
+            match result {
+                Ok(loaded_entries) => {
+                    report.loaded_resources += 1;
+                    report.loaded_records += loaded_entries;
+                }
+                Err(error) => {
+                    self.clear_usage_cache();
+                    report.failure = Some(error);
+                    return report;
+                }
+            }
+        }
+        report
+    }
+
     /// Дописывает exact `count + ordered (length, record)` wire.
     pub(crate) fn serialize(
         &self,
@@ -224,6 +305,81 @@ fn visible_c_string(bytes: &[u8]) -> &[u8] {
         .iter()
         .position(|byte| *byte == 0)
         .map_or(bytes, |end| &bytes[..end])
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|candidate| candidate == needle)
+}
+
+/// Один уже перечисленный cache-resource. `None` представляет неудачу
+/// `rfOpen`; поиск package/fallback-файлов остаётся у resource-owner-а.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SkillFactoryCacheResource<'a> {
+    pub(crate) path: &'a [u8],
+    pub(crate) contents: Option<&'a [u8]>,
+}
+
+/// Итог exact cache-load. `legacy_result` повторяет исходный BOOL: список без
+/// файлов успешен, а первая ошибка даёт `false` и оставляет целевую карту пустой.
+#[derive(Debug)]
+pub(crate) struct SkillFactoryCacheLoadReport {
+    pub(crate) loaded_resources: usize,
+    pub(crate) loaded_records: usize,
+    pub(crate) skipped_resources: usize,
+    failure: Option<SkillFactoryCacheLoadError>,
+}
+
+impl SkillFactoryCacheLoadReport {
+    pub(crate) fn legacy_result(&self) -> bool {
+        self.failure.is_none()
+    }
+
+    pub(crate) fn failure(&self) -> Option<&SkillFactoryCacheLoadError> {
+        self.failure.as_ref()
+    }
+}
+
+impl Default for SkillFactoryCacheLoadReport {
+    fn default() -> Self {
+        Self {
+            loaded_resources: 0,
+            loaded_records: 0,
+            skipped_resources: 0,
+            failure: None,
+        }
+    }
+}
+
+/// Причина безопасного прекращения cache-loader-а вместо исходного
+/// неинициализированного/CRT error path.
+#[derive(Debug)]
+pub(crate) enum SkillFactoryCacheLoadError {
+    ResourceOpen { path: Vec<u8> },
+    Content(SkillFactoryLoadError),
+}
+
+impl fmt::Display for SkillFactoryCacheLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ResourceOpen { path } => write!(
+                formatter,
+                "skill resource {:?} не удалось открыть",
+                String::from_utf8_lossy(path)
+            ),
+            Self::Content(source) => source.fmt(formatter),
+        }
+    }
+}
+
+impl Error for SkillFactoryCacheLoadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Content(source) => Some(source),
+            Self::ResourceOpen { .. } => None,
+        }
+    }
 }
 
 /// Наблюдаемый итог одного `.skill` content-loader-а.
@@ -510,7 +666,7 @@ impl Error for SkillFactorySerializeError {
 
 // ============================================================================
 // FUNCTION: CSkillFactory::LoadSkillCache
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\skills\skillfactory.cpp:154
@@ -518,6 +674,9 @@ impl Error for SkillFactorySerializeError {
 // ADDRESS: 00462510
 // PROTOTYPE: int __cdecl LoadSkillCache(void)
 //
+// Реализовано выше как `load_skill_cache`: перечисленные resource-owner-ом
+// bytes сохраняют исходный порядок, pre/post-failure clear и EXE-skip
+// substring `rhg_314`, без Win32/CRFile fallback plumbing.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -540,7 +699,7 @@ impl Error for SkillFactorySerializeError {
 
 // ============================================================================
 // FUNCTION: CSkillFactory::LoadUsageCache
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\skills\skillfactory.cpp:326
@@ -548,6 +707,9 @@ impl Error for SkillFactorySerializeError {
 // ADDRESS: 00462a70
 // PROTOTYPE: int __cdecl LoadUsageCache(void)
 //
+// Реализовано выше как `load_usage_cache`: resource-owner передаёт уже
+// перечисленные bytes, а factory сохраняет порядок и атомарно очищает usage
+// cache при первой ошибке, как исходный BOOL-owner.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
