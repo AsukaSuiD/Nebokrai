@@ -73,6 +73,12 @@
 //! `COrganizingCtrl::Initialize`: этот DB owner возвращает именно безопасную
 //! data-проекцию, поэтому не подменяет ещё не реконструированный парный
 //! `CRsFaction` частичным init-вызовом.
+//!
+//! PDB задаёт верхнему loader-у `int`, который `Initialize` подставляет в `%d`
+//! без проверки успеха. В RAW `local_148` увеличивается перед чтением каждого
+//! base-row: при отказе этого row журналируемый счётчик поэтому может быть на
+//! единицу больше опубликованного prefix. Rust хранит оба значения отдельно;
+//! overflow signed счётчика не сохраняется как внутренний дефект.
 //! Старые copy/stack lifetime и неинициализированные region/last-online bytes
 //! заменены полностью определёнными Rust-полями; Title и faction Name всё ещё
 //! получают исходное правило short-copy: видимый ANSI prefix короче 21 байта,
@@ -114,9 +120,20 @@ pub(crate) struct UnionDatabaseLoadRecord {
 
 /// Результат `LoadAllConfederation`; `records` всегда содержит уже завершённый
 /// prefix, как исходные записи в controller-map до первого отказа.
+///
+/// PDB задаёт `int` return, а не `bool`: exact RAW увеличивает local counter
+/// до чтения каждого base-row. Поэтому `reported_count` может на единицу
+/// опережать `records.len()` на отказавшем base/member-row — именно это число
+/// попадает в последующий `Initialize` log.
 pub(crate) enum UnionLoadOutcome {
-    ReturnedTrue { records: Vec<UnionDatabaseLoadRecord> },
-    ReturnedFalse { records: Vec<UnionDatabaseLoadRecord> },
+    ReturnedTrue {
+        records: Vec<UnionDatabaseLoadRecord>,
+        reported_count: i32,
+    },
+    ReturnedFalse {
+        records: Vec<UnionDatabaseLoadRecord>,
+        reported_count: i32,
+    },
 }
 
 /// Caller-owned save-копия `CUnion`, созданная исходным `CloneSaveData`.
@@ -352,12 +369,16 @@ impl TiberiusRsUnion {
         operation: RsUnionOperation,
         error: UnionLoadReadError,
         records: Vec<UnionDatabaseLoadRecord>,
+        reported_count: i32,
     ) -> UnionLoadOutcome {
         self.notices.push_back(RsUnionNotice {
             operation,
             error: error.into(),
         });
-        UnionLoadOutcome::ReturnedFalse { records }
+        UnionLoadOutcome::ReturnedFalse {
+            records,
+            reported_count,
+        }
     }
 }
 
@@ -368,7 +389,10 @@ impl RsUnionOwner for TiberiusRsUnion {
                 operation: RsUnionOperation::LoadAllConfederation,
                 error: RsUnionSaveError::MissingSettings,
             });
-            return UnionLoadOutcome::ReturnedFalse { records: Vec::new() };
+            return UnionLoadOutcome::ReturnedFalse {
+                records: Vec::new(),
+                reported_count: 0,
+            };
         };
         let mut connection = match settings.connect().await {
             Ok(connection) => connection,
@@ -377,7 +401,10 @@ impl RsUnionOwner for TiberiusRsUnion {
                     operation: RsUnionOperation::LoadAllConfederation,
                     error: RsUnionSaveError::Connection(error),
                 });
-                return UnionLoadOutcome::ReturnedFalse { records: Vec::new() };
+                return UnionLoadOutcome::ReturnedFalse {
+                    records: Vec::new(),
+                    reported_count: 0,
+                };
             }
         };
         let stream = match Query::new(LOAD_ALL_CONFEDERATIONS_SQL)
@@ -390,7 +417,10 @@ impl RsUnionOwner for TiberiusRsUnion {
                     operation: RsUnionOperation::LoadAllConfederation,
                     error: RsUnionSaveError::Database(error.into()),
                 });
-                return UnionLoadOutcome::ReturnedFalse { records: Vec::new() };
+                return UnionLoadOutcome::ReturnedFalse {
+                    records: Vec::new(),
+                    reported_count: 0,
+                };
             }
         };
         let rows = match stream.into_first_result().await {
@@ -400,31 +430,42 @@ impl RsUnionOwner for TiberiusRsUnion {
                     operation: RsUnionOperation::LoadAllConfederation,
                     error: RsUnionSaveError::Database(error.into()),
                 });
-                return UnionLoadOutcome::ReturnedFalse { records: Vec::new() };
+                return UnionLoadOutcome::ReturnedFalse {
+                    records: Vec::new(),
+                    reported_count: 0,
+                };
             }
         };
 
         let mut records = Vec::with_capacity(rows.len());
+        let mut reported_count = 0_i32;
         for row in &rows {
+            // Исследовательский разбор увеличивает счётчик перед чтением ID.
+            // Saturation заменяет только недостижимое переполнение signed
+            // `int`: старый overflow не является игровым контрактом.
+            reported_count = reported_count.saturating_add(1);
             let union_id = match read_legacy_i32(row, "ID") {
                 Ok(value) => value,
-                Err(error) => return self.load_failed(RsUnionOperation::LoadAllConfederation, error, records),
+                Err(error) => return self.load_failed(RsUnionOperation::LoadAllConfederation, error, records, reported_count),
             };
             let name = match read_legacy_text(row, "Name") {
                 Ok(value) => value,
-                Err(error) => return self.load_failed(RsUnionOperation::LoadAllConfederation, error, records),
+                Err(error) => return self.load_failed(RsUnionOperation::LoadAllConfederation, error, records, reported_count),
             };
             let master_id = match read_legacy_i32(row, "MasterID") {
                 Ok(value) => value,
-                Err(error) => return self.load_failed(RsUnionOperation::LoadAllConfederation, error, records),
+                Err(error) => return self.load_failed(RsUnionOperation::LoadAllConfederation, error, records, reported_count),
             };
             let members = match load_confe_members(&mut connection, union_id, &mut self.notices).await {
                 Ok(members) => members,
-                Err(error) => return self.load_failed(RsUnionOperation::LoadConfederationMembers, error, records),
+                Err(error) => return self.load_failed(RsUnionOperation::LoadConfederationMembers, error, records, reported_count),
             };
             records.push(UnionDatabaseLoadRecord { union_id, name, master_id, members });
         }
-        UnionLoadOutcome::ReturnedTrue { records }
+        UnionLoadOutcome::ReturnedTrue {
+            records,
+            reported_count,
+        }
     }
 
     async fn save_confederation(

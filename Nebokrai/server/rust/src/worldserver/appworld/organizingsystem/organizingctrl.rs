@@ -2913,6 +2913,11 @@ pub(crate) enum OrganizingDatabaseLoadDisposition {
 pub(crate) struct OrganizingDatabaseLoadReport {
     pub(crate) published_unions: usize,
     pub(crate) published_factions: usize,
+    /// Точный `int` из `CRsUnion::LoadAllConfederation`, который `Initialize`
+    /// передаёт в `%d` log независимо от дальнейшей publication-семантики.
+    pub(crate) union_reported_count: i32,
+    /// Точный `int` из `CRsFaction::LoadAllFaction` для следующего `%d` log.
+    pub(crate) faction_reported_count: i32,
     pub(crate) union_load_returned_true: bool,
     pub(crate) disposition: OrganizingDatabaseLoadDisposition,
 }
@@ -3380,31 +3385,46 @@ impl COrganizingCtrl {
         unions: UnionLoadOutcome,
         factions: FactionLoadOutcome,
     ) -> Result<OrganizingDatabaseLoadReport, OrganizingDatabasePublishBlock> {
-        let (union_load_returned_true, union_records) = match unions {
-            UnionLoadOutcome::ReturnedTrue { records } => (true, records),
-            UnionLoadOutcome::ReturnedFalse { records } => (false, records),
+        let (union_load_returned_true, union_records, union_reported_count) = match unions {
+            UnionLoadOutcome::ReturnedTrue {
+                records,
+                reported_count,
+            } => (true, records, reported_count),
+            UnionLoadOutcome::ReturnedFalse {
+                records,
+                reported_count,
+            } => (false, records, reported_count),
         };
         let published_unions = self.publish_database_unions(union_master_title, union_records)?;
         match factions {
-            FactionLoadOutcome::ReturnedTrue { factions } => Ok(OrganizingDatabaseLoadReport {
+            FactionLoadOutcome::ReturnedTrue {
+                factions,
+                reported_count,
+            } => Ok(OrganizingDatabaseLoadReport {
                 published_unions,
                 published_factions: self.publish_database_factions(factions),
+                union_reported_count,
+                faction_reported_count: reported_count,
                 union_load_returned_true,
                 disposition: OrganizingDatabaseLoadDisposition::PublishedAll,
             }),
             // Exact LoadAllFaction deletes its temporary map on any failed
             // helper; its completed prefix therefore cannot become live.
-            FactionLoadOutcome::ReturnedFalse { .. } => Ok(OrganizingDatabaseLoadReport {
+            FactionLoadOutcome::ReturnedFalse { reported_count, .. } => Ok(OrganizingDatabaseLoadReport {
                 published_unions,
                 published_factions: 0,
+                union_reported_count,
+                faction_reported_count: reported_count,
                 union_load_returned_true,
                 disposition: OrganizingDatabaseLoadDisposition::FactionLoadFailed,
             }),
-            FactionLoadOutcome::BlockedInitial { .. }
-            | FactionLoadOutcome::BlockedMember { .. }
-            | FactionLoadOutcome::BlockedPronounce { .. } => Ok(OrganizingDatabaseLoadReport {
+            FactionLoadOutcome::BlockedInitial { reported_count, .. }
+            | FactionLoadOutcome::BlockedMember { reported_count, .. }
+            | FactionLoadOutcome::BlockedPronounce { reported_count, .. } => Ok(OrganizingDatabaseLoadReport {
                 published_unions,
                 published_factions: 0,
+                union_reported_count,
+                faction_reported_count: reported_count,
                 union_load_returned_true,
                 disposition: OrganizingDatabaseLoadDisposition::FactionLoadBlocked,
             }),

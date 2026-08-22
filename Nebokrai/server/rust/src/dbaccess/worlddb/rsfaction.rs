@@ -171,6 +171,10 @@
 //! точно пересчитываются MemberNums, `InitialPropertyByLvl` и clear dirty mask.
 //! Публикация готовой map в `COrganizingCtrl` принадлежит следующему парному
 //! owner-проходу и здесь не подменяется частичным init-вызовом.
+//! PDB задаёт `LoadAllFaction -> int`; это размер временной map на момент
+//! выхода, который `Initialize` печатает через `%d` даже после её cleanup при
+//! ошибке. Rust передаёт этот count рядом со staging outcome, не оставляя
+//! прежние pointer lifetime и не сохраняя недостижимый signed overflow.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
@@ -247,12 +251,37 @@ pub(crate) enum FactionAbilityLoadOutcome {
 }
 
 /// Итог верхнего `LoadAllFaction` до передачи готовой map парному controller-owner.
+/// PDB задаёт `int` return; для raw temporary `std::map` это его число элементов
+/// до cleanup. Неуспешная ветвь удаляет map, но возвращаемое в `Initialize` log
+/// число относится к сохранённому до удаления staging-prefix.
 pub(crate) enum FactionLoadOutcome {
-    ReturnedTrue { factions: FactionPropertyLoadStaging },
-    ReturnedFalse { factions: FactionPropertyLoadStaging },
-    BlockedInitial { factions: FactionPropertyLoadStaging, block: FactionInitialBlock },
-    BlockedMember { factions: FactionPropertyLoadStaging, block: FactionMemberLoadBlock },
-    BlockedPronounce { factions: FactionPropertyLoadStaging, block: FactionPronounceLoadBlock },
+    ReturnedTrue {
+        factions: FactionPropertyLoadStaging,
+        reported_count: i32,
+    },
+    ReturnedFalse {
+        factions: FactionPropertyLoadStaging,
+        reported_count: i32,
+    },
+    BlockedInitial {
+        factions: FactionPropertyLoadStaging,
+        block: FactionInitialBlock,
+        reported_count: i32,
+    },
+    BlockedMember {
+        factions: FactionPropertyLoadStaging,
+        block: FactionMemberLoadBlock,
+        reported_count: i32,
+    },
+    BlockedPronounce {
+        factions: FactionPropertyLoadStaging,
+        block: FactionPronounceLoadBlock,
+        reported_count: i32,
+    },
+}
+
+fn reported_faction_load_count(factions: &FactionPropertyLoadStaging) -> i32 {
+    i32::try_from(factions.len()).unwrap_or(i32::MAX)
 }
 
 /// Scalar-поля property-группы одной достигнутой save-копии `CFaction`.
@@ -1147,43 +1176,104 @@ impl RsFactionOwner for TiberiusRsFaction {
     ) -> FactionLoadOutcome {
         let Some(settings) = self.settings.clone() else {
             self.notices.push_back(RsFactionNotice { operation: RsFactionOperation::LoadFactionProperty, error: RsFactionSaveError::MissingSettings });
-            return FactionLoadOutcome::ReturnedFalse { factions: BTreeMap::new() };
+            return FactionLoadOutcome::ReturnedFalse {
+                factions: BTreeMap::new(),
+                reported_count: 0,
+            };
         };
         let mut connection = match settings.connect().await {
             Ok(connection) => connection,
             Err(error) => {
                 self.notices.push_back(RsFactionNotice { operation: RsFactionOperation::LoadFactionProperty, error: RsFactionSaveError::Connection(error) });
-                return FactionLoadOutcome::ReturnedFalse { factions: BTreeMap::new() };
+                return FactionLoadOutcome::ReturnedFalse {
+                    factions: BTreeMap::new(),
+                    reported_count: 0,
+                };
             }
         };
         let mut factions = match load_faction_property_rows(&mut connection, master_title, game, parameters, &mut self.notices).await {
             FactionPropertyLoadOutcome::ReturnedTrue { factions } => factions,
-            FactionPropertyLoadOutcome::ReturnedFalse { factions } => return FactionLoadOutcome::ReturnedFalse { factions },
-            FactionPropertyLoadOutcome::BlockedMissingFact { factions, block } => return FactionLoadOutcome::BlockedInitial { factions, block },
+            FactionPropertyLoadOutcome::ReturnedFalse { factions } => {
+                let reported_count = reported_faction_load_count(&factions);
+                return FactionLoadOutcome::ReturnedFalse {
+                    factions,
+                    reported_count,
+                };
+            }
+            FactionPropertyLoadOutcome::BlockedMissingFact { factions, block } => {
+                let reported_count = reported_faction_load_count(&factions);
+                return FactionLoadOutcome::BlockedInitial {
+                    factions,
+                    block,
+                    reported_count,
+                };
+            }
         };
         match load_faction_members_rows(&mut connection, &mut factions, &mut self.notices).await {
             FactionMembersLoadOutcome::ReturnedTrue => {}
-            FactionMembersLoadOutcome::ReturnedFalse => return FactionLoadOutcome::ReturnedFalse { factions },
-            FactionMembersLoadOutcome::BlockedMissingFact(block) => return FactionLoadOutcome::BlockedMember { factions, block },
+            FactionMembersLoadOutcome::ReturnedFalse => {
+                let reported_count = reported_faction_load_count(&factions);
+                return FactionLoadOutcome::ReturnedFalse {
+                    factions,
+                    reported_count,
+                };
+            }
+            FactionMembersLoadOutcome::BlockedMissingFact(block) => {
+                let reported_count = reported_faction_load_count(&factions);
+                return FactionLoadOutcome::BlockedMember {
+                    factions,
+                    block,
+                    reported_count,
+                };
+            }
         }
         if !load_faction_leave_words_rows(&mut connection, &mut factions, &mut self.notices).await {
-            return FactionLoadOutcome::ReturnedFalse { factions };
+            let reported_count = reported_faction_load_count(&factions);
+            return FactionLoadOutcome::ReturnedFalse {
+                factions,
+                reported_count,
+            };
         }
         match load_faction_ability_rows(&mut connection, &mut factions, &mut self.notices).await {
             FactionAbilityLoadOutcome::ReturnedTrue => {}
-            FactionAbilityLoadOutcome::ReturnedFalse => return FactionLoadOutcome::ReturnedFalse { factions },
-            FactionAbilityLoadOutcome::BlockedMissingFact(block) => return FactionLoadOutcome::BlockedPronounce { factions, block },
+            FactionAbilityLoadOutcome::ReturnedFalse => {
+                let reported_count = reported_faction_load_count(&factions);
+                return FactionLoadOutcome::ReturnedFalse {
+                    factions,
+                    reported_count,
+                };
+            }
+            FactionAbilityLoadOutcome::BlockedMissingFact(block) => {
+                let reported_count = reported_faction_load_count(&factions);
+                return FactionLoadOutcome::BlockedPronounce {
+                    factions,
+                    block,
+                    reported_count,
+                };
+            }
         }
         if !load_faction_apply_persons_rows(&mut connection, &mut factions, &mut self.notices).await {
-            return FactionLoadOutcome::ReturnedFalse { factions };
+            let reported_count = reported_faction_load_count(&factions);
+            return FactionLoadOutcome::ReturnedFalse {
+                factions,
+                reported_count,
+            };
         }
         for faction in factions.values_mut() {
             if faction.complete_database_load(parameters).is_err() {
                 self.notices.push_back(RsFactionNotice { operation: RsFactionOperation::LoadFactionProperty, error: RsFactionSaveError::MissingRequiredValue("CFaction::m_Property") });
-                return FactionLoadOutcome::ReturnedFalse { factions };
+                let reported_count = reported_faction_load_count(&factions);
+                return FactionLoadOutcome::ReturnedFalse {
+                    factions,
+                    reported_count,
+                };
             }
         }
-        FactionLoadOutcome::ReturnedTrue { factions }
+        let reported_count = reported_faction_load_count(&factions);
+        FactionLoadOutcome::ReturnedTrue {
+            factions,
+            reported_count,
+        }
     }
 
     async fn load_faction_property(
