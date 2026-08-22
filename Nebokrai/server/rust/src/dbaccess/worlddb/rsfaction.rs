@@ -5,9 +5,12 @@
 //! `0x000FA080`, `SaveFactionMembers` RVA `0x000FB700`, `SaveLeaveWords` RVA
 //! `0x000FACA0`, `SaveFactionApplyPersons` RVA `0x000FB240`, `SaveIconData` RVA
 //! `0x000FB3F0`, `SaveFactionPronounce` RVA `0x000FC860` и `SaveAbility` RVA
-//! `0x000FECB0`, а также private `LoadFactionProperty` RVA `0x000FCB20` —
-//! `IMPLEMENTED`; constructor, destructor и остальные функции ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `0x000FECB0`, private `LoadFactionPronounce`/`LoadIconData`/`LoadAbility`
+//! RVA `0x000F9AD0/0x000F9D60/0x000FAEE0`, `LoadLeaveWords` RVA `0x000FBDE0`,
+//! `LoadFactionProperty`/`LoadFactionMembers` RVA `0x000FCB20/0x000FD840`,
+//! `LoadFactionApplyPersons` RVA `0x000FE710` и `LoadAllFaction` RVA
+//! `0x000FF1D0` — `IMPLEMENTED`; constructor, destructor, catch и
+//! COM/compiler cleanup ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
@@ -1743,7 +1746,7 @@ async fn execute_faction_statement(
 
 // ============================================================================
 // FUNCTION: CRsFaction::LoadFactionPronounce
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:565
@@ -1771,7 +1774,7 @@ async fn execute_faction_statement(
 
 // ============================================================================
 // FUNCTION: CRsFaction::LoadIconData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:662
@@ -1799,7 +1802,7 @@ async fn execute_faction_statement(
 
 // ============================================================================
 // FUNCTION: CRsFaction::LoadAbility
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:447
@@ -1840,7 +1843,7 @@ async fn execute_faction_statement(
 //
 // ============================================================================
 // FUNCTION: CRsFaction::LoadLeaveWords
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:372
@@ -1881,7 +1884,7 @@ async fn execute_faction_statement(
 //
 // ============================================================================
 // FUNCTION: CRsFaction::LoadFactionProperty
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:196
@@ -1923,7 +1926,7 @@ async fn execute_faction_statement(
 
 // ============================================================================
 // FUNCTION: CRsFaction::LoadFactionMembers
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:265
@@ -1965,7 +1968,7 @@ async fn execute_faction_statement(
 
 // ============================================================================
 // FUNCTION: CRsFaction::LoadFactionApplyPersons
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:505
@@ -2006,7 +2009,7 @@ async fn execute_faction_statement(
 //
 // ============================================================================
 // FUNCTION: CRsFaction::LoadAllFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:141
