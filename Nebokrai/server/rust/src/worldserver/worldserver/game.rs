@@ -212,6 +212,13 @@
 //! длину wire только при отправке. `quick-xml` заменяет TinyXML внутри owner-а,
 //! а CGame сохраняет наблюдаемые путь, диагностики, log-order и wire boundary.
 //!
+//! `CBattleFairyProperty` аналогично остаётся внешним runtime owner-ом:
+//! `BattleFairyCombineConfig` читает `BattleFairyReleate/CombineConfig.ini`,
+//! не меняет старый compose-vector при missing resource и после успешного
+//! чтения публикует его exact `0x2D` payload. Legacy return — размер payload
+//! только при send. Так CGame устраняет generic callback, но не копирует
+//! owner-state и сохраняет observed resource/lifecycle контракт.
+//!
 //! `CContributeSetup` теперь owned `CGame`: dispatcher
 //! `0x004171CA..0x004172B1` читает `data/ContributeSetup.ini`, сохраняет bool
 //! load-result в legacy return-slot и при success + send-флаге публикует
@@ -1220,6 +1227,9 @@ use crate::worldserver::appworld::country::country::{
     CountryGovernanceContextBlock, CountryKingSaveLimits, CountryOnlinePlayer,
     CountryPlayersListContext, CountryPlayersListContextBlock,
     CountryVillageTaxContext, CountryVillageTaxContextBlock, CountryVillageTaxRegion,
+};
+use crate::worldserver::appworld::goods::cbattlefairyproperty::{
+    BattleFairyComposeWireError, CBattleFairyProperty,
 };
 use crate::worldserver::appworld::country::countryhandler::{
     CCountryHandler, CountryHandlerInitializeReport, CountryInfoDeliveryContext,
@@ -4226,7 +4236,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     PreciousBox,
     FairyExp,
     ChangeBody,
-    BattleFairyCombine,
     Synthesis,
     DaKongXiangQian,
     HonorEliminate,
@@ -4264,7 +4273,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     PreciousBox,
     FairyExp,
     ChangeBody,
-    BattleFairyCombine,
     Synthesis,
     DaKongXiangQian,
     LingBao,
@@ -4308,6 +4316,8 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn new_skill_monster_conf(&mut self) -> &mut NewSkillMonsterConf;
     /// Таблица опыта боевых духов, общая для reload и initial-config wire.
     fn battle_fairy_exp_config(&mut self) -> &mut CBattleFairyExpConfig;
+    /// Конфигурация объединения боевых духов, общая для reload и `0x2D` wire.
+    fn battle_fairy_property(&mut self) -> &mut CBattleFairyProperty;
     /// Возвращает исходный 32-битный result; bool owners обязаны дать `0/1`.
     fn call_boolean_owner(&mut self, owner: WorldReloadBooleanOwner) -> u32;
     fn call_void_owner(&mut self, owner: WorldReloadVoidOwner);
@@ -5896,6 +5906,7 @@ pub(crate) enum WorldReloadBlock {
     GoodsDestroySerialization(GoodsDestroySerializeError),
     NewSkillMonsterSerialization(NewSkillMonsterSerializeError),
     BattleFairyExpSerialization(BattleFairyExpSerializeError),
+    BattleFairyCombineSerialization(BattleFairyComposeWireError),
     EquipmentComposeSerialization(EquipmentComposeSerializeError),
     CiQingSerialization(CiQingSerializationBlock),
     TaoZhuangSerialization(TaoZhuangSerializationBlock),
@@ -8327,17 +8338,28 @@ impl CGame {
                 }
             }
             WorldReloadProfile::BattleFairyCombine => {
-                self.reload_simple_serialized(
-                    context,
-                    WorldReloadBooleanOwner::BattleFairyCombine,
-                    WorldReloadSerializationOwner::BattleFairyCombine,
-                    0x2D,
-                    b"Add BattleFairyCombineConfig.xml...ok!",
-                    b"Add BattleFairyCombineConfig.xml...failed!",
-                    send_to_game_servers,
-                    true,
-                    &mut legacy_result,
-                );
+                const PATH: &[u8] = b"BattleFairyReleate/CombineConfig.ini";
+                let loaded = match context.read_resource(PATH) {
+                    Some(source) => {
+                        context.battle_fairy_property().load_combine_config(&source);
+                        true
+                    }
+                    None => false,
+                };
+                context.add_log_text(if loaded {
+                    b"Add BattleFairyCombineConfig.xml...ok!"
+                } else {
+                    b"Add BattleFairyCombineConfig.xml...failed!"
+                });
+                if loaded && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    context
+                        .battle_fairy_property()
+                        .serialize_combine(&mut payload)
+                        .map_err(WorldReloadBlock::BattleFairyCombineSerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(0x2D, &payload);
+                }
             }
             WorldReloadProfile::Synthesis => {
                 self.reload_simple_serialized(
