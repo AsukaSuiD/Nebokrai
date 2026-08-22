@@ -5,7 +5,7 @@
 //! `LoadEx` остаётся RAW из-за неустановленного return эпилога; готовый
 //! registry принимает уже прочитанные `.ril` и `.pak` owners.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fs, io, path::Path};
 
 use crate::public::filesinfo::{FileInfo, FilesInfo};
 use crate::public::package::PackageArchive;
@@ -71,6 +71,17 @@ impl ClientResource {
         let package = self.package(info.package_type())
             .ok_or(ClientResourceReadError::MissingPackage { package_type: info.package_type() })?;
         package.extract_decoded(&normalized).map_err(ClientResourceReadError::Package)
+    }
+
+    /// Loose fallback `rfOpen` для absent index либо установленного bit 0.
+    pub(crate) fn read_loose(&self, root: &Path, path: &[u8]) -> io::Result<Option<Vec<u8>>> {
+        let mut normalized = path.to_vec();
+        for byte in &mut normalized { if *byte == b'/' { *byte = b'\\'; } }
+        if normalized.first() != Some(&b'\\') { normalized.insert(0, b'\\'); }
+        if self.files_info.file_info_by_text(&normalized).is_some_and(|info| info.package_type() & 1 == 0) { return Ok(None); }
+        let mut file = root.to_path_buf();
+        for part in normalized[1..].split(|byte| *byte == b'\\') { if !part.is_empty() { file.push(String::from_utf8_lossy(part).as_ref()); } }
+        fs::read(file).map(Some)
     }
 }
 
