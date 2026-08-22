@@ -1819,7 +1819,6 @@ pub(crate) struct OrganizingSaveDataReport {
 /// Локальная safe-граница полного faction countdown traversal.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum OrganizingRunBlock {
-    NullFaction { map_key: i32 },
     DeleteRemainTimeAbsent { map_key: i32 },
     MasterIdAbsent { map_key: i32, faction_id: i32 },
     Disband {
@@ -7898,6 +7897,11 @@ impl COrganizingCtrl {
     }
 
     /// Выполняет полный ordered countdown, disband-dispatch и top-info expiry.
+    ///
+    /// Пустой технический slot не создаётся normal ingress и возникает только
+    /// на время синхронного split-borrow join-path; minute-фаза начинается
+    /// после его возврата. Если такой slot всё же встретился, он пропускается,
+    /// а не превращается в новый observable отказ всего main loop.
     pub(crate) fn run<Disband>(
         &mut self,
         minute_delta: i32,
@@ -7910,7 +7914,7 @@ impl COrganizingCtrl {
         let mut decremented_factions = 0;
         for (&map_key, faction) in &mut self.factions {
             let Some(faction) = faction.as_deref_mut() else {
-                return Err(OrganizingRunBlock::NullFaction { map_key });
+                continue;
             };
             let Some(remaining) = faction.delete_remain_time() else {
                 return Err(OrganizingRunBlock::DeleteRemainTimeAbsent { map_key });
