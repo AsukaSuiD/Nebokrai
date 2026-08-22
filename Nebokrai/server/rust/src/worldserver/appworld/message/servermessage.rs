@@ -287,6 +287,7 @@ use crate::public::dupliregionsetup::DupliRegionSerializeError;
 use crate::public::equipmentcomposelist::EquipmentComposeSerializeError;
 use crate::public::ciqing::{CCiQingSetup, CiQingSerializationBlock};
 use crate::public::taozhuangsetup::{CTaoZhuangSetup, TaoZhuangSerializationBlock};
+use crate::public::wordsfilter::WordsFilterSerializeError;
 use crate::setup::cbattlefairyexpconfig::{
     BattleFairyExpSerializeError, CBattleFairyExpConfig,
 };
@@ -807,7 +808,6 @@ pub(crate) struct WorldGameServerConnectionReport {
 /// Concrete owner-снимки достигнутого prefix-а initial-config.
 pub(crate) struct WorldGameServerInitialConfigurationPrefix<'a> {
     pub(crate) da_kong_xiang_qian: &'a [u8],
-    pub(crate) valid_words_filter: Option<&'a [u8]>,
     pub(crate) goods_registry: &'a GoodsBasePropertiesRegistry,
     pub(crate) thing_setup: &'a CThingSetup,
 }
@@ -831,6 +831,7 @@ pub(crate) struct WorldInitialConfigurationDelivery {
 /// Следующая точная позиция после достигнутого initial-config prefix-а.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldInitialConfigurationPrefixCompletion {
+    WordsFilter(WordsFilterSerializeError),
     GoodsRegistry(GoodsRegistrySerializeError),
     ThingSetup(ThingSetupCodecError),
     MonsterListPending { socket_id: i32 },
@@ -2752,12 +2753,21 @@ pub(crate) fn continue_game_server_initial_configuration_prefix(
     ));
     let language_notice = true;
 
-    let words_filter_notice = if let Some(words_filter) = snapshots.valid_words_filter {
+    let words_filter_notice = if game.words_filter().is_valid() {
+        let mut words_filter = Vec::new();
+        if let Err(error) = game.words_filter().add_to_byte_array(&mut words_filter) {
+            return WorldInitialConfigurationPrefixReport {
+                deliveries,
+                language_notice,
+                words_filter_notice: false,
+                completion: WorldInitialConfigurationPrefixCompletion::WordsFilter(error),
+            };
+        }
         deliveries.push(send_initial_configuration_to_socket(
             sender.as_ref(),
             socket_id,
             0x31,
-            words_filter,
+            &words_filter,
         ));
         true
     } else {

@@ -139,7 +139,9 @@
 //! очищает owner на позиции исходного singleton delete. Это устраняет global
 //! lifetime, не меняя порядок загрузки, фильтрации или teardown. Смена имени
 //! вызывает двухаргументный overload, создание роли — трёхаргументный с exact
-//! all-numbers gate; прежние внешние callback-и для этих путей удалены.
+//! all-numbers gate; initial-config проверяет `IsValid` и кодирует subtype
+//! `0x31` из того же owner-а. Прежние внешние callback/snapshot-ы этих путей
+//! удалены.
 //!
 //! `EquipmentComposeList` также принадлежит единственному `CGame`: reload и
 //! initial-config serializer читают одну пару ordered map. Exact caller
@@ -6637,6 +6639,10 @@ impl CGame {
     ) -> bool {
         self.words_filter
             .check_with_numeric_gate(value, replace, reject_all_numbers)
+    }
+
+    pub(crate) fn words_filter(&self) -> &CWordsFilter {
+        &self.words_filter
     }
 
     pub(crate) fn equipment_compose_list(&self) -> &EquipmentComposeList {

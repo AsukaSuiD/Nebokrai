@@ -15,6 +15,9 @@
 //! контекст WorldServer; parser сохраняет Windows text-mode CRLF, `fgets(1024)`
 //! и безусловное удаление последнего прочитанного byte каждой порции.
 
+use std::error::Error;
+use std::fmt;
+
 use super::char_code_filter::CharCodeFilter;
 
 pub(crate) struct CWordsFilter {
@@ -119,15 +122,25 @@ impl CWordsFilter {
     }
 
     /// Дописывает ranges и запрещённые C-строки в exact World wire-order.
-    pub(crate) fn add_to_byte_array(&self, destination: &mut Vec<u8>) -> Result<(), usize> {
+    pub(crate) fn add_to_byte_array(
+        &self,
+        destination: &mut Vec<u8>,
+    ) -> Result<(), WordsFilterSerializeError> {
         let range_count = i32::try_from(self.char_code_filter.ranges().len())
-            .map_err(|_| self.char_code_filter.ranges().len())?;
+            .map_err(|_| WordsFilterSerializeError {
+                section: WordsFilterSerializeSection::CharacterRanges,
+                count: self.char_code_filter.ranges().len(),
+            })?;
         destination.extend_from_slice(&range_count.to_le_bytes());
         for range in self.char_code_filter.ranges() {
             destination.push(range.first);
             destination.push(range.last);
         }
-        let filter_count = i32::try_from(self.filters.len()).map_err(|_| self.filters.len())?;
+        let filter_count =
+            i32::try_from(self.filters.len()).map_err(|_| WordsFilterSerializeError {
+                section: WordsFilterSerializeSection::BannedWords,
+                count: self.filters.len(),
+            })?;
         destination.extend_from_slice(&filter_count.to_le_bytes());
         for filter in &self.filters {
             destination.extend_from_slice(filter);
@@ -156,6 +169,34 @@ impl CWordsFilter {
         self.char_code_filter.load(char_code_source)
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WordsFilterSerializeSection {
+    CharacterRanges,
+    BannedWords,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WordsFilterSerializeError {
+    pub(crate) section: WordsFilterSerializeSection,
+    pub(crate) count: usize,
+}
+
+impl fmt::Display for WordsFilterSerializeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let section = match self.section {
+            WordsFilterSerializeSection::CharacterRanges => "диапазонов символов",
+            WordsFilterSerializeSection::BannedWords => "запрещённых строк",
+        };
+        write!(
+            formatter,
+            "WordsFilter содержит {} {} вне signed 32-битного диапазона",
+            self.count, section
+        )
+    }
+}
+
+impl Error for WordsFilterSerializeError {}
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     needle.is_empty()
