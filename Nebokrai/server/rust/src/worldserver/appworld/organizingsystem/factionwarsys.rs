@@ -6,7 +6,8 @@
 //! `DigUpTheHatchet` RVA `0x00064D80`, `OnPlayerDied` RVA `0x00065750`,
 //! `StopFactionWar` RVA `0x00065D10`,
 //! `GenerateSaveData` RVA `0x000662F0`, constructor RVA `0x000663F0` и
-//! `Run` RVA `0x00066590` и `LoadIni` RVA `0x00064BB0` —
+//! `Run` RVA `0x00066590`, `LoadIni` RVA `0x00064BB0` и
+//! `Initialize` RVA `0x00066530` —
 //! `IMPLEMENTED`; остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
 //! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
 //! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
@@ -74,7 +75,10 @@ use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
 use std::fmt;
 
-use crate::dbaccess::worlddb::rsenemyfactions::EnemyFactionSaveSnapshot;
+use crate::dbaccess::worlddb::rsenemyfactions::{
+    EnemyFactionLoadSnapshot, EnemyFactionSaveSnapshot, EnemyFactionsLoadOutcome,
+};
+use crate::worldserver::appworld::organizingsystem::faction::FactionEnemyMutationBlock;
 use crate::public::readwrite::read_to;
 use crate::worldserver::worldserver::game::CGame;
 
@@ -127,6 +131,22 @@ pub(crate) struct FactionWarIniLoadReport {
     pub(crate) completion: FactionWarIniLoadCompletion,
     pub(crate) parsed_records: u32,
     pub(crate) legacy_result: bool,
+}
+
+/// Точный результат `CFactionWarSys::Initialize` после DB/list/INI стадий.
+#[derive(Debug)]
+pub(crate) struct FactionWarInitializationReport {
+    pub(crate) enemy_faction_load_succeeded: bool,
+    pub(crate) loaded_relation_records: usize,
+    pub(crate) applied_relation_records: usize,
+    pub(crate) ini: FactionWarIniLoadReport,
+    pub(crate) legacy_result: bool,
+}
+
+/// Локальная safe-граница второго external owner-а внутри `Initialize`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionWarInitializationBlock {
+    EnemyRelation(FactionEnemyMutationBlock),
 }
 
 /// Причина, по которой safe Rust не может выбрать продолжение старой цепочки.
@@ -378,6 +398,58 @@ impl CFactionWarSys {
             enemy_factions: VecDeque::new(),
             start_time_ms,
         }
+    }
+
+    /// Очищает live relation-list до самостоятельного DB open.
+    ///
+    /// Это отдельная операция, поскольку exact `CRsEnemyFactions::LoadAll…`
+    /// выполнял clear *до* `CreateCn/OpenCn`; ошибка подключения оставляла
+    /// именно пустой список, а не предыдущий snapshot.
+    pub(crate) fn clear_enemy_factions_for_load(&mut self) {
+        self.enemy_factions.clear();
+    }
+
+    /// Завершает `CFactionWarSys::Initialize` после самостоятельного DB read.
+    ///
+    /// Caller обязан вызвать `clear_enemy_factions_for_load` перед запуском
+    /// DB-owner-а. Каждая строка сначала проходит exact unordered upsert, затем
+    /// итоговый live list в list-order передаётся `SetEnemyFactionRelation`.
+    /// Только после всех этих effects перечитывается `FactionWarSys.ini`.
+    pub(crate) fn initialize_from_loaded_relations<ApplyRelation>(
+        &mut self,
+        load: EnemyFactionsLoadOutcome,
+        ini_source: Option<&[u8]>,
+        mut apply_relation: ApplyRelation,
+    ) -> Result<FactionWarInitializationReport, FactionWarInitializationBlock>
+    where
+        ApplyRelation: FnMut(i32, i32) -> Result<(), FactionEnemyMutationBlock>,
+    {
+        let (enemy_faction_load_succeeded, loaded_relations) = match load {
+            EnemyFactionsLoadOutcome::ReturnedTrue(relations) => (true, relations),
+            EnemyFactionsLoadOutcome::ReturnedFalse(relations) => (false, relations),
+        };
+        for EnemyFactionLoadSnapshot {
+            faction_id_1,
+            faction_id_2,
+            disband_time,
+        } in &loaded_relations
+        {
+            self.add_one_enemy_faction(*faction_id_1, *faction_id_2, *disband_time);
+        }
+        let mut applied_relation_records = 0_usize;
+        for relation in &self.enemy_factions {
+            apply_relation(relation.faction_id_1, relation.faction_id_2)
+                .map_err(FactionWarInitializationBlock::EnemyRelation)?;
+            applied_relation_records = applied_relation_records.wrapping_add(1);
+        }
+        let ini = self.load_ini_from_resource(ini_source);
+        Ok(FactionWarInitializationReport {
+            enemy_faction_load_succeeded,
+            loaded_relation_records: loaded_relations.len(),
+            applied_relation_records,
+            ini,
+            legacy_result: true,
+        })
     }
 
     /// Загружает package-resource `data/FactionWarSys.ini` в exact map-order.
@@ -903,7 +975,7 @@ where
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\factionwarsys.cpp
 
 // IMPLEMENTED: registry/lifecycle, IsEnemyRelation, ClearEnemyFaction,
-// AddOneEnmeyFaction, LoadIni, GetDecWarMoneyByType, OnPlayerDied,
+// AddOneEnmeyFaction, Initialize, LoadIni, GetDecWarMoneyByType, OnPlayerDied,
 // StopFactionWar, GenerateSaveData и Run; точные RVA и контракт сохранены в
 // верхнем `//!`.
 
@@ -959,7 +1031,7 @@ where
 
 // ============================================================================
 // FUNCTION: CFactionWarSys::Initialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\factionwarsys.cpp:53
@@ -967,6 +1039,11 @@ where
 // ADDRESS: 00466530
 // PROTOTYPE: bool __thiscall Initialize(void)
 //
+// IMPLEMENTED_OWNER: `clear_enemy_factions_for_load` выполняется до отдельного
+// DB-owner-а, затем `initialize_from_loaded_relations` сохраняет AddOne
+// dedupe/list-order, оба `SetEnemyFactionRelation` effect, поздний LoadIni и
+// legacy true. Ошибка безопасного formatter-а relation-owner-а останавливает
+// Init вместо старого stack corruption.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

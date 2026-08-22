@@ -1196,7 +1196,9 @@ use crate::dbaccess::worlddb::playerloadqueue::{
     CPlayerLoadQueue, PLAYER_LOAD_CDKEY_CAPACITY, PlayerLoadPushOutcome,
     PlayerLoadQueueEntry,
 };
-use crate::dbaccess::worlddb::rsenemyfactions::{EnemyFactionSaveSnapshot, RsEnemyFactionsOwner};
+use crate::dbaccess::worlddb::rsenemyfactions::{
+    EnemyFactionSaveSnapshot, RsEnemyFactionsOwner,
+};
 use crate::dbaccess::worlddb::rsfaction::RsFactionOwner;
 use crate::dbaccess::worlddb::rsgenvar::RsGenVarOwner;
 use crate::dbaccess::worlddb::rsgodsbattle::{
@@ -1466,13 +1468,16 @@ use crate::worldserver::appworld::incrementlog::incrementlog::{
 use crate::worldserver::appworld::organizingsystem::faction::{
     goods_war_check_for_faction_id, CFaction, FactionDemiseContext, FactionDemiseOutcome,
     FactionDisbandContext, FactionExperienceBlock, FactionMemberInfoRequest,
-    FactionInitialPropertyBlock, FactionOrganizingInfoContext, FactionUploadIconBlock,
+    FactionEnemyMutationContext, FactionInitialPropertyBlock, FactionOrganizingInfoContext,
+    FactionUploadIconBlock,
 };
 use crate::worldserver::appworld::organizingsystem::attackcitysys::{
     AttackCityCallbacks, CAttackCitySys,
 };
 use crate::worldserver::appworld::organizingsystem::factionwarsys::{
-    CFactionWarSys, FactionWarRunReport, FactionWarStopBlock, FactionWarStopContext,
+    CFactionWarSys, FactionWarIniLoadCompletion, FactionWarInitializationBlock,
+    FactionWarInitializationReport, FactionWarRunReport, FactionWarStopBlock,
+    FactionWarStopContext,
 };
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     AttackCityEndBlock, COrganizingCtrl, CityTransferEndpointBlock, CityTransferFinishBlock,
@@ -1809,6 +1814,7 @@ pub(crate) enum WorldGameInitEvent {
     GoodsWarMemberLoaded(GoodsWarDatabaseLoadReport),
     RsSetupOwnerCreated(LoadedSetupIds),
     VoidOwner(WorldGameInitVoidOwner),
+    FactionWarInitialized(FactionWarInitializationReport),
     QuestSystemInitialized(QuestSystemLoadReport),
     JjcConfigurationLoaded(JjcConfigurationLoadReport),
     Reload {
@@ -1921,6 +1927,7 @@ pub(crate) enum WorldGameInitBlockReason<ContextBlock> {
         region_id: i32,
         source: WorldRegionOwnerRelationBlock,
     },
+    FactionWar(FactionWarInitializationBlock),
     PlayerRanksSchedule(PlayerRanksScheduleBlock),
     PlayerRanksStat(PlayerRanksStatRunBlock),
     NetworkClient(WorldClientInitializationError),
@@ -1949,6 +1956,7 @@ pub(crate) type WorldGameInitResult<ContextBlock> =
 pub(crate) trait WorldGameInitContext: WorldReloadContext {
     type Block;
     type PlayerDatabase: RsPlayerOwner;
+    type EnemyFactionsDatabase: RsEnemyFactionsOwner;
 
     fn install_crash_reporter(&mut self);
     fn current_time_seconds(&mut self) -> i64;
@@ -1978,6 +1986,8 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn player_database(
         &mut self,
     ) -> (&mut Self::PlayerDatabase, Option<&mut WorldTdsClient>);
+    /// Отдельный DB-owner `CRsEnemyFactions` с самостоятельным connection.
+    fn enemy_factions_database(&mut self) -> &mut Self::EnemyFactionsDatabase;
     /// Возвращает уже открытый Log DB connection техническому increment-owner-у.
     fn increment_log_database(&mut self) -> Option<&mut WorldTdsClient>;
     /// Возвращает уже открытый Log DB connection техническому auction-owner-у.
@@ -9918,12 +9928,20 @@ impl CGame {
         clippy::too_many_arguments,
         reason = "прямые PlayerRanks/country/timer/increment owners заменяют прежние opaque callbacks"
     )]
-    pub(crate) async fn init<Context, TimerCallback, CountryDatabase, CountryContext>(
+    pub(crate) async fn init<
+        Context,
+        TimerCallback,
+        FactionEnemyContext,
+        CountryDatabase,
+        CountryContext,
+    >(
         &mut self,
         runtime_directory: &Path,
         context: &mut Context,
         jjc: &mut CJJcSystem,
         organizing_parameters: &mut COrganizingParam,
+        faction_war: &mut CFactionWarSys,
+        faction_enemy_context: &mut FactionEnemyContext,
         player_ranks: &mut CPlayerRanks,
         timer: &mut CTimer<TimerCallback>,
         organizing_tax_callback: TimerCallback,
@@ -9947,6 +9965,7 @@ impl CGame {
     where
         Context: WorldGameInitContext,
         TimerCallback: Copy,
+        FactionEnemyContext: FactionEnemyMutationContext,
         CountryDatabase: DbCountryOwner,
         CountryContext: CountrySetNewDayContext + ?Sized,
     {
@@ -10400,9 +10419,51 @@ impl CGame {
             });
         }
 
-        context.initialize_void_owner(WorldGameInitVoidOwner::InitializeFactionWar);
-        events.push(WorldGameInitEvent::VoidOwner(
-            WorldGameInitVoidOwner::InitializeFactionWar,
+        self.record_game_init_log(
+            &mut events,
+            log,
+            callbacks,
+            b"Load FactionWarSys:EnemyFactions...",
+        );
+        faction_war.clear_enemy_factions_for_load();
+        let faction_war_load = context.enemy_factions_database().load_all_enemy_factions().await;
+        self.record_game_init_log(
+            &mut events,
+            log,
+            callbacks,
+            b"Load FactionWarSys:EnemyFactions SUCCESS...",
+        );
+        let faction_war_ini_source = context.read_resource(b"data/FactionWarSys.ini");
+        let faction_war_initialization = faction_war.initialize_from_loaded_relations(
+            faction_war_load,
+            faction_war_ini_source.as_deref(),
+            |first_faction_id, second_faction_id| {
+                organizing
+                    .set_enemy_faction_relation(
+                        first_faction_id,
+                        second_faction_id,
+                        faction_enemy_context,
+                    )
+                    .map(|_| ())
+            },
+        );
+        let faction_war_initialization = match faction_war_initialization {
+            Ok(report) => report,
+            Err(source) => stop!(WorldGameInitBlockReason::FactionWar(source)),
+        };
+        if matches!(
+            faction_war_initialization.ini.completion,
+            FactionWarIniLoadCompletion::FileMissing
+        ) {
+            self.record_game_init_log(
+                &mut events,
+                log,
+                callbacks,
+                b"data/FactionWarSys.txt can't found!",
+            );
+        }
+        events.push(WorldGameInitEvent::FactionWarInitialized(
+            faction_war_initialization,
         ));
         let quest_system = self.initialize_quest_system(context);
         events.push(WorldGameInitEvent::QuestSystemInitialized(quest_system));
