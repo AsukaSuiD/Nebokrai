@@ -5,8 +5,8 @@
 //! `0x00093F80`, `OnRefreshRegion`/`OnClearWar`/`RequestWarResultFromGS` RVA
 //! `0x00093B10/0x00093B80/0x00093BF0`, `GetWarRegionIDByTime` RVA
 //! `0x00094200`, `OnSignUpWarStart`/`OnWarEnd` RVA
-//! `0x00094F10/0x00095E90`: `IMPLEMENTED`; loader, прочие calendar branches и
-//! остальной Game runtime ниже остаются
+//! `0x00094F10/0x00095E90`, `ReLoad` RVA `0x00097370`: `IMPLEMENTED`; loader,
+//! прочие calendar branches и остальной Game runtime ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -28,8 +28,9 @@
 //! `Initialize` RVA `0x000963E0` восстанавливает country-name snapshot,
 //! очищает setup/fund registries, читает `#` weekly setup и `*` fund records,
 //! ставит достижимые calendar events и загружает `regions/<first>.nation`.
-//! Rust хранит timer IDs как ноль до регистрации: старые неинициализированные
-//! поля не имеют downstream-семантики и не переносятся.
+//! Rust хранит невыставленные timer IDs как ноль для wire, но отдельно помнит
+//! факт регистрации: ID `0` валиден, а старые неинициализированные поля при
+//! `ReLoad` были внутренним риском удаления чужого события.
 //! Проверка country-index nation-файла заменяет доказанный выход за `RECT[5]`
 //! безопасным пропуском без нового внешнего log: исходная ветка ошибки была
 //! внутренне противоречивой (`index < 0 && index > 4`) и не задавала
@@ -99,7 +100,7 @@ use std::fmt;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::date::{TagTime, TagTimeArithmeticBlock};
 use crate::public::readwrite::read_to;
-use crate::public::timer::CTimer;
+use crate::public::timer::{CTimer, TimerId};
 use crate::worldserver::appworld::player::PlayerExploitUpdate;
 
 const FOUR_NATION_SETUP_WIRE_SIZE: usize = 196;
@@ -129,6 +130,15 @@ pub(crate) struct FourNationWarSetup {
     pub(crate) clear_war_time: TagTime,
     pub(crate) region_state: i32,
     pub(crate) is_every_week: i32,
+    sign_up_start_event_registered: bool,
+    sign_up_end_event_registered: bool,
+    start_event_registered: bool,
+    end_event_registered: bool,
+    end_info_event_registered: bool,
+    enter_start_event_registered: bool,
+    enter_end_event_registered: bool,
+    refresh_event_registered: bool,
+    clear_war_event_registered: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -220,6 +230,41 @@ pub(crate) trait FourNationWarCallbackContext {
 pub(crate) enum FourNationWarCalendarBlock {
     RegionIndex(FourNationWarRegionIndexBlock),
     Calendar(TagTimeArithmeticBlock),
+}
+
+/// Девять exact `KillTimeEvent` вызовов `CFourNationWarSys::ReLoad`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FourNationWarReloadEvent {
+    SignUpStart,
+    SignUpEnd,
+    EnterStart,
+    EnterEnd,
+    Start,
+    End,
+    ClearWar,
+    RefreshRegion,
+    EndInfo,
+}
+
+/// Итог reload-ветки, отдельно сохраняющий legacy `false` активной войны.
+#[derive(Debug)]
+pub(crate) enum FourNationWarReloadDisposition {
+    BlockedActive {
+        index: i32,
+        kill_requests: u32,
+        killed_events: u32,
+    },
+    Reloaded(FourNationWarReloadReport),
+}
+
+/// Exact `ReLoad` игнорирует bool `Initialize`; Rust не скрывает его outcome.
+#[derive(Debug)]
+pub(crate) struct FourNationWarReloadReport {
+    pub(crate) previous_setups: usize,
+    pub(crate) kill_requests: u32,
+    pub(crate) killed_events: u32,
+    pub(crate) unregistered_events: u32,
+    pub(crate) load: Result<FourNationWarLoadReport, FourNationWarLoadError>,
 }
 
 impl From<TagTimeArithmeticBlock> for FourNationWarCalendarBlock {
@@ -487,6 +532,60 @@ impl CFourNationWarSys {
             }
         }
         Ok(report)
+    }
+
+    /// Exact `ReLoad`: не начинает reload внутри `[SignUpStart, ClearWar]`,
+    /// иначе отменяет девять event-ID каждого setup-а и вызывает `Initialize`.
+    ///
+    /// Старый bool `Initialize` после удалений игнорировался: поэтому его
+    /// outcome остаётся в отчёте внутри legacy-success `Reloaded`, а не
+    /// превращается в новый false. Отменяются лишь реально зарегистрированные
+    /// события: это исправляет старый internal риск с неинициализированными ID
+    /// и не путает отсутствие события с валидным `TimerId(0)`.
+    pub(crate) fn reload<Callback: Copy, NationSource>(
+        &mut self,
+        source: Option<&[u8]>,
+        now: TagTime,
+        timer: &mut CTimer<Callback>,
+        callbacks: FourNationWarCallbacks<Callback>,
+        nation_source: NationSource,
+    ) -> FourNationWarReloadDisposition
+    where
+        NationSource: FnMut(i32) -> Option<Vec<u8>>,
+    {
+        let previous_setups = self.setups.len();
+        let mut kill_requests = 0u32;
+        let mut killed_events = 0u32;
+        let mut unregistered_events = 0u32;
+
+        for (position, setup) in self.setups.iter().enumerate() {
+            if now.legacy_ge(setup.sign_up_start_time) && now.legacy_le(setup.clear_war_time) {
+                return FourNationWarReloadDisposition::BlockedActive {
+                    index: position as i32,
+                    kill_requests,
+                    killed_events,
+                };
+            }
+            for (_event, event_id) in setup.reload_event_ids() {
+                let Some(event_id) = event_id else {
+                    unregistered_events = unregistered_events.wrapping_add(1);
+                    continue;
+                };
+                kill_requests = kill_requests.wrapping_add(1);
+                if timer.kill_time_event(event_id) {
+                    killed_events = killed_events.wrapping_add(1);
+                }
+            }
+        }
+
+        let load = self.initialize(source, now, timer, callbacks, nation_source);
+        FourNationWarReloadDisposition::Reloaded(FourNationWarReloadReport {
+            previous_setups,
+            kill_requests,
+            killed_events,
+            unregistered_events,
+            load,
+        })
     }
 
     pub(crate) fn funds(&self) -> &[FourNationWarFund] {
@@ -1027,6 +1126,56 @@ impl FourNationWarSetup {
             && self.enter_end_time.legacy_lt(self.clear_war_time)
     }
 
+    fn reload_event_ids(&self) -> [(FourNationWarReloadEvent, Option<TimerId>); 9] {
+        [
+            (
+                FourNationWarReloadEvent::SignUpStart,
+                self.sign_up_start_event_registered
+                    .then(|| TimerId::from_raw(self.sign_up_start_event_id)),
+            ),
+            (
+                FourNationWarReloadEvent::SignUpEnd,
+                self.sign_up_end_event_registered
+                    .then(|| TimerId::from_raw(self.sign_up_end_event_id)),
+            ),
+            (
+                FourNationWarReloadEvent::EnterStart,
+                self.enter_start_event_registered
+                    .then(|| TimerId::from_raw(self.enter_start_event_id)),
+            ),
+            (
+                FourNationWarReloadEvent::EnterEnd,
+                self.enter_end_event_registered
+                    .then(|| TimerId::from_raw(self.enter_end_event_id)),
+            ),
+            (
+                FourNationWarReloadEvent::Start,
+                self.start_event_registered
+                    .then(|| TimerId::from_raw(self.start_event_id)),
+            ),
+            (
+                FourNationWarReloadEvent::End,
+                self.end_event_registered
+                    .then(|| TimerId::from_raw(self.end_event_id)),
+            ),
+            (
+                FourNationWarReloadEvent::ClearWar,
+                self.clear_war_event_registered
+                    .then(|| TimerId::from_raw(self.clear_war_event_id)),
+            ),
+            (
+                FourNationWarReloadEvent::RefreshRegion,
+                self.refresh_event_registered
+                    .then(|| TimerId::from_raw(self.refresh_event_id)),
+            ),
+            (
+                FourNationWarReloadEvent::EndInfo,
+                self.end_info_event_registered
+                    .then(|| TimerId::from_raw(self.end_info_event_id)),
+            ),
+        ]
+    }
+
     fn register_initial_events<Callback: Copy>(
         &mut self,
         index: i32,
@@ -1040,9 +1189,11 @@ impl FourNationWarSetup {
         self.end_event_id = timer
             .set_time_event(self.end_time, callbacks.war_end, index)
             .get();
+        self.end_event_registered = true;
         self.clear_war_event_id = timer
             .set_time_event(self.clear_war_time, callbacks.clear_war, index)
             .get();
+        self.clear_war_event_registered = true;
         self.end_info_event_id = timer
             .set_time_event(
                 if self.end_info_time.legacy_ge(now) {
@@ -1054,6 +1205,7 @@ impl FourNationWarSetup {
                 index,
             )
             .get();
+        self.end_info_event_registered = true;
         self.enter_end_event_id = timer
             .set_time_event(
                 if self.enter_end_time.legacy_gt(now) {
@@ -1065,6 +1217,7 @@ impl FourNationWarSetup {
                 index,
             )
             .get();
+        self.enter_end_event_registered = true;
         if !self.start_time.legacy_ge(now) {
             self.region_state = 3;
             return;
@@ -1072,9 +1225,11 @@ impl FourNationWarSetup {
         self.start_event_id = timer
             .set_time_event(self.start_time, callbacks.war_start, index)
             .get();
+        self.start_event_registered = true;
         self.refresh_event_id = timer
             .set_time_event(self.refresh_region_time, callbacks.refresh_region, index)
             .get();
+        self.refresh_event_registered = true;
         if !self.enter_start_time.legacy_gt(now) {
             self.region_state = 2;
             return;
@@ -1082,14 +1237,17 @@ impl FourNationWarSetup {
         self.enter_start_event_id = timer
             .set_time_event(self.enter_start_time, callbacks.enter_start, index)
             .get();
+        self.enter_start_event_registered = true;
         if self.sign_up_end_time.legacy_ge(now) {
             self.sign_up_end_event_id = timer
                 .set_time_event(self.sign_up_end_time, callbacks.sign_up_end, index)
                 .get();
+            self.sign_up_end_event_registered = true;
             if self.sign_up_start_time.legacy_ge(now) {
                 self.sign_up_start_event_id = timer
                     .set_time_event(self.sign_up_start_time, callbacks.sign_up_start, index)
                     .get();
+                self.sign_up_start_event_registered = true;
             } else {
                 self.region_state = 1;
             }
@@ -1097,6 +1255,7 @@ impl FourNationWarSetup {
             self.sign_up_end_event_id = timer
                 .set_time_event(now, callbacks.sign_up_end, index)
                 .get();
+            self.sign_up_end_event_registered = true;
         }
     }
 
@@ -1112,46 +1271,55 @@ impl FourNationWarSetup {
         self.sign_up_start_event_id = timer
             .set_time_event(self.sign_up_start_time, callbacks.sign_up_start, index)
             .get();
+        self.sign_up_start_event_registered = true;
 
         self.sign_up_end_time.add_day(7)?;
         self.sign_up_end_event_id = timer
             .set_time_event(self.sign_up_end_time, callbacks.sign_up_end, index)
             .get();
+        self.sign_up_end_event_registered = true;
 
         self.enter_start_time.add_day(7)?;
         self.enter_start_event_id = timer
             .set_time_event(self.enter_start_time, callbacks.enter_start, index)
             .get();
+        self.enter_start_event_registered = true;
 
         self.enter_end_time.add_day(7)?;
         self.enter_end_event_id = timer
             .set_time_event(self.enter_end_time, callbacks.enter_end, index)
             .get();
+        self.enter_end_event_registered = true;
 
         self.refresh_region_time.add_day(7)?;
         self.refresh_event_id = timer
             .set_time_event(self.refresh_region_time, callbacks.refresh_region, index)
             .get();
+        self.refresh_event_registered = true;
 
         self.start_time.add_day(7)?;
         self.start_event_id = timer
             .set_time_event(self.start_time, callbacks.war_start, index)
             .get();
+        self.start_event_registered = true;
 
         self.end_info_time.add_day(7)?;
         self.end_info_event_id = timer
             .set_time_event(self.end_info_time, callbacks.war_end_info, index)
             .get();
+        self.end_info_event_registered = true;
 
         self.end_time.add_day(7)?;
         self.end_event_id = timer
             .set_time_event(self.end_time, callbacks.war_end, index)
             .get();
+        self.end_event_registered = true;
 
         self.clear_war_time.add_day(7)?;
         self.clear_war_event_id = timer
             .set_time_event(self.clear_war_time, callbacks.clear_war, index)
             .get();
+        self.clear_war_event_registered = true;
         Ok(())
     }
 }
@@ -1209,6 +1377,15 @@ fn read_weekly_setup<'a>(
         clear_war_time: shifted_minutes(start_time, clear_offset)?,
         region_state: 0,
         is_every_week: 1,
+        sign_up_start_event_registered: false,
+        sign_up_end_event_registered: false,
+        start_event_registered: false,
+        end_event_registered: false,
+        end_info_event_registered: false,
+        enter_start_event_registered: false,
+        enter_end_event_registered: false,
+        refresh_event_registered: false,
+        clear_war_event_registered: false,
     })
 }
 
@@ -1536,7 +1713,7 @@ fn next_war_i32<'a>(
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::ReLoad
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:304
@@ -1544,6 +1721,7 @@ fn next_war_i32<'a>(
 // ADDRESS: 00497370
 // PROTOTYPE: bool __cdecl ReLoad(void)
 //
+// IMPLEMENTED_OWNER: `CFourNationWarSys::reload` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
