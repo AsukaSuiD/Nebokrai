@@ -5223,7 +5223,7 @@ async fn run_transaction_command(
 
 // ============================================================================
 // FUNCTION: DoSaveData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\savedb.cpp:22
@@ -5231,6 +5231,9 @@ async fn run_transaction_command(
 // ADDRESS: 0041c610
 // PROTOTYPE: void __cdecl DoSaveData(void)
 //
+// IMPLEMENTED_OWNER: `do_save_data_lifecycle` связывает open/phase/final
+// порядок, а `CGame::save_thread_func` удерживает save-barrier и передаёт
+// финальный monitoring packet точному `SendErrLog` current Login owner-у.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
