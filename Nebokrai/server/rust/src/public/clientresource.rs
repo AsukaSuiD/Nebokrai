@@ -156,13 +156,17 @@ impl DefaultClientResourceOwner {
         &mut self,
         root: &Path,
     ) -> DefaultClientResourceReplacement {
-        let previous_owner_released = self
-            .installed
-            .replace(InstalledClientResource {
-                root: root.to_path_buf(),
-                resource: None,
-            })
-            .is_some();
+        // Exact `CGame::LoadServerResource` сначала удаляет прежний global
+        // `CClientResource`, и лишь затем создаёт/публикует новый. `replace`
+        // менял бы этот lifecycle-order местами, потому что старый owner
+        // доживает до конца выражения уже после записи нового значения.
+        let previous = self.installed.take();
+        let previous_owner_released = previous.is_some();
+        drop(previous);
+        self.installed = Some(InstalledClientResource {
+            root: root.to_path_buf(),
+            resource: None,
+        });
         let load = ClientResource::load_world_server_directory(root);
         match load {
             Ok(report) => {
@@ -617,7 +621,7 @@ fn package_path(root: &Path, file_name: &[u8]) -> PathBuf {
 
 // ============================================================================
 // FUNCTION: CClientResource::~CClientResource
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / RAII_SUBSTITUTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\clientresource.cpp:75
@@ -625,13 +629,18 @@ fn package_path(root: &Path, file_name: &[u8]) -> PathBuf {
 // ADDRESS: 0044ffd0
 // PROTOTYPE: void __thiscall ~CClientResource(void)
 //
+// `DefaultClientResourceOwner::replace_from_world_directory` завершает старый
+// `InstalledClientResource` через `take` и `Drop` до публикации нового. В
+// достигнутом World пути `ahThread` constructor-а остаётся null, а LoadEx
+// синхронен; `FilesInfo`, `BTreeMap` пакетов и архивные bytes освобождаются
+// Rust RAII без переноса Win32 wait/FILE*/STL-destruction plumbing.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CClientResource::CClientResource
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / RAII_SUBSTITUTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\clientresource.cpp:66
@@ -639,6 +648,11 @@ fn package_path(root: &Path, file_name: &[u8]) -> PathBuf {
 // ADDRESS: 00450290
 // PROTOTYPE: undefined __thiscall CClientResource(eResourceType param_1, basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_2, basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_3, HWND__ * param_4)
 //
+// cwd и `FilesInfo.ril`; current-folder хранится даже после failed LoadEx.
+// `ClientResource` владеет только уже разобранными `FilesInfo` и пакетами,
+// а `InstalledClientResource::resource == None` представляет созданный
+// `CFilesInfo` с недоступным индексом. Это заменяет allocator/Win32 fields
+// safe owner-ом, не меняя nullable query/loose fallback контракт.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
