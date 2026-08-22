@@ -1392,6 +1392,7 @@ use crate::worldserver::appworld::message::playermessage::{
 };
 use crate::worldserver::appworld::message::organsysmessage::{
     CityTransferConfirmationDelivery, ConfederationCreationConfirmationDelivery,
+    OrganizingCityWarResultContextBlock, reload_attack_city,
     OrganizingAdmissionPermitBlock,
     OrganizingAdmissionPermitDispatch, OrganizingAttackCityEndDispatch,
     OrganizingCityGateBlock, OrganizingCityGateDispatch, OrganizingCityTransferDispatch,
@@ -1498,7 +1499,7 @@ use crate::worldserver::appworld::organizingsystem::faction::{
 };
 use crate::worldserver::appworld::organizingsystem::attackcitysys::{
     AttackCityCallbacks, AttackCityEnemyRelationContext, AttackCityEnemyRelationReport,
-    AttackCityLoadError, AttackCityLoadReport, CAttackCitySys,
+    AttackCityLoadError, AttackCityLoadReport, AttackCityReloadBlock, CAttackCitySys,
 };
 use crate::worldserver::appworld::organizingsystem::factionwarsys::{
     CFactionWarSys, FactionWarIniLoadCompletion, FactionWarInitializationBlock,
@@ -6053,6 +6054,7 @@ pub(crate) enum WorldReloadBlock {
     TimeToReturnOwnerRequired,
     VillageWarOwnerRequired,
     VillageWar(VillageWarReloadBlock),
+    AttackCity(AttackCityReloadBlock<OrganizingCityWarResultContextBlock>),
 }
 
 pub(crate) type WorldReloadResult = Result<i32, WorldReloadBlock>;
@@ -7883,6 +7885,67 @@ impl CGame {
         let legacy_result = payload.len() as u32 as i32;
         self.send_reload_payload(0x1C, &payload);
         context.add_log_text(b"Load VilWarPara...OK!");
+        Ok(legacy_result)
+    }
+
+    /// Выполняет concrete `CAttackCitySys::Reload` для main-loop профиля.
+    ///
+    /// Ложный результат `Initialize` остаётся обычным legacy `0`: прежние
+    /// таймеры и активные войны уже обработаны Reload и не откатываются.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Reload объединяет доказанные singleton-owner-ы city-war lifecycle"
+    )]
+    fn reload_attack_city<Context, TimerCallback>(
+        &mut self,
+        context: &mut Context,
+        attack_city: &mut CAttackCitySys,
+        timer: &mut CTimer<TimerCallback>,
+        attack_callbacks: AttackCityCallbacks<TimerCallback>,
+        organizing: &mut COrganizingCtrl,
+        country_handler: &mut CCountryHandler,
+        country_parameters: &CCountryParam,
+        organizing_parameters: &COrganizingParam,
+        globe_setup: &GlobeSetupSnapshot,
+        effects: &mut WorldUnionApplicationEffectCallbacks<'_>,
+        update_player: &mut dyn FnMut(i32),
+        now: TagTime,
+        reload_server_resources: bool,
+    ) -> WorldReloadResult
+    where
+        Context: WorldReloadContext + ?Sized,
+        TimerCallback: Copy,
+    {
+        if reload_server_resources {
+            context.load_reload_server_resources(self);
+        }
+        let source = context.read_resource(b"setup/CityWarSys.ini");
+        match reload_attack_city(
+            self,
+            attack_city,
+            source.as_deref(),
+            now,
+            timer,
+            attack_callbacks,
+            organizing_parameters.latest_tax_event_id(),
+            organizing,
+            country_handler,
+            country_parameters,
+            globe_setup,
+            effects,
+            update_player,
+        ) {
+            Ok(_) => {}
+            // `CAttackCitySys::Reload` буквально возвращает Initialize bool.
+            // Ошибка parse/open представляет его ложный результат, не block.
+            Err(AttackCityReloadBlock::Load(_)) => return Ok(0),
+            Err(block) => return Err(WorldReloadBlock::AttackCity(block)),
+        };
+        let mut payload = Vec::new();
+        let _ = attack_city.add_to_byte_array(&mut payload);
+        let legacy_result = payload.len() as u32 as i32;
+        self.send_reload_payload(0x1B, &payload);
+        context.add_log_text(b"Load AttackCitySys List...OK!");
         Ok(legacy_result)
     }
 
@@ -13364,6 +13427,17 @@ impl CGame {
             }
         };
 
+        let mut reload_union_application_callbacks = WorldUnionApplicationEffectCallbacks {
+            random: &mut *callbacks.random,
+            world_string: &mut *callbacks.world_string_by_id,
+            format_world_string: &mut *callbacks.format_union_world_string,
+            put_war_log: &mut *callbacks.put_union_war_log,
+            refresh_owned_city: &mut *callbacks.refresh_union_owned_city,
+            faction_level_log_enabled: callbacks.faction_level_log_enabled,
+            write_faction_level_log: &mut *callbacks.write_faction_level_log,
+            faction_experience_log_enabled: callbacks.faction_experience_log_enabled,
+            write_faction_experience_log: &mut *callbacks.write_faction_experience_log,
+        };
         let reload = reload_profiles(
             self,
             state.reload_flags,
@@ -13379,6 +13453,15 @@ impl CGame {
             owners.time_to_return_callbacks,
             owners.village_war,
             owners.village_war_callbacks,
+            owners.attack_city,
+            owners.attack_city_callbacks,
+            owners.organizing,
+            owners.country,
+            owners.country_parameters,
+            owners.organizing_parameters,
+            owners.globe_setup,
+            &mut reload_union_application_callbacks,
+            &mut *callbacks.update_union_player,
             &mut *callbacks.get_timer_local_time,
         );
         let reload = match reload {
@@ -20691,6 +20774,15 @@ pub(crate) fn reload_profiles<Context, GetLocalTime, GetTimerLocalTime, TimerCal
     time_to_return_callbacks: TimeToReturnCallbacks<TimerCallback>,
     village_war: &mut CVillageWarSys,
     village_war_callbacks: VillageWarCallbacks<TimerCallback>,
+    attack_city: &mut CAttackCitySys,
+    attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
+    organizing: &mut COrganizingCtrl,
+    country_handler: &mut CCountryHandler,
+    country_parameters: &CCountryParam,
+    organizing_parameters: &COrganizingParam,
+    globe_setup: &GlobeSetupSnapshot,
+    application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    update_player: &mut dyn FnMut(i32),
     mut get_timer_local_time: GetTimerLocalTime,
 ) -> WorldReloadProfilesReport
 where
@@ -20749,6 +20841,22 @@ where
                     village_war,
                     timer,
                     village_war_callbacks,
+                    get_timer_local_time(),
+                    action.second_option,
+                )
+            } else if action.reload_profile == b"AttackCitySys" {
+                game.reload_attack_city(
+                    context,
+                    attack_city,
+                    timer,
+                    attack_city_callbacks,
+                    organizing,
+                    country_handler,
+                    country_parameters,
+                    organizing_parameters,
+                    globe_setup,
+                    application_callbacks,
+                    update_player,
                     get_timer_local_time(),
                     action.second_option,
                 )

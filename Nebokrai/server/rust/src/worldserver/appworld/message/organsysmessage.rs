@@ -408,7 +408,7 @@ use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::country::countryparam::CCountryParam;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionCallbackOutcome};
 use crate::public::date::TagTime;
-use crate::public::timer::CTimer;
+use crate::public::timer::{CTimer, TimerId};
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsOriginalNameIndex, query_goods_name,
 };
@@ -446,7 +446,8 @@ use crate::worldserver::appworld::organizingsystem::factionwarsys::{
 };
 use crate::worldserver::appworld::organizingsystem::attackcitysys::{
     AttackCityApplicationContext, AttackCityApplicationReport, AttackCityCallbacks,
-    AttackCityEnemyRelationContext, AttackCityWarEndContext, AttackCityWarResultBlock,
+    AttackCityEnemyRelationContext, AttackCityReloadBlock, AttackCityReloadReport,
+    AttackCityWarEndContext, AttackCityWarResultBlock,
     AttackCityWarResultContext, AttackCityWarResultFaction, AttackCityWarResultFormatArgument,
     AttackCityWarResultRegion, AttackCityWarResultReport, CAttackCitySys,
 };
@@ -6548,6 +6549,52 @@ pub(crate) fn dispatch_city_war_result<Callback: Copy>(
         reported_union_id,
         outcome,
     })
+}
+
+/// Соединяет concrete `CAttackCitySys::Reload` с World runtime owners.
+///
+/// `Reload` сначала снимает прежние timer events и завершает активные войны;
+/// поэтому вызывающий не имеет права превращать ошибку последующего `Initialize`
+/// в транзакционный rollback. Контекст буквально совпадает с result-ingress
+/// `0x60138`, а `send_all` сохраняет `0x7FE22` между end и новым Initialize.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "все singleton-владельцы и callback-грань подтверждены CAttackCitySys::Reload"
+)]
+pub(crate) fn reload_attack_city<Callback: Copy>(
+    game: &mut CGame,
+    attack_city: &mut CAttackCitySys,
+    source: Option<&[u8]>,
+    now: TagTime,
+    timer: &mut CTimer<Callback>,
+    attack_callbacks: AttackCityCallbacks<Callback>,
+    today_tax_event_id: Option<TimerId>,
+    organizing: &mut COrganizingCtrl,
+    country_handler: &mut CCountryHandler,
+    country_parameters: &CCountryParam,
+    globe_setup: &GlobeSetupSnapshot,
+    effects: &mut WorldUnionApplicationEffectCallbacks<'_>,
+    update_player: &mut dyn FnMut(i32),
+) -> Result<AttackCityReloadReport, AttackCityReloadBlock<OrganizingCityWarResultContextBlock>> {
+    let sender = game.current_game_server_sender();
+    let mut context = WorldAttackCityResultContext {
+        game,
+        organizing,
+        country_handler,
+        country_parameters,
+        globe_setup,
+        callbacks: effects,
+        update_player,
+    };
+    attack_city.reload(
+        source,
+        now,
+        timer,
+        attack_callbacks,
+        today_tax_event_id,
+        &mut context,
+        |message| message.send_all(sender.as_ref()).unwrap_or(0),
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
