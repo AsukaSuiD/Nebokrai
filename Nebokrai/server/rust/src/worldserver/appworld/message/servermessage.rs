@@ -16,6 +16,8 @@
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
 //! Исходный путь PDB:
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\servermessage.cpp:87`.
+//! Opcode вне полной машинной таблицы завершается общим epilogue без чтения,
+//! отправки или перехода к следующему owner-у; Rust фиксирует это `NoOp`.
 //!
 //! Старый reconnect передавал `CMyNetClient*` как `long` внутри сообщения.
 //! Rust получает тот же элемент общей FIFO как typed event: сначала вызывает
@@ -399,6 +401,10 @@ pub(crate) struct WorldCompletedSaveResponseLaunchReport {
 /// Результат исполненного обычного opcode `OnServerMessage`.
 #[derive(Debug)]
 pub(crate) enum WorldServerMessageOutcome {
+    /// Default полного exact `OnServerMessage` без side effects.
+    NoOp {
+        request_type: i32,
+    },
     GameServerConnection(WorldGameServerConnectionReport),
     GameServerBroadcast(WorldGameServerBroadcast),
     GameServerPingResponseRecorded(WorldGameServerPingResponse),
@@ -2630,7 +2636,9 @@ pub(crate) async fn on_server_message(
                 ),
             )
         }
-        _ => WorldServerMessageDispatch::Pending(message),
+        request_type => WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::NoOp {
+            request_type,
+        }),
     }
 }
 
