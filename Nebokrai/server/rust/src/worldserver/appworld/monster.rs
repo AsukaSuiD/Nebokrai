@@ -2,8 +2,8 @@
 //!
 //! Статус base-подобъекта и type-default внутри `CMonster::CMonster` RVA
 //! `0x000E0490`, а также непосредственной destructor-цепочки RVA `0x000E0410`
-//! — `VERIFIED_DISASSEMBLY`; property и остальной корпус ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! — `VERIFIED_DISASSEMBLY`; `GetFigure` RVA `0x000E0460` — `IMPLEMENTED`.
+//! Property и остальной корпус ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -24,23 +24,35 @@
 //! строки сходятся на сбросе её состояния и затем tail-jump вызывают
 //! `CMoveShape::~CMoveShape`. Rust-композиция материализует только единственный
 //! достигнутый base-подобъект и type-default. Helper не называется `new`:
-//! `m_Property`, строка, GetFigure и AI/region/container-семантика остаются
-//! raw, а их destructor не подменяется пустым `Drop`. Rust layout не
-//! объявляется копией старого ABI.
+//! `m_Property` заменён владением только достигнутой `strOrginName`: оно
+//! сохраняет C-string lookup, но исключает SSO/heap lifetime старого ABI.
+//! Original `GetFigure` разыменовывал null при отсутствующей setup-записи;
+//! `Option` делает этот ошибочный внутренний путь явным и не выдумывает
+//! внешне значимого figure. AI/region/container-семантика остаются raw, а
+//! destructor не подменяется пустым `Drop`. Rust layout не объявляется копией
+//! старого ABI.
+
+use crate::setup::monsterlist::{
+    MonsterRegistry, get_monster_property_by_origin_name,
+};
 
 use super::moveshape::CMoveShape;
 
 /// Достигнутая base-часть исходного `CMonster`.
 pub(crate) struct CMonster {
     move_shape_base: CMoveShape,
+    original_name: Vec<u8>,
 }
 
 impl CMonster {
     /// Создаёт только доказанный base-подобъект с object type `600`.
-    pub(crate) const fn with_constructor_base_and_type() -> Self {
+    pub(crate) fn with_constructor_base_and_type() -> Self {
         let mut move_shape_base = CMoveShape::with_constructor_shape_base();
         move_shape_base.set_type(600);
-        Self { move_shape_base }
+        Self {
+            move_shape_base,
+            original_name: Vec::new(),
+        }
     }
 
     /// Возвращает унаследованный object type без дополнительных эффектов.
@@ -56,6 +68,19 @@ impl CMonster {
     /// Присваивает унаследованный signed object ID.
     pub(crate) const fn set_id(&mut self, id: i32) {
         self.move_shape_base.set_id(id);
+    }
+
+    /// Присваивает единственное достигнутое строковое поле `m_Property`.
+    pub(crate) fn set_original_name(&mut self, original_name: Vec<u8>) {
+        self.original_name = original_name;
+    }
+
+    /// Возвращает low-byte setup `dwFigure` либо отсутствие setup-записи.
+    ///
+    /// Точное приведение `u32` к `uchar` сохраняет младшие восемь бит.
+    pub(crate) fn get_figure(&self, monsters: &MonsterRegistry) -> Option<u8> {
+        get_monster_property_by_origin_name(monsters, &self.original_name)
+            .map(|properties| properties.figure as u8)
     }
 }
 
@@ -82,7 +107,7 @@ impl CMonster {
 
 // ============================================================================
 // FUNCTION: CMonster::GetFigure
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\monster.h:36

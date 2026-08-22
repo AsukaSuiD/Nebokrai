@@ -1,7 +1,8 @@
 //! Реестр и wire-сериализатор списка монстров Miracle.
 //!
-//! Статус `CMonsterList::AddToByteArray` WorldServer RVA `0x0009C760`:
-//! `IMPLEMENTED`; загрузчики и lookup-ы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Статус `CMonsterList::AddToByteArray` WorldServer RVA `0x0009C760` и
+//! `CMonsterList::GetPropertyByOrginName` RVA `0x000A0230`: `IMPLEMENTED`;
+//! загрузчики ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
 //! SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
@@ -107,6 +108,23 @@ pub(crate) struct MonsterDropList {
 
 pub(crate) type MonsterRegistry = BTreeMap<Vec<u8>, MonsterProperties>;
 pub(crate) type MonsterDropRegistry = BTreeMap<Vec<u8>, MonsterDropList>;
+
+/// Ищет свойство по legacy C-строке original name.
+///
+/// Original owner сначала строил `std::string` до первого NUL и выполнял
+/// `map::find`; отсутствующий ключ возвращал null. `Vec<u8>` исключает
+/// lifetime/SSO-детали старой строки, а `Option` сохраняет именно этот
+/// различимый результат, не превращая его в разыменование null.
+pub(crate) fn get_monster_property_by_origin_name<'registry>(
+    monsters: &'registry MonsterRegistry,
+    origin_name: &[u8],
+) -> Option<&'registry MonsterProperties> {
+    let c_string = origin_name
+        .split(|byte| *byte == b'\0')
+        .next()
+        .unwrap_or_default();
+    monsters.get(c_string)
+}
 
 /// Безопасная граница только для состояния вне 32-битного owner-контракта.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -488,7 +506,7 @@ fn append_legacy_string(destination: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CMonsterList::GetPropertyByOrginName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\monsterlist.cpp:385
