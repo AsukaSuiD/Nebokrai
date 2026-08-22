@@ -1,8 +1,9 @@
 //! Владелец операторского журнала исторического `WorldServer`.
 //!
 //! `SaveLogText` RVA `0x0001E520`, `AddLogText` RVA `0x0001E630`,
-//! `AddErrorLogText` RVA `0x0001E720` и `RefeashInfoText` RVA `0x0001E810`
-//! имеют статус `IMPLEMENTED`; остальные
+//! `AddErrorLogText` RVA `0x0001E720` и `RefeashInfoText` RVA `0x0001E810`,
+//! а также `AddPlayerList` RVA `0x00001000` как exact no-op имеют статус
+//! `IMPLEMENTED`; остальные
 //! владельцы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
 //! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
 //! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -555,7 +556,7 @@ fn format_without_arguments(format: &[u8]) -> Result<Vec<u8>, AddLogTextBlock> {
 
 // ============================================================================
 // FUNCTION: AddPlayerList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\worldserver.cpp:925
@@ -563,6 +564,8 @@ fn format_without_arguments(format: &[u8]) -> Result<Vec<u8>, AddLogTextBlock> {
 // ADDRESS: 00401000
 // PROTOTYPE: void __cdecl AddPlayerList(char * param_1)
 //
+// IMPLEMENTED_OWNER: точное тело состоит из единственного `ret`; Rust не
+// материализует пустой ABI-вызов и тем самым сохраняет отсутствие эффекта.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
