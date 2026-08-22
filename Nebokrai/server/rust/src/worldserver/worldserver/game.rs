@@ -6391,6 +6391,27 @@ pub(crate) struct WorldGlobeVariablesDelivery {
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
+/// Наблюдаемый результат свободного owner-а `SendErrLog`.
+///
+/// Исходная функция возвращала `void` и игнорировала результат `CMessage::Send`;
+/// он сохранён здесь только для вызывающего Rust owner-а и не меняет её порядок
+/// или внешний wire-контракт.
+#[derive(Debug)]
+pub(crate) enum WorldErrorLogDelivery {
+    /// Nullable `char*` был нулевым: сообщение даже не создаётся.
+    SkippedNullText,
+    /// Пакет `0x1FE08` целиком поставлен текущему LoginServer без priority.
+    Sent {
+        message_type: i8,
+        server_ip: i32,
+        world_id: i32,
+        /// Видимая до первого NUL часть исходной C-строки.
+        text: Vec<u8>,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
 /// Точная достигнутая семантика полей исходного `CGame::tagLoginPlayer`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct WorldLoginPlayerEntry {
@@ -14449,6 +14470,45 @@ impl CGame {
         self.net_client.as_mut()
     }
 
+    /// Воспроизводит свободный `SendErrLog`: `0x1FE08 + char + long + long + C-string`.
+    ///
+    /// Nullable text сохраняет исходный ранний return. Внутренние bytes после
+    /// первого NUL не принадлежат старой C-строке и не входят в wire; отсутствие
+    /// Login owner сохраняет обычный результат `CMessage::Send == 0`.
+    pub(crate) fn send_err_log(
+        &self,
+        message_type: i8,
+        server_ip: i32,
+        world_id: i32,
+        text: Option<&[u8]>,
+    ) -> WorldErrorLogDelivery {
+        let Some(text) = text else {
+            return WorldErrorLogDelivery::SkippedNullText;
+        };
+        let text = &text[..text.iter().position(|byte| *byte == 0).unwrap_or(text.len())];
+
+        let mut message = CMessage::new(0x0001_FE08);
+        message.base_mut().add_char(message_type);
+        message.base_mut().add_long(server_ip);
+        message.base_mut().add_long(world_id);
+        message.base_mut().add(text);
+        message.base_mut().add_char(0);
+        let wire = message.as_wire_bytes().to_vec();
+        let delivery = message.send(
+            self.current_login_client().map(CMyNetClient::send_queue),
+            false,
+        );
+
+        WorldErrorLogDelivery::Sent {
+            message_type,
+            server_ip,
+            world_id,
+            text: text.to_vec(),
+            wire,
+            delivery,
+        }
+    }
+
     /// Возвращает producer handle текущего nullable GameServer owner-а.
     pub(crate) fn current_game_server_sender(&self) -> Option<ServerCommandHandle> {
         self.net_server.as_ref().map(CMyNetServer::command_handle)
@@ -21272,7 +21332,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: SendErrLog
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5399
@@ -21280,6 +21340,10 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 00401f30
 // PROTOTYPE: void __cdecl SendErrLog(char param_1, long param_2, long param_3, char * param_4)
 //
+// IMPLEMENTED_OWNER: `CGame::send_err_log` выше. `Option<&[u8]>` заменяет
+// nullable pointer, bytes до первого NUL — старую C-строку, а `CMessage`/
+// current Login owner — process-global send без Win32 lifetime. Exact opcode,
+// signed поля, NUL, неприоритетный send и игнорирование send-result сохранены.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
