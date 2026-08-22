@@ -1195,7 +1195,7 @@ use crate::public::timer::{
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::godsbattleconf::CGodsBattleConf;
 use crate::setup::leitingsetup::{CThingSetup, ThingSetupCodecError};
-use crate::setup::playerlist::CPlayerList;
+use crate::setup::playerlist::{CPlayerList, PlayerListFormatError, PlayerListSerializeError};
 use crate::setup::regionrouter::RegionRouter;
 use crate::public::tools::{ini_decode, put_string_to_file};
 use crate::transport::bind_tcp_ipv4;
@@ -4195,9 +4195,6 @@ pub(crate) struct WorldReloadProfileFlags {
 /// Прямой соседний owner, который `CGame::ReLoad` вызывал с boolean-result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldReloadBooleanOwner {
-    PlayerList,
-    PlayerExpList,
-    PlayerPropertiesUpgrade,
     GoodsList,
     MonsterList,
     DropGoodsList,
@@ -4242,7 +4239,6 @@ pub(crate) enum WorldReloadVoidOwner {
 /// Владелец точного payload, который следует за успешной reload-операцией.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldReloadSerializationOwner {
-    PlayerList,
     GoodsList,
     MonsterList,
     SkillList,
@@ -4293,6 +4289,11 @@ pub(crate) type WorldReloadOneScriptResult = Result<bool, WorldReloadOneScriptBl
 /// Resource/domain границы, непосредственно вызываемые готовым `CGame::ReLoad`.
 pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn load_reload_server_resources(&mut self, game: &mut CGame);
+    /// Отдельный mutable owner исторических static `CPlayerList` data.
+    ///
+    /// Он остаётся вне `CGame`, поскольку тот же экземпляр участвует в
+    /// create-role и DB-load runtime; это исключает расходящиеся config копии.
+    fn player_list(&mut self) -> &mut CPlayerList;
     /// Возвращает исходный 32-битный result; bool owners обязаны дать `0/1`.
     fn call_boolean_owner(&mut self, owner: WorldReloadBooleanOwner) -> u32;
     fn call_void_owner(&mut self, owner: WorldReloadVoidOwner);
@@ -5875,6 +5876,8 @@ pub(crate) enum WorldReloadBlock {
     ThingSetupCodec(ThingSetupCodecError),
     EmotionFormat(EmotionFormatError),
     EmotionSerialization(EmotionSerializeError),
+    PlayerListFormat(PlayerListFormatError),
+    PlayerListSerialization(PlayerListSerializeError),
     EquipmentComposeSerialization(EquipmentComposeSerializeError),
     CiQingSerialization(CiQingSerializationBlock),
     TaoZhuangSerialization(TaoZhuangSerializationBlock),
@@ -7585,34 +7588,91 @@ impl CGame {
 
         match profile {
             WorldReloadProfile::PlayerList => {
-                let player = context.call_boolean_owner(WorldReloadBooleanOwner::PlayerList);
-                context.add_log_text(if player != 0 {
+                const PLAYER_LIST_PATH: &[u8] = b"data/playerlist.ini";
+                const ORIGIN_EQUIPMENT_PATH: &[u8] = b"data/playerOrginEquip.ini";
+                const EXPERIENCE_PATH: &[u8] = b"data/playerExp.ini";
+                const UPGRADES_PATH: &[u8] = b"data/playerPropertiesUpgrade.ini";
+
+                // `LoadPlayerList` открывает второй файл только после успешного
+                // первого. Каждая missing-file ветвь сохраняет exact clear scope.
+                let player = match context.read_resource(PLAYER_LIST_PATH) {
+                    Some(source) => {
+                        context
+                            .player_list()
+                            .load_player_properties_from_bytes(&source)
+                            .map_err(WorldReloadBlock::PlayerListFormat)?;
+                        match context.read_resource(ORIGIN_EQUIPMENT_PATH) {
+                            Some(source) => {
+                                context
+                                    .player_list()
+                                    .load_origin_equipment_from_bytes(&source)
+                                    .map_err(WorldReloadBlock::PlayerListFormat)?;
+                                true
+                            }
+                            None => {
+                                context.player_list().clear_origin_equipment();
+                                false
+                            }
+                        }
+                    }
+                    None => {
+                        context.player_list().clear_player_properties();
+                        false
+                    }
+                };
+                context.add_log_text(if player {
                     b"Load PlayerList playerOrginEquip.ini...OK!"
                 } else {
                     b"Load PlayerList playerOrginEquip.ini...FAILED!"
                 });
-                let experience = context.call_boolean_owner(WorldReloadBooleanOwner::PlayerExpList);
-                context.add_log_text(if player & experience != 0 {
+                let experience = match context.read_resource(EXPERIENCE_PATH) {
+                    Some(source) => {
+                        context
+                            .player_list()
+                            .load_player_experience_from_bytes(&source)
+                            .map_err(WorldReloadBlock::PlayerListFormat)?;
+                        true
+                    }
+                    None => {
+                        context.player_list().clear_player_experience();
+                        false
+                    }
+                };
+                context.add_log_text(if player & experience {
                     b"Load PlayerExpList playerExp.ini...OK!"
                 } else {
                     b"Load PlayerExpList playerExp.ini...FAILED!"
                 });
-                let properties =
-                    context.call_boolean_owner(WorldReloadBooleanOwner::PlayerPropertiesUpgrade);
-                let player_complete = player & experience & properties != 0;
+                let properties = match context.read_resource(UPGRADES_PATH) {
+                    Some(source) => {
+                        let string_table = self.string_table.table();
+                        context
+                            .player_list()
+                            .load_properties_upgrades_from_bytes(&source, &mut |key| {
+                                string_table.get_string_by_id(key).map(ToOwned::to_owned)
+                            })
+                            .map_err(WorldReloadBlock::PlayerListFormat)?;
+                        true
+                    }
+                    None => {
+                        context.player_list().clear_properties_upgrades();
+                        false
+                    }
+                };
+                let player_complete = player & experience & properties;
                 context.add_log_text(if player_complete {
                     b"Load playerPropertiesUpgrade.ini...OK!"
                 } else {
                     b"Load Player Property Upgrade List playerPropertiesUpgrade.ini...FAILED!"
                 });
                 if player_complete && send_to_game_servers {
-                    self.serialize_reload_owner(
-                        context,
-                        WorldReloadSerializationOwner::PlayerList,
-                        1,
-                        true,
-                        &mut legacy_result,
-                    );
+                    let mut payload = Vec::new();
+                    context
+                        .player_list()
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::PlayerListSerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(1, &payload);
                 }
                 let emotion = match context.read_resource(b"data/Emotions.ini") {
                     Some(source) => self

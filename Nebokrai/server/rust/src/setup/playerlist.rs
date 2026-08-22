@@ -1,9 +1,10 @@
 //! Базовые свойства игрока и progression setup исторического Miracle.
 //!
-//! Статус World `CPlayerList::AddToByteArray` RVA `0x0002C4D0` и
-//! `GetPropertiesUpgrade` RVA `0x0002CAE0`: `IMPLEMENTED`; loaders, остальные
-//! lookup-ы и Game decoder ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Статус World `CPlayerList::AddToByteArray` RVA `0x0002C4D0`,
+//! `GetPropertiesUpgrade` RVA `0x0002CAE0`, `LoadPlayerList` RVA `0x0002DD20`,
+//! `LoadPlayerExpList` RVA `0x0002E290` и `LoadPlayerProperitiesUpgrade` RVA
+//! `0x0002E710`: `IMPLEMENTED`; остальные lookup-ы и Game decoder ниже
+//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -36,10 +37,22 @@
 //! только для occupation `0/1/2`, передаёт `find` второй аргумент level и
 //! копирует найденный mapped value; отсутствующий level либо иной occupation
 //! возвращает `0` без вставки.
+//! `LoadPlayerList` сначала очищает property map, загружает `playerlist.ini`,
+//! затем очищает origin-equipment list и загружает `playerOrginEquip.ini`.
+//! Поэтому отсутствие первого файла сохраняет прежний equipment list, а
+//! отсутствие второго оставляет новый property map и пустой equipment list.
+//! `LoadPlayerExpList` и `LoadPlayerProperitiesUpgrade` очищают свои owners до
+//! открытия файла. Форматные ошибки старого formatted extraction могли
+//! использовать неинициализированные locals; Rust прекращает загрузку с typed
+//! error, сохраняя только уже материализованный prefix state.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+use std::io;
+use std::path::Path;
+
+use crate::public::readwrite::read_to;
 
 /// Содержимое одного исходного 88-байтового player-property record.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -145,6 +158,214 @@ impl CPlayerList {
         &self.origin_equipment
     }
 
+    /// Очищает только exact `m_mapPlayerList` до открытия `playerlist.ini`.
+    pub(crate) fn clear_player_properties(&mut self) {
+        self.player_properties.clear();
+    }
+
+    /// Очищает только exact `m_listOrginEquip` перед вторым resource-open.
+    pub(crate) fn clear_origin_equipment(&mut self) {
+        self.origin_equipment.clear();
+    }
+
+    /// Очищает только exact vector `m_vectorPlayerExp`.
+    pub(crate) fn clear_player_experience(&mut self) {
+        self.player_experience.clear();
+    }
+
+    /// Очищает все три static map `PropertiesUpgrade` до открытия файла.
+    pub(crate) fn clear_properties_upgrades(&mut self) {
+        self.fighter_upgrades.clear();
+        self.hunter_upgrades.clear();
+        self.taoist_upgrades.clear();
+    }
+
+    /// Загружает первую половину `LoadPlayerList` после успешного resource-open.
+    pub(crate) fn load_player_properties_from_bytes(
+        &mut self,
+        source: &[u8],
+    ) -> Result<usize, PlayerListFormatError> {
+        self.clear_player_properties();
+        let mut tokens = tokens(source);
+        let mut loaded = 0;
+        while read_to(&mut tokens, b"*") {
+            let occupation_token = read_i32(&mut tokens, "occupation")?;
+            let sex_token = read_i32(&mut tokens, "sex")?;
+            let occupation = u8::try_from(occupation_token)
+                .ok()
+                .filter(|value| *value < 3)
+                .ok_or(PlayerListFormatError::InvalidOccupation(occupation_token))?;
+            let sex = u8::try_from(sex_token)
+                .ok()
+                .filter(|value| *value <= 1)
+                .ok_or(PlayerListFormatError::InvalidSex(sex_token))?;
+
+            let properties = PlayerBaseProperties {
+                occupation,
+                sex,
+                hot_hit: read_u32(&mut tokens, "hot hit")?,
+                remain_point: read_u16(&mut tokens, "remain point")?,
+                yp: 0,
+                hp: 0,
+                mp: 0,
+                rp: 0,
+                base_maximum_hp: read_u32(&mut tokens, "base maximum HP")?,
+                base_maximum_mp: read_u32(&mut tokens, "base maximum MP")?,
+                base_maximum_yp: read_u16(&mut tokens, "base maximum YP")?,
+                base_maximum_rp: read_u16(&mut tokens, "base maximum RP")?,
+                base_strength: read_u32(&mut tokens, "base strength")?,
+                base_dexterity: read_u32(&mut tokens, "base dexterity")?,
+                base_constitution: read_u32(&mut tokens, "base constitution")?,
+                base_intelligence: read_u32(&mut tokens, "base intelligence")?,
+                base_minimum_attack: read_u32(&mut tokens, "base minimum attack")?,
+                base_maximum_attack: read_u32(&mut tokens, "base maximum attack")?,
+                base_hit: read_u16(&mut tokens, "base hit")?,
+                base_burden: read_u16(&mut tokens, "base burden")?,
+                base_cch: read_u16(&mut tokens, "base CCH")?,
+                base_defence: read_u32(&mut tokens, "base defence")?,
+                base_dodge: read_u16(&mut tokens, "base dodge")?,
+                base_attack_speed: read_u16(&mut tokens, "base attack speed")?,
+                base_element_resistant: read_u32(&mut tokens, "base element resistance")?,
+                base_hp_recover_speed: read_u16(&mut tokens, "base HP recovery speed")?,
+                base_mp_recover_speed: read_u16(&mut tokens, "base MP recovery speed")?,
+                constitution_to_maximum_hp: read_u16(&mut tokens, "constitution to HP")?,
+                intelligence_to_maximum_mp: read_u16(&mut tokens, "intelligence to MP")?,
+            };
+            let properties = PlayerBaseProperties {
+                hp: properties.base_maximum_hp,
+                mp: properties.base_maximum_mp,
+                ..properties
+            };
+            let key = u32::from(sex) + u32::from(occupation) * 2;
+            self.player_properties.insert(key, properties);
+            loaded += 1;
+        }
+        Ok(loaded)
+    }
+
+    /// Загружает вторую половину `LoadPlayerList` после успешного resource-open.
+    pub(crate) fn load_origin_equipment_from_bytes(
+        &mut self,
+        source: &[u8],
+    ) -> Result<usize, PlayerListFormatError> {
+        self.clear_origin_equipment();
+        let mut tokens = tokens(source);
+        while read_to(&mut tokens, b"*") {
+            let occupation = read_i32(&mut tokens, "origin equipment occupation")?;
+            let place_position = read_u16(&mut tokens, "origin equipment position")?;
+            let original_name = next_token(&mut tokens, "origin equipment original name")?.to_vec();
+            self.origin_equipment.push(PlayerOriginEquipment {
+                occupation: occupation as u8,
+                place_position,
+                original_name,
+            });
+        }
+        Ok(self.origin_equipment.len())
+    }
+
+    /// Выполняет обе уже открытые части exact `LoadPlayerList` в порядке EXE.
+    pub(crate) fn load_player_list_from_bytes(
+        &mut self,
+        player_list_source: &[u8],
+        origin_equipment_source: &[u8],
+    ) -> Result<PlayerListLoadReport, PlayerListFormatError> {
+        let player_properties = self.load_player_properties_from_bytes(player_list_source)?;
+        let origin_equipment = self.load_origin_equipment_from_bytes(origin_equipment_source)?;
+        Ok(PlayerListLoadReport {
+            player_properties,
+            origin_equipment,
+        })
+    }
+
+    /// File-adapter `LoadPlayerList`, сохраняющий clear-before-open transition.
+    pub(crate) fn load_player_list_from_files(
+        &mut self,
+        player_list_path: impl AsRef<Path>,
+        origin_equipment_path: impl AsRef<Path>,
+    ) -> Result<PlayerListLoadReport, PlayerListFileLoadError> {
+        self.clear_player_properties();
+        let player_list_source = std::fs::read(player_list_path).map_err(PlayerListFileLoadError::Io)?;
+        let player_properties = self
+            .load_player_properties_from_bytes(&player_list_source)
+            .map_err(PlayerListFileLoadError::Format)?;
+        self.clear_origin_equipment();
+        let origin_equipment_source =
+            std::fs::read(origin_equipment_path).map_err(PlayerListFileLoadError::Io)?;
+        let origin_equipment = self
+            .load_origin_equipment_from_bytes(&origin_equipment_source)
+            .map_err(PlayerListFileLoadError::Format)?;
+        Ok(PlayerListLoadReport {
+            player_properties,
+            origin_equipment,
+        })
+    }
+
+    /// Выполняет `LoadPlayerExpList`: level token читается, но не хранится.
+    pub(crate) fn load_player_experience_from_bytes(
+        &mut self,
+        source: &[u8],
+    ) -> Result<usize, PlayerListFormatError> {
+        self.clear_player_experience();
+        let mut tokens = tokens(source);
+        while read_to(&mut tokens, b"#") {
+            let _level = read_u32(&mut tokens, "experience level")?;
+            self.player_experience
+                .push(read_u32(&mut tokens, "experience value")?);
+        }
+        Ok(self.player_experience.len())
+    }
+
+    /// File-adapter `LoadPlayerExpList` с очисткой до открытия файла.
+    pub(crate) fn load_player_experience_from_file(
+        &mut self,
+        path: impl AsRef<Path>,
+    ) -> Result<usize, PlayerListFileLoadError> {
+        self.clear_player_experience();
+        let source = std::fs::read(path).map_err(PlayerListFileLoadError::Io)?;
+        self.load_player_experience_from_bytes(&source)
+            .map_err(PlayerListFileLoadError::Format)
+    }
+
+    /// Выполняет три последовательных блока `LoadPlayerProperitiesUpgrade`.
+    ///
+    /// `StringTable::getStringByID` в EXE подменял отсутствующий key пустой
+    /// строкой. Closure получает byte-exact key и возвращает локализованный
+    /// текст либо `None` для того же результата.
+    pub(crate) fn load_properties_upgrades_from_bytes<ResolveNotification>(
+        &mut self,
+        source: &[u8],
+        resolve_notification: &mut ResolveNotification,
+    ) -> Result<PlayerPropertiesUpgradeLoadReport, PlayerListFormatError>
+    where
+        ResolveNotification: FnMut(&[u8]) -> Option<Vec<u8>>,
+    {
+        self.clear_properties_upgrades();
+        let mut tokens = tokens(source);
+        let fighter = load_upgrade_block(&mut tokens, &mut self.fighter_upgrades, resolve_notification)?;
+        let hunter = load_upgrade_block(&mut tokens, &mut self.hunter_upgrades, resolve_notification)?;
+        let taoist = load_upgrade_block(&mut tokens, &mut self.taoist_upgrades, resolve_notification)?;
+        Ok(PlayerPropertiesUpgradeLoadReport {
+            fighter,
+            hunter,
+            taoist,
+        })
+    }
+
+    /// File-adapter `LoadPlayerProperitiesUpgrade` с очисткой до resource-open.
+    pub(crate) fn load_properties_upgrades_from_file<ResolveNotification>(
+        &mut self,
+        path: impl AsRef<Path>,
+        resolve_notification: &mut ResolveNotification,
+    ) -> Result<PlayerPropertiesUpgradeLoadReport, PlayerListFileLoadError>
+    where
+        ResolveNotification: FnMut(&[u8]) -> Option<Vec<u8>>,
+    {
+        self.clear_properties_upgrades();
+        let source = std::fs::read(path).map_err(PlayerListFileLoadError::Io)?;
+        self.load_properties_upgrades_from_bytes(&source, resolve_notification)
+            .map_err(PlayerListFileLoadError::Format)
+    }
+
     /// Выполняет exact create-role `map::operator[]` lookup.
     pub(crate) fn creation_properties(
         &mut self,
@@ -204,6 +425,179 @@ impl CPlayerList {
         append_upgrade_map(destination, "taoist upgrade map", &self.taoist_upgrades)?;
         Ok(())
     }
+}
+
+/// Количество полностью применённых записей обеих частей `LoadPlayerList`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerListLoadReport {
+    pub(crate) player_properties: usize,
+    pub(crate) origin_equipment: usize,
+}
+
+/// Количество записей трёх fixed-order upgrade blocks.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerPropertiesUpgradeLoadReport {
+    pub(crate) fighter: usize,
+    pub(crate) hunter: usize,
+    pub(crate) taoist: usize,
+}
+
+/// Safe граница formatted extraction старого text owner-а.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerListFormatError {
+    UnexpectedEnd { field: &'static str },
+    InvalidUnsignedLong { field: &'static str, token: Vec<u8> },
+    InvalidOccupation(i32),
+    InvalidSex(i32),
+    MissingUpgradeBlock { block: &'static str },
+}
+
+impl fmt::Display for PlayerListFormatError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd { field } => write!(formatter, "отсутствует поле {field}"),
+            Self::InvalidUnsignedLong { field, token } => write!(
+                formatter,
+                "поле {field} не является подходящим unsigned long: {}",
+                String::from_utf8_lossy(token)
+            ),
+            Self::InvalidOccupation(value) => write!(formatter, "недопустимая occupation {value}"),
+            Self::InvalidSex(value) => write!(formatter, "недопустимый sex {value}"),
+            Self::MissingUpgradeBlock { block } => {
+                write!(formatter, "отсутствует маркер блока upgrade {block}")
+            }
+        }
+    }
+}
+
+impl Error for PlayerListFormatError {}
+
+/// Ошибка filesystem adapter-а, не смешивающая IO и format границы.
+#[derive(Debug)]
+pub(crate) enum PlayerListFileLoadError {
+    Io(io::Error),
+    Format(PlayerListFormatError),
+}
+
+impl fmt::Display for PlayerListFileLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => error.fmt(formatter),
+            Self::Format(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for PlayerListFileLoadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Format(error) => Some(error),
+        }
+    }
+}
+
+fn tokens(source: &[u8]) -> impl Iterator<Item = &[u8]> {
+    source
+        .split(u8::is_ascii_whitespace)
+        .filter(|token| !token.is_empty())
+}
+
+fn load_upgrade_block<'source, ResolveNotification>(
+    tokens: &mut impl Iterator<Item = &'source [u8]>,
+    upgrades: &mut PlayerPropertiesUpgradeMap,
+    resolve_notification: &mut ResolveNotification,
+) -> Result<usize, PlayerListFormatError>
+where
+    ResolveNotification: FnMut(&[u8]) -> Option<Vec<u8>>,
+{
+    if !read_to(tokens, b"*") {
+        return Err(PlayerListFormatError::MissingUpgradeBlock { block: "properties" });
+    }
+    let count = read_u32(tokens, "upgrade count")?;
+    let mut applied = 0;
+    for _ in 0..count {
+        let level = read_u32(tokens, "upgrade level")?;
+        let properties = PlayerPropertiesUpgrade {
+            base_maximum_hp: read_u32(tokens, "upgrade base maximum HP")?,
+            base_maximum_mp: read_u32(tokens, "upgrade base maximum MP")?,
+            base_strength: read_u32(tokens, "upgrade base strength")?,
+            base_dexterity: read_u32(tokens, "upgrade base dexterity")?,
+            base_constitution: read_u32(tokens, "upgrade base constitution")?,
+            base_intelligence: read_u32(tokens, "upgrade base intelligence")?,
+            base_burden: read_u16(tokens, "upgrade base burden")?,
+            notification: resolve_notification(next_token(tokens, "upgrade notification key")?)
+                .unwrap_or_default(),
+        };
+        upgrades.insert(level, properties);
+        applied += 1;
+    }
+    Ok(applied)
+}
+
+fn next_token<'source>(
+    tokens: &mut impl Iterator<Item = &'source [u8]>,
+    field: &'static str,
+) -> Result<&'source [u8], PlayerListFormatError> {
+    tokens
+        .next()
+        .ok_or(PlayerListFormatError::UnexpectedEnd { field })
+}
+
+fn read_i32<'source>(
+    tokens: &mut impl Iterator<Item = &'source [u8]>,
+    field: &'static str,
+) -> Result<i32, PlayerListFormatError> {
+    let token = next_token(tokens, field)?;
+    let text = std::str::from_utf8(token).map_err(|_| PlayerListFormatError::InvalidUnsignedLong {
+        field,
+        token: token.to_vec(),
+    })?;
+    text.parse::<i32>()
+        .map_err(|_| PlayerListFormatError::InvalidUnsignedLong {
+            field,
+            token: token.to_vec(),
+        })
+}
+
+fn read_u32<'source>(
+    tokens: &mut impl Iterator<Item = &'source [u8]>,
+    field: &'static str,
+) -> Result<u32, PlayerListFormatError> {
+    let token = next_token(tokens, field)?;
+    let text = std::str::from_utf8(token).map_err(|_| PlayerListFormatError::InvalidUnsignedLong {
+        field,
+        token: token.to_vec(),
+    })?;
+    text.parse::<u32>()
+        .map_err(|_| PlayerListFormatError::InvalidUnsignedLong {
+            field,
+            token: token.to_vec(),
+        })
+}
+
+fn read_u16<'source>(
+    tokens: &mut impl Iterator<Item = &'source [u8]>,
+    field: &'static str,
+) -> Result<u16, PlayerListFormatError> {
+    let token = next_token(tokens, field)?;
+    let value = parse_u32(token, field)?;
+    u16::try_from(value).map_err(|_| PlayerListFormatError::InvalidUnsignedLong {
+        field,
+        token: token.to_vec(),
+    })
+}
+
+fn parse_u32(token: &[u8], field: &'static str) -> Result<u32, PlayerListFormatError> {
+    let text = std::str::from_utf8(token).map_err(|_| PlayerListFormatError::InvalidUnsignedLong {
+        field,
+        token: token.to_vec(),
+    })?;
+    text.parse::<u32>()
+        .map_err(|_| PlayerListFormatError::InvalidUnsignedLong {
+            field,
+            token: token.to_vec(),
+        })
 }
 
 /// Безопасная граница размера старого signed `long` count.
@@ -560,7 +954,9 @@ fn append_legacy_string(destination: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CPlayerList::LoadPlayerList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// IMPLEMENTED_OWNER: `CPlayerList::load_player_properties_from_bytes`,
+// `load_origin_equipment_from_bytes` и filesystem adapter выше.
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\playerlist.cpp:37
@@ -574,7 +970,9 @@ fn append_legacy_string(destination: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CPlayerList::LoadPlayerExpList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// IMPLEMENTED_OWNER: `CPlayerList::load_player_experience_from_bytes` и
+// filesystem adapter выше.
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\playerlist.cpp:212
@@ -588,7 +986,9 @@ fn append_legacy_string(destination: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CPlayerList::LoadPlayerProperitiesUpgrade
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// IMPLEMENTED_OWNER: `CPlayerList::load_properties_upgrades_from_bytes` и
+// filesystem adapter выше.
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\playerlist.cpp:146
