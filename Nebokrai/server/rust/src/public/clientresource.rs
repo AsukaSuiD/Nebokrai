@@ -19,6 +19,9 @@ use crate::public::package::PackageArchive;
 use crate::public::package::PackageReadError;
 use crate::public::rfile::{CRFile, RFileResource, rf_open};
 
+/// Безусловный `AddLogText` exact `CGame::LoadServerResource`.
+pub(crate) const LOAD_SERVER_RESOURCE_SUCCESS_LOG: &[u8] = b"Load package file OK!";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ClientResourceReadError {
     MissingPackage { package_type: u32 },
