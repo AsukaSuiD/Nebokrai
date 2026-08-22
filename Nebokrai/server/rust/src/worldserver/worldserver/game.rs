@@ -1206,11 +1206,16 @@ use crate::dbaccess::worlddb::dbmisc::{
 use crate::dbaccess::worlddb::largess::{
     LargessOwner, LoadLargessBlock, LoadLargessReport, TiberiusLargess,
 };
-use crate::dbaccess::worlddb::playerdataqueue::{CPlayerDataQueue, PlayerDataQueueEntry};
-use crate::dbaccess::worlddb::playerloadqueue::{
-    CPlayerLoadQueue, PLAYER_LOAD_CDKEY_CAPACITY, PlayerLoadPushOutcome, PlayerLoadQueueEntry,
+use crate::dbaccess::worlddb::playerdataqueue::{
+    CPlayerDataQueue, PlayerDataQueueEntry,
 };
-use crate::dbaccess::worlddb::rsenemyfactions::{EnemyFactionSaveSnapshot, RsEnemyFactionsOwner};
+use crate::dbaccess::worlddb::playerloadqueue::{
+    CPlayerLoadQueue, PLAYER_LOAD_CDKEY_CAPACITY, PlayerLoadPushOutcome,
+    PlayerLoadQueueEntry,
+};
+use crate::dbaccess::worlddb::rsenemyfactions::{
+    EnemyFactionSaveSnapshot, RsEnemyFactionsOwner,
+};
 use crate::dbaccess::worlddb::rsfaction::RsFactionOwner;
 use crate::dbaccess::worlddb::rsgenvar::{GenVarLoadOutcome, RsGenVarOwner};
 use crate::dbaccess::worlddb::rsgodsbattle::{
@@ -1224,7 +1229,8 @@ use crate::dbaccess::worlddb::rsplayer::{
 };
 use crate::dbaccess::worlddb::rsregion::{RegionSaveSnapshot, RsRegionOwner};
 use crate::dbaccess::worlddb::rssetup::{
-    LoadedSetupIds, RsSetupOwner, WorldDatabaseSettings, WorldDatabaseSettingsParts, WorldTdsClient,
+    LoadedSetupIds, RsSetupOwner, WorldDatabaseSettings, WorldDatabaseSettingsParts,
+    WorldTdsClient,
 };
 use crate::dbaccess::worlddb::rsunion::RsUnionOwner;
 use crate::dbaccess::worlddb::writelogqueue::WorldWriteLogQueue;
@@ -1234,69 +1240,84 @@ use crate::nets::networld::message::{CMessage, SendMessageError, WorldMessageHan
 use crate::nets::networld::mynetclient::CMyNetClient;
 use crate::nets::networld::mynetserver::{CMyNetServer, WorldServerEvent};
 use crate::nets::servers::{ServerCommandHandle, ServerHostError};
-use crate::public::auctionlog::{AuctionBangUpdateOutcome, AuctionLogLoadOutcome, CAuctionLog};
+use crate::public::auctionlog::{
+    AuctionBangUpdateOutcome, AuctionLogLoadOutcome, CAuctionLog,
+};
 use crate::public::ciqing::{CCiQingSetup, CiQingSerializationBlock};
 use crate::public::clientresource::{
     DefaultClientResourceOwner, DefaultClientResourceReplacement, LOAD_SERVER_RESOURCE_SUCCESS_LOG,
 };
-use crate::public::dakongxiangqian::{CDaKongXiangQian, DaKongSerializeError};
 use crate::public::date::TagTime;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
-use crate::public::equipmentcomposelist::{EquipmentComposeList, EquipmentComposeSerializeError};
-use crate::public::mystringtable::MyStringTable;
-use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
-use crate::public::readwrite::read_to;
+use crate::public::equipmentcomposelist::{
+    EquipmentComposeList, EquipmentComposeSerializeError,
+};
 use crate::public::taozhuangsetup::{CTaoZhuangSetup, TaoZhuangSerializationBlock};
-use crate::public::timer::{
-    AsyncTimerCallbackDisposition, AsyncTimerCallbackHandler, AsyncTimerRunBlock, CTimer,
-    CalendarTimerRegistration, TimerCallbackInvocation, TimerCallbackSource, TimerId,
-    TimerRunReport,
-};
-use crate::public::tools::{ini_decode, put_string_to_file};
-use crate::public::wordsfilter::CWordsFilter;
-use crate::setup::cbattlefairyexpconfig::{BattleFairyExpSerializeError, CBattleFairyExpConfig};
-use crate::setup::changebody::{CChangeBodyConf, ChangeBodySerializeError};
-use crate::setup::contributesetup::{
-    CContributeSetup, ContributeSetupFormatError, ContributeSetupSerializeError,
-};
-use crate::setup::emotion::{CEmotion, EmotionFormatError, EmotionSerializeError};
-use crate::setup::fairyexpconf::CFairyExpConf;
-use crate::setup::globesetup::GlobeSetupSnapshot;
-use crate::setup::godsbattleconf::CGodsBattleConf;
-use crate::setup::goodsdestructionconfig::{
-    GoodsDestroyFormatError, GoodsDestroySerializeError, GoodsDestroySetup,
+use crate::public::dakongxiangqian::{
+    CDaKongXiangQian, DaKongSerializeError,
 };
 use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelFormatError, HitLevelSerializeError};
 use crate::setup::honorelimilateconfig::HonorElimilateConfig;
+use crate::setup::contributesetup::{
+    CContributeSetup, ContributeSetupFormatError, ContributeSetupSerializeError,
+};
+use crate::setup::cbattlefairyexpconfig::{BattleFairyExpSerializeError, CBattleFairyExpConfig};
+use crate::setup::changebody::{
+    CChangeBodyConf, ChangeBodySerializeError,
+};
+use crate::setup::emotion::{CEmotion, EmotionFormatError, EmotionSerializeError};
+use crate::setup::fairyexpconf::CFairyExpConf;
+use crate::setup::goodsdestructionconfig::{
+    GoodsDestroyFormatError, GoodsDestroySerializeError, GoodsDestroySetup,
+};
 use crate::setup::incrementshoplist::{
     CIncrementShopList, IncrementShopGoodsQuery, IncrementShopGoodsResult,
     IncrementShopSerializeError,
 };
-use crate::setup::leitingsetup::{CThingSetup, ThingSetupCodecError};
-use crate::setup::lingbao::{CLingBaoSetup, LingBaoSerializationBlock};
-use crate::setup::newskillmonsterlist::{NewSkillMonsterConf, NewSkillMonsterSerializeError};
-use crate::setup::playerlist::{CPlayerList, PlayerListFormatError, PlayerListSerializeError};
-use crate::setup::preciousboxconf::{PreciousBoxConf, PreciousBoxSerializeError};
 use crate::setup::prisonconf::{PrisonConf, PrisonConfFormatError, PrisonConfSerializeError};
 use crate::setup::questsystem::{CQuestSystem, QuestSystemLoadReport};
-use crate::setup::regionrouter::RegionRouter;
+use crate::setup::tradelist::{CTradeList, TradeListFormatError, TradeListSerializeError};
+use crate::public::mystringtable::MyStringTable;
+use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
+use crate::public::wordsfilter::CWordsFilter;
+use crate::public::readwrite::read_to;
+use crate::public::timer::{
+    AsyncTimerCallbackDisposition, AsyncTimerCallbackHandler, AsyncTimerRunBlock,
+    CalendarTimerRegistration, CTimer, TimerCallbackInvocation, TimerCallbackSource, TimerId,
+    TimerRunReport,
+};
+use crate::setup::globesetup::GlobeSetupSnapshot;
+use crate::setup::godsbattleconf::CGodsBattleConf;
+use crate::setup::leitingsetup::{CThingSetup, ThingSetupCodecError};
+use crate::setup::lingbao::{CLingBaoSetup, LingBaoSerializationBlock};
+use crate::setup::newskillmonsterlist::{
+    NewSkillMonsterConf, NewSkillMonsterSerializeError,
+};
+use crate::setup::playerlist::{CPlayerList, PlayerListFormatError, PlayerListSerializeError};
+use crate::setup::preciousboxconf::{
+    PreciousBoxConf, PreciousBoxSerializeError,
+};
 use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};
+use crate::setup::regionrouter::RegionRouter;
 use crate::setup::timetoreturn::{
     TimeToReturn, TimeToReturnCallbacks, TimeToReturnLoadError, TimeToReturnLoadReport,
 };
-use crate::setup::tradelist::{CTradeList, TradeListFormatError, TradeListSerializeError};
+use crate::public::tools::{ini_decode, put_string_to_file};
 use crate::transport::bind_tcp_ipv4;
 use crate::worldserver::appworld::country::country::{
     CountryAbsolveCounterReset, CountryExileMessageDelivery, CountryExileResultContext,
-    CountryExileTarget, CountryExileTextArgument, CountryFactionSnapshot,
-    CountryGovernanceContextBlock, CountryKingSaveLimits, CountryNewTermContext,
-    CountryOnlinePlayer, CountryPlayersListContext, CountryPlayersListContextBlock,
-    CountrySetNewDayContext, CountryVillageTaxContext, CountryVillageTaxContextBlock,
-    CountryVillageTaxRegion,
+    CountryExileTarget, CountryExileTextArgument, CountryFactionSnapshot, CountryNewTermContext,
+    CountrySetNewDayContext,
+    CountryGovernanceContextBlock, CountryKingSaveLimits, CountryOnlinePlayer,
+    CountryPlayersListContext, CountryPlayersListContextBlock,
+    CountryVillageTaxContext, CountryVillageTaxContextBlock, CountryVillageTaxRegion,
+};
+use crate::worldserver::appworld::goods::cbattlefairyproperty::{
+    BattleFairyComposeWireError, CBattleFairyProperty,
 };
 use crate::worldserver::appworld::country::countryhandler::{
-    CCountryHandler, CountryHandlerInitializeReport, CountryInfoDeliveryContext, CountryRunBlock,
-    CountryRunReport,
+    CCountryHandler, CountryHandlerInitializeReport, CountryInfoDeliveryContext,
+    CountryRunBlock, CountryRunReport,
 };
 use crate::worldserver::appworld::country::countryparam::{
     CCountryParam, CountryParamLoadError, CountryParamLoadReport,
@@ -1310,42 +1331,55 @@ use crate::worldserver::appworld::country::countrywarsys::{
     CountryWarTopInfoContext, CountryWarTopInfoKind, CountryWarTopInfoReport,
     CountryWarVictoryContext, CountryWarVictoryRegion,
 };
-use crate::worldserver::appworld::goods::cbattlefairyproperty::{
-    BattleFairyComposeWireError, CBattleFairyProperty,
-};
 use crate::worldserver::appworld::goods::cgoods::CGoods;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsOriginalNameIndex,
 };
 use crate::worldserver::appworld::goodswarmember::{
-    CGoodsWarMember, GoodsWarDatabaseLoadReport, GoodsWarDeliveryContext, GoodsWarMemberBlock,
-};
-use crate::worldserver::appworld::incrementlog::incrementlog::{
-    CIncrementLog, IncrementLogLoadOutcome,
+    CGoodsWarMember, GoodsWarDatabaseLoadReport, GoodsWarDeliveryContext,
+    GoodsWarMemberBlock,
 };
 use crate::worldserver::appworld::jjcsystem::{
     CJJcSystem, JJC_CONFIG_PATH, JJC_LEVEL_LIST_PATH, JJC_REGION_LIST_PATH,
     JjcConfigurationLoadReport, JjcRunBlock, JjcRunConfig, JjcRunContext, JjcRunReport,
 };
+use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
+    CFourNationWarSys, FourNationCountryFailContext, FourNationExploitContext,
+    FourNationExploitLoadedDisposition, FourNationWarCallbacks, FourNationWarLoadError,
+    FourNationWarLoadReport, FourNationWarReloadDisposition,
+    FourNationWarResultContext, FourNationWarSerializationBlock,
+};
 use crate::worldserver::appworld::leiting::{
     CLeiTing, LeiTingBlock, LeiTingContext, LeiTingLocalTime, LeiTingRunReport,
 };
-use crate::worldserver::appworld::message::auction::{
-    WorldServerAuctionMessageDispatch, WorldServerAuctionMessageOutcome, on_msg_s2w_auction,
+use crate::worldserver::appworld::message::othermessage::{
+    WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
+};
+use crate::worldserver::appworld::message::jjcsysmessage::{
+    JjcSystemMessageOutcome, on_jjc_system_message,
 };
 use crate::worldserver::appworld::message::countrymessage::{
     WorldCountryMessageDispatch, WorldCountryMessageOutcome,
     WorldFourNationExploitDatabaseDisposition, WorldFourNationExploitSync,
-    decode_four_nation_exploit_message, dispatch_country_absolve_request_message,
-    dispatch_country_appoint_minister_message, dispatch_country_demise_message,
-    dispatch_country_depose_minister_message, dispatch_country_direct_appointment_message,
-    dispatch_country_exile_request_message, dispatch_country_exile_result_message,
-    dispatch_country_info_message, dispatch_country_new_day_message,
-    dispatch_country_player_change_message, dispatch_country_players_list_message,
-    dispatch_country_silence_request_message, dispatch_country_war_declaration_message,
-    dispatch_country_war_victory_message, dispatch_four_nation_country_fail_message,
-    dispatch_four_nation_war_result_message, dispatch_four_nation_war_time_message,
-    on_country_message,
+    decode_four_nation_exploit_message,
+    dispatch_country_absolve_request_message,
+    dispatch_country_appoint_minister_message,
+    dispatch_country_demise_message,
+    dispatch_country_depose_minister_message,
+    dispatch_country_direct_appointment_message,
+    dispatch_country_new_day_message,
+    dispatch_country_player_change_message,
+    dispatch_country_exile_result_message,
+    dispatch_country_exile_request_message,
+    dispatch_country_info_message,
+    dispatch_country_players_list_message,
+    dispatch_country_silence_request_message,
+    dispatch_country_war_declaration_message, dispatch_country_war_victory_message,
+    dispatch_four_nation_country_fail_message, dispatch_four_nation_war_result_message,
+    dispatch_four_nation_war_time_message, on_country_message,
+};
+use crate::worldserver::appworld::message::auction::{
+    WorldServerAuctionMessageDispatch, WorldServerAuctionMessageOutcome, on_msg_s2w_auction,
 };
 use crate::worldserver::appworld::message::gmamessage::{
     WorldGmaMessageDispatch, WorldGmaMessageOutcome, on_gma_message,
@@ -1353,77 +1387,97 @@ use crate::worldserver::appworld::message::gmamessage::{
 use crate::worldserver::appworld::message::gmmessage::{
     WorldGmMessageDispatch, WorldGmMessageOutcome, on_gm_message,
 };
-use crate::worldserver::appworld::message::jjcsysmessage::{
-    JjcSystemMessageOutcome, on_jjc_system_message,
-};
 use crate::worldserver::appworld::message::logmessage::{
     WorldLogMessageDispatch, WorldLogMessageOutcome, on_log_message,
 };
 use crate::worldserver::appworld::message::onmsg_m2w_auction::{
     WorldMiscAuctionMessageDispatch, WorldMiscAuctionMessageOutcome, on_msg_m2w_auction,
 };
-use crate::worldserver::appworld::message::organsysmessage::{
-    CityTransferConfirmationDelivery, ConfederationCreationConfirmationDelivery,
-    OrganizingAdmissionPermitBlock, OrganizingAdmissionPermitDispatch,
-    OrganizingAttackCityEndDispatch, OrganizingChangeRegionRouterDispatch, OrganizingCityGateBlock,
-    OrganizingCityGateDispatch, OrganizingCityTransferDispatch, OrganizingCityWarApplicationBlock,
-    OrganizingCityWarApplicationDispatch, OrganizingCityWarResultContextBlock,
-    OrganizingCityWarResultDispatch, OrganizingConsumedLongDispatch, OrganizingCreateFactionBlock,
-    OrganizingCreateFactionDispatch, OrganizingDeclareFactionWarBlock,
-    OrganizingDeclareFactionWarDispatch, OrganizingDeclareWarFactionListBlock,
-    OrganizingDeclareWarFactionListDispatch, OrganizingFactionApplicationCancelBlock,
-    OrganizingFactionApplicationCancelDispatch, OrganizingFactionApplicationDecisionDispatch,
-    OrganizingFactionApplicationDispatch, OrganizingFactionApplicationDispatchBlock,
-    OrganizingFactionBillboardBlock, OrganizingFactionBillboardOutcome,
-    OrganizingFactionContributorDispatch, OrganizingFactionDemiseBlock,
-    OrganizingFactionDemiseDispatch, OrganizingFactionDisbandBlock,
-    OrganizingFactionDisbandDispatch, OrganizingFactionDubBlock, OrganizingFactionDubDispatch,
-    OrganizingFactionExitBlock, OrganizingFactionExitDispatch, OrganizingFactionExperienceDispatch,
-    OrganizingFactionFireOutBlock, OrganizingFactionFireOutDispatch, OrganizingFactionListBlock,
-    OrganizingFactionListDispatch, OrganizingFactionMemberStateDispatch,
-    OrganizingFactionParameterBlock, OrganizingFactionParameterDispatch,
-    OrganizingFactionPurviewBlock, OrganizingFactionPurviewDispatch, OrganizingFactionTaxBlock,
-    OrganizingFactionTaxDispatch, OrganizingFactionUpgradeBlock, OrganizingFactionUpgradeDispatch,
-    OrganizingFactionUploadIconDispatch, OrganizingFactionWarPlayerDiedDispatch,
-    OrganizingGoodsWarCommandDispatch, OrganizingGoodsWarContextBlock,
-    OrganizingGoodsWarFactionWinBlock, OrganizingGoodsWarFactionWinDispatch,
-    OrganizingInitialDataDispatch, OrganizingLeaveWordDispatch, OrganizingLeaveWordEditDispatch,
-    OrganizingLeaveWordEnableDispatch, OrganizingPlayerInviteFactionDispatch,
-    OrganizingPlayerQuestCommandDispatch, OrganizingPlayerRunScriptDispatch,
-    OrganizingPronounceDispatch, OrganizingRegionParamDispatch, OrganizingRegionRouteDispatch,
-    OrganizingSessionResultDispatch, OrganizingUnionApplicationDispatch,
-    OrganizingUnionDemiseDispatch, OrganizingUnionDisbandBlock, OrganizingUnionDisbandDispatch,
-    OrganizingUnionExitDispatch, OrganizingUnionFireOutDispatch,
-    OrganizingVillageWarApplicationBlock, OrganizingVillageWarApplicationDispatch,
-    OrganizingVillageWarResultDispatch, QueuedCityTransferTerminal,
-    QueuedConfederationCreationTerminal, QueuedOrganizingSessionTerminal,
-    QueuedUnionApplicationTerminal, QueuedUnionInvitationTerminal,
-    UnionApplicationConfirmationDelivery, WorldUnionApplicationEffectCallbacks,
-    WorldUnionApplicationEffects, WorldUnionApplicationRuntimeOwner, dispatch_admission_permit,
-    dispatch_attack_city_end, dispatch_change_region_router, dispatch_city_gate,
-    dispatch_city_transfer, dispatch_city_war_application, dispatch_city_war_result,
-    dispatch_consumed_long, dispatch_create_faction, dispatch_declare_faction_war,
-    dispatch_declare_war_faction_list, dispatch_faction_application,
-    dispatch_faction_application_cancel, dispatch_faction_application_decision,
-    dispatch_faction_billboard, dispatch_faction_contributor, dispatch_faction_demise,
-    dispatch_faction_disband, dispatch_faction_dub, dispatch_faction_exit,
-    dispatch_faction_experience, dispatch_faction_fire_out, dispatch_faction_list,
-    dispatch_faction_member_state, dispatch_faction_parameter, dispatch_faction_purview,
-    dispatch_faction_tax, dispatch_faction_upgrade, dispatch_faction_upload_icon,
-    dispatch_faction_war_player_died, dispatch_goods_war_command, dispatch_goods_war_faction_win,
-    dispatch_initial_organizing_data, dispatch_leave_word, dispatch_leave_word_edit,
-    dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_player_invite_faction,
-    dispatch_player_quest_command, dispatch_player_run_script, dispatch_pronounce,
-    dispatch_region_param_update, dispatch_region_route, dispatch_union_application,
-    dispatch_union_demise, dispatch_union_disband, dispatch_union_exit, dispatch_union_fire_out,
-    dispatch_village_war_application, dispatch_village_war_result,
-    finalize_faction_disband_dispatch, reload_attack_city,
-};
-use crate::worldserver::appworld::message::othermessage::{
-    WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
-};
 use crate::worldserver::appworld::message::playermessage::{
     WorldPlayerMessageDispatch, WorldPlayerMessageOutcome, on_player_message,
+};
+use crate::worldserver::appworld::message::organsysmessage::{
+    CityTransferConfirmationDelivery, ConfederationCreationConfirmationDelivery,
+    OrganizingCityWarResultContextBlock, reload_attack_city,
+    OrganizingAdmissionPermitBlock,
+    OrganizingAdmissionPermitDispatch, OrganizingAttackCityEndDispatch,
+    OrganizingCityGateBlock, OrganizingCityGateDispatch, OrganizingCityTransferDispatch,
+    OrganizingCityWarApplicationBlock, OrganizingCityWarApplicationDispatch,
+    OrganizingChangeRegionRouterDispatch, OrganizingCityWarResultDispatch,
+    OrganizingConsumedLongDispatch,
+    OrganizingDeclareFactionWarBlock,
+    OrganizingDeclareFactionWarDispatch, OrganizingDeclareWarFactionListBlock,
+    OrganizingDeclareWarFactionListDispatch, OrganizingFactionBillboardBlock,
+    OrganizingFactionApplicationCancelBlock, OrganizingFactionApplicationCancelDispatch,
+    OrganizingFactionApplicationDispatch, OrganizingFactionApplicationDispatchBlock,
+    OrganizingFactionApplicationDecisionDispatch,
+    OrganizingFactionListBlock, OrganizingFactionListDispatch,
+    OrganizingFactionBillboardOutcome, OrganizingFactionContributorDispatch,
+    OrganizingFactionExperienceDispatch, OrganizingFactionMemberStateDispatch,
+    OrganizingFactionDubBlock, OrganizingFactionDubDispatch,
+    OrganizingFactionPurviewBlock, OrganizingFactionPurviewDispatch,
+    OrganizingFactionDemiseBlock, OrganizingFactionDemiseDispatch,
+    OrganizingFactionDisbandBlock, OrganizingFactionDisbandDispatch,
+    OrganizingFactionFireOutBlock, OrganizingFactionFireOutDispatch,
+    OrganizingFactionWarPlayerDiedDispatch,
+    OrganizingInitialDataDispatch,
+    OrganizingFactionExitBlock, OrganizingFactionExitDispatch,
+    OrganizingUnionDemiseDispatch,
+    OrganizingUnionDisbandBlock, OrganizingUnionDisbandDispatch,
+    OrganizingUnionExitDispatch,
+    OrganizingUnionFireOutDispatch,
+    OrganizingFactionTaxBlock, OrganizingFactionTaxDispatch, OrganizingFactionUpgradeBlock,
+    OrganizingFactionUpgradeDispatch, OrganizingFactionUploadIconDispatch,
+    OrganizingRegionParamDispatch, OrganizingRegionRouteDispatch,
+    OrganizingGoodsWarCommandDispatch, OrganizingGoodsWarContextBlock,
+    OrganizingGoodsWarFactionWinBlock, OrganizingGoodsWarFactionWinDispatch,
+    OrganizingPlayerQuestCommandDispatch,
+    OrganizingPlayerRunScriptDispatch,
+    OrganizingFactionParameterBlock, OrganizingFactionParameterDispatch,
+    OrganizingVillageWarApplicationBlock, OrganizingVillageWarApplicationDispatch,
+    OrganizingVillageWarResultDispatch,
+    OrganizingLeaveWordDispatch,
+    OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEnableDispatch,
+    OrganizingCreateFactionBlock, OrganizingCreateFactionDispatch,
+    OrganizingPronounceDispatch, OrganizingSessionResultDispatch,
+    OrganizingPlayerInviteFactionDispatch, OrganizingUnionApplicationDispatch,
+    QueuedCityTransferTerminal, QueuedConfederationCreationTerminal,
+    QueuedOrganizingSessionTerminal,
+    QueuedUnionApplicationTerminal, QueuedUnionInvitationTerminal,
+    UnionApplicationConfirmationDelivery,
+    WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects,
+    WorldUnionApplicationRuntimeOwner, dispatch_admission_permit, dispatch_attack_city_end,
+    dispatch_city_gate, dispatch_city_transfer, dispatch_city_war_application,
+    dispatch_change_region_router, dispatch_city_war_result,
+    dispatch_consumed_long, dispatch_create_faction, dispatch_declare_faction_war,
+    dispatch_faction_war_player_died,
+    dispatch_initial_organizing_data,
+    dispatch_declare_war_faction_list, dispatch_faction_application,
+    dispatch_faction_application_decision,
+    dispatch_faction_dub,
+    dispatch_faction_purview,
+    dispatch_faction_demise,
+    dispatch_faction_disband,
+    dispatch_faction_fire_out,
+    dispatch_faction_exit,
+    dispatch_union_demise,
+    dispatch_union_disband,
+    dispatch_union_exit,
+    dispatch_union_fire_out,
+    dispatch_faction_billboard, dispatch_faction_list,
+    dispatch_faction_application_cancel,
+    dispatch_faction_upgrade,
+    dispatch_faction_contributor, dispatch_faction_experience, dispatch_faction_member_state,
+    dispatch_faction_tax, dispatch_faction_upload_icon,
+    dispatch_goods_war_command, dispatch_goods_war_faction_win,
+    dispatch_player_quest_command,
+    dispatch_player_invite_faction, dispatch_player_run_script,
+    dispatch_faction_parameter,
+    dispatch_leave_word, dispatch_leave_word_edit,
+    dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_pronounce,
+    dispatch_region_param_update, dispatch_region_route, dispatch_union_application,
+    finalize_faction_disband_dispatch,
+    dispatch_village_war_application, dispatch_village_war_result,
 };
 use crate::worldserver::appworld::message::servermessage::{
     WorldLoginClientReplacement, WorldServerMessageDispatch, WorldServerMessageError,
@@ -1437,44 +1491,44 @@ use crate::worldserver::appworld::message::writelogmessage::{
     on_write_log_message,
 };
 use crate::worldserver::appworld::misc::{
-    CopyNumberResetReport, CopyNumberScheduleBlock, CopyNumberScheduleReport, CopyNumberTimerState,
+    CopyNumberResetReport, CopyNumberScheduleBlock, CopyNumberScheduleReport,
+    CopyNumberTimerState,
+};
+use crate::worldserver::appworld::incrementlog::incrementlog::{
+    CIncrementLog, IncrementLogLoadOutcome,
+};
+use crate::worldserver::appworld::organizingsystem::faction::{
+    goods_war_check_for_faction_id, CFaction, FactionDemiseContext, FactionDemiseOutcome,
+    FactionDisbandContext, FactionExperienceBlock, FactionMemberInfoRequest,
+    FactionEnemyMutationContext, FactionInitialPropertyBlock, FactionOrganizingInfoContext,
+    FactionUploadIconBlock,
 };
 use crate::worldserver::appworld::organizingsystem::attackcitysys::{
     AttackCityCallbacks, AttackCityEnemyRelationContext, AttackCityEnemyRelationReport,
     AttackCityLoadError, AttackCityLoadReport, AttackCityReloadBlock, CAttackCitySys,
-};
-use crate::worldserver::appworld::organizingsystem::faction::{
-    CFaction, FactionDemiseContext, FactionDemiseOutcome, FactionDisbandContext,
-    FactionEnemyMutationContext, FactionExperienceBlock, FactionInitialPropertyBlock,
-    FactionMemberInfoRequest, FactionOrganizingInfoContext, FactionUploadIconBlock,
-    goods_war_check_for_faction_id,
 };
 use crate::worldserver::appworld::organizingsystem::factionwarsys::{
     CFactionWarSys, FactionWarIniLoadCompletion, FactionWarInitializationBlock,
     FactionWarInitializationReport, FactionWarRunReport, FactionWarStopBlock,
     FactionWarStopContext,
 };
-use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
-    CFourNationWarSys, FourNationCountryFailContext, FourNationExploitContext,
-    FourNationExploitLoadedDisposition, FourNationWarCallbacks, FourNationWarLoadError,
-    FourNationWarLoadReport, FourNationWarReloadDisposition, FourNationWarResultContext,
-    FourNationWarSerializationBlock,
-};
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     AttackCityEndBlock, COrganizingCtrl, CityTransferEndpointBlock, CityTransferFinishBlock,
     CityTransferFinishReport, CityTransferSessionBlock, CityTransferSessionReport,
     CityTransferStartBlock, ConfederationCreationCallbackBlock,
     ConfederationCreationCallbackReport, ConfederationCreationEndpointBlock,
-    ConfederationCreationSessionBlock, ConfederationCreationSessionReport, FreeFactionLookup,
-    FreePlayerLookup, OrganizingContributorBlock, OrganizingDisbandOutcome,
-    OrganizingDisbandPlayer, OrganizingFactionDoJoinBlock, OrganizingLeaveWordBlock,
-    OrganizingLeaveWordEditBlock, OrganizingLeaveWordEnableBlock, OrganizingNameLookupBlock,
-    OrganizingPronounceBlock, OrganizingRunBlock, OrganizingRunReport, OrganizingSaveDataBlock,
-    OrganizingSaveDataReport, OrganizingUnionApplicationCallbackBlock,
-    OrganizingUnionApplicationCallbackReport, OrganizingUnionApplyForJoinDispatchBlock,
+    ConfederationCreationSessionBlock, ConfederationCreationSessionReport,
+    OrganizingContributorBlock, OrganizingDisbandOutcome,
+    OrganizingDisbandPlayer, OrganizingRunBlock, OrganizingRunReport, OrganizingSaveDataBlock,
+    OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock, OrganizingLeaveWordEnableBlock,
+    OrganizingFactionDoJoinBlock,
     OrganizingUnionDemiseBlock, OrganizingUnionExitBlock, OrganizingUnionFireOutBlock,
+    OrganizingNameLookupBlock,
+    OrganizingPronounceBlock, OrganizingSaveDataReport, OrganizingUnionApplicationCallbackBlock,
+    OrganizingUnionApplicationCallbackReport, OrganizingUnionApplyForJoinDispatchBlock,
     OrganizingUnionInvitationCallbackBlock, OrganizingUnionInvitationCallbackReport,
-    PlayerEnterGameOutcome, PlayerExitGameOutcome, PlayerInviteFactionBlock,
+    FreeFactionLookup, FreePlayerLookup, PlayerEnterGameOutcome, PlayerExitGameOutcome,
+    PlayerInviteFactionBlock,
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::{
     COrganizingParam, OrganizingParamLoadError, OrganizingParamLoadReport,
@@ -1489,13 +1543,15 @@ use crate::worldserver::appworld::organizingsystem::villagewarsys::{
     VillageWarReloadBlock,
 };
 use crate::worldserver::appworld::player::{
-    CPlayer, PlayerCodecError, PlayerCountryChangeReport, PlayerDbProjectionBlock,
-    PlayerEquipmentWireSnapshot, PlayerExploitUpdate, PlayerFactionInfoContext,
-    PlayerFactionInfoDelivery, PlayerFactionInfoUpdateBlock, PlayerFactionInfoUpdateReport,
-    PlayerLeiTingClock, PlayerLeiTingUpdateBlock, PlayerLeiTingUpdateReport, PlayerLoadDataOutcome,
-    PlayerLoadDataOwner, PlayerMurderCounterReset, PlayerMurderCounterUpdate,
-    PlayerOrganizingState, PlayerOrganizingUpdateError, PlayerOrganizingUpdater,
-    PlayerOriginEquipmentBlock, PlayerOriginEquipmentOutcome, PlayerPropertyCoefficients,
+    CPlayer, PlayerCodecError, PlayerCountryChangeReport, PlayerExploitUpdate,
+    PlayerDbProjectionBlock, PlayerEquipmentWireSnapshot,
+    PlayerFactionInfoContext, PlayerFactionInfoDelivery, PlayerFactionInfoUpdateBlock,
+    PlayerFactionInfoUpdateReport,
+    PlayerLoadDataOutcome, PlayerLoadDataOwner,
+    PlayerLeiTingClock, PlayerLeiTingUpdateBlock, PlayerLeiTingUpdateReport,
+    PlayerMurderCounterReset, PlayerMurderCounterUpdate, PlayerOrganizingUpdateError,
+    PlayerOrganizingState, PlayerOrganizingUpdater, PlayerOriginEquipmentBlock,
+    PlayerOriginEquipmentOutcome, PlayerPropertyCoefficients,
 };
 use crate::worldserver::appworld::region::{CRegion, RegionSerializationBlock};
 use crate::worldserver::appworld::script::variablelist::{
@@ -1511,8 +1567,8 @@ use crate::worldserver::appworld::worldcountrywarregion::{
     WorldCountryWarRegion, WorldCountryWarRegionLoadError, WorldCountryWarRegionSerializationBlock,
 };
 use crate::worldserver::appworld::worldregion::{
-    CWorldRegion, WorldRegionLoadError, WorldRegionLoadedCounts, WorldRegionOwnerRelationBlock,
-    WorldRegionOwnerRelationReport, WorldRegionParamDecodeError, WorldRegionResourceContext,
+    CWorldRegion, WorldRegionLoadError, WorldRegionLoadedCounts, WorldRegionResourceContext,
+    WorldRegionOwnerRelationBlock, WorldRegionOwnerRelationReport, WorldRegionParamDecodeError,
     WorldRegionSerializationBlock, WorldRegionSetupSerializationBlock,
 };
 use crate::worldserver::appworld::worldvillageregion::CWorldVillageRegion;
@@ -1889,15 +1945,10 @@ pub(crate) struct WorldStringTableUpdateReport {
 #[derive(Debug)]
 pub(crate) enum WorldGameInitBlockReason<ContextBlock> {
     SetupOpen(WorldSetupOpenError),
-    ExistingInstance {
-        title: Vec<u8>,
-    },
+    ExistingInstance { title: Vec<u8> },
     ServerSetup(io::Error),
     MissingPlayerLoadThreadCount,
-    InvalidPlayerLoadThreadCount {
-        count: u32,
-        legacy_exit_code: i32,
-    },
+    InvalidPlayerLoadThreadCount { count: u32, legacy_exit_code: i32 },
     DefaultLanguageTable,
     ConfiguredLanguageTable,
     StringTableEncoding(WorldStringTableEncodingBlock),
@@ -1979,7 +2030,9 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn country_war_source(&mut self) -> Option<Vec<u8>>;
     fn use_appellation_function(&mut self) -> bool;
     /// Возвращает достигнутый player DB-owner и его текущий caller-connection.
-    fn player_database(&mut self) -> (&mut Self::PlayerDatabase, Option<&mut WorldTdsClient>);
+    fn player_database(
+        &mut self,
+    ) -> (&mut Self::PlayerDatabase, Option<&mut WorldTdsClient>);
     /// Отдельный DB-owner `CRsEnemyFactions` с самостоятельным connection.
     fn enemy_factions_database(&mut self) -> &mut Self::EnemyFactionsDatabase;
     /// Отдельный DB-owner `CRsGenVar`, который сам открывает World connection.
@@ -2322,7 +2375,9 @@ pub(crate) struct WorldReconnectedPlayerDecode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldServerSnapshotPlayerOwner {
     Existing,
-    Created { replaced_existing_decoded_id: bool },
+    Created {
+        replaced_existing_decoded_id: bool,
+    },
 }
 
 /// Итог полного player decode из обычной ветки `0x5FA09/1`.
@@ -2539,15 +2594,19 @@ pub(crate) type WorldPlayerInviteFactionStartBlock = PlayerInviteFactionBlock<
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldUnionApplicationTerminalDispatch {
     pub(crate) request: QueuedUnionApplicationTerminal,
-    pub(crate) outcome:
-        Result<OrganizingUnionApplicationCallbackReport, OrganizingUnionApplicationCallbackBlock>,
+    pub(crate) outcome: Result<
+        OrganizingUnionApplicationCallbackReport,
+        OrganizingUnionApplicationCallbackBlock,
+    >,
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldUnionInvitationTerminalDispatch {
     pub(crate) request: QueuedUnionInvitationTerminal,
-    pub(crate) outcome:
-        Result<OrganizingUnionInvitationCallbackReport, OrganizingUnionInvitationCallbackBlock>,
+    pub(crate) outcome: Result<
+        OrganizingUnionInvitationCallbackReport,
+        OrganizingUnionInvitationCallbackBlock,
+    >,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -2559,8 +2618,10 @@ pub(crate) struct WorldCityTransferTerminalDispatch {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldConfederationCreationTerminalDispatch {
     pub(crate) request: QueuedConfederationCreationTerminal,
-    pub(crate) outcome:
-        Result<ConfederationCreationCallbackReport, ConfederationCreationCallbackBlock>,
+    pub(crate) outcome: Result<
+        ConfederationCreationCallbackReport,
+        ConfederationCreationCallbackBlock,
+    >,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -2572,9 +2633,12 @@ pub(crate) struct WorldUnionApplicationRuntimeReport {
     pub(crate) city_terminals: Vec<WorldCityTransferTerminalDispatch>,
     pub(crate) city_confirmations: Vec<CityTransferConfirmationDelivery>,
     pub(crate) city_endpoint_blocks: Vec<CityTransferEndpointBlock>,
-    pub(crate) confederation_creation_terminals: Vec<WorldConfederationCreationTerminalDispatch>,
-    pub(crate) confederation_creation_confirmations: Vec<ConfederationCreationConfirmationDelivery>,
-    pub(crate) confederation_creation_endpoint_blocks: Vec<ConfederationCreationEndpointBlock>,
+    pub(crate) confederation_creation_terminals:
+        Vec<WorldConfederationCreationTerminalDispatch>,
+    pub(crate) confederation_creation_confirmations:
+        Vec<ConfederationCreationConfirmationDelivery>,
+    pub(crate) confederation_creation_endpoint_blocks:
+        Vec<ConfederationCreationEndpointBlock>,
 }
 
 /// Один фактически извлечённый элемент двух FIFO `ProcessMessage`.
@@ -2674,8 +2738,10 @@ pub(crate) enum ProcessedWorldEvent {
     OrganizingDeclareWarFactionList {
         source: WorldMessageSource,
         legacy_run_result: i32,
-        outcome:
-            Result<OrganizingDeclareWarFactionListDispatch, OrganizingDeclareWarFactionListBlock>,
+        outcome: Result<
+            OrganizingDeclareWarFactionListDispatch,
+            OrganizingDeclareWarFactionListBlock,
+        >,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingFactionList {
@@ -2705,7 +2771,10 @@ pub(crate) enum ProcessedWorldEvent {
     OrganizingFactionApplicationDecision {
         source: WorldMessageSource,
         legacy_run_result: i32,
-        outcome: Result<OrganizingFactionApplicationDecisionDispatch, OrganizingFactionDoJoinBlock>,
+        outcome: Result<
+            OrganizingFactionApplicationDecisionDispatch,
+            OrganizingFactionDoJoinBlock,
+        >,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingFactionFireOut {
@@ -2858,14 +2927,19 @@ pub(crate) enum ProcessedWorldEvent {
     OrganizingVillageWarApplication {
         source: WorldMessageSource,
         legacy_run_result: i32,
-        outcome:
-            Result<OrganizingVillageWarApplicationDispatch, OrganizingVillageWarApplicationBlock>,
+        outcome: Result<
+            OrganizingVillageWarApplicationDispatch,
+            OrganizingVillageWarApplicationBlock,
+        >,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingCityWarApplication {
         source: WorldMessageSource,
         legacy_run_result: i32,
-        outcome: Result<OrganizingCityWarApplicationDispatch, OrganizingCityWarApplicationBlock>,
+        outcome: Result<
+            OrganizingCityWarApplicationDispatch,
+            OrganizingCityWarApplicationBlock,
+        >,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingCityWarResult {
@@ -2886,7 +2960,10 @@ pub(crate) enum ProcessedWorldEvent {
     OrganizingGoodsWarFactionWin {
         source: WorldMessageSource,
         legacy_run_result: i32,
-        outcome: Result<OrganizingGoodsWarFactionWinDispatch, OrganizingGoodsWarFactionWinBlock>,
+        outcome: Result<
+            OrganizingGoodsWarFactionWinDispatch,
+            OrganizingGoodsWarFactionWinBlock,
+        >,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingPlayerQuestCommand {
@@ -2931,7 +3008,10 @@ pub(crate) enum ProcessedWorldEvent {
     OrganizingPlayerInviteFaction {
         source: WorldMessageSource,
         legacy_run_result: i32,
-        outcome: Result<WorldPlayerInviteFactionDispatch, WorldPlayerInviteFactionStartBlock>,
+        outcome: Result<
+            WorldPlayerInviteFactionDispatch,
+            WorldPlayerInviteFactionStartBlock,
+        >,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     OrganizingLeaveWordEnable {
@@ -3563,7 +3643,8 @@ struct WorldTimerHandler<'a, Callback> {
     get_log_local_time: &'a mut dyn FnMut() -> WorldLogLocalTime,
     put_log_info: &'a mut dyn FnMut(&[u8]),
     world_string_by_id: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
-    format_world_string: &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+    format_world_string:
+        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
     copy_number_resets: Vec<CopyNumberResetReport>,
     refreshes: Vec<PlayerRanksTimerRefreshReport>,
     tax_refreshes: Vec<OrganizingTodayTaxRefreshReport>,
@@ -3615,10 +3696,7 @@ where
 
         let tax_event_id = match invocation.source {
             TimerCallbackSource::Calendar(event_id)
-                if self.organizing_parameters.is_tax_event(event_id) =>
-            {
-                Some(event_id)
-            }
+                if self.organizing_parameters.is_tax_event(event_id) => Some(event_id),
             _ => None,
         };
         if let Some(event_id) = tax_event_id {
@@ -3776,8 +3854,10 @@ where
         event_id: TimerId,
     ) {
         if let Some(report_index) = self.pending_copy_number_registration.take() {
-            self.copy_number_timer
-                .finish_reset(&mut self.copy_number_resets[report_index], event_id);
+            self.copy_number_timer.finish_reset(
+                &mut self.copy_number_resets[report_index],
+                event_id,
+            );
             return;
         }
 
@@ -4062,7 +4142,8 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     pub(crate) put_union_war_log: &'a mut dyn FnMut(&[u8]),
     pub(crate) refresh_union_owned_city: &'a mut dyn FnMut(i32, i32, i32),
     pub(crate) update_union_player: &'a mut dyn FnMut(i32),
-    pub(crate) check_invalid_organizing_string: &'a mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
+    pub(crate) check_invalid_organizing_string:
+        &'a mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
     /// Внешние feature-gates exact `CLogSystem::bFactionChat/bPrivateChat`.
     pub(crate) faction_chat_log_enabled: bool,
     pub(crate) private_chat_log_enabled: bool,
@@ -4070,7 +4151,8 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     pub(crate) delete_log_enabled: bool,
     /// Внешний feature-gate `CLogSystem::FactionCreateEnabled`.
     pub(crate) faction_create_log_enabled: bool,
-    pub(crate) write_faction_create_log: &'a mut dyn FnMut(i32, &[u8], i32, &[u8]),
+    pub(crate) write_faction_create_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, &[u8]),
     /// Внешний feature-gate `CLogSystem::FactionTitleEnabled`.
     pub(crate) faction_title_log_enabled: bool,
     pub(crate) write_faction_title_log:
@@ -4080,28 +4162,35 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     pub(crate) write_faction_purview_log:
         &'a mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
     pub(crate) faction_level_log_enabled: bool,
-    pub(crate) write_faction_level_log: &'a mut dyn FnMut(i32, &[u8], i32, i32, &[u8]),
+    pub(crate) write_faction_level_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, i32, &[u8]),
     pub(crate) faction_experience_log_enabled: bool,
-    pub(crate) write_faction_experience_log: &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, i32),
+    pub(crate) write_faction_experience_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, i32),
     /// Внешний feature-gate `CLogSystem::FactionApplyEnabled`.
     pub(crate) faction_apply_log_enabled: bool,
-    pub(crate) write_faction_apply_log: &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
+    pub(crate) write_faction_apply_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
     /// Внешний feature-gate `CLogSystem::FactionJoinEnabled`.
     pub(crate) faction_join_log_enabled: bool,
-    pub(crate) write_faction_join_log: &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
+    pub(crate) write_faction_join_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
     /// Внешний feature-gate `CLogSystem::FactionQuitEnabled`.
     pub(crate) faction_quit_log_enabled: bool,
-    pub(crate) write_faction_quit_log: &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
+    pub(crate) write_faction_quit_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
     /// Внешний feature-gate `CLogSystem::FactionFireOutEnabled`.
     pub(crate) faction_fire_out_log_enabled: bool,
     pub(crate) write_faction_fire_out_log:
         &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
     /// Внешний feature-gate `CLogSystem::FactionMasterChangedEnabled`.
     pub(crate) faction_master_log_enabled: bool,
-    pub(crate) write_faction_master_log: &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
+    pub(crate) write_faction_master_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
     /// Внешний feature-gate `CLogSystem::FactionDisbandEnabled`.
     pub(crate) faction_disband_log_enabled: bool,
-    pub(crate) write_faction_disband_log: &'a mut dyn FnMut(i32, &[u8], i32, &[u8]),
+    pub(crate) write_faction_disband_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, &[u8]),
     pub(crate) dispatch_timer:
         &'a mut dyn FnMut(&mut CTimer<TimerCallback>, TimerCallbackInvocation<TimerCallback>),
     pub(crate) get_lei_ting_local_time: &'a mut dyn FnMut() -> LeiTingLocalTime,
@@ -6081,7 +6170,10 @@ fn truncate_scaled_legacy_money(amount: i32, factor: f32) -> i32 {
     let (mantissa, binary_exponent) = if exponent == 0 {
         (u128::from(fraction), -149)
     } else {
-        (u128::from((1 << 23) | fraction), exponent as i32 - 127 - 23)
+        (
+            u128::from((1 << 23) | fraction),
+            exponent as i32 - 127 - 23,
+        )
     };
     let magnitude = u128::from(amount.unsigned_abs()) * mantissa;
     let magnitude = if binary_exponent >= 0 {
@@ -6276,7 +6368,10 @@ pub(crate) struct WorldGameServerEntry {
 pub(crate) enum WorldReceivedPlayerDataUpdate {
     GameServerNotFound,
     Uninitialized,
-    Updated { previous: Option<i32>, current: i32 },
+    Updated {
+        previous: Option<i32>,
+        current: i32,
+    },
 }
 
 /// Чтение `lReceivedPlayerData` для итогового subtype `2`.
@@ -6357,10 +6452,7 @@ fn send_err_log_to_login(
     let Some(text) = text else {
         return WorldErrorLogDelivery::SkippedNullText;
     };
-    let text = &text[..text
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(text.len())];
+    let text = &text[..text.iter().position(|byte| *byte == 0).unwrap_or(text.len())];
 
     let mut message = CMessage::new(0x0001_FE08);
     message.base_mut().add_char(message_type);
@@ -7026,7 +7118,9 @@ impl CGame {
     ) -> WorldStringTableLoadReport {
         let package = legacy_c_string_prefix(package);
         let succeeded = if package.is_empty() {
-            self.string_table.table_mut().reject_empty_resource_name();
+            self.string_table
+                .table_mut()
+                .reject_empty_resource_name();
             false
         } else if let Some(source) = source {
             self.string_table.table_mut().load_bytes(source)
@@ -7054,7 +7148,9 @@ impl CGame {
     }
 
     /// Дописывает current ordered table в coded buffer, как исходный owner.
-    pub(crate) fn code_string_table(&mut self) -> Result<(), WorldStringTableEncodingBlock> {
+    pub(crate) fn code_string_table(
+        &mut self,
+    ) -> Result<(), WorldStringTableEncodingBlock> {
         self.string_table
             .to_byte_array(&mut self.string_table_array)
             .map_err(|entry_count| WorldStringTableEncodingBlock { entry_count })
@@ -7090,11 +7186,7 @@ impl CGame {
         let report = self.quest_system.load_from_resources(
             quest_source.as_deref(),
             quest_ex_source.as_deref(),
-            &mut |string_id| {
-                string_table
-                    .get_string_by_id(string_id)
-                    .map(ToOwned::to_owned)
-            },
+            &mut |string_id| string_table.get_string_by_id(string_id).map(ToOwned::to_owned),
         );
         match report.completion {
             crate::setup::questsystem::QuestSystemLoadCompletion::QuestFileMissing => {
@@ -7134,7 +7226,8 @@ impl CGame {
 
         let configured_package = self.setup.language_package.clone();
         let source = context.read_resource(&configured_package);
-        let configured = self.load_string_table_resource(&configured_package, source.as_deref());
+        let configured =
+            self.load_string_table_resource(&configured_package, source.as_deref());
         context.add_log_text(&configured.log_payload);
         if !configured.succeeded {
             return WorldStringTableUpdateReport {
@@ -7150,8 +7243,9 @@ impl CGame {
             };
         }
         if self.string_table_array.is_empty() {
-            context
-                .add_log_text(b"WARNING : Language packet is NULL, will NOT send to WorldServer.");
+            context.add_log_text(
+                b"WARNING : Language packet is NULL, will NOT send to WorldServer.",
+            );
             return WorldStringTableUpdateReport {
                 requested_package: requested_package.to_vec(),
                 completion: WorldStringTableUpdateCompletion::Empty,
@@ -7196,11 +7290,13 @@ impl CGame {
     }
 
     /// Ставит единственную созданную `CLargess::LoadLargess` запись в общий FIFO.
-    pub(crate) fn publish_largess_load_log(&self, report: &mut LoadLargessReport) -> Option<usize> {
-        report
-            .write_log
-            .take()
-            .map(|record| self.push_write_log_command(WorldWriteLogCommand::LargessLog(record)))
+    pub(crate) fn publish_largess_load_log(
+        &self,
+        report: &mut LoadLargessReport,
+    ) -> Option<usize> {
+        report.write_log.take().map(|record| {
+            self.push_write_log_command(WorldWriteLogCommand::LargessLog(record))
+        })
     }
 
     /// Выполняет доменную выдачу и сразу публикует её optional log в общий FIFO.
@@ -7291,7 +7387,8 @@ impl CGame {
         seller_money: Option<u32>,
     ) -> Option<WorldAuctionSellerMoney> {
         let seller_money = seller_money? as i32;
-        let mut fee = truncate_scaled_legacy_money(seller_money, globe_setup.auction_factor_c());
+        let mut fee =
+            truncate_scaled_legacy_money(seller_money, globe_setup.auction_factor_c());
         if f64::from(fee) < f64::from(globe_setup.auction_fee_minimum()) {
             fee = truncate_legacy_money(f64::from(globe_setup.auction_fee_minimum()));
         }
@@ -7335,9 +7432,12 @@ impl CGame {
 
     /// Ordered C-string view initial-config `m_mapScript_FileData`.
     pub(crate) fn initial_script_files(&self) -> impl Iterator<Item = (&[u8], &[u8])> + '_ {
-        self.script_file_data
-            .iter()
-            .map(|(path, data)| (legacy_c_string_prefix(path), legacy_c_string_prefix(data)))
+        self.script_file_data.iter().map(|(path, data)| {
+            (
+                legacy_c_string_prefix(path),
+                legacy_c_string_prefix(data),
+            )
+        })
     }
 
     /// Загружает один script и заменяет прежний owner с тем же normalized key.
@@ -8189,7 +8289,11 @@ impl CGame {
                         self.trade_list
                             .load_from_bytes(
                                 &source,
-                                &mut |id| string_table.get_string_by_id(id).map(ToOwned::to_owned),
+                                &mut |id| {
+                                    string_table
+                                        .get_string_by_id(id)
+                                        .map(ToOwned::to_owned)
+                                },
                                 &mut |original_name| {
                                     context.query_goods_id_by_original_name(original_name)
                                 },
@@ -8246,11 +8350,10 @@ impl CGame {
                 let loaded = match context.read_resource(PATH) {
                     Some(source) => {
                         let string_table = self.string_table.table();
-                        match context
-                            .new_skill_monster_conf()
-                            .load_from_bytes(&source, &mut |key| {
-                                string_table.get_string_by_id(key).map(ToOwned::to_owned)
-                            }) {
+                        match context.new_skill_monster_conf().load_from_bytes(
+                            &source,
+                            &mut |key| string_table.get_string_by_id(key).map(ToOwned::to_owned),
+                        ) {
                             Ok(report) => {
                                 for count in report.read_monster_counts {
                                     let count = count as u32 as i32;
@@ -8399,8 +8502,7 @@ impl CGame {
                     WorldReloadBooleanOwner::RegionLevelSetup,
                     b"Load regionlevelsetup.ini...OK!",
                     b"Load regionlevelsetup.ini...FAILED!",
-                ) && send_to_game_servers
-                {
+                ) && send_to_game_servers {
                     self.serialize_reload_owner(
                         context,
                         WorldReloadSerializationOwner::RegionLevelSetup,
@@ -8520,20 +8622,21 @@ impl CGame {
                 const PATH: &[u8] = b"setup/incrementshoplist.ini";
                 let loaded = match context.read_resource(PATH) {
                     Some(source) => {
-                        let result =
-                            self.increment_shop_list
-                                .load_from_bytes(&source, &mut |query| match query {
-                                    IncrementShopGoodsQuery::OriginalName(name) => {
-                                        IncrementShopGoodsResult::Id(
-                                            context.query_goods_id_by_original_name(name),
-                                        )
-                                    }
-                                    IncrementShopGoodsQuery::DisplayName(goods_id) => {
-                                        IncrementShopGoodsResult::Name(
-                                            context.query_goods_name(goods_id),
-                                        )
-                                    }
-                                });
+                        let result = self.increment_shop_list.load_from_bytes(
+                            &source,
+                            &mut |query| match query {
+                                IncrementShopGoodsQuery::OriginalName(name) => {
+                                    IncrementShopGoodsResult::Id(
+                                        context.query_goods_id_by_original_name(name),
+                                    )
+                                }
+                                IncrementShopGoodsQuery::DisplayName(goods_id) => {
+                                    IncrementShopGoodsResult::Name(
+                                        context.query_goods_name(goods_id),
+                                    )
+                                }
+                            },
+                        );
                         match result {
                             Ok(report) => {
                                 for warning in report.warnings {
@@ -8713,15 +8816,16 @@ impl CGame {
                     Some(source) => match context.change_body_conf().load_from_bytes(&source) {
                         Ok(()) => true,
                         Err(error) => {
-                            let diagnostic = self.get_string_by_id(error.string_id()).to_vec();
+                            let diagnostic = self
+                                .get_string_by_id(error.string_id())
+                                .to_vec();
                             context.add_log_text(&diagnostic);
                             false
                         }
                     },
                     None => {
                         context.change_body_conf().clear();
-                        let diagnostic =
-                            format_legacy_percent_s(self.get_string_by_id(b"GS1148"), PATH);
+                        let diagnostic = format_legacy_percent_s(self.get_string_by_id(b"GS1148"), PATH);
                         context.add_log_text(&diagnostic);
                         false
                     }
@@ -8747,21 +8851,20 @@ impl CGame {
             WorldReloadProfile::BattleFairyExp => {
                 const PATH: &[u8] = b"BattleFairyReleate/BattleFairyExp.xml";
                 let loaded = match context.read_resource(PATH) {
-                    Some(source) => {
-                        match context.battle_fairy_exp_config().load_from_bytes(&source) {
-                            Ok(_) => true,
-                            Err(error) => {
-                                let diagnostic = self
-                                    .string_table
-                                    .table()
-                                    .get_string_by_id(error.string_id())
-                                    .map(ToOwned::to_owned)
-                                    .unwrap_or_default();
-                                context.add_log_text(&diagnostic);
-                                false
-                            }
+                    Some(source) => match context.battle_fairy_exp_config().load_from_bytes(&source)
+                    {
+                        Ok(_) => true,
+                        Err(error) => {
+                            let diagnostic = self
+                                .string_table
+                                .table()
+                                .get_string_by_id(error.string_id())
+                                .map(ToOwned::to_owned)
+                                .unwrap_or_default();
+                            context.add_log_text(&diagnostic);
+                            false
                         }
-                    }
+                    },
                     None => {
                         context.battle_fairy_exp_config().clear();
                         let diagnostic = self
@@ -8823,13 +8926,17 @@ impl CGame {
                         // тот же `WorldReloadContext`, а после точного loader-а state
                         // возвращается в его единственный runtime slot.
                         let mut synthesis = std::mem::take(context.synthesis());
-                        let result = synthesis.load_from_bytes(&source, |original_name| {
-                            let goods_id = context.query_goods_id_by_original_name(original_name);
-                            let goods_name = (goods_id != 0)
-                                .then(|| context.query_goods_name(goods_id))
-                                .flatten();
-                            (goods_id, goods_name)
-                        });
+                        let result = synthesis.load_from_bytes(
+                            &source,
+                            |original_name| {
+                                let goods_id =
+                                    context.query_goods_id_by_original_name(original_name);
+                                let goods_name = (goods_id != 0)
+                                    .then(|| context.query_goods_name(goods_id))
+                                    .flatten();
+                                (goods_id, goods_name)
+                            },
+                        );
                         *context.synthesis() = synthesis;
                         match result {
                             Ok(_) => true,
@@ -8990,11 +9097,10 @@ impl CGame {
             WorldReloadProfile::CiQing => {
                 const PATH: &[u8] = b"/data/ciqing.ini";
                 let source = context.read_resource(PATH);
-                let succeeded = self
-                    .ci_qing_setup
-                    .read_setup_file(source.as_deref(), |original_name| {
-                        context.query_goods_id_by_original_name(original_name)
-                    });
+                let succeeded = self.ci_qing_setup.read_setup_file(
+                    source.as_deref(),
+                    |original_name| context.query_goods_id_by_original_name(original_name),
+                );
                 context.add_log_text(if succeeded {
                     b"Add ciqing.ini...ok!"
                 } else {
@@ -9039,7 +9145,9 @@ impl CGame {
                 const PATH: &[u8] = b"/data/LeitingAction.ini";
                 let loaded = if let Some(source) = context.read_resource(PATH) {
                     self.thing_setup
-                        .load_all_thing_list(&source, PATH, |payload| context.add_log_text(payload))
+                        .load_all_thing_list(&source, PATH, |payload| {
+                            context.add_log_text(payload)
+                        })
                         .is_ok()
                 } else {
                     self.thing_setup.clear_all_things_for_load();
@@ -9207,7 +9315,10 @@ impl CGame {
 
     /// Выделяет следующий signed leave-word ID с точным x86 wrapping.
     pub(crate) fn allocate_leave_word_id(&mut self) -> Result<i32, WorldLeaveWordIdBlock> {
-        let leave_word_id = self.leave_word_id.as_mut().ok_or(WorldLeaveWordIdBlock)?;
+        let leave_word_id = self
+            .leave_word_id
+            .as_mut()
+            .ok_or(WorldLeaveWordIdBlock)?;
         *leave_word_id = leave_word_id.wrapping_add(1);
         Ok(*leave_word_id)
     }
@@ -10314,9 +10425,16 @@ impl CGame {
         events.push(WorldGameInitEvent::StringTablesCleared);
         const DEFAULT_LANGUAGE: &[u8] = b"data/Language.lag";
         let default_language_source = context.read_resource(DEFAULT_LANGUAGE);
-        let default_language =
-            self.load_string_table_resource(DEFAULT_LANGUAGE, default_language_source.as_deref());
-        self.record_game_init_log(&mut events, log, callbacks, &default_language.log_payload);
+        let default_language = self.load_string_table_resource(
+            DEFAULT_LANGUAGE,
+            default_language_source.as_deref(),
+        );
+        self.record_game_init_log(
+            &mut events,
+            log,
+            callbacks,
+            &default_language.log_payload,
+        );
         if !default_language.succeeded {
             self.record_game_init_log(
                 &mut events,
@@ -10385,14 +10503,17 @@ impl CGame {
         events.push(WorldGameInitEvent::DatabaseLayerInitialized);
         let jjc_configuration = Self::load_jjc_configuration_from_resources(jjc, context);
         if let Some(path) = jjc_configuration.missing_path() {
-            Self::record_game_init_notice(&mut events, context, b"file not found", path);
+            Self::record_game_init_notice(
+                &mut events,
+                context,
+                b"file not found",
+                path,
+            );
             stop!(WorldGameInitBlockReason::JjcConfiguration(
                 jjc_configuration,
             ));
         }
-        events.push(WorldGameInitEvent::JjcConfigurationLoaded(
-            jjc_configuration,
-        ));
+        events.push(WorldGameInitEvent::JjcConfigurationLoaded(jjc_configuration));
 
         if let Err(block) = context.create_database_owner(WorldGameDatabaseOwner::RsPlayer) {
             stop!(WorldGameInitBlockReason::Context(block));
@@ -10649,11 +10770,10 @@ impl CGame {
         events.push(WorldGameInitEvent::AttackCityInitialized(
             attack_city_initialization,
         ));
-        let attack_city_relations =
-            match attack_city.initial_city_all_faction_enemy_relation(context) {
-                Ok(report) => report,
-                Err(source) => stop!(WorldGameInitBlockReason::AttackCityEnemyRelation(source)),
-            };
+        let attack_city_relations = match attack_city.initial_city_all_faction_enemy_relation(context) {
+            Ok(report) => report,
+            Err(source) => stop!(WorldGameInitBlockReason::AttackCityEnemyRelation(source)),
+        };
         events.push(WorldGameInitEvent::AttackCityEnemyRelationsInitialized(
             attack_city_relations,
         ));
@@ -10748,11 +10868,15 @@ impl CGame {
                 .region = Some(region_owner);
             let report = match relation {
                 Ok(report) => report,
-                Err(source) => {
-                    stop!(WorldGameInitBlockReason::RegionOwnerRelation { region_id, source })
-                }
+                Err(source) => stop!(WorldGameInitBlockReason::RegionOwnerRelation {
+                    region_id,
+                    source,
+                }),
             };
-            events.push(WorldGameInitEvent::RegionOwnerRelationInitialized { region_id, report });
+            events.push(WorldGameInitEvent::RegionOwnerRelationInitialized {
+                region_id,
+                report,
+            });
         }
 
         self.record_game_init_log(
@@ -10762,10 +10886,7 @@ impl CGame {
             b"Load FactionWarSys:EnemyFactions...",
         );
         faction_war.clear_enemy_factions_for_load();
-        let faction_war_load = context
-            .enemy_factions_database()
-            .load_all_enemy_factions()
-            .await;
+        let faction_war_load = context.enemy_factions_database().load_all_enemy_factions().await;
         self.record_game_init_log(
             &mut events,
             log,
@@ -10845,11 +10966,12 @@ impl CGame {
         events.push(WorldGameInitEvent::PlayerRanksLoaded(player_ranks_stat));
 
         let country_parameter_source = context.country_parameter_source();
-        let country_parameter_report =
-            match country_parameters.initialize(country_parameter_source.as_deref()) {
-                Ok(report) => report,
-                Err(source) => stop!(WorldGameInitBlockReason::CountryParameters(source)),
-            };
+        let country_parameter_report = match country_parameters
+            .initialize(country_parameter_source.as_deref())
+        {
+            Ok(report) => report,
+            Err(source) => stop!(WorldGameInitBlockReason::CountryParameters(source)),
+        };
         events.push(WorldGameInitEvent::CountryParametersLoaded(
             country_parameter_report,
         ));
@@ -11039,8 +11161,8 @@ impl CGame {
         events.push(WorldGameInitEvent::WorkerStarted { kind, handle });
         for worker_index in 0..player_load_thread_count {
             let kind = WorldGameInitWorkerKind::LoadPlayerData { worker_index };
-            let handle =
-                context.start_player_load_worker(self.player_load_worker_spec(), worker_index);
+            let handle = context
+                .start_player_load_worker(self.player_load_worker_spec(), worker_index);
             events.push(WorldGameInitEvent::WorkerStarted { kind, handle });
         }
 
@@ -11810,20 +11932,27 @@ impl CGame {
         faction_create_log_enabled: bool,
         write_faction_create_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
         faction_title_log_enabled: bool,
-        write_faction_title_log: &mut dyn FnMut(i32, &[u8], &[u8], &[u8], i32, &[u8], i32, &[u8]),
+        write_faction_title_log:
+            &mut dyn FnMut(i32, &[u8], &[u8], &[u8], i32, &[u8], i32, &[u8]),
         faction_purview_add_log_enabled: bool,
         faction_purview_revoke_log_enabled: bool,
-        write_faction_purview_log: &mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
+        write_faction_purview_log:
+            &mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
         faction_apply_log_enabled: bool,
-        write_faction_apply_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
+        write_faction_apply_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
         faction_join_log_enabled: bool,
-        write_faction_join_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
+        write_faction_join_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
         faction_quit_log_enabled: bool,
-        write_faction_quit_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
+        write_faction_quit_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
         faction_fire_out_log_enabled: bool,
-        write_faction_fire_out_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
+        write_faction_fire_out_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
         faction_master_log_enabled: bool,
-        write_faction_master_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
+        write_faction_master_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
         faction_disband_log_enabled: bool,
         write_faction_disband_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
         rs_player: &mut TiberiusRsPlayer,
@@ -11865,81 +11994,79 @@ impl CGame {
             if let Some(event) = event {
                 match event {
                     WorldServerEvent::Message(message) => {
-                        events.push(
-                            process_world_message(
-                                self,
-                                honor_ranks,
-                                increment_log,
-                                auction_log,
-                                db_misc,
-                                &mut *db_misc_context,
-                                organizing,
-                                organizing_parameters,
-                                country_handler,
-                                country_parameters,
-                                player_list,
-                                country_war,
-                                four_nation_war,
-                                country_limits,
-                                faction_war_sys,
-                                attack_city,
-                                attack_city_callbacks,
-                                globe_setup,
-                                region_router,
-                                village_war,
-                                goods_war,
-                                timer,
-                                village_war_callbacks,
-                                registry,
-                                original_name_index,
-                                coefficients,
-                                &mut *load_player_largess,
-                                net_sessions,
-                                jjc,
-                                jjc_config,
-                                jjc_context,
-                                application_runtime,
-                                application_callbacks,
-                                &mut *check_invalid_organizing_string,
-                                faction_chat_log_enabled,
-                                private_chat_log_enabled,
-                                delete_log_enabled,
-                                faction_create_log_enabled,
-                                &mut *write_faction_create_log,
-                                faction_title_log_enabled,
-                                &mut *write_faction_title_log,
-                                faction_purview_add_log_enabled,
-                                faction_purview_revoke_log_enabled,
-                                &mut *write_faction_purview_log,
-                                faction_apply_log_enabled,
-                                &mut *write_faction_apply_log,
-                                faction_join_log_enabled,
-                                &mut *write_faction_join_log,
-                                faction_quit_log_enabled,
-                                &mut *write_faction_quit_log,
-                                faction_fire_out_log_enabled,
-                                &mut *write_faction_fire_out_log,
-                                faction_master_log_enabled,
-                                &mut *write_faction_master_log,
-                                faction_disband_log_enabled,
-                                &mut *write_faction_disband_log,
-                                &mut *rs_player,
-                                player_database.as_deref_mut(),
-                                &mut *save_thread_handle,
-                                &mut *launch_save_thread,
-                                &mut *session_factory,
-                                general_variables.as_deref_mut(),
-                                &mut *gods_battle,
-                                rs_gods_battle.as_deref_mut(),
-                                gods_battle_database.as_deref_mut(),
-                                &mut *reload_context,
-                                &mut *add_log_text,
-                                update_player,
-                                WorldMessageSource::GameServer,
-                                message,
-                            )
-                            .await,
-                        );
+                        events.push(process_world_message(
+                            self,
+                            honor_ranks,
+                            increment_log,
+                            auction_log,
+                            db_misc,
+                            &mut *db_misc_context,
+                            organizing,
+                            organizing_parameters,
+                            country_handler,
+                            country_parameters,
+                            player_list,
+                            country_war,
+                            four_nation_war,
+                            country_limits,
+                            faction_war_sys,
+                            attack_city,
+                            attack_city_callbacks,
+                            globe_setup,
+                            region_router,
+                            village_war,
+                            goods_war,
+                            timer,
+                            village_war_callbacks,
+                            registry,
+                            original_name_index,
+                            coefficients,
+                            &mut *load_player_largess,
+                            net_sessions,
+                            jjc,
+                            jjc_config,
+                            jjc_context,
+                            application_runtime,
+                            application_callbacks,
+                            &mut *check_invalid_organizing_string,
+                            faction_chat_log_enabled,
+                            private_chat_log_enabled,
+                            delete_log_enabled,
+                            faction_create_log_enabled,
+                            &mut *write_faction_create_log,
+                            faction_title_log_enabled,
+                            &mut *write_faction_title_log,
+                            faction_purview_add_log_enabled,
+                            faction_purview_revoke_log_enabled,
+                            &mut *write_faction_purview_log,
+                            faction_apply_log_enabled,
+                            &mut *write_faction_apply_log,
+                            faction_join_log_enabled,
+                            &mut *write_faction_join_log,
+                            faction_quit_log_enabled,
+                            &mut *write_faction_quit_log,
+                            faction_fire_out_log_enabled,
+                            &mut *write_faction_fire_out_log,
+                            faction_master_log_enabled,
+                            &mut *write_faction_master_log,
+                            faction_disband_log_enabled,
+                            &mut *write_faction_disband_log,
+                            &mut *rs_player,
+                            player_database.as_deref_mut(),
+                            &mut *save_thread_handle,
+                            &mut *launch_save_thread,
+                            &mut *session_factory,
+                            general_variables.as_deref_mut(),
+                            &mut *gods_battle,
+                            rs_gods_battle.as_deref_mut(),
+                            gods_battle_database.as_deref_mut(),
+                            &mut *reload_context,
+                            &mut *add_log_text,
+                            update_player,
+                            WorldMessageSource::GameServer,
+                            message,
+                        )
+                        .await);
                     }
                     WorldServerEvent::LoginClientReconnected(client) => {
                         let replacement = on_login_client_reconnected(self, client)
@@ -11965,81 +12092,79 @@ impl CGame {
                 .as_ref()
                 .and_then(CMyNetClient::pop_received_message);
             if let Some(message) = message {
-                events.push(
-                    process_world_message(
-                        self,
-                        honor_ranks,
-                        increment_log,
-                        auction_log,
-                        db_misc,
-                        &mut *db_misc_context,
-                        organizing,
-                        organizing_parameters,
-                        country_handler,
-                        country_parameters,
-                        player_list,
-                        country_war,
-                        four_nation_war,
-                        country_limits,
-                        faction_war_sys,
-                        attack_city,
-                        attack_city_callbacks,
-                        globe_setup,
-                        region_router,
-                        village_war,
-                        goods_war,
-                        timer,
-                        village_war_callbacks,
-                        registry,
-                        original_name_index,
-                        coefficients,
-                        &mut *load_player_largess,
-                        net_sessions,
-                        jjc,
-                        jjc_config,
-                        jjc_context,
-                        application_runtime,
-                        application_callbacks,
-                        &mut *check_invalid_organizing_string,
-                        faction_chat_log_enabled,
-                        private_chat_log_enabled,
-                        delete_log_enabled,
-                        faction_create_log_enabled,
-                        &mut *write_faction_create_log,
-                        faction_title_log_enabled,
-                        &mut *write_faction_title_log,
-                        faction_purview_add_log_enabled,
-                        faction_purview_revoke_log_enabled,
-                        &mut *write_faction_purview_log,
-                        faction_apply_log_enabled,
-                        &mut *write_faction_apply_log,
-                        faction_join_log_enabled,
-                        &mut *write_faction_join_log,
-                        faction_quit_log_enabled,
-                        &mut *write_faction_quit_log,
-                        faction_fire_out_log_enabled,
-                        &mut *write_faction_fire_out_log,
-                        faction_master_log_enabled,
-                        &mut *write_faction_master_log,
-                        faction_disband_log_enabled,
-                        &mut *write_faction_disband_log,
-                        &mut *rs_player,
-                        player_database.as_deref_mut(),
-                        &mut *save_thread_handle,
-                        &mut *launch_save_thread,
-                        &mut *session_factory,
-                        general_variables.as_deref_mut(),
-                        &mut *gods_battle,
-                        rs_gods_battle.as_deref_mut(),
-                        gods_battle_database.as_deref_mut(),
-                        &mut *reload_context,
-                        &mut *add_log_text,
-                        update_player,
-                        WorldMessageSource::LoginServer,
-                        message,
-                    )
-                    .await,
-                );
+                events.push(process_world_message(
+                    self,
+                    honor_ranks,
+                    increment_log,
+                    auction_log,
+                    db_misc,
+                    &mut *db_misc_context,
+                    organizing,
+                    organizing_parameters,
+                    country_handler,
+                    country_parameters,
+                    player_list,
+                    country_war,
+                    four_nation_war,
+                    country_limits,
+                    faction_war_sys,
+                    attack_city,
+                    attack_city_callbacks,
+                    globe_setup,
+                    region_router,
+                    village_war,
+                    goods_war,
+                    timer,
+                    village_war_callbacks,
+                    registry,
+                    original_name_index,
+                    coefficients,
+                    &mut *load_player_largess,
+                    net_sessions,
+                    jjc,
+                    jjc_config,
+                    jjc_context,
+                    application_runtime,
+                    application_callbacks,
+                    &mut *check_invalid_organizing_string,
+                    faction_chat_log_enabled,
+                    private_chat_log_enabled,
+                    delete_log_enabled,
+                    faction_create_log_enabled,
+                    &mut *write_faction_create_log,
+                    faction_title_log_enabled,
+                    &mut *write_faction_title_log,
+                    faction_purview_add_log_enabled,
+                    faction_purview_revoke_log_enabled,
+                    &mut *write_faction_purview_log,
+                    faction_apply_log_enabled,
+                    &mut *write_faction_apply_log,
+                    faction_join_log_enabled,
+                    &mut *write_faction_join_log,
+                    faction_quit_log_enabled,
+                    &mut *write_faction_quit_log,
+                    faction_fire_out_log_enabled,
+                    &mut *write_faction_fire_out_log,
+                    faction_master_log_enabled,
+                    &mut *write_faction_master_log,
+                    faction_disband_log_enabled,
+                    &mut *write_faction_disband_log,
+                    &mut *rs_player,
+                    player_database.as_deref_mut(),
+                    &mut *save_thread_handle,
+                    &mut *launch_save_thread,
+                    &mut *session_factory,
+                    general_variables.as_deref_mut(),
+                    &mut *gods_battle,
+                    rs_gods_battle.as_deref_mut(),
+                    gods_battle_database.as_deref_mut(),
+                    &mut *reload_context,
+                    &mut *add_log_text,
+                    update_player,
+                    WorldMessageSource::LoginServer,
+                    message,
+                )
+                .await);
             }
             login_remaining -= 1;
             login_slots_visited += 1;
@@ -12110,20 +12235,27 @@ impl CGame {
         faction_create_log_enabled: bool,
         write_faction_create_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
         faction_title_log_enabled: bool,
-        write_faction_title_log: &mut dyn FnMut(i32, &[u8], &[u8], &[u8], i32, &[u8], i32, &[u8]),
+        write_faction_title_log:
+            &mut dyn FnMut(i32, &[u8], &[u8], &[u8], i32, &[u8], i32, &[u8]),
         faction_purview_add_log_enabled: bool,
         faction_purview_revoke_log_enabled: bool,
-        write_faction_purview_log: &mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
+        write_faction_purview_log:
+            &mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
         faction_apply_log_enabled: bool,
-        write_faction_apply_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
+        write_faction_apply_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
         faction_join_log_enabled: bool,
-        write_faction_join_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
+        write_faction_join_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
         faction_quit_log_enabled: bool,
-        write_faction_quit_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
+        write_faction_quit_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
         faction_fire_out_log_enabled: bool,
-        write_faction_fire_out_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
+        write_faction_fire_out_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
         faction_master_log_enabled: bool,
-        write_faction_master_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
+        write_faction_master_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
         faction_disband_log_enabled: bool,
         write_faction_disband_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
         rs_player: &mut TiberiusRsPlayer,
@@ -12163,77 +12295,76 @@ impl CGame {
                 &mut *put_log_info,
             )
         };
-        let outcome = match self
-            .process_message(
-                honor_ranks,
-                increment_log,
-                auction_log,
-                db_misc,
-                db_misc_context,
-                organizing,
-                organizing_parameters,
-                country_handler,
-                country_parameters,
-                player_list,
-                country_war,
-                four_nation_war,
-                country_limits,
-                faction_war_sys,
-                attack_city,
-                attack_city_callbacks,
-                globe_setup,
-                region_router,
-                village_war,
-                goods_war,
-                timer,
-                village_war_callbacks,
-                registry,
-                original_name_index,
-                coefficients,
-                load_player_largess,
-                net_sessions,
-                jjc,
-                jjc_config,
-                jjc_context,
-                application_runtime,
-                application_callbacks,
-                check_invalid_organizing_string,
-                faction_chat_log_enabled,
-                private_chat_log_enabled,
-                delete_log_enabled,
-                faction_create_log_enabled,
-                write_faction_create_log,
-                faction_title_log_enabled,
-                write_faction_title_log,
-                faction_purview_add_log_enabled,
-                faction_purview_revoke_log_enabled,
-                write_faction_purview_log,
-                faction_apply_log_enabled,
-                write_faction_apply_log,
-                faction_join_log_enabled,
-                write_faction_join_log,
-                faction_quit_log_enabled,
-                write_faction_quit_log,
-                faction_fire_out_log_enabled,
-                write_faction_fire_out_log,
-                faction_master_log_enabled,
-                write_faction_master_log,
-                faction_disband_log_enabled,
-                write_faction_disband_log,
-                rs_player,
-                player_database,
-                save_thread_handle,
-                launch_save_thread,
-                session_factory,
-                general_variables,
-                gods_battle,
-                rs_gods_battle,
-                gods_battle_database,
-                reload_context,
-                &mut add_log_text,
-                update_player,
-            )
-            .await
+        let outcome = match self.process_message(
+            honor_ranks,
+            increment_log,
+            auction_log,
+            db_misc,
+            db_misc_context,
+            organizing,
+            organizing_parameters,
+            country_handler,
+            country_parameters,
+            player_list,
+            country_war,
+            four_nation_war,
+            country_limits,
+            faction_war_sys,
+            attack_city,
+            attack_city_callbacks,
+            globe_setup,
+            region_router,
+            village_war,
+            goods_war,
+            timer,
+            village_war_callbacks,
+            registry,
+            original_name_index,
+            coefficients,
+            load_player_largess,
+            net_sessions,
+            jjc,
+            jjc_config,
+            jjc_context,
+            application_runtime,
+            application_callbacks,
+            check_invalid_organizing_string,
+            faction_chat_log_enabled,
+            private_chat_log_enabled,
+            delete_log_enabled,
+            faction_create_log_enabled,
+            write_faction_create_log,
+            faction_title_log_enabled,
+            write_faction_title_log,
+            faction_purview_add_log_enabled,
+            faction_purview_revoke_log_enabled,
+            write_faction_purview_log,
+            faction_apply_log_enabled,
+            write_faction_apply_log,
+            faction_join_log_enabled,
+            write_faction_join_log,
+            faction_quit_log_enabled,
+            write_faction_quit_log,
+            faction_fire_out_log_enabled,
+            write_faction_fire_out_log,
+            faction_master_log_enabled,
+            write_faction_master_log,
+            faction_disband_log_enabled,
+            write_faction_disband_log,
+            rs_player,
+            player_database,
+            save_thread_handle,
+            launch_save_thread,
+            session_factory,
+            general_variables,
+            gods_battle,
+            rs_gods_battle,
+            gods_battle_database,
+            reload_context,
+            &mut add_log_text,
+            update_player,
+        )
+        .await
         {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -12323,7 +12454,9 @@ impl CGame {
         &mut self,
         player_id: u32,
     ) -> Vec<WorldFriendPresenceUpdate> {
-        let friend_count = self.map_player(player_id).map_or(0, CPlayer::friend_count);
+        let friend_count = self
+            .map_player(player_id)
+            .map_or(0, CPlayer::friend_count);
         let mut updates = Vec::with_capacity(friend_count);
         for friend_index in 0..friend_count {
             let (friend_name, player_name) = {
@@ -12419,7 +12552,11 @@ impl CGame {
             unreachable!("map key удалён непосредственно перед AppendMapPlayer")
         };
         debug_assert_eq!(inserted_player_id, player_id);
-        (online_removal, replaced_existing_player, login_time_ms)
+        (
+            online_removal,
+            replaced_existing_player,
+            login_time_ms,
+        )
     }
 
     /// Проводит уже полученного player-owner-а по общей direct/DB-load цепочке.
@@ -12536,7 +12673,12 @@ impl CGame {
                 WorldLoadedPlayerRouteOrder::LoadedQueue => {
                     let friend_updates = self.update_detached_player_friends(&mut player);
                     let (online_removal, replaced_existing_player, login_time_ms) = self
-                        .publish_loaded_player(organizing_ctrl, player_id, player, &mut get_tick);
+                        .publish_loaded_player(
+                            organizing_ctrl,
+                            player_id,
+                            player,
+                            &mut get_tick,
+                        );
                     (
                         friend_updates,
                         online_removal,
@@ -12546,7 +12688,12 @@ impl CGame {
                 }
                 WorldLoadedPlayerRouteOrder::Direct => {
                     let (online_removal, replaced_existing_player, login_time_ms) = self
-                        .publish_loaded_player(organizing_ctrl, player_id, player, &mut get_tick);
+                        .publish_loaded_player(
+                            organizing_ctrl,
+                            player_id,
+                            player,
+                            &mut get_tick,
+                        );
                     let friend_updates = self.update_published_player_friends(player_id);
                     self.players
                         .get_mut(&player_id)
@@ -12672,7 +12819,12 @@ impl CGame {
         clippy::too_many_arguments,
         reason = "timer callback сохраняет явные DB, ranking, clock и log owners"
     )]
-    pub(crate) async fn run_main_loop_timer_stage<Callback, GetTick, GetTimerLocalTime, Dispatch>(
+    pub(crate) async fn run_main_loop_timer_stage<
+        Callback,
+        GetTick,
+        GetTimerLocalTime,
+        Dispatch,
+    >(
         &self,
         timer: &mut CTimer<Callback>,
         country_war: &mut CountryWarSys,
@@ -12693,7 +12845,8 @@ impl CGame {
         get_log_local_time: &mut dyn FnMut() -> WorldLogLocalTime,
         put_log_info: &mut dyn FnMut(&[u8]),
         world_string_by_id: &mut dyn FnMut(&[u8]) -> Vec<u8>,
-        format_world_string: &mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+        format_world_string:
+            &mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
         dispatch: &mut Dispatch,
     ) -> Result<WorldMainLoopTimerStageReport, WorldMainLoopTimerStageBlock>
     where
@@ -12869,8 +13022,10 @@ impl CGame {
             refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
             faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
             write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-            faction_experience_log_enabled: application_callbacks.faction_experience_log_enabled,
-            write_faction_experience_log: &mut *application_callbacks.write_faction_experience_log,
+            faction_experience_log_enabled:
+                application_callbacks.faction_experience_log_enabled,
+            write_faction_experience_log:
+                &mut *application_callbacks.write_faction_experience_log,
         };
         let mut effects =
             WorldUnionApplicationEffects::new(self, manager, application_runtime, callbacks);
@@ -12979,11 +13134,13 @@ impl CGame {
         globe_setup: &GlobeSetupSnapshot,
         mut get_tick: GetTick,
         world_string: &mut dyn FnMut(&[u8]) -> Vec<u8>,
-        format_world_string: &mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+        format_world_string:
+            &mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
         refresh_owned_city: &mut dyn FnMut(i32, i32, i32),
         update_player: &mut dyn FnMut(i32),
         faction_master_log_enabled: bool,
-        write_faction_master_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
+        write_faction_master_log:
+            &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
         faction_disband_log_enabled: bool,
         write_faction_disband_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
     ) -> Result<WorldMainLoopMinuteStageReport, WorldMainLoopMinuteStageBlock>
@@ -12997,7 +13154,8 @@ impl CGame {
             .wrapping_sub(clocks.minute_started_at_ms)
             .wrapping_div(60_000) as i32;
 
-        let faction_disband_log_enabled = self.setup.use_log_system && faction_disband_log_enabled;
+        let faction_disband_log_enabled =
+            self.setup.use_log_system && faction_disband_log_enabled;
         let organizing_report = organizing
             .run(minute_delta, |organizing, player_id, faction_id| {
                 let outcome = {
@@ -13009,7 +13167,12 @@ impl CGame {
                         goods_war: &mut *goods_war,
                         world_string: &mut *world_string,
                     };
-                    organizing.disband_faction(&*self, player_id, faction_id, &mut effects)?
+                    organizing.disband_faction(
+                        &*self,
+                        player_id,
+                        faction_id,
+                        &mut effects,
+                    )?
                 };
                 let OrganizingDisbandOutcome::Disbanded {
                     mut progress,
@@ -13019,7 +13182,9 @@ impl CGame {
                     return Ok(false);
                 };
                 progress.player = self.clear_disbanded_player_faction_data(player_id);
-                if faction_disband_log_enabled && let Some(player) = progress.player.as_ref() {
+                if faction_disband_log_enabled
+                    && let Some(player) = progress.player.as_ref()
+                {
                     write_faction_disband_log(
                         faction_id,
                         legacy_c_string_prefix(retired_faction.name()),
@@ -13222,8 +13387,12 @@ impl CGame {
             );
 
             let team_session_id = self.get_team_session_id(team_id as u32);
-            let team_exit =
-                self.exit_team_player(session_factory, team_session_id, owner_type, owner_id);
+            let team_exit = self.exit_team_player(
+                session_factory,
+                team_session_id,
+                owner_type,
+                owner_id,
+            );
 
             let removed = self.login_players.remove(login_index);
             debug_assert_eq!(removed.map(|entry| entry.player_id), Some(login.player_id));
@@ -13496,24 +13665,23 @@ impl CGame {
             }
         };
 
-        let maintenance = self
-            .run_main_loop_maintenance_stage(
-                state.player_ranks_request,
-                configuration.use_appellation_function,
-                owners.player_ranks,
-                owners.rs_player,
-                owners.player_database.as_deref_mut(),
-                owners.organizing,
-                owners.honor_ranks,
-                owners.auction_log,
-                owners.auction_log_database.as_deref_mut(),
-                owners.log,
-                &mut callbacks.get_tick,
-                &mut callbacks.get_log_local_time,
-                &mut callbacks.get_auction_month_day,
-                &mut callbacks.put_log_info,
-            )
-            .await;
+        let maintenance = self.run_main_loop_maintenance_stage(
+            state.player_ranks_request,
+            configuration.use_appellation_function,
+            owners.player_ranks,
+            owners.rs_player,
+            owners.player_database.as_deref_mut(),
+            owners.organizing,
+            owners.honor_ranks,
+            owners.auction_log,
+            owners.auction_log_database.as_deref_mut(),
+            owners.log,
+            &mut callbacks.get_tick,
+            &mut callbacks.get_log_local_time,
+            &mut callbacks.get_auction_month_day,
+            &mut callbacks.put_log_info,
+        )
+        .await;
         let maintenance = match maintenance {
             Ok(maintenance) => maintenance,
             Err(block) => return Err(Box::new(WorldMainLoopBlock::Maintenance(block))),
@@ -13616,82 +13784,81 @@ impl CGame {
             faction_experience_log_enabled: callbacks.faction_experience_log_enabled,
             write_faction_experience_log: &mut *callbacks.write_faction_experience_log,
         };
-        let process_message = match self
-            .process_message_main_loop_stage(
-                owners.honor_ranks,
-                owners.increment_log,
-                owners.auction_log,
-                &*owners.db_misc,
-                owners.db_misc_context,
-                owners.organizing,
-                owners.organizing_parameters,
-                owners.country,
-                owners.country_parameters,
-                owners.player_list,
-                owners.country_war,
-                owners.four_nation_war,
-                configuration.country_limits,
-                owners.faction_war,
-                owners.attack_city,
-                owners.attack_city_callbacks,
-                owners.globe_setup,
-                owners.region_router,
-                owners.village_war,
-                owners.goods_war,
-                owners.timer,
-                owners.village_war_callbacks,
-                owners.registry,
-                owners.original_name_index,
-                owners.coefficients,
-                &mut *owners.load_player_largess,
-                owners.net_sessions,
-                owners.jjc,
-                configuration.jjc,
-                owners.jjc_context,
-                owners.union_application_runtime,
-                &mut union_application_callbacks,
-                &mut *callbacks.check_invalid_organizing_string,
-                callbacks.faction_chat_log_enabled,
-                callbacks.private_chat_log_enabled,
-                callbacks.delete_log_enabled,
-                callbacks.faction_create_log_enabled,
-                &mut *callbacks.write_faction_create_log,
-                callbacks.faction_title_log_enabled,
-                &mut *callbacks.write_faction_title_log,
-                callbacks.faction_purview_add_log_enabled,
-                callbacks.faction_purview_revoke_log_enabled,
-                &mut *callbacks.write_faction_purview_log,
-                callbacks.faction_apply_log_enabled,
-                &mut *callbacks.write_faction_apply_log,
-                callbacks.faction_join_log_enabled,
-                &mut *callbacks.write_faction_join_log,
-                callbacks.faction_quit_log_enabled,
-                &mut *callbacks.write_faction_quit_log,
-                callbacks.faction_fire_out_log_enabled,
-                &mut *callbacks.write_faction_fire_out_log,
-                callbacks.faction_master_log_enabled,
-                &mut *callbacks.write_faction_master_log,
-                callbacks.faction_disband_log_enabled,
-                &mut *callbacks.write_faction_disband_log,
-                owners.rs_player,
-                owners.player_database.as_deref_mut(),
-                state.save_thread_handle,
-                &mut *callbacks.launch_save_thread,
-                owners.session_factory,
-                owners.general_variables.as_deref_mut(),
-                owners.gods_battle,
-                owners.rs_gods_battle.as_deref_mut(),
-                owners.gods_battle_database.as_deref_mut(),
-                &mut *callbacks.reload_context,
-                owners.log,
-                &mut *callbacks.get_log_local_time,
-                &mut *callbacks.put_log_info,
-                &mut *callbacks.update_union_player,
-                state.clocks,
-                state.process_message,
-                &mut *callbacks.get_tick,
-            )
-            .await
+        let process_message = match self.process_message_main_loop_stage(
+            owners.honor_ranks,
+            owners.increment_log,
+            owners.auction_log,
+            &*owners.db_misc,
+            owners.db_misc_context,
+            owners.organizing,
+            owners.organizing_parameters,
+            owners.country,
+            owners.country_parameters,
+            owners.player_list,
+            owners.country_war,
+            owners.four_nation_war,
+            configuration.country_limits,
+            owners.faction_war,
+            owners.attack_city,
+            owners.attack_city_callbacks,
+            owners.globe_setup,
+            owners.region_router,
+            owners.village_war,
+            owners.goods_war,
+            owners.timer,
+            owners.village_war_callbacks,
+            owners.registry,
+            owners.original_name_index,
+            owners.coefficients,
+            &mut *owners.load_player_largess,
+            owners.net_sessions,
+            owners.jjc,
+            configuration.jjc,
+            owners.jjc_context,
+            owners.union_application_runtime,
+            &mut union_application_callbacks,
+            &mut *callbacks.check_invalid_organizing_string,
+            callbacks.faction_chat_log_enabled,
+            callbacks.private_chat_log_enabled,
+            callbacks.delete_log_enabled,
+            callbacks.faction_create_log_enabled,
+            &mut *callbacks.write_faction_create_log,
+            callbacks.faction_title_log_enabled,
+            &mut *callbacks.write_faction_title_log,
+            callbacks.faction_purview_add_log_enabled,
+            callbacks.faction_purview_revoke_log_enabled,
+            &mut *callbacks.write_faction_purview_log,
+            callbacks.faction_apply_log_enabled,
+            &mut *callbacks.write_faction_apply_log,
+            callbacks.faction_join_log_enabled,
+            &mut *callbacks.write_faction_join_log,
+            callbacks.faction_quit_log_enabled,
+            &mut *callbacks.write_faction_quit_log,
+            callbacks.faction_fire_out_log_enabled,
+            &mut *callbacks.write_faction_fire_out_log,
+            callbacks.faction_master_log_enabled,
+            &mut *callbacks.write_faction_master_log,
+            callbacks.faction_disband_log_enabled,
+            &mut *callbacks.write_faction_disband_log,
+            owners.rs_player,
+            owners.player_database.as_deref_mut(),
+            state.save_thread_handle,
+            &mut *callbacks.launch_save_thread,
+            owners.session_factory,
+            owners.general_variables.as_deref_mut(),
+            owners.gods_battle,
+            owners.rs_gods_battle.as_deref_mut(),
+            owners.gods_battle_database.as_deref_mut(),
+            &mut *callbacks.reload_context,
+            owners.log,
+            &mut *callbacks.get_log_local_time,
+            &mut *callbacks.put_log_info,
+            &mut *callbacks.update_union_player,
+            state.clocks,
+            state.process_message,
+            &mut *callbacks.get_tick,
+        )
+        .await
         {
             complete @ WorldProcessMessageStageReport::Complete { .. } => complete,
             blocked @ WorldProcessMessageStageReport::Blocked { .. } => {
@@ -13896,7 +14063,9 @@ impl CGame {
         if self.setup.world_number.is_none() {
             // BLOCKED_MISSING_FACT: TransferLargessThread форматировал `%d`
             // непосредственно из исходно неинициализированного dwNumber.
-            return WorldMainLoopLargessGateReport::BlockedMissingFact { field: "dwNumber" };
+            return WorldMainLoopLargessGateReport::BlockedMissingFact {
+                field: "dwNumber",
+            };
         }
 
         let elapsed_ms = clocks
@@ -14057,8 +14226,11 @@ impl CGame {
         }
         let finished_at_ms = get_tick();
         let elapsed_ms = finished_at_ms.wrapping_sub(started_at_ms);
-        let complete_text =
-            format!("PlayerRanks Stat. END(USED TIME:{}MS)", elapsed_ms as i32,).into_bytes();
+        let complete_text = format!(
+            "PlayerRanks Stat. END(USED TIME:{}MS)",
+            elapsed_ms as i32,
+        )
+        .into_bytes();
         let complete_log = log.add_log_text(
             &complete_text,
             self.setup.save_info_time_ms,
@@ -14127,7 +14299,10 @@ impl CGame {
             let publication = player_ranks
                 .update_ranks_to_game_server(sender.as_ref())
                 .map_err(WorldMainLoopMaintenanceBlock::PlayerRanksSerialization)?;
-            WorldPlayerRanksMaintenanceDisposition::Updated { stat, publication }
+            WorldPlayerRanksMaintenanceDisposition::Updated {
+                stat,
+                publication,
+            }
         } else {
             WorldPlayerRanksMaintenanceDisposition::NotRequested
         };
@@ -14152,19 +14327,17 @@ impl CGame {
                         &mut *get_local_time,
                         &mut *put_log_info,
                     );
-                    let rollover = honor_ranks_owner
-                        .on_new_day(self, false)
-                        .map_err(|source| {
-                            WorldMainLoopMaintenanceBlock::HonorRanks(
-                                WorldHonorRanksMaintenanceBlock {
-                                    current_day,
-                                    previous_sort_day,
-                                    started_at_ms,
-                                    start_log: start_log.clone(),
-                                    source,
-                                },
-                            )
-                        })?;
+                    let rollover = honor_ranks_owner.on_new_day(self, false).map_err(|source| {
+                        WorldMainLoopMaintenanceBlock::HonorRanks(
+                            WorldHonorRanksMaintenanceBlock {
+                                current_day,
+                                previous_sort_day,
+                                started_at_ms,
+                                start_log: start_log.clone(),
+                                source,
+                            },
+                        )
+                    })?;
                     let finished_at_ms = get_tick();
                     let elapsed_ms = finished_at_ms.wrapping_sub(started_at_ms);
                     let complete_text = format!(
@@ -14195,7 +14368,9 @@ impl CGame {
 
         let current_month_day = get_auction_month_day();
         let Some(old_month_day) = auction_log.old_auction_day() else {
-            return Err(WorldMainLoopMaintenanceBlock::AuctionOldDayUnknown { current_month_day });
+            return Err(WorldMainLoopMaintenanceBlock::AuctionOldDayUnknown {
+                current_month_day,
+            });
         };
         let auction_bang = if current_month_day == old_month_day {
             WorldAuctionBangMaintenanceDisposition::AlreadyCurrent {
@@ -14264,7 +14439,8 @@ impl CGame {
             let db_data = self.db_data.lock();
             legacy_refresh_count("m_stDBData.mDBPlayer", db_data.players.len())? as i32
         };
-        let write_log_queue = legacy_refresh_count("m_qWriteLogData", self.write_log_queue.len())?;
+        let write_log_queue =
+            legacy_refresh_count("m_qWriteLogData", self.write_log_queue.len())?;
 
         Ok(Some(WorldRefreshInfoCurrent {
             connections: net_server.client_count(),
@@ -14607,7 +14783,11 @@ impl CGame {
 
     /// Повторяет `ValidatePlayerIDinCdkey`: lookup идёт только по live map,
     /// а account сравнивается старым `_strcmpi` до первого NUL.
-    pub(crate) fn validate_player_id_in_cdkey(&self, account: &[u8], player_id: u32) -> bool {
+    pub(crate) fn validate_player_id_in_cdkey(
+        &self,
+        account: &[u8],
+        player_id: u32,
+    ) -> bool {
         let Some(player) = self.map_player(player_id) else {
             return false;
         };
@@ -14616,7 +14796,11 @@ impl CGame {
     }
 
     /// Повторяет locked `ValidateDBPlayerIDinCdkey` над frozen save-map.
-    pub(crate) fn validate_db_player_id_in_cdkey(&self, account: &[u8], player_id: u32) -> bool {
+    pub(crate) fn validate_db_player_id_in_cdkey(
+        &self,
+        account: &[u8],
+        player_id: u32,
+    ) -> bool {
         let db_data = self.db_data.lock();
         let Some(player) = db_data.players.get(&player_id) else {
             return false;
@@ -14666,7 +14850,10 @@ impl CGame {
         stamp: &mut LeiTingLocalTime,
         globe_setup: &GlobeSetupSnapshot,
         clock: &mut Clock,
-    ) -> Result<Option<PlayerLeiTingUpdateReport>, PlayerLeiTingUpdateBlock<Clock::Block>> {
+    ) -> Result<
+        Option<PlayerLeiTingUpdateReport>,
+        PlayerLeiTingUpdateBlock<Clock::Block>,
+    > {
         let Some(player) = self.players.get_mut(&map_key) else {
             return Ok(None);
         };
@@ -14873,11 +15060,7 @@ impl CGame {
         &mut self,
         player_id: u32,
     ) -> Option<PlayerMurderCounterReset> {
-        if !self
-            .online_players
-            .iter()
-            .any(|&online_id| online_id == player_id)
-        {
+        if !self.online_players.iter().any(|&online_id| online_id == player_id) {
             return None;
         }
         self.players
@@ -15304,7 +15487,9 @@ impl CGame {
         }
 
         let mut notice = CMessage::new(0x0001_FE03);
-        notice.base_mut().add_long(affected_players.len() as i32);
+        notice
+            .base_mut()
+            .add_long(affected_players.len() as i32);
         for (_, player_name) in &affected_players {
             add_legacy_c_string(notice.base_mut(), player_name);
         }
@@ -15368,7 +15553,13 @@ impl CGame {
                 organizing,
                 region_types: &region_types,
             };
-            player.add_to_byte_array(&mut payload, true, registry, &mut updater, coefficients)
+            player.add_to_byte_array(
+                &mut payload,
+                true,
+                registry,
+                &mut updater,
+                coefficients,
+            )
         };
         self.players.insert(map_key, player);
         encoded.map(|_| Some(payload))
@@ -15456,13 +15647,12 @@ impl CGame {
         })?;
         let db_data = self.db_data.lock();
         for player in &db_data.creation_players {
-            let player_name =
-                copy_name_for_legacy_lowercase(player.get_name()).map_err(|length| {
-                    WorldPlayerNameLookupError::PlayerNameTooLongForLegacyBuffer {
-                        player_id: player.get_id() as u32,
-                        length,
-                    }
-                })?;
+            let player_name = copy_name_for_legacy_lowercase(player.get_name()).map_err(
+                |length| WorldPlayerNameLookupError::PlayerNameTooLongForLegacyBuffer {
+                    player_id: player.get_id() as u32,
+                    length,
+                },
+            )?;
             if player_name == requested_name {
                 return Ok(true);
             }
@@ -15480,13 +15670,12 @@ impl CGame {
         })?;
         let db_data = self.db_data.lock();
         for (&player_id, player) in &db_data.players {
-            let player_name =
-                copy_name_for_legacy_lowercase(player.get_name()).map_err(|length| {
-                    WorldPlayerNameLookupError::PlayerNameTooLongForLegacyBuffer {
-                        player_id,
-                        length,
-                    }
-                })?;
+            let player_name = copy_name_for_legacy_lowercase(player.get_name()).map_err(
+                |length| WorldPlayerNameLookupError::PlayerNameTooLongForLegacyBuffer {
+                    player_id,
+                    length,
+                },
+            )?;
             if player_name == requested_name {
                 return Ok(true);
             }
@@ -15520,13 +15709,14 @@ impl CGame {
     where
         Database: RsPlayerOwner + ?Sized,
     {
-        let report =
-            |requested_name: &[u8], legacy_result, disposition| WorldPlayerNameChangeReport {
+        let report = |requested_name: &[u8], legacy_result, disposition| {
+            WorldPlayerNameChangeReport {
                 player_id,
                 requested_name: requested_name.to_vec(),
                 legacy_result,
                 disposition,
-            };
+            }
+        };
 
         let Some(player) = self.players.get(&player_id) else {
             return Ok(report(
@@ -15536,7 +15726,11 @@ impl CGame {
             ));
         };
         let Some(requested_name) = requested_name else {
-            return Ok(report(&[], 1, WorldPlayerNameChangeDisposition::NullName));
+            return Ok(report(
+                &[],
+                1,
+                WorldPlayerNameChangeDisposition::NullName,
+            ));
         };
         let requested_name = legacy_c_string_prefix(requested_name);
         if requested_name.len() > 0x10 {
@@ -15802,7 +15996,11 @@ impl CGame {
 
         let mut fixed_account = [0_u8; PLAYER_LOAD_CDKEY_CAPACITY];
         fixed_account[..account.len()].copy_from_slice(account);
-        let entry = PlayerLoadQueueEntry::new(fixed_account, player_id as i32, client_ip);
+        let entry = PlayerLoadQueueEntry::new(
+            fixed_account,
+            player_id as i32,
+            client_ip,
+        );
         Ok(match self.player_load_queue.push_player_load_data(entry) {
             PlayerLoadPushOutcome::Queued => WorldPlayerLoadRequestOutcome::Queued,
             PlayerLoadPushOutcome::Duplicate(_) => WorldPlayerLoadRequestOutcome::Duplicate,
@@ -15896,8 +16094,13 @@ impl CGame {
             .get_mut(&region_id)
             .and_then(|assignment| assignment.region.as_mut())
             .expect("materialized region owner проверен до country lookup");
-        region.base_mut().set_owned_city_org(faction_id, union_id);
-        region.base_mut().region_base_mut().set_country(country_id);
+        region
+            .base_mut()
+            .set_owned_city_org(faction_id, union_id);
+        region
+            .base_mut()
+            .region_base_mut()
+            .set_country(country_id);
 
         let mut message = CMessage::new(0x0007_FE27);
         message.base_mut().add_long(region_id);
@@ -15940,9 +16143,11 @@ impl CGame {
         let Some(region) = assignment.region.as_mut() else {
             return WorldRegionParamUpdateOutcome::NullRegionPointer;
         };
-        region
-            .base_mut()
-            .set_param_from_gs(current_tax_rate, today_total_tax, total_tax);
+        region.base_mut().set_param_from_gs(
+            current_tax_rate,
+            today_total_tax,
+            total_tax,
+        );
         WorldRegionParamUpdateOutcome::Applied
     }
 
@@ -15977,23 +16182,21 @@ impl CGame {
         Visit: FnMut(WorldInitialRegionSnapshot),
     {
         for (&map_key, assignment) in &self.regions {
-            let region = assignment
-                .region
-                .as_ref()
-                .ok_or(WorldInitialRegionSnapshotBlock {
+            let region = assignment.region.as_ref().ok_or(
+                WorldInitialRegionSnapshotBlock {
                     map_key,
                     source: WorldInitialRegionSnapshotSource::MissingRegionOwner,
-                })?;
+                },
+            )?;
             let region_id = region.base().get_id();
             let mut payload = Vec::new();
             let kind = if assignment.game_server_index == target_game_server_index {
-                let region_type =
-                    assignment
-                        .region_type
-                        .ok_or(WorldInitialRegionSnapshotBlock {
-                            map_key,
-                            source: WorldInitialRegionSnapshotSource::UninitializedRegionType,
-                        })?;
+                let region_type = assignment.region_type.ok_or(
+                    WorldInitialRegionSnapshotBlock {
+                        map_key,
+                        source: WorldInitialRegionSnapshotSource::UninitializedRegionType,
+                    },
+                )?;
                 region
                     .add_full_initial_snapshot(&mut payload)
                     .map_err(|source| WorldInitialRegionSnapshotBlock {
@@ -16300,7 +16503,8 @@ impl CGame {
             player.reset_honor_eliminate_info(rank_mask);
         }
         self.honor_eliminate_list.clear();
-        self.player_data_queue.reset_honor_eliminate_info(rank_mask);
+        self.player_data_queue
+            .reset_honor_eliminate_info(rank_mask);
         true
     }
 
@@ -16557,20 +16761,23 @@ struct WorldCountryWarEffects<'a> {
     country_handler: &'a mut CCountryHandler,
     globe_setup: &'a GlobeSetupSnapshot,
     world_string: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
-    format_world_string: &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+    format_world_string:
+        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
 }
 
 struct WorldCountryExileResultEffects<'a> {
     game: &'a mut CGame,
     globe_setup: &'a GlobeSetupSnapshot,
-    format_world_string: &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+    format_world_string:
+        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
 }
 
 struct WorldCountryPlayersListEffects<'a> {
     game: &'a CGame,
     organizing: &'a COrganizingCtrl,
     globe_setup: &'a GlobeSetupSnapshot,
-    format_world_string: &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+    format_world_string:
+        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
 }
 
 struct WorldCountryDemiseEffects<'a> {
@@ -16583,7 +16790,8 @@ struct WorldCountryDemiseEffects<'a> {
     refresh_owned_city: &'a mut dyn FnMut(i32, i32, i32),
     update_player: &'a mut dyn FnMut(i32),
     faction_master_log_enabled: bool,
-    write_faction_master_log: &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
+    write_faction_master_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
 }
 
 struct WorldCountryFactionDemiseEffects<'a> {
@@ -16591,13 +16799,15 @@ struct WorldCountryFactionDemiseEffects<'a> {
     attack_city: &'a CAttackCitySys,
     goods_war: &'a CGoodsWarMember,
     world_string: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
-    format_world_string: &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+    format_world_string:
+        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
     update_player: &'a mut dyn FnMut(i32),
     country_id: u8,
     king_id: i32,
     demise_faction: bool,
     faction_master_log_enabled: bool,
-    write_faction_master_log: &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
+    write_faction_master_log:
+        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
 }
 
 /// Concrete war/country/Goods-War owners внешнего `DisbandFaction`.
@@ -16627,7 +16837,8 @@ struct WorldFourNationExploitEffects<'a> {
 struct WorldFourNationCountryFailEffects<'a> {
     game: &'a CGame,
     organizing: &'a COrganizingCtrl,
-    format_world_string: &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+    format_world_string:
+        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
 }
 
 impl CountryNewTermContext for WorldCountryExileResultEffects<'_> {
@@ -16715,7 +16926,11 @@ impl CountryVillageTaxContext for WorldCountryDemiseEffects<'_> {
         string_id: &'static [u8],
         arguments: &[CountryExileTextArgument<'_>],
     ) -> Vec<u8> {
-        CountryVillageTaxContext::format_world_string(&mut self.base, string_id, arguments)
+        CountryVillageTaxContext::format_world_string(
+            &mut self.base,
+            string_id,
+            arguments,
+        )
     }
 
     fn put_king_log(&mut self, text: &[u8]) {
@@ -16728,7 +16943,11 @@ impl FourNationWarResultContext for WorldFourNationWarResultEffects<'_> {
         self.game.game_server_number_by_region_id(region_id)
     }
 
-    fn send_to_map_id(&mut self, message: &CMessage, map_id: i32) -> Result<i32, SendMessageError> {
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError> {
         message.send_to_map_id(self.game.current_game_server_sender().as_ref(), map_id)
     }
 }
@@ -16798,7 +17017,11 @@ impl CountryExileResultContext for WorldCountryExileResultEffects<'_> {
         self.game.game_server_number_by_player_id(player_id)
     }
 
-    fn send_to_map_id(&mut self, message: &CMessage, map_id: i32) -> Result<i32, SendMessageError> {
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError> {
         message.send_to_map_id(self.game.current_game_server_sender().as_ref(), map_id)
     }
 
@@ -16895,7 +17118,11 @@ impl CountryPlayersListContext for WorldCountryPlayersListEffects<'_> {
         self.game.game_server_number_by_player_id(player_id)
     }
 
-    fn send_to_map_id(&mut self, message: &CMessage, map_id: i32) -> Result<i32, SendMessageError> {
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError> {
         message.send_to_map_id(self.game.current_game_server_sender().as_ref(), map_id)
     }
 
@@ -16980,10 +17207,16 @@ impl FactionDemiseContext for WorldCountryFactionDemiseEffects<'_> {
     }
 
     fn country_blocks_demise(&self, country: u8, old_master_id: i32) -> bool {
-        country == self.country_id && old_master_id == self.king_id && !self.demise_faction
+        country == self.country_id
+            && old_master_id == self.king_id
+            && !self.demise_faction
     }
 
-    fn format_demise_signed(&mut self, string_id: &'static [u8], value: i32) -> Vec<u8> {
+    fn format_demise_signed(
+        &mut self,
+        string_id: &'static [u8],
+        value: i32,
+    ) -> Vec<u8> {
         (self.format_world_string)(string_id, &[UnionFormatArgument::Signed(value)])
     }
 
@@ -17069,13 +17302,11 @@ impl CountryExileResultContext for WorldCountryDemiseEffects<'_> {
     }
 
     fn faction_snapshot(&mut self, faction_id: i32) -> Option<CountryFactionSnapshot> {
-        self.organizing
-            .faction_by_id(faction_id)
-            .map(|faction| CountryFactionSnapshot {
-                faction_id: faction.faction_id(),
-                name: faction.name().to_vec(),
-                owned_cities: faction.owned_cities().iter().copied().collect(),
-            })
+        self.organizing.faction_by_id(faction_id).map(|faction| CountryFactionSnapshot {
+            faction_id: faction.faction_id(),
+            name: faction.name().to_vec(),
+            owned_cities: faction.owned_cities().iter().copied().collect(),
+        })
     }
 
     fn union_id_for_faction(
@@ -17174,14 +17405,22 @@ impl CountryExileResultContext for WorldCountryDemiseEffects<'_> {
         string_id: &'static [u8],
         arguments: &[CountryExileTextArgument<'_>],
     ) -> Vec<u8> {
-        CountryExileResultContext::format_world_string(&mut self.base, string_id, arguments)
+        CountryExileResultContext::format_world_string(
+            &mut self.base,
+            string_id,
+            arguments,
+        )
     }
 
     fn game_server_number_by_player_id(&mut self, player_id: i32) -> i32 {
         self.base.game_server_number_by_player_id(player_id)
     }
 
-    fn send_to_map_id(&mut self, message: &CMessage, map_id: i32) -> Result<i32, SendMessageError> {
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError> {
         self.base.send_to_map_id(message, map_id)
     }
 
@@ -17221,13 +17460,21 @@ impl FourNationExploitContext for WorldFourNationExploitEffects<'_> {
             .add_map_player_exploit_wrapping(player_id, increment)
     }
 
-    fn send_to_map_id(&mut self, message: &CMessage, map_id: i32) -> Result<i32, SendMessageError> {
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError> {
         message.send_to_map_id(self.game.current_game_server_sender().as_ref(), map_id)
     }
 }
 
 impl FourNationCountryFailContext for WorldFourNationCountryFailEffects<'_> {
-    fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8> {
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[&[u8]],
+    ) -> Vec<u8> {
         let arguments = arguments
             .iter()
             .map(|argument| UnionFormatArgument::Text(argument))
@@ -17271,8 +17518,10 @@ impl CountryWarDeclarationContext for WorldCountryWarEffects<'_> {
         if is_king {
             return CountryWarDeclarationAuthority::Authorized;
         }
-        let king_log =
-            (self.format_world_string)(b"WS0034", &[UnionFormatArgument::Text(&country_name)]);
+        let king_log = (self.format_world_string)(
+            b"WS0034",
+            &[UnionFormatArgument::Text(&country_name)],
+        );
         let king_log = legacy_c_string_prefix(&king_log);
         put_string_to_file("king", &king_log[..king_log.len().min(0x103)]);
 
@@ -17291,7 +17540,10 @@ impl CountryWarDeclarationContext for WorldCountryWarEffects<'_> {
             ],
         );
         let minister_log = legacy_c_string_prefix(&minister_log);
-        put_string_to_file("king", &minister_log[..minister_log.len().min(0x103)]);
+        put_string_to_file(
+            "king",
+            &minister_log[..minister_log.len().min(0x103)],
+        );
         CountryWarDeclarationAuthority::Rejected
     }
 
@@ -17300,9 +17552,8 @@ impl CountryWarDeclarationContext for WorldCountryWarEffects<'_> {
             WorldRegionNameLookup::Name(name) => Some(CountryWarVictoryRegion {
                 name: name.to_vec(),
             }),
-            WorldRegionNameLookup::RegionNotFound | WorldRegionNameLookup::NullRegionPointer => {
-                None
-            }
+            WorldRegionNameLookup::RegionNotFound
+            | WorldRegionNameLookup::NullRegionPointer => None,
         }
     }
 
@@ -17361,7 +17612,11 @@ impl CountryWarDeclarationContext for WorldCountryWarEffects<'_> {
         message.send_all(self.game.current_game_server_sender().as_ref())
     }
 
-    fn send_to_map_id(&mut self, message: &CMessage, map_id: i32) -> Result<i32, SendMessageError> {
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError> {
         message.send_to_map_id(self.game.current_game_server_sender().as_ref(), map_id)
     }
 
@@ -17377,14 +17632,16 @@ impl CountryWarDeclarationContext for WorldCountryWarEffects<'_> {
 impl CountryWarVictoryContext for WorldCountryWarEffects<'_> {
     type Block = Infallible;
 
-    fn region(&mut self, region_id: i32) -> Result<Option<CountryWarVictoryRegion>, Self::Block> {
+    fn region(
+        &mut self,
+        region_id: i32,
+    ) -> Result<Option<CountryWarVictoryRegion>, Self::Block> {
         Ok(match self.game.region_name(region_id) {
             WorldRegionNameLookup::Name(name) => Some(CountryWarVictoryRegion {
                 name: name.to_vec(),
             }),
-            WorldRegionNameLookup::RegionNotFound | WorldRegionNameLookup::NullRegionPointer => {
-                None
-            }
+            WorldRegionNameLookup::RegionNotFound
+            | WorldRegionNameLookup::NullRegionPointer => None,
         })
     }
 
@@ -17398,8 +17655,14 @@ impl CountryWarVictoryContext for WorldCountryWarEffects<'_> {
             .unwrap_or(0)
     }
 
-    fn set_country_war_result(&mut self, country: u8, result: i32) -> Result<(), Self::Block> {
-        let _ = self.country_handler.set_country_war_result(country, result);
+    fn set_country_war_result(
+        &mut self,
+        country: u8,
+        result: i32,
+    ) -> Result<(), Self::Block> {
+        let _ = self
+            .country_handler
+            .set_country_war_result(country, result);
         Ok(())
     }
 
@@ -17451,7 +17714,10 @@ impl CountryWarVictoryContext for WorldCountryWarEffects<'_> {
 impl CountryWarPhaseContext for WorldCountryWarEffects<'_> {
     type Block = Infallible;
 
-    fn reset_country_war_result_if_present(&mut self, country: u8) -> Result<bool, Self::Block> {
+    fn reset_country_war_result_if_present(
+        &mut self,
+        country: u8,
+    ) -> Result<bool, Self::Block> {
         Ok(self.country_handler.set_country_war_result(country, 0))
     }
 
@@ -17459,7 +17725,10 @@ impl CountryWarPhaseContext for WorldCountryWarEffects<'_> {
         message.send_all(self.game.current_game_server_sender().as_ref())
     }
 
-    fn format_phase_notice(&mut self, string_id: &'static [u8]) -> Result<Vec<u8>, Self::Block> {
+    fn format_phase_notice(
+        &mut self,
+        string_id: &'static [u8],
+    ) -> Result<Vec<u8>, Self::Block> {
         let formatted = (self.format_world_string)(string_id, &[]);
         let visible = legacy_c_string_prefix(&formatted);
         Ok(visible[..visible.len().min(0xff)].to_vec())
@@ -17483,7 +17752,10 @@ impl CountryWarPhaseContext for WorldCountryWarEffects<'_> {
 impl CountryWarTopInfoContext for WorldCountryWarEffects<'_> {
     type Block = Infallible;
 
-    fn format_top_info_notice(&mut self, string_id: &'static [u8]) -> Result<Vec<u8>, Self::Block> {
+    fn format_top_info_notice(
+        &mut self,
+        string_id: &'static [u8],
+    ) -> Result<Vec<u8>, Self::Block> {
         let formatted = (self.format_world_string)(string_id, &[]);
         let visible = legacy_c_string_prefix(&formatted);
         Ok(visible[..visible.len().min(0xff)].to_vec())
@@ -17559,26 +17831,35 @@ async fn process_world_message<TimerCallback, DbMiscContextOwner, JjcContext>(
     faction_create_log_enabled: bool,
     write_faction_create_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
     faction_title_log_enabled: bool,
-    write_faction_title_log: &mut dyn FnMut(i32, &[u8], &[u8], &[u8], i32, &[u8], i32, &[u8]),
+    write_faction_title_log:
+        &mut dyn FnMut(i32, &[u8], &[u8], &[u8], i32, &[u8], i32, &[u8]),
     faction_purview_add_log_enabled: bool,
     faction_purview_revoke_log_enabled: bool,
-    write_faction_purview_log: &mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
+    write_faction_purview_log:
+        &mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
     faction_apply_log_enabled: bool,
-    write_faction_apply_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
+    write_faction_apply_log:
+        &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
     faction_join_log_enabled: bool,
-    write_faction_join_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
+    write_faction_join_log:
+        &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
     faction_quit_log_enabled: bool,
-    write_faction_quit_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
+    write_faction_quit_log:
+        &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
     faction_fire_out_log_enabled: bool,
-    write_faction_fire_out_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
+    write_faction_fire_out_log:
+        &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
     faction_master_log_enabled: bool,
-    write_faction_master_log: &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
+    write_faction_master_log:
+        &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
     faction_disband_log_enabled: bool,
     write_faction_disband_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
     rs_player: &mut TiberiusRsPlayer,
     mut player_database: Option<&mut WorldTdsClient>,
     save_thread_handle: &mut WorldSaveThreadHandleState,
-    launch_save_thread: &mut dyn FnMut(&WorldSaveThreadLaunchRequest) -> WorldSaveThreadHandleState,
+    launch_save_thread: &mut dyn FnMut(
+        &WorldSaveThreadLaunchRequest,
+    ) -> WorldSaveThreadHandleState,
     session_factory: &mut CSessionFactory,
     general_variables: Option<&mut CVariableList>,
     gods_battle: &mut CGodsBattleConf,
@@ -17698,8 +17979,10 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::Other) {
-        let faction_chat_log_enabled = game.setup.use_log_system && faction_chat_log_enabled;
-        let private_chat_log_enabled = game.setup.use_log_system && private_chat_log_enabled;
+        let faction_chat_log_enabled =
+            game.setup.use_log_system && faction_chat_log_enabled;
+        let private_chat_log_enabled =
+            game.setup.use_log_system && private_chat_log_enabled;
         match on_other_message(
             game,
             organizing,
@@ -17842,11 +18125,13 @@ where
                                 log,
                             };
                         let mut effects = WorldFourNationExploitEffects { game };
-                        after_database = Some(four_nation_war.convert_loaded_morale_to_exploit(
-                            request.player_id,
-                            request.increment,
-                            &mut effects,
-                        ));
+                        after_database = Some(
+                            four_nation_war.convert_loaded_morale_to_exploit(
+                                request.player_id,
+                                request.increment,
+                                &mut effects,
+                            ),
+                        );
                     }
                     Some(active_database) => {
                         let mut query = Query::new(
@@ -17858,18 +18143,18 @@ where
                             Ok(_) => {
                                 database = WorldFourNationExploitDatabaseDisposition::Applied;
                                 let mut effects = WorldFourNationExploitEffects { game };
-                                after_database =
-                                    Some(four_nation_war.convert_loaded_morale_to_exploit(
+                                after_database = Some(
+                                    four_nation_war.convert_loaded_morale_to_exploit(
                                         request.player_id,
                                         request.increment,
                                         &mut effects,
-                                    ));
+                                    ),
+                                );
                             }
                             Err(error) => {
-                                database =
-                                    WorldFourNationExploitDatabaseDisposition::ExecutionFailed {
-                                        error: error.to_string(),
-                                    };
+                                database = WorldFourNationExploitDatabaseDisposition::ExecutionFailed {
+                                    error: error.to_string(),
+                                };
                             }
                         }
                     }
@@ -17889,9 +18174,11 @@ where
                 ),
             };
         }
-        if let Some(sync) =
-            dispatch_country_player_change_message(&mut message, game, &*country_handler)
-        {
+        if let Some(sync) = dispatch_country_player_change_message(
+            &mut message,
+            game,
+            &*country_handler,
+        ) {
             return ProcessedWorldEvent::CountryMessage {
                 source,
                 legacy_run_result,
@@ -17993,7 +18280,11 @@ where
                 globe_setup,
                 format_world_string: &mut *application_callbacks.format_world_string,
             };
-            dispatch_country_players_list_message(&mut message, &*country_handler, &mut effects)
+            dispatch_country_players_list_message(
+                &mut message,
+                &*country_handler,
+                &mut effects,
+            )
         };
         if let Some(sync) = players_list {
             return ProcessedWorldEvent::CountryMessage {
@@ -18162,7 +18453,11 @@ where
                 organizing: &*organizing,
                 format_world_string: &mut *application_callbacks.format_world_string,
             };
-            dispatch_four_nation_country_fail_message(&mut message, &*four_nation_war, &mut effects)
+            dispatch_four_nation_country_fail_message(
+                &mut message,
+                &*four_nation_war,
+                &mut effects,
+            )
         };
         if let Some(sync) = four_nation_country_fail {
             return ProcessedWorldEvent::CountryMessage {
@@ -18173,7 +18468,11 @@ where
         }
         let four_nation_war_time = {
             let mut effects = WorldFourNationWarResultEffects { game };
-            dispatch_four_nation_war_time_message(&mut message, four_nation_war, &mut effects)
+            dispatch_four_nation_war_time_message(
+                &mut message,
+                four_nation_war,
+                &mut effects,
+            )
         };
         if let Some(sync) = four_nation_war_time {
             return ProcessedWorldEvent::CountryMessage {
@@ -18184,7 +18483,11 @@ where
         }
         let four_nation_result = {
             let mut effects = WorldFourNationWarResultEffects { game };
-            dispatch_four_nation_war_result_message(&mut message, four_nation_war, &mut effects)
+            dispatch_four_nation_war_result_message(
+                &mut message,
+                four_nation_war,
+                &mut effects,
+            )
         };
         if let Some(sync) = four_nation_result {
             return ProcessedWorldEvent::CountryMessage {
@@ -18266,10 +18569,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18318,10 +18621,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18344,7 +18647,9 @@ where
                 runtime,
             };
         }
-        if let Some(outcome) = dispatch_initial_organizing_data(&mut message, game, organizing) {
+        if let Some(outcome) =
+            dispatch_initial_organizing_data(&mut message, game, organizing)
+        {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
                 world_string: &mut *application_callbacks.world_string,
@@ -18353,10 +18658,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18388,10 +18693,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18423,10 +18728,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18458,10 +18763,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18504,10 +18809,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18545,10 +18850,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18592,10 +18897,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18633,10 +18938,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18675,10 +18980,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18716,10 +19021,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18742,7 +19047,11 @@ where
                 runtime,
             };
         }
-        if let Some(outcome) = dispatch_faction_member_state(&mut message, game, organizing) {
+        if let Some(outcome) = dispatch_faction_member_state(
+            &mut message,
+            game,
+            organizing,
+        ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
                 world_string: &mut *application_callbacks.world_string,
@@ -18751,10 +19060,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18778,9 +19087,11 @@ where
             };
         }
         let game_server_sender = game.current_game_server_sender();
-        if let Some(outcome) =
-            dispatch_region_param_update(&mut message, game, game_server_sender.as_ref())
-        {
+        if let Some(outcome) = dispatch_region_param_update(
+            &mut message,
+            game,
+            game_server_sender.as_ref(),
+        ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
                 world_string: &mut *application_callbacks.world_string,
@@ -18789,10 +19100,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18815,7 +19126,8 @@ where
                 runtime,
             };
         }
-        if let Some(outcome) = dispatch_goods_war_command(&mut message, game, organizing, goods_war)
+        if let Some(outcome) =
+            dispatch_goods_war_command(&mut message, game, organizing, goods_war)
         {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
@@ -18825,10 +19137,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18862,10 +19174,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18901,10 +19213,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18940,10 +19252,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -18982,10 +19294,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -19008,9 +19320,11 @@ where
                 runtime,
             };
         }
-        if let Some(outcome) =
-            dispatch_change_region_router(&mut message, region_router, game_server_sender.as_ref())
-        {
+        if let Some(outcome) = dispatch_change_region_router(
+            &mut message,
+            region_router,
+            game_server_sender.as_ref(),
+        ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
                 world_string: &mut *application_callbacks.world_string,
@@ -19019,10 +19333,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -19063,10 +19377,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -19107,10 +19421,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -19153,10 +19467,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -19200,10 +19514,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -19248,10 +19562,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -19296,10 +19610,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -19344,10 +19658,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -19386,10 +19700,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -19433,10 +19747,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -19474,10 +19788,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -19520,7 +19834,12 @@ where
                     faction_disband_log_enabled,
                     |player_id| game.clear_disbanded_player_faction_data(player_id),
                     |faction_id, faction_name, player_id, player_name| {
-                        write_faction_disband_log(faction_id, faction_name, player_id, player_name);
+                        write_faction_disband_log(
+                            faction_id,
+                            faction_name,
+                            player_id,
+                            player_name,
+                        );
                     },
                 )
             });
@@ -19532,10 +19851,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -19574,10 +19893,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -19619,10 +19938,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -19663,10 +19982,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -19705,10 +20024,10 @@ where
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-                faction_experience_log_enabled: application_callbacks
-                    .faction_experience_log_enabled,
-                write_faction_experience_log: &mut *application_callbacks
-                    .write_faction_experience_log,
+                faction_experience_log_enabled:
+                    application_callbacks.faction_experience_log_enabled,
+                write_faction_experience_log:
+                    &mut *application_callbacks.write_faction_experience_log,
             };
             let mut effects = WorldUnionApplicationEffects::new(
                 game,
@@ -19739,11 +20058,17 @@ where
             refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
             faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
             write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
-            faction_experience_log_enabled: application_callbacks.faction_experience_log_enabled,
-            write_faction_experience_log: &mut *application_callbacks.write_faction_experience_log,
+            faction_experience_log_enabled:
+                application_callbacks.faction_experience_log_enabled,
+            write_faction_experience_log:
+                &mut *application_callbacks.write_faction_experience_log,
         };
-        let mut effects =
-            WorldUnionApplicationEffects::new(game, net_sessions, application_runtime, callbacks);
+        let mut effects = WorldUnionApplicationEffects::new(
+            game,
+            net_sessions,
+            application_runtime,
+            callbacks,
+        );
         if let Some(outcome) = dispatch_region_route(&mut message, game) {
             let runtime = drain_union_application_runtime(
                 game,
@@ -19816,9 +20141,13 @@ where
                 runtime,
             };
         }
-        if let Some(outcome) =
-            dispatch_attack_city_end(&mut message, game, organizing, &mut effects, update_player)
-        {
+        if let Some(outcome) = dispatch_attack_city_end(
+            &mut message,
+            game,
+            organizing,
+            &mut effects,
+            update_player,
+        ) {
             let runtime = drain_union_application_runtime(
                 game,
                 organizing,
@@ -19905,9 +20234,12 @@ where
                 runtime,
             };
         }
-        if let Some(outcome) =
-            dispatch_faction_application_cancel(&mut message, game, organizing, &mut effects)
-        {
+        if let Some(outcome) = dispatch_faction_application_cancel(
+            &mut message,
+            game,
+            organizing,
+            &mut effects,
+        ) {
             let runtime = drain_union_application_runtime(
                 game,
                 organizing,
@@ -20021,7 +20353,9 @@ where
                 runtime,
             };
         }
-        if let Some(outcome) = dispatch_leave_word_enable(&mut message, organizing, &mut effects) {
+        if let Some(outcome) =
+            dispatch_leave_word_enable(&mut message, organizing, &mut effects)
+        {
             let runtime = drain_union_application_runtime(
                 game,
                 organizing,
@@ -20085,8 +20419,10 @@ fn drain_union_application_runtime(
                     effects,
                     update_player,
                 );
-                invitation_terminals
-                    .push(WorldUnionInvitationTerminalDispatch { request, outcome });
+                invitation_terminals.push(WorldUnionInvitationTerminalDispatch {
+                    request,
+                    outcome,
+                });
             }
             QueuedOrganizingSessionTerminal::ConfederationCreation(request) => {
                 let outcome = organizing.finish_confederation_creation(
@@ -20101,8 +20437,9 @@ fn drain_union_application_runtime(
                     effects,
                     update_player,
                 );
-                confederation_creation_terminals
-                    .push(WorldConfederationCreationTerminalDispatch { request, outcome });
+                confederation_creation_terminals.push(
+                    WorldConfederationCreationTerminalDispatch { request, outcome },
+                );
             }
             QueuedOrganizingSessionTerminal::CityTransfer(request) => {
                 let outcome = organizing.finish_city_transfer(
@@ -20128,8 +20465,10 @@ fn drain_union_application_runtime(
         city_confirmations: runtime.take_city_confirmations(),
         city_endpoint_blocks: runtime.take_city_blocks(),
         confederation_creation_terminals,
-        confederation_creation_confirmations: runtime.take_confederation_creation_confirmations(),
-        confederation_creation_endpoint_blocks: runtime.take_confederation_creation_blocks(),
+        confederation_creation_confirmations:
+            runtime.take_confederation_creation_confirmations(),
+        confederation_creation_endpoint_blocks:
+            runtime.take_confederation_creation_blocks(),
     }
 }
 
