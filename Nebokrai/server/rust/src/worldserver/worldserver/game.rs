@@ -1190,6 +1190,9 @@ use crate::worldserver::appworld::message::servermessage::{
 use crate::worldserver::appworld::message::teammessage::{
     WorldTeamMessageOutcome, on_team_message,
 };
+use crate::worldserver::appworld::incrementlog::incrementlog::{
+    CIncrementLog, IncrementLogLoadOutcome,
+};
 use crate::worldserver::appworld::organizingsystem::faction::{
     goods_war_check_for_faction_id, CFaction, FactionDemiseContext, FactionDemiseOutcome,
     FactionDisbandContext, FactionExperienceBlock, FactionMemberInfoRequest,
@@ -1483,7 +1486,6 @@ pub(crate) enum WorldGameInitBooleanOwner {
     InitializeAttackCity,
     InitializeFourNationWar,
     InitializeVillageWar,
-    LoadIncrementShopLog,
 }
 
 /// Opaque результат одного старого `__beginthreadex` call-site.
@@ -1560,6 +1562,9 @@ pub(crate) enum WorldGameInitEvent {
         finished_at_ms: u32,
         elapsed_ms: u32,
         outcome: HonorRanksLoadOutcome,
+    },
+    IncrementLogLoaded {
+        outcome: IncrementLogLoadOutcome,
     },
     AuctionLogLoaded {
         outcome: AuctionLogLoadOutcome,
@@ -1699,10 +1704,12 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn player_database(
         &mut self,
     ) -> (&mut Self::PlayerDatabase, Option<&mut WorldTdsClient>);
+    /// Возвращает уже открытый Log DB connection техническому increment-owner-у.
+    fn increment_log_database(&mut self) -> Option<&mut WorldTdsClient>;
     /// Возвращает уже открытый Log DB connection техническому auction-owner-у.
     fn auction_log_database(&mut self) -> Option<&mut WorldTdsClient>;
-    /// Exact `CGlobeSetup::m_stSetup.dwIncrementLogDays` для history query.
-    fn auction_increment_log_days(&mut self) -> u32;
+    /// Exact `CGlobeSetup::m_stSetup.dwIncrementLogDays` для обеих history query.
+    fn increment_log_days(&mut self) -> u32;
     /// Для write-worker сохраняет единственный handle, для load-worker
     /// добавляет даже пустой handle в исходный ordered owner.
     fn start_worker(&mut self, kind: WorldGameInitWorkerKind) -> WorldGameInitWorkerHandleState;
@@ -1951,6 +1958,9 @@ pub(crate) trait WorldGameThreadRuntime: WorldGameReleaseContext {
     /// Временно передаёт concrete Goods War owner полному Release.
     fn take_goods_war_member(&mut self) -> CGoodsWarMember;
     fn restore_goods_war_member(&mut self, owner: CGoodsWarMember);
+    /// Временно передаёт process-global increment-log owner полному Release.
+    fn take_increment_log(&mut self) -> CIncrementLog;
+    fn restore_increment_log(&mut self, owner: CIncrementLog);
     fn signal_game_thread_exit(&mut self);
     fn request_window_close(&mut self);
 }
@@ -3287,6 +3297,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) auction_log: &'a mut CAuctionLog,
     pub(crate) auction_log_database: Option<&'a mut WorldTdsClient>,
     pub(crate) session_factory: &'a mut CSessionFactory,
+    pub(crate) increment_log: &'a mut CIncrementLog,
     pub(crate) timer: &'a mut CTimer<TimerCallback>,
     pub(crate) faction_war: &'a mut CFactionWarSys,
     pub(crate) attack_city: &'a mut CAttackCitySys,
@@ -8164,9 +8175,16 @@ impl CGame {
     /// `reInitDB` выполняется между `DbCountry` и `DbMisc`, но собственный
     /// DB-error поглощается после сохранения прочитанного prefix-а. Поэтому
     /// typed load-report входит в event stream и не становится init block-ом.
+    /// Increment log также является concrete owner-ом этого порядка: после
+    /// general variables он потоково читает Log DB, пишет исходный
+    /// success/failure log и не превращает старый непроверяемый результат в
+    /// новый init-block. `Release` очищает тот же owner ровно между
+    /// `TimeToReturn::uninitialize` и `CCountryHandler::Release`. Открытое
+    /// Tiberius-соединение и явная Rust-ссылка заменяют только внутренние
+    /// ADO/singleton mechanics.
     #[allow(
         clippy::too_many_arguments,
-        reason = "прямые PlayerRanks/country/timer owners заменяют прежние opaque callbacks"
+        reason = "прямые PlayerRanks/country/timer/increment owners заменяют прежние opaque callbacks"
     )]
     pub(crate) async fn init<Context, TimerCallback, CountryDatabase, CountryContext>(
         &mut self,
@@ -8189,6 +8207,7 @@ impl CGame {
         country_war_system: &mut CountryWarSys,
         country_war_callbacks: CountryWarCallbacks<TimerCallback>,
         honor_ranks: &mut CHonorRanks,
+        increment_log: &mut CIncrementLog,
         auction_log: &mut CAuctionLog,
         log: &mut WorldLogTextOwner,
         callbacks: &mut WorldGameInitCallbacks<'_>,
@@ -8773,9 +8792,12 @@ impl CGame {
             events.push(WorldGameInitEvent::VoidOwner(owner));
         }
 
-        let owner = WorldGameInitBooleanOwner::LoadIncrementShopLog;
-        let succeeded = context.initialize_boolean_owner(owner);
-        events.push(WorldGameInitEvent::BooleanOwner { owner, succeeded });
+        let increment_log_days = context.increment_log_days();
+        let outcome = increment_log
+            .load(context.increment_log_database(), increment_log_days)
+            .await;
+        let succeeded = outcome.succeeded();
+        events.push(WorldGameInitEvent::IncrementLogLoaded { outcome });
         self.record_game_init_log(
             &mut events,
             log,
@@ -8787,7 +8809,6 @@ impl CGame {
             },
         );
 
-        let increment_log_days = context.auction_increment_log_days();
         let outcome = auction_log
             .load_item(context.auction_log_database(), increment_log_days)
             .await;
@@ -8919,6 +8940,7 @@ impl CGame {
         &mut self,
         context: &mut Context,
         goods_war: &mut CGoodsWarMember,
+        increment_log: &mut CIncrementLog,
     ) -> WorldGameReleaseResult {
         let mut events = Vec::new();
 
@@ -9021,7 +9043,15 @@ impl CGame {
         for owner in [
             WorldGameReleaseVoidOwner::ReleaseIncrementShopList,
             WorldGameReleaseVoidOwner::UninitializeTimeToReturn,
+        ] {
+            context.release_void_owner(owner);
+            events.push(WorldGameReleaseEvent::VoidOwner(owner));
+        }
+        increment_log.uninitialize();
+        events.push(WorldGameReleaseEvent::VoidOwner(
             WorldGameReleaseVoidOwner::UninitializeIncrementLog,
+        ));
+        for owner in [
             WorldGameReleaseVoidOwner::ReleaseCountryHandler,
             WorldGameReleaseVoidOwner::ReleaseWordsFilter,
             WorldGameReleaseVoidOwner::ReleaseOrganizingController,
@@ -9529,6 +9559,7 @@ impl CGame {
     pub(crate) async fn process_message<TimerCallback, JjcContext>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
+        increment_log: &CIncrementLog,
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
         country_handler: &mut CCountryHandler,
@@ -9622,6 +9653,7 @@ impl CGame {
                         events.push(process_world_message(
                             self,
                             honor_ranks,
+                            increment_log,
                             organizing,
                             organizing_parameters,
                             country_handler,
@@ -9711,6 +9743,7 @@ impl CGame {
                 events.push(process_world_message(
                     self,
                     honor_ranks,
+                    increment_log,
                     organizing,
                     organizing_parameters,
                     country_handler,
@@ -9803,6 +9836,7 @@ impl CGame {
     >(
         &mut self,
         honor_ranks: &mut CHonorRanks,
+        increment_log: &CIncrementLog,
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
         country_handler: &mut CCountryHandler,
@@ -9893,6 +9927,7 @@ impl CGame {
         };
         let outcome = match self.process_message(
             honor_ranks,
+            increment_log,
             organizing,
             organizing_parameters,
             country_handler,
@@ -11185,6 +11220,7 @@ impl CGame {
         };
         let process_message = match self.process_message_main_loop_stage(
             owners.honor_ranks,
+            owners.increment_log,
             owners.organizing,
             owners.organizing_parameters,
             owners.country,
@@ -13579,14 +13615,16 @@ pub(crate) async fn game_thread_func<Runtime: WorldGameThreadRuntime>(
     };
 
     let mut goods_war = runtime.take_goods_war_member();
+    let mut increment_log = runtime.take_increment_log();
     let release = match game_slot
         .as_deref_mut()
         .expect("Release вызывается до DeleteGame")
-        .release(runtime, &mut goods_war)
+        .release(runtime, &mut goods_war, &mut increment_log)
     {
         Ok(release) => release,
         Err(block) => {
             runtime.restore_goods_war_member(goods_war);
+            runtime.restore_increment_log(increment_log);
             return WorldGameThreadReport::BlockedRelease {
                 game: game_slot
                     .take()
@@ -13600,6 +13638,7 @@ pub(crate) async fn game_thread_func<Runtime: WorldGameThreadRuntime>(
         }
     };
     runtime.restore_goods_war_member(goods_war);
+    runtime.restore_increment_log(increment_log);
     let deletion = delete_game(&mut game_slot);
     runtime.signal_game_thread_exit();
     runtime.request_window_close();
@@ -14672,6 +14711,7 @@ impl CountryWarTopInfoContext for WorldCountryWarEffects<'_> {
 async fn process_world_message<TimerCallback, JjcContext>(
     game: &mut CGame,
     honor_ranks: &mut CHonorRanks,
+    increment_log: &CIncrementLog,
     organizing: &mut COrganizingCtrl,
     organizing_parameters: &COrganizingParam,
     country_handler: &mut CCountryHandler,
@@ -14815,6 +14855,7 @@ where
         match on_other_message(
             game,
             honor_ranks,
+            increment_log,
             globe_setup,
             registry,
             &mut *application_callbacks.random,

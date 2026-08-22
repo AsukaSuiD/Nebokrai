@@ -2,7 +2,7 @@
 //!
 //! Весь dispatcher RVA `0x000AC680` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме локального
 //! transport leaves `0x5FD02`, `0x5FD06..0x5FD09`, goods-link publish/lookup
-//! `0x5FD03/0x5FD04`, copy-number `0x5FD0B`,
+//! `0x5FD03/0x5FD04`, increment-log page `0x5FD0A`, copy-number `0x5FD0B`,
 //! cursor-only `0x5FD0E`, player rename `0x5FD05`, LeiTing update `0x5FD10`,
 //! honor-reset `0x5FD0C` и eliminate update `0x5FD0D` со статусом
 //! `IMPLEMENTED`. Reset читает один Windows `long`, получает текущий `CGame`
@@ -36,6 +36,10 @@
 //! parameterized Tiberius query заменяет только старый ADO owner. Только
 //! локальная safe-граница недопустимо длинного уже сохранённого имени не
 //! получает выдуманного response после исходного stack-overread.
+//! `0x5FD0A` читает player/page, требует online owner-а и отвечает
+//! `0x7FA12 + player + page` только когда `CIncrementLog` добавил exact page.
+//! Empty/missing player history сохраняет исходную ветку без отправки; page
+//! wire и newest-first порядок принадлежат concrete increment-log owner-у.
 //!
 //! Goods-link publish точно сохраняет три `long`, условную строку type `2`,
 //! title/text, positive signed count и два entry-вида. Changed entry владеет
@@ -56,6 +60,9 @@ use crate::worldserver::appworld::misc::{add_copy_num, get_copy_num};
 use crate::worldserver::appworld::goods::cgoods::{CGoods, GoodsCodecError};
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, create_goods,
+};
+use crate::worldserver::appworld::incrementlog::incrementlog::{
+    CIncrementLog, IncrementLogPageBlock,
 };
 use crate::worldserver::appworld::player::PlayerCodecError;
 use crate::worldserver::worldserver::game::{
@@ -164,6 +171,18 @@ pub(crate) enum WorldHonorEliminateUpdate {
     },
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldIncrementLogPageOutcome {
+    pub(crate) player_id: u32,
+    pub(crate) page: i32,
+    pub(crate) payload_complete: [bool; 2],
+    pub(crate) online_player_found: bool,
+    pub(crate) serialization: Option<Result<bool, IncrementLogPageBlock>>,
+    pub(crate) response_type: i32,
+    pub(crate) wire: Option<Vec<u8>>,
+    pub(crate) delivery: Option<Result<i32, SendMessageError>>,
+}
+
 /// Один обработанный результат частично восстановленного other-owner-а.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldOtherMessageOutcome {
@@ -209,6 +228,7 @@ pub(crate) enum WorldOtherMessageOutcome {
     },
     GoodsLinkPublish(WorldGoodsLinkPublishOutcome),
     GoodsLinkLookup(WorldGoodsLinkLookupOutcome),
+    IncrementLogPage(WorldIncrementLogPageOutcome),
     HonorEliminateReset(WorldHonorEliminateReset),
     HonorEliminateUpdate(WorldHonorEliminateUpdate),
 }
@@ -223,6 +243,7 @@ pub(crate) enum WorldOtherMessageDispatch {
 pub(crate) async fn on_other_message(
     game: &mut CGame,
     honor_ranks: &mut CHonorRanks,
+    increment_log: &CIncrementLog,
     globe_setup: &GlobeSetupSnapshot,
     goods_registry: &GoodsBasePropertiesRegistry,
     random: &mut dyn FnMut(i32) -> i32,
@@ -283,6 +304,54 @@ pub(crate) async fn on_other_message(
                 value: decoded_value.unwrap_or(0),
                 payload_complete: decoded_value.is_some(),
             })
+        }
+        0x0005_FD0A => {
+            let decoded_player_id = message.base_mut().get_long();
+            let decoded_page = message.base_mut().get_long();
+            let player_id = decoded_player_id.unwrap_or(0) as u32;
+            let page = decoded_page.unwrap_or(0);
+            let online_player_found = game.online_player_by_id(player_id).is_some();
+            let mut serialization = None;
+            let mut wire = None;
+            let mut delivery = None;
+
+            if online_player_found {
+                let mut response = CMessage::new(0x0007_FA12);
+                response.base_mut().add_ulong(player_id);
+                response.base_mut().add_long(page);
+                let mut page_bytes = Vec::new();
+                let result = increment_log.add_page_to_byte_array(
+                    &mut page_bytes,
+                    page,
+                    player_id as i32,
+                );
+                if matches!(result, Ok(true)) {
+                    response.base_mut().add(&page_bytes);
+                    response.base_mut().update();
+                    wire = Some(response.as_wire_bytes().to_vec());
+                    delivery = Some(response.send_to_socket(
+                        game.current_game_server_sender().as_ref(),
+                        message.socket_id(),
+                    ));
+                }
+                serialization = Some(result);
+            }
+
+            WorldOtherMessageDispatch::Handled(WorldOtherMessageOutcome::IncrementLogPage(
+                WorldIncrementLogPageOutcome {
+                    player_id,
+                    page,
+                    payload_complete: [
+                        decoded_player_id.is_some(),
+                        decoded_page.is_some(),
+                    ],
+                    online_player_found,
+                    serialization,
+                    response_type: 0x0007_FA12,
+                    wire,
+                    delivery,
+                },
+            ))
         }
         0x0005_FD0B => {
             let decoded_requester = message.base_mut().get_long();

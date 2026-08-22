@@ -1,312 +1,216 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! DB-reader журнала increment-shop исторического WorldServer.
+//!
+//! `CDbIncrementLog::LoadAll` RVA `0x00115410` восстановлен по точной паре
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner:
+//! `e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp:13`.
+//! Запрос сохраняет `DATEDIFF(day, log_time, GETDATE()) <= days` и обязательный
+//! порядок `player_id, log_time`. Каждая уже прочитанная строка публиковалась в
+//! `CIncrementLog` до перехода к следующей, поэтому typed результат отдельно
+//! возвращает достигнутый prefix при ошибке следующей строки.
+//!
+//! Tiberius, параметр `@P1`, owned строки и `chrono::NaiveDateTime` заменяют
+//! только ADO connection/recordset, BSTR/VARIANT и `VariantTimeToSystemTime`.
+//! Идентификатор DB-строки исходник не читал; дополнительные donor-валидации
+//! ID, календаря, длины описания и общих лимитов сюда не перенесены.
 
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp
+use std::error::Error;
+use std::fmt;
 
+use chrono::{Datelike, NaiveDateTime, Timelike};
+use encoding_rs::WINDOWS_1251;
+use futures_util::TryStreamExt;
+use tiberius::{Query, Row};
 
-// ============================================================================
-// FUNCTION: _com_error::`scalar_deleting_destructor'
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp
-// RVA: 0x000EF670
-// ADDRESS: 004ef670
-// PROTOTYPE: void * __thiscall `scalar_deleting_destructor'(uint param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
+use crate::public::date::TagTime;
 
-// ============================================================================
-// FUNCTION: Field20::GetChunk
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp
-// RVA: 0x000EF6B0
-// ADDRESS: 004ef6b0
-// PROTOTYPE: _variant_t __thiscall GetChunk(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+const LOAD_RECENT_SQL: &str = "SELECT id,type,money,description,log_time,player_id FROM increment_log WHERE DATEDIFF(day,log_time,GETDATE())<=@P1 ORDER BY player_id,log_time";
 
+#[derive(Clone, Debug)]
+pub(crate) struct DbIncrementLogRow {
+    pub(crate) player_id: i32,
+    pub(crate) time: TagTime,
+    pub(crate) entry_type: u8,
+    pub(crate) money: i32,
+    pub(crate) description: Vec<u8>,
+}
 
-// ============================================================================
-// FUNCTION: Catch@004f10c5
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp
-// RVA: 0x000F10C5
-// ADDRESS: 004f10c5
-// PROTOTYPE: undefined Catch@004f10c5()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Debug)]
+pub(crate) enum DbIncrementLogLoadFailure {
+    MissingConnection,
+    Database(tiberius::error::Error),
+    MissingRequiredValue { row_index: usize, column: &'static str },
+    NumericOutsideRange { row_index: usize, column: &'static str },
+}
 
-// ============================================================================
-// FUNCTION: Catch@004f163d
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp
-// RVA: 0x000F163D
-// ADDRESS: 004f163d
-// PROTOTYPE: undefined Catch@004f163d()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl fmt::Display for DbIncrementLogLoadFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingConnection => formatter.write_str("отсутствует соединение Log DB"),
+            Self::Database(error) => write!(formatter, "ошибка TDS increment log: {error}"),
+            Self::MissingRequiredValue { row_index, column } => write!(
+                formatter,
+                "в строке increment log {row_index} отсутствует поле {column}"
+            ),
+            Self::NumericOutsideRange { row_index, column } => write!(
+                formatter,
+                "поле {column} строки increment log {row_index} вне legacy-диапазона"
+            ),
+        }
+    }
+}
 
-// ============================================================================
-// FUNCTION: Catch@004f1785
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp
-// RVA: 0x000F1785
-// ADDRESS: 004f1785
-// PROTOTYPE: undefined Catch@004f1785()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl Error for DbIncrementLogLoadFailure {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Database(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
+#[derive(Debug)]
+pub(crate) struct DbIncrementLogLoad {
+    pub(crate) rows: Vec<DbIncrementLogRow>,
+    pub(crate) completion: Result<(), DbIncrementLogLoadFailure>,
+}
 
+pub(crate) async fn load_recent(
+    active_connection: Option<&mut WorldTdsClient>,
+    retention_days: u32,
+) -> DbIncrementLogLoad {
+    let Some(active_connection) = active_connection else {
+        return DbIncrementLogLoad {
+            rows: Vec::new(),
+            completion: Err(DbIncrementLogLoadFailure::MissingConnection),
+        };
+    };
+    let mut query = Query::new(LOAD_RECENT_SQL);
+    query.bind(retention_days as i32);
+    let mut stream = match query.query(&mut *active_connection).await {
+        Ok(stream) => stream,
+        Err(error) => {
+            return DbIncrementLogLoad {
+                rows: Vec::new(),
+                completion: Err(DbIncrementLogLoadFailure::Database(error)),
+            };
+        }
+    };
+    let mut rows = Vec::new();
+    let mut row_index = 0usize;
+    loop {
+        let item = match stream.try_next().await {
+            Ok(Some(item)) => item,
+            Ok(None) => break,
+            Err(error) => {
+                return DbIncrementLogLoad {
+                    rows,
+                    completion: Err(DbIncrementLogLoadFailure::Database(error)),
+                };
+            }
+        };
+        let Some(source_row) = item.into_row() else {
+            continue;
+        };
+        match parse_row(&source_row, row_index) {
+            Ok(row) => rows.push(row),
+            Err(failure) => {
+                return DbIncrementLogLoad {
+                    rows,
+                    completion: Err(failure),
+                };
+            }
+        }
+        row_index += 1;
+    }
+    DbIncrementLogLoad {
+        rows,
+        completion: Ok(()),
+    }
+}
 
-// ============================================================================
-// FUNCTION: CDbIncrementLog::LoadAll
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp:13
-// RVA: 0x00115410
-// ADDRESS: 00515410
-// PROTOTYPE: bool __thiscall LoadAll(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn parse_row(
+    row: &Row,
+    row_index: usize,
+) -> Result<DbIncrementLogRow, DbIncrementLogLoadFailure> {
+    let player_id = required_i32(row, row_index, "player_id")?;
+    let money = required_i32(row, row_index, "money")?;
+    let entry_type = required_u8(row, row_index, "type")?;
+    let time = row
+        .try_get::<NaiveDateTime, _>("log_time")
+        .map_err(DbIncrementLogLoadFailure::Database)?
+        .ok_or(DbIncrementLogLoadFailure::MissingRequiredValue {
+            row_index,
+            column: "log_time",
+        })?;
+    let description = row
+        .try_get::<&str, _>("description")
+        .map_err(DbIncrementLogLoadFailure::Database)?
+        .ok_or(DbIncrementLogLoadFailure::MissingRequiredValue {
+            row_index,
+            column: "description",
+        })?;
+    let (description, _, _) = WINDOWS_1251.encode(description);
+    let description = description
+        .iter()
+        .copied()
+        .take_while(|byte| *byte != 0)
+        .collect();
 
-// ============================================================================
-// FUNCTION: Catch@00515b86
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp:82
-// RVA: 0x00115B86
-// ADDRESS: 00515b86
-// PROTOTYPE: undefined Catch@00515b86()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    Ok(DbIncrementLogRow {
+        player_id,
+        time: TagTime::from_fields([
+            time.year() as u16,
+            time.month() as u16,
+            time.weekday().num_days_from_sunday() as u16,
+            time.day() as u16,
+            time.hour() as u16,
+            time.minute() as u16,
+            time.second() as u16,
+            time.and_utc().timestamp_subsec_millis() as u16,
+        ]),
+        entry_type,
+        money,
+        description,
+    })
+}
 
-// ============================================================================
-// FUNCTION: FUN_00515bea
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp:87
-// RVA: 0x00115BEA
-// ADDRESS: 00515bea
-// PROTOTYPE: undefined FUN_00515bea()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn required_i32(
+    row: &Row,
+    row_index: usize,
+    column: &'static str,
+) -> Result<i32, DbIncrementLogLoadFailure> {
+    if let Ok(value) = row.try_get::<i32, _>(column) {
+        return value.ok_or(DbIncrementLogLoadFailure::MissingRequiredValue {
+            row_index,
+            column,
+        });
+    }
+    if let Ok(value) = row.try_get::<i16, _>(column) {
+        return value
+            .map(i32::from)
+            .ok_or(DbIncrementLogLoadFailure::MissingRequiredValue { row_index, column });
+    }
+    if let Ok(value) = row.try_get::<u8, _>(column) {
+        return value
+            .map(i32::from)
+            .ok_or(DbIncrementLogLoadFailure::MissingRequiredValue { row_index, column });
+    }
+    match row.try_get::<i64, _>(column) {
+        Ok(Some(value)) => i32::try_from(value).map_err(|_| {
+            DbIncrementLogLoadFailure::NumericOutsideRange { row_index, column }
+        }),
+        Ok(None) => Err(DbIncrementLogLoadFailure::MissingRequiredValue { row_index, column }),
+        Err(error) => Err(DbIncrementLogLoadFailure::Database(error)),
+    }
+}
 
-// ============================================================================
-// FUNCTION: Unwind@00536800
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp
-// RVA: 0x00136800
-// ADDRESS: 00536800
-// PROTOTYPE: undefined Unwind@00536800()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@00536850
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp
-// RVA: 0x00136850
-// ADDRESS: 00536850
-// PROTOTYPE: undefined Unwind@00536850()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// ============================================================================
-// FUNCTION: Unwind@00536880
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp
-// RVA: 0x00136880
-// ADDRESS: 00536880
-// PROTOTYPE: undefined Unwind@00536880()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@005368b0
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp
-// RVA: 0x001368B0
-// ADDRESS: 005368b0
-// PROTOTYPE: undefined Unwind@005368b0()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-// ============================================================================
-// FUNCTION: Unwind@005369da
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp
-// RVA: 0x001369DA
-// ADDRESS: 005369da
-// PROTOTYPE: undefined Unwind@005369da()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-// ============================================================================
-// FUNCTION: Unwind@00536a8d
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp
-// RVA: 0x00136A8D
-// ADDRESS: 00536a8d
-// PROTOTYPE: undefined Unwind@00536a8d()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-// ============================================================================
-// FUNCTION: Unwind@00536ae3
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp
-// RVA: 0x00136AE3
-// ADDRESS: 00536ae3
-// PROTOTYPE: undefined Unwind@00536ae3()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// ============================================================================
-// FUNCTION: Unwind@00536b00
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp
-// RVA: 0x00136B00
-// ADDRESS: 00536b00
-// PROTOTYPE: undefined Unwind@00536b00()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@00536b08
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp
-// RVA: 0x00136B08
-// ADDRESS: 00536b08
-// PROTOTYPE: undefined Unwind@00536b08()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-// ============================================================================
-// FUNCTION: Unwind@00536b46
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp
-// RVA: 0x00136B46
-// ADDRESS: 00536b46
-// PROTOTYPE: undefined Unwind@00536b46()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-// ============================================================================
-// FUNCTION: Unwind@00536b98
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp
-// RVA: 0x00136B98
-// ADDRESS: 00536b98
-// PROTOTYPE: undefined Unwind@00536b98()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: WorldServer
+fn required_u8(
+    row: &Row,
+    row_index: usize,
+    column: &'static str,
+) -> Result<u8, DbIncrementLogLoadFailure> {
+    let value = required_i32(row, row_index, column)?;
+    u8::try_from(value)
+        .map_err(|_| DbIncrementLogLoadFailure::NumericOutsideRange { row_index, column })
+}

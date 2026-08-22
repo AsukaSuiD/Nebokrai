@@ -7,6 +7,11 @@
 pub(crate) mod dbcountry;
 #[allow(
     dead_code,
+    reason = "CDBIncrementLog подключён к concrete CIncrementLog init-owner"
+)]
+pub(crate) mod dbincrementlog;
+#[allow(
+    dead_code,
     reason = "goods DB-owner подключён через CRsPlayer::CreatePlayer перед New Character transaction"
 )]
 pub(crate) mod dbgoods;

@@ -111,6 +111,9 @@ pub(crate) mod appworld {
         reason = "Goods War runtime-owner подключён к organizing ingress до DB reload и остальных mutations"
     )]
     pub(crate) mod goodswarmember;
+    pub(crate) mod incrementlog {
+        pub(crate) mod incrementlog;
+    }
     pub(crate) mod jjcsystem;
     pub(crate) mod leiting;
     pub(crate) mod misc;
