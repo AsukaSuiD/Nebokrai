@@ -2938,14 +2938,6 @@ pub(crate) struct OrganizingDatabaseLoadReport {
     pub(crate) disposition: OrganizingDatabaseLoadDisposition,
 }
 
-/// Safe-граница ordered `ReSetPermitDemise`: старый virtual call
-/// разыменовывал сохранённый null faction-pointer.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingPermitDemiseResetBlock {
-    pub(crate) map_key: i32,
-    pub(crate) reset_faction_ids: Vec<i32>,
-}
-
 /// Результат первой calendar-постановки `COrganizingCtrl::Initialize`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OrganizingNewDayScheduleReport {
@@ -2973,7 +2965,6 @@ pub(crate) struct OrganizingNewDayReport {
 
 #[derive(Debug)]
 pub(crate) enum OrganizingNewDayBlock {
-    ResetPermitDemise(OrganizingPermitDemiseResetBlock),
     DateArithmetic(TagTimeArithmeticBlock),
 }
 
@@ -3367,9 +3358,7 @@ impl COrganizingCtrl {
     where
         SetCountryDay: FnMut(u16),
     {
-        let reset_faction_ids = self
-            .reset_permit_demise()
-            .map_err(OrganizingNewDayBlock::ResetPermitDemise)?;
+        let reset_faction_ids = self.reset_permit_demise();
         let mut scheduled_time = self.new_day_time_for_date(current_time);
         scheduled_time
             .add_day(1)
@@ -3650,23 +3639,20 @@ impl COrganizingCtrl {
     /// Выполняет exact ordered `ReSetPermitDemise` без сетевых/DB эффектов.
     ///
     /// Каждая concrete faction получает virtual `SetPermitDemise(true)` в
-    /// signed map-order. Уже выполненный prefix не откатывается при safe
-    /// остановке вместо старого null-pointer dereference.
-    pub(crate) fn reset_permit_demise(
-        &mut self,
-    ) -> Result<Vec<i32>, OrganizingPermitDemiseResetBlock> {
+    /// signed map-order. Empty slot не создаётся ни одним normal ingress: он
+    /// был бы только техническим промежутком Rust-представления raw pointer-а.
+    /// Поэтому `OnNewDay` пропускает его и продолжает calendar lifecycle,
+    /// устраняя старый null-dereference вместо публикации нового отказа.
+    pub(crate) fn reset_permit_demise(&mut self) -> Vec<i32> {
         let mut reset_faction_ids = Vec::with_capacity(self.factions.len());
-        for (&map_key, faction) in &mut self.factions {
+        for faction in self.factions.values_mut() {
             let Some(faction) = faction.as_deref_mut() else {
-                return Err(OrganizingPermitDemiseResetBlock {
-                    map_key,
-                    reset_faction_ids,
-                });
+                continue;
             };
             faction.set_permit_demise(true);
             reset_faction_ids.push(faction.faction_id());
         }
-        Ok(reset_faction_ids)
+        reset_faction_ids
     }
 
     /// Перестраивает три snapshot-а в точном порядке исходного `StatBillboard`.
@@ -9062,7 +9048,8 @@ fn legacy_tick_ms() -> u32 {
 //
 // IMPLEMENTED_OWNER: `COrganizingCtrl::reset_permit_demise` выше. Обход идёт
 // в signed map-порядке и вызывает `SetPermitDemise(true)` для каждой concrete
-// faction; raw null-dereference заменён typed safe-границей с готовым prefix.
+// faction; технический empty slot пропускается, не превращая raw
+// null-dereference в новый observable отказ суточного lifecycle.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
