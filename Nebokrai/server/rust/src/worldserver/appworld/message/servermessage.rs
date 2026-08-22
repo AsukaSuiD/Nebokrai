@@ -348,6 +348,7 @@ use crate::worldserver::appworld::player::{
 use crate::worldserver::appworld::script::variablelist::{
     CVariableList, VariableListSerializationBlock, VariableSetOutcome,
 };
+use crate::worldserver::appworld::session::csessionfactory::CSessionFactory;
 use crate::worldserver::appworld::skills::skillfactory::{
     CSkillFactory, SkillFactorySerializeError,
 };
@@ -357,8 +358,7 @@ use crate::worldserver::worldserver::game::{
     WorldInitialRegionSnapshot, WorldInitialRegionSnapshotBlock, WorldInitialRegionSnapshotKind,
     WorldOnlinePlayerAppendOutcome, WorldPingGameServerInfo, WorldReconnectedPlayerDecode,
     WorldPlayerSaveResponseProgress, WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate,
-    WorldRegionParamDecodeOutcome,
-    WorldRegionChangePlayerTransition, WorldRegionChangeTeamOwner,
+    WorldRegionParamDecodeOutcome, WorldRegionChangePlayerTransition,
     WorldRegionChangeTeamUpdate, WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest,
     WorldServerSnapshotPlayerDecode, WorldServerSnapshotPlayerOwner, prepare_save_thread_launch,
 };
@@ -1726,7 +1726,7 @@ where
 }
 
 /// Исполняет только уже восстановленные обычные ветви `OnServerMessage`.
-pub(crate) async fn on_server_message<TeamOwner>(
+pub(crate) async fn on_server_message(
     game: &mut CGame,
     mut message: CMessage,
     registry: &GoodsBasePropertiesRegistry,
@@ -1741,15 +1741,12 @@ pub(crate) async fn on_server_message<TeamOwner>(
         &WorldSaveThreadLaunchRequest,
     ) -> WorldSaveThreadHandleState,
     add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
-    team_owner: &mut TeamOwner,
+    session_factory: &mut CSessionFactory,
     general_variables: Option<&mut CVariableList>,
     gods_battle: &mut CGodsBattleConf,
     rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
     mut gods_battle_database: Option<&mut WorldTdsClient>,
-) -> WorldServerMessageDispatch
-where
-    TeamOwner: WorldRegionChangeTeamOwner + ?Sized,
-{
+) -> WorldServerMessageDispatch {
     match message.message_type() {
         0x0004_FC01 => {
             let (cleared_responses, started_at_ms) = game.begin_game_server_ping();
@@ -1880,7 +1877,8 @@ where
                                     response.send_to_socket(sender.as_ref(), socket_id);
                                 let team_session_id =
                                     game.get_team_session_id(transition.team_id as u32);
-                                let team_update = team_owner.set_team_player_owner_region(
+                                let team_update = game.set_team_player_owner_region(
+                                    session_factory,
                                     team_session_id,
                                     transition.owner_type,
                                     transition.owner_id,

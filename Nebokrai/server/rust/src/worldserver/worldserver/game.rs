@@ -3125,7 +3125,7 @@ pub(crate) struct WorldMainLoopBaiTanJjcStageReport {
     pub(crate) jjc: JjcRunReport,
 }
 
-/// Результат сырой session/team/plug цепочки timeout-login owner-а.
+/// Результат точной session/team/plug цепочки timeout-login owner-а.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldLoginTimeoutTeamExit {
     SessionMissingOrNotTeam,
@@ -3133,32 +3133,11 @@ pub(crate) enum WorldLoginTimeoutTeamExit {
     Exited,
 }
 
-/// Явная граница ещё сырых `CSessionFactory -> CTeam -> CTeamPlug::Exit`.
-pub(crate) trait WorldLoginTimeoutTeamOwner {
-    fn exit_team_player(
-        &mut self,
-        session_id: i32,
-        owner_type: i32,
-        owner_id: i32,
-    ) -> WorldLoginTimeoutTeamExit;
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldRegionChangeTeamUpdate {
     SessionMissingOrNotTeam,
     PlugMissing,
     Updated,
-}
-
-/// Точная RTTI-цепочка `CTeam -> CTeamate::SetOwnerRegionID` после ответа.
-pub(crate) trait WorldRegionChangeTeamOwner {
-    fn set_team_player_owner_region(
-        &mut self,
-        session_id: i32,
-        owner_type: i32,
-        owner_id: i32,
-        region_id: i32,
-    ) -> WorldRegionChangeTeamUpdate;
 }
 
 /// Одна friend-ветвь после перевода просроченного игрока в offline-list.
@@ -3286,7 +3265,6 @@ pub(crate) struct WorldMainLoopOwners<
     LeiTingContextOwner,
     DbMiscContextOwner,
     JjcContext,
-    TeamOwner,
 > {
     pub(crate) registry: &'a GoodsBasePropertiesRegistry,
     pub(crate) original_name_index: &'a GoodsOriginalNameIndex,
@@ -3327,7 +3305,6 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) lei_ting_context: &'a mut LeiTingContextOwner,
     pub(crate) db_misc_context: &'a mut DbMiscContextOwner,
     pub(crate) jjc_context: &'a mut JjcContext,
-    pub(crate) team_owner: &'a mut TeamOwner,
     pub(crate) log: &'a mut WorldLogTextOwner,
 }
 
@@ -9549,7 +9526,7 @@ impl CGame {
     /// `0x5FF12` завершается до следующего slot-а, как синхронный ADO EXE;
     /// JJC owner `0x60901..0x60907` и Team owner `0x60001..0x6000C`
     /// исполняются полностью.
-    pub(crate) async fn process_message<TimerCallback, TeamOwner, JjcContext>(
+    pub(crate) async fn process_message<TimerCallback, JjcContext>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
         organizing: &mut COrganizingCtrl,
@@ -9611,7 +9588,6 @@ impl CGame {
             &WorldSaveThreadLaunchRequest,
         ) -> WorldSaveThreadHandleState,
         session_factory: &mut CSessionFactory,
-        team_owner: &mut TeamOwner,
         mut general_variables: Option<&mut CVariableList>,
         gods_battle: &mut CGodsBattleConf,
         mut rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
@@ -9622,7 +9598,6 @@ impl CGame {
     ) -> Result<WorldProcessMessageOutcome, WorldProcessMessageError>
     where
         TimerCallback: Copy,
-        TeamOwner: WorldRegionChangeTeamOwner + ?Sized,
         JjcContext: JjcRunContext + ?Sized,
     {
         let server_started_at = legacy_tick_ms();
@@ -9697,7 +9672,6 @@ impl CGame {
                             &mut *save_thread_handle,
                             &mut *launch_save_thread,
                             &mut *session_factory,
-                            &mut *team_owner,
                             general_variables.as_deref_mut(),
                             &mut *gods_battle,
                             rs_gods_battle.as_deref_mut(),
@@ -9787,7 +9761,6 @@ impl CGame {
                     &mut *save_thread_handle,
                     &mut *launch_save_thread,
                     &mut *session_factory,
-                    &mut *team_owner,
                     general_variables.as_deref_mut(),
                     &mut *gods_battle,
                     rs_gods_battle.as_deref_mut(),
@@ -9825,7 +9798,6 @@ impl CGame {
     /// накопитель: исходный невозвратившийся путь их не достигал.
     pub(crate) async fn process_message_main_loop_stage<
         TimerCallback,
-        TeamOwner,
         JjcContext,
         GetTick,
     >(
@@ -9890,7 +9862,6 @@ impl CGame {
             &WorldSaveThreadLaunchRequest,
         ) -> WorldSaveThreadHandleState,
         session_factory: &mut CSessionFactory,
-        team_owner: &mut TeamOwner,
         general_variables: Option<&mut CVariableList>,
         gods_battle: &mut CGodsBattleConf,
         rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
@@ -9906,7 +9877,6 @@ impl CGame {
     ) -> WorldProcessMessageStageReport
     where
         TimerCallback: Copy,
-        TeamOwner: WorldRegionChangeTeamOwner + ?Sized,
         JjcContext: JjcRunContext + ?Sized,
         GetTick: FnMut() -> u32,
     {
@@ -9973,7 +9943,6 @@ impl CGame {
             save_thread_handle,
             launch_save_thread,
             session_factory,
-            team_owner,
             general_variables,
             gods_battle,
             rs_gods_battle,
@@ -10721,18 +10690,80 @@ impl CGame {
         self.team_session_ids.remove(&team_id);
     }
 
+    /// Выполняет точную `CTeam -> CTeamate::Exit` цепочку timeout-login.
+    pub(crate) fn exit_team_player(
+        &mut self,
+        factory: &mut CSessionFactory,
+        session_id: i32,
+        owner_type: i32,
+        owner_id: i32,
+    ) -> WorldLoginTimeoutTeamExit {
+        let Some(plug_id) = factory
+            .with_team(self, session_id, |team| {
+                team.query_plug_by_owner(owner_type, owner_id)
+            })
+            .flatten()
+        else {
+            return if factory.is_team(session_id) {
+                WorldLoginTimeoutTeamExit::PlugMissing
+            } else {
+                WorldLoginTimeoutTeamExit::SessionMissingOrNotTeam
+            };
+        };
+        if factory
+            .with_teamate(self, plug_id, |teamate| teamate.exit())
+            .is_some()
+        {
+            WorldLoginTimeoutTeamExit::Exited
+        } else {
+            WorldLoginTimeoutTeamExit::PlugMissing
+        }
+    }
+
+    /// Выполняет точную RTTI-цепочку смены региона участника команды.
+    pub(crate) fn set_team_player_owner_region(
+        &mut self,
+        factory: &mut CSessionFactory,
+        session_id: i32,
+        owner_type: i32,
+        owner_id: i32,
+        region_id: i32,
+    ) -> WorldRegionChangeTeamUpdate {
+        let Some(plug_id) = factory
+            .with_team(self, session_id, |team| {
+                team.query_plug_by_owner(owner_type, owner_id)
+            })
+            .flatten()
+        else {
+            return if factory.is_team(session_id) {
+                WorldRegionChangeTeamUpdate::PlugMissing
+            } else {
+                WorldRegionChangeTeamUpdate::SessionMissingOrNotTeam
+            };
+        };
+        if factory
+            .with_teamate(self, plug_id, |teamate| {
+                teamate.set_owner_region_id(region_id)
+            })
+            .is_some()
+        {
+            WorldRegionChangeTeamUpdate::Updated
+        } else {
+            WorldRegionChangeTeamUpdate::PlugMissing
+        }
+    }
+
     /// Обходит весь login-list по одному общему tick snapshot и освобождает
     /// только просроченные записи, у которых ещё существует player-owner.
-    pub(crate) fn process_time_out_login_player<GetTick, TeamOwner>(
+    pub(crate) fn process_time_out_login_player<GetTick>(
         &mut self,
         release_interval_ms: u32,
         organizing: &mut COrganizingCtrl,
         mut get_tick: GetTick,
-        team_owner: &mut TeamOwner,
+        session_factory: &mut CSessionFactory,
     ) -> WorldLoginTimeoutReport
     where
         GetTick: FnMut() -> u32,
-        TeamOwner: WorldLoginTimeoutTeamOwner,
     {
         let snapshot_tick_ms = get_tick();
         let mut entries = Vec::with_capacity(self.login_players.len());
@@ -10785,7 +10816,12 @@ impl CGame {
             );
 
             let team_session_id = self.get_team_session_id(team_id as u32);
-            let team_exit = team_owner.exit_team_player(team_session_id, owner_type, owner_id);
+            let team_exit = self.exit_team_player(
+                session_factory,
+                team_session_id,
+                owner_type,
+                owner_id,
+            );
 
             let removed = self.login_players.remove(login_index);
             debug_assert_eq!(removed.map(|entry| entry.player_id), Some(login.player_id));
@@ -10844,9 +10880,9 @@ impl CGame {
     /// Выполняет точный 40-ms pacing, warning-resync и strict login-release gate.
     #[allow(
         clippy::too_many_arguments,
-        reason = "clock, wait/debug adapters и сырой team-owner являются разными границами"
+        reason = "clock, wait/debug adapters и session factory являются разными границами"
     )]
-    pub(crate) fn run_main_loop_tail_stage<GetTick, Wait, DebugOutput, TeamOwner>(
+    pub(crate) fn run_main_loop_tail_stage<GetTick, Wait, DebugOutput>(
         &mut self,
         clocks: &mut WorldMainLoopTailClockState,
         release_state: &mut WorldMainLoopLoginReleaseState,
@@ -10854,13 +10890,12 @@ impl CGame {
         mut get_tick: GetTick,
         mut wait: Wait,
         mut output_debug: DebugOutput,
-        team_owner: &mut TeamOwner,
+        session_factory: &mut CSessionFactory,
     ) -> WorldMainLoopTailStageReport
     where
         GetTick: FnMut() -> u32,
         Wait: FnMut(u32),
         DebugOutput: FnMut(&'static str),
-        TeamOwner: WorldLoginTimeoutTeamOwner,
     {
         let sampled_tick_ms = get_tick();
         clocks.current_tick_ms = sampled_tick_ms;
@@ -10912,7 +10947,7 @@ impl CGame {
                 release_interval_ms,
                 organizing,
                 &mut get_tick,
-                team_owner,
+                session_factory,
             ))
         } else {
             None
@@ -10940,7 +10975,6 @@ impl CGame {
         LeiTingContextOwner,
         DbMiscContextOwner,
         JjcContext,
-        TeamOwner,
     >(
         &mut self,
         configuration: WorldMainLoopConfiguration,
@@ -10952,7 +10986,6 @@ impl CGame {
             LeiTingContextOwner,
             DbMiscContextOwner,
             JjcContext,
-            TeamOwner,
         >,
         callbacks: &mut WorldMainLoopCallbacks<'_, TimerCallback>,
     ) -> WorldMainLoopResult<FactionContext::Block, LeiTingContextOwner::Block>
@@ -10962,7 +10995,6 @@ impl CGame {
         LeiTingContextOwner: LeiTingContext,
         DbMiscContextOwner: DbMiscContext,
         JjcContext: JjcRunContext,
-        TeamOwner: WorldLoginTimeoutTeamOwner + WorldRegionChangeTeamOwner,
     {
         let profile_initialization = initialize_main_loop_profile_if_needed(
             state.initialization,
@@ -11203,7 +11235,6 @@ impl CGame {
             state.save_thread_handle,
             &mut *callbacks.launch_save_thread,
             owners.session_factory,
-            &mut *owners.team_owner,
             owners.general_variables.as_deref_mut(),
             owners.gods_battle,
             owners.rs_gods_battle.as_deref_mut(),
@@ -11349,7 +11380,7 @@ impl CGame {
             &mut *callbacks.get_tick,
             &mut *callbacks.wait,
             &mut *callbacks.output_debug,
-            owners.team_owner,
+            owners.session_factory,
         );
         let tail = match tail {
             complete @ WorldMainLoopTailStageReport::Complete { .. } => complete,
@@ -14638,7 +14669,7 @@ impl CountryWarTopInfoContext for WorldCountryWarEffects<'_> {
     }
 }
 
-async fn process_world_message<TimerCallback, TeamOwner, JjcContext>(
+async fn process_world_message<TimerCallback, JjcContext>(
     game: &mut CGame,
     honor_ranks: &mut CHonorRanks,
     organizing: &mut COrganizingCtrl,
@@ -14700,7 +14731,6 @@ async fn process_world_message<TimerCallback, TeamOwner, JjcContext>(
         &WorldSaveThreadLaunchRequest,
     ) -> WorldSaveThreadHandleState,
     session_factory: &mut CSessionFactory,
-    team_owner: &mut TeamOwner,
     general_variables: Option<&mut CVariableList>,
     gods_battle: &mut CGodsBattleConf,
     rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
@@ -14713,7 +14743,6 @@ async fn process_world_message<TimerCallback, TeamOwner, JjcContext>(
 ) -> ProcessedWorldEvent
 where
     TimerCallback: Copy,
-    TeamOwner: WorldRegionChangeTeamOwner + ?Sized,
     JjcContext: JjcRunContext + ?Sized,
 {
     let message_type = message.message_type();
@@ -14737,7 +14766,7 @@ where
             save_thread_handle,
             launch_save_thread,
             add_log_text,
-            team_owner,
+            session_factory,
             general_variables,
             gods_battle,
             rs_gods_battle,
