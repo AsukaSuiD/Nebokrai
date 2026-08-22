@@ -2,7 +2,7 @@
 //!
 //! Статус base-подобъекта и type-default внутри `CMonster::CMonster` RVA
 //! `0x000E0490`, а также непосредственной destructor-цепочки RVA `0x000E0410`
-//! — `VERIFIED_DISASSEMBLY`; `GetFigure` RVA `0x000E0460` — `IMPLEMENTED`.
+//! и `GetFigure` RVA `0x000E0460` — `IMPLEMENTED`.
 //! Property и остальной корпус ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -93,7 +93,7 @@ impl CMonster {
 
 // ============================================================================
 // FUNCTION: CMonster::~CMonster
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\monster.cpp:16
@@ -101,6 +101,9 @@ impl CMonster {
 // ADDRESS: 004e0410
 // PROTOTYPE: void __thiscall ~CMonster(void)
 //
+// Реализовано обычным Rust `Drop` полей `original_name` и `move_shape_base`.
+// Точная цепочка не имеет внешних побочных действий; SSO/heap-ветки старого ABI
+// являются только внутренней технической деталью владения.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -121,7 +124,7 @@ impl CMonster {
 
 // ============================================================================
 // FUNCTION: CMonster::CMonster
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\monster.cpp:11
@@ -129,6 +132,9 @@ impl CMonster {
 // ADDRESS: 004e0490
 // PROTOTYPE: undefined __thiscall CMonster(void)
 //
+// Реализовано выше как `with_constructor_base_and_type`: конструктор создаёт
+// достигнутый `CMoveShape`, пустое byte-имя и затем ставит object type `600`.
+// Rust не переносит старый SSO layout строки и vtable-назначение.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
