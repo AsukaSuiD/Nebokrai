@@ -59,6 +59,12 @@ pub(crate) struct CQuestSystem {
 }
 
 impl CQuestSystem {
+    /// Exact начало `Load`: очищается только map заданий; scalar и script
+    /// поля сохраняются, если первый resource `Data/Quest.ini` недоступен.
+    pub(crate) fn clear_quests_for_load(&mut self) {
+        self.quests.clear();
+    }
+
     pub(crate) fn insert(&mut self, quest: QuestEntry) -> Option<QuestEntry> {
         self.quests.insert(quest.id, quest)
     }
