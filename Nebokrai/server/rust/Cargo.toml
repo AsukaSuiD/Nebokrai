@@ -22,6 +22,7 @@ freetype-rs = { version = "0.38.0", features = ["bundled"] }
 futures-util = "0.3.34"
 getrandom = "0.4.3"
 md-5 = "0.11.0"
+lzo = "0.1.3"
 parking_lot = "0.12.5"
 procfs = { version = "0.18.0", default-features = false }
 quick-xml = "0.39.2"
