@@ -46,7 +46,7 @@ use crate::dbaccess::worlddb::rssetup::{WorldDatabaseSettings, WorldTdsClient};
 use crate::public::date::TagTime;
 use crate::worldserver::appworld::message::writelogmessage::{
     WorldAuctionSaleLogEvent, WorldFairyLogEvent, WorldPlayerProgressLogEvent,
-    WorldWriteLogCommand,
+    WorldPlayerRelationLogEvent, WorldWriteLogCommand,
 };
 
 const INSERT_INCREMENT_LOG_SQL: &str = "INSERT INTO increment_log(\
@@ -99,6 +99,12 @@ const INSERT_PLAYER_EXP_LOG_SQL: &str = "INSERT INTO player_exp_log(\
 const INSERT_PLAYER_DIED_LOG_SQL: &str = "INSERT INTO player_died_log(\
     player_id,player_name,map_id,pos_x,pos_y\
 ) VALUES(@P1,@P2,@P3,@P4,@P5)";
+const INSERT_TEAM_LOG_SQL: &str = "INSERT INTO team_log(\
+    captain_id,captain_name,player_id,player_name,map_id,pos_x,pos_y,log_type\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8)";
+const INSERT_PLAYER_KILLER_LOG_SQL: &str = "INSERT INTO player_killer_log(\
+    player_id,player_name,murderer_id,murderer_name,map_id,pos_x,pos_y,log_type\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8)";
 
 /// Cloneable FIFO-owner для producer-а главного цикла и отдельного DB worker-а.
 ///
@@ -565,6 +571,46 @@ pub(crate) async fn execute_world_write_log_command(
             }
             Ok(())
         }
+        WorldWriteLogCommand::PlayerRelationLog(write) => {
+            match &write.event {
+                WorldPlayerRelationLogEvent::Team {
+                    map_id,
+                    wire_position_x: _,
+                    position_y,
+                    log_type,
+                } => {
+                    let mut query = Query::new(INSERT_TEAM_LOG_SQL);
+                    query.bind(write.first_player_id);
+                    query.bind(decode_legacy_text(&write.first_player_name));
+                    query.bind(write.second_player_id);
+                    query.bind(decode_legacy_text(&write.second_player_name));
+                    query.bind(*map_id);
+                    // Exact `_sprintf` передавал последний long для обеих координат.
+                    query.bind(*position_y);
+                    query.bind(*position_y);
+                    query.bind(i32::from(*log_type));
+                    query.execute(connection).await?;
+                }
+                WorldPlayerRelationLogEvent::Killer {
+                    map_id,
+                    position_x,
+                    position_y,
+                    log_type,
+                } => {
+                    let mut query = Query::new(INSERT_PLAYER_KILLER_LOG_SQL);
+                    query.bind(write.first_player_id);
+                    query.bind(decode_legacy_text(&write.first_player_name));
+                    query.bind(write.second_player_id);
+                    query.bind(decode_legacy_text(&write.second_player_name));
+                    query.bind(*map_id);
+                    query.bind(*position_x);
+                    query.bind(*position_y);
+                    query.bind(i32::from(*log_type));
+                    query.execute(connection).await?;
+                }
+            }
+            Ok(())
+        }
     }
 }
 
@@ -611,5 +657,6 @@ fn world_write_log_command_name(command: &WorldWriteLogCommand) -> &'static str 
         WorldWriteLogCommand::AuctionLog(_) => "AuctionLog",
         WorldWriteLogCommand::AuctionSaleLog(_) => "AuctionSaleLog",
         WorldWriteLogCommand::PlayerProgressLog(_) => "PlayerProgressLog",
+        WorldWriteLogCommand::PlayerRelationLog(_) => "PlayerRelationLog",
     }
 }

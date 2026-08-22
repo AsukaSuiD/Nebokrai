@@ -1,7 +1,8 @@
 //! WorldServer dispatcher-owner `OnWriteLogMessage`.
 //!
 //! Весь dispatcher RVA `0x000A8AB0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме
-//! player progress `0x60206..0x60208`, increment-shop `0x6020D`, carriage
+//! player progress `0x60206..0x60208`, team/killer `0x60209..0x6020A`,
+//! increment-shop `0x6020D`, carriage
 //! `0x6020E`, plain player log `0x6020F`, fairy `0x60210`, reserved no-op
 //! `0x60211..0x60213`, auction
 //! `0x60214..0x60217` и ciqing `0x60218` со статусом `IMPLEMENTED`. Точная пара:
@@ -63,6 +64,12 @@
 //! даёт буквальное имя `"NULL"`. Старый Linux-донор ошибочно сменил player ID
 //! на `%u`; это расхождение не перенесено. Параметризация исправляет только
 //! неэкранированное имя и не добавляет отсутствующую в машине валидацию.
+//! Team/killer `0x60209..0x6020A` по exact `0x004A96CB..0x004A9909` независимо
+//! lookup-ят обоих игроков, подставляя `"NULL"` для каждого отсутствующего, и
+//! расширяют log-type через `movzx`. Killer сохраняет обе wire-координаты.
+//! Team читает обе, но machine `_sprintf` дважды передаёт последний `pos_y`,
+//! поэтому DB `pos_x == pos_y`; этот наблюдаемый quirk сохранён явно, тогда как
+//! Linux-донор молча использовал прочитанный `pos_x`.
 //! Exact outer jump-table VA `0x004AACA8` направляет все три wire ID
 //! `0x60211..0x60213` прямо в epilogue `0x004AAC87`; Rust поэтому считает их
 //! обработанными no-op, не создавая ложный pending owner. Ветка `0x60218` по
@@ -90,6 +97,8 @@ use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 const PLAYER_LEVEL_LOG_MESSAGE: i32 = 0x0006_0206;
 const PLAYER_EXP_LOG_MESSAGE: i32 = 0x0006_0207;
 const PLAYER_DIED_LOG_MESSAGE: i32 = 0x0006_0208;
+const TEAM_LOG_MESSAGE: i32 = 0x0006_0209;
+const PLAYER_KILLER_LOG_MESSAGE: i32 = 0x0006_020A;
 const INCREMENT_LOG_MESSAGE: i32 = 0x0006_020D;
 const CARRIAGE_LOG_MESSAGE: i32 = 0x0006_020E;
 const PLAIN_LOG_MESSAGE: i32 = 0x0006_020F;
@@ -264,6 +273,31 @@ pub(crate) enum WorldPlayerProgressLogEvent {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerRelationLogWrite {
+    pub(crate) first_player_id: i32,
+    pub(crate) first_player_name: Vec<u8>,
+    pub(crate) second_player_id: i32,
+    pub(crate) second_player_name: Vec<u8>,
+    pub(crate) event: WorldPlayerRelationLogEvent,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WorldPlayerRelationLogEvent {
+    Team {
+        map_id: i32,
+        wire_position_x: i32,
+        position_y: i32,
+        log_type: u8,
+    },
+    Killer {
+        map_id: i32,
+        position_x: i32,
+        position_y: i32,
+        log_type: u8,
+    },
+}
+
 /// Typed очередь сохраняет старый FIFO, но оставляет SQL transport Tiberius-у.
 #[derive(Clone, Debug)]
 pub(crate) enum WorldWriteLogCommand {
@@ -275,6 +309,7 @@ pub(crate) enum WorldWriteLogCommand {
     AuctionLog(WorldAuctionLogWrite),
     AuctionSaleLog(WorldAuctionSaleLogWrite),
     PlayerProgressLog(WorldPlayerProgressLogWrite),
+    PlayerRelationLog(WorldPlayerRelationLogWrite),
 }
 
 #[derive(Debug)]
@@ -397,6 +432,14 @@ pub(crate) struct WorldPlayerProgressLogMessageOutcome {
 }
 
 #[derive(Debug)]
+pub(crate) struct WorldPlayerRelationLogMessageOutcome {
+    pub(crate) write: WorldPlayerRelationLogWrite,
+    pub(crate) players_found: [bool; 2],
+    pub(crate) payload_complete: [bool; 6],
+    pub(crate) queue_length_after: usize,
+}
+
+#[derive(Debug)]
 pub(crate) enum WorldWriteLogMessageOutcome {
     IncrementLog(WorldIncrementLogMessageOutcome),
     CarriageLog(WorldCarriageLogMessageOutcome),
@@ -406,6 +449,7 @@ pub(crate) enum WorldWriteLogMessageOutcome {
     AuctionLog(WorldAuctionLogMessageOutcome),
     AuctionSaleLog(WorldAuctionSaleLogMessageOutcome),
     PlayerProgressLog(WorldPlayerProgressLogMessageOutcome),
+    PlayerRelationLog(WorldPlayerRelationLogMessageOutcome),
     ReservedNoOp { message_type: i32 },
 }
 
@@ -466,6 +510,16 @@ pub(crate) fn on_write_log_message(
         return WorldWriteLogMessageDispatch::Handled(
             WorldWriteLogMessageOutcome::PlayerProgressLog(
                 on_player_progress_log_message(game, message),
+            ),
+        );
+    }
+    if matches!(
+        message.message_type(),
+        TEAM_LOG_MESSAGE | PLAYER_KILLER_LOG_MESSAGE
+    ) {
+        return WorldWriteLogMessageDispatch::Handled(
+            WorldWriteLogMessageOutcome::PlayerRelationLog(
+                on_player_relation_log_message(game, message),
             ),
         );
     }
@@ -711,6 +765,66 @@ fn on_player_progress_log_message(
         write,
         player_found,
         payload_complete,
+        queue_length_after,
+    }
+}
+
+fn on_player_relation_log_message(
+    game: &CGame,
+    mut message: CMessage,
+) -> WorldPlayerRelationLogMessageOutcome {
+    let log_type = message.base_mut().get_char();
+    let first_player_id = message.base_mut().get_long();
+    let second_player_id = message.base_mut().get_long();
+    let first_player_id_value = first_player_id.unwrap_or(0);
+    let second_player_id_value = second_player_id.unwrap_or(0);
+    let first_player = game.map_player(first_player_id_value as u32);
+    let second_player = game.map_player(second_player_id_value as u32);
+    let players_found = [first_player.is_some(), second_player.is_some()];
+    let first_player_name = first_player
+        .map(|player| visible_c_string(player.get_name()))
+        .unwrap_or_else(|| b"NULL".to_vec());
+    let second_player_name = second_player
+        .map(|player| visible_c_string(player.get_name()))
+        .unwrap_or_else(|| b"NULL".to_vec());
+    let map_id = message.base_mut().get_long();
+    let position_x = message.base_mut().get_long();
+    let position_y = message.base_mut().get_long();
+    let event = if message.message_type() == TEAM_LOG_MESSAGE {
+        WorldPlayerRelationLogEvent::Team {
+            map_id: map_id.unwrap_or(0),
+            wire_position_x: position_x.unwrap_or(0),
+            position_y: position_y.unwrap_or(0),
+            log_type: log_type.unwrap_or(0) as u8,
+        }
+    } else {
+        WorldPlayerRelationLogEvent::Killer {
+            map_id: map_id.unwrap_or(0),
+            position_x: position_x.unwrap_or(0),
+            position_y: position_y.unwrap_or(0),
+            log_type: log_type.unwrap_or(0) as u8,
+        }
+    };
+    let write = WorldPlayerRelationLogWrite {
+        first_player_id: first_player_id_value,
+        first_player_name,
+        second_player_id: second_player_id_value,
+        second_player_name,
+        event,
+    };
+    let queue_length_after =
+        game.push_write_log_command(WorldWriteLogCommand::PlayerRelationLog(write.clone()));
+    WorldPlayerRelationLogMessageOutcome {
+        write,
+        players_found,
+        payload_complete: [
+            log_type.is_some(),
+            first_player_id.is_some(),
+            second_player_id.is_some(),
+            map_id.is_some(),
+            position_x.is_some(),
+            position_y.is_some(),
+        ],
         queue_length_after,
     }
 }
