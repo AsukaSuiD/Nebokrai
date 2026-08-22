@@ -1322,7 +1322,8 @@ use crate::worldserver::appworld::jjcsystem::{
 };
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
     CFourNationWarSys, FourNationCountryFailContext, FourNationExploitContext,
-    FourNationExploitLoadedDisposition, FourNationWarResultContext,
+    FourNationExploitLoadedDisposition, FourNationWarCallbacks, FourNationWarLoadError,
+    FourNationWarLoadReport, FourNationWarResultContext,
 };
 use crate::worldserver::appworld::leiting::{
     CLeiTing, LeiTingBlock, LeiTingContext, LeiTingLocalTime, LeiTingRunReport,
@@ -1816,6 +1817,7 @@ pub(crate) enum WorldGameInitEvent {
     VoidOwner(WorldGameInitVoidOwner),
     AttackCityInitialized(AttackCityLoadReport),
     AttackCityEnemyRelationsInitialized(AttackCityEnemyRelationReport),
+    FourNationWarInitialized(FourNationWarLoadReport),
     FactionWarInitialized(FactionWarInitializationReport),
     QuestSystemInitialized(QuestSystemLoadReport),
     JjcConfigurationLoaded(JjcConfigurationLoadReport),
@@ -1922,6 +1924,7 @@ pub(crate) enum WorldGameInitBlockReason<ContextBlock> {
     BooleanOwner(WorldGameInitBooleanOwner),
     AttackCityLoad(AttackCityLoadError),
     AttackCityEnemyRelation(ContextBlock),
+    FourNationWarLoad(FourNationWarLoadError),
     OrganizingParameters(OrganizingParamLoadError),
     CountryParameters(CountryParamLoadError),
     CountryHandler,
@@ -9946,6 +9949,8 @@ impl CGame {
         organizing_parameters: &mut COrganizingParam,
         attack_city: &mut CAttackCitySys,
         attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
+        four_nation_war: &mut CFourNationWarSys,
+        four_nation_war_callbacks: FourNationWarCallbacks<TimerCallback>,
         faction_war: &mut CFactionWarSys,
         faction_enemy_context: &mut FactionEnemyContext,
         player_ranks: &mut CPlayerRanks,
@@ -10391,14 +10396,37 @@ impl CGame {
             attack_city_relations,
         ));
 
-        let owner = WorldGameInitBooleanOwner::InitializeFourNationWar;
-        let succeeded = context.initialize_boolean_owner(owner);
-        events.push(WorldGameInitEvent::BooleanOwner { owner, succeeded });
-        if !succeeded {
-            let localized = self.get_string_by_id(b"XBWS0021").to_vec();
-            self.record_game_init_log(&mut events, log, callbacks, &localized);
-            stop!(WorldGameInitBlockReason::BooleanOwner(owner));
-        }
+        const FOUR_NATION_WAR_PATH: &[u8] = b"setup/FourNationWarSys.ini";
+        let four_nation_source = context.read_resource(FOUR_NATION_WAR_PATH);
+        let four_nation_initialization = match four_nation_war.initialize(
+            four_nation_source.as_deref(),
+            (callbacks.get_timer_local_time)(),
+            timer,
+            four_nation_war_callbacks,
+            |region_id| {
+                let path = format!("regions/{region_id}.nation");
+                context.read_resource(path.as_bytes())
+            },
+        ) {
+            Ok(report) => report,
+            Err(source) => {
+                let owner = WorldGameInitBooleanOwner::InitializeFourNationWar;
+                events.push(WorldGameInitEvent::BooleanOwner {
+                    owner,
+                    succeeded: false,
+                });
+                let localized = self.get_string_by_id(b"XBWS0021").to_vec();
+                self.record_game_init_log(&mut events, log, callbacks, &localized);
+                stop!(WorldGameInitBlockReason::FourNationWarLoad(source));
+            }
+        };
+        events.push(WorldGameInitEvent::BooleanOwner {
+            owner: WorldGameInitBooleanOwner::InitializeFourNationWar,
+            succeeded: true,
+        });
+        events.push(WorldGameInitEvent::FourNationWarInitialized(
+            four_nation_initialization,
+        ));
 
         let owner = WorldGameInitBooleanOwner::InitializeVillageWar;
         let succeeded = context.initialize_boolean_owner(owner);

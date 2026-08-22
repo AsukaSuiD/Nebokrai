@@ -22,7 +22,15 @@
 //! padding/host ABI устранены, но все 196 наблюдаемых bytes сохраняются.
 //! `Vec` заменяет `std::vector`, фиксированный массив — process-global RECT[5].
 //! Невозможный signed count блокирует append до изменения destination. Точная
-//! parser/timer-семантика `FourNationWarSys.ini` остаётся отдельным проходом.
+//! `Initialize` RVA `0x000963E0` восстанавливает country-name snapshot,
+//! очищает setup/fund registries, читает `#` weekly setup и `*` fund records,
+//! ставит достижимые calendar events и загружает `regions/<first>.nation`.
+//! Rust хранит timer IDs как ноль до регистрации: старые неинициализированные
+//! поля не имеют downstream-семантики и не переносятся.
+//! Проверка country-index nation-файла заменяет доказанный выход за `RECT[5]`
+//! безопасным пропуском без нового внешнего log: исходная ветка ошибки была
+//! внутренне противоречивой (`index < 0 && index > 4`) и не задавала
+//! совместимого результата для повреждённого ресурса.
 //!
 //! Exact `0x00493C60..0x00493D3E` последовательно читает ровно пять signed
 //! `long` в static `s_lMorale[5]`. После slots `1..=4`, до чтения следующего,
@@ -71,7 +79,9 @@ use std::error::Error;
 use std::fmt;
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
-use crate::public::date::TagTime;
+use crate::public::date::{TagTime, TagTimeArithmeticBlock};
+use crate::public::readwrite::read_to;
+use crate::public::timer::CTimer;
 use crate::worldserver::appworld::player::PlayerExploitUpdate;
 
 const FOUR_NATION_SETUP_WIRE_SIZE: usize = 196;
@@ -111,9 +121,59 @@ pub(crate) struct FourNationRect {
     pub(crate) bottom: i32,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct FourNationWarFund {
+    pub(crate) morale: i32,
+    pub(crate) money: i32,
+}
+
+/// Все девять точных calendar callback-ов `CFourNationWarSys`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FourNationWarCallbacks<Callback> {
+    pub(crate) sign_up_start: Callback,
+    pub(crate) sign_up_end: Callback,
+    pub(crate) war_start: Callback,
+    pub(crate) war_end: Callback,
+    pub(crate) war_end_info: Callback,
+    pub(crate) enter_start: Callback,
+    pub(crate) enter_end: Callback,
+    pub(crate) refresh_region: Callback,
+    pub(crate) clear_war: Callback,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct FourNationWarLoadReport {
+    pub(crate) setup_resource_found: bool,
+    pub(crate) nation_resource_found: bool,
+    pub(crate) setup_rows_read: u32,
+    pub(crate) setup_rows_accepted: u32,
+    pub(crate) setup_rows_ignored_order: u32,
+    pub(crate) funds_loaded: u32,
+    pub(crate) rects_loaded: u32,
+    pub(crate) rects_ignored_country: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FourNationWarLoadError {
+    SetupResourceMissing,
+    NoAcceptedSetups,
+    NationResourceMissing { region_id: i32 },
+    MissingValue { field: &'static str },
+    InvalidValue { field: &'static str },
+    Arithmetic(TagTimeArithmeticBlock),
+    ScheduleIndexOverflow,
+}
+
+impl From<TagTimeArithmeticBlock> for FourNationWarLoadError {
+    fn from(value: TagTimeArithmeticBlock) -> Self {
+        Self::Arithmetic(value)
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CFourNationWarSys {
     setups: Vec<FourNationWarSetup>,
+    funds: Vec<FourNationWarFund>,
     rects: [FourNationRect; FOUR_NATION_RECT_COUNT as usize],
     morale: [i32; FOUR_NATION_RECT_COUNT as usize],
 }
@@ -230,6 +290,97 @@ pub(crate) struct FourNationWarResultReport {
 }
 
 impl CFourNationWarSys {
+    /// Восстанавливает полный exact loader `FourNationWarSys.ini`.
+    ///
+    /// Source `regions/<first region>.nation` запрашивается лишь после
+    /// постановки timers всех принятых setup-записей, как в EXE. Поэтому его
+    /// отсутствие завершает bool-owner с уже зарегистрированным prefix side
+    /// effect.
+    pub(crate) fn initialize<Callback: Copy, NationSource>(
+        &mut self,
+        source: Option<&[u8]>,
+        now: TagTime,
+        timer: &mut CTimer<Callback>,
+        callbacks: FourNationWarCallbacks<Callback>,
+        mut nation_source: NationSource,
+    ) -> Result<FourNationWarLoadReport, FourNationWarLoadError>
+    where
+        NationSource: FnMut(i32) -> Option<Vec<u8>>,
+    {
+        self.setups.clear();
+        self.funds.clear();
+        self.rects = [FourNationRect::default(); FOUR_NATION_RECT_COUNT as usize];
+        let Some(source) = source else {
+            return Err(FourNationWarLoadError::SetupResourceMissing);
+        };
+
+        let mut report = FourNationWarLoadReport {
+            setup_resource_found: true,
+            ..FourNationWarLoadReport::default()
+        };
+        let mut setup_tokens = war_tokens(source);
+        let mut row_index = 0i32;
+        while read_to(&mut setup_tokens, b"#") {
+            row_index = row_index
+                .checked_add(1)
+                .ok_or(FourNationWarLoadError::ScheduleIndexOverflow)?;
+            report.setup_rows_read = report.setup_rows_read.wrapping_add(1);
+            let setup = read_weekly_setup(&mut setup_tokens, row_index, now)?;
+            if setup.has_valid_time_order() {
+                self.setups.push(setup);
+                report.setup_rows_accepted = report.setup_rows_accepted.wrapping_add(1);
+            } else {
+                report.setup_rows_ignored_order = report.setup_rows_ignored_order.wrapping_add(1);
+            }
+        }
+
+        let mut fund_tokens = war_tokens(source);
+        while read_to(&mut fund_tokens, b"*") {
+            let fund = FourNationWarFund {
+                morale: next_war_i32(&mut fund_tokens, "lMorale")?,
+                money: next_war_i32(&mut fund_tokens, "lMoney")?,
+            };
+            self.funds.push(fund);
+            report.funds_loaded = report.funds_loaded.wrapping_add(1);
+        }
+
+        let first_region_id = self
+            .setups
+            .first()
+            .map(|setup| setup.region_id)
+            .ok_or(FourNationWarLoadError::NoAcceptedSetups)?;
+        for (index, setup) in self.setups.iter_mut().enumerate() {
+            setup.register_initial_events(index as i32, now, timer, callbacks);
+        }
+
+        let Some(nation_source) = nation_source(first_region_id) else {
+            return Err(FourNationWarLoadError::NationResourceMissing {
+                region_id: first_region_id,
+            });
+        };
+        report.nation_resource_found = true;
+        let mut nation_tokens = war_tokens(&nation_source);
+        while read_to(&mut nation_tokens, b"#") {
+            let country = next_war_i32(&mut nation_tokens, "country")?;
+            let rect = FourNationRect {
+                left: next_war_i32(&mut nation_tokens, "rect.left")?,
+                top: next_war_i32(&mut nation_tokens, "rect.top")?,
+                right: next_war_i32(&mut nation_tokens, "rect.right")?,
+                bottom: next_war_i32(&mut nation_tokens, "rect.bottom")?,
+            };
+            if let Some(slot) = self.rects.get_mut(country as usize) {
+                *slot = rect;
+                report.rects_loaded = report.rects_loaded.wrapping_add(1);
+            } else {
+                report.rects_ignored_country = report.rects_ignored_country.wrapping_add(1);
+            }
+        }
+        Ok(report)
+    }
+
+    pub(crate) fn funds(&self) -> &[FourNationWarFund] {
+        &self.funds
+    }
     /// Сохраняет единственный внешний контракт exact `OneCountrySignUp`.
     pub(crate) const fn one_country_sign_up(country: i32) -> FourNationSignUpDisposition {
         if 0 < country && country < 5 {
@@ -516,6 +667,172 @@ fn write_tag_time(destination: &mut Vec<u8>, time: TagTime) {
     ] {
         destination.extend_from_slice(&value.to_le_bytes());
     }
+}
+
+impl FourNationWarSetup {
+    fn has_valid_time_order(&self) -> bool {
+        self.sign_up_start_time.legacy_lt(self.sign_up_end_time)
+            && self.sign_up_end_time.legacy_lt(self.enter_start_time)
+            && self.enter_start_time.legacy_lt(self.refresh_region_time)
+            && self.refresh_region_time.legacy_lt(self.start_time)
+            && self.start_time.legacy_lt(self.end_info_time)
+            && self.end_info_time.legacy_lt(self.end_time)
+            && self.end_time.legacy_lt(self.enter_end_time)
+            && self.enter_end_time.legacy_lt(self.clear_war_time)
+    }
+
+    fn register_initial_events<Callback: Copy>(
+        &mut self,
+        index: i32,
+        now: TagTime,
+        timer: &mut CTimer<Callback>,
+        callbacks: FourNationWarCallbacks<Callback>,
+    ) {
+        if self.end_time.legacy_lt(now) {
+            return;
+        }
+        self.end_event_id = timer
+            .set_time_event(self.end_time, callbacks.war_end, index)
+            .get();
+        self.clear_war_event_id = timer
+            .set_time_event(self.clear_war_time, callbacks.clear_war, index)
+            .get();
+        self.end_info_event_id = timer
+            .set_time_event(
+                if self.end_info_time.legacy_ge(now) {
+                    self.end_info_time
+                } else {
+                    now
+                },
+                callbacks.war_end_info,
+                index,
+            )
+            .get();
+        self.enter_end_event_id = timer
+            .set_time_event(
+                if self.enter_end_time.legacy_gt(now) {
+                    self.enter_end_time
+                } else {
+                    now
+                },
+                callbacks.enter_end,
+                index,
+            )
+            .get();
+        if !self.start_time.legacy_ge(now) {
+            self.region_state = 3;
+            return;
+        }
+        self.start_event_id = timer
+            .set_time_event(self.start_time, callbacks.war_start, index)
+            .get();
+        self.refresh_event_id = timer
+            .set_time_event(self.refresh_region_time, callbacks.refresh_region, index)
+            .get();
+        if !self.enter_start_time.legacy_gt(now) {
+            self.region_state = 2;
+            return;
+        }
+        self.enter_start_event_id = timer
+            .set_time_event(self.enter_start_time, callbacks.enter_start, index)
+            .get();
+        if self.sign_up_end_time.legacy_ge(now) {
+            self.sign_up_end_event_id = timer
+                .set_time_event(self.sign_up_end_time, callbacks.sign_up_end, index)
+                .get();
+            if self.sign_up_start_time.legacy_ge(now) {
+                self.sign_up_start_event_id = timer
+                    .set_time_event(self.sign_up_start_time, callbacks.sign_up_start, index)
+                    .get();
+            } else {
+                self.region_state = 1;
+            }
+        } else {
+            self.sign_up_end_event_id = timer
+                .set_time_event(now, callbacks.sign_up_end, index)
+                .get();
+        }
+    }
+}
+
+fn read_weekly_setup<'a>(
+    tokens: &mut impl Iterator<Item = &'a [u8]>,
+    time_index: i32,
+    now: TagTime,
+) -> Result<FourNationWarSetup, FourNationWarLoadError> {
+    let region_id = next_war_i32(tokens, "lRegionID")?;
+    let weekday = next_war_i32(tokens, "weekday")?;
+    let hour = next_war_i32(tokens, "hour")? as u16;
+    let minute = next_war_i32(tokens, "minute")? as u16;
+    let second = next_war_i32(tokens, "second")? as u16;
+    let sign_up_start_offset = next_war_i32(tokens, "SignUpWarStartTime offset")?;
+    let sign_up_end_offset = next_war_i32(tokens, "SignUpWarEndTime offset")?;
+    let enter_start_offset = next_war_i32(tokens, "EnterStartTime offset")?;
+    let end_info_offset = next_war_i32(tokens, "EndInfoTime offset")?;
+    let enter_end_offset = next_war_i32(tokens, "EnterEndTime offset")?;
+    let refresh_offset = next_war_i32(tokens, "RefreshRegionTime offset")?;
+    let end_offset = next_war_i32(tokens, "EndTime offset")?;
+    let clear_offset = next_war_i32(tokens, "ClearWarTime offset")?;
+
+    let mut start_time = now;
+    let day_delta = weekday - i32::from(now.day_of_week);
+    let _ = start_time.add_day(if day_delta < 0 { day_delta + 7 } else { day_delta })?;
+    start_time.hour = hour;
+    start_time.minute = minute;
+    start_time.second = second;
+    start_time.milliseconds = 0;
+    if shifted_minutes(start_time, sign_up_start_offset)?.legacy_lt(now) {
+        let _ = start_time.add_day(7)?;
+    }
+
+    Ok(FourNationWarSetup {
+        time_index,
+        region_id,
+        sign_up_start_event_id: 0,
+        sign_up_start_time: shifted_minutes(start_time, sign_up_start_offset)?,
+        sign_up_end_event_id: 0,
+        sign_up_end_time: shifted_minutes(start_time, sign_up_end_offset)?,
+        start_event_id: 0,
+        start_time,
+        end_event_id: 0,
+        end_time: shifted_minutes(start_time, end_offset)?,
+        end_info_event_id: 0,
+        end_info_time: shifted_minutes(start_time, end_info_offset)?,
+        enter_start_event_id: 0,
+        enter_start_time: shifted_minutes(start_time, enter_start_offset)?,
+        enter_end_event_id: 0,
+        enter_end_time: shifted_minutes(start_time, enter_end_offset)?,
+        refresh_event_id: 0,
+        refresh_region_time: shifted_minutes(start_time, refresh_offset)?,
+        clear_war_event_id: 0,
+        clear_war_time: shifted_minutes(start_time, clear_offset)?,
+        region_state: 0,
+        is_every_week: 1,
+    })
+}
+
+fn shifted_minutes(mut time: TagTime, offset: i32) -> Result<TagTime, TagTimeArithmeticBlock> {
+    let _ = time.add_minute(offset)?;
+    Ok(time)
+}
+
+fn war_tokens(source: &[u8]) -> impl Iterator<Item = &[u8]> {
+    source
+        .split(u8::is_ascii_whitespace)
+        .filter(|token| !token.is_empty())
+}
+
+fn next_war_i32<'a>(
+    tokens: &mut impl Iterator<Item = &'a [u8]>,
+    field: &'static str,
+) -> Result<i32, FourNationWarLoadError> {
+    let token = tokens
+        .next()
+        .ok_or(FourNationWarLoadError::MissingValue { field })?;
+    std::str::from_utf8(token)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .ok_or(FourNationWarLoadError::InvalidValue { field })
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
