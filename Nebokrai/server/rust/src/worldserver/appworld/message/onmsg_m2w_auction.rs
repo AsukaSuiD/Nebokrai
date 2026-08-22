@@ -297,7 +297,7 @@ pub(crate) fn on_msg_m2w_auction(
 
 // ============================================================================
 // FUNCTION: OnMSG_M2W_AUCTION
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\onmsg_m2w_auction.cpp:12
@@ -305,6 +305,9 @@ pub(crate) fn on_msg_m2w_auction(
 // ADDRESS: 004a5230
 // PROTOTYPE: void __cdecl OnMSG_M2W_AUCTION(CMessage * param_1)
 //
+// IMPLEMENTED_OWNER: `on_msg_m2w_auction` выше покрывает literal case
+// `0x15EB01..=0x15EB08`: exact enqueue, route, opcode/update и DB order
+// материализованы; raw switch сохранён только как доказательная заготовка.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
