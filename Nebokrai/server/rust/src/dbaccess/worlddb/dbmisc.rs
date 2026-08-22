@@ -3,7 +3,8 @@
 //! Статус владельца: `IMPLEMENTED` для `DbNote`, constructor/lifecycle очередей,
 //! `PushItemToListIn/Out`, `PopItemFromListIn/Out`, трёх
 //! `DoneOT_IN_*`, `DoneListIn`, `DoneOutList`, `PopPlayerList`, создания и
-//! active-проверки normal DB-соединения и пяти DB-переходов записи
+//! active-проверки normal DB-соединения, вставки нового лота с его
+//! addon-свойствами и пяти DB-переходов записи
 //! `DelItemFromDb`/`DelMoneyFromDb`/`ModifyGoodsStateA2S`/`TansferMoney`/
 //! `ModifyGoodsStateA2B`, а также
 //! достигнутой части `LoadAuction`,
@@ -69,8 +70,8 @@
 //! остаётся у concrete context и не подменяется блокирующим вызовом драйвера.
 //! `TiberiusAuctionWriteOwner` так же не прячет async I/O за синхронным
 //! `DbMiscContext`: удаление лота открывает собственное соединение, а остальные
-//! четыре точные SQL-команды принимают normal connection исходного owner-а от
-//! вызывающего кода.
+//! остальные точные SQL-команды, включая `AddNewGoods`, принимают normal
+//! connection исходного owner-а от вызывающего кода.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -84,14 +85,17 @@ use tiberius::Query;
 use crate::dbaccess::worlddb::rssetup::{
     WorldDatabaseConnectionError, WorldDatabaseSettings, WorldTdsClient,
 };
+use crate::dbaccess::worlddb::dbgoods::{GoodsAddonPropertySnapshot, GoodsPropertiesSnapshot};
 use crate::nets::networld::message::CMessage;
 use crate::public::auctionnode::{
-    AuctionDatabaseNodeFields, AuctionDatabaseWriteFields, CGoodsNode,
+    AuctionDatabaseInsertFields, AuctionDatabaseNodeFields, AuctionDatabaseWriteFields, CGoodsNode,
     GoodsNodeSerializeError, GoodsState,
 };
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::guid::CGuid;
-use crate::worldserver::appworld::goods::cgoods::{CGoods, GoodsCodecError, GoodsLoadedAddonBlock};
+use crate::worldserver::appworld::goods::cgoods::{
+    CGoods, GoodsCodecError, GoodsDbSnapshotBlock, GoodsLoadedAddonBlock,
+};
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, create_goods, create_goods_no_probability,
 };
@@ -653,6 +657,8 @@ fn output_block(
 pub(crate) enum AuctionWriteOperation {
     CreateNormalConnection,
     CheckNormalConnection,
+    InsertItem,
+    InsertAddonProperty,
     DeleteItem,
     DeleteMoney,
     ModifyStateAuctionToSucceeded,
@@ -677,6 +683,9 @@ pub(crate) enum AuctionWriteFailure {
         field: &'static str,
         value: u32,
     },
+    MissingGoodsBaseProperties {
+        operation: AuctionWriteOperation,
+    },
 }
 
 impl fmt::Display for AuctionWriteFailure {
@@ -694,6 +703,10 @@ impl fmt::Display for AuctionWriteFailure {
                 formatter,
                 "{operation:?}: {field}={value} не представим исходным SQL int"
             ),
+            Self::MissingGoodsBaseProperties { operation } => write!(
+                formatter,
+                "{operation:?}: CGoodsFactory::QueryGoodsBaseProperties вернул null"
+            ),
         }
     }
 }
@@ -703,17 +716,24 @@ impl Error for AuctionWriteFailure {
         match self {
             Self::Connection { source, .. } => Some(source),
             Self::Database { source, .. } => Some(source),
-            Self::LegacyUnsignedOutsideSqlInt { .. } => None,
+            Self::LegacyUnsignedOutsideSqlInt { .. } | Self::MissingGoodsBaseProperties { .. } => None,
         }
     }
 }
 
-/// Безопасная остановка на старой строковой границе, для которой исходник мог
-/// выйти за фиксированный буфер до SQL-вызова.
+/// Безопасная остановка на недоказанной legacy-границе до либо после уже
+/// выполненного SQL-перехода. Она не подменяется выдуманным `bool` старого
+/// процесса.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AuctionWriteBlock {
     BuyerNameWithoutTerminator,
     MissingSellerMoneyAfterFee,
+    InsertTextWithoutTerminator { field: &'static str },
+    MissingGoodsType,
+    MissingLevelLimit,
+    GoodsDecode(GoodsCodecError),
+    GoodsSnapshot(GoodsDbSnapshotBlock),
+    GuidGeneration,
 }
 
 /// Результат одного write-перехода без выдумывания проверки rowcount: ADO
@@ -823,6 +843,99 @@ impl TiberiusAuctionWriteOwner {
                 source,
             }),
         }
+    }
+
+    /// Вставляет один auction lot точной последовательностью `InsertItemToDb`.
+    ///
+    /// Вложенный `CGoods` декодируется до SQL, затем отдельный `exec
+    /// AddNewGoods` записывает главную строку. Base-properties и каждая
+    /// `AddNewGoodsPre` обрабатываются только после этого успеха: ни
+    /// отсутствующая база, ни поздний DB-отказ не откатывают уже созданный
+    /// лот, поскольку exact owner не открывал транзакцию.
+    pub(crate) async fn insert_item_to_db(
+        &self,
+        normal_connection: &mut WorldTdsClient,
+        node: &CGoodsNode,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> AuctionWriteOutcome {
+        let mut goods = CGoods::with_constructor_base_and_type();
+        let mut cursor = 0;
+        if let Err(source) = goods.unserialize(node.goods_bytes(), &mut cursor, true) {
+            return AuctionWriteOutcome::BlockedMissingFact(AuctionWriteBlock::GoodsDecode(source));
+        }
+
+        let row_id = match CGuid::create() {
+            Ok(value) => value,
+            Err(_) => {
+                return AuctionWriteOutcome::BlockedMissingFact(AuctionWriteBlock::GuidGeneration);
+            }
+        };
+        let fields = node.database_insert_fields();
+        let text = match AuctionInsertText::from_fields(&fields) {
+            Ok(value) => value,
+            Err(source) => return AuctionWriteOutcome::BlockedMissingFact(source),
+        };
+
+        let mut query = Query::new(
+            "exec addnewGoods @P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11,\
+             @P12,@P13,@P14,@P15,@P16,@P17,@P18,@P19,@P20,@P21,@P22,@P23",
+        );
+        query.bind(row_id.to_string());
+        query.bind(goods.get_ex_id().to_string());
+        query.bind(i64::from(fields.add_ticket));
+        query.bind(i64::from(fields.base_index));
+        query.bind(text.account);
+        query.bind(i64::from(fields.owner_id));
+        query.bind(i64::from(fields.auction_time));
+        query.bind(i32::from(fields.money_type));
+        query.bind(i32::from(text.goods_type));
+        query.bind(i64::from(fields.npc_price as u32));
+        query.bind(i64::from(fields.amount as u32));
+        query.bind(fields.goods_state.raw());
+        query.bind(i32::from(fields.offer_price));
+        query.bind(text.goods_name);
+        query.bind(text.seller_name);
+        query.bind(i64::from(fields.money_seller));
+        query.bind(i64::from(fields.time_seller));
+        query.bind(i64::from(fields.seller_id));
+        query.bind(text.buyer_name);
+        query.bind(i64::from(fields.money_buyer));
+        query.bind(i64::from(fields.buyer_id));
+        query.bind(i64::from(fields.time_buyer));
+        query.bind(i64::from(text.level_limit));
+        if let Err(source) = query.execute(&mut *normal_connection).await {
+            return AuctionWriteOutcome::ReturnedFalse(AuctionWriteFailure::Database {
+                operation: AuctionWriteOperation::InsertItem,
+                source,
+            });
+        }
+
+        let snapshot = match goods.db_save_snapshot(registry) {
+            Ok(value) => value,
+            Err(source) => {
+                return AuctionWriteOutcome::BlockedMissingFact(AuctionWriteBlock::GoodsSnapshot(source));
+            }
+        };
+        let properties = match snapshot.properties {
+            GoodsPropertiesSnapshot::Available(properties) => properties,
+            GoodsPropertiesSnapshot::MissingBaseProperties => {
+                return AuctionWriteOutcome::ReturnedFalse(
+                    AuctionWriteFailure::MissingGoodsBaseProperties {
+                        operation: AuctionWriteOperation::InsertItem,
+                    },
+                );
+            }
+        };
+        if let Err(source) = save_auction_goods_properties(
+            &properties,
+            row_id,
+            normal_connection,
+        )
+        .await
+        {
+            return AuctionWriteOutcome::ReturnedFalse(source);
+        }
+        AuctionWriteOutcome::Written
     }
 
     /// Выполняет точный `delete auction where goodsid = '%s'` в отдельном
@@ -965,6 +1078,93 @@ impl TiberiusAuctionWriteOwner {
     }
 }
 
+/// Преобразованные строки одного legacy `AddNewGoods` batch. Каждая старый
+/// `_sprintf("%s")` останавливался на NUL; отсутствие terminator не получает
+/// произвольного чтения соседней памяти.
+struct AuctionInsertText {
+    account: String,
+    goods_type: u8,
+    goods_name: String,
+    seller_name: String,
+    buyer_name: String,
+    level_limit: u32,
+}
+
+impl AuctionInsertText {
+    fn from_fields(fields: &AuctionDatabaseInsertFields<'_>) -> Result<Self, AuctionWriteBlock> {
+        let goods_type = fields.goods_type.ok_or(AuctionWriteBlock::MissingGoodsType)?;
+        let level_limit = fields
+            .level_limit
+            .ok_or(AuctionWriteBlock::MissingLevelLimit)?;
+        Ok(Self {
+            account: legacy_auction_text(fields.account, "m_strAccount")?,
+            goods_type,
+            goods_name: legacy_auction_text(fields.goods_name, "m_strGoodsName")?,
+            seller_name: legacy_auction_text(fields.seller_name, "m_AucInfo.strSellerName")?,
+            buyer_name: legacy_auction_text(fields.buyer_name, "m_AucInfo.strBuyerName")?,
+            level_limit,
+        })
+    }
+}
+
+/// Сохраняет addon records по exact `SaveGoodsProperties`. Четыре
+/// accumulator-а намеренно созданы до внешнего цикла и не сбрасываются между
+/// properties: это подтверждённая DB-семантика, а не техническая деталь.
+async fn save_auction_goods_properties(
+    properties: &[GoodsAddonPropertySnapshot],
+    row_id: CGuid,
+    normal_connection: &mut WorldTdsClient,
+) -> Result<(), AuctionWriteFailure> {
+    let row_id = row_id.to_string();
+    let mut first_base = 0_i32;
+    let mut first_modifier = 0_i32;
+    let mut second_base = 0_i32;
+    let mut second_modifier = 0_i32;
+
+    for property in properties {
+        let (property_type, occur_probability, values) = property.legacy_parts();
+        for value in values {
+            match value.id {
+                1 => {
+                    first_base = value.base_value;
+                    first_modifier = value.modifier;
+                }
+                2 => {
+                    second_base = value.base_value;
+                    second_modifier = value.modifier;
+                }
+                _ => {}
+            }
+        }
+
+        let modifier_value_2 = if property_type == 0x25 {
+            if first_modifier == 0 && first_base == second_base {
+                continue;
+            }
+            second_base
+        } else {
+            if occur_probability == 10_000 && first_modifier == 0 && second_modifier == 0 {
+                continue;
+            }
+            second_modifier
+        };
+
+        let mut query = Query::new("exec AddNewGoodsPre @P1,@P2,@P3,@P4");
+        query.bind(property_type as i32);
+        query.bind(first_modifier);
+        query.bind(modifier_value_2);
+        query.bind(row_id.as_str());
+        query
+            .execute(&mut *normal_connection)
+            .await
+            .map_err(|source| AuctionWriteFailure::Database {
+                operation: AuctionWriteOperation::InsertAddonProperty,
+                source,
+            })?;
+    }
+    Ok(())
+}
+
 async fn execute_auction_write(
     operation: AuctionWriteOperation,
     connection: &mut WorldTdsClient,
@@ -992,10 +1192,17 @@ async fn execute_auction_write_with_ignored_failure(
     }
 }
 
-fn legacy_auction_buyer_name(bytes: &[u8]) -> Option<String> {
-    let terminator = bytes.iter().position(|byte| *byte == 0)?;
+fn legacy_auction_text(bytes: &[u8], field: &'static str) -> Result<String, AuctionWriteBlock> {
+    let terminator = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or(AuctionWriteBlock::InsertTextWithoutTerminator { field })?;
     let (name, _, _) = WINDOWS_1251.decode(&bytes[..terminator]);
-    Some(name.into_owned())
+    Ok(name.into_owned())
+}
+
+fn legacy_auction_buyer_name(bytes: &[u8]) -> Option<String> {
+    legacy_auction_text(bytes, "m_AucInfo.strBuyerName").ok()
 }
 
 fn legacy_unsigned_sql_int(
@@ -1813,7 +2020,7 @@ enum ReadAuctionGoodsRecordError {
 
 // ============================================================================
 // FUNCTION: CDbMisc::SaveGoodsProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1682
@@ -1821,6 +2028,8 @@ enum ReadAuctionGoodsRecordError {
 // ADDRESS: 004f02c0
 // PROTOTYPE: bool __thiscall SaveGoodsProperties(vector<CGoods::tagAddonProperty,std::allocator<CGoods::tagAddonProperty>_> * param_1, CGoodsBaseProperties * param_2, char * param_3, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_4)
 //
+// IMPLEMENTED_OWNER: `save_auction_goods_properties` выше. Накопители value
+// ID 1/2 созданы до outer loop и намеренно carry-ятся между properties.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1895,7 +2104,7 @@ enum ReadAuctionGoodsRecordError {
 
 // ============================================================================
 // FUNCTION: CDbMisc::InsertItemToDb
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:729
@@ -1903,6 +2112,8 @@ enum ReadAuctionGoodsRecordError {
 // ADDRESS: 004f2ec0
 // PROTOTYPE: bool __thiscall InsertItemToDb(CGoodsNode * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
 //
+// IMPLEMENTED_OWNER: `TiberiusAuctionWriteOwner::insert_item_to_db` выше.
+// Main `AddNewGoods` не откатывается при позднем lookup/addon-отказе.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

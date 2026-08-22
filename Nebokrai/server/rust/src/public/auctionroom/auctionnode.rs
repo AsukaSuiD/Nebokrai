@@ -38,9 +38,10 @@
 //! `AuctionInfo` сохраняется byte-exact wrapper-ом над `[u8; 0x22c]`,
 //! `std::vector<unsigned char>` — `Vec<u8>`, а GUID — готовым `CGuid`.
 //! Достигнутое поле `dwBuyerId` PDB задаёт как unsigned 32-bit по offset
-//! `0x224`. Снимок полей для DB-записи ниже дополнительно читает только подтверждённые
-//! `strBuyerName`, `dwMoneySeller`, `dwSellerId` и `GoodsState`, нужные exact
-//! `CDbMisc`; остальные байты структуры не переинтерпретируются заранее.
+//! `0x224`. Снимки полей для DB-записи ниже читают только подтверждённые
+//! аргументы exact `CDbMisc`; остальные байты структуры не переинтерпретируются
+//! заранее. У неинициализированных constructor-ом `m_btGoodsType/m_dwLvLimit`
+//! нет придуманного default и TDS-owner останавливает такой вызов до SQL.
 //! Rust-владение заменяет destructor,
 //! allocator и exception cleanup. Форма `long&` сознательно заменена
 //! `&mut usize`, а неинициализированные constructor-ом `m_btGoodsType` и
@@ -216,6 +217,10 @@ impl AuctionInfo {
         &self.bytes[AUCTION_BUYER_NAME_OFFSET..AUCTION_MONEY_BUYER_OFFSET]
     }
 
+    fn seller_name(&self) -> &[u8] {
+        &self.bytes[AUCTION_SELLER_NAME_OFFSET..AUCTION_MONEY_SELLER_OFFSET]
+    }
+
     fn money_seller(&self) -> u32 {
         u32::from_le_bytes(
             self.bytes[AUCTION_MONEY_SELLER_OFFSET..AUCTION_MONEY_SELLER_OFFSET + 4]
@@ -229,6 +234,30 @@ impl AuctionInfo {
             self.bytes[AUCTION_SELLER_ID_OFFSET..AUCTION_SELLER_ID_OFFSET + 4]
                 .try_into()
                 .expect("PDB offset dwSellerId помещается в AuctionInfo"),
+        )
+    }
+
+    fn time_seller(&self) -> u32 {
+        u32::from_le_bytes(
+            self.bytes[AUCTION_TIME_SELLER_OFFSET..AUCTION_TIME_SELLER_OFFSET + 4]
+                .try_into()
+                .expect("PDB offset dwTimeSeller помещается в AuctionInfo"),
+        )
+    }
+
+    fn money_buyer(&self) -> u32 {
+        u32::from_le_bytes(
+            self.bytes[AUCTION_MONEY_BUYER_OFFSET..AUCTION_MONEY_BUYER_OFFSET + 4]
+                .try_into()
+                .expect("PDB offset dwMoneyBuyer помещается в AuctionInfo"),
+        )
+    }
+
+    fn time_buyer(&self) -> u32 {
+        u32::from_le_bytes(
+            self.bytes[AUCTION_TIME_BUYER_OFFSET..AUCTION_TIME_BUYER_OFFSET + 4]
+                .try_into()
+                .expect("PDB offset dwTimeBuyer помещается в AuctionInfo"),
         )
     }
 
@@ -336,6 +365,35 @@ pub(crate) struct AuctionDatabaseWriteFields<'node> {
     pub(crate) seller_money: u32,
     pub(crate) seller_id: u32,
     pub(crate) goods_state: GoodsState,
+}
+
+/// PDB-подтверждённые поля одного вызова `CDbMisc::InsertItemToDb`.
+///
+/// В отличие от materialized DB-view, текст остаётся заимствованным
+/// fixed-size legacy-буфером. SQL-владелец останавливается на первом NUL, как
+/// исходный `%s`, но не переносит его чтение за границу массива.
+pub(crate) struct AuctionDatabaseInsertFields<'node> {
+    pub(crate) add_ticket: u32,
+    pub(crate) account: &'node [u8],
+    pub(crate) owner_id: u32,
+    pub(crate) auction_time: u32,
+    pub(crate) money_type: u8,
+    pub(crate) goods_type: Option<u8>,
+    pub(crate) npc_price: i32,
+    pub(crate) amount: i32,
+    pub(crate) goods_state: GoodsState,
+    pub(crate) offer_price: bool,
+    pub(crate) goods_name: &'node [u8],
+    pub(crate) level_limit: Option<u32>,
+    pub(crate) base_index: u32,
+    pub(crate) seller_name: &'node [u8],
+    pub(crate) money_seller: u32,
+    pub(crate) time_seller: u32,
+    pub(crate) seller_id: u32,
+    pub(crate) buyer_name: &'node [u8],
+    pub(crate) money_buyer: u32,
+    pub(crate) time_buyer: u32,
+    pub(crate) buyer_id: u32,
 }
 
 impl Default for CGoodsNode {
@@ -583,6 +641,34 @@ impl CGoodsNode {
             seller_money: self.auction_info.money_seller(),
             seller_id: self.auction_info.seller_id(),
             goods_state: self.goods_state,
+        }
+    }
+
+    /// Собирает аргументы exact `exec addnewGoods` без переинтерпретации
+    /// неиспользуемых байтов `AuctionInfo`.
+    pub(crate) fn database_insert_fields(&self) -> AuctionDatabaseInsertFields<'_> {
+        AuctionDatabaseInsertFields {
+            add_ticket: self.add_ticket,
+            account: &self.account,
+            owner_id: self.owner_id,
+            auction_time: self.auction_time,
+            money_type: self.money_type,
+            goods_type: self.goods_type,
+            npc_price: self.npc_price,
+            amount: self.amount,
+            goods_state: self.goods_state,
+            offer_price: self.offer_price,
+            goods_name: &self.goods_name,
+            level_limit: self.level_limit,
+            base_index: self.base_index,
+            seller_name: self.auction_info.seller_name(),
+            money_seller: self.auction_info.money_seller(),
+            time_seller: self.auction_info.time_seller(),
+            seller_id: self.auction_info.seller_id(),
+            buyer_name: self.auction_info.buyer_name(),
+            money_buyer: self.auction_info.money_buyer(),
+            time_buyer: self.auction_info.time_buyer(),
+            buyer_id: self.auction_info.buyer_id(),
         }
     }
 

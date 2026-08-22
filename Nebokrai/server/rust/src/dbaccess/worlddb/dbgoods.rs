@@ -183,6 +183,12 @@ impl GoodsAddonPropertySnapshot {
             values,
         })
     }
+
+    /// Возвращает доказанные части property для другого DB-owner-а. Порядок
+    /// values и все три 32-битных поля остаются исходным `tagAddonProperty`.
+    pub(crate) fn legacy_parts(&self) -> (u32, u32, &[GoodsAddonPropertyValue]) {
+        (self.property_type, self.occur_probability, &self.values)
+    }
 }
 
 /// Состояние lookup-а base-properties после успешного main goods INSERT.

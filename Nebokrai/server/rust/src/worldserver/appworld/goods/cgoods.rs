@@ -154,7 +154,7 @@ impl From<ShapeDecodeError> for GoodsCodecError {
 }
 
 /// Неразрешённая граница материализации frozen `CGoods` для WorldDB.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GoodsDbSnapshotBlock {
     /// Constructor/decode ещё не назначили обязательный base-properties index.
     MissingBasePropertiesIndex,
