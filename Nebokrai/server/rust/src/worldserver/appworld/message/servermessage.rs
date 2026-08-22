@@ -315,7 +315,7 @@ use crate::setup::newskillmonsterlist::{
 use crate::setup::playerlist::{CPlayerList, PlayerListSerializeError};
 use crate::setup::preciousboxconf::{PreciousBoxConf, PreciousBoxSerializeError};
 use crate::setup::prisonconf::PrisonConfSerializeError;
-use crate::setup::questsystem::{CQuestSystem, QuestSystemSerializationBlock};
+use crate::setup::questsystem::QuestSystemSerializationBlock;
 use crate::setup::regionsetup::{CRegionSetup, RegionSetupSerializeError};
 use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};
@@ -3691,10 +3691,9 @@ pub(crate) fn continue_game_server_script_files_configuration(
 pub(crate) fn continue_game_server_quest_configuration(
     game: &CGame,
     socket_id: i32,
-    quests: &CQuestSystem,
 ) -> WorldQuestConfigurationReport {
     let mut payload = Vec::new();
-    if let Err(error) = quests.add_to_byte_array(&mut payload) {
+    if let Err(error) = game.quest_system().add_to_byte_array(&mut payload) {
         return WorldQuestConfigurationReport {
             delivery: None,
             completion: WorldQuestConfigurationCompletion::QuestSystem(error),
