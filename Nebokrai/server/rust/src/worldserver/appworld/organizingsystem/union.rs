@@ -1,7 +1,8 @@
 //! Владелец союза исторического `WorldServer`.
 //!
-//! Статус достигнутой save-части `CUnion`, `CUnion::CloneSaveData` RVA
-//! `0x000C6380`, `SetChangeData` RVA `0x000C17D0` и `CUnion::IsMember` RVA
+//! Статус достигнутой save-части `CUnion`, `CUnion::Save` RVA `0x000C1A00`,
+//! `CUnion::CloneSaveData` RVA `0x000C6380`, `SetChangeData` RVA `0x000C17D0`
+//! и `CUnion::IsMember` RVA
 //! `0x000BD840`, `CUnion::GetPlayerHeader` RVA `0x000C6320`, а также
 //! `CUnion::DelMember` RVA `0x000C2B30`, inert virtual-ы
 //! `DubAndSetJobLvl/EditLeaveWord/OperatorTax/SetControbuter/Upgrade` RVA
@@ -1777,6 +1778,17 @@ impl CUnion {
             change_data_type: self.change_data_type,
             last_demise_time_ms: 0,
         })
+    }
+
+    /// Вызывает exact DB-owner с live union и игнорирует его результат.
+    ///
+    /// Оригинал разрешал `CGame::m_pRsConfederation`, один раз вызывал
+    /// `SaveConfederation(this)` и всегда возвращал `true`. Rust передаёт
+    /// внешний DB-owner явным one-shot callback-ом; snapshot-фаза `savedb`
+    /// остаётся отдельным асинхронным owner-ом.
+    pub(crate) fn save(&self, save_confederation: impl FnOnce(&Self)) -> bool {
+        save_confederation(self);
+        true
     }
 
     /// Применяет точную bit-mask семантику virtual `SetChangeData`.
@@ -4366,7 +4378,7 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CUnion::Save
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\union.cpp:83
@@ -4374,6 +4386,8 @@ fn append_legacy_c_string(output: &mut Vec<u8>, value: &[u8]) {
 // ADDRESS: 004c1a00
 // PROTOTYPE: bool __thiscall Save(void)
 //
+// Реализовано выше как `save`: DB-owner вызывается один раз с live union,
+// его результат игнорируется, а возвращаемое значение всегда `true`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
