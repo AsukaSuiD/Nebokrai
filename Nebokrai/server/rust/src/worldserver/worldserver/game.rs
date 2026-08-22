@@ -314,13 +314,17 @@
 //!
 //! `Release` сохраняет полный порядок: queue/city-save, остановка network
 //! workers, шесть live lists, player/DB data, save-worker join, goods/region/
-//! script owners, subsystem/network/DB teardown, cache и runtime cleanup,
+//! script/team-session owners, subsystem/network/DB teardown, cache и runtime cleanup,
 //! write/player-load workers, Largess/ADO и последние resource owners. Exact
 //! EXE содержит единственный `ret` в `0x0040ED87`; псевдокодовые ранние выходы
 //! после STL `operator_delete` являются ошибкой декомпилятора и не перенесены.
 //! `CDbMisc` в Release доказанно не удалялся и отмечен retained, а не потерян
 //! внутри общего DB списка. `VecDeque/BTreeMap/Box/Drop` заменяют только
 //! container nodes, deleting destructors и allocator cleanup. Для
+//! уже удалённых region owner-ов Rust очищает и пустые map-узлы, а scalar
+//! `m_mTeamSessionID` освобождается после последнего lookup перед `DeleteGame`:
+//! это внутренние очистки без wire, callback или изменения порядка owner-ов.
+//! Для
 //! `SaveCityRegion(0)` остаются две локальные safe-границы: неназначенный
 //! `REGION_TYPE` и исходное разыменование null city-region pointer.
 //!
