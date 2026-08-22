@@ -2152,6 +2152,27 @@ pub(crate) struct WorldOnlinePlayerRemoveOutcome {
     pub(crate) organizing: PlayerExitGameOutcome,
 }
 
+/// Один player state-transition из exact `CGame::OnGameServerLost`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldLostGameServerPlayer {
+    pub(crate) player_id: u32,
+    pub(crate) player_name: Vec<u8>,
+    pub(crate) online_removal: WorldOnlinePlayerRemoveOutcome,
+    pub(crate) login_removed: bool,
+    pub(crate) offline_inserted: bool,
+}
+
+/// Полный достигнутый результат отключения одного GameServer.
+#[derive(Debug)]
+pub(crate) struct WorldGameServerLostReport {
+    pub(crate) game_server_index: u32,
+    pub(crate) affected_region_ids: Vec<i32>,
+    pub(crate) skipped_null_region_owners: usize,
+    pub(crate) players: Vec<WorldLostGameServerPlayer>,
+    pub(crate) login_notice_type: i32,
+    pub(crate) login_notice_delivery: Result<i32, SendMessageError>,
+}
+
 /// State-переход живого игрока из server opcode `0x5FA02`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldRegionChangePlayerTransition {
@@ -13931,6 +13952,100 @@ impl CGame {
         }
     }
 
+    /// Переводит игроков потерянного GameServer в offline и уведомляет Login.
+    ///
+    /// Сначала собираются фактические `pRegion->ID` всех assignments указанного
+    /// GS в signed map-order. Затем online-list и login-list в таком порядке
+    /// дают уникальные player ID. Для каждого выполняются exact side effects:
+    /// удаление всех online-дубликатов, organizing exit, `AddPlayerList`, удаление
+    /// первой login-записи и unique offline append. В конце Login получает
+    /// `0x1FE03`, signed count и C-string имена в том же player-list order.
+    pub(crate) fn on_game_server_lost<AddPlayerList>(
+        &mut self,
+        organizing: &mut COrganizingCtrl,
+        game_server_index: u32,
+        mut add_player_list: AddPlayerList,
+    ) -> WorldGameServerLostReport
+    where
+        AddPlayerList: FnMut(&[u8]),
+    {
+        let mut skipped_null_region_owners = 0;
+        let affected_region_ids = self
+            .regions
+            .values()
+            .filter(|assignment| assignment.game_server_index == game_server_index)
+            .filter_map(|assignment| match assignment.region.as_ref() {
+                Some(region) => Some(region.base().get_id()),
+                None => {
+                    // Старый код разыменовывал повреждённый null pRegion. Такой
+                    // внутренний UB не является compatibility-поведением.
+                    skipped_null_region_owners += 1;
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let candidate_ids = self
+            .online_players
+            .iter()
+            .copied()
+            .chain(self.login_players.iter().map(|entry| entry.player_id))
+            .collect::<Vec<_>>();
+        let mut affected_players = Vec::<(u32, Vec<u8>)>::new();
+        for player_id in candidate_ids {
+            let Some(player) = self.players.get(&player_id) else {
+                continue;
+            };
+            if !affected_region_ids.contains(&player.get_region_id())
+                || affected_players
+                    .iter()
+                    .any(|(affected_id, _)| *affected_id == player_id)
+            {
+                continue;
+            }
+            affected_players.push((
+                player_id,
+                legacy_c_string_prefix(player.get_name()).to_vec(),
+            ));
+        }
+
+        let mut players = Vec::with_capacity(affected_players.len());
+        for (player_id, player_name) in &affected_players {
+            let online_removal = self.remove_online_player(organizing, *player_id);
+            add_player_list(player_name);
+            let login_removed = self.remove_login_player(*player_id);
+            let offline_inserted = self.append_offline_player_id(*player_id);
+            players.push(WorldLostGameServerPlayer {
+                player_id: *player_id,
+                player_name: player_name.clone(),
+                online_removal,
+                login_removed,
+                offline_inserted,
+            });
+        }
+
+        let mut notice = CMessage::new(0x0001_FE03);
+        notice
+            .base_mut()
+            .add_long(affected_players.len() as i32);
+        for (_, player_name) in &affected_players {
+            add_legacy_c_string(notice.base_mut(), player_name);
+        }
+        let login_notice_delivery = notice.send(
+            self.current_login_client().map(CMyNetClient::send_queue),
+            false,
+        );
+
+        WorldGameServerLostReport {
+            game_server_index,
+            affected_region_ids,
+            skipped_null_region_owners,
+            players,
+            login_notice_type: 0x0001_FE03,
+            login_notice_delivery,
+        }
+    }
+
     /// Возвращает игрока только после подтверждения ID в login-list.
     pub(crate) fn login_player_by_id(&self, player_id: u32) -> Option<&CPlayer> {
         let is_login = self
@@ -20338,7 +20453,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::OnGameServerLost
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4313
@@ -20346,6 +20461,11 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 00411340
 // PROTOTYPE: void __thiscall OnGameServerLost(ulong param_1)
 //
+// IMPLEMENTED_OWNER: `CGame::on_game_server_lost`; typed report сохраняет
+// affected region/player order, каждый list-transition и Login delivery.
+// Exact `0x0041165D..0x004116D2` подтвердил, что raw `return` после удаления
+// login-node был ошибкой decompiler-а: цикл продолжает offline append и следующий
+// affected player. Null region-owner исправлен только как внутренний UB.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
