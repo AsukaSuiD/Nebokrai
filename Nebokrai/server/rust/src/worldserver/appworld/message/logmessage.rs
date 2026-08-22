@@ -99,7 +99,6 @@ use crate::dbaccess::worlddb::rsplayer::{
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
-use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::playerlist::CPlayerList;
 use crate::public::tools::put_string_to_file;
@@ -503,7 +502,6 @@ pub(crate) async fn on_log_message(
     country_handler: &CCountryHandler,
     country_parameters: &mut CCountryParam,
     player_list: &mut CPlayerList,
-    duplicate_regions: &CDupliRegionSetup,
     session_factory: &mut CSessionFactory,
     registry: &GoodsBasePropertiesRegistry,
     original_name_index: &GoodsOriginalNameIndex,
@@ -573,7 +571,6 @@ pub(crate) async fn on_log_message(
                 country_handler,
                 country_parameters,
                 player_list,
-                duplicate_regions,
                 registry,
                 original_name_index,
                 coefficients,
@@ -822,7 +819,6 @@ async fn create_role(
     country_handler: &CCountryHandler,
     country_parameters: &mut CCountryParam,
     player_list: &mut CPlayerList,
-    duplicate_regions: &CDupliRegionSetup,
     registry: &GoodsBasePropertiesRegistry,
     original_name_index: &GoodsOriginalNameIndex,
     coefficients: &PlayerPropertyCoefficients,
@@ -981,7 +977,7 @@ async fn create_role(
         request.occupation,
         request.country,
         country_parameters,
-        duplicate_regions,
+        game.dupli_region_setup(),
         player_list,
         globe_setup,
         game.thing_setup(),

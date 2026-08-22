@@ -283,7 +283,7 @@ use crate::nets::basemessage::CBaseMessage;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::networld::mynetclient::CMyNetClient;
 use crate::nets::servers::ServerCommandHandle;
-use crate::public::dupliregionsetup::{CDupliRegionSetup, DupliRegionSerializeError};
+use crate::public::dupliregionsetup::DupliRegionSerializeError;
 use crate::public::equipmentcomposelist::EquipmentComposeSerializeError;
 use crate::public::ciqing::{CCiQingSetup, CiQingSerializationBlock};
 use crate::public::taozhuangsetup::{CTaoZhuangSetup, TaoZhuangSerializationBlock};
@@ -3446,10 +3446,9 @@ pub(crate) fn continue_game_server_region_setup_configuration(
 pub(crate) fn continue_game_server_dupli_region_configuration(
     game: &CGame,
     socket_id: i32,
-    dupli_region_setup: &CDupliRegionSetup,
 ) -> WorldDupliRegionConfigurationReport {
     let mut payload = Vec::new();
-    if let Err(error) = dupli_region_setup.add_to_byte_array(&mut payload) {
+    if let Err(error) = game.dupli_region_setup().add_to_byte_array(&mut payload) {
         return WorldDupliRegionConfigurationReport {
             delivery: None,
             completion: WorldDupliRegionConfigurationCompletion::DupliRegionSetup(error),

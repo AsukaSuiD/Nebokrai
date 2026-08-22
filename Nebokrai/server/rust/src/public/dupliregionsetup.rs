@@ -1,8 +1,8 @@
 //! Список дублирующих регионов исторического Miracle.
 //!
-//! Статус World `CDupliRegionSetup::AddToByteArray` RVA `0x000506B0` и
-//! `GetRandomRegion` RVA `0x00050A00`: `IMPLEMENTED`; loader и Game decoder ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! World `CDupliRegionSetup::Load/AddToByteArray/GetRandomRegion` RVA
+//! `0x00050820/0x000506B0/0x00050A00` — `IMPLEMENTED`; Game decoder ниже
+//! остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -19,10 +19,15 @@
 //! общий `random(count)`. `Vec` и переданный caller-ом RNG adapter заменяют
 //! только STL/process-global plumbing. Контракт adapter-а исходный: при
 //! положительном bound он возвращает индекс `0..bound`. Поведение повреждённого
-//! ini пока не доказано и не маскируется удобной новой семантикой.
+//! ini подтверждено отдельно: exact machine вставляла stack-мусор после
+//! неуспешного formatted extraction, но всё равно возвращала success открытого
+//! файла. Rust сохраняет success и уже прочитанный prefix, но не переносит
+//! uninitialized-memory defect и не добавляет неполную запись.
 
 use std::error::Error;
 use std::fmt;
+
+use super::readwrite::read_to;
 
 /// Точный восьмибайтовый `CDupliRegionSetup::tagDupliRegion`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -38,6 +43,30 @@ pub(crate) struct CDupliRegionSetup {
 }
 
 impl CDupliRegionSetup {
+    /// Перечитывает exact `setup/DupliRegionsSetup.ini` token-формат.
+    pub(crate) fn load(&mut self, source: Option<&[u8]>) -> bool {
+        self.entries.clear();
+        let Some(source) = source else {
+            return false;
+        };
+        let mut tokens = source
+            .split(|byte| byte.is_ascii_whitespace())
+            .filter(|token| !token.is_empty());
+        while read_to(&mut tokens, b"*") {
+            let Some(region_id) = read_formatted_long(&mut tokens) else {
+                break;
+            };
+            let Some(duplicate_region_id) = read_formatted_long(&mut tokens) else {
+                break;
+            };
+            self.entries.push(DupliRegionEntry {
+                region_id,
+                duplicate_region_id,
+            });
+        }
+        true
+    }
+
     pub(crate) fn push(&mut self, entry: DupliRegionEntry) {
         self.entries.push(entry);
     }
@@ -82,6 +111,10 @@ impl CDupliRegionSetup {
         }
         Ok(())
     }
+}
+
+fn read_formatted_long<'a>(tokens: &mut impl Iterator<Item = &'a [u8]>) -> Option<i32> {
+    std::str::from_utf8(tokens.next()?).ok()?.parse().ok()
 }
 
 /// Невозможный в исходном 32-битном `std::list` размер.
@@ -161,7 +194,7 @@ impl Error for DupliRegionSerializeError {}
 
 // ============================================================================
 // FUNCTION: CDupliRegionSetup::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\dupliregionsetup.cpp:42
@@ -175,7 +208,7 @@ impl Error for DupliRegionSerializeError {}
 
 // ============================================================================
 // FUNCTION: CDupliRegionSetup::CDupliRegionSetup
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\dupliregionsetup.cpp:5
@@ -189,7 +222,7 @@ impl Error for DupliRegionSerializeError {}
 
 // ============================================================================
 // FUNCTION: CDupliRegionSetup::Load
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\public\dupliregionsetup.cpp:15

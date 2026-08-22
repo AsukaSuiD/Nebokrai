@@ -149,6 +149,13 @@
 //! для этой ветви удалены; resource backend и `CMessage` остаются общими
 //! техническими границами.
 //!
+//! `CDupliRegionSetup` создаётся и публикуется в `CGame` перед своим `Load`,
+//! как exact Init `0x0041901B..0x00419053`, и остаётся owned даже при
+//! load-failure до общего Release. Init читает точный
+//! `setup/DupliRegionsSetup.ini`; reconnect и create-role используют тот же
+//! owner без внешней параллельной копии. `Option` сохраняет исходный nullable
+//! lifecycle до позиции создания и после позиции удаления.
+//!
 //! `LoadSetup` сначала пробует обычный `setup.ini`, а только при ошибке
 //! открытия — декодированный `setup.dat`. Поток читает пары `label + value`,
 //! label не проверяет, строки хранит byte-exact и при EOF/fail-state оставляет
@@ -1792,9 +1799,6 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     /// Возвращает `true`, если Linux single-instance owner закрепил title.
     fn claim_single_instance(&mut self, title: &[u8]) -> bool;
     fn notify_operator(&mut self, notice: &WorldGameInitOperatorNotice);
-
-    /// Обязана сначала опубликовать новый owner, затем вызвать его `Load`.
-    fn create_and_load_dupli_region_setup(&mut self) -> bool;
 
     fn initialize_database_layer(
         &mut self,
@@ -3831,7 +3835,6 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) country: &'a mut CCountryHandler,
     pub(crate) country_parameters: &'a mut CCountryParam,
     pub(crate) player_list: &'a mut CPlayerList,
-    pub(crate) duplicate_regions: &'a CDupliRegionSetup,
     pub(crate) country_war: &'a mut CountryWarSys,
     pub(crate) country_war_callbacks: CountryWarCallbacks<TimerCallback>,
     pub(crate) four_nation_war: &'a mut CFourNationWarSys,
@@ -6568,6 +6571,7 @@ pub(crate) struct CGame {
     string_table: MyStringTable,
     string_table_array: Vec<u8>,
     words_filter: CWordsFilter,
+    dupli_region_setup: Option<CDupliRegionSetup>,
     equipment_compose_list: EquipmentComposeList,
     net_client: Option<CMyNetClient>,
     net_server: Option<CMyNetServer>,
@@ -6639,6 +6643,12 @@ impl CGame {
         &self.equipment_compose_list
     }
 
+    pub(crate) fn dupli_region_setup(&self) -> &CDupliRegionSetup {
+        self.dupli_region_setup
+            .as_ref()
+            .expect("CDupliRegionSetup доступен только после успешного CGame::Init")
+    }
+
     /// Создаёт `tagSetup`, затем применяет четыре точные записи `CGame::CGame`.
     pub(crate) fn new() -> Self {
         Self {
@@ -6648,6 +6658,7 @@ impl CGame {
             string_table: MyStringTable::new(),
             string_table_array: Vec::new(),
             words_filter: CWordsFilter::new(),
+            dupli_region_setup: None,
             equipment_compose_list: EquipmentComposeList::default(),
             net_client: None,
             net_server: None,
@@ -9344,7 +9355,15 @@ impl CGame {
         }
         events.push(WorldGameInitEvent::StringTablesCoded);
 
-        if !context.create_and_load_dupli_region_setup() {
+        const DUPLI_REGION_SETUP_PATH: &[u8] = b"setup/DupliRegionsSetup.ini";
+        self.dupli_region_setup = Some(CDupliRegionSetup::default());
+        let dupli_region_source = context.read_resource(DUPLI_REGION_SETUP_PATH);
+        let dupli_region_loaded = self
+            .dupli_region_setup
+            .as_mut()
+            .expect("owner опубликован перед Load")
+            .load(dupli_region_source.as_deref());
+        if !dupli_region_loaded {
             Self::record_game_init_notice(
                 &mut events,
                 context,
@@ -10161,13 +10180,12 @@ impl CGame {
             context.release_void_owner(owner);
             events.push(WorldGameReleaseEvent::VoidOwner(owner));
         }
-        for owner in [
-            WorldGameReleaseOptionalOwner::DefaultClientResource,
-            WorldGameReleaseOptionalOwner::DupliRegionSetup,
-        ] {
-            let released = context.release_optional_owner(owner);
-            events.push(WorldGameReleaseEvent::OptionalOwner { owner, released });
-        }
+        let owner = WorldGameReleaseOptionalOwner::DefaultClientResource;
+        let released = context.release_optional_owner(owner);
+        events.push(WorldGameReleaseEvent::OptionalOwner { owner, released });
+        let owner = WorldGameReleaseOptionalOwner::DupliRegionSetup;
+        let released = self.dupli_region_setup.take().is_some();
+        events.push(WorldGameReleaseEvent::OptionalOwner { owner, released });
 
         context.put_debug_string(b"WorldServer Exited!");
         events.push(WorldGameReleaseEvent::DebugPublished(
@@ -10591,7 +10609,6 @@ impl CGame {
         country_handler: &mut CCountryHandler,
         country_parameters: &mut CCountryParam,
         player_list: &mut CPlayerList,
-        duplicate_regions: &CDupliRegionSetup,
         country_war: &mut CountryWarSys,
         four_nation_war: &mut CFourNationWarSys,
         country_limits: CountryKingSaveLimits,
@@ -10692,7 +10709,6 @@ impl CGame {
                             country_handler,
                             country_parameters,
                             player_list,
-                            duplicate_regions,
                             country_war,
                             four_nation_war,
                             country_limits,
@@ -10789,7 +10805,6 @@ impl CGame {
                     country_handler,
                     country_parameters,
                     player_list,
-                    duplicate_regions,
                     country_war,
                     four_nation_war,
                     country_limits,
@@ -10889,7 +10904,6 @@ impl CGame {
         country_handler: &mut CCountryHandler,
         country_parameters: &mut CCountryParam,
         player_list: &mut CPlayerList,
-        duplicate_regions: &CDupliRegionSetup,
         country_war: &mut CountryWarSys,
         four_nation_war: &mut CFourNationWarSys,
         country_limits: CountryKingSaveLimits,
@@ -10987,7 +11001,6 @@ impl CGame {
             country_handler,
             country_parameters,
             player_list,
-            duplicate_regions,
             country_war,
             four_nation_war,
             country_limits,
@@ -12449,7 +12462,6 @@ impl CGame {
             owners.country,
             owners.country_parameters,
             owners.player_list,
-            owners.duplicate_regions,
             owners.country_war,
             owners.four_nation_war,
             configuration.country_limits,
@@ -16443,7 +16455,6 @@ async fn process_world_message<TimerCallback, JjcContext>(
     country_handler: &mut CCountryHandler,
     country_parameters: &mut CCountryParam,
     player_list: &mut CPlayerList,
-    duplicate_regions: &CDupliRegionSetup,
     country_war: &mut CountryWarSys,
     four_nation_war: &mut CFourNationWarSys,
     country_limits: CountryKingSaveLimits,
@@ -16566,7 +16577,6 @@ where
             country_handler,
             country_parameters,
             player_list,
-            duplicate_regions,
             session_factory,
             registry,
             original_name_index,
