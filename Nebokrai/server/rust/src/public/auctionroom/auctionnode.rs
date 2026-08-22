@@ -61,6 +61,13 @@ use super::guid::CGuid;
 
 const LEGACY_STRING_CAPACITY: usize = 0x100;
 const AUCTION_INFO_SIZE: usize = 0x22c;
+const AUCTION_SELLER_NAME_OFFSET: usize = 0x000;
+const AUCTION_MONEY_SELLER_OFFSET: usize = 0x100;
+const AUCTION_TIME_SELLER_OFFSET: usize = 0x104;
+const AUCTION_SELLER_ID_OFFSET: usize = 0x108;
+const AUCTION_BUYER_NAME_OFFSET: usize = 0x11c;
+const AUCTION_MONEY_BUYER_OFFSET: usize = 0x21c;
+const AUCTION_TIME_BUYER_OFFSET: usize = 0x220;
 const AUCTION_BUYER_ID_OFFSET: usize = 0x224;
 
 /// Ошибка безопасной границы чтения старого неограниченного byte-array.
@@ -158,6 +165,13 @@ impl GoodsState {
     pub(crate) const fn raw(self) -> i32 {
         self.0
     }
+
+    /// Сохраняет любой 32-битный database discriminant без преждевременного
+    /// сужения до известных состояний: exact `LoadGoodsByOwnerId` просто
+    /// копировал `GoodsState` из строки в node.
+    pub(crate) const fn from_raw(raw: i32) -> Self {
+        Self(raw)
+    }
 }
 
 struct AuctionInfo {
@@ -195,6 +209,42 @@ impl AuctionInfo {
         self.bytes[AUCTION_BUYER_ID_OFFSET..AUCTION_BUYER_ID_OFFSET + 4]
             .copy_from_slice(&buyer_id.to_le_bytes());
     }
+
+    fn set_database_fields(
+        &mut self,
+        seller_name: &[u8],
+        money_seller: u32,
+        time_seller: u32,
+        seller_id: u32,
+        buyer_name: &[u8],
+        money_buyer: u32,
+        time_buyer: u32,
+        buyer_id: u32,
+    ) {
+        copy_legacy_database_string(
+            (&mut self.bytes[AUCTION_SELLER_NAME_OFFSET..AUCTION_MONEY_SELLER_OFFSET])
+                .try_into()
+                .expect("PDB seller-name диапазон имеет длину 0x100"),
+            seller_name,
+        );
+        self.bytes[AUCTION_MONEY_SELLER_OFFSET..AUCTION_MONEY_SELLER_OFFSET + 4]
+            .copy_from_slice(&money_seller.to_le_bytes());
+        self.bytes[AUCTION_TIME_SELLER_OFFSET..AUCTION_TIME_SELLER_OFFSET + 4]
+            .copy_from_slice(&time_seller.to_le_bytes());
+        self.bytes[AUCTION_SELLER_ID_OFFSET..AUCTION_SELLER_ID_OFFSET + 4]
+            .copy_from_slice(&seller_id.to_le_bytes());
+        copy_legacy_database_string(
+            (&mut self.bytes[AUCTION_BUYER_NAME_OFFSET..AUCTION_MONEY_BUYER_OFFSET])
+                .try_into()
+                .expect("PDB buyer-name диапазон имеет длину 0x100"),
+            buyer_name,
+        );
+        self.bytes[AUCTION_MONEY_BUYER_OFFSET..AUCTION_MONEY_BUYER_OFFSET + 4]
+            .copy_from_slice(&money_buyer.to_le_bytes());
+        self.bytes[AUCTION_TIME_BUYER_OFFSET..AUCTION_TIME_BUYER_OFFSET + 4]
+            .copy_from_slice(&time_buyer.to_le_bytes());
+        self.set_buyer_id(buyer_id);
+    }
 }
 
 /// Owned-состояние исходного `CGoodsNode`.
@@ -216,6 +266,38 @@ pub(crate) struct CGoodsNode {
     base_index: u32,
     auction_info: AuctionInfo,
     goods_bytes: Vec<u8>,
+}
+
+/// Значения одной основной строки `Auction`, которые `CDbMisc` переносил в
+/// `CGoodsNode` до сериализации вложенного `CGoods`.
+///
+/// Поле IP продавца в `AuctionInfo` в этом SQL не читается. Оно остаётся
+/// нулевым после `DbNote::DbNote -> CGoodsNode::Clear`, как в точном owner-е.
+/// Строки уже должны быть в Windows-1251; helper ниже безопасно выражает
+/// старый `_snprintf(char[0x100], "%s")` и не переносит его UB при усечении.
+pub(crate) struct AuctionDatabaseNodeFields {
+    pub(crate) add_ticket: u32,
+    pub(crate) account: Vec<u8>,
+    pub(crate) owner_id: u32,
+    pub(crate) auction_time: u32,
+    pub(crate) money_type: u8,
+    pub(crate) goods_type: u8,
+    pub(crate) npc_price: i32,
+    pub(crate) amount: i32,
+    pub(crate) goods_state: GoodsState,
+    pub(crate) offer_price: bool,
+    pub(crate) guid: CGuid,
+    pub(crate) base_index: u32,
+    pub(crate) level_limit: u32,
+    pub(crate) goods_name: Vec<u8>,
+    pub(crate) seller_name: Vec<u8>,
+    pub(crate) money_seller: u32,
+    pub(crate) time_seller: u32,
+    pub(crate) seller_id: u32,
+    pub(crate) buyer_name: Vec<u8>,
+    pub(crate) money_buyer: u32,
+    pub(crate) time_buyer: u32,
+    pub(crate) buyer_id: u32,
 }
 
 impl Default for CGoodsNode {
@@ -247,6 +329,44 @@ impl CGoodsNode {
             goods_bytes: Vec::new(),
         };
         node.clear();
+        node
+    }
+
+    /// Создаёт результат одной materialized DB-строки `Auction`.
+    ///
+    /// Это узкая граница `CDbMisc::LoadGoodsByOwnerId`: exact owner заполнял
+    /// note после `CreateGoodsNoProbability`, а его goods-byte-array назначал
+    /// позднее, когда все joined `AuctionGoods` строки были применены.
+    pub(crate) fn from_auction_database(
+        fields: AuctionDatabaseNodeFields,
+        goods_bytes: Vec<u8>,
+    ) -> Self {
+        let mut node = Self::new();
+        node.add_ticket = fields.add_ticket;
+        copy_legacy_database_string(&mut node.account, &fields.account);
+        node.owner_id = fields.owner_id;
+        node.auction_time = fields.auction_time;
+        node.money_type = fields.money_type;
+        node.goods_type = Some(fields.goods_type);
+        node.npc_price = fields.npc_price;
+        node.amount = fields.amount;
+        node.goods_state = fields.goods_state;
+        node.offer_price = fields.offer_price;
+        node.guid = fields.guid;
+        node.base_index = fields.base_index;
+        node.level_limit = Some(fields.level_limit);
+        copy_legacy_database_string(&mut node.goods_name, &fields.goods_name);
+        node.auction_info.set_database_fields(
+            &fields.seller_name,
+            fields.money_seller,
+            fields.time_seller,
+            fields.seller_id,
+            &fields.buyer_name,
+            fields.money_buyer,
+            fields.time_buyer,
+            fields.buyer_id,
+        );
+        node.goods_bytes = goods_bytes;
         node
     }
 
@@ -486,6 +606,22 @@ fn legacy_c_string<'value>(
         .position(|byte| *byte == 0)
         .ok_or(GoodsNodeSerializeError::LegacyStringWithoutTerminator { field })?;
     Ok(&value[..=terminator])
+}
+
+/// Безопасная замена `_snprintf(buffer, 0x100, "%s", database_text)`.
+///
+/// Нормальная строка сохраняется byte-for-byte и с первым NUL. Старый MSVC
+/// мог оставить усечённый buffer без NUL, а последующий `Serialize` читать за
+/// его границей; это внутренний дефект без доказанного контракта, поэтому Rust
+/// всегда ставит terminator в последней ячейке.
+fn copy_legacy_database_string(destination: &mut [u8; LEGACY_STRING_CAPACITY], source: &[u8]) {
+    destination.fill(0);
+    let visible = source
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(source.len());
+    let copied = visible.min(LEGACY_STRING_CAPACITY - 1);
+    destination[..copied].copy_from_slice(&source[..copied]);
 }
 
 struct LegacyByteArrayReader<'source, 'cursor> {
@@ -1297,11 +1433,6 @@ impl<'source, 'cursor> LegacyByteArrayReader<'source, 'cursor> {
 //
 //
 
-
-
-
-
-
 // COMPONENT_VARIANT_END: GameServer
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
@@ -1324,6 +1455,5 @@ impl<'source, 'cursor> LegacyByteArrayReader<'source, 'cursor> {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // COMPONENT_VARIANT_END: WorldServer
