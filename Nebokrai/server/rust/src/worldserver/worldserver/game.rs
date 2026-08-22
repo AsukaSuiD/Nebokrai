@@ -1068,6 +1068,9 @@ use crate::worldserver::appworld::leiting::{
 use crate::worldserver::appworld::message::othermessage::{
     WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
 };
+use crate::worldserver::appworld::message::jjcsysmessage::{
+    JjcSystemMessageOutcome, on_jjc_system_message,
+};
 use crate::worldserver::appworld::message::countrymessage::{
     WorldCountryMessageDispatch, WorldCountryMessageOutcome,
     WorldFourNationExploitDatabaseDisposition, WorldFourNationExploitSync,
@@ -2243,6 +2246,11 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: WorldGmMessageOutcome,
+    },
+    JjcMessage {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        outcome: JjcSystemMessageOutcome,
     },
     OrganizingSessionResult {
         source: WorldMessageSource,
@@ -9499,8 +9507,9 @@ impl CGame {
     /// `0x6013E` и region-router request `0x60144` исполняются; остальные
     /// остаются owned pending. Terminal
     /// actions применяются FIFO до следующего сообщения. Async TDS lookup
-    /// `0x5FF12` завершается до следующего slot-а, как синхронный ADO EXE.
-    pub(crate) async fn process_message<TimerCallback, TeamOwner>(
+    /// `0x5FF12` завершается до следующего slot-а, как синхронный ADO EXE;
+    /// JJC owner `0x60901..0x60907` исполняется полностью.
+    pub(crate) async fn process_message<TimerCallback, TeamOwner, JjcContext>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
         organizing: &mut COrganizingCtrl,
@@ -9523,6 +9532,9 @@ impl CGame {
         original_name_index: &GoodsOriginalNameIndex,
         coefficients: &PlayerPropertyCoefficients,
         net_sessions: &CNetSessionManager,
+        jjc: &mut CJJcSystem,
+        jjc_config: JjcRunConfig,
+        jjc_context: &mut JjcContext,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
         check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
@@ -9570,6 +9582,7 @@ impl CGame {
     where
         TimerCallback: Copy,
         TeamOwner: WorldRegionChangeTeamOwner + ?Sized,
+        JjcContext: JjcRunContext + ?Sized,
     {
         let server_started_at = legacy_tick_ms();
         let mut server_remaining = self
@@ -9613,6 +9626,9 @@ impl CGame {
                             original_name_index,
                             coefficients,
                             net_sessions,
+                            jjc,
+                            jjc_config,
+                            jjc_context,
                             application_runtime,
                             application_callbacks,
                             &mut *check_invalid_organizing_string,
@@ -9699,6 +9715,9 @@ impl CGame {
                     original_name_index,
                     coefficients,
                     net_sessions,
+                    jjc,
+                    jjc_config,
+                    jjc_context,
                     application_runtime,
                     application_callbacks,
                     &mut *check_invalid_organizing_string,
@@ -9761,7 +9780,12 @@ impl CGame {
     ///
     /// Safe block не получает придуманных end/next-stage ticks и не меняет
     /// накопитель: исходный невозвратившийся путь их не достигал.
-    pub(crate) async fn process_message_main_loop_stage<TimerCallback, TeamOwner, GetTick>(
+    pub(crate) async fn process_message_main_loop_stage<
+        TimerCallback,
+        TeamOwner,
+        JjcContext,
+        GetTick,
+    >(
         &mut self,
         honor_ranks: &mut CHonorRanks,
         organizing: &mut COrganizingCtrl,
@@ -9784,6 +9808,9 @@ impl CGame {
         original_name_index: &GoodsOriginalNameIndex,
         coefficients: &PlayerPropertyCoefficients,
         net_sessions: &CNetSessionManager,
+        jjc: &mut CJJcSystem,
+        jjc_config: JjcRunConfig,
+        jjc_context: &mut JjcContext,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
         check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
@@ -9836,6 +9863,7 @@ impl CGame {
     where
         TimerCallback: Copy,
         TeamOwner: WorldRegionChangeTeamOwner + ?Sized,
+        JjcContext: JjcRunContext + ?Sized,
         GetTick: FnMut() -> u32,
     {
         let started_at_ms = get_tick();
@@ -9871,6 +9899,9 @@ impl CGame {
             original_name_index,
             coefficients,
             net_sessions,
+            jjc,
+            jjc_config,
+            jjc_context,
             application_runtime,
             application_callbacks,
             check_invalid_organizing_string,
@@ -11086,6 +11117,9 @@ impl CGame {
             owners.original_name_index,
             owners.coefficients,
             owners.net_sessions,
+            owners.jjc,
+            configuration.jjc,
+            owners.jjc_context,
             owners.union_application_runtime,
             &mut union_application_callbacks,
             &mut *callbacks.check_invalid_organizing_string,
@@ -12016,6 +12050,34 @@ impl CGame {
     /// Возвращает игрока непосредственно из владеющего map либо `None`.
     pub(crate) fn map_player(&self, player_id: u32) -> Option<&CPlayer> {
         self.players.get(&player_id).map(Box::as_ref)
+    }
+
+    pub(crate) fn set_map_player_jjc_identity(
+        &mut self,
+        player_id: u32,
+        level: u8,
+        jjc_level: u32,
+    ) -> bool {
+        let Some(player) = self.players.get_mut(&player_id) else {
+            return false;
+        };
+        player.set_jjc_identity(level, jjc_level);
+        true
+    }
+
+    pub(crate) fn set_map_player_jjc_snapshot(
+        &mut self,
+        player_id: u32,
+        level: u8,
+        jjc_level: u32,
+        jjc_score: u32,
+        counters: [u8; 0x10],
+    ) -> bool {
+        let Some(player) = self.players.get_mut(&player_id) else {
+            return false;
+        };
+        player.set_jjc_snapshot(level, jjc_level, jjc_score, counters);
+        true
     }
 
     /// Снимает unsigned map-order ключей для exact `CLeiTing` прохода.
@@ -14519,7 +14581,7 @@ impl CountryWarTopInfoContext for WorldCountryWarEffects<'_> {
     }
 }
 
-async fn process_world_message<TimerCallback, TeamOwner>(
+async fn process_world_message<TimerCallback, TeamOwner, JjcContext>(
     game: &mut CGame,
     honor_ranks: &mut CHonorRanks,
     organizing: &mut COrganizingCtrl,
@@ -14542,6 +14604,9 @@ async fn process_world_message<TimerCallback, TeamOwner>(
     original_name_index: &GoodsOriginalNameIndex,
     coefficients: &PlayerPropertyCoefficients,
     net_sessions: &CNetSessionManager,
+    jjc: &mut CJJcSystem,
+    jjc_config: JjcRunConfig,
+    jjc_context: &mut JjcContext,
     application_runtime: &WorldUnionApplicationRuntimeOwner,
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
@@ -14591,6 +14656,7 @@ async fn process_world_message<TimerCallback, TeamOwner>(
 where
     TimerCallback: Copy,
     TeamOwner: WorldRegionChangeTeamOwner + ?Sized,
+    JjcContext: JjcRunContext + ?Sized,
 {
     let message_type = message.message_type();
     let mut selector = WorldOwnerSelector {
@@ -14703,6 +14769,15 @@ where
             }
             WorldGmMessageDispatch::Pending(pending) => message = pending,
         }
+    }
+
+    if selector.owner == Some(WorldMessageOwner::JjcSystem) {
+        let outcome = on_jjc_system_message(game, jjc, jjc_config, jjc_context, &mut message);
+        return ProcessedWorldEvent::JjcMessage {
+            source,
+            legacy_run_result,
+            outcome,
+        };
     }
 
     if selector.owner == Some(WorldMessageOwner::Country) {

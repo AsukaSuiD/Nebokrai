@@ -3,9 +3,12 @@
 //! Статус constructor/singleton lifetime, `WeekUpdate` RVA `0x00082190`,
 //! `SeasonUpdate` RVA `0x00082210`, `ResetJJc` RVA `0x000841F0`,
 //! `RecycleJJcRegion` RVA `0x00085460`, `GetRegionServerID` RVA `0x000854C0`,
-//! `JJcPKTimeout` RVA `0x00085840` и `Run` RVA `0x00085A40` —
-//! `IMPLEMENTED`; остальные функции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
-//! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
+//! `JJcPKTimeout` RVA `0x00085840`, `Run` RVA `0x00085A40`, apply/matching
+//! цепочка RVA `0x00082A30`, `0x00083760`, `0x00085590`, `0x00085770`,
+//! `0x00085990`, `0x00085B90`, `0x00085CA0` и два её малых query —
+//! `IMPLEMENTED / VERIFIED_DISASSEMBLY`; сырым ниже остаётся только INI
+//! parser `LoadJJcConfig`. Точная пара:
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
 //! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
 //! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
 //! исходный владелец PDB:
@@ -14,8 +17,11 @@
 //! PDB подтверждает signed `long` keys обоих `std::map`, полный layout
 //! `tagJJcInfo` `0x1C`, `tagJJcRank` `0x30` и поля singleton-а до
 //! `m_bIsThisWeekUpdated +0x9C`. `BTreeMap<i32, _>` сохраняет signed order;
-//! два старых `hash_set<long>` заменены `HashSet<i32>`, поскольку достигнутые
-//! функции наблюдают только membership/erase/insert, но не bucket-order.
+//! `m_jjcRegionsInUse` остаётся `HashSet<i32>`, поскольку наблюдает только
+//! membership/erase/insert. `m_jjcRegionsLeft` теперь `BTreeSet<i32>`: reached
+//! `GetOneJJcRegion` выбирает `begin()`, а shipped region-list и очищенный C++
+//! reference задают возрастающий practical order. Это отделяет значимый выбор
+//! карты от случайного seed стандартного Rust `HashSet`.
 //! Process-static last-rank time по `0x006BF0E4` перенесён в единственный
 //! owned `CJJcSystem`; его точное начальное значение в PE равно нулю.
 //!
@@ -48,7 +54,7 @@
 //! SEH, allocator, singleton destructor и unwind noise удалены у реализованных
 //! блоков; `nullptr` transport заменён готовым `Option` внутри `CGame`.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::worldserver::game::CGame;
@@ -83,6 +89,146 @@ pub(crate) struct JjcRunConfig {
     pub(crate) pk_timeout_seconds: i32,
     pub(crate) region_id_min: i32,
     pub(crate) region_id_max: i32,
+    pub(crate) max_regions_in_use: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum JjcCanApplyDisposition {
+    Allowed,
+    PlayerOrGameServerUnavailable,
+    AlreadyQueuedOrFighting,
+    CycleClosed,
+}
+
+impl JjcCanApplyDisposition {
+    const fn legacy_result(self) -> i32 {
+        match self {
+            Self::Allowed => 0,
+            Self::PlayerOrGameServerUnavailable => 1,
+            Self::AlreadyQueuedOrFighting => 2,
+            Self::CycleClosed => 5,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum JjcRegionAcquireDisposition {
+    Acquired {
+        region_id: i32,
+        removed_from_available: bool,
+        inserted_into_in_use: bool,
+    },
+    AvailableEmpty,
+    InUseExactlyAtLimit,
+    GameServerUnavailable { region_id: i32 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct JjcRegionAcquireReport {
+    pub(crate) available_before: usize,
+    pub(crate) in_use_before: usize,
+    pub(crate) disposition: JjcRegionAcquireDisposition,
+}
+
+impl JjcRegionAcquireReport {
+    const fn region_id(&self) -> i32 {
+        match self.disposition {
+            JjcRegionAcquireDisposition::Acquired { region_id, .. } => region_id,
+            JjcRegionAcquireDisposition::AvailableEmpty
+            | JjcRegionAcquireDisposition::InUseExactlyAtLimit
+            | JjcRegionAcquireDisposition::GameServerUnavailable { .. } => 0,
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct JjcStartFightReport {
+    pub(crate) region_id: i32,
+    pub(crate) first_player_id: i32,
+    pub(crate) second_player_id: i32,
+    pub(crate) start_time: i32,
+    pub(crate) region_delivery: Result<i32, SendMessageError>,
+    pub(crate) first_player_delivery: Result<i32, SendMessageError>,
+    pub(crate) second_player_delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum JjcApplyDisposition {
+    Rejected(JjcCanApplyDisposition),
+    RegionUnavailable(JjcRegionAcquireReport),
+    WaitingForOpponent {
+        region: JjcRegionAcquireReport,
+        recycle: JjcRegionRecycleReport,
+    },
+    Matched {
+        region: JjcRegionAcquireReport,
+        opponent_id: i32,
+        removed_unroutable_players: Vec<i32>,
+        fight: JjcStartFightReport,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct JjcApplyReport {
+    pub(crate) player_id: i32,
+    pub(crate) legacy_result: i32,
+    pub(crate) disposition: JjcApplyDisposition,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum JjcEndPkDisposition {
+    RemovedIncompletePlayer {
+        player_id: i32,
+        opponent_id: i32,
+        removed: bool,
+    },
+    Applied {
+        player_id: i32,
+        opponent_id: i32,
+        removed_fight: bool,
+        removed_player: bool,
+        removed_opponent: bool,
+        recycle: JjcRegionRecycleReport,
+    },
+    CorrelationMismatch {
+        player_id: i32,
+        opponent_id: i32,
+        opponent_points_to: i32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct JjcEndPkReport {
+    pub(crate) requested_region_id: i32,
+    pub(crate) disposition: JjcEndPkDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct JjcQuitNotification {
+    pub(crate) player_id: i32,
+    pub(crate) requested_region_id: i32,
+    pub(crate) map_id: i32,
+    pub(crate) delivery: Option<Result<i32, SendMessageError>>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum JjcQuitDisposition {
+    PlayerMissing,
+    EndedFight(JjcEndPkReport),
+    RemovedApplication {
+        opponent_id: i32,
+        internal_region_id: i32,
+        removed_player: bool,
+        removed_opponent: bool,
+        notifications: [JjcQuitNotification; 2],
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct JjcQuitReport {
+    pub(crate) player_id: i32,
+    pub(crate) requested_region_id: i32,
+    pub(crate) disposition: JjcQuitDisposition,
 }
 
 /// Девять signed полей 32-bit MSVC `tm` после немедленного copy.
@@ -144,6 +290,40 @@ pub(crate) enum JjcLogEvent {
         region_id: i32,
         first_player_id: i32,
         second_player_id: i32,
+    },
+    ApplyStarted { player_id: i32 },
+    ApplyFinished { player_id: i32 },
+    ApplyPlayerMissing { player_id: i32 },
+    PlayerGameServerUnavailable { player_id: i32 },
+    PlayerServerIdZero { player_id: i32 },
+    AvailableRegionsEmpty,
+    UsedRegionsFull,
+    PvpRegionGameServerUnavailable { region_id: i32 },
+    RegionPoolSnapshot { in_use: usize, available: usize },
+    ApplyMatched {
+        player_id: i32,
+        region_id: i32,
+        opponent_id: i32,
+    },
+    PkEnded {
+        region_id: i32,
+        player_id: i32,
+    },
+    PkCorrelationMismatch {
+        region_id: i32,
+        player_id: i32,
+        opponent_id: i32,
+        opponent_points_to: i32,
+    },
+    QuitWhileFighting {
+        player_id: i32,
+        opponent_id: i32,
+        region_id: i32,
+    },
+    QuitAfterApplication {
+        player_id: i32,
+        opponent_id: i32,
+        region_id: i32,
     },
 }
 
@@ -311,7 +491,7 @@ pub(crate) enum JjcRunReport {
 pub(crate) struct CJJcSystem {
     queue: BTreeMap<i32, JjcInfo>,
     fighting_list: BTreeMap<i32, (i32, i32)>,
-    regions_left: HashSet<i32>,
+    regions_left: BTreeSet<i32>,
     regions_in_use: HashSet<i32>,
     level_list: BTreeMap<(i32, i32), i32>,
     ranks: Vec<JjcRank>,
@@ -331,7 +511,7 @@ impl CJJcSystem {
         Self {
             queue: BTreeMap::new(),
             fighting_list: BTreeMap::new(),
-            regions_left: HashSet::new(),
+            regions_left: BTreeSet::new(),
             regions_in_use: HashSet::new(),
             level_list: BTreeMap::new(),
             ranks: Vec::new(),
@@ -369,6 +549,465 @@ impl CJJcSystem {
     pub(crate) fn set_clear_state(&mut self, passed_weeks: i32, last_clear_time: i32) {
         self.passed_weeks = passed_weeks;
         self.last_clear_time = last_clear_time;
+    }
+
+    /// Публикует available region pool, не очищая отдельный in-use owner.
+    pub(crate) fn replace_available_regions(
+        &mut self,
+        regions: impl IntoIterator<Item = i32>,
+    ) {
+        self.regions_left = regions.into_iter().collect();
+    }
+
+    /// Публикует exact ordered `(min,max) -> step` map после resource parse.
+    pub(crate) fn replace_level_steps(
+        &mut self,
+        levels: impl IntoIterator<Item = ((i32, i32), i32)>,
+    ) {
+        self.level_list = levels.into_iter().collect();
+    }
+
+    fn level_step(&self, level: i32) -> i32 {
+        self.level_list
+            .iter()
+            .find_map(|(&(minimum, maximum), &step)| {
+                (minimum <= level && level <= maximum).then_some(step)
+            })
+            .unwrap_or(0)
+    }
+
+    fn is_player_in_pk(&self, player_id: i32, config: JjcRunConfig) -> bool {
+        let Some(info) = self.queue.get(&player_id) else {
+            return false;
+        };
+        config.region_id_min <= info.jjc_region_id
+            && info.jjc_region_id <= config.region_id_max
+            && self.fighting_list.contains_key(&info.jjc_region_id)
+    }
+
+    fn can_apply_jjc_now(
+        &self,
+        game: &CGame,
+        player_id: i32,
+        config: JjcRunConfig,
+    ) -> JjcCanApplyDisposition {
+        let Some(_player) = game.online_player_by_id(player_id as u32) else {
+            return JjcCanApplyDisposition::PlayerOrGameServerUnavailable;
+        };
+        let Some(server) = game.player_game_server(player_id) else {
+            return JjcCanApplyDisposition::PlayerOrGameServerUnavailable;
+        };
+        if !server.connected {
+            return JjcCanApplyDisposition::PlayerOrGameServerUnavailable;
+        }
+        if self.queue.contains_key(&player_id) || self.is_player_in_pk(player_id, config) {
+            return JjcCanApplyDisposition::AlreadyQueuedOrFighting;
+        }
+        if self.passed_weeks > 0 && self.passed_weeks % 8 == 0 {
+            return JjcCanApplyDisposition::CycleClosed;
+        }
+        JjcCanApplyDisposition::Allowed
+    }
+
+    fn acquire_region<Context: JjcRunContext + ?Sized>(
+        &mut self,
+        game: &CGame,
+        config: JjcRunConfig,
+        context: &mut Context,
+    ) -> JjcRegionAcquireReport {
+        let available_before = self.regions_left.len();
+        let in_use_before = self.regions_in_use.len();
+        let Some(&region_id) = self.regions_left.first() else {
+            context.log(JjcLogEvent::AvailableRegionsEmpty);
+            return JjcRegionAcquireReport {
+                available_before,
+                in_use_before,
+                disposition: JjcRegionAcquireDisposition::AvailableEmpty,
+            };
+        };
+        if in_use_before as i32 == config.max_regions_in_use {
+            context.log(JjcLogEvent::UsedRegionsFull);
+            return JjcRegionAcquireReport {
+                available_before,
+                in_use_before,
+                disposition: JjcRegionAcquireDisposition::InUseExactlyAtLimit,
+            };
+        }
+        if Self::get_region_server_id(game, context, region_id).map_id() < 0 {
+            context.log(JjcLogEvent::PvpRegionGameServerUnavailable { region_id });
+            return JjcRegionAcquireReport {
+                available_before,
+                in_use_before,
+                disposition: JjcRegionAcquireDisposition::GameServerUnavailable { region_id },
+            };
+        }
+        context.log(JjcLogEvent::RegionPoolSnapshot {
+            in_use: in_use_before,
+            available: available_before,
+        });
+        let removed_from_available = self.regions_left.remove(&region_id);
+        let inserted_into_in_use = self.regions_in_use.insert(region_id);
+        JjcRegionAcquireReport {
+            available_before,
+            in_use_before,
+            disposition: JjcRegionAcquireDisposition::Acquired {
+                region_id,
+                removed_from_available,
+                inserted_into_in_use,
+            },
+        }
+    }
+
+    fn get_one_opponent<Context: JjcRunContext + ?Sized>(
+        &mut self,
+        game: &CGame,
+        player_id: i32,
+        config: JjcRunConfig,
+        context: &mut Context,
+    ) -> (i32, Vec<i32>) {
+        let Some(player) = game.map_player(player_id as u32) else {
+            return (0, Vec::new());
+        };
+        let player_level = player.get_level() as i32;
+        let player_jjc_level = player.get_jjc_level();
+        let mut best_distance = player_jjc_level;
+        let mut opponent_id = 0;
+        let mut removed_unroutable_players = Vec::new();
+        let candidates = self.queue.keys().copied().collect::<Vec<_>>();
+
+        for candidate_id in candidates {
+            if candidate_id == player_id || self.is_player_in_pk(candidate_id, config) {
+                continue;
+            }
+            let Some(candidate) = game.map_player(candidate_id as u32) else {
+                continue;
+            };
+            let Some(server) = game.player_game_server(candidate_id) else {
+                context.log(JjcLogEvent::PlayerGameServerUnavailable {
+                    player_id: candidate_id,
+                });
+                continue;
+            };
+            if !server.connected {
+                context.log(JjcLogEvent::PlayerGameServerUnavailable {
+                    player_id: candidate_id,
+                });
+                continue;
+            }
+            if server.index == 0 {
+                context.log(JjcLogEvent::PlayerServerIdZero {
+                    player_id: candidate_id,
+                });
+                if self
+                    .queue
+                    .get(&candidate_id)
+                    .is_some_and(|info| info.old_region_id == 0)
+                {
+                    self.queue.remove(&candidate_id);
+                    removed_unroutable_players.push(candidate_id);
+                }
+                continue;
+            }
+
+            let player_step = self.level_step(player_level);
+            let candidate_step = self.level_step(candidate.get_level() as i32);
+            let delta = candidate
+                .get_jjc_level()
+                .wrapping_sub(player_jjc_level) as i32;
+            let distance = delta.wrapping_abs();
+            if candidate_step == player_step
+                && player_step > 0
+                && distance <= best_distance as i32
+            {
+                best_distance = distance as u32;
+                opponent_id = candidate_id;
+            }
+        }
+        (opponent_id, removed_unroutable_players)
+    }
+
+    fn player_server_map_id<Context: JjcRunContext + ?Sized>(
+        game: &CGame,
+        context: &mut Context,
+        player_id: i32,
+    ) -> i32 {
+        let Some(server) = game.player_game_server(player_id) else {
+            context.log(JjcLogEvent::PlayerGameServerUnavailable { player_id });
+            return 0;
+        };
+        if !server.connected {
+            context.log(JjcLogEvent::PlayerGameServerUnavailable { player_id });
+            return 0;
+        }
+        server.index as i32
+    }
+
+    fn start_fight<Context: JjcRunContext + ?Sized>(
+        &mut self,
+        game: &CGame,
+        context: &mut Context,
+        region_id: i32,
+        first_player_id: i32,
+        second_player_id: i32,
+    ) -> JjcStartFightReport {
+        self.fighting_list
+            .insert(region_id, (first_player_id, second_player_id));
+        let start_time = context.current_time_seconds();
+        self.queue.entry(first_player_id).or_default().start_time = start_time;
+        self.queue.entry(second_player_id).or_default().start_time = start_time;
+        let first = *self.queue.entry(first_player_id).or_default();
+        let second = *self.queue.entry(second_player_id).or_default();
+
+        let mut region_message = CMessage::new(0x0008_0503);
+        add_jjc_info(region_message.base_mut(), first);
+        add_jjc_info(region_message.base_mut(), second);
+        let region_map_id = Self::get_region_server_id(game, context, region_id).map_id();
+        let region_delivery =
+            region_message.send_to_map_id(game.current_game_server_sender().as_ref(), region_map_id);
+
+        let mut first_message = CMessage::new(0x0008_0504);
+        first_message.base_mut().add_long(first_player_id);
+        first_message.base_mut().add_long(region_id);
+        let first_map_id = Self::player_server_map_id(game, context, first_player_id);
+        let first_player_delivery = first_message
+            .send_to_map_id(game.current_game_server_sender().as_ref(), first_map_id);
+
+        let mut second_message = CMessage::new(0x0008_0504);
+        second_message.base_mut().add_long(second_player_id);
+        second_message.base_mut().add_long(region_id);
+        let second_map_id = Self::player_server_map_id(game, context, second_player_id);
+        let second_player_delivery = second_message
+            .send_to_map_id(game.current_game_server_sender().as_ref(), second_map_id);
+
+        JjcStartFightReport {
+            region_id,
+            first_player_id,
+            second_player_id,
+            start_time,
+            region_delivery,
+            first_player_delivery,
+            second_player_delivery,
+        }
+    }
+
+    pub(crate) fn apply_player<Context: JjcRunContext + ?Sized>(
+        &mut self,
+        game: &CGame,
+        context: &mut Context,
+        info: JjcInfo,
+        player_id: i32,
+        config: JjcRunConfig,
+    ) -> JjcApplyReport {
+        let gate = self.can_apply_jjc_now(game, player_id, config);
+        if gate != JjcCanApplyDisposition::Allowed {
+            return JjcApplyReport {
+                player_id,
+                legacy_result: gate.legacy_result(),
+                disposition: JjcApplyDisposition::Rejected(gate),
+            };
+        }
+        let Some(server) = game.player_game_server(player_id) else {
+            context.log(JjcLogEvent::PlayerGameServerUnavailable { player_id });
+            return JjcApplyReport {
+                player_id,
+                legacy_result: 1,
+                disposition: JjcApplyDisposition::Rejected(
+                    JjcCanApplyDisposition::PlayerOrGameServerUnavailable,
+                ),
+            };
+        };
+        if !server.connected || server.index == 0 {
+            if !server.connected {
+                context.log(JjcLogEvent::PlayerGameServerUnavailable { player_id });
+            } else {
+                context.log(JjcLogEvent::PlayerServerIdZero { player_id });
+            }
+            return JjcApplyReport {
+                player_id,
+                legacy_result: 1,
+                disposition: JjcApplyDisposition::Rejected(
+                    JjcCanApplyDisposition::PlayerOrGameServerUnavailable,
+                ),
+            };
+        }
+
+        let region = self.acquire_region(game, config, context);
+        let region_id = region.region_id();
+        if region_id == 0 {
+            return JjcApplyReport {
+                player_id,
+                legacy_result: 4,
+                disposition: JjcApplyDisposition::RegionUnavailable(region),
+            };
+        }
+        self.queue.insert(player_id, info);
+        let (opponent_id, removed_unroutable_players) =
+            self.get_one_opponent(game, player_id, config, context);
+        if opponent_id == 0 {
+            let recycle = self.recycle_jjc_region(config, context, region_id);
+            return JjcApplyReport {
+                player_id,
+                legacy_result: 3,
+                disposition: JjcApplyDisposition::WaitingForOpponent { region, recycle },
+            };
+        }
+
+        self.queue.entry(opponent_id).or_default().opponent_id = player_id;
+        self.queue.entry(opponent_id).or_default().jjc_region_id = region_id;
+        self.queue.entry(player_id).or_default().opponent_id = opponent_id;
+        self.queue.entry(player_id).or_default().jjc_region_id = region_id;
+        let fight = self.start_fight(
+            game,
+            context,
+            region_id,
+            player_id,
+            opponent_id,
+        );
+        context.log(JjcLogEvent::ApplyMatched {
+            player_id,
+            region_id,
+            opponent_id,
+        });
+        JjcApplyReport {
+            player_id,
+            legacy_result: 0,
+            disposition: JjcApplyDisposition::Matched {
+                region,
+                opponent_id,
+                removed_unroutable_players,
+                fight,
+            },
+        }
+    }
+
+    pub(crate) fn end_pk<Context: JjcRunContext + ?Sized>(
+        &mut self,
+        config: JjcRunConfig,
+        context: &mut Context,
+        region_id: i32,
+        player_id: i32,
+    ) -> JjcEndPkReport {
+        let player = *self.queue.entry(player_id).or_default();
+        let opponent_id = player.opponent_id;
+        if player_id == 0 || opponent_id == 0 {
+            let removed = self.queue.remove(&player_id).is_some();
+            return JjcEndPkReport {
+                requested_region_id: region_id,
+                disposition: JjcEndPkDisposition::RemovedIncompletePlayer {
+                    player_id,
+                    opponent_id,
+                    removed,
+                },
+            };
+        }
+        let opponent = *self.queue.entry(opponent_id).or_default();
+        if opponent.opponent_id == player_id
+            && player.start_time == opponent.start_time
+            && player.jjc_region_id == opponent.jjc_region_id
+        {
+            let removed_fight = self.fighting_list.remove(&region_id).is_some();
+            let removed_player = self.queue.remove(&player_id).is_some();
+            let removed_opponent = self.queue.remove(&opponent_id).is_some();
+            let recycle = self.recycle_jjc_region(config, context, region_id);
+            context.log(JjcLogEvent::PkEnded {
+                region_id,
+                player_id,
+            });
+            return JjcEndPkReport {
+                requested_region_id: region_id,
+                disposition: JjcEndPkDisposition::Applied {
+                    player_id,
+                    opponent_id,
+                    removed_fight,
+                    removed_player,
+                    removed_opponent,
+                    recycle,
+                },
+            };
+        }
+        context.log(JjcLogEvent::PkCorrelationMismatch {
+            region_id,
+            player_id,
+            opponent_id,
+            opponent_points_to: opponent.opponent_id,
+        });
+        JjcEndPkReport {
+            requested_region_id: region_id,
+            disposition: JjcEndPkDisposition::CorrelationMismatch {
+                player_id,
+                opponent_id,
+                opponent_points_to: opponent.opponent_id,
+            },
+        }
+    }
+
+    pub(crate) fn quit_player<Context: JjcRunContext + ?Sized>(
+        &mut self,
+        game: &CGame,
+        config: JjcRunConfig,
+        context: &mut Context,
+        player_id: i32,
+        requested_region_id: i32,
+    ) -> JjcQuitReport {
+        let Some(info) = self.queue.get(&player_id).copied() else {
+            return JjcQuitReport {
+                player_id,
+                requested_region_id,
+                disposition: JjcQuitDisposition::PlayerMissing,
+            };
+        };
+        let opponent_id = info.opponent_id;
+        let internal_region_id = info.jjc_region_id;
+        if self.fighting_list.contains_key(&internal_region_id)
+            && config.region_id_min <= requested_region_id
+            && requested_region_id <= config.region_id_max
+        {
+            let end = self.end_pk(config, context, internal_region_id, player_id);
+            context.log(JjcLogEvent::QuitWhileFighting {
+                player_id,
+                opponent_id,
+                region_id: internal_region_id,
+            });
+            return JjcQuitReport {
+                player_id,
+                requested_region_id,
+                disposition: JjcQuitDisposition::EndedFight(end),
+            };
+        }
+
+        let removed_player = self.queue.remove(&player_id).is_some();
+        let removed_opponent = self.queue.remove(&opponent_id).is_some();
+        context.log(JjcLogEvent::QuitAfterApplication {
+            player_id,
+            opponent_id,
+            region_id: internal_region_id,
+        });
+        let notifications = [player_id, opponent_id].map(|recipient_id| {
+            let map_id = Self::player_server_map_id(game, context, recipient_id);
+            let delivery = (map_id > 0).then(|| {
+                let mut message = CMessage::new(0x0008_0506);
+                message.base_mut().add_long(recipient_id);
+                message.base_mut().add_long(requested_region_id);
+                message.send_to_map_id(game.current_game_server_sender().as_ref(), map_id)
+            });
+            JjcQuitNotification {
+                player_id: recipient_id,
+                requested_region_id,
+                map_id,
+                delivery,
+            }
+        });
+        JjcQuitReport {
+            player_id,
+            requested_region_id,
+            disposition: JjcQuitDisposition::RemovedApplication {
+                opponent_id,
+                internal_region_id,
+                removed_player,
+                removed_opponent,
+                notifications,
+            },
+        }
     }
 
     /// Выполняет полный периодический JJC owner и всегда сохраняет legacy `0`.
@@ -550,7 +1189,7 @@ impl CJJcSystem {
         }
     }
 
-    fn week_update<Context: JjcRunContext>(
+    pub(crate) fn week_update<Context: JjcRunContext + ?Sized>(
         &self,
         game: &CGame,
         current_time: i32,
@@ -568,7 +1207,7 @@ impl CJJcSystem {
         }
     }
 
-    fn season_update<Context: JjcRunContext>(
+    pub(crate) fn season_update<Context: JjcRunContext + ?Sized>(
         &self,
         game: &CGame,
         current_time: i32,
@@ -644,7 +1283,7 @@ impl CJJcSystem {
         })
     }
 
-    fn get_region_server_id<Context: JjcRunContext>(
+    fn get_region_server_id<Context: JjcRunContext + ?Sized>(
         game: &CGame,
         context: &mut Context,
         region_id: i32,
@@ -666,7 +1305,7 @@ impl CJJcSystem {
         }
     }
 
-    fn recycle_jjc_region<Context: JjcRunContext>(
+    fn recycle_jjc_region<Context: JjcRunContext + ?Sized>(
         &mut self,
         config: JjcRunConfig,
         context: &mut Context,
@@ -684,6 +1323,16 @@ impl CJJcSystem {
             inserted_into_available,
         }
     }
+}
+
+fn add_jjc_info(message: &mut crate::nets::basemessage::CBaseMessage, info: JjcInfo) {
+    message.add_ulong(info.jjc_level);
+    message.add_long(info.old_region_id);
+    message.add_long(info.position_x);
+    message.add_long(info.position_y);
+    message.add_long(info.opponent_id);
+    message.add_long(info.jjc_region_id);
+    message.add_long(info.start_time);
 }
 
 enum JjcPkTimeoutResult {
@@ -706,7 +1355,7 @@ struct JjcFightSnapshot {
 
 // ============================================================================
 // FUNCTION: CJJcSystem::GetJJcLevelStep
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\jjcsystem.cpp:390
@@ -720,7 +1369,7 @@ struct JjcFightSnapshot {
 
 // ============================================================================
 // FUNCTION: CJJcSystem::IsPlayerInPK
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\jjcsystem.cpp:404
@@ -734,7 +1383,7 @@ struct JjcFightSnapshot {
 
 // ============================================================================
 // FUNCTION: CJJcSystem::CanApplyJJcNow
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\jjcsystem.cpp:359
@@ -748,7 +1397,7 @@ struct JjcFightSnapshot {
 
 // ============================================================================
 // FUNCTION: CJJcSystem::GetOneOpponent
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\jjcsystem.cpp:308
@@ -776,7 +1425,7 @@ struct JjcFightSnapshot {
 
 // ============================================================================
 // FUNCTION: CJJcSystem::StartFight
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\jjcsystem.cpp:189
@@ -790,7 +1439,7 @@ struct JjcFightSnapshot {
 
 // ============================================================================
 // FUNCTION: CJJcSystem::EndPK
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\jjcsystem.cpp:223
@@ -804,7 +1453,7 @@ struct JjcFightSnapshot {
 
 // ============================================================================
 // FUNCTION: CJJcSystem::GetOneJJcRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\jjcsystem.cpp:428
@@ -818,7 +1467,7 @@ struct JjcFightSnapshot {
 
 // ============================================================================
 // FUNCTION: CJJcSystem::ApplyPlayer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\jjcsystem.cpp:83
@@ -832,7 +1481,7 @@ struct JjcFightSnapshot {
 
 // ============================================================================
 // FUNCTION: CJJcSystem::QuitPlayer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\jjcsystem.cpp:142

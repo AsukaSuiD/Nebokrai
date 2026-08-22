@@ -1667,6 +1667,31 @@ impl CPlayer {
         self.base_property.read_u8(BASE_PROPERTY_LEVEL_OFFSET)
     }
 
+    pub(crate) fn get_jjc_level(&self) -> u32 {
+        self.base_property.read_u32(BASE_PROPERTY_JJC_LEVEL_OFFSET)
+    }
+
+    /// Прямые записи apply-message в два поля `m_BaseProperty`.
+    pub(crate) fn set_jjc_identity(&mut self, level: u8, jjc_level: u32) {
+        self.base_property.write_u8(BASE_PROPERTY_LEVEL_OFFSET, level);
+        self.base_property
+            .write_u32(BASE_PROPERTY_JJC_LEVEL_OFFSET, jjc_level);
+    }
+
+    /// Exact `0x60901`: три scalar-поля и все восемь adjacent u16 counters.
+    pub(crate) fn set_jjc_snapshot(
+        &mut self,
+        level: u8,
+        jjc_level: u32,
+        jjc_score: u32,
+        counters: [u8; 0x10],
+    ) {
+        self.set_jjc_identity(level, jjc_level);
+        self.base_property
+            .write_u32(BASE_PROPERTY_JJC_SCORE_OFFSET, jjc_score);
+        self.jjc_data = counters;
+    }
+
     /// Возвращает exact unsigned `m_BaseProperty.dwCredit`.
     pub(crate) fn credit(&self) -> u32 {
         self.base_property.read_u32(BASE_PROPERTY_CREDIT_OFFSET)

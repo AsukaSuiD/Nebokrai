@@ -125,6 +125,7 @@ pub(crate) mod appworld {
     pub(crate) mod message {
         pub(crate) mod gmamessage;
         pub(crate) mod gmmessage;
+        pub(crate) mod jjcsysmessage;
         #[allow(
             dead_code,
             reason = "общий organizing session-result branch подключён перед остальными organizing opcodes"
