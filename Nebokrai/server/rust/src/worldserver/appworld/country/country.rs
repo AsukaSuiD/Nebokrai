@@ -10,7 +10,8 @@
 //! `CCountry::CloneSaveData` RVA `0x000CC470`, `CCountry::AI` RVA
 //! `0x000CB710`, `GetMinister` RVA `0x000C6DE0`, `SendPrivateMsg` RVA
 //! `0x000C6870`, `SendCountryMsg` RVA `0x000C7090` и `SetKing` RVA
-//! `0x000CC290` — `IMPLEMENTED`; остальной
+//! `0x000CC290`, а также destructor `CCountry::~CCountry` RVA `0x000CA0C0` —
+//! `IMPLEMENTED`; остальной
 //! корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -4390,7 +4391,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::~CCountry
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:35
@@ -4398,6 +4399,14 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 // ADDRESS: 004ca0c0
 // PROTOTYPE: void __thiscall ~CCountry(void)
 //
+// IMPLEMENTED_OWNER: PDB задаёт три container-owner-а destructor-а:
+// `m_Players` (+0x6C), `_map_minister` (+0x5C) и `ExileMap` (+0xAC). Точное
+// тело удаляет player-info и каждого ненулевого virtual `CMinister`, затем
+// освобождает узлы этих map. В Rust соответствующие достигнутые состояния
+// принадлежат `CCountry` как `BTreeMap`/`BTreeSet`/owned value и уничтожаются
+// обычным `Drop`; virtual ABI, MSVC allocator и SEH cleanup не имеют
+// наблюдаемого эффекта. Вызовов DB, сообщений, callback-ов либо mutation
+// внешнего состояния destructor не содержит.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
