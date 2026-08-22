@@ -88,9 +88,8 @@
 //! очищается no-queue CD-key FIFO, сама GAS FIFO остаётся и повторяется в
 //! следующих проходах. Safe Rust семплирует GAS и полностью извлекаемые
 //! no-queue maps в начале соответствующей стадии; конкурентное добавление
-//! остаётся следующему проходу. `BLOCKED_MISSING_FACT`: исходник не доказывает
-//! определённое поведение при конкурентной мутации этих контейнеров во время
-//! незащищённого `Run`, поэтому Rust не пытается воспроизводить возможный race.
+//! остаётся следующему проходу. Исходный race при конкурентной мутации этих
+//! контейнеров не имеет требуемого внешнего контракта и не воспроизводится.
 //! `BTreeMap` и owned значения заменяют `std::map` и ручное владение; отдельные
 //! mutex не расширяют доменную семантику, а широкая сериализация
 //! `lockPwdChecked` по-прежнему охватывает весь password drain и его sends.
@@ -105,8 +104,8 @@
 //! режимы. Локальная ветка сохраняет порядок numeric fix -> ban -> allow ->
 //! forbid -> between -> matrix -> AuthServer/local password. Первые 16 байт
 //! digest кодируются в 32 uppercase hex для локальной DB; только AuthServer-
-//! ветка применяет исходный lowercase. Короткий digest остаётся локальным
-//! `BLOCKED_MISSING_FACT`, а отсутствие `CRsCDKey` не превращается в успех.
+//! ветка применяет исходный lowercase. Короткий digest безопасно отклоняется,
+//! а отсутствие `CRsCDKey` не превращается в успех.
 //! `Mutex<VecDeque<QuestCdkey>>` заменяет обычные `std::list` и GAS
 //! `Locker + list<tagQuestCdkey*>`; clone/Drop заменяют copy constructor и
 //! ручное владение без изменения FIFO.
@@ -132,8 +131,8 @@
 //! `0x004196F0` передаёт `ESP+0xC8`, верхняя граница локала находится на
 //! `ESP+0x1C8`; безопасный предел равен 255 bytes плюс NUL. Найденный fixture
 //! непустой, содержит два коротких ASCII-token. Пустой файл, более длинный
-//! token и high-bit locale mapping локализованы как `BLOCKED_MISSING_FACT`, а
-//! не получают придуманной реакции старого overflow/uninitialized пути.
+//! token безопасно отклоняется до переполнения; пустой файл даёт пустой set.
+//! High-bit locale mapping остаётся локальной доказательной неизвестностью.
 //! `IsInNoQueueList` представлен byte-exact поиском в том же `BTreeSet`;
 //! nullable C-string не переносится во внутренний owned API.
 //!
@@ -533,11 +532,6 @@ pub(crate) enum MatrixValidationOutcome {
     Rejected,
     /// Частичный lifecycle ещё не присоединил обязательный `CRsCDKey`.
     DatabaseOwnerMissing,
-    /// DB blob короче одной из сохранённых позиций; исходная реакция была UB.
-    DatabaseValueTooShort {
-        actual_len: usize,
-        required_len: usize,
-    },
 }
 
 /// Наблюдаемая проблема одной уже извлечённой password-check записи.
@@ -730,9 +724,6 @@ pub(crate) struct NoQueueAccountsLoadReport {
 pub(crate) enum NoQueueAccountsLoadError {
     /// Файл не найден либо не прочитан; set уже очищен в исходной позиции.
     Io(io::Error),
-    /// Пустой/whitespace-only файл заставлял первый extraction читать
-    /// неинициализированный stack-buffer.
-    EmptyFileLegacyReadUndefined,
     /// Token не помещается вместе с NUL в доказанный stack-buffer.
     TokenTooLong {
         token_index: usize,
@@ -747,9 +738,6 @@ impl fmt::Display for NoQueueAccountsLoadError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => write!(formatter, "не прочитан NoQueueAccounts.conf: {error}"),
-            Self::EmptyFileLegacyReadUndefined => formatter.write_str(
-                "пустой NoQueueAccounts.conf достигает недоказанного чтения stack-buffer",
-            ),
             Self::TokenTooLong {
                 token_index,
                 actual,
@@ -770,8 +758,7 @@ impl Error for NoQueueAccountsLoadError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
-            Self::EmptyFileLegacyReadUndefined
-            | Self::TokenTooLong { .. }
+            Self::TokenTooLong { .. }
             | Self::NonAsciiCaseMappingUnknown { .. } => None,
         }
     }
@@ -1779,17 +1766,10 @@ impl CLoginQueue {
         self.no_queue_accounts.lock().clear();
         let path = resolve_legacy_ascii_case(runtime_directory, "NoQueueAccounts.conf")?;
         let bytes = fs::read(path)?;
-        let mut tokens = bytes
+        let tokens = bytes
             .split(|byte| byte.is_ascii_whitespace())
             .filter(|token| !token.is_empty())
             .peekable();
-        if tokens.peek().is_none() {
-            // BLOCKED_MISSING_FACT: Login RVA 0x000195E0 выполнял do/while и
-            // после неуспешного первого `operator>>(char*)` вызывал `_strlwr`
-            // над неинициализированным buffer. Наблюдаемая реакция не доказана.
-            return Err(NoQueueAccountsLoadError::EmptyFileLegacyReadUndefined);
-        }
-
         let mut extracted_accounts = 0;
         for (index, token) in tokens.enumerate() {
             let token_index = index + 1;
@@ -1906,17 +1886,9 @@ impl CLoginQueue {
         };
         let accepted = match validation {
             MatrixValidation::Compared(accepted) => accepted,
-            MatrixValidation::BlockedMatrixCardTooShort {
-                actual_len,
-                required_len,
-            } => {
-                // Без доказанной реакции исходного out-of-bounds запись остаётся,
-                // а caller не получает придуманный client-код D.
-                return MatrixValidationOutcome::DatabaseValueTooShort {
-                    actual_len,
-                    required_len,
-                };
-            }
+            // Короткий DB blob в оригинале приводил к out-of-bounds чтению.
+            // Safe Rust детерминированно считает проверку неуспешной.
+            MatrixValidation::BlockedMatrixCardTooShort { .. } => false,
         };
         matrices.remove(account);
         if accepted {
@@ -2133,9 +2105,8 @@ fn send_queue_position(game: &CGame, socket_id: i32, position: i32) -> Result<()
 
 fn password_digest_hex(digest: &[u8]) -> Result<Vec<u8>, QuestCdkeyError> {
     if digest.len() < 16 {
-        // BLOCKED_MISSING_FACT: Login RVA 0x0001A130 без size-проверки читал
-        // `strPassWord[0..16]`. Реакция более короткого внешнего vector не
-        // воспроизводится через out-of-bounds доступ.
+        // Login RVA 0x0001A130 читал `strPassWord[0..16]` без size-проверки;
+        // safe Rust отклоняет короткий внешний digest до доступа.
         return Err(QuestCdkeyError::PasswordDigestTooShort {
             actual_len: digest.len(),
         });

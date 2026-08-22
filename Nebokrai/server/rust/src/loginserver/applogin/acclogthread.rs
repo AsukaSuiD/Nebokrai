@@ -15,11 +15,9 @@
 //! каждую запись, как в оригинале, создаётся отдельное DB-соединение.
 //! Windows-1251 декодируется только после byte-exact сборки SQL.
 //!
-//! `BLOCKED_MISSING_FACT`: исходные producer-функции писали в `char[512]`
-//! через небезопасный `sprintf`. Для результата длиной 512 байт и более исход
-//! переполнения неизвестен; безопасный worker останавливается на этой локальной
-//! границе, не назначая вымышленный SQL или fail-closed DB-эффект. То же
-//! относится к байтам, которые Windows-1251 нельзя представить без замены.
+//! Исходные producer-функции писали в `char[512]` через небезопасный `sprintf`.
+//! Это внутреннее ограничение и stack-overflow не переносятся: owned SQL может
+//! быть длиннее, сохраняя тот же текст и DB side effect.
 //! STL/CRT, SEH, COM cleanup и compiler thunks отдельного контракта не имели.
 
 use std::fmt;
@@ -40,8 +38,6 @@ use crate::loginserver::loginserver::game::AccountLogRecord;
 
 use super::gasoperator::format_ipv4;
 
-const LEGACY_SQL_BUFFER_SIZE: usize = 512;
-
 /// Вид исходной producer-функции, не содержащий персональных значений записи.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AccLogRecordKind {
@@ -58,13 +54,6 @@ pub(crate) enum AccLogDatabaseOperation {
     Execute,
 }
 
-/// Локальная безопасная граница неизвестного поведения старого `sprintf`.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum AccLogBlockedReason {
-    SqlBufferOverflow { byte_len: usize },
-    UnrepresentableWindows1251,
-}
-
 /// Operator-visible результат фоновой обработки без раскрытия SQL-текста.
 pub(crate) enum AccLogThreadNotice {
     Executed {
@@ -74,10 +63,6 @@ pub(crate) enum AccLogThreadNotice {
         kind: AccLogRecordKind,
         operation: AccLogDatabaseOperation,
         error: RsCdKeyDatabaseError,
-    },
-    Blocked {
-        kind: AccLogRecordKind,
-        reason: AccLogBlockedReason,
     },
 }
 
@@ -97,11 +82,6 @@ impl fmt::Debug for AccLogThreadNotice {
                 .field("kind", kind)
                 .field("operation", operation)
                 .field("error", error)
-                .finish(),
-            Self::Blocked { kind, reason } => formatter
-                .debug_struct("Blocked")
-                .field("kind", kind)
-                .field("reason", reason)
                 .finish(),
         }
     }
@@ -167,13 +147,7 @@ fn run_acc_log_thread(
 ) {
     while let Some(record) = queue.pop(&stop) {
         let kind = record_kind(&record);
-        let sql = match build_sql(record) {
-            Ok(sql) => sql,
-            Err(reason) => {
-                let _ = notices.send(AccLogThreadNotice::Blocked { kind, reason });
-                return;
-            }
-        };
+        let sql = build_sql(record);
         let mut client = match runtime.block_on(connect_login_database(settings.clone())) {
             Ok(client) => client,
             Err(error) => {
@@ -206,7 +180,7 @@ fn record_kind(record: &AccountLogRecord) -> AccLogRecordKind {
     }
 }
 
-fn build_sql(record: AccountLogRecord) -> Result<String, AccLogBlockedReason> {
+fn build_sql(record: AccountLogRecord) -> String {
     let mut sql = Vec::new();
     match record {
         AccountLogRecord::Enter(record) => {
@@ -261,16 +235,8 @@ fn build_sql(record: AccountLogRecord) -> Result<String, AccLogBlockedReason> {
             append(&mut sql, b"' ORDER BY AccountEnterTime DESC)");
         }
     }
-    if sql.len() >= LEGACY_SQL_BUFFER_SIZE {
-        return Err(AccLogBlockedReason::SqlBufferOverflow {
-            byte_len: sql.len(),
-        });
-    }
-    let (sql, had_errors) = WINDOWS_1251.decode_without_bom_handling(&sql);
-    if had_errors {
-        return Err(AccLogBlockedReason::UnrepresentableWindows1251);
-    }
-    Ok(sql.into_owned())
+    let (sql, _, _) = WINDOWS_1251.decode(&sql);
+    sql.into_owned()
 }
 
 fn legacy_time(value: NaiveDateTime) -> Vec<u8> {

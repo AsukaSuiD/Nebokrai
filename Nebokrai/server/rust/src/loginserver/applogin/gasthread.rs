@@ -26,9 +26,9 @@
 //! Принудительный Win32 `TerminateThread`, COM init, singleton `CGasOperator`,
 //! STL allocator/copy и EH cleanup заменены владением Rust, atomic stop,
 //! `JoinHandle`, каналом и соседними техническими владельцами. Для путей,
-//! где C++ мог читать за границей массива, Rust возвращает локальный
-//! `BLOCKED_MISSING_FACT`: digest короче 16 байт и nickname/format, не
-//! помещающийся в исходный фиксированный буфер.
+//! где C++ мог читать за границей массива, короткий digest безопасно
+//! отклоняется. Фиксированные nickname/format buffers были внутренними
+//! ограничениями и заменены owned `Vec` без изменения HTTP-формата.
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,9 +47,6 @@ use crate::public::md5::message_digest;
 
 const LOGIN_RESPONSE_MESSAGE_TYPE: i32 = 0x000A_F501;
 const IDLE_INTERVAL: Duration = Duration::from_millis(10);
-const SIGNATURE_CAPACITY: usize = 0x200;
-const CONTENT_CAPACITY: usize = 0x400;
-const NICKNAME_CAPACITY: usize = 1000;
 const NICKNAME_MARKER: &[u8] = b"\"nickname\"";
 
 #[derive(Clone, Debug)]
@@ -62,13 +59,8 @@ pub(crate) struct GasVerificationConfig {
 pub(crate) enum GasBlockedReason {
     PasswordDigestTooShort { actual_len: usize },
     SignatureUppercaseMissing,
-    SignatureInputTooLong { actual_len: usize },
-    FormContentTooLong { actual_len: usize },
-    VerificationAddressTooLong { actual_len: usize },
     VerificationAddressEncodingUnsupported,
     VerificationAddressSchemeUnsupported,
-    NicknameTooLong { actual_len: usize },
-    ResponseWithoutTerminator,
 }
 
 #[derive(Debug)]
@@ -230,11 +222,6 @@ fn check_account(
     quest: &mut QuestCdkey,
 ) -> GasCheckResult {
     let address = legacy_c_string_prefix(&config.address);
-    if address.len() >= CONTENT_CAPACITY {
-        return GasCheckResult::Blocked(GasBlockedReason::VerificationAddressTooLong {
-            actual_len: address.len(),
-        });
-    }
     if let Err(error) = wininet.init(address) {
         return match error {
             MyWinInetError::InvalidUrlEncoding => {
@@ -259,10 +246,6 @@ fn check_account(
     }
     let response = match wininet.recv() {
         Ok(response) => response,
-        Err(MyWinInetError::ResponseWithoutTerminator) => {
-            wininet.close();
-            return GasCheckResult::Blocked(GasBlockedReason::ResponseWithoutTerminator);
-        }
         Err(error) => {
             wininet.close();
             return transport_failure(error);
@@ -300,11 +283,6 @@ fn form_content(
     let password = lower_hex_16(quest.password_digest())?;
     let account = legacy_c_string_prefix(quest.account());
     let signature_len = account.len() + 1 + password.len() + b"|DaYeZaiCi".len();
-    if signature_len >= SIGNATURE_CAPACITY {
-        return Err(GasBlockedReason::SignatureInputTooLong {
-            actual_len: signature_len,
-        });
-    }
 
     let mut signature_input = Vec::with_capacity(signature_len);
     signature_input.extend_from_slice(account);
@@ -324,11 +302,6 @@ fn form_content(
         + password.len()
         + b"&hash=".len()
         + signature.len();
-    if content_len >= CONTENT_CAPACITY {
-        return Err(GasBlockedReason::FormContentTooLong {
-            actual_len: content_len,
-        });
-    }
     let mut content = Vec::with_capacity(content_len);
     content.extend_from_slice(b"username=");
     content.extend_from_slice(account);
@@ -366,11 +339,6 @@ fn analyse_response(response: Option<&[u8]>) -> Result<(i32, Option<Vec<u8>>), G
     };
     if nickname.is_empty() {
         return Ok((-10, None));
-    }
-    if nickname.len() >= NICKNAME_CAPACITY {
-        return Err(GasBlockedReason::NicknameTooLong {
-            actual_len: nickname.len(),
-        });
     }
     Ok((0, Some(nickname.to_vec())))
 }

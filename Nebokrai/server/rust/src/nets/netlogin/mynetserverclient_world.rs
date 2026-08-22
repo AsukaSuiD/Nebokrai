@@ -3,8 +3,8 @@
 //!
 //! Статус владельца: `IMPLEMENTED` для constructor state, `OnClose` и
 //! корректного/неполного `OnReceive`. Небезопасные malformed-границы длины и
-//! короткого внутреннего header оставлены локальными `BLOCKED_MISSING_FACT`,
-//! а не объявлены исходным fail-closed. `SetSendRevBuf` остаётся отдельной
+//! короткого внутреннего header детерминированно очищают accumulator и
+//! возвращают локальную ошибку. `SetSendRevBuf` остаётся отдельной
 //! transport-границей до доказательства совместимого Linux socket option.
 //!
 //! Точная пара: `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`;
@@ -46,9 +46,9 @@
 //! вопрос о требуемом backpressure остаётся будущему server/transport-owner.
 //!
 //! Для длины с sign bit либо `total_len < 12` x86-путь переходил к signed
-//! сравнению и/или unsigned `len - 12`; наблюдаемая реакция не доказана.
-//! Внутреннее сообщение длиной 1..15 bytes также приводило к чтению header за
-//! границей. Эти случаи не воспроизводятся через `unsafe`. SEH, allocator-
+//! сравнению и/или unsigned `len - 12`; внутреннее сообщение длиной 1..15
+//! bytes также приводило к чтению header за границей. Safe Rust очищает такой
+//! вход без воспроизведения UB. SEH, allocator-
 //! копии и deleting-destructor удалены как compiler/library noise.
 
 use crate::nets::msgqueue::CMsgQueue;
@@ -65,10 +65,8 @@ const WORLD_DISCONNECTED: i32 = 0x0000_FF01;
 pub(crate) enum WorldReceiveError {
     /// CRC little-endian слова `total_len` не совпал со вторым словом envelope.
     LengthChecksumMismatch { expected: u32, actual: u32 },
-    /// Signed-ветвление оригинала не задаёт безопасную реакцию на эту длину.
-    SignedFrameLengthReactionUnknown { declared: u32 },
-    /// `total_len < 12` приводит к недоказанному unsigned вычитанию.
-    ShortFrameReactionUnknown { declared: u32 },
+    /// Длина меньше envelope либо не представима положительным Windows `long`.
+    InvalidFrameLength { declared: u32 },
     /// Конкретный message-owner не смог безопасно создать сообщение.
     Message(CreateMessageError),
     /// CRC нормализованного сообщения не совпал с третьим словом envelope.
@@ -152,12 +150,9 @@ impl CMyNetServerClientWorld {
                 });
             }
 
-            // BLOCKED_MISSING_FACT: Login RVA 0x0006EDF0 сравнивает
-            // `m_nSize < (int)total_len`, а отрицательность проверяет только
-            // внутри этой ветки. Для sign-bit при положительном accumulator
-            // машинная реакция перед `len - 12` требует точечной проверки.
             if (declared as i32) < 0 {
-                return Err(WorldReceiveError::SignedFrameLengthReactionUnknown { declared });
+                client.discard_receive_data();
+                return Err(WorldReceiveError::InvalidFrameLength { declared });
             }
 
             let frame_length = declared as usize;
@@ -165,18 +160,15 @@ impl CMyNetServerClientWorld {
                 break;
             }
             if frame_length < SERVER_ENVELOPE_LEN {
-                // BLOCKED_MISSING_FACT: исходный `total_len - 12` был
-                // unsigned и передавался CreateMessageWithoutRLE.
-                return Err(WorldReceiveError::ShortFrameReactionUnknown { declared });
+                client.discard_receive_data();
+                return Err(WorldReceiveError::InvalidFrameLength { declared });
             }
 
             let message_wire = &frame[SERVER_ENVELOPE_LEN..frame_length];
             let message = match CMessage::create_without_rle(message_wire) {
                 Ok(message) => message,
                 Err(error) => {
-                    if matches!(error, CreateMessageError::EmptyInput) {
-                        client.discard_receive_data();
-                    }
+                    client.discard_receive_data();
                     return Err(WorldReceiveError::Message(error));
                 }
             };

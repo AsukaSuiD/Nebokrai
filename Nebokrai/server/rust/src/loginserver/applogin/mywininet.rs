@@ -24,10 +24,9 @@
 //! историческое сохранение хвоста предыдущего куска. Ошибка очередного read,
 //! как `InternetReadFile == 0`, также завершает цикл и оставляет уже прочитанный
 //! буфер доступным анализатору. `Close` после запроса полностью обнуляет его.
-//! Это поведение сохранено.
-//! Если полный последний кусок не оставляет NUL, чтение оригинала выходило за
-//! границу массива; безопасный Rust не назначает такому UB результат и
-//! возвращает локальную ошибку `ResponseWithoutTerminator`.
+//! Это поведение сохранено. Если полный последний кусок не оставляет NUL,
+//! оригинал читал за границей массива; safe Rust возвращает весь bounded
+//! 1024-байтовый блок анализатору без OOB.
 
 use std::error::Error;
 use std::fmt;
@@ -37,7 +36,6 @@ use reqwest::Url;
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 
-const URL_CAPACITY: usize = 0x100;
 const RESPONSE_CAPACITY: usize = 0x400;
 
 pub(crate) enum MyWinInetError {
@@ -47,7 +45,6 @@ pub(crate) enum MyWinInetError {
     Client(reqwest::Error),
     Request(reqwest::Error),
     ResponseMissing,
-    ResponseWithoutTerminator,
 }
 
 impl fmt::Debug for MyWinInetError {
@@ -69,9 +66,6 @@ impl fmt::Display for MyWinInetError {
             Self::Client(_) => formatter.write_str("не удалось создать HTTP-клиент GAS"),
             Self::Request(_) => formatter.write_str("HTTP-запрос GAS завершился ошибкой"),
             Self::ResponseMissing => formatter.write_str("ответ GAS ещё не получен"),
-            Self::ResponseWithoutTerminator => formatter.write_str(
-                "BLOCKED_MISSING_FACT: полный последний блок ответа GAS не содержит NUL",
-            ),
         }
     }
 }
@@ -110,8 +104,7 @@ impl CMyWinInet {
         let end = raw_url
             .iter()
             .position(|byte| *byte == 0)
-            .unwrap_or(raw_url.len())
-            .min(URL_CAPACITY);
+            .unwrap_or(raw_url.len());
         let text =
             std::str::from_utf8(&raw_url[..end]).map_err(|_| MyWinInetError::InvalidUrlEncoding)?;
         let url = Url::parse(text).map_err(|_| MyWinInetError::InvalidUrl)?;
@@ -170,7 +163,7 @@ impl CMyWinInet {
             .response_buffer
             .iter()
             .position(|byte| *byte == 0)
-            .ok_or(MyWinInetError::ResponseWithoutTerminator)?;
+            .unwrap_or(self.response_buffer.len());
         Ok(Some(self.response_buffer[..end].to_vec()))
     }
 

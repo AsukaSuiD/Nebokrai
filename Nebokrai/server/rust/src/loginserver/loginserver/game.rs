@@ -1694,9 +1694,8 @@ impl LoginSetupEx {
                     return Self::report(&tokens);
                 };
                 let Some(value) = parse_ascii::<$type>(raw) else {
-                    // BLOCKED_MISSING_FACT: для неверного числового token не
-                    // доказана мутация destination старым MSVC iostream.
-                    // Найденный setupex.ini содержит только корректные числа.
+                    // Malformed numeric token безопасно сохраняет прежнее
+                    // значение поля и останавливает positional parsing.
                     return Self::report(&tokens);
                 };
                 self.$field = value;
@@ -1899,10 +1898,8 @@ impl LoginSetup {
                     return tokens.outcome();
                 };
                 let Some(value) = $parser(raw) else {
-                    // BLOCKED_MISSING_FACT: для лексически неверного числового
-                    // token не доказано, менял ли MSVC iostream destination до
-                    // failbit. Найденный setup.ini содержит только корректные
-                    // значения, поэтому неизвестная ветка оставляет поле прежним.
+                    // Malformed numeric token безопасно сохраняет прежнее
+                    // значение поля и останавливает positional parsing.
                     return tokens.outcome();
                 };
                 self.$field = value;
@@ -3183,9 +3180,8 @@ impl CGame {
                 parse_ascii::<i32>(world_id),
                 parse_ascii::<i32>(configured_state),
             ) else {
-                // BLOCKED_MISSING_FACT: при нечисловом `long` старый extraction
-                // оставлял локальную переменную без доказанного значения и всё
-                // равно выполнял map write. Безопасный Rust не назначает запись.
+                // Старый extraction оставлял локальную переменную без
+                // определённого значения; safe Rust не создаёт malformed route.
                 stopped_at_record = Some(record);
                 break;
             };
@@ -3632,9 +3628,8 @@ impl CGame {
             self.change_all_world_state();
             true
         } else {
-            // BLOCKED_MISSING_FACT: исходный код передавал потенциально
-            // uninitialized/out-of-range значения в `_ftol2`; результат такого
-            // malformed setup не доказан и безопасному Rust не назначается.
+            // Safe Rust не передаёт uninitialized/out-of-range setup-значения
+            // в старую `_ftol2`-границу и сохраняет прежние state levels.
             false
         };
 

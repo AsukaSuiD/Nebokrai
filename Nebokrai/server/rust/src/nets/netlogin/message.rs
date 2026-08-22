@@ -37,8 +37,9 @@
 //!
 //! RLE create сохраняет порог `0x20001`, capacity `0x100000` либо
 //! `compressed_len * 8`; несжатый create копирует четыре header-слова и
-//! нормализует длину. Вход 1..15 bytes и overflow умножения остаются локальными
-//! неизвестностями, а malformed trailing marker принадлежит `basemessage`.
+//! нормализует длину. Вход 1..15 bytes и overflow умножения безопасно
+//! отклоняются до чтения header или выделения; malformed trailing marker
+//! принадлежит `basemessage`.
 //!
 //! `Run` сначала выделяет полный диапазон Auth `0xCF301..0xDF1FE`, затем
 //! маршрутизирует семейства по `MsgType & 0xFFFF_FF00`: `0x20000` GM,
@@ -74,12 +75,12 @@ static AUTH_SEND_SERIALIZER: Mutex<()> = Mutex::new(());
 pub(crate) enum CreateMessageError {
     /// Исходный nullable/нулевой вход доказанно не создавал сообщение.
     EmptyInput,
-    /// Реакция C++ на ненулевой буфер короче header не была безопасно задана.
-    HeaderTooShortReactionUnknown,
+    /// Внутренний wire-буфер короче обязательного header.
+    HeaderTooShort { actual: usize },
     /// Размер не представим 32-битным `unsigned long` исходного API.
     InputOutsideLegacyRange,
-    /// `compressed_len * 8` переполнял 32-битную арифметику.
-    RleCapacityOverflowReactionUnknown,
+    /// Требуемая RLE-capacity не представима в 32-битном исходном диапазоне.
+    RleCapacityOutsideLegacyRange,
     /// Декодер отклонил поток либо достиг локально неизвестной malformed-границы.
     Rle(RleDecodeError),
 }
@@ -151,7 +152,7 @@ impl CMessage {
                 .len()
                 .checked_mul(8)
                 .filter(|capacity| *capacity <= u32::MAX as usize)
-                .ok_or(CreateMessageError::RleCapacityOverflowReactionUnknown)?
+                .ok_or(CreateMessageError::RleCapacityOutsideLegacyRange)?
         };
         let decoded = decode_rle(compressed, capacity).map_err(CreateMessageError::Rle)?;
         Self::create_without_rle(&decoded)
@@ -166,9 +167,7 @@ impl CMessage {
             return Err(CreateMessageError::InputOutsideLegacyRange);
         }
         if wire.len() < MESSAGE_HEADER_LEN {
-            // BLOCKED_MISSING_FACT: Login RVA 0x00065710 проверяет только
-            // ненулевые pointer/len, затем читает header и вычитает 16.
-            return Err(CreateMessageError::HeaderTooShortReactionUnknown);
+            return Err(CreateMessageError::HeaderTooShort { actual: wire.len() });
         }
         let header = wire[..MESSAGE_HEADER_LEN]
             .try_into()

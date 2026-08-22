@@ -4,8 +4,8 @@
 //! Статус владельца: `IMPLEMENTED` для constructor state, условных проверок
 //! длины/CRC, RLE create-пути, opcode-range, metadata, FIFO-публикации,
 //! неполного TCP-хвоста и synthetic disconnect по непустому CD-key.
-//! Небезопасные malformed-границы длины и RLE оставлены локальными
-//! `BLOCKED_MISSING_FACT`, а не объявлены исходным fail-closed.
+//! Небезопасные malformed-границы длины и RLE детерминированно очищают
+//! accumulator и возвращают локальную ошибку без воспроизведения UB.
 //!
 //! Точная пара: `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`;
 //! SHA-256 EXE
@@ -49,13 +49,12 @@
 //! удаление соединения по-прежнему принадлежит общему `CServer`.
 //!
 //! При длине с sign bit либо `total_len < 12` x86-путь переходил к signed
-//! сравнению и/или unsigned `len - 12`; безопасная наблюдаемая реакция не
-//! доказана. Аналогично trailing RLE marker и декодированный header короче 16
-//! bytes не получают придуманной реакции. SEH, deleting-destructor thunks,
+//! сравнению и/или unsigned `len - 12`. Как и trailing RLE marker или
+//! декодированный header короче 16 bytes, safe Rust отбрасывает такой вход без
+//! unsafe-чтения. SEH, deleting-destructor thunks,
 //! allocator-копии и ошибочно приписанный World deleting-destructor удалены
 //! как compiler/library noise.
 
-use crate::nets::basemessage::RleDecodeError;
 use crate::nets::msgqueue::CMsgQueue;
 use crate::nets::netlogin::message::{CMessage, CreateMessageError};
 use crate::nets::serverclient::CServerClient;
@@ -99,10 +98,8 @@ pub(crate) enum ClientReceiveError {
     LengthChecksumMismatch { expected: u32, actual: u32 },
     /// CRC сжатой части кадра не совпал с третьим словом envelope.
     ContentChecksumMismatch { expected: u32, actual: u32 },
-    /// Signed-ветвление оригинала не задаёт безопасную реакцию на эту длину.
-    SignedFrameLengthReactionUnknown { declared: u32 },
-    /// `total_len < 12` приводит к недоказанному unsigned вычитанию.
-    ShortFrameReactionUnknown { declared: u32 },
+    /// Длина меньше envelope либо не представима положительным Windows `long`.
+    InvalidFrameLength { declared: u32 },
     /// Конкретный message-owner не смог безопасно создать сообщение.
     Message(CreateMessageError),
     /// Полный тип сообщения находится вне разрешённого client-диапазона.
@@ -212,12 +209,9 @@ impl CMyNetServerClientClient {
                 }
             }
 
-            // BLOCKED_MISSING_FACT: Login RVA 0x0006E810 сравнивает
-            // `m_nSize < (int)total_len`, а отрицательность проверяет только
-            // внутри этой ветки. Для sign-bit при положительном accumulator
-            // машинная реакция перед `len - 12` требует точечной проверки.
             if (declared as i32) < 0 {
-                return Err(ClientReceiveError::SignedFrameLengthReactionUnknown { declared });
+                client.discard_receive_data();
+                return Err(ClientReceiveError::InvalidFrameLength { declared });
             }
 
             let frame_length = declared as usize;
@@ -225,9 +219,8 @@ impl CMyNetServerClientClient {
                 break;
             }
             if frame_length < CLIENT_ENVELOPE_LEN {
-                // BLOCKED_MISSING_FACT: исходный `total_len - 12` был
-                // unsigned и использовался и для CRC, и для CreateMessage.
-                return Err(ClientReceiveError::ShortFrameReactionUnknown { declared });
+                client.discard_receive_data();
+                return Err(ClientReceiveError::InvalidFrameLength { declared });
             }
 
             let compressed = &frame[CLIENT_ENVELOPE_LEN..frame_length];
@@ -246,9 +239,7 @@ impl CMyNetServerClientClient {
             let mut message = match CMessage::create(compressed) {
                 Ok(message) => message,
                 Err(error) => {
-                    if is_proven_null_create(&error) {
-                        client.discard_receive_data();
-                    }
+                    client.discard_receive_data();
                     return Err(ClientReceiveError::Message(error));
                 }
             };
@@ -270,14 +261,4 @@ impl CMyNetServerClientClient {
             pending_bytes: client.pending_receive_bytes(),
         })
     }
-}
-
-fn is_proven_null_create(error: &CreateMessageError) -> bool {
-    matches!(
-        error,
-        CreateMessageError::EmptyInput
-            | CreateMessageError::Rle(
-                RleDecodeError::EmptyInput | RleDecodeError::OutputCapacityReached
-            )
-    )
 }

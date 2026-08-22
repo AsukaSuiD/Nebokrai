@@ -252,6 +252,8 @@ pub(crate) enum LogMessageOutcome {
     SocketMismatchIgnored,
     /// Matrix/valid-code handler получил пустой account и только диагностировал его.
     EmptyAccountIgnored,
+    /// Malformed payload безопасно отклонён без чтения за его границей.
+    MalformedPayloadIgnored,
     /// Успешная matrix-проверка не нашла обязательную login/world запись.
     LoginStateMissing,
     /// Для opcode отсутствует case в исходном `OnLogMessage`.
@@ -267,17 +269,8 @@ pub(crate) enum LogMessageError {
     ValidCode(ValidCodeError),
     /// Positional Login setup не определил сравниваемую client version.
     LoginServerVersionMissing,
-    /// Исходный `GetEx` дошёл до недоказанного чтения за payload-границей.
-    PasswordDigestTruncatedReactionUnknown { available: usize, required: usize },
-    /// В matrix payload отсутствуют один или несколько обязательных байтов.
-    MatrixAnswerTooShortReactionUnknown,
     /// Частичный Login lifecycle ещё не присоединил исходный `CRsCDKey`.
     MatrixDatabaseOwnerMissing,
-    /// Сохранённая matrix-позиция вышла за фактическую длину DB blob.
-    MatrixDatabaseValueTooShort {
-        actual_len: usize,
-        required_len: usize,
-    },
 }
 
 impl fmt::Display for LogMessageError {
@@ -288,27 +281,9 @@ impl fmt::Display for LogMessageError {
             Self::LoginServerVersionMissing => {
                 formatter.write_str("Login setup не определил server_version")
             }
-            Self::PasswordDigestTruncatedReactionUnknown {
-                available,
-                required,
-            } => write!(
-                formatter,
-                "GetEx digest объявил 16 байт, но после префикса доступно {available} из {required}; \
-                 исходная реакция не доказана"
-            ),
-            Self::MatrixAnswerTooShortReactionUnknown => formatter
-                .write_str("реакция LoginServer на matrix-ответ короче трёх байтов не доказана"),
             Self::MatrixDatabaseOwnerMissing => {
                 formatter.write_str("DB-владелец CRsCDKey для matrix-проверки отсутствует")
             }
-            Self::MatrixDatabaseValueTooShort {
-                actual_len,
-                required_len,
-            } => write!(
-                formatter,
-                "matrix_card короче сохранённой позиции: {actual_len} < {required_len}; \
-                 исходная реакция не доказана"
-            ),
         }
     }
 }
@@ -319,10 +294,7 @@ impl Error for LogMessageError {
             Self::Route(error) => Some(error),
             Self::ValidCode(error) => Some(error),
             Self::LoginServerVersionMissing
-            | Self::PasswordDigestTruncatedReactionUnknown { .. }
-            | Self::MatrixAnswerTooShortReactionUnknown
-            | Self::MatrixDatabaseOwnerMissing
-            | Self::MatrixDatabaseValueTooShort { .. } => None,
+            | Self::MatrixDatabaseOwnerMissing => None,
         }
     }
 }
@@ -760,10 +732,7 @@ impl<'a> LogMessageHandler<'a> {
 
         let mut answer = [0; 3];
         if !message.base_mut().get(&mut answer) {
-            // BLOCKED_MISSING_FACT: Login RVA 0x0007F3F0 игнорирует результат
-            // `Get(..., 3)` и затем читает stack bytes. Реакция короткого
-            // внешнего payload не воспроизводится через неинициализированную память.
-            return Err(LogMessageError::MatrixAnswerTooShortReactionUnknown);
+            return Ok(LogMessageOutcome::MalformedPayloadIgnored);
         }
 
         let queue = self.game.login_queue();
@@ -795,13 +764,6 @@ impl<'a> LogMessageHandler<'a> {
             MatrixValidationOutcome::DatabaseOwnerMissing => {
                 Err(LogMessageError::MatrixDatabaseOwnerMissing)
             }
-            MatrixValidationOutcome::DatabaseValueTooShort {
-                actual_len,
-                required_len,
-            } => Err(LogMessageError::MatrixDatabaseValueTooShort {
-                actual_len,
-                required_len,
-            }),
         }
     }
 
@@ -941,14 +903,7 @@ fn get_password_digest(message: &mut CBaseMessage) -> Result<Option<Vec<u8>>, Lo
     }
     let available = remaining - size_of::<i32>();
     if available < PASSWORD_DIGEST_LEN {
-        // BLOCKED_MISSING_FACT: Login RVA 0x00065D60 проверяет remaining >= 16
-        // до чтения четырёхбайтовой длины, но не повторяет проверку после неё.
-        // При declared length 16 и исходных remaining 16..19 точный результат
-        // OOB-чтения не доказан и не воспроизводится через unsafe.
-        return Err(LogMessageError::PasswordDigestTruncatedReactionUnknown {
-            available,
-            required: PASSWORD_DIGEST_LEN,
-        });
+        return Ok(None);
     }
 
     let mut digest = vec![0; PASSWORD_DIGEST_LEN];
