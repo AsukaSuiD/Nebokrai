@@ -2,9 +2,10 @@
 //!
 //! Статус владельца: `IMPLEMENTED` для `DbNote`, constructor/lifecycle очередей,
 //! `PushItemToListIn/Out`, `PopItemFromListIn/Out`, трёх
-//! `DoneOT_IN_*`, `DoneListIn`, `DoneOutList`, `PopPlayerList`, создания normal
-//! DB-соединения и пяти DB-переходов записи `DelItemFromDb`/`DelMoneyFromDb`/
-//! `ModifyGoodsStateA2S`/`TansferMoney`/`ModifyGoodsStateA2B`, а также
+//! `DoneOT_IN_*`, `DoneListIn`, `DoneOutList`, `PopPlayerList`, создания и
+//! active-проверки normal DB-соединения и пяти DB-переходов записи
+//! `DelItemFromDb`/`DelMoneyFromDb`/`ModifyGoodsStateA2S`/`TansferMoney`/
+//! `ModifyGoodsStateA2B`, а также
 //! достигнутой части `LoadAuction`,
 //! caller-контрактов `LoadOwnerBackGoods`,
 //! `LoadOwnerUndoGoods`, `LoadOwnerSuccGoods` и `LoadMoneyById`, а также
@@ -651,6 +652,7 @@ fn output_block(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AuctionWriteOperation {
     CreateNormalConnection,
+    CheckNormalConnection,
     DeleteItem,
     DeleteMoney,
     ModifyStateAuctionToSucceeded,
@@ -728,6 +730,22 @@ pub(crate) enum AuctionWriteOutcome {
     BlockedMissingFact(AuctionWriteBlock),
 }
 
+/// Результат exact `IsActiveConnect`: `ExecuteCnEx` возвращал unsigned
+/// affected-row count, а `CDbMisc` считал соединение активным только при нуле.
+#[derive(Debug)]
+pub(crate) enum AuctionConnectionState {
+    Active,
+    Inactive { affected_rows: u64 },
+    Failed(AuctionWriteFailure),
+}
+
+impl AuctionConnectionState {
+    /// Bool для ровно той reconnect-ветки, которую вызывает `DoneListIn`.
+    pub(crate) const fn legacy_bool(&self) -> bool {
+        matches!(self, Self::Active)
+    }
+}
+
 impl AuctionWriteOutcome {
     /// Точный bool для будущего async-адаптера `DbMiscContext`; безопасная
     /// блокировка не выдаётся за доказанный ответ старого процесса.
@@ -778,6 +796,33 @@ impl TiberiusAuctionWriteOwner {
                 operation: AuctionWriteOperation::CreateNormalConnection,
                 source,
             })
+    }
+
+    /// Выполняет literal `exec IsActiveConnect` на normal connection.
+    ///
+    /// Exact `0x004EFF7A..0x004EFFB5` передаёт результат `ExecuteCnEx` в
+    /// `test eax,eax; sete dl`: нулевой affected-row count — `true`, любой
+    /// ненулевой count или ADO exception — `false`. Tiberius даёт тот же count
+    /// через `ExecuteResult::total`; ошибка сохраняется отдельно, но для
+    /// legacy caller также означает неактивное соединение.
+    pub(crate) async fn is_active_connection(
+        &self,
+        normal_connection: &mut WorldTdsClient,
+    ) -> AuctionConnectionState {
+        match normal_connection.execute("exec IsActiveConnect", &[]).await {
+            Ok(result) => {
+                let affected_rows = result.total();
+                if affected_rows == 0 {
+                    AuctionConnectionState::Active
+                } else {
+                    AuctionConnectionState::Inactive { affected_rows }
+                }
+            }
+            Err(source) => AuctionConnectionState::Failed(AuctionWriteFailure::Database {
+                operation: AuctionWriteOperation::CheckNormalConnection,
+                source,
+            }),
+        }
     }
 
     /// Выполняет точный `delete auction where goodsid = '%s'` в отдельном
@@ -1725,7 +1770,7 @@ enum ReadAuctionGoodsRecordError {
 
 // ============================================================================
 // FUNCTION: CDbMisc::IsActiveConnect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1829
@@ -1733,6 +1778,7 @@ enum ReadAuctionGoodsRecordError {
 // ADDRESS: 004eff10
 // PROTOTYPE: bool __thiscall IsActiveConnect(void)
 //
+// IMPLEMENTED_OWNER: `TiberiusAuctionWriteOwner::is_active_connection` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
