@@ -4265,7 +4265,11 @@ impl<Context: WorldJjcRuntimeContext> JjcRunContext for WorldJjcWorkerContext<'_
     }
 
     fn clear_jjc_season(&mut self) -> bool {
-        self.worker.clear_season(self.runtime.clone())
+        let returned = self.worker.clear_season(self.runtime.clone());
+        while let Some(event) = self.worker.try_next_event() {
+            self.context.on_week_clear_worker_event(event);
+        }
+        returned
     }
 
     fn write_private_profile_string(
