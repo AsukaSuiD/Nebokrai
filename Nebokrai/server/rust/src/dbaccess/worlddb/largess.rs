@@ -1,9 +1,10 @@
 //! Владелец `CLargess` исторического WorldServer из `largess.cpp`.
 //!
 //! Статус двух перегрузок `SaveLoadDetails` RVA `0x000E8CA0` и
-//! `0x000E91B0`, `GetTime` RVA `0x000E6800`, `AddGoldCoin` RVA `0x000E6690`
-//! и `AddOneLargess` RVA `0x000E6A60` — `IMPLEMENTED`; остальной корпус ниже
-//! остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
+//! `0x000E91B0`, `GetTime` RVA `0x000E6800`, `AddGoldCoin` RVA `0x000E6690`,
+//! `AddOneLargess` RVA `0x000E6A60`, `AppendLargessToMap` RVA `0x000E9D40`
+//! и `CycleLoadLargessThread` RVA `0x000E9FD0` — `IMPLEMENTED`; остальной
+//! корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
 //! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
 //! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
 //! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
@@ -74,6 +75,12 @@
 //! `AppendLargessToMap` сначала линейно проверяет `lSendID` по всей карте и
 //! только затем делает unique insert по player ID; ни один из двух duplicate-
 //! случаев не заменяет старую запись. `BTreeMap::entry` сохраняет этот контракт.
+//! Cycle-load держит тот же map-lock от открытия Cost DB до EOF, выполняет
+//! literal query без ORDER BY и сразу публикует каждую строку через append-
+//! owner. Поэтому поздняя DB/row ошибка сохраняет уже вставленный prefix, а
+//! donor staging/swap не переносится. Прочитанный `Cdkey` и его `_strlwr`
+//! удалены как мёртвая локальная работа; exact вызов append передаёт
+//! `ObtainedNum=0` независимо от выбранной DB-строки, и этот quirk сохранён.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
@@ -82,8 +89,9 @@ use std::io;
 
 use chrono::{Datelike, Local, Timelike};
 use encoding_rs::WINDOWS_1251;
+use futures_util::TryStreamExt;
 use parking_lot::Mutex;
-use tiberius::{AuthMethod, Client, Config, EncryptionLevel};
+use tiberius::{AuthMethod, Client, Config, EncryptionLevel, Row};
 use tokio::net::TcpStream;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
@@ -156,6 +164,35 @@ pub(crate) enum AppendLargessOutcome {
     Inserted,
     DuplicateSendId,
     ExistingPlayerKept,
+}
+
+#[derive(Debug)]
+pub(crate) enum CycleLoadLargessFailure {
+    Connection(LargessDatabaseError),
+    Database {
+        row_index: usize,
+        source: tiberius::error::Error,
+    },
+    MissingRequiredValue {
+        row_index: usize,
+        column: &'static str,
+    },
+    NumericOutsideLegacyRange {
+        row_index: usize,
+        column: &'static str,
+        value: i64,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum CycleLoadLargessOutcome {
+    ReturnedTrue {
+        row_count: usize,
+        inserted: usize,
+        duplicate_send_ids: usize,
+        existing_players_kept: usize,
+    },
+    ReturnedFalse(CycleLoadLargessFailure),
 }
 
 /// Делегирует `CLargess::AddGoldCoin` готовому bank-wallet owner-у.
@@ -364,8 +401,8 @@ pub(crate) struct TiberiusLargess {
 }
 
 impl TiberiusLargess {
-    /// Принимает уже материализованный map snapshot; его наполнение принадлежит
-    /// пока ещё сырому `LoadLargess`/`AppendLargessToMap`.
+    /// Принимает начальный map snapshot; дальнейшее наполнение выполняют
+    /// готовые `AppendLargessToMap` и `CycleLoadLargessThread` owners.
     pub(crate) fn new(
         load_largess_time: u32,
         cost_database: CostDatabaseSettings,
@@ -391,26 +428,113 @@ impl TiberiusLargess {
         player_id: i32,
     ) -> AppendLargessOutcome {
         let mut entries = self.entries.lock();
-        if entries.values().any(|entry| entry.send_id == send_id) {
-            return AppendLargessOutcome::DuplicateSendId;
-        }
-        let entry = LargessSnapshot {
+        append_largess_entry(
+            &mut entries,
             send_id,
             goods_index,
             send_num,
             obtained_num,
             goods_level,
-            sent_time: Vec::new(),
-            failed_reason: Vec::new(),
+            player_id,
+        )
+    }
+
+    /// Выполняет один exact Cost DB polling-проход без staging/swap карты.
+    #[allow(
+        clippy::await_holding_lock,
+        reason = "exact CriticalSectionmapLargess охватывал connect, recordset и весь row-loop"
+    )]
+    pub(crate) async fn cycle_load_largess(&self) -> CycleLoadLargessOutcome {
+        const SELECT_PENDING_LARGESS: &str =
+            "SELECT * FROM Largess WHERE SendNum>ObtainedNum or ObtainedNum is NULL";
+
+        let config = self.cost_database.tds_config();
+        let mut entries = self.entries.lock();
+        let mut connection = match Self::connect_cost_database(config).await {
+            Ok(connection) => connection,
+            Err(source) => {
+                return CycleLoadLargessOutcome::ReturnedFalse(
+                    CycleLoadLargessFailure::Connection(source),
+                );
+            }
         };
-        match entries.entry(player_id) {
-            std::collections::btree_map::Entry::Vacant(slot) => {
-                slot.insert(entry);
-                AppendLargessOutcome::Inserted
+        let mut rows = match connection.query(SELECT_PENDING_LARGESS, &[]).await {
+            Ok(rows) => rows,
+            Err(source) => {
+                return CycleLoadLargessOutcome::ReturnedFalse(
+                    CycleLoadLargessFailure::Database {
+                        row_index: 0,
+                        source,
+                    },
+                );
             }
-            std::collections::btree_map::Entry::Occupied(_) => {
-                AppendLargessOutcome::ExistingPlayerKept
+        };
+
+        let mut row_count = 0usize;
+        let mut inserted = 0usize;
+        let mut duplicate_send_ids = 0usize;
+        let mut existing_players_kept = 0usize;
+        loop {
+            let item = match rows.try_next().await {
+                Ok(Some(item)) => item,
+                Ok(None) => break,
+                Err(source) => {
+                    return CycleLoadLargessOutcome::ReturnedFalse(
+                        CycleLoadLargessFailure::Database {
+                            row_index: row_count,
+                            source,
+                        },
+                    );
+                }
+            };
+            let Some(row) = item.into_row() else {
+                continue;
+            };
+            let send_id = match required_largess_i32(&row, "SendID", row_count) {
+                Ok(value) => value,
+                Err(source) => return CycleLoadLargessOutcome::ReturnedFalse(source),
+            };
+            let send_num = match required_largess_i32(&row, "SendNum", row_count) {
+                Ok(value) => value,
+                Err(source) => return CycleLoadLargessOutcome::ReturnedFalse(source),
+            };
+            let goods_index = match required_largess_i32(&row, "GoodsIndex", row_count) {
+                Ok(value) => value as u32,
+                Err(source) => return CycleLoadLargessOutcome::ReturnedFalse(source),
+            };
+            let goods_level = match optional_largess_i32(&row, "GoodsLevel", row_count) {
+                Ok(Some(value)) => value,
+                Ok(None) => -1,
+                Err(source) => return CycleLoadLargessOutcome::ReturnedFalse(source),
+            };
+            let player_id = match required_largess_i32(&row, "PlayerId", row_count) {
+                Ok(value) => value,
+                Err(source) => return CycleLoadLargessOutcome::ReturnedFalse(source),
+            };
+
+            // Exact owner читал/lowercase-ил Cdkey, но значение не покидало
+            // локальный string и не участвовало ни в одном side effect.
+            match append_largess_entry(
+                &mut entries,
+                send_id,
+                goods_index,
+                send_num,
+                0,
+                goods_level,
+                player_id,
+            ) {
+                AppendLargessOutcome::Inserted => inserted += 1,
+                AppendLargessOutcome::DuplicateSendId => duplicate_send_ids += 1,
+                AppendLargessOutcome::ExistingPlayerKept => existing_players_kept += 1,
             }
+            row_count += 1;
+        }
+
+        CycleLoadLargessOutcome::ReturnedTrue {
+            row_count,
+            inserted,
+            duplicate_send_ids,
+            existing_players_kept,
         }
     }
 
@@ -598,6 +722,76 @@ impl TiberiusLargess {
             use_log_system,
         ))
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_largess_entry(
+    entries: &mut BTreeMap<i32, LargessSnapshot>,
+    send_id: i32,
+    goods_index: u32,
+    send_num: i32,
+    obtained_num: i32,
+    goods_level: i32,
+    player_id: i32,
+) -> AppendLargessOutcome {
+    if entries.values().any(|entry| entry.send_id == send_id) {
+        return AppendLargessOutcome::DuplicateSendId;
+    }
+    let entry = LargessSnapshot {
+        send_id,
+        goods_index,
+        send_num,
+        obtained_num,
+        goods_level,
+        sent_time: Vec::new(),
+        failed_reason: Vec::new(),
+    };
+    match entries.entry(player_id) {
+        std::collections::btree_map::Entry::Vacant(slot) => {
+            slot.insert(entry);
+            AppendLargessOutcome::Inserted
+        }
+        std::collections::btree_map::Entry::Occupied(_) => {
+            AppendLargessOutcome::ExistingPlayerKept
+        }
+    }
+}
+
+fn optional_largess_i32(
+    row: &Row,
+    column: &'static str,
+    row_index: usize,
+) -> Result<Option<i32>, CycleLoadLargessFailure> {
+    match row.try_get::<i32, _>(column) {
+        Ok(value) => Ok(value),
+        Err(first_error) => match row.try_get::<i64, _>(column) {
+            Ok(Some(value)) => i32::try_from(value).map(Some).map_err(|_| {
+                CycleLoadLargessFailure::NumericOutsideLegacyRange {
+                    row_index,
+                    column,
+                    value,
+                }
+            }),
+            Ok(None) => Ok(None),
+            Err(_) => Err(CycleLoadLargessFailure::Database {
+                row_index,
+                source: first_error,
+            }),
+        },
+    }
+}
+
+fn required_largess_i32(
+    row: &Row,
+    column: &'static str,
+    row_index: usize,
+) -> Result<i32, CycleLoadLargessFailure> {
+    optional_largess_i32(row, column, row_index)?.ok_or(
+        CycleLoadLargessFailure::MissingRequiredValue {
+            row_index,
+            column,
+        },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -948,7 +1142,7 @@ fn format_local_time() -> String {
 
 // ============================================================================
 // FUNCTION: CLargess::CycleLoadLargessThread
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:809
@@ -956,6 +1150,8 @@ fn format_local_time() -> String {
 // ADDRESS: 004e9fd0
 // PROTOTYPE: bool __cdecl CycleLoadLargessThread(void)
 //
+// IMPLEMENTED_OWNER: `TiberiusLargess::cycle_load_largess` выше сохраняет
+// lock/connect/query/row-порядок, prefix mutations и literal ObtainedNum `0`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
