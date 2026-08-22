@@ -87,6 +87,11 @@ impl CBank {
         self.wallet_state.get_goods(position)
     }
 
+    /// Возвращает mutable DB-view slot-а независимо от lock, как collision lookup.
+    pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
+        self.wallet_state.get_goods_mut(position)
+    }
+
     /// Возвращает число занятых bank-slot-ов: ноль либо один.
     pub(crate) const fn get_goods_amount(&self) -> u32 {
         self.wallet_state.get_goods_amount()

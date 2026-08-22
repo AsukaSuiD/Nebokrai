@@ -12,6 +12,7 @@
 //! `CPlayer::LoadData` RVA `0x0005E390`,
 //! `CPlayer::LoadDefaultProperty` RVA `0x0005E560`,
 //! `CPlayer::ReSetHonorElimilateNum` RVA `0x0005B260`,
+//! container-граница `CDBGoods::LoadGoods`,
 //! `CPlayer::ClearOwnedRegion` RVA `0x00033B50` и
 //! `CPlayer::AddOwnedRegion` RVA `0x0005DD10`
 //! accessors для level/friends и inherited `CShape::SetState`,
@@ -391,7 +392,7 @@ use super::container::cvolumelimitgoodscontainer::{
 use super::container::cwallet::CWallet;
 use super::container::cyuanbao::CYuanBao;
 use super::country::countryparam::{CCountryParam, CountryRect};
-use super::goods::cgoods::{GoodsCodecError, GoodsDbSnapshotBlock};
+use super::goods::cgoods::{CGoods, GoodsCodecError, GoodsDbSnapshotBlock};
 use super::goods::cgoodsbaseproperties::GAP_WEAPON_LEVEL;
 use super::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsOriginalNameIndex, create_goods,
@@ -856,6 +857,31 @@ pub(crate) struct PlayerHonorEliminateResetReport {
     pub(crate) day_reset: bool,
     pub(crate) week_reset: bool,
     pub(crate) month_reset: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerLoadedGoodsInsertBlock {
+    Amount(AmountContainerCodecError),
+    Equipment(EquipmentContainerCodecError),
+    Volume(VolumeContainerCodecError),
+}
+
+impl From<AmountContainerCodecError> for PlayerLoadedGoodsInsertBlock {
+    fn from(error: AmountContainerCodecError) -> Self {
+        Self::Amount(error)
+    }
+}
+
+impl From<EquipmentContainerCodecError> for PlayerLoadedGoodsInsertBlock {
+    fn from(error: EquipmentContainerCodecError) -> Self {
+        Self::Equipment(error)
+    }
+}
+
+impl From<VolumeContainerCodecError> for PlayerLoadedGoodsInsertBlock {
+    fn from(error: VolumeContainerCodecError) -> Self {
+        Self::Volume(error)
+    }
 }
 
 /// Точный четырёхбайтовый value `CPlayer::tagSkill`.
@@ -1446,6 +1472,90 @@ impl PlayerDbProjection<'_> {
 }
 
 impl CPlayer {
+    /// Повторяет начальный reset пятнадцати container-ов `CDBGoods::LoadGoods`.
+    pub(crate) fn reset_goods_for_db_load(&mut self) {
+        self.packet.clear();
+        self.packet.set_container_volume_2d(8, 0x0C);
+        self.auction_goods_container.clear();
+        self.auction_goods_container.set_container_volume(0x12);
+        self.auction_container.clear();
+        self.auction_container.set_container_volume(2);
+        self.equipment.clear();
+        self.hand.clear();
+        self.hand.set_goods_amount_limit(1);
+        self.wallet.clear();
+        self.auction_wallet.clear();
+        self.yuan_bao.clear();
+        self.ji_fen.clear();
+        self.bank.clear();
+        self.depot.clear();
+        self.depot.set_container_volume(0xA1);
+        self.fairy.clear();
+        self.fairy.set_container_volume(0x0E);
+        self.battle_fairy.clear();
+        self.battle_fairy.set_container_volume(0x11);
+        self.ci_qing.clear();
+        self.ci_qing.set_container_volume(8);
+        self.compose_ci_qing.clear();
+        self.compose_ci_qing.set_container_volume(3);
+    }
+
+    /// Возвращает существующий товар joined-строки по exact place/position.
+    pub(crate) fn loaded_goods_mut(&mut self, place: i32, position: u32) -> Option<&mut CGoods> {
+        match place {
+            1 => self.packet.get_goods_mut(position),
+            2 => self.equipment.get_goods_mut(position),
+            3 => self.hand.get_goods_mut(position),
+            4 => self.wallet.get_goods_mut(position),
+            5 => self.yuan_bao.get_goods_mut(position),
+            6 => self.ji_fen.get_goods_mut(position),
+            7 => self.bank.get_goods_mut(position),
+            8 => self.depot.get_goods_mut(position),
+            9 => self.fairy.get_goods_mut(position),
+            10 => self.battle_fairy.get_goods_mut(position),
+            11 => self.auction_goods_container.get_goods_mut(position),
+            12 => self.auction_wallet.get_goods_mut(position),
+            13 => self.auction_container.get_goods_mut(position),
+            14 => self.ci_qing.get_goods_mut(position),
+            15 => self.compose_ci_qing.get_goods_mut(position),
+            _ => None,
+        }
+    }
+
+    /// Передаёт новый DB-товар exact container-у; неизвестный place остаётся no-op.
+    pub(crate) fn insert_loaded_goods(
+        &mut self,
+        place: i32,
+        position: u32,
+        goods: Box<CGoods>,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, PlayerLoadedGoodsInsertBlock> {
+        match place {
+            1 => Ok(self.packet.add_from_db(position, goods, registry)?),
+            2 => Ok(self.equipment.add_from_db(position, goods, registry)?),
+            3 => Ok(self.hand.add_from_db(position, goods, registry)?),
+            4 => Ok(self.wallet.add_from_db(position, goods)),
+            5 => Ok(self.yuan_bao.add_from_db(position, goods)),
+            6 => Ok(self.ji_fen.add_from_db(position, goods)),
+            7 => Ok(self.bank.add_from_db(position, goods)),
+            8 => Ok(self.depot.add_from_db(position, goods, registry)?),
+            9 => Ok(self.fairy.add_from_db(position, goods, registry)?),
+            10 => Ok(self.battle_fairy.add_from_db(position, goods, registry)?),
+            11 => Ok(self
+                .auction_goods_container
+                .add_from_db(position, goods, registry)?),
+            12 => Ok(self.auction_wallet.add_from_db(position, goods)),
+            13 => Ok(self
+                .auction_container
+                .add_from_db(position, goods, registry)?),
+            14 => Ok(self.ci_qing.add_from_db(position, goods, registry)?),
+            15 => Ok(self
+                .compose_ci_qing
+                .add_from_db(position, goods, registry)?),
+            _ => Ok(Some(goods)),
+        }
+    }
+
     fn base_equipment_fields(
         &self,
     ) -> Result<([u32; 11], [i32; 11]), PlayerDbProjectionBlock> {

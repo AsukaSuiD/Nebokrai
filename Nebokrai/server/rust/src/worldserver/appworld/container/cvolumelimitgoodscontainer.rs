@@ -227,6 +227,12 @@ impl CVolumeLimitGoodsContainer {
         self.find(ex_id)
     }
 
+    /// Возвращает mutable DB-view товара exact cell-а.
+    pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
+        let ex_id = *self.get_goods(position)?.get_ex_id();
+        self.amount_base.goods_mut(&ex_id)
+    }
+
     /// Берёт GUID non-null объекта и делегирует GUID-overload position-query.
     pub(crate) fn query_goods_position_by_object(&self, goods: Option<&CGoods>) -> Option<u32> {
         self.query_goods_position(goods?.get_ex_id())

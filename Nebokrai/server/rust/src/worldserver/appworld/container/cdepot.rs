@@ -119,6 +119,14 @@ impl CDepot {
         self.volume_state.get_goods(position)
     }
 
+    /// Возвращает mutable DB-view только из unlocked depot-а.
+    pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
+        if self.locked {
+            return None;
+        }
+        self.volume_state.get_goods_mut(position)
+    }
+
     /// Вынимает товар только из unlocked depot-а.
     pub(crate) fn remove(
         &mut self,

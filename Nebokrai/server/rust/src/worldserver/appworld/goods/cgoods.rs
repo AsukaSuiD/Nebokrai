@@ -9,7 +9,8 @@
 //! `0x00052760`, wire-based `Clone` RVA `0x000523B0`,
 //! `SetExID` RVA `0x000530E0`, base-подобъекта и defaults конструктора RVA
 //! `0x00053060`, а также непосредственной destructor-цепочки RVA `0x000534B0`
-//! и сломанный `CanUpgraded` RVA `0x000528E0`
+//! и сломанный `CanUpgraded` RVA `0x000528E0`, а также локальный adapter
+//! применения joined addon-строк `CDBGoods::LoadGoods`
 //! — `IMPLEMENTED`;
 //! остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
@@ -68,6 +69,7 @@
 //! только ненаблюдаемые map lookup и временный vector, но сохраняет этот
 //! внешний запрет upgrade буквально; исправленное donor-тело сюда не входит.
 
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 
@@ -158,6 +160,13 @@ pub(crate) enum GoodsDbSnapshotBlock {
         property_index: usize,
         value_count: usize,
     },
+}
+
+/// Safe-граница применения одной joined addon-строки `CDBGoods::LoadGoods`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GoodsLoadedAddonBlock {
+    MissingBaseProperties { index: u32 },
+    ExistingPropertyHasFewerThanTwoValues { property_type: i32, count: usize },
 }
 
 #[derive(Clone, Copy)]
@@ -282,6 +291,69 @@ impl CGoods {
         self.addon_properties
             .iter()
             .any(|property| property.property_type == property_type)
+    }
+
+    /// Применяет одну non-null строку `extend_properties` в exact row-order.
+    pub(crate) fn apply_loaded_addon(
+        &mut self,
+        property_type: i32,
+        first_modifier: i32,
+        second_modifier: i32,
+        registry: &GoodsBasePropertiesRegistry,
+        dakong_addon_types: &BTreeSet<i32>,
+    ) -> Result<(), GoodsLoadedAddonBlock> {
+        if let Some(property) = self
+            .addon_properties
+            .iter_mut()
+            .find(|property| property.property_type == property_type)
+        {
+            if property.values.len() < 2 {
+                return Err(GoodsLoadedAddonBlock::ExistingPropertyHasFewerThanTwoValues {
+                    property_type,
+                    count: property.values.len(),
+                });
+            }
+            property.values[0].modifier = first_modifier;
+            if property_type == 0x25 {
+                property.values[1].base_value = second_modifier;
+            } else {
+                property.values[1].modifier = second_modifier;
+            }
+            return Ok(());
+        }
+
+        let index = self
+            .base_properties_index
+            .ok_or(GoodsLoadedAddonBlock::MissingBaseProperties { index: 0 })?;
+        let properties = query_goods_base_properties(registry, index)
+            .ok_or(GoodsLoadedAddonBlock::MissingBaseProperties { index })?;
+        let base_values = properties.get_addon_property_values(property_type);
+        let values = if base_values.len() >= 2 {
+            vec![
+                (
+                    base_values[0].id(),
+                    base_values[0].base_value(),
+                    first_modifier,
+                ),
+                (
+                    base_values[1].id(),
+                    base_values[1].base_value(),
+                    second_modifier,
+                ),
+            ]
+        } else if self.is_addon_property_exist(140)
+            && dakong_addon_types.contains(&property_type)
+        {
+            vec![(1, 0, first_modifier), (2, 0, second_modifier)]
+        } else {
+            return Ok(());
+        };
+        self.push_factory_addon_property(
+            property_type,
+            properties.is_implicit(property_type),
+            values,
+        );
+        Ok(())
     }
 
     /// Возвращает values первого addon-а совпавшего numeric-типа.

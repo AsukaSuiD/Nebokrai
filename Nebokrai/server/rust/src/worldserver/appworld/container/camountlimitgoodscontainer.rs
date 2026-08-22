@@ -393,6 +393,12 @@ impl CAmountLimitGoodsContainer {
         (!self.is_locked(goods)).then_some(goods)
     }
 
+    /// Возвращает mutable DB-view того же unlocked ordinal-элемента.
+    pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
+        let ex_id = *self.get_goods(position)?.get_ex_id();
+        self.goods_mut(&ex_id)
+    }
+
     /// Возвращает первый unlocked товар с exact base-properties index.
     pub(crate) fn get_the_first_goods(&self, base_properties_index: u32) -> Option<&CGoods> {
         self.goods.values().map(Box::as_ref).find(|goods| {

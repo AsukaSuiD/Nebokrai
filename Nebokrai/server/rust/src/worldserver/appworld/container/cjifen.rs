@@ -95,6 +95,11 @@ impl CJiFen {
         self.wallet_state.get_goods(position)
     }
 
+    /// Возвращает mutable DB-view folded wallet-slot-а.
+    pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
+        self.wallet_state.get_goods_mut(position)
+    }
+
     /// Возвращает число занятых slot-ов: ноль либо один.
     pub(crate) const fn get_goods_amount(&self) -> u32 {
         self.wallet_state.get_goods_amount()
@@ -240,6 +245,13 @@ impl CWallet {
     pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
         (position == 0)
             .then_some(self.gold_coins.as_deref())
+            .flatten()
+    }
+
+    /// Возвращает mutable DB-view единственного wallet-slot-а.
+    pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
+        (position == 0)
+            .then_some(self.gold_coins.as_deref_mut())
             .flatten()
     }
 

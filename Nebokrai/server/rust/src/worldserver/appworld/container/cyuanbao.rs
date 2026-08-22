@@ -75,6 +75,11 @@ impl CYuanBao {
         self.wallet_state.get_goods(position)
     }
 
+    /// Возвращает mutable DB-view folded wallet-slot-а.
+    pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
+        self.wallet_state.get_goods_mut(position)
+    }
+
     /// Возвращает число занятых slot-ов: ноль либо один.
     pub(crate) const fn get_goods_amount(&self) -> u32 {
         self.wallet_state.get_goods_amount()

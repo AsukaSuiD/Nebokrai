@@ -2,7 +2,8 @@
 //!
 //! `DeleteGoods` RVA `0x001174F0`, `SaveGoodsFiled` RVA `0x001175D0`,
 //! `SaveGoodsProperties` RVA `0x001178C0` и `SaveGoods` RVA `0x00117B30` имеют
-//! статус `IMPLEMENTED`; `LoadGoods` и остальные функции ниже остаются
+//! статус `IMPLEMENTED`; caller-connection путь `LoadGoods` RVA `0x00117E20` —
+//! `IMPLEMENTED_PARTIAL/VERIFIED_DISASSEMBLY`, остальные функции ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -100,12 +101,33 @@
 //! сохраняется отдельным `MissingConnection`. Caller-owned container snapshots
 //! меняют только ещё не материализованный полный `CPlayer` layout: каждый
 //! snapshot обязан сохранить порядок конкретного исходного map/list/wallet.
+//!
+//! `LoadGoods` сначала очищает все пятнадцать container-ов в exact порядке и
+//! восстанавливает их limit/volume, затем читает исходный left join
+//! `player_goods/extend_properties`. Повторная строка той же place/position
+//! mutates уже вставленный goods, поэтому несколько addon rows сохраняют
+//! исходную построчную семантику без staging позднего Linux-donor-а. Tiberius
+//! parameter binding заменяет `_sprintf`, `encoding_rs` — BSTR/ANSI conversion,
+//! `uuid` — валидный GUID parse, а Rust ownership — factory/STL cleanup.
+//! `ChangeGoodsIndexMap` и множество DaKong-type передаются caller-owned
+//! `BTreeMap/BTreeSet`, не создавая недоказанный mutable singleton.
+//!
+//! Exact normal tail `0x005190E3` выполняет `mov al,1`, catch-tail
+//! `0x005191A4` — `xor al,al`. Поэтому неизвестный place, null factory-result
+//! и rejected container insertion остаются успешными skipped rows; DB/ADO
+//! ошибки дают false. Небезопасные края исходника — повреждённый GUID длиной
+//! 38, невыразимое ANSI-имя, отказ RNG при смене индекса и addon-vector короче
+//! двух значений — не получают выдуманного результата и возвращают typed
+//! `BlockedMissingFact`. Автономная ветка `connection == null` пока честно
+//! обозначена `PendingStandaloneConnection`; основной `CRsPlayer::LoadPlayer`
+//! передаёт уже открытый caller-owned connection.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
 
 use encoding_rs::WINDOWS_1251;
+use futures_util::TryStreamExt;
 use tiberius::Query;
 
 use crate::dbaccess::worlddb::goodslistener::{
@@ -113,6 +135,11 @@ use crate::dbaccess::worlddb::goodslistener::{
 };
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::public::guid::CGuid;
+use crate::worldserver::appworld::goods::cgoods::GoodsLoadedAddonBlock;
+use crate::worldserver::appworld::goods::cgoodsfactory::{
+    GoodsBasePropertiesRegistry, create_goods_no_probability,
+};
+use crate::worldserver::appworld::player::{CPlayer, PlayerLoadedGoodsInsertBlock};
 
 /// Точное содержимое одного `CGoods::tagAddonPropertyValue`.
 #[derive(Clone, Copy, Debug)]
@@ -228,6 +255,55 @@ pub(crate) enum GoodsFiledSaveOutcome {
     BlockedMissingFact(GoodsTraversalBlock),
 }
 
+#[derive(Debug)]
+pub(crate) enum GoodsLoadFailure {
+    Database {
+        row_index: Option<usize>,
+        source: tiberius::error::Error,
+    },
+    MissingRequiredValue {
+        row_index: usize,
+        column: &'static str,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum GoodsLoadBlock {
+    NameOutsideWindows1251 {
+        row_index: usize,
+    },
+    GoodsGuid {
+        row_index: usize,
+        source: uuid::Error,
+    },
+    ChangedGuid {
+        row_index: usize,
+        source: getrandom::Error,
+    },
+    Addon {
+        row_index: usize,
+        source: GoodsLoadedAddonBlock,
+    },
+    Insert {
+        row_index: usize,
+        source: PlayerLoadedGoodsInsertBlock,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum GoodsLoadOutcome {
+    ReturnedTrue {
+        row_count: usize,
+        created_count: usize,
+        skipped_count: usize,
+    },
+    ReturnedFalse(GoodsLoadFailure),
+    /// Исходный null connection открывал новый ADO connection; внешний
+    /// connection-owner ещё не подключён к `TiberiusDbGoods`.
+    PendingStandaloneConnection,
+    BlockedMissingFact(GoodsLoadBlock),
+}
+
 /// Операция исходного `CDBGoods`, породившая log-эквивалент.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum DbGoodsOperation {
@@ -304,8 +380,18 @@ impl From<tiberius::error::Error> for DbGoodsDatabaseError {
     }
 }
 
-/// Узкая объектная граница четырёх достигнутых функций `CDBGoods`.
+/// Узкая объектная граница достигнутых функций `CDBGoods`.
 pub(crate) trait DbGoodsOwner {
+    /// Загружает joined goods rows внутри caller-owned connection.
+    async fn load_goods(
+        &mut self,
+        player: &mut CPlayer,
+        active_transaction: Option<&mut WorldTdsClient>,
+        registry: &GoodsBasePropertiesRegistry,
+        changed_goods_indices: &BTreeMap<u32, u32>,
+        dakong_addon_types: &BTreeSet<i32>,
+    ) -> GoodsLoadOutcome;
+
     /// Удаляет старые строки игрока внутри уже начатой caller-транзакции.
     async fn delete_goods(
         &mut self,
@@ -346,6 +432,193 @@ pub(crate) struct TiberiusDbGoods {
 }
 
 impl DbGoodsOwner for TiberiusDbGoods {
+    async fn load_goods(
+        &mut self,
+        player: &mut CPlayer,
+        active_transaction: Option<&mut WorldTdsClient>,
+        registry: &GoodsBasePropertiesRegistry,
+        changed_goods_indices: &BTreeMap<u32, u32>,
+        dakong_addon_types: &BTreeSet<i32>,
+    ) -> GoodsLoadOutcome {
+        player.reset_goods_for_db_load();
+        let Some(active_transaction) = active_transaction else {
+            return GoodsLoadOutcome::PendingStandaloneConnection;
+        };
+
+        let mut query = Query::new(
+            "SELECT CONVERT(varchar(38),a.GoodsID) AS GoodsID, a.goodsIndex, \
+             a.name, a.price, a.amount, a.place, a.position, \
+             CONVERT(int,b.type) AS type, b.modifierValue1, b.modifierValue2 \
+             FROM player_goods AS a LEFT JOIN extend_properties AS b ON a.id=b.id \
+             WHERE playerid=@P1 ORDER BY playerid",
+        );
+        query.bind(player.get_id());
+        let mut rows = match query.query(&mut *active_transaction).await {
+            Ok(rows) => rows,
+            Err(source) => {
+                return GoodsLoadOutcome::ReturnedFalse(GoodsLoadFailure::Database {
+                    row_index: None,
+                    source,
+                });
+            }
+        };
+
+        let mut row_index = 0usize;
+        let mut created_count = 0usize;
+        let mut skipped_count = 0usize;
+        loop {
+            let item = match rows.try_next().await {
+                Ok(Some(item)) => item,
+                Ok(None) => break,
+                Err(source) => {
+                    return GoodsLoadOutcome::ReturnedFalse(GoodsLoadFailure::Database {
+                        row_index: Some(row_index),
+                        source,
+                    });
+                }
+            };
+            let Some(row) = item.into_row() else {
+                continue;
+            };
+
+            macro_rules! required {
+                ($type:ty, $column:literal) => {
+                    match row.try_get::<$type, _>($column) {
+                        Ok(Some(value)) => value,
+                        Ok(None) => {
+                            return GoodsLoadOutcome::ReturnedFalse(
+                                GoodsLoadFailure::MissingRequiredValue {
+                                    row_index,
+                                    column: $column,
+                                },
+                            );
+                        }
+                        Err(source) => {
+                            return GoodsLoadOutcome::ReturnedFalse(
+                                GoodsLoadFailure::Database {
+                                    row_index: Some(row_index),
+                                    source,
+                                },
+                            );
+                        }
+                    }
+                };
+            }
+
+            let goods_guid_text = required!(&str, "GoodsID");
+            let mut goods_guid = match CGuid::from_legacy_text(Some(goods_guid_text)) {
+                Ok(guid) => guid,
+                Err(source) => {
+                    return GoodsLoadOutcome::BlockedMissingFact(GoodsLoadBlock::GoodsGuid {
+                        row_index, source,
+                    });
+                }
+            };
+            let mut goods_index = required!(i32, "goodsIndex") as u32;
+            let name = required!(&str, "name");
+            let (name, _, name_had_errors) = WINDOWS_1251.encode(name);
+            if name_had_errors {
+                return GoodsLoadOutcome::BlockedMissingFact(
+                    GoodsLoadBlock::NameOutsideWindows1251 { row_index },
+                );
+            }
+            let price = required!(i32, "price") as u32;
+            let amount = required!(i32, "amount") as u32;
+            let place = required!(i32, "place");
+            let position = required!(i32, "position") as u32;
+            let addon_type = match row.try_get::<i32, _>("type") {
+                Ok(value) => value,
+                Err(source) => {
+                    return GoodsLoadOutcome::ReturnedFalse(GoodsLoadFailure::Database {
+                        row_index: Some(row_index),
+                        source,
+                    });
+                }
+            };
+            let addon = if let Some(addon_type) = addon_type {
+                Some((
+                    addon_type,
+                    required!(i32, "modifierValue1"),
+                    required!(i32, "modifierValue2"),
+                ))
+            } else {
+                None
+            };
+
+            if let Some(&replacement) = changed_goods_indices.get(&goods_index) {
+                goods_index = replacement;
+                goods_guid = match CGuid::create() {
+                    Ok(guid) => guid,
+                    Err(source) => {
+                        return GoodsLoadOutcome::BlockedMissingFact(
+                            GoodsLoadBlock::ChangedGuid { row_index, source },
+                        );
+                    }
+                };
+            }
+
+            if let Some(goods) = player.loaded_goods_mut(place, position) {
+                if let Some((property_type, first_modifier, second_modifier)) = addon
+                    && let Err(source) = goods.apply_loaded_addon(
+                        property_type,
+                        first_modifier,
+                        second_modifier,
+                        registry,
+                        dakong_addon_types,
+                    )
+                {
+                    return GoodsLoadOutcome::BlockedMissingFact(GoodsLoadBlock::Addon {
+                        row_index,
+                        source,
+                    });
+                }
+                row_index += 1;
+                continue;
+            }
+
+            let Some(mut goods) = create_goods_no_probability(registry, goods_index) else {
+                skipped_count += 1;
+                row_index += 1;
+                continue;
+            };
+            if let Some((property_type, first_modifier, second_modifier)) = addon
+                && let Err(source) = goods.apply_loaded_addon(
+                    property_type,
+                    first_modifier,
+                    second_modifier,
+                    registry,
+                    dakong_addon_types,
+                )
+            {
+                return GoodsLoadOutcome::BlockedMissingFact(GoodsLoadBlock::Addon {
+                    row_index,
+                    source,
+                });
+            }
+            goods.set_ex_id(&goods_guid);
+            goods.set_name(&name);
+            goods.set_price(price);
+            goods.set_amount(amount);
+            match player.insert_loaded_goods(place, position, goods, registry) {
+                Ok(None) => created_count += 1,
+                Ok(Some(_)) => skipped_count += 1,
+                Err(source) => {
+                    return GoodsLoadOutcome::BlockedMissingFact(GoodsLoadBlock::Insert {
+                        row_index,
+                        source,
+                    });
+                }
+            }
+            row_index += 1;
+        }
+
+        GoodsLoadOutcome::ReturnedTrue {
+            row_count: row_index,
+            created_count,
+            skipped_count,
+        }
+    }
+
     async fn delete_goods(
         &mut self,
         player_id: i32,
@@ -628,7 +901,7 @@ async fn insert_goods_row(
 
 // ============================================================================
 // FUNCTION: CDBGoods::LoadGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_PARTIAL/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbgoods.cpp:355
@@ -636,6 +909,8 @@ async fn insert_goods_row(
 // ADDRESS: 00517e20
 // PROTOTYPE: bool __cdecl LoadGoods(CPlayer * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
 //
+// IMPLEMENTED_OWNER: `DbGoodsOwner::load_goods` выше восстанавливает полный
+// caller-connection путь; автономное открытие при null connection ещё pending.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

@@ -333,6 +333,13 @@ impl CEquipmentContainer {
             .map(Box::as_ref)
     }
 
+    /// Возвращает mutable DB-view exact numeric equipment-column.
+    pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
+        EquipmentColumn::from_wire(position)
+            .and_then(|column| self.equipment.get_mut(&column))
+            .map(Box::as_mut)
+    }
+
     /// Передаёт все товары listener-у в exact numeric map-order.
     pub(crate) fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
         let Some(listener) = listener else {

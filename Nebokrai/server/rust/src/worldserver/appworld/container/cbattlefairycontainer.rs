@@ -92,6 +92,11 @@ impl CBattleFairyContainer {
         self.volume_state.find(ex_id)
     }
 
+    /// Возвращает mutable DB-view exact battle-fairy cell-а.
+    pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
+        self.volume_state.get_goods_mut(position)
+    }
+
     /// Делегирует folded volume removal с exact post-remove checks.
     pub(crate) fn remove(
         &mut self,
