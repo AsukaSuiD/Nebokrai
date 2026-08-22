@@ -29,6 +29,8 @@
 //! а raw-конструктор — base-вызов по offset `0`; Rust layout и исходный
 //! ABI/vtable не отождествляются. Raw constructor/destructor/SetExStates
 //! удалены после замены; дополнительное дизассемблирование не требовалось.
+//! Полный scalar accessor-набор `CShape` делегируется тем же единственным
+//! base-owner-ом, чтобы CPlayer не терял доступ к достигнутым virtual slots.
 
 use super::shape::{CShape, ShapeDecodeError, ShapeTileCoordinateBlock};
 
@@ -89,9 +91,19 @@ impl CMoveShape {
         self.shape_base.get_pos_x()
     }
 
+    /// Делегирует inherited `CShape::SetPosX`.
+    pub(crate) const fn set_pos_x(&mut self, pos_x: f32) {
+        self.shape_base.set_pos_x(pos_x);
+    }
+
     /// Возвращает Y через единственный shape-owner.
     pub(crate) const fn get_pos_y(&self) -> f32 {
         self.shape_base.get_pos_y()
+    }
+
+    /// Делегирует inherited `CShape::SetPosY`.
+    pub(crate) const fn set_pos_y(&mut self, pos_y: f32) {
+        self.shape_base.set_pos_y(pos_y);
     }
 
     /// Возвращает X-клетку через единственный shape-owner.
@@ -107,6 +119,16 @@ impl CMoveShape {
     /// Возвращает direction через единственный shape-owner.
     pub(crate) const fn get_direction(&self) -> i32 {
         self.shape_base.get_direction()
+    }
+
+    /// Делегирует inherited `CShape::SetPos`.
+    pub(crate) const fn set_position(&mut self, position: i32) {
+        self.shape_base.set_position(position);
+    }
+
+    /// Делегирует inherited `CShape::GetSpeed`.
+    pub(crate) const fn get_speed(&self) -> f32 {
+        self.shape_base.get_speed()
     }
 
     /// Присваивает region ID через унаследованный shape-owner.
@@ -140,6 +162,21 @@ impl CMoveShape {
     /// Присваивает state единственного унаследованного shape-owner-а.
     pub(crate) const fn set_state(&mut self, state: u16) {
         self.shape_base.set_state(state);
+    }
+
+    /// Делегирует inherited `CShape::GetState`.
+    pub(crate) const fn get_state(&self) -> u16 {
+        self.shape_base.get_state()
+    }
+
+    /// Делегирует inherited `CShape::GetAction`.
+    pub(crate) const fn get_action(&self) -> u16 {
+        self.shape_base.get_action()
+    }
+
+    /// Делегирует inherited `CShape::SetAction`.
+    pub(crate) const fn set_action(&mut self, action: u16) {
+        self.shape_base.set_action(action);
     }
 
     /// Заимствует byte-exact extended states в исходном vector-order.

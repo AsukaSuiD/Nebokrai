@@ -2504,6 +2504,26 @@ impl CPlayer {
         self.move_shape_base.get_region_id()
     }
 
+    /// Возвращает X через унаследованный shape-owner.
+    pub(crate) const fn get_pos_x(&self) -> f32 {
+        self.move_shape_base.get_pos_x()
+    }
+
+    /// Присваивает X через унаследованный shape-owner.
+    pub(crate) const fn set_pos_x(&mut self, pos_x: f32) {
+        self.move_shape_base.set_pos_x(pos_x);
+    }
+
+    /// Возвращает Y через унаследованный shape-owner.
+    pub(crate) const fn get_pos_y(&self) -> f32 {
+        self.move_shape_base.get_pos_y()
+    }
+
+    /// Присваивает Y через унаследованный shape-owner.
+    pub(crate) const fn set_pos_y(&mut self, pos_y: f32) {
+        self.move_shape_base.set_pos_y(pos_y);
+    }
+
     /// Возвращает X-клетку через унаследованный shape-owner.
     pub(crate) fn get_tile_x(&self) -> Result<i32, ShapeTileCoordinateBlock> {
         self.move_shape_base.get_tile_x()
@@ -2519,8 +2539,33 @@ impl CPlayer {
         self.move_shape_base.set_pos_xy(pos_x, pos_y);
     }
 
+    /// Присваивает signed legacy position через shape-owner.
+    pub(crate) const fn set_position(&mut self, position: i32) {
+        self.move_shape_base.set_position(position);
+    }
+
+    /// Возвращает bit-exact скорость через shape-owner.
+    pub(crate) const fn get_speed(&self) -> f32 {
+        self.move_shape_base.get_speed()
+    }
+
     pub(crate) const fn set_direction(&mut self, direction: i32) -> bool {
         self.move_shape_base.set_direction(direction)
+    }
+
+    /// Возвращает state через shape-owner.
+    pub(crate) const fn get_state(&self) -> u16 {
+        self.move_shape_base.get_state()
+    }
+
+    /// Возвращает action через shape-owner.
+    pub(crate) const fn get_action(&self) -> u16 {
+        self.move_shape_base.get_action()
+    }
+
+    /// Присваивает action через shape-owner.
+    pub(crate) const fn set_action(&mut self, action: u16) {
+        self.move_shape_base.set_action(action);
     }
 
     /// Ставит игрока в центр signed tile через унаследованный shape-owner.
