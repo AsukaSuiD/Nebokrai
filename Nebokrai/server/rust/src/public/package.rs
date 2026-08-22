@@ -438,7 +438,7 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 
 // ============================================================================
 // FUNCTION: CPackage::Open
-// STATUS: PARTIALLY_IMPLEMENTED / SNAPSHOT_IO_SUBSTITUTED
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: ServerUpdate
 // ARTIFACT: GameServer/ServerUpdate.exe + GameServer/ServerUpdate.pdb
 // SOURCE: d:\йЈЋдє‘\fengyun_els\src\public\package.cpp:131
