@@ -1,8 +1,8 @@
 //! Конфигурация синтеза исторического Miracle.
 //!
-//! Статус World `CSynthesis::AddToByteArray` RVA `0x0008D560`:
-//! `IMPLEMENTED`; XML loader, static queries и Game decoder ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Статус World `CSynthesis::LoadSynthesisList` RVA `0x0008EE50` и
+//! `AddToByteArray` RVA `0x0008D560`: `IMPLEMENTED`; static queries и Game
+//! decoder ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
 //! SHA-256 PDB
@@ -21,10 +21,18 @@
 //! ждёт wire-порядок. Rust не воспроизводит layout/сырой `char*`, но сохраняет
 //! этот compatibility quirk явно. `BTreeMap`, `Vec` и owned bytes заменяют
 //! только MSVC containers и ручной lifetime.
+//!
+//! Loader очищает recipes до открытия, но намеренно не очищает broadcast map:
+//! это разные static owners в EXE, и частично прочитанные Broadcast остаются
+//! после последующей ошибки Item. XML parsing выполняет `quick-xml`; узкий
+//! pre-pass сохраняет TinyXML acceptance historic unquoted attributes.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::Reader;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SynthesisFormula {
@@ -65,6 +73,256 @@ impl CSynthesis {
     pub(crate) fn clear(&mut self) {
         self.broadcasts.clear();
         self.recipes.clear();
+    }
+
+    /// Exact `LoadSynthesisList` clear до resource-open затрагивает только recipes.
+    pub(crate) fn clear_recipes(&mut self) {
+        self.recipes.clear();
+    }
+
+    /// Загружает XML `Synthesis` с concrete lookup уже живого `CGoodsFactory`.
+    pub(crate) fn load_from_bytes<GoodsLookup>(
+        &mut self,
+        source: &[u8],
+        mut goods_lookup: GoodsLookup,
+    ) -> Result<SynthesisLoadReport, SynthesisLoadError>
+    where
+        GoodsLookup: FnMut(&[u8]) -> (u32, Option<Vec<u8>>),
+    {
+        self.clear_recipes();
+        let result = self.load_from_bytes_after_clear(
+            source,
+            &mut goods_lookup,
+        );
+        if result.is_err() {
+            self.clear_recipes();
+        }
+        result
+    }
+
+    fn load_from_bytes_after_clear<GoodsLookup>(
+        &mut self,
+        source: &[u8],
+        goods_lookup: &mut GoodsLookup,
+    ) -> Result<SynthesisLoadReport, SynthesisLoadError>
+    where
+        GoodsLookup: FnMut(&[u8]) -> (u32, Option<Vec<u8>>),
+    {
+        let normalized = normalize_legacy_attributes(source);
+        let mut reader = Reader::from_reader(normalized.as_slice());
+        reader.config_mut().trim_text(true);
+        let mut buffer = Vec::new();
+        let mut depth = 0usize;
+        let mut root_seen = false;
+        let mut broadcast_list_seen = false;
+        let mut broadcast_list_complete = false;
+        let mut broadcast_count = 0usize;
+        let mut synthesis_list_seen = false;
+        let mut active_item: Option<ActiveSynthesisItem> = None;
+
+        loop {
+            match reader.read_event_into(&mut buffer) {
+                Ok(Event::Start(start)) => {
+                    self.process_start(
+                        &start,
+                        depth,
+                        &mut root_seen,
+                        &mut broadcast_list_seen,
+                        broadcast_list_complete,
+                        &mut broadcast_count,
+                        &mut synthesis_list_seen,
+                        &mut active_item,
+                        goods_lookup,
+                    )?;
+                    depth += 1;
+                }
+                Ok(Event::Empty(empty)) => {
+                    self.process_start(
+                        &empty,
+                        depth,
+                        &mut root_seen,
+                        &mut broadcast_list_seen,
+                        broadcast_list_complete,
+                        &mut broadcast_count,
+                        &mut synthesis_list_seen,
+                        &mut active_item,
+                        goods_lookup,
+                    )?;
+                    if depth == 2 && empty.name().as_ref() == b"Item" {
+                        let item = active_item
+                            .take()
+                            .expect("Item создаётся перед его empty-завершением");
+                        self.push_item_if_has_formula(item);
+                    }
+                }
+                Ok(Event::End(end)) => {
+                    if depth == 0 {
+                        return Err(SynthesisLoadError::InvalidFormat);
+                    }
+                    depth -= 1;
+                    match (depth, end.name().as_ref()) {
+                        (1, b"BroadcastList") => {
+                            if broadcast_count == 0 {
+                                return Err(SynthesisLoadError::InvalidBroadcastList);
+                            }
+                            broadcast_list_complete = true;
+                        }
+                        (2, b"Item") => {
+                            let item = active_item
+                                .take()
+                                .ok_or(SynthesisLoadError::InvalidFormat)?;
+                            self.push_item_if_has_formula(item);
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Ok(_) => {}
+                Err(_) => return Err(SynthesisLoadError::InvalidFormat),
+            }
+            buffer.clear();
+        }
+
+        if !root_seen || !broadcast_list_seen || !broadcast_list_complete || !synthesis_list_seen {
+            return Err(SynthesisLoadError::InvalidFormat);
+        }
+        if depth != 0 || active_item.is_some() {
+            return Err(SynthesisLoadError::InvalidFormat);
+        }
+        Ok(SynthesisLoadReport {
+            broadcasts: broadcast_count,
+            recipes: self.recipes.len(),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn process_start<GoodsLookup>(
+        &mut self,
+        start: &BytesStart<'_>,
+        depth: usize,
+        root_seen: &mut bool,
+        broadcast_list_seen: &mut bool,
+        broadcast_list_complete: bool,
+        broadcast_count: &mut usize,
+        synthesis_list_seen: &mut bool,
+        active_item: &mut Option<ActiveSynthesisItem>,
+        goods_lookup: &mut GoodsLookup,
+    ) -> Result<(), SynthesisLoadError>
+    where
+        GoodsLookup: FnMut(&[u8]) -> (u32, Option<Vec<u8>>),
+    {
+        let qualified_name = start.name();
+        let name = qualified_name.as_ref();
+        if !*root_seen {
+            if name != b"Synthesis" {
+                return Err(SynthesisLoadError::InvalidFormat);
+            }
+            *root_seen = true;
+        } else if depth == 1 && name == b"BroadcastList" {
+            *broadcast_list_seen = true;
+        } else if depth == 2 && name == b"Broadcast" {
+            if !*broadcast_list_seen || broadcast_list_complete {
+                return Err(SynthesisLoadError::InvalidBroadcastList);
+            }
+            let tag = legacy_atoi(&required_attribute(
+                start,
+                b"id",
+                SynthesisLoadError::InvalidBroadcast,
+            )?) as u16;
+            let value = required_attribute(start, b"value", SynthesisLoadError::InvalidBroadcast)?;
+            self.broadcasts.insert(tag, value);
+            *broadcast_count += 1;
+        } else if depth == 1 && name == b"SynthesisList" {
+            if !broadcast_list_complete {
+                return Err(SynthesisLoadError::InvalidFormat);
+            }
+            *synthesis_list_seen = true;
+        } else if depth == 2 && name == b"Item" {
+            if !*synthesis_list_seen {
+                return Err(SynthesisLoadError::InvalidFormat);
+            }
+            let synthesis_type = legacy_atoi(&required_attribute(
+                start,
+                b"lSType",
+                SynthesisLoadError::MissingType,
+            )?) as u16;
+            if !is_valid_synthesis_type(synthesis_type) {
+                return Err(SynthesisLoadError::InvalidType);
+            }
+            let original_name = required_attribute(
+                start,
+                b"strSynthesisName",
+                SynthesisLoadError::MissingSynthesisName,
+            )?;
+            let (goods_index, key) = goods_lookup(&original_name);
+            if goods_index == 0 {
+                return Err(SynthesisLoadError::InvalidSynthesisGoods);
+            }
+            let key = key.ok_or(SynthesisLoadError::InvalidSynthesisGoods)?;
+            let coins = legacy_atol(&required_attribute(
+                start,
+                b"lCoins",
+                SynthesisLoadError::MissingCoins,
+            )?);
+            let prestige = legacy_atol(&required_attribute(
+                start,
+                b"lContribute",
+                SynthesisLoadError::MissingContribute,
+            )?);
+            let probability = legacy_atoi(&required_attribute(
+                start,
+                b"dwProbability",
+                SynthesisLoadError::MissingProbability,
+            )?) as u16;
+            let broadcast_tag = attribute(start, b"wBroadcastTag")
+                .map(|value| legacy_atoi(&value) as u16)
+                .unwrap_or(0);
+            *active_item = Some(ActiveSynthesisItem {
+                synthesis_type,
+                probability,
+                goods_index,
+                coins,
+                prestige,
+                broadcast_tag,
+                key,
+                formulas: Vec::new(),
+            });
+        } else if depth == 3 && name == b"Formula" {
+            let item = active_item.as_mut().ok_or(SynthesisLoadError::InvalidFormat)?;
+            let original_name = required_attribute(
+                start,
+                b"strFormulaName",
+                SynthesisLoadError::MissingFormulaName,
+            )?;
+            let (goods_index, _) = goods_lookup(&original_name);
+            if goods_index == 0 {
+                return Err(SynthesisLoadError::InvalidFormulaGoods);
+            }
+            let amount = legacy_atol(&required_attribute(
+                start,
+                b"wFormulaNum",
+                SynthesisLoadError::MissingFormulaNumber,
+            )?) as u32;
+            item.formulas.push(SynthesisFormula { goods_index, amount });
+        }
+        Ok(())
+    }
+
+    fn push_item_if_has_formula(&mut self, item: ActiveSynthesisItem) {
+        if item.formulas.is_empty() {
+            return;
+        }
+        self.recipes.push(SynthesisRecipe {
+            synthesis_index: self.recipes.len() as u32,
+            synthesis_type: item.synthesis_type,
+            probability: item.probability,
+            goods_index: item.goods_index,
+            coins: item.coins,
+            prestige: item.prestige,
+            broadcast_tag: item.broadcast_tag,
+            key: item.key,
+            formulas: item.formulas,
+        });
     }
 
     /// Дописывает exact broadcast + recipe wire.
@@ -120,6 +378,177 @@ impl CSynthesis {
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ActiveSynthesisItem {
+    synthesis_type: u16,
+    probability: u16,
+    goods_index: u32,
+    coins: i32,
+    prestige: i32,
+    broadcast_tag: u16,
+    key: Vec<u8>,
+    formulas: Vec<SynthesisFormula>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SynthesisLoadReport {
+    pub(crate) broadcasts: usize,
+    pub(crate) recipes: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SynthesisLoadError {
+    InvalidFormat,
+    InvalidBroadcastList,
+    InvalidBroadcast,
+    MissingType,
+    InvalidType,
+    MissingSynthesisName,
+    InvalidSynthesisGoods,
+    MissingCoins,
+    MissingContribute,
+    MissingProbability,
+    MissingFormulaName,
+    InvalidFormulaGoods,
+    MissingFormulaNumber,
+}
+
+impl SynthesisLoadError {
+    pub(crate) const fn log_payload(self) -> &'static [u8] {
+        match self {
+            Self::InvalidFormat => b"error: error format OF compose FILE ...!!",
+            Self::InvalidBroadcastList => b"error: error format OF compose (Broadcast) file!!",
+            Self::InvalidBroadcast => b"error:error format OF compose (Broadcast) FILE!!",
+            Self::MissingType => b"error: there is no lSType configure OF compose file!! ",
+            Self::InvalidType => b"error: compose FILE [lSType] ...is wrong.!!!",
+            Self::MissingSynthesisName => {
+                b"error: the original name of compound(strSynthesisName) is not exist!!!"
+            }
+            Self::InvalidSynthesisGoods => {
+                b"error: original name of compose file is wrong,the sequence number is not exist!"
+            }
+            Self::MissingCoins => b"error: there is no prop quantity configured!!!",
+            Self::MissingContribute => b"error: there is no national contribute configured!!",
+            Self::MissingProbability => b"error:there is no composite probability configured!!",
+            Self::MissingFormulaName => b"error:there is no strFormulaName configured!!",
+            Self::InvalidFormulaGoods => {
+                b"error: the original name of compound is wrong,the sequence number is not exist!"
+            }
+            Self::MissingFormulaNumber => b"error: there is no wFormulaNum configured!!",
+        }
+    }
+}
+
+fn attribute(start: &BytesStart<'_>, expected: &[u8]) -> Option<Vec<u8>> {
+    start
+        .attributes()
+        .with_checks(false)
+        .filter_map(Result::ok)
+        .find(|attribute| attribute.key.as_ref() == expected)
+        .map(|attribute| attribute.value.into_owned())
+}
+
+fn required_attribute(
+    start: &BytesStart<'_>,
+    expected: &[u8],
+    error: SynthesisLoadError,
+) -> Result<Vec<u8>, SynthesisLoadError> {
+    attribute(start, expected).ok_or(error)
+}
+
+fn is_valid_synthesis_type(value: u16) -> bool {
+    (100..401).contains(&value)
+        || (500..510).contains(&value)
+        || (600..610).contains(&value)
+        || (700..710).contains(&value)
+        || matches!(value, 800 | 900)
+}
+
+fn legacy_atoi(value: &[u8]) -> i32 {
+    legacy_atol(value)
+}
+
+/// `_atol` decimal-prefix semantics без signed-overflow UB CRT.
+fn legacy_atol(value: &[u8]) -> i32 {
+    let mut bytes = value.iter().copied().skip_while(u8::is_ascii_whitespace).peekable();
+    let negative = matches!(bytes.peek(), Some(b'-'));
+    if matches!(bytes.peek(), Some(b'-' | b'+')) {
+        bytes.next();
+    }
+    let mut parsed = false;
+    let mut result = 0_i32;
+    for byte in bytes {
+        let Some(digit) = byte.checked_sub(b'0').filter(|digit| *digit <= 9) else {
+            break;
+        };
+        parsed = true;
+        result = result.saturating_mul(10).saturating_add(i32::from(digit));
+    }
+    if !parsed {
+        0
+    } else if negative {
+        result.saturating_neg()
+    } else {
+        result
+    }
+}
+
+/// TinyXML accepts the historic unquoted ASCII attributes of `synthesis.xml`.
+fn normalize_legacy_attributes(source: &[u8]) -> Vec<u8> {
+    let mut normalized = Vec::with_capacity(source.len());
+    let mut index = 0;
+    while index < source.len() {
+        if source[index..].starts_with(b"<!--") {
+            let end = source[index + 4..]
+                .windows(3)
+                .position(|window| window == b"-->")
+                .map(|offset| index + 4 + offset + 3)
+                .unwrap_or(source.len());
+            normalized.extend_from_slice(&source[index..end]);
+            index = end;
+            continue;
+        }
+        if source[index] != b'<' {
+            normalized.push(source[index]);
+            index += 1;
+            continue;
+        }
+        normalized.push(b'<');
+        index += 1;
+        while index < source.len() && source[index] != b'>' {
+            if source[index] != b'=' {
+                normalized.push(source[index]);
+                index += 1;
+                continue;
+            }
+            normalized.push(b'=');
+            index += 1;
+            while index < source.len() && source[index].is_ascii_whitespace() {
+                normalized.push(source[index]);
+                index += 1;
+            }
+            if index == source.len() || matches!(source[index], b'\'' | b'"') {
+                continue;
+            }
+            normalized.push(b'"');
+            while index < source.len()
+                && !source[index].is_ascii_whitespace()
+                && source[index] != b'>'
+                && source[index] != b'/'
+            {
+                normalized.push(source[index]);
+                index += 1;
+            }
+            normalized.push(b'"');
+        }
+        if index < source.len() {
+            normalized.push(b'>');
+            index += 1;
+        }
+    }
+    normalized
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -588,7 +1017,7 @@ fn ensure_c_string(value: &[u8], field: SynthesisString) -> Result<(), Synthesis
 
 // ============================================================================
 // FUNCTION: CSynthesis::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\synthesis.cpp:283
@@ -602,7 +1031,7 @@ fn ensure_c_string(value: &[u8], field: SynthesisString) -> Result<(), Synthesis
 
 // ============================================================================
 // FUNCTION: CSynthesis::LoadSynthesisList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\synthesis.cpp:34

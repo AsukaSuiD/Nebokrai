@@ -219,6 +219,14 @@
 //! только при send. Так CGame устраняет generic callback, но не копирует
 //! owner-state и сохраняет observed resource/lifecycle контракт.
 //!
+//! `CSynthesis` — внешний static owner двух разных контейнеров: reload
+//! `data/synthesis.xml` очищает лишь recipes до resource-open, выполняет
+//! original-name/display-name lookup через тот же `CGoodsFactory`, а broadcast
+//! map сохраняет даже при последующем XML failure. После успеха тот же owner
+//! кодирует subtype `0x21`; generic callback и отдельная serialization-копия
+//! удалены. `quick-xml` и safe temporary extraction owner-а заменяют только
+//! TinyXML и aliasing, не меняя порядок state transitions или lookup-ов.
+//!
 //! `CContributeSetup` теперь owned `CGame`: dispatcher
 //! `0x004171CA..0x004172B1` читает `data/ContributeSetup.ini`, сохраняет bool
 //! load-result в legacy return-slot и при success + send-флаге публикует
@@ -1217,6 +1225,7 @@ use crate::setup::newskillmonsterlist::{
     NewSkillMonsterConf, NewSkillMonsterSerializeError,
 };
 use crate::setup::playerlist::{CPlayerList, PlayerListFormatError, PlayerListSerializeError};
+use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};
 use crate::setup::regionrouter::RegionRouter;
 use crate::public::tools::{ini_decode, put_string_to_file};
 use crate::transport::bind_tcp_ipv4;
@@ -4236,7 +4245,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     PreciousBox,
     FairyExp,
     ChangeBody,
-    Synthesis,
     DaKongXiangQian,
     HonorEliminate,
     GodsBattle,
@@ -4273,7 +4281,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     PreciousBox,
     FairyExp,
     ChangeBody,
-    Synthesis,
     DaKongXiangQian,
     LingBao,
     GodsBattle,
@@ -4318,6 +4325,8 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn battle_fairy_exp_config(&mut self) -> &mut CBattleFairyExpConfig;
     /// Конфигурация объединения боевых духов, общая для reload и `0x2D` wire.
     fn battle_fairy_property(&mut self) -> &mut CBattleFairyProperty;
+    /// Статические map/vector синтеза, shared с игровыми запросами и reload wire.
+    fn synthesis(&mut self) -> &mut CSynthesis;
     /// Возвращает исходный 32-битный result; bool owners обязаны дать `0/1`.
     fn call_boolean_owner(&mut self, owner: WorldReloadBooleanOwner) -> u32;
     fn call_void_owner(&mut self, owner: WorldReloadVoidOwner);
@@ -5907,6 +5916,7 @@ pub(crate) enum WorldReloadBlock {
     NewSkillMonsterSerialization(NewSkillMonsterSerializeError),
     BattleFairyExpSerialization(BattleFairyExpSerializeError),
     BattleFairyCombineSerialization(BattleFairyComposeWireError),
+    SynthesisSerialization(SynthesisSerializeError),
     EquipmentComposeSerialization(EquipmentComposeSerializeError),
     CiQingSerialization(CiQingSerializationBlock),
     TaoZhuangSerialization(TaoZhuangSerializationBlock),
@@ -8362,17 +8372,54 @@ impl CGame {
                 }
             }
             WorldReloadProfile::Synthesis => {
-                self.reload_simple_serialized(
-                    context,
-                    WorldReloadBooleanOwner::Synthesis,
-                    WorldReloadSerializationOwner::Synthesis,
-                    0x21,
-                    b"Load synthesis.xml...ok!",
-                    b"Load synthesis.xml...failed!",
-                    send_to_game_servers,
-                    true,
-                    &mut legacy_result,
-                );
+                const PATH: &[u8] = b"data/synthesis.xml";
+                // EXE очищает recipe-vector до rfOpen, но broadcast-map остаётся static.
+                context.synthesis().clear_recipes();
+                let loaded = match context.read_resource(PATH) {
+                    Some(source) => {
+                        // На время goods lookup owner извлечён безопасно: lookup идёт в
+                        // тот же `WorldReloadContext`, а после точного loader-а state
+                        // возвращается в его единственный runtime slot.
+                        let mut synthesis = std::mem::take(context.synthesis());
+                        let result = synthesis.load_from_bytes(
+                            &source,
+                            |original_name| {
+                                let goods_id =
+                                    context.query_goods_id_by_original_name(original_name);
+                                let goods_name = (goods_id != 0)
+                                    .then(|| context.query_goods_name(goods_id))
+                                    .flatten();
+                                (goods_id, goods_name)
+                            },
+                        );
+                        *context.synthesis() = synthesis;
+                        match result {
+                            Ok(_) => true,
+                            Err(error) => {
+                                context.add_log_text(error.log_payload());
+                                false
+                            }
+                        }
+                    }
+                    None => {
+                        context.add_log_text(b"error: compose file is not exist!");
+                        false
+                    }
+                };
+                context.add_log_text(if loaded {
+                    b"Load synthesis.xml...ok!"
+                } else {
+                    b"Load synthesis.xml...failed!"
+                });
+                if loaded && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    context
+                        .synthesis()
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::SynthesisSerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(0x21, &payload);
+                }
             }
             WorldReloadProfile::DaKongXiangQian => {
                 self.reload_simple_serialized(
