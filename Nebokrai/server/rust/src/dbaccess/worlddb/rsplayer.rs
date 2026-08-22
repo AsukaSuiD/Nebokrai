@@ -2960,9 +2960,6 @@ impl RsPlayerOwner for TiberiusRsPlayer {
             GoodsLoadOutcome::ReturnedFalse(source) => {
                 return PlayerLoadOutcome::ReturnedFalse(PlayerLoadFailure::Goods(source));
             }
-            GoodsLoadOutcome::PendingStandaloneConnection => unreachable!(
-                "LoadPlayer всегда передаёт CDBGoods активное connection"
-            ),
             GoodsLoadOutcome::BlockedMissingFact(source) => {
                 return PlayerLoadOutcome::BlockedMissingFact(PlayerLoadBlock::Goods(source));
             }

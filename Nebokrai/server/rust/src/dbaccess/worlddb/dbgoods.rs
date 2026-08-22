@@ -118,10 +118,9 @@
 //! ошибки дают false. Небезопасные края исходника — повреждённый GUID длиной
 //! 38, невыразимое ANSI-имя, отказ RNG при смене индекса и addon-vector короче
 //! двух значений — не получают выдуманного результата и возвращают typed
-//! `BlockedMissingFact`. Автономная ветка `connection == null` пока честно
-//! обозначена `PendingStandaloneConnection`; основной `CRsPlayer::LoadPlayer`
-//! теперь либо переиспользует caller-owned connection, либо сам открывает одно
-//! connection и передаёт его goods-owner-у.
+//! `BlockedMissingFact`. При `connection == null` owner открывает отдельное
+//! World DB connection после container reset и освобождает его на выходе;
+//! переданный caller-owned connection по-прежнему переиспользуется.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -134,7 +133,9 @@ use tiberius::Query;
 use crate::dbaccess::worlddb::goodslistener::{
     GoodsContainerTraversalSnapshot, GoodsListener, GoodsTraversalBlock,
 };
-use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
+use crate::dbaccess::worlddb::rssetup::{
+    WorldDatabaseConnectionError, WorldDatabaseSettings, WorldTdsClient,
+};
 use crate::public::guid::CGuid;
 use crate::worldserver::appworld::goods::cgoods::GoodsLoadedAddonBlock;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
@@ -258,6 +259,7 @@ pub(crate) enum GoodsFiledSaveOutcome {
 
 #[derive(Debug)]
 pub(crate) enum GoodsLoadFailure {
+    Connection(WorldDatabaseConnectionError),
     Database {
         row_index: Option<usize>,
         source: tiberius::error::Error,
@@ -299,9 +301,6 @@ pub(crate) enum GoodsLoadOutcome {
         skipped_count: usize,
     },
     ReturnedFalse(GoodsLoadFailure),
-    /// Исходный null connection открывал новый ADO connection; внешний
-    /// connection-owner ещё не подключён к `TiberiusDbGoods`.
-    PendingStandaloneConnection,
     BlockedMissingFact(GoodsLoadBlock),
 }
 
@@ -427,9 +426,19 @@ pub(crate) trait DbGoodsOwner {
 }
 
 /// Linux/TDS-замена достигнутой части исходного `CDBGoods`.
-#[derive(Default)]
 pub(crate) struct TiberiusDbGoods {
+    settings: WorldDatabaseSettings,
     notices: VecDeque<DbGoodsNotice>,
+}
+
+impl TiberiusDbGoods {
+    /// Копирует DB setup для исходных load-вызовов без caller connection.
+    pub(crate) fn new(settings: &WorldDatabaseSettings) -> Self {
+        Self {
+            settings: settings.clone(),
+            notices: VecDeque::new(),
+        }
+    }
 }
 
 impl DbGoodsOwner for TiberiusDbGoods {
@@ -442,8 +451,20 @@ impl DbGoodsOwner for TiberiusDbGoods {
         dakong_addon_types: &BTreeSet<i32>,
     ) -> GoodsLoadOutcome {
         player.reset_goods_for_db_load();
-        let Some(active_transaction) = active_transaction else {
-            return GoodsLoadOutcome::PendingStandaloneConnection;
+        let mut standalone_connection;
+        let active_transaction = match active_transaction {
+            Some(active_transaction) => active_transaction,
+            None => {
+                standalone_connection = match self.settings.connect().await {
+                    Ok(connection) => connection,
+                    Err(source) => {
+                        return GoodsLoadOutcome::ReturnedFalse(
+                            GoodsLoadFailure::Connection(source),
+                        );
+                    }
+                };
+                &mut standalone_connection
+            }
         };
 
         let mut query = Query::new(
@@ -902,7 +923,7 @@ async fn insert_goods_row(
 
 // ============================================================================
 // FUNCTION: CDBGoods::LoadGoods
-// STATUS: IMPLEMENTED_PARTIAL/VERIFIED_DISASSEMBLY
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbgoods.cpp:355
@@ -910,8 +931,8 @@ async fn insert_goods_row(
 // ADDRESS: 00517e20
 // PROTOTYPE: bool __cdecl LoadGoods(CPlayer * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
 //
-// IMPLEMENTED_OWNER: `DbGoodsOwner::load_goods` выше восстанавливает полный
-// caller-connection путь; автономное открытие при null connection ещё pending.
+// IMPLEMENTED_OWNER: `DbGoodsOwner::load_goods` выше переиспользует caller-
+// connection либо открывает одно отдельное через `WorldDatabaseSettings`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
