@@ -1,7 +1,7 @@
 //! Общие FIFO и записи `CBillingPlayerManager` из
 //! `appbilling/billingplayermanager.{h,cpp}`.
 //!
-//! Восстановлены функции. Восстановлены записи и три FIFO,
+//! Восстановлены записи, три общие FIFO и полный lifecycle worker-ов:
 //! `BPMThreadFunc` `0x00012CC0`, `LogThreadFunc` `0x00012D70`, `Start`
 //! `0x00012E10`, `CreateThread` `0x00012E60`, `Release` `0x00011840` и
 //! `End` `0x000117E0`.

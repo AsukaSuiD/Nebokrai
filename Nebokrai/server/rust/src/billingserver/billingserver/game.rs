@@ -1,9 +1,9 @@
 //! Владелец `CGame` исторического BillingServer из `billingserver/game.cpp`.
 //!
-//! достигнутые PlayerFill-ветви, полные `Init/Release`, owned network runtime и
-//! `GameThreadFunc` — восстановлено.
-//! реализована; её Windows `FindWindow` single-instance граница заменяется
-//! последующим exclusive listener bind в `InitServer`.
+//! Восстановлены достигнутые PlayerFill-ветви, полные `Init/Release`, owned
+//! network runtime и `GameThreadFunc`. Отдельная Windows-проверка единственного
+//! экземпляра через `FindWindow` не переносится: тот же процессный инвариант
+//! обеспечивает последующий exclusive listener bind в `InitServer`.
 //!
 //! Исходный путь PDB:
 //!
@@ -65,7 +65,8 @@
 //! partial Init и принимает внешний shutdown future вместо Windows global,
 //! event и `WM_CLOSE`. Перед cleanup он публикует тот же
 //! `g_bGameThreadExit`, чтобы optional workers увидели уже наступившую границу.
-//! Billing намеренно не выбран в `main.rs` и этим владельцем не запускается.
+//! Отдельный Linux entrypoint `src/bin/billingserver.rs` передаёт сюда
+//! process shutdown и снимает наблюдаемые результаты каждого turn.
 
 use std::collections::VecDeque;
 use std::fs;
@@ -89,7 +90,8 @@ use crate::billingserver::appbilling::billingmessage::{
     BillingMessageHandler, BillingMessageOutcome,
 };
 use crate::billingserver::appbilling::billingplayermanager::{
-    BillingPlayerManagerRuntime, CBillingPlayerManager, CreateBillingPlayerWorkerError,
+    BillingPlayerManagerNotice, BillingPlayerManagerRuntime, CBillingPlayerManager,
+    CreateBillingPlayerWorkerError,
 };
 use crate::billingserver::appbilling::playerfillmgr::{
     CPlayerFillMgr, PlayerFillNotice, PlayerFillRuntime, StartPlayerFillError,
@@ -258,6 +260,17 @@ pub(crate) struct BillingNetworkTurn {
     pub(crate) io_completions: Vec<ServerIoCompletion>,
     pub(crate) processed_commands: i32,
     pub(crate) snapshot_errors: Vec<ServerSnapshotError<BillingReceiveError>>,
+}
+
+/// Полный наблюдаемый результат одного Billing runtime-turn.
+#[derive(Debug, Default)]
+pub(crate) struct BillingRuntimeStep {
+    pub(crate) network: BillingNetworkTurn,
+    pub(crate) keep_running: bool,
+    pub(crate) message_outcomes: Vec<BillingGameMessageOutcome>,
+    pub(crate) events: Vec<BillingGameEvent>,
+    pub(crate) billing_player_notices: Vec<BillingPlayerManagerNotice>,
+    pub(crate) player_fill_notices: Vec<PlayerFillNotice>,
 }
 
 /// Фатальная граница одного полного runtime-turn.
@@ -562,13 +575,34 @@ impl CGame {
     /// Выполняет технический network snapshot, затем буквальный `MainLoop`.
     pub(crate) async fn run_runtime_turn(
         &mut self,
-    ) -> Result<(BillingNetworkTurn, bool), BillingRuntimeError> {
+    ) -> Result<BillingRuntimeStep, BillingRuntimeError> {
         let network = self
             .run_network_turn()
             .await
             .map_err(BillingRuntimeError::Network)?;
         let keep_running = self.main_loop().map_err(BillingRuntimeError::MainLoop)?;
-        Ok((network, keep_running))
+        let mut step = BillingRuntimeStep {
+            network,
+            keep_running,
+            ..BillingRuntimeStep::default()
+        };
+        self.drain_runtime_observations(&mut step);
+        Ok(step)
+    }
+
+    fn drain_runtime_observations(&mut self, step: &mut BillingRuntimeStep) {
+        while let Some(outcome) = self.pop_message_outcome() {
+            step.message_outcomes.push(outcome);
+        }
+        while let Some(event) = self.pop_event() {
+            step.events.push(event);
+        }
+        while let Some(notice) = self.billing_players.pop_notice() {
+            step.billing_player_notices.push(notice);
+        }
+        while let Some(notice) = self.pop_player_fill_notice() {
+            step.player_fill_notices.push(notice);
+        }
     }
 
     /// Выполняет полный порядок исходного `CGame::Release`.
@@ -1024,6 +1058,7 @@ fn resolve_first_local_ipv4() -> Option<Ipv4Addr> {
 pub(crate) async fn game_thread_func<Shutdown>(
     paths: &BillingRuntimePaths,
     shutdown: Shutdown,
+    mut observe_step: impl FnMut(&BillingRuntimeStep),
 ) -> BillingGameThreadReport
 where
     Shutdown: Future<Output = ()>,
@@ -1040,8 +1075,10 @@ where
                 result = game.run_runtime_turn() => result,
             };
             match outcome {
-                Ok((_network, keep_running)) => {
+                Ok(step) => {
                     completed_turns = completed_turns.wrapping_add(1);
+                    let keep_running = step.keep_running;
+                    observe_step(&step);
                     if !keep_running {
                         break None;
                     }
@@ -1059,6 +1096,15 @@ where
     // detached навсегда и safe owned cleanup был бы невозможен.
     game.request_game_thread_exit();
     let release = game.release().await;
+    let mut final_step = BillingRuntimeStep::default();
+    game.drain_runtime_observations(&mut final_step);
+    if !final_step.message_outcomes.is_empty()
+        || !final_step.events.is_empty()
+        || !final_step.billing_player_notices.is_empty()
+        || !final_step.player_fill_notices.is_empty()
+    {
+        observe_step(&final_step);
+    }
     drop(game);
     BillingGameThreadReport {
         initialization,
