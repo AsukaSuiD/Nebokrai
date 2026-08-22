@@ -7,7 +7,8 @@
 //! `SetNewDay` RVA `0x00044A70`, `Initialize` RVA `0x00044B10`,
 //! `Append` RVA `0x000452B0`,
 //! `AddOneTopInfo` RVA `0x00045130` и полный `Run` RVA `0x00045040` —
-//! `IMPLEMENTED`; остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
+//! `IMPLEMENTED`; singleton-доступ, конструктор, `Release` и destructor также
+//! выражены через безопасное Rust-владение. Точная
 //! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
 //! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
 //! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
@@ -190,6 +191,21 @@ pub(crate) struct CCountryHandler {
     day: i32,
 }
 
+/// Итог consuming `CCountryHandler::Release`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryHandlerReleaseReport {
+    /// Число живых country-owner-ов, удалённых до освобождения map storage.
+    pub(crate) released_countries: usize,
+    /// Число top-info записей, уничтоженных вместе с handler-ом.
+    pub(crate) released_top_infos: usize,
+}
+
+impl Default for CCountryHandler {
+    fn default() -> Self {
+        Self::with_reached_save_state()
+    }
+}
+
 impl CCountryHandler {
     /// Повторяет exact `Append`: null reject, затем `operator[]` overwrite.
     pub(crate) fn append_country(
@@ -239,6 +255,18 @@ impl CCountryHandler {
             countries: BTreeMap::new(),
             top_infos: VecDeque::new(),
             day: 0,
+        }
+    }
+
+    /// Потребляет singleton owner, как `Release` после удаления всех country.
+    ///
+    /// Старый метод virtual-удалял каждый ненулевой `CCountry*`, затем удалял
+    /// сам process-global handler. Rust возвращает счётчики до обычного Drop;
+    /// map/list nodes, vtable и deleting-destructor не являются контрактом.
+    pub(crate) fn release(self) -> CountryHandlerReleaseReport {
+        CountryHandlerReleaseReport {
+            released_countries: self.countries.values().flatten().count(),
+            released_top_infos: self.top_infos.len(),
         }
     }
 
@@ -470,7 +498,7 @@ impl CCountryHandler {
 
 // ============================================================================
 // FUNCTION: CCountryHandler::GetInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countryhandler.h:29
@@ -478,6 +506,10 @@ impl CCountryHandler {
 // ADDRESS: 004014f0
 // PROTOTYPE: CCountryHandler * __cdecl GetInstance(void)
 //
+// IMPLEMENTED_OWNER: process-global nullable pointer заменён явным owned
+// `CCountryHandler`, передаваемым связанным World-owner-ам. Это сохраняет
+// единственность времени жизни в границах World-логики без повторного
+// глобального выделения, null-singleton и механики deleting destructor.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -521,7 +553,7 @@ impl CCountryHandler {
 
 // ============================================================================
 // FUNCTION: CCountryHandler::Release
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countryhandler.cpp:38
@@ -529,6 +561,10 @@ impl CCountryHandler {
 // ADDRESS: 004448e0
 // PROTOTYPE: void __thiscall Release(void)
 //
+// IMPLEMENTED_OWNER: consuming `CCountryHandler::release` выше считает живые
+// country/top-info owners и передаёт их обычному Rust Drop. Тем самым точное
+// virtual-удаление всех non-null country сохраняется, а process-global
+// `instance`, MSVC map/list nodes и deleting destructor не воспроизводятся.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -575,7 +611,7 @@ impl CCountryHandler {
 
 // ============================================================================
 // FUNCTION: CCountryHandler::~CCountryHandler
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countryhandler.cpp:16
@@ -583,6 +619,9 @@ impl CCountryHandler {
 // ADDRESS: 00445250
 // PROTOTYPE: void __thiscall ~CCountryHandler(void)
 //
+// IMPLEMENTED_OWNER: `BTreeMap`/`VecDeque` и их owned элементы освобождаются
+// обычным Rust Drop после `release` либо конца owner lifetime. Старые vtable,
+// list sentinel и allocator-деallocation не имеют внешнего эффекта.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -603,7 +642,7 @@ impl CCountryHandler {
 
 // ============================================================================
 // FUNCTION: CCountryHandler::CCountryHandler
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countryhandler.cpp:12
@@ -611,6 +650,9 @@ impl CCountryHandler {
 // ADDRESS: 004452e0
 // PROTOTYPE: undefined __thiscall CCountryHandler(void)
 //
+// IMPLEMENTED_OWNER: `CCountryHandler::with_reached_save_state` создаёт
+// пустые country-map/top-info list и `m_nDay = 0`; `Default` сохраняет тот же
+// constructor-state. MSVC tree/list sentinel и vtable заменены стандартными
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
