@@ -4,13 +4,15 @@
 //! `PackageArchive`: `BTreeMap<u32, _>` заменяет только STL-владение.
 //! `load_world_server_directory` воспроизводит доказанный успешный путь
 //! `LoadEx`: читает `FilesInfo.ril`, сворачивает package ID как `std::map` и
-//! затем открывает записи в key-order из `Package`. Неопределённый в EXE
+//! затем открывает записи в key-order из `Package` с тем же доступом `r+b`.
+//! Неопределённый в EXE
 //! bool-эпилог `LoadEx` намеренно не выдан за Rust-result: filesystem и
 //! format ошибки выражены отдельным report-API.
 
 use std::{
     collections::BTreeMap,
-    fs, io,
+    fs::{self, OpenOptions},
+    io::{self, Read},
     path::{Path, PathBuf},
 };
 
@@ -46,6 +48,11 @@ pub(crate) enum ClientResourcePackageLoad {
         package_type: u32,
     },
     OpenFailed {
+        package_type: u32,
+        path: PathBuf,
+        kind: io::ErrorKind,
+    },
+    ReadFailed {
         package_type: u32,
         path: PathBuf,
         kind: io::ErrorKind,
@@ -256,9 +263,10 @@ impl ClientResource {
     /// заменяет прежнее имя, а `LoadPackage(false)` идёт в sorted key-order.
     /// Пустое имя пропускает `CPackage::Open`. Для непустого имени точный
     /// `OpenFileHandle` добавляет literal `.pak` к имени из `.ril`, поэтому
-    /// `data` открывается как `Package/data.pak`. Неоткрытый/повреждённый
-    /// пакет остаётся в report, а остальные пакеты продолжают обрабатываться
-    /// — это сохраняет порядок его side effects без unsafe `FILE*` lifetime.
+    /// `data` открывается как `Package/data.pak` в режиме `r+b`. Неоткрытый/
+    /// повреждённый пакет остаётся в report, а остальные пакеты продолжают
+    /// обрабатываться — это сохраняет порядок его side effects без unsafe
+    /// `FILE*` lifetime.
     pub(crate) fn load_world_server_directory(
         root: &Path,
     ) -> Result<ClientResourceLoadReport, ClientResourceLoadError> {
@@ -287,10 +295,18 @@ impl ClientResource {
             }
 
             let path = package_path(root, &file_name);
-            let bytes = match fs::read(&path) {
+            let bytes = match read_package_snapshot(&path) {
                 Ok(bytes) => bytes,
-                Err(error) => {
+                Err(PackageSnapshotReadError::Open(error)) => {
                     package_loads.push(ClientResourcePackageLoad::OpenFailed {
+                        package_type,
+                        path,
+                        kind: error.kind(),
+                    });
+                    continue;
+                }
+                Err(PackageSnapshotReadError::Read(error)) => {
+                    package_loads.push(ClientResourcePackageLoad::ReadFailed {
                         package_type,
                         path,
                         kind: error.kind(),
@@ -405,6 +421,28 @@ impl ClientResource {
         }
         fs::read(file).map(Some)
     }
+}
+
+/// Снимок `.pak` после literal `fopen(path, "r+b")` exact `OpenFileHandle`.
+///
+/// Read-only доступ намеренно недостаточен: оригинальный read-side требует
+/// одновременно права записи. После успешного открытия содержимое берётся в
+/// owned buffer, так что дальнейшая работа не наследует `FILE*` lifetime.
+fn read_package_snapshot(path: &Path) -> Result<Vec<u8>, PackageSnapshotReadError> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(PackageSnapshotReadError::Open)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(PackageSnapshotReadError::Read)?;
+    Ok(bytes)
+}
+
+enum PackageSnapshotReadError {
+    Open(io::Error),
+    Read(io::Error),
 }
 
 /// Строит exact `cwd + "\\Package" + package file name + ".pak"`.
