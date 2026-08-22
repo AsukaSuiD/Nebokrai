@@ -1010,6 +1010,7 @@ use parking_lot::Mutex;
 use rustix::system::uname;
 use rustix::time::{ClockId, clock_gettime};
 use tiberius::Query;
+use walkdir::WalkDir;
 
 use crate::dbaccess::worlddb::dbcountry::{CountrySaveSnapshot, DbCountryOwner};
 use crate::dbaccess::worlddb::dbgoods::DbGoodsOwner;
@@ -4178,8 +4179,14 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn add_log_text(&mut self, payload: &[u8]);
     fn notify_reload_operator(&mut self, title: &[u8], message: &[u8]);
 
-    /// Возвращает script paths в порядке исходного resource-owner-а.
-    fn script_files(&mut self, pattern: &[u8], extension: &[u8]) -> Vec<Vec<u8>>;
+    /// Возвращает script paths в порядке конкретного resource-owner-а.
+    ///
+    /// Пока package-resource ещё не материализован, default является безопасной
+    /// host-filesystem заменой Win32 `FindScriptFile`. Будущий resource owner
+    /// может переопределить метод, не меняя script-loading контракт `CGame`.
+    fn script_files(&mut self, pattern: &[u8], extension: &[u8]) -> Vec<Vec<u8>> {
+        find_script_files(pattern, extension)
+    }
     /// Выполняет оставшийся inline-parser `setup/sysboardcast.ini`, включая
     /// operator notice, random/tick и единственный success log.
     fn reload_broadcast_list(&mut self, game: &mut CGame);
@@ -4187,6 +4194,101 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     /// Сохраняет два process-global счётчика после прямого region-owner load.
     fn add_region_object_counts(&mut self, monsters: i32, npcs: i32) -> (i32, i32);
     fn region_object_counts(&mut self) -> (i32, i32);
+}
+
+/// Рекурсивно собирает host-файлы старого `FindScriptFile`.
+///
+/// `walkdir` заменяет `FindFirstFileA/FindNextFileA/FindClose` и ручную
+/// рекурсию. Symlink-каталоги не обходятся: циклическая ссылка была внутренним
+/// дефектом неограниченной C++-рекурсии, а не Miracle-контрактом. Фильтр
+/// расширения остаётся ASCII case-insensitive, полный возвращаемый путь —
+/// lowercase с `/`, как `_strlwr` плюс последующая нормализация map-key.
+pub(crate) fn find_script_files(pattern: &[u8], extension: &[u8]) -> Vec<Vec<u8>> {
+    let pattern = legacy_c_string_prefix(pattern)
+        .iter()
+        .map(|byte| if *byte == b'\\' { b'/' } else { *byte })
+        .collect::<Vec<_>>();
+    let root = script_search_root(&pattern);
+    let requested_extension = legacy_c_string_prefix(extension)
+        .strip_prefix(b".")
+        .unwrap_or_else(|| legacy_c_string_prefix(extension));
+
+    let mut files = WalkDir::new(legacy_path_from_bytes(root))
+        .min_depth(1)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter_map(|entry| {
+            let extension = entry.path().extension()?;
+            let extension = legacy_path_component_bytes(extension);
+            if !extension.eq_ignore_ascii_case(requested_extension) {
+                return None;
+            }
+            let mut path = legacy_path_bytes(entry.path());
+            for byte in &mut path {
+                if *byte == b'\\' {
+                    *byte = b'/';
+                } else {
+                    byte.make_ascii_lowercase();
+                }
+            }
+            Some(path)
+        })
+        .collect::<Vec<_>>();
+    // Win32 не обещал directory order. Стабильная сортировка устраняет только
+    // внутреннюю зависимость от host FS; wire всё равно публикуется из BTreeMap.
+    files.sort_unstable();
+    files
+}
+
+fn script_search_root(pattern: &[u8]) -> &[u8] {
+    let wildcard = pattern.iter().position(|byte| matches!(*byte, b'*' | b'?'));
+    let parent_end = wildcard
+        .and_then(|position| pattern[..position].iter().rposition(|byte| *byte == b'/'))
+        .or_else(|| pattern.iter().rposition(|byte| *byte == b'/'));
+    match parent_end {
+        Some(0) => b"/",
+        Some(end) => &pattern[..end],
+        None => b".",
+    }
+}
+
+#[cfg(unix)]
+fn legacy_path_from_bytes(bytes: &[u8]) -> PathBuf {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    PathBuf::from(OsString::from_vec(bytes.to_vec()))
+}
+
+#[cfg(not(unix))]
+fn legacy_path_from_bytes(bytes: &[u8]) -> PathBuf {
+    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
+}
+
+#[cfg(unix)]
+fn legacy_path_component_bytes(value: &std::ffi::OsStr) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+
+    value.as_bytes().to_vec()
+}
+
+#[cfg(not(unix))]
+fn legacy_path_component_bytes(value: &std::ffi::OsStr) -> Vec<u8> {
+    value.to_string_lossy().as_bytes().to_vec()
+}
+
+#[cfg(unix)]
+fn legacy_path_bytes(path: &Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+
+    path.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(not(unix))]
+fn legacy_path_bytes(path: &Path) -> Vec<u8> {
+    path.to_string_lossy().as_bytes().to_vec()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -19933,7 +20035,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::LoadServerResource
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: UNKNOWN (сохранены только метаданные исследования) / VERIFIED_DISASSEMBLY_BOUNDARY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:567
@@ -19941,6 +20043,12 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 00409110
 // PROTOTYPE: bool __thiscall LoadServerResource(void)
 //
+// VERIFIED_NOTE: сохранённый raw ниже ошибочно обрывается после освобождения
+// cwd-buffer. Exact тело продолжается до `0x004092BB`: удаляет прежний global
+// `CClientResource`, создаёт новый с `GAME_RES=2`, cwd и `FilesInfo.ril`, вызывает
+// `LoadEx`, игнорирует его bool, пишет `Load package file OK!` и возвращает
+// `true`. Owner остаётся RAW до реконструкции `CClientResource/rfOpen`; текущая
+// `WorldGameInitContext::load_server_resources` честно удерживает эту границу.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -20088,7 +20196,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 //
 // ============================================================================
 // FUNCTION: FindScriptFile
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / SAFE_INFRASTRUCTURE_REPLACEMENT
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:1081
@@ -20096,6 +20204,9 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 004106e0
 // PROTOTYPE: void __cdecl FindScriptFile(char * param_1, list<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>,std::allocator<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>_>_> * param_2)
 //
+// IMPLEMENTED_OWNER: `find_script_files`; `walkdir` заменяет Win32 handles и
+// recursion, а default `WorldReloadContext::script_files` подключает host-
+// fallback, не закрывая будущий package-resource override.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
