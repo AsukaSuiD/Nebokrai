@@ -2894,6 +2894,14 @@ pub(crate) struct OrganizingDatabasePublishBlock {
     pub(crate) source: UnionInitialBlock,
 }
 
+/// Safe-граница ordered `ReSetPermitDemise`: старый virtual call
+/// разыменовывал сохранённый null faction-pointer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingPermitDemiseResetBlock {
+    pub(crate) map_key: i32,
+    pub(crate) reset_faction_ids: Vec<i32>,
+}
+
 /// Наблюдаемый no-op либо обе city-war мутации `SetEnemyFactionRelation`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EnemyFactionRelationOutcome {
@@ -3224,6 +3232,28 @@ impl COrganizingCtrl {
             published_unions,
             published_factions,
         })
+    }
+
+    /// Выполняет exact ordered `ReSetPermitDemise` без сетевых/DB эффектов.
+    ///
+    /// Каждая concrete faction получает virtual `SetPermitDemise(true)` в
+    /// signed map-order. Уже выполненный prefix не откатывается при safe
+    /// остановке вместо старого null-pointer dereference.
+    pub(crate) fn reset_permit_demise(
+        &mut self,
+    ) -> Result<Vec<i32>, OrganizingPermitDemiseResetBlock> {
+        let mut reset_faction_ids = Vec::with_capacity(self.factions.len());
+        for (&map_key, faction) in &mut self.factions {
+            let Some(faction) = faction.as_deref_mut() else {
+                return Err(OrganizingPermitDemiseResetBlock {
+                    map_key,
+                    reset_faction_ids,
+                });
+            };
+            faction.set_permit_demise(true);
+            reset_faction_ids.push(faction.faction_id());
+        }
+        Ok(reset_faction_ids)
     }
 
     /// Перестраивает три snapshot-а в точном порядке исходного `StatBillboard`.
