@@ -11,6 +11,8 @@
 
 use std::collections::BTreeMap;
 
+use flate2::{Decompress, FlushDecompress, Status};
+
 const PACKAGE_HEADER_LEN: usize = 12;
 const FILE_INDEX_LEN: usize = 0x118;
 const FILE_INDEX_NAME_LEN: usize = 256;
@@ -54,6 +56,9 @@ pub(crate) enum PackageReadError {
     IndexNameWithoutNul,
     DataOutsideFile,
     BufferTooSmall { required: u32, available: u32 },
+    LzoDecoderUnavailable,
+    ZlibDecoder,
+    ZlibOutputIncomplete,
 }
 
 /// Владеющий снимок `.pak`, доступный будущему `CClientResource/rfOpen`.
@@ -142,6 +147,30 @@ impl PackageArchive {
             .ok_or(PackageReadError::DataOutsideFile)?
             .to_vec();
         Ok(Some((index.clone(), payload)))
+    }
+
+    /// Восстанавливает exact zlib-ветвь `rfOpen`; LZO не подменяется иной
+    /// кодировкой, пока не выбран совместимый безопасный adapter.
+    pub(crate) fn extract_decoded(&self, name: &[u8]) -> Result<Option<Vec<u8>>, PackageReadError> {
+        let Some((index, compressed)) = self.extract_compressed(name, u32::MAX)? else {
+            return Ok(None);
+        };
+        if index.compress_type & 4 == 0 {
+            return Err(PackageReadError::LzoDecoderUnavailable);
+        }
+        let capacity = index.origin_size as usize;
+        let mut output = vec![0; capacity];
+        let mut decoder = Decompress::new(true);
+        let status = decoder
+            .decompress(&compressed, &mut output, FlushDecompress::Finish)
+            .map_err(|_| PackageReadError::ZlibDecoder)?;
+        let written = usize::try_from(decoder.total_out())
+            .map_err(|_| PackageReadError::ZlibOutputIncomplete)?;
+        if status != Status::StreamEnd || written > output.len() {
+            return Err(PackageReadError::ZlibOutputIncomplete);
+        }
+        output.truncate(written);
+        Ok(Some(output))
     }
 }
 
