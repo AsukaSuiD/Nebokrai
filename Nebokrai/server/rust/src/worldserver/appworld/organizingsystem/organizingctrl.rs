@@ -15,6 +15,8 @@
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
 //! `CreateFaction` RVA `0x000381A0` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
+//! публикация DB-staging `COrganizingCtrl::Initialize` RVA `0x0003B830` —
+//! `IMPLEMENTED` для подтверждённой последовательности union/faction owner-ов;
 //! полный `COrganizingCtrl::Run` RVA `0x0003A550` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`, `DisbandFaction` RVA `0x00038550` и
 //! `UpdateOtherFacInfoToClient` RVA `0x00034980` и `DisbandConferation` RVA
@@ -468,6 +470,8 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 use rustix::time::{ClockId, clock_gettime};
 
+use crate::dbaccess::worlddb::rsfaction::FactionPropertyLoadStaging;
+use crate::dbaccess::worlddb::rsunion::UnionDatabaseLoadRecord;
 use super::attackcitysys::CAttackCitySys;
 use super::faction::{
     CFaction, CityWarEnemyRefreshOutcome, FactionCloneSaveBlock, FactionContributorBlock,
@@ -2877,6 +2881,19 @@ pub(crate) struct COrganizingCtrl {
     detached_union_membership_lookup: Cell<Option<(i32, FreeFactionLookup)>>,
 }
 
+/// Наблюдаемый результат публикации двух DB staging-map в organizing-control.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingDatabasePublishReport {
+    pub(crate) published_unions: usize,
+    pub(crate) published_factions: usize,
+}
+
+/// Safe-граница constructor `CUnion::Initial` при DB materialization.
+pub(crate) struct OrganizingDatabasePublishBlock {
+    pub(crate) union_id: i32,
+    pub(crate) source: UnionInitialBlock,
+}
+
 /// Наблюдаемый no-op либо обе city-war мутации `SetEnemyFactionRelation`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EnemyFactionRelationOutcome {
@@ -3168,6 +3185,45 @@ impl COrganizingCtrl {
             defence_victories_billboard: Vec::new(),
             detached_union_membership_lookup: Cell::new(None),
         }
+    }
+
+    /// Публикует DB-готовые union/faction owner-ы в порядке `Initialize`.
+    ///
+    /// Exact `Initialize` сперва чистит request-list, затем `LoadAllConfederation`
+    /// materialize-ит и вставляет unions, после чего `LoadAllFaction` вставляет
+    /// factions. При положительном уже найденном union `AddFactionOrganizing`
+    /// не вызывает повторный clear dirty-mask; faction DB owner уже выполнил
+    /// этот финальный clear, поэтому безопасная insertion сохраняет наблюдаемое
+    /// состояние без ненужного virtual dispatch. Repeated map-key заменяет
+    /// прежний owner, но не сохраняет старую pointer leak.
+    pub(crate) fn publish_database_organizing(
+        &mut self,
+        union_master_title: &[u8],
+        unions: Vec<UnionDatabaseLoadRecord>,
+        factions: FactionPropertyLoadStaging,
+    ) -> Result<OrganizingDatabasePublishReport, OrganizingDatabasePublishBlock> {
+        self.request_establishment_union_players.clear();
+        let published_unions = unions.len();
+        for record in unions {
+            let union_id = record.union_id;
+            let union = CUnion::from_database_load_state(
+                union_id,
+                record.name,
+                record.master_id,
+                union_master_title,
+                record.members,
+            )
+            .map_err(|source| OrganizingDatabasePublishBlock { union_id, source })?;
+            self.confederations.insert(union_id, Some(Box::new(union)));
+        }
+        let published_factions = factions.len();
+        for (faction_id, faction) in factions {
+            self.factions.insert(faction_id, Some(Box::new(faction)));
+        }
+        Ok(OrganizingDatabasePublishReport {
+            published_unions,
+            published_factions,
+        })
     }
 
     /// Перестраивает три snapshot-а в точном порядке исходного `StatBillboard`.

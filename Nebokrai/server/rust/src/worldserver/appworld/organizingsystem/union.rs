@@ -1551,6 +1551,70 @@ pub(crate) struct CUnion {
 }
 
 impl CUnion {
+    /// Строит concrete union на DB-пути `LoadAllConfederation`.
+    ///
+    /// Public constructor точного EXE вызывает `Initial` ещё до
+    /// `LoadConfeMembers`: поэтому `m_ApplyPerson` становится `0`, а в map
+    /// появляется fallback master-member с `WS0154` и current local time.
+    /// Переданные DB members затем заменяют соответствующие ключи, как старый
+    /// `map::operator[]`. Faction-map на этой стадии ещё пуста, поэтому
+    /// constructor не меняет имя/union ID живой faction и не делает player
+    /// refresh; эти side effect старого null lookup отсутствуют.
+    pub(crate) fn from_database_load_state(
+        union_id: i32,
+        name: Vec<u8>,
+        master_id: i32,
+        master_title: &[u8],
+        members: BTreeMap<i32, TagMemInfo>,
+    ) -> Result<Self, UnionInitialBlock> {
+        let visible_title = legacy_c_string_visible_bytes(master_title);
+        let mut title = [0; 64];
+        if visible_title.len() >= title.len() {
+            return Err(UnionInitialBlock::MasterTitleWouldOverflow {
+                visible_length: visible_title.len(),
+                capacity: title.len(),
+            });
+        }
+        title[..visible_title.len()].copy_from_slice(visible_title);
+        let established_time = current_local_member_time();
+        let fallback_master = TagMemInfo::from_complete_fields(
+            master_id,
+            [0; 32],
+            0,
+            0,
+            1,
+            title,
+            [
+                EPurviewOwnState::Permit,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::Permit,
+                EPurviewOwnState::Permit,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+                EPurviewOwnState::No,
+            ],
+            [0; 64],
+            established_time,
+            false,
+        );
+        let mut union_members = BTreeMap::from([(master_id, fallback_master)]);
+        union_members.extend(members);
+        Ok(Self {
+            union_id,
+            name,
+            master_id,
+            members: union_members,
+            established_time,
+            apply_person: Some(0),
+            change_data_type: 0,
+            last_demise_time_ms: 0,
+        })
+    }
+
     /// Строит live-union и выполняет доказанный `Initial` с явными callbacks.
     ///
     /// При safe-блокировке возвращает сам частично инициализированный owner,
