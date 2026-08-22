@@ -191,6 +191,11 @@ impl CVolumeLimitGoodsContainer {
         self.amount_base.set_goods_amount_limit(size);
     }
 
+    /// Возвращает exact inherited amount-limit, которым largess обходит cells.
+    pub(crate) const fn get_goods_amount_limit(&self) -> u32 {
+        self.amount_base.get_goods_amount_limit()
+    }
+
     /// Очищает logical contents, сохраняя size и заново обнуляя cells.
     pub(crate) fn clear(&mut self) {
         self.amount_base.clear();

@@ -2023,6 +2023,41 @@ impl CPlayer {
         self.base_property.account.extend_from_slice(account);
     }
 
+    /// Ставит reached `bIsCharged` перед первой largess-выдачей игроку.
+    pub(crate) fn mark_largess_charged(&mut self) {
+        if self.base_property.read_u8(BASE_PROPERTY_IS_CHARGED_OFFSET) == 0 {
+            self.base_property
+                .write_u8(BASE_PROPERTY_IS_CHARGED_OFFSET, 1);
+        }
+    }
+
+    /// Делегирует exact `CLargess::AddGoldCoin` bank-owner-у на позиции `0`.
+    pub(crate) fn add_largess_gold_coin(
+        &mut self,
+        goods: Box<CGoods>,
+        gold_coin_limit: u32,
+    ) -> Result<bool, PlayerCodecError> {
+        Ok(self
+            .bank
+            .add_gold_coin_of_largess(0, goods, gold_coin_limit)?
+            .is_none())
+    }
+
+    /// Возвращает inherited depot limit для exact позиционного обхода largess.
+    pub(crate) const fn largess_depot_limit(&self) -> u32 {
+        self.depot.get_goods_amount_limit()
+    }
+
+    /// Передаёт один товар positional `CDepot::Add`, сохраняя rejected owner.
+    pub(crate) fn add_largess_to_depot(
+        &mut self,
+        position: u32,
+        goods: Box<CGoods>,
+        registry: &GoodsBasePropertiesRegistry,
+    ) -> Result<Option<Box<CGoods>>, PlayerCodecError> {
+        self.depot.add_at(position, goods, registry).map_err(Into::into)
+    }
+
     /// Повторяет `CPlayer::GetMoney` RVA `0x0005AEA0` через wallet-owner.
     pub(crate) const fn money(&self) -> u32 {
         self.wallet.get_gold_coins_amount()

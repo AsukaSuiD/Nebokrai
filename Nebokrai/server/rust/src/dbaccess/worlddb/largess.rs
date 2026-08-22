@@ -1,8 +1,9 @@
 //! Владелец `CLargess` исторического WorldServer из `largess.cpp`.
 //!
 //! Статус двух перегрузок `SaveLoadDetails` RVA `0x000E8CA0` и
-//! `0x000E91B0`, а также достигнутого `GetTime` RVA `0x000E6800` —
-//! `IMPLEMENTED`; остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
+//! `0x000E91B0`, `GetTime` RVA `0x000E6800`, `AddGoldCoin` RVA `0x000E6690`
+//! и `AddOneLargess` RVA `0x000E6A60` — `IMPLEMENTED`; остальной корпус ниже
+//! остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
 //! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
 //! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
 //! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
@@ -59,6 +60,16 @@
 //! и structured notices заменяют только `std::string`, MSVC tree, COM lifetime
 //! и log-механику; CD-key в `Debug` намеренно скрыт, но остаётся доступен
 //! будущему точному log-owner-у.
+//!
+//! Два leaf-а выдачи также восстановлены. `AddGoldCoin` вызывает bank-wallet
+//! на позиции `0`. `AddOneLargess` обходит весь inherited depot limit; только
+//! ячейки `96,109,122,135,148` требуют addon `GAP_GOODS_PACKAGE_EXTENTION/1`
+//! со значением `1`. Rejected `Box<CGoods>` освобождается Rust `Drop` вместо
+//! virtual deleting destructor; container codec-ошибка остаётся typed block.
+//! Exact `0x004E6AB0..0x004E6AE3` подтверждает gate и numeric type `0xEA`;
+//! `0x004E6B12` возвращает `AL=1` после вставки. Failure-tail читает в
+//! `0x004E6B7A` тот самый локальный byte, который `0x004E6A80` заранее
+//! обнулил, поэтому заполненный depot стабильно даёт `false`, а не мусор.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
@@ -73,9 +84,65 @@ use tokio::net::TcpStream;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
+use crate::worldserver::appworld::goods::cgoods::{
+    CGoods, GAP_GOODS_PACKAGE_EXTENTION,
+};
+use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
+use crate::worldserver::appworld::player::{CPlayer, PlayerCodecError};
 
 const LEGACY_SQL_BUFFER_SIZE: usize = 256;
 const ERROR_GOODS_ID: &[u8] = b"error goodsID!";
+const LARGESS_DEPOT_EXTENSION_FIRST_POSITION: u32 = 0x60;
+const LARGESS_DEPOT_EXTENSION_STRIDE: u32 = 0x0D;
+const LARGESS_DEPOT_EXTENSION_END: u32 = 0xA1;
+
+/// Exact bool и достигнутая позиция `CLargess::AddOneLargess`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LargessDepotAddOutcome {
+    Added { position: u32 },
+    Rejected { position: u32 },
+}
+
+/// Делегирует `CLargess::AddGoldCoin` готовому bank-wallet owner-у.
+pub(crate) fn add_gold_coin(
+    player: &mut CPlayer,
+    goods: Box<CGoods>,
+    gold_coin_limit: u32,
+) -> Result<bool, PlayerCodecError> {
+    player.add_largess_gold_coin(goods, gold_coin_limit)
+}
+
+/// Повторяет positional scan и пять package-extension gates depot-а.
+pub(crate) fn add_one_largess(
+    player: &mut CPlayer,
+    goods: Box<CGoods>,
+    registry: &GoodsBasePropertiesRegistry,
+) -> Result<LargessDepotAddOutcome, PlayerCodecError> {
+    let limit = player.largess_depot_limit();
+    let extension_enabled =
+        goods.get_addon_property_value(GAP_GOODS_PACKAGE_EXTENTION, 1) == 1;
+    let mut goods = Some(goods);
+    let mut position = 0_u32;
+    while position < limit {
+        let extension_cell = position >= LARGESS_DEPOT_EXTENSION_FIRST_POSITION
+            && position < LARGESS_DEPOT_EXTENSION_END
+            && (position - LARGESS_DEPOT_EXTENSION_FIRST_POSITION)
+                % LARGESS_DEPOT_EXTENSION_STRIDE
+                == 0;
+        if !extension_cell || extension_enabled {
+            goods = player.add_largess_to_depot(
+                position,
+                goods.take().expect("товар жив до успешной depot-вставки"),
+                registry,
+            )?;
+            if goods.is_none() {
+                return Ok(LargessDepotAddOutcome::Added { position });
+            }
+        }
+        position = position.wrapping_add(1);
+    }
+    Ok(LargessDepotAddOutcome::Rejected { position: limit })
+}
 
 /// Пять исходных Cost DB setup-строк без публикации credentials.
 #[derive(Clone)]
@@ -492,7 +559,7 @@ fn format_local_time() -> String {
 
 // ============================================================================
 // FUNCTION: CLargess::AddGoldCoin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:79
@@ -500,13 +567,14 @@ fn format_local_time() -> String {
 // ADDRESS: 004e6690
 // PROTOTYPE: bool __cdecl AddGoldCoin(CPlayer * param_1, CGoods * param_2)
 //
+// IMPLEMENTED_OWNER: `add_gold_coin` выше делегирует bank-wallet позиции `0`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CLargess::AddOneLargess
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:92
@@ -514,6 +582,7 @@ fn format_local_time() -> String {
 // ADDRESS: 004e6a60
 // PROTOTYPE: bool __cdecl AddOneLargess(CPlayer * param_1, CGoods * param_2)
 //
+// IMPLEMENTED_OWNER: `add_one_largess` выше сохраняет полный positional scan.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

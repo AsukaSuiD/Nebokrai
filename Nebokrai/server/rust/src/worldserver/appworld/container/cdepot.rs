@@ -66,6 +66,11 @@ impl CDepot {
         self.volume_state.set_container_volume(size);
     }
 
+    /// Делегирует inherited limit для точного `CLargess::AddOneLargess`.
+    pub(crate) const fn get_goods_amount_limit(&self) -> u32 {
+        self.volume_state.get_goods_amount_limit()
+    }
+
     /// Снимает lock и очищает товары, сохраняя текущий volume.
     pub(crate) fn clear(&mut self) {
         self.locked = false;

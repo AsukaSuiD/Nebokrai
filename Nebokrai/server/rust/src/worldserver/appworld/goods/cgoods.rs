@@ -86,6 +86,9 @@ use super::cgoodsbaseproperties::{
 };
 use super::cgoodsfactory::{GoodsBasePropertiesRegistry, query_goods_base_properties};
 
+/// PDB enum `CGoodsBaseProperties::GAP_GOODS_PACKAGE_EXTENTION` (`0xEA`).
+pub(crate) const GAP_GOODS_PACKAGE_EXTENTION: i32 = 234;
+
 /// Ошибка безопасной границы `CGoods` wire-owner-а.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GoodsCodecError {
