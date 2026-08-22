@@ -481,8 +481,9 @@
 //! `CPlayer::LoadData`, а `WorldPlayerLoadDataAdapter` передаёт его bool-итог
 //! точному `LoadPlayerDataFromDB` worker-у, не пряча registry/config в mutable
 //! singleton.
-//! Автономная ветка null connection пока остаётся честным
-//! `PendingStandaloneConnection`; рабочий DB-thread передаёт готовое соединение.
+//! При null connection exact owner создаёт одно отдельное World DB connection
+//! до ability-query и освобождает его после JJC либо любого раннего failure;
+//! `WorldDatabaseSettings::connect` и Rust `Drop` заменяют только ADO plumbing.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::Infallible;
@@ -503,7 +504,9 @@ use crate::dbaccess::worlddb::goodslistener::GoodsTraversalBlock;
 use crate::dbaccess::worlddb::rsjjcsys::{
     PlayerJjcDataSnapshot, PlayerJjcLoadFailure, PlayerJjcLoadOutcome, RsJjcSysOwner,
 };
-use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
+use crate::dbaccess::worlddb::rssetup::{
+    WorldDatabaseConnectionError, WorldDatabaseSettings, WorldTdsClient,
+};
 use crate::public::date::{TagTime, TagTimeArithmeticBlock};
 use crate::setup::leitingsetup::CThingSetup;
 use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
@@ -1380,15 +1383,15 @@ pub(crate) trait RsPlayerOwner {
 }
 
 /// Linux/TDS-замена достигнутой части исходного `CRsPlayer`.
-#[derive(Default)]
 pub(crate) struct TiberiusRsPlayer {
+    settings: WorldDatabaseSettings,
     notices: VecDeque<RsPlayerNotice>,
 }
 
 /// Caller-owned связка полного `CRsPlayer::LoadPlayer` для `CPlayer::LoadData`.
 pub(crate) struct TiberiusPlayerLoadData<'owner, J, G, WeekDay> {
     pub(crate) player_owner: &'owner mut TiberiusRsPlayer,
-    pub(crate) active_transaction: &'owner mut WorldTdsClient,
+    pub(crate) active_transaction: Option<&'owner mut WorldTdsClient>,
     pub(crate) thing_setup: &'owner CThingSetup,
     pub(crate) get_week_day: &'owner mut WeekDay,
     pub(crate) jjc_owner: &'owner mut J,
@@ -1401,7 +1404,6 @@ pub(crate) struct TiberiusPlayerLoadData<'owner, J, G, WeekDay> {
 #[derive(Debug)]
 pub(crate) enum TiberiusPlayerLoadDataBlock {
     Reconstruction(PlayerLoadBlock),
-    PendingStandaloneConnection,
 }
 
 impl<J, G, WeekDay> PlayerLoadDataOwner for TiberiusPlayerLoadData<'_, J, G, WeekDay>
@@ -1417,7 +1419,7 @@ where
             .player_owner
             .load_player(
                 player,
-                Some(&mut *self.active_transaction),
+                self.active_transaction.as_deref_mut(),
                 self.thing_setup,
                 &mut *self.get_week_day,
                 self.jjc_owner,
@@ -1432,9 +1434,6 @@ where
             PlayerLoadOutcome::ReturnedFalse(_) => Ok(false),
             PlayerLoadOutcome::BlockedMissingFact(source) => {
                 Err(TiberiusPlayerLoadDataBlock::Reconstruction(source))
-            }
-            PlayerLoadOutcome::PendingStandaloneConnection => {
-                Err(TiberiusPlayerLoadDataBlock::PendingStandaloneConnection)
             }
         }
     }
@@ -2411,6 +2410,7 @@ pub(crate) enum PlayerQuestQueryLoadOutcome {
 
 #[derive(Debug)]
 pub(crate) enum PlayerLoadFailure {
+    Connection(WorldDatabaseConnectionError),
     Ability(PlayerAbilityQueryLoadFailure),
     Quest(PlayerQuestQueryLoadFailure),
     Goods(GoodsLoadFailure),
@@ -2427,7 +2427,6 @@ pub(crate) enum PlayerLoadBlock {
 pub(crate) enum PlayerLoadOutcome {
     ReturnedTrue,
     ReturnedFalse(PlayerLoadFailure),
-    PendingStandaloneConnection,
     BlockedMissingFact(PlayerLoadBlock),
 }
 
@@ -2727,6 +2726,14 @@ pub(crate) fn materialize_player_ability_binary_row(
 }
 
 impl TiberiusRsPlayer {
+    /// Копирует DB setup для исходных методов с автономным connection.
+    pub(crate) fn new(settings: &WorldDatabaseSettings) -> Self {
+        Self {
+            settings: settings.clone(),
+            notices: VecDeque::new(),
+        }
+    }
+
     /// Загружает и публикует одну ordered ability-строку по signed player ID.
     pub(crate) async fn load_player_ability_row(
         &mut self,
@@ -2895,8 +2902,20 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         G: DbGoodsOwner,
         WeekDay: FnMut() -> u16,
     {
-        let Some(active_transaction) = active_transaction else {
-            return PlayerLoadOutcome::PendingStandaloneConnection;
+        let mut standalone_connection;
+        let active_transaction = match active_transaction {
+            Some(active_transaction) => active_transaction,
+            None => {
+                standalone_connection = match self.settings.connect().await {
+                    Ok(connection) => connection,
+                    Err(source) => {
+                        return PlayerLoadOutcome::ReturnedFalse(
+                            PlayerLoadFailure::Connection(source),
+                        );
+                    }
+                };
+                &mut standalone_connection
+            }
         };
 
         match self
@@ -2941,9 +2960,9 @@ impl RsPlayerOwner for TiberiusRsPlayer {
             GoodsLoadOutcome::ReturnedFalse(source) => {
                 return PlayerLoadOutcome::ReturnedFalse(PlayerLoadFailure::Goods(source));
             }
-            GoodsLoadOutcome::PendingStandaloneConnection => {
-                return PlayerLoadOutcome::PendingStandaloneConnection;
-            }
+            GoodsLoadOutcome::PendingStandaloneConnection => unreachable!(
+                "LoadPlayer всегда передаёт CDBGoods активное connection"
+            ),
             GoodsLoadOutcome::BlockedMissingFact(source) => {
                 return PlayerLoadOutcome::BlockedMissingFact(PlayerLoadBlock::Goods(source));
             }
@@ -5467,7 +5486,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadPlayer
-// STATUS: IMPLEMENTED_PARTIAL/VERIFIED_DISASSEMBLY
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:1135
@@ -5476,8 +5495,8 @@ async fn execute_batch(
 // PROTOTYPE: bool __thiscall LoadPlayer(CPlayer * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
 //
 // IMPLEMENTED_OWNER: `RsPlayerOwner::load_player` и
-// `TiberiusPlayerLoadData` выше; caller-connection цепочка полна, автономное
-// открытие при null connection ещё pending.
+// `TiberiusPlayerLoadData` выше; caller-connection переиспользуется, а null
+// connection открывается один раз через `WorldDatabaseSettings::connect`.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

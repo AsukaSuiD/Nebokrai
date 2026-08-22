@@ -142,6 +142,48 @@ impl WorldDatabaseSettings {
         config.encryption(EncryptionLevel::NotSupported);
         config
     }
+
+    /// Открывает отдельное World DB connection вместо старых `CreateCn/OpenCn`.
+    pub(crate) async fn connect(
+        &self,
+    ) -> Result<WorldTdsClient, WorldDatabaseConnectionError> {
+        let config = self.tds_config();
+        let tcp = TcpStream::connect(config.get_addr())
+            .await
+            .map_err(WorldDatabaseConnectionError::Connect)?;
+        tcp.set_nodelay(true)
+            .map_err(WorldDatabaseConnectionError::Connect)?;
+        Client::connect(config, tcp.compat_write())
+            .await
+            .map_err(WorldDatabaseConnectionError::Tds)
+    }
+}
+
+/// Общая ошибка технической границы отдельного World DB connection.
+#[derive(Debug)]
+pub(crate) enum WorldDatabaseConnectionError {
+    Connect(io::Error),
+    Tds(tiberius::error::Error),
+}
+
+impl fmt::Display for WorldDatabaseConnectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Connect(error) => {
+                write!(formatter, "не установлено соединение World DB: {error}")
+            }
+            Self::Tds(error) => write!(formatter, "ошибка TDS World DB: {error}"),
+        }
+    }
+}
+
+impl Error for WorldDatabaseConnectionError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Connect(error) => Some(error),
+            Self::Tds(error) => Some(error),
+        }
+    }
 }
 
 /// Два значения, которые исходный constructor записывал прямо в `CGame`.

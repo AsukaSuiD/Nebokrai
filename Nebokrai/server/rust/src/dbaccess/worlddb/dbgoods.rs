@@ -120,7 +120,8 @@
 //! двух значений — не получают выдуманного результата и возвращают typed
 //! `BlockedMissingFact`. Автономная ветка `connection == null` пока честно
 //! обозначена `PendingStandaloneConnection`; основной `CRsPlayer::LoadPlayer`
-//! передаёт уже открытый caller-owned connection.
+//! теперь либо переиспользует caller-owned connection, либо сам открывает одно
+//! connection и передаёт его goods-owner-у.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
