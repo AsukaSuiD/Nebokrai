@@ -3,8 +3,8 @@
 //! Все достигнутые ветви dispatcher-а реализованы: player lifecycle
 //! `0x5FB01/0x5FB02`, player-list `0x4FB01`, delete-role `0x4FB02`,
 //! restore-role `0x4FB03`, create-role `0x4FB04`, select-player `0x4FB05` и
-//! account cleanup `0x4FB06/0x4FB07`. Неизвестный opcode остаётся
-//! `Pending` для общего маршрутизатора, как исходная default-ветвь.
+//! account cleanup `0x4FB06/0x4FB07`. Неизвестный opcode попадает в исходный
+//! default-return без side effects, а не передаётся общему маршрутизатору.
 //! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\logmessage.cpp:30`.
@@ -478,6 +478,10 @@ pub(crate) enum WorldPlayerReturnOutcome {
 
 #[derive(Debug)]
 pub(crate) enum WorldLogMessageOutcome {
+    /// Default полного exact `OnLogMessage` без чтения и side effects.
+    NoOp {
+        request_type: i32,
+    },
     PlayerBase(WorldPlayerBaseOutcome),
     DeleteRole(WorldDeleteRoleOutcome),
     RestoreRole(WorldRestoreRoleOutcome),
@@ -600,7 +604,9 @@ pub(crate) async fn on_log_message(
             account_login_cleanup(game, session_factory, message)
         }
         ACCOUNT_DISCONNECT_REQUEST => account_disconnect(game, session_factory, message),
-        _ => WorldLogMessageDispatch::Pending(message),
+        request_type => WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::NoOp {
+            request_type,
+        }),
     }
 }
 
