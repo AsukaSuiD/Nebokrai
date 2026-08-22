@@ -1748,7 +1748,6 @@ pub(crate) enum WorldGameDatabaseOwner {
 /// Void initialization calls, границы которых принадлежат соседним owners.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldGameInitVoidOwner {
-    InitializeLargess,
     LoadGodsBattleFactionXyd,
     InitializeOrganizingController,
     InitializeFactionWar,
@@ -10137,10 +10136,6 @@ impl CGame {
             stop!(WorldGameInitBlockReason::Context(block));
         }
         events.push(WorldGameInitEvent::DatabaseLayerInitialized);
-        context.initialize_void_owner(WorldGameInitVoidOwner::InitializeLargess);
-        events.push(WorldGameInitEvent::VoidOwner(
-            WorldGameInitVoidOwner::InitializeLargess,
-        ));
         let jjc_configuration = Self::load_jjc_configuration_from_resources(jjc, context);
         if let Some(path) = jjc_configuration.missing_path() {
             Self::record_game_init_notice(
