@@ -11636,11 +11636,13 @@ impl CGame {
     /// исполняются полностью. Write-log owners `0x6020D/0x60214` ставят typed
     /// DB-command в FIFO и сразу публикуют запись в concrete increment/auction
     /// live-owner.
-    pub(crate) async fn process_message<TimerCallback, JjcContext>(
+    pub(crate) async fn process_message<TimerCallback, DbMiscContextOwner, JjcContext>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
         increment_log: &mut CIncrementLog,
         auction_log: &mut CAuctionLog,
+        db_misc: &CDbMisc,
+        db_misc_context: &mut DbMiscContextOwner,
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
         country_handler: &mut CCountryHandler,
@@ -11715,6 +11717,7 @@ impl CGame {
     ) -> Result<WorldProcessMessageOutcome, WorldProcessMessageError>
     where
         TimerCallback: Copy,
+        DbMiscContextOwner: DbMiscContext,
         JjcContext: JjcRunContext + ?Sized,
     {
         let server_started_at = legacy_tick_ms();
@@ -11741,6 +11744,8 @@ impl CGame {
                             honor_ranks,
                             increment_log,
                             auction_log,
+                            db_misc,
+                            &mut *db_misc_context,
                             organizing,
                             organizing_parameters,
                             country_handler,
@@ -11837,6 +11842,8 @@ impl CGame {
                     honor_ranks,
                     increment_log,
                     auction_log,
+                    db_misc,
+                    &mut *db_misc_context,
                     organizing,
                     organizing_parameters,
                     country_handler,
@@ -11929,6 +11936,7 @@ impl CGame {
     /// накопитель: исходный невозвратившийся путь их не достигал.
     pub(crate) async fn process_message_main_loop_stage<
         TimerCallback,
+        DbMiscContextOwner,
         JjcContext,
         GetTick,
     >(
@@ -11936,6 +11944,8 @@ impl CGame {
         honor_ranks: &mut CHonorRanks,
         increment_log: &mut CIncrementLog,
         auction_log: &mut CAuctionLog,
+        db_misc: &CDbMisc,
+        db_misc_context: &mut DbMiscContextOwner,
         organizing: &mut COrganizingCtrl,
         organizing_parameters: &COrganizingParam,
         country_handler: &mut CCountryHandler,
@@ -12015,6 +12025,7 @@ impl CGame {
     ) -> WorldProcessMessageStageReport
     where
         TimerCallback: Copy,
+        DbMiscContextOwner: DbMiscContext,
         JjcContext: JjcRunContext + ?Sized,
         GetTick: FnMut() -> u32,
     {
@@ -12033,6 +12044,8 @@ impl CGame {
             honor_ranks,
             increment_log,
             auction_log,
+            db_misc,
+            db_misc_context,
             organizing,
             organizing_parameters,
             country_handler,
@@ -13500,6 +13513,8 @@ impl CGame {
             owners.honor_ranks,
             owners.increment_log,
             owners.auction_log,
+            &*owners.db_misc,
+            owners.db_misc_context,
             owners.organizing,
             owners.organizing_parameters,
             owners.country,
@@ -17479,11 +17494,13 @@ impl CountryWarTopInfoContext for WorldCountryWarEffects<'_> {
     }
 }
 
-async fn process_world_message<TimerCallback, JjcContext>(
+async fn process_world_message<TimerCallback, DbMiscContextOwner, JjcContext>(
     game: &mut CGame,
     honor_ranks: &mut CHonorRanks,
     increment_log: &mut CIncrementLog,
     auction_log: &mut CAuctionLog,
+    db_misc: &CDbMisc,
+    db_misc_context: &mut DbMiscContextOwner,
     organizing: &mut COrganizingCtrl,
     organizing_parameters: &COrganizingParam,
     country_handler: &mut CCountryHandler,
@@ -17560,6 +17577,7 @@ async fn process_world_message<TimerCallback, JjcContext>(
 ) -> ProcessedWorldEvent
 where
     TimerCallback: Copy,
+    DbMiscContextOwner: DbMiscContext,
     JjcContext: JjcRunContext + ?Sized,
 {
     let message_type = message.message_type();
@@ -17739,7 +17757,7 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::MiscAuction) {
-        match on_msg_m2w_auction(game, message) {
+        match on_msg_m2w_auction(game, db_misc, db_misc_context, message) {
             WorldMiscAuctionMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::MiscAuctionMessage {
                     source,
@@ -17752,7 +17770,7 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::ServerAuction) {
-        match on_msg_s2w_auction(game, &*auction_log, message) {
+        match on_msg_s2w_auction(game, &*auction_log, db_misc, message) {
             WorldServerAuctionMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::ServerAuctionMessage {
                     source,

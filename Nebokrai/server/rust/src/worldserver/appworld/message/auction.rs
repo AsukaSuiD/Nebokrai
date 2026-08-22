@@ -1,14 +1,16 @@
 //! WorldServer dispatcher-owner `OnMSG_S2W_AUCTION`.
 //!
-//! Статус владельца: `IMPLEMENTED` для relay/BaiTan/auction-bang ветвей
-//! `0x60802/03/05/07/09/0F/10/11/12/13/14`; `0x60801/04/06/0A..0E`
-//! остаются owned `Pending` до concrete DB, GlobeSetup и player-virtual
+//! Статус владельца: `IMPLEMENTED` для relay/DB queue/BaiTan/auction-bang
+//! ветвей `0x60801..07/09/0F..14`; `0x60808/0A..0E` остаются owned `Pending`
+//! до concrete GlobeSetup, SQL-load, auction notice и player-virtual
 //! владельцев. Точная пара: `WorldServer/Nworldserver.exe +
 //! WorldServer/WorldServer.pdb`, исходный owner
 //! `e:\\svn\\fengyun_russia_dev\\server\\worldserver\\appworld\\message\\auction.cpp:10`,
 //! RVA `0x000A5650`.
 //!
-//! Реализованные relay меняют только literal opcode и сохраняют отсутствие
+//! `0x60801/04/06` создают один owned `DbNote`, декодируют `CGoodsNode` и
+//! ставят соответствующий input operation; только non-DB item `0x60801`
+//! зануляет buyer и немедленно отправляет `0x14ED01`. Реализованные relay меняют только literal opcode и сохраняют отсутствие
 //! `Update` там, где его нет в EXE. `0x60807` добавляет source map как один
 //! unsigned byte перед непрочитанным payload. `0x60811/12` сохраняют порядок
 //! чтения и точные BaiTan mutations; `0x60814` проверяет только существование
@@ -17,10 +19,15 @@
 //! layout и order side effects.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::dbaccess::worlddb::dbmisc::{CDbMisc, DbNote, OperatorType};
 use crate::public::auctionlog::CAuctionLog;
+use crate::public::auctionnode::{GoodsNodeSerializeError, GoodsNodeUnserializeError, GoodsState};
 use crate::worldserver::worldserver::game::{CGame, WorldBaiTanRemoval};
 
 const AUCTION_GAME_SERVER: u32 = 5;
+const INSERT_AUCTION_ITEM: i32 = 0x0006_0801;
+const MODIFY_AUCTION_STATE: i32 = 0x0006_0804;
+const MODIFY_AUCTION_SALE: i32 = 0x0006_0806;
 const FORWARD_INSERT_RESULT: i32 = 0x0006_0802;
 const FORWARD_SEARCH_RESULT: i32 = 0x0006_0803;
 const FORWARD_BUY: i32 = 0x0006_0805;
@@ -36,6 +43,10 @@ const FORWARD_PLAYER_RESULT: i32 = 0x0006_0814;
 /// Наблюдаемый результат одной доказанной S2W auction-ветви.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldServerAuctionMessageOutcome {
+    InputQueued {
+        request_type: i32,
+        operation: OperatorType,
+    },
     Forwarded {
         request_type: i32,
         response_type: i32,
@@ -66,6 +77,14 @@ pub(crate) enum WorldServerAuctionMessageOutcome {
     NoOp {
         request_type: i32,
     },
+    GoodsNodeUnserializeBlocked {
+        request_type: i32,
+        source: GoodsNodeUnserializeError,
+    },
+    GoodsNodeSerializeBlocked {
+        request_type: i32,
+        source: GoodsNodeSerializeError,
+    },
 }
 
 /// Сохранённое сообщение для ещё не восстановленной части S2W owner-а.
@@ -78,6 +97,7 @@ pub(crate) enum WorldServerAuctionMessageDispatch {
 pub(crate) fn on_msg_s2w_auction(
     game: &mut CGame,
     auction_log: &CAuctionLog,
+    db_misc: &CDbMisc,
     mut message: CMessage,
 ) -> WorldServerAuctionMessageDispatch {
     let request_type = message.message_type();
@@ -104,6 +124,65 @@ pub(crate) fn on_msg_s2w_auction(
     };
 
     match request_type {
+        INSERT_AUCTION_ITEM => {
+            if !game
+                .game_server(AUCTION_GAME_SERVER)
+                .is_some_and(|game_server| game_server.connected)
+            {
+                return WorldServerAuctionMessageDispatch::Handled(
+                    WorldServerAuctionMessageOutcome::NoOp { request_type },
+                );
+            }
+            let mut note = Box::new(DbNote::new());
+            let decode = {
+                let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                note.goods.unserialize(source, cursor)
+            };
+            if let Err(source) = decode {
+                return WorldServerAuctionMessageDispatch::Handled(
+                    WorldServerAuctionMessageOutcome::GoodsNodeUnserializeBlocked {
+                        request_type,
+                        source,
+                    },
+                );
+            }
+            if note.goods.is_db() {
+                note.e_type = OperatorType::OT_IN_INSERT_NEW_ITEM;
+                let _ = db_misc.push_item_to_list_in(note, false);
+                return WorldServerAuctionMessageDispatch::Handled(
+                    WorldServerAuctionMessageOutcome::InputQueued {
+                        request_type,
+                        operation: OperatorType::OT_IN_INSERT_NEW_ITEM,
+                    },
+                );
+            }
+            note.goods.set_buyer_id(0);
+            let bytes = match note.goods.serialize() {
+                Ok(bytes) => bytes,
+                Err(source) => {
+                    return WorldServerAuctionMessageDispatch::Handled(
+                        WorldServerAuctionMessageOutcome::GoodsNodeSerializeBlocked {
+                            request_type,
+                            source,
+                        },
+                    );
+                }
+            };
+            let mut response = CMessage::new(0x0014_ED01);
+            response.base_mut().add(&bytes);
+            let wire = response.as_wire_bytes().to_vec();
+            let delivery = response.send_to_map_id(
+                game.current_game_server_sender().as_ref(),
+                AUCTION_GAME_SERVER as i32,
+            );
+            WorldServerAuctionMessageDispatch::Handled(WorldServerAuctionMessageOutcome::Forwarded {
+                request_type,
+                response_type: 0x0014_ED01,
+                route_map_id: AUCTION_GAME_SERVER as i32,
+                wire,
+                delivery,
+            })
+        }
         FORWARD_INSERT_RESULT => forward_to_auction(&mut message, 0x0014_ED06)
             .map_or_else(
                 || WorldServerAuctionMessageDispatch::Handled(WorldServerAuctionMessageOutcome::NoOp { request_type }),
@@ -114,6 +193,32 @@ pub(crate) fn on_msg_s2w_auction(
                 || WorldServerAuctionMessageDispatch::Handled(WorldServerAuctionMessageOutcome::NoOp { request_type }),
                 WorldServerAuctionMessageDispatch::Handled,
             ),
+        MODIFY_AUCTION_STATE => {
+            let mut note = Box::new(DbNote::new());
+            let decode = {
+                let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                note.goods.unserialize(source, cursor)
+            };
+            if let Err(source) = decode {
+                return WorldServerAuctionMessageDispatch::Handled(
+                    WorldServerAuctionMessageOutcome::GoodsNodeUnserializeBlocked {
+                        request_type,
+                        source,
+                    },
+                );
+            }
+            if note.goods.goods_state() == GoodsState::PRE_BUY {
+                return WorldServerAuctionMessageDispatch::Handled(
+                    WorldServerAuctionMessageOutcome::NoOp { request_type },
+                );
+            }
+            note.e_type = OperatorType::OT_IN_MODIFY_STATE_A2B;
+            let _ = db_misc.push_item_to_list_in(note, false);
+            WorldServerAuctionMessageDispatch::Handled(WorldServerAuctionMessageOutcome::InputQueued {
+                request_type,
+                operation: OperatorType::OT_IN_MODIFY_STATE_A2B,
+            })
+        }
         FORWARD_BUY => {
             message.set_message_type(0x0014_ED04);
             let wire = message.as_wire_bytes().to_vec();
@@ -127,6 +232,27 @@ pub(crate) fn on_msg_s2w_auction(
                 route_map_id: AUCTION_GAME_SERVER as i32,
                 wire,
                 delivery,
+            })
+        }
+        MODIFY_AUCTION_SALE => {
+            let mut note = Box::new(DbNote::new());
+            let decode = {
+                let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                note.goods.unserialize(source, cursor)
+            };
+            if let Err(source) = decode {
+                return WorldServerAuctionMessageDispatch::Handled(
+                    WorldServerAuctionMessageOutcome::GoodsNodeUnserializeBlocked {
+                        request_type,
+                        source,
+                    },
+                );
+            }
+            note.e_type = OperatorType::OT_IN_MODIFY_STATE_A2S;
+            let _ = db_misc.push_item_to_list_in(note, false);
+            WorldServerAuctionMessageDispatch::Handled(WorldServerAuctionMessageOutcome::InputQueued {
+                request_type,
+                operation: OperatorType::OT_IN_MODIFY_STATE_A2S,
             })
         }
         FORWARD_SYNC => {

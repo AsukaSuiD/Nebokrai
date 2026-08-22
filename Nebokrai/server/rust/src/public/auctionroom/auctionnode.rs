@@ -376,6 +376,21 @@ impl CGoodsNode {
         self.owner_id
     }
 
+    /// Возвращает exact `m_bDb` для World auction relay.
+    pub(crate) const fn is_db(&self) -> bool {
+        self.db
+    }
+
+    /// Возвращает PDB-подтверждённый `m_AucInfo.dwBuyerId`.
+    pub(crate) fn buyer_id(&self) -> u32 {
+        self.auction_info.buyer_id()
+    }
+
+    /// Выполняет единственное доказанное присваивание `dwBuyerId`.
+    pub(crate) fn set_buyer_id(&mut self, buyer_id: u32) {
+        self.auction_info.set_buyer_id(buyer_id);
+    }
+
     /// Возвращает старый byte money type.
     pub(super) const fn money_type(&self) -> u8 {
         self.money_type
