@@ -173,6 +173,16 @@ pub(crate) struct FourNationWarRegionIndexBlock {
     pub(crate) setup_count: usize,
 }
 
+/// Внешние owner-ы достигнутого `OnWarStart`.
+pub(crate) trait FourNationWarStartContext {
+    fn send_all(&mut self, message: &CMessage);
+    fn region_name(&mut self, region_id: i32) -> Option<Vec<u8>>;
+    fn war_start_notice(&mut self, region_name: &[u8]) -> Vec<u8>;
+    fn war_start_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8>;
+    fn send_organizing_info(&mut self, text: &[u8], color: u32, trailing: u32);
+    fn put_war_log(&mut self, text: &[u8]);
+}
+
 impl From<TagTimeArithmeticBlock> for FourNationWarLoadError {
     fn from(value: TagTimeArithmeticBlock) -> Self {
         Self::Arithmetic(value)
@@ -462,6 +472,31 @@ impl CFourNationWarSys {
                 index: index as i32,
                 setup_count,
             })
+    }
+
+    /// `OnWarStart`: state `CIS_Fight`, broadcast `0x7FE3C`, затем region
+    /// notice `XBWS0022` и war-log `XBWS0023`.
+    pub(crate) fn on_war_start<Context: FourNationWarStartContext + ?Sized>(
+        &mut self,
+        index: i32,
+        context: &mut Context,
+    ) -> Result<(), FourNationWarRegionIndexBlock> {
+        let setup_count = self.setups.len();
+        let setup = self.setups.get_mut(usize::try_from(index).map_err(|_| {
+            FourNationWarRegionIndexBlock { index, setup_count }
+        })?).ok_or(FourNationWarRegionIndexBlock { index, setup_count })?;
+        setup.region_state = 1;
+        let mut message = CMessage::new(0x7FE3C);
+        message.base_mut().add_long(index);
+        context.send_all(&message);
+        let Some(region_name) = context.region_name(setup.region_id) else {
+            return Ok(());
+        };
+        let notice = context.war_start_notice(&region_name);
+        context.send_organizing_info(&notice, 0xFFFF_FE92, 0xFFFF_0000);
+        let log = context.war_start_log(index, &region_name);
+        context.put_war_log(&log);
+        Ok(())
     }
     /// Сохраняет единственный внешний контракт exact `OneCountrySignUp`.
     pub(crate) const fn one_country_sign_up(country: i32) -> FourNationSignUpDisposition {
@@ -1098,7 +1133,7 @@ fn next_war_i32<'a>(
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::OnWarStart
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:333
@@ -1106,6 +1141,7 @@ fn next_war_i32<'a>(
 // ADDRESS: 00494cc0
 // PROTOTYPE: void __stdcall OnWarStart(long param_1)
 //
+// IMPLEMENTED_OWNER: `CFourNationWarSys::on_war_start` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
