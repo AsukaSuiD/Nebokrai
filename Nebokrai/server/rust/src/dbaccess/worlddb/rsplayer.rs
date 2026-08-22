@@ -18,6 +18,7 @@
 //! `GetPlayerCountryByID` RVA `0x00101E30`, `GetPlayerNameByID` RVA
 //! `0x00105980`, `ValidatePlayerIDInCdkey` RVA `0x00101350`,
 //! `GetPlayerData` RVA `0x00114EA0`,
+//! caller-connection путь `LoadPlayer` RVA `0x001117F0`,
 //! `OpenPlayerBaseInMem` RVA `0x0010F280`, внешний `OpenPlayerBase` RVA
 //! `0x0010F750`,
 //! `RestorePlayer` RVA `0x00101260` и
@@ -25,7 +26,8 @@
 //! `0x0010FB90`, внешний `LoadHonorRanks` RVA `0x001113B0`, `InsertHonorRanks`
 //! RVA `0x00101680`, `SaveHonorRanksByType` RVA `0x00105080` и внешний
 //! `SaveHonorRanks` RVA `0x00105E20` и `StatRanks` RVA `0x00109570` —
-//! `IMPLEMENTED`; constructor, destructor
+//! `IMPLEMENTED`; `LoadPlayer` имеет статус
+//! `IMPLEMENTED_PARTIAL/VERIFIED_DISASSEMBLY`; constructor, destructor
 //! и остальные функции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -467,6 +469,18 @@
 //! `get cdkey ERROR`. Параметризованный `tiberius::Query` заменяет только
 //! `_sprintf`/ADO и исключает старый SQL-injection/buffer-overflow дефект;
 //! Windows-1251 сохраняет ANSI C-string границу имени и результата.
+//!
+//! Полный caller-connection `LoadPlayer` сохраняет исходную короткую цепочку:
+//! одна ability-row со всеми scalar/binary post-load правилами, отдельный
+//! `LoadQuestData`, затем `CDBGoods::LoadGoods` и `CRsJJcSys::LoadJJcData`.
+//! Каждый следующий owner вызывается только после `true` предыдущего. Exact
+//! `0x00514D0E/0x00514D39` подтверждают порядок Goods/JJC, `0x00514E56` —
+//! normal `AL=1`, общий failure-tail `0x00514D9C` — `AL=0`. Таймер и запись
+//! `TemptLoadDataLog` являются технической диагностикой и не входят в игровой
+//! контракт. `TiberiusPlayerLoadData` связывает этот owner с готовым
+//! `CPlayer::LoadData`, не пряча registry/config в mutable singleton.
+//! Автономная ветка null connection пока остаётся честным
+//! `PendingStandaloneConnection`; рабочий DB-thread передаёт готовое соединение.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::Infallible;
@@ -480,14 +494,18 @@ use futures_util::TryStreamExt;
 use tiberius::{Query, Row};
 
 use crate::dbaccess::worlddb::dbgoods::{
-    DbGoodsOwner, GoodsFiledSaveOutcome, PlayerGoodsFiledSnapshot,
+    DbGoodsOwner, GoodsFiledSaveOutcome, GoodsLoadBlock, GoodsLoadFailure, GoodsLoadOutcome,
+    PlayerGoodsFiledSnapshot,
 };
 use crate::dbaccess::worlddb::goodslistener::GoodsTraversalBlock;
-use crate::dbaccess::worlddb::rsjjcsys::{PlayerJjcDataSnapshot, RsJjcSysOwner};
+use crate::dbaccess::worlddb::rsjjcsys::{
+    PlayerJjcDataSnapshot, PlayerJjcLoadFailure, PlayerJjcLoadOutcome, RsJjcSysOwner,
+};
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::public::date::{TagTime, TagTimeArithmeticBlock};
 use crate::setup::leitingsetup::CThingSetup;
-use crate::worldserver::appworld::player::CPlayer;
+use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
+use crate::worldserver::appworld::player::{CPlayer, PlayerLoadDataOwner};
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
 use crate::worldserver::worldserver::playerranks::{CPlayerRanks, PlayerRankAddBlock};
 
@@ -1237,6 +1255,24 @@ pub(crate) trait RsPlayerOwner {
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> PlayerRanksStatOutcome;
 
+    /// Выполняет полную цепочку `LoadPlayer` до первого false/block.
+    async fn load_player<J, G, WeekDay>(
+        &mut self,
+        player: &mut CPlayer,
+        active_transaction: Option<&mut WorldTdsClient>,
+        thing_setup: &CThingSetup,
+        get_week_day: WeekDay,
+        jjc_owner: &mut J,
+        goods_owner: &mut G,
+        goods_registry: &GoodsBasePropertiesRegistry,
+        changed_goods_indices: &BTreeMap<u32, u32>,
+        dakong_addon_types: &BTreeSet<i32>,
+    ) -> PlayerLoadOutcome
+    where
+        J: RsJjcSysOwner,
+        G: DbGoodsOwner,
+        WeekDay: FnMut() -> u16;
+
     /// Выполняет три create-стадии, останавливаясь после первого исходного false.
     async fn create_player<J: RsJjcSysOwner, G: DbGoodsOwner>(
         &mut self,
@@ -1345,6 +1381,61 @@ pub(crate) trait RsPlayerOwner {
 #[derive(Default)]
 pub(crate) struct TiberiusRsPlayer {
     notices: VecDeque<RsPlayerNotice>,
+}
+
+/// Caller-owned связка полного `CRsPlayer::LoadPlayer` для `CPlayer::LoadData`.
+pub(crate) struct TiberiusPlayerLoadData<'owner, J, G, WeekDay> {
+    pub(crate) player_owner: &'owner mut TiberiusRsPlayer,
+    pub(crate) active_transaction: &'owner mut WorldTdsClient,
+    pub(crate) thing_setup: &'owner CThingSetup,
+    pub(crate) get_week_day: &'owner mut WeekDay,
+    pub(crate) jjc_owner: &'owner mut J,
+    pub(crate) goods_owner: &'owner mut G,
+    pub(crate) goods_registry: &'owner GoodsBasePropertiesRegistry,
+    pub(crate) changed_goods_indices: &'owner BTreeMap<u32, u32>,
+    pub(crate) dakong_addon_types: &'owner BTreeSet<i32>,
+}
+
+#[derive(Debug)]
+pub(crate) enum TiberiusPlayerLoadDataBlock {
+    Reconstruction(PlayerLoadBlock),
+    PendingStandaloneConnection,
+}
+
+impl<J, G, WeekDay> PlayerLoadDataOwner for TiberiusPlayerLoadData<'_, J, G, WeekDay>
+where
+    J: RsJjcSysOwner,
+    G: DbGoodsOwner,
+    WeekDay: FnMut() -> u16,
+{
+    type Block = TiberiusPlayerLoadDataBlock;
+
+    async fn load_player(&mut self, player: &mut CPlayer) -> Result<bool, Self::Block> {
+        match self
+            .player_owner
+            .load_player(
+                player,
+                Some(&mut *self.active_transaction),
+                self.thing_setup,
+                &mut *self.get_week_day,
+                self.jjc_owner,
+                self.goods_owner,
+                self.goods_registry,
+                self.changed_goods_indices,
+                self.dakong_addon_types,
+            )
+            .await
+        {
+            PlayerLoadOutcome::ReturnedTrue => Ok(true),
+            PlayerLoadOutcome::ReturnedFalse(_) => Ok(false),
+            PlayerLoadOutcome::BlockedMissingFact(source) => {
+                Err(TiberiusPlayerLoadDataBlock::Reconstruction(source))
+            }
+            PlayerLoadOutcome::PendingStandaloneConnection => {
+                Err(TiberiusPlayerLoadDataBlock::PendingStandaloneConnection)
+            }
+        }
+    }
 }
 
 /// Scalar-колонка создаваемой строки `CSL_PLAYER_ABILITY`.
@@ -2316,6 +2407,28 @@ pub(crate) enum PlayerQuestQueryLoadOutcome {
     ReturnedFalse(PlayerQuestQueryLoadFailure),
 }
 
+#[derive(Debug)]
+pub(crate) enum PlayerLoadFailure {
+    Ability(PlayerAbilityQueryLoadFailure),
+    Quest(PlayerQuestQueryLoadFailure),
+    Goods(GoodsLoadFailure),
+    Jjc(PlayerJjcLoadFailure),
+}
+
+#[derive(Debug)]
+pub(crate) enum PlayerLoadBlock {
+    Ability(PlayerAbilityRowLoadFailure),
+    Goods(GoodsLoadBlock),
+}
+
+#[derive(Debug)]
+pub(crate) enum PlayerLoadOutcome {
+    ReturnedTrue,
+    ReturnedFalse(PlayerLoadFailure),
+    PendingStandaloneConnection,
+    BlockedMissingFact(PlayerLoadBlock),
+}
+
 fn required_ability_integer(
     row: &Row,
     column: &'static str,
@@ -2763,6 +2876,88 @@ impl TiberiusRsPlayer {
 }
 
 impl RsPlayerOwner for TiberiusRsPlayer {
+    async fn load_player<J, G, WeekDay>(
+        &mut self,
+        player: &mut CPlayer,
+        active_transaction: Option<&mut WorldTdsClient>,
+        thing_setup: &CThingSetup,
+        get_week_day: WeekDay,
+        jjc_owner: &mut J,
+        goods_owner: &mut G,
+        goods_registry: &GoodsBasePropertiesRegistry,
+        changed_goods_indices: &BTreeMap<u32, u32>,
+        dakong_addon_types: &BTreeSet<i32>,
+    ) -> PlayerLoadOutcome
+    where
+        J: RsJjcSysOwner,
+        G: DbGoodsOwner,
+        WeekDay: FnMut() -> u16,
+    {
+        let Some(active_transaction) = active_transaction else {
+            return PlayerLoadOutcome::PendingStandaloneConnection;
+        };
+
+        match self
+            .load_player_ability_row(
+                player,
+                Some(&mut *active_transaction),
+                thing_setup,
+                get_week_day,
+            )
+            .await
+        {
+            PlayerAbilityQueryLoadOutcome::ReturnedTrue => {}
+            PlayerAbilityQueryLoadOutcome::ReturnedFalse(source) => {
+                return PlayerLoadOutcome::ReturnedFalse(PlayerLoadFailure::Ability(source));
+            }
+            PlayerAbilityQueryLoadOutcome::BlockedMalformed(source) => {
+                return PlayerLoadOutcome::BlockedMissingFact(PlayerLoadBlock::Ability(source));
+            }
+        }
+
+        match self
+            .load_player_quest_data(player, Some(&mut *active_transaction))
+            .await
+        {
+            PlayerQuestQueryLoadOutcome::ReturnedTrue { .. } => {}
+            PlayerQuestQueryLoadOutcome::ReturnedFalse(source) => {
+                return PlayerLoadOutcome::ReturnedFalse(PlayerLoadFailure::Quest(source));
+            }
+        }
+
+        match goods_owner
+            .load_goods(
+                player,
+                Some(&mut *active_transaction),
+                goods_registry,
+                changed_goods_indices,
+                dakong_addon_types,
+            )
+            .await
+        {
+            GoodsLoadOutcome::ReturnedTrue { .. } => {}
+            GoodsLoadOutcome::ReturnedFalse(source) => {
+                return PlayerLoadOutcome::ReturnedFalse(PlayerLoadFailure::Goods(source));
+            }
+            GoodsLoadOutcome::PendingStandaloneConnection => {
+                return PlayerLoadOutcome::PendingStandaloneConnection;
+            }
+            GoodsLoadOutcome::BlockedMissingFact(source) => {
+                return PlayerLoadOutcome::BlockedMissingFact(PlayerLoadBlock::Goods(source));
+            }
+        }
+
+        match jjc_owner
+            .load_jjc_data(player, Some(&mut *active_transaction))
+            .await
+        {
+            PlayerJjcLoadOutcome::ReturnedTrue { .. } => PlayerLoadOutcome::ReturnedTrue,
+            PlayerJjcLoadOutcome::ReturnedFalse(source) => {
+                PlayerLoadOutcome::ReturnedFalse(PlayerLoadFailure::Jjc(source))
+            }
+        }
+    }
+
     async fn get_player_count_in_db_by_cdkey(
         &mut self,
         account: &[u8],
@@ -5270,7 +5465,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::LoadPlayer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_PARTIAL/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:1135
@@ -5278,6 +5473,9 @@ async fn execute_batch(
 // ADDRESS: 005117f0
 // PROTOTYPE: bool __thiscall LoadPlayer(CPlayer * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
 //
+// IMPLEMENTED_OWNER: `RsPlayerOwner::load_player` и
+// `TiberiusPlayerLoadData` выше; caller-connection цепочка полна, автономное
+// открытие при null connection ещё pending.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
