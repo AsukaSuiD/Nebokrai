@@ -2,9 +2,9 @@
 //!
 //! Статус World `CGodsBattleConf::LoadFile` RVA `0x000810D0`,
 //! `AddByteToArray` RVA `0x0007E990`, runtime accessors/mutations RVA
-//! `0x0007E460/0x0007E480/0x0007EC50` и два accessor-а RVA
-//! `0x000DEA50/0x000DEBA0`: `IMPLEMENTED`; persistence call-site ниже остаётся
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `0x0007E460/0x0007E480/0x0007EC50`, два accessor-а RVA
+//! `0x000DEA50/0x000DEBA0` и persistence call-site `SaveNpcFaction` RVA
+//! `0x0007E610`: `IMPLEMENTED_CALLSITE_FOLDED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
 //! SHA-256 PDB
@@ -773,7 +773,7 @@ fn write_gods_battle_string(
 
 // ============================================================================
 // FUNCTION: CGodsBattleConf::SaveNpcFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_CALLSITE_FOLDED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:321
@@ -781,6 +781,12 @@ fn write_gods_battle_string(
 // ADDRESS: 0047e610
 // PROTOTYPE: void __thiscall SaveNpcFaction(void)
 //
+// IMPLEMENTED_OWNER: единственный достигнутый caller `OnServerMessage`
+// opcode `0x5FA0F`, subtype `2`, материализует vector snapshot и напрямую
+// вызывает `RsGodsBattleOwner::save_npc_faction_autonomous`. Это заменяет
+// только цепочку process-global `GetGame`/nullable pointer: DB-вызов остаётся
+// no-argument overload-ом с собственным соединением, его bool не влияет на
+// opcode, а отсутствие DB-owner-а остаётся тихим отсутствием side effect.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

@@ -246,8 +246,10 @@
 //! `1` и возвращает обновлённую пару тому же socket. Subtype `2` читает имя
 //! `0x80` и faction, меняет первую byte-exact NPC-запись и затем безусловно
 //! достигает nullable `CRSGodsBattle::SaveNpcFaction`; отсутствие совпадения
-//! не подавляет save. Rust использует готовый Tiberius owner и awaits его до
-//! следующего FIFO slot-а, сохраняя синхронный порядок старого ADO call-site.
+//! не подавляет save. `CGodsBattleConf` вызывает именно no-argument overload:
+//! тот открывает отдельное соединение и не входит в caller-transaction opcode.
+//! Rust вызывает тот же автономный Tiberius owner и awaits его до следующего
+//! FIFO slot-а, сохраняя синхронный порядок старого ADO call-site.
 //!
 //! `0x5FA10` не читает payload: nullable `CRSGodsBattle` последовательно
 //! дописывает рейтинг faction `5`, затем faction `6`. Второй SQL и ответ
@@ -2544,7 +2546,7 @@ pub(crate) async fn on_server_message(
                         Some(database_owner) => {
                             let notice_checkpoint = database_owner.notice_checkpoint();
                             let save_returned = database_owner
-                                .save_npc_faction(&snapshots, gods_battle_database)
+                                .save_npc_faction_autonomous(&snapshots)
                                 .await;
                             let notices = database_owner.drain_notices_after(notice_checkpoint);
                             WorldGodsBattleNpcSave::Completed {
