@@ -52,12 +52,17 @@ impl CHitLevelSetup {
         &self.entries
     }
 
+    /// Очищает owner на той же позиции, что и exact loader перед `rfOpen`.
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+    }
+
     /// Очищает прежний owner, читает файл стандартной библиотекой и парсит его.
     pub(crate) fn load_from_file(
         &mut self,
         path: impl AsRef<Path>,
     ) -> Result<usize, HitLevelFileLoadError> {
-        self.entries.clear();
+        self.clear();
         let source = std::fs::read(path).map_err(HitLevelFileLoadError::Io)?;
         self.load_from_bytes(&source)
             .map_err(HitLevelFileLoadError::Format)
@@ -65,7 +70,7 @@ impl CHitLevelSetup {
 
     /// Повторяет `ReadTo("*")` и три formatted unsigned-long extraction-а.
     pub(crate) fn load_from_bytes(&mut self, source: &[u8]) -> Result<usize, HitLevelFormatError> {
-        self.entries.clear();
+        self.clear();
         let mut tokens = source
             .split(u8::is_ascii_whitespace)
             .filter(|token| !token.is_empty());
@@ -218,7 +223,7 @@ fn read_u32<'a>(
 
 // ============================================================================
 // FUNCTION: CHitLevelSetup::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\hitlevelsetup.cpp:51
@@ -226,13 +231,14 @@ fn read_u32<'a>(
 // ADDRESS: 00497550
 // PROTOTYPE: bool __cdecl AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
 //
+// IMPLEMENTED_OWNER: `CHitLevelSetup::add_to_byte_array` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CHitLevelSetup::LoadHitLevelSetup
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_OWNER / VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\hitlevelsetup.cpp:22
@@ -240,6 +246,9 @@ fn read_u32<'a>(
 // ADDRESS: 004979c0
 // PROTOTYPE: bool __cdecl LoadHitLevelSetup(char * param_1)
 //
+// IMPLEMENTED_OWNER: `load_from_bytes` вместе с owned `CGame` reload path.
+// Exact `0x004979E9..0x00497A25` очищает vector до `rfOpen`, а
+// `0x00497B17..0x00497B2A` возвращает false только для отсутствующего файла.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

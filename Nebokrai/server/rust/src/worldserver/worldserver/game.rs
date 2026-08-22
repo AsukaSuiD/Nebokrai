@@ -174,6 +174,13 @@
 //! блокируют reload и оставляют первый item, как World EXE. Initial-config
 //! кодирует этот же owned owner, без внешнего TaoZhuang snapshot/callback.
 //!
+//! `CHitLevelSetup` теперь тоже принадлежит `CGame`: exact dispatcher
+//! `0x00416768..0x00416850` очищает/читает `data/hitlevel.ini`, сохраняет
+//! именно bool load-result до и после optional subtype `0x14`, а не размер
+//! payload. Missing file сохраняет исходный operator notice `ERROR`; initial-
+//! config использует этот же owner. Прежние HitLevel boolean/serialization
+//! callbacks и внешний snapshot удалены.
+//!
 //! `CDupliRegionSetup` создаётся и публикуется в `CGame` перед своим `Load`,
 //! как exact Init `0x0041901B..0x00419053`, и остаётся owned даже при
 //! load-failure до общего Release. Init читает точный
@@ -1133,6 +1140,7 @@ use crate::public::equipmentcomposelist::{
     EquipmentComposeList, EquipmentComposeSerializeError,
 };
 use crate::public::taozhuangsetup::{CTaoZhuangSetup, TaoZhuangSerializationBlock};
+use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelFormatError, HitLevelSerializeError};
 use crate::public::mystringtable::MyStringTable;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
 use crate::public::wordsfilter::CWordsFilter;
@@ -4163,7 +4171,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     GmList,
     PlayerGmList,
     RegionLevelSetup,
-    HitLevelSetup,
     AttackCity,
     FourNationWar,
     IncrementShop,
@@ -4210,7 +4217,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     LogSystem,
     GmList,
     RegionLevelSetup,
-    HitLevelSetup,
     AttackCity,
     VillageWar,
     FourNationWar,
@@ -5837,6 +5843,8 @@ pub(crate) enum WorldReloadBlock {
     EquipmentComposeSerialization(EquipmentComposeSerializeError),
     CiQingSerialization(CiQingSerializationBlock),
     TaoZhuangSerialization(TaoZhuangSerializationBlock),
+    HitLevelFormat(HitLevelFormatError),
+    HitLevelSerialization(HitLevelSerializeError),
     CountryWarOwnerRequired,
     CountryWar(CountryWarReloadBlock),
 }
@@ -6602,6 +6610,7 @@ pub(crate) struct CGame {
     equipment_compose_list: EquipmentComposeList,
     ci_qing_setup: CCiQingSetup,
     tao_zhuang_setup: CTaoZhuangSetup,
+    hit_level_setup: CHitLevelSetup,
     net_client: Option<CMyNetClient>,
     net_server: Option<CMyNetServer>,
     regions: BTreeMap<i32, WorldRegionAssignment>,
@@ -6684,6 +6693,10 @@ impl CGame {
         &self.tao_zhuang_setup
     }
 
+    pub(crate) fn hit_level_setup(&self) -> &CHitLevelSetup {
+        &self.hit_level_setup
+    }
+
     pub(crate) fn dupli_region_setup(&self) -> &CDupliRegionSetup {
         self.dupli_region_setup
             .as_ref()
@@ -6703,6 +6716,7 @@ impl CGame {
             equipment_compose_list: EquipmentComposeList::default(),
             ci_qing_setup: CCiQingSetup::default(),
             tao_zhuang_setup: CTaoZhuangSetup::default(),
+            hit_level_setup: CHitLevelSetup::default(),
             net_client: None,
             net_server: None,
             regions: BTreeMap::new(),
@@ -7743,34 +7757,51 @@ impl CGame {
                         .map_err(WorldReloadBlock::RegionSnapshot)?;
                 }
             }
-            WorldReloadProfile::RegionLevelSetup | WorldReloadProfile::HitLevelSetup => {
-                let (owner, serializer, subcode, ok, failed) =
-                    if profile == WorldReloadProfile::RegionLevelSetup {
-                        (
-                            WorldReloadBooleanOwner::RegionLevelSetup,
-                            WorldReloadSerializationOwner::RegionLevelSetup,
-                            0x11,
-                            b"Load regionlevelsetup.ini...OK!".as_slice(),
-                            b"Load regionlevelsetup.ini...FAILED!".as_slice(),
-                        )
-                    } else {
-                        (
-                            WorldReloadBooleanOwner::HitLevelSetup,
-                            WorldReloadSerializationOwner::HitLevelSetup,
-                            0x14,
-                            b"Load hitlevel.ini...OK!".as_slice(),
-                            b"Load hitlevel.ini...FAILED!".as_slice(),
-                        )
-                    };
-                if Self::reload_boolean_with_log(context, owner, ok, failed) && send_to_game_servers
-                {
+            WorldReloadProfile::RegionLevelSetup => {
+                if Self::reload_boolean_with_log(
+                    context,
+                    WorldReloadBooleanOwner::RegionLevelSetup,
+                    b"Load regionlevelsetup.ini...OK!",
+                    b"Load regionlevelsetup.ini...FAILED!",
+                ) && send_to_game_servers {
                     self.serialize_reload_owner(
                         context,
-                        serializer,
-                        subcode,
+                        WorldReloadSerializationOwner::RegionLevelSetup,
+                        0x11,
                         true,
                         &mut legacy_result,
                     );
+                }
+            }
+            WorldReloadProfile::HitLevelSetup => {
+                const PATH: &[u8] = b"data/hitlevel.ini";
+                let succeeded = match context.read_resource(PATH) {
+                    Some(source) => self
+                        .hit_level_setup
+                        .load_from_bytes(&source)
+                        .map(|_| true)
+                        .map_err(WorldReloadBlock::HitLevelFormat)?,
+                    None => {
+                        self.hit_level_setup.clear();
+                        let mut message = b"file '".to_vec();
+                        message.extend_from_slice(PATH);
+                        message.extend_from_slice(b"' can't found!");
+                        context.notify_reload_operator(b"ERROR", &message);
+                        false
+                    }
+                };
+                legacy_result = i32::from(succeeded);
+                context.add_log_text(if succeeded {
+                    b"Load hitlevel.ini...OK!"
+                } else {
+                    b"Load hitlevel.ini...FAILED!"
+                });
+                if succeeded && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    self.hit_level_setup
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::HitLevelSerialization)?;
+                    self.send_reload_payload(0x14, &payload);
                 }
             }
             WorldReloadProfile::Broadcast => {

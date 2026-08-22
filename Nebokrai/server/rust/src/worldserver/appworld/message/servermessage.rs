@@ -300,7 +300,7 @@ use crate::setup::godsbattleconf::{
     CGodsBattleConf, GodsBattleFactionXydUpdate, GodsBattleNpcFactionUpdate,
     GodsBattleSerializeError,
 };
-use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelSerializeError};
+use crate::setup::hitlevelsetup::HitLevelSerializeError;
 use crate::setup::honorelimilateconfig::HonorElimilateConfig;
 use crate::setup::incrementshoplist::{CIncrementShopList, IncrementShopSerializeError};
 use crate::setup::lingbao::{CLingBaoSetup, LingBaoSerializationBlock};
@@ -2842,10 +2842,9 @@ pub(crate) fn continue_game_server_monster_configuration(
 pub(crate) fn continue_game_server_hit_level_configuration(
     game: &CGame,
     socket_id: i32,
-    hit_levels: &CHitLevelSetup,
 ) -> WorldHitLevelConfigurationReport {
     let mut payload = Vec::new();
-    if let Err(error) = hit_levels.add_to_byte_array(&mut payload) {
+    if let Err(error) = game.hit_level_setup().add_to_byte_array(&mut payload) {
         return WorldHitLevelConfigurationReport {
             delivery: None,
             completion: WorldHitLevelConfigurationCompletion::HitLevelSetup(error),
