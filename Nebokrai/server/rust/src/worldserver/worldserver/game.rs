@@ -10437,6 +10437,7 @@ impl CGame {
                 let path = format!("regions/{region_id}.nation");
                 context.read_resource(path.as_bytes())
             },
+            |payload| self.record_game_init_log(&mut events, log, callbacks, payload),
         ) {
             Ok(report) => report,
             Err(source) => {

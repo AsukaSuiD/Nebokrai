@@ -28,6 +28,9 @@
 //! `Initialize` RVA `0x000963E0` восстанавливает country-name snapshot,
 //! очищает setup/fund registries, читает `#` weekly setup и `*` fund records,
 //! ставит достижимые calendar events и загружает `regions/<first>.nation`.
+//! Его точные `AddLogText` для отсутствующего setup/nation ресурса и неверного
+//! time order проходят через явный callback в момент исходной ветки; Rust не
+//! переносит только iostream/CRT cleanup и неинициализированные local fields.
 //! Rust хранит невыставленные timer IDs как ноль для wire, но отдельно помнит
 //! факт регистрации: ID `0` валиден, а старые неинициализированные поля при
 //! `ReLoad` были внутренним риском удаления чужого события.
@@ -452,21 +455,24 @@ impl CFourNationWarSys {
     /// постановки timers всех принятых setup-записей, как в EXE. Поэтому его
     /// отсутствие завершает bool-owner с уже зарегистрированным prefix side
     /// effect.
-    pub(crate) fn initialize<Callback: Copy, NationSource>(
+    pub(crate) fn initialize<Callback: Copy, NationSource, Log>(
         &mut self,
         source: Option<&[u8]>,
         now: TagTime,
         timer: &mut CTimer<Callback>,
         callbacks: FourNationWarCallbacks<Callback>,
         mut nation_source: NationSource,
+        mut add_log_text: Log,
     ) -> Result<FourNationWarLoadReport, FourNationWarLoadError>
     where
         NationSource: FnMut(i32) -> Option<Vec<u8>>,
+        Log: FnMut(&[u8]),
     {
         self.setups.clear();
         self.funds.clear();
         self.rects = [FourNationRect::default(); FOUR_NATION_RECT_COUNT as usize];
         let Some(source) = source else {
+            add_log_text(b"setup/FourNationWarSys.ini can't found!");
             return Err(FourNationWarLoadError::SetupResourceMissing);
         };
 
@@ -487,6 +493,12 @@ impl CFourNationWarSys {
                 report.setup_rows_accepted = report.setup_rows_accepted.wrapping_add(1);
             } else {
                 report.setup_rows_ignored_order = report.setup_rows_ignored_order.wrapping_add(1);
+                add_log_text(
+                    format!(
+                        "Setup error:[setup/FourNationWarSys.ini] Num: [{row_index}] ,ignore this!"
+                    )
+                    .as_bytes(),
+                );
             }
         }
 
@@ -510,6 +522,7 @@ impl CFourNationWarSys {
         }
 
         let Some(nation_source) = nation_source(first_region_id) else {
+            add_log_text(format!("file 'regions/{first_region_id}.nation' can't found!").as_bytes());
             return Err(FourNationWarLoadError::NationResourceMissing {
                 region_id: first_region_id,
             });
@@ -542,16 +555,18 @@ impl CFourNationWarSys {
     /// превращается в новый false. Отменяются лишь реально зарегистрированные
     /// события: это исправляет старый internal риск с неинициализированными ID
     /// и не путает отсутствие события с валидным `TimerId(0)`.
-    pub(crate) fn reload<Callback: Copy, NationSource>(
+    pub(crate) fn reload<Callback: Copy, NationSource, Log>(
         &mut self,
         source: Option<&[u8]>,
         now: TagTime,
         timer: &mut CTimer<Callback>,
         callbacks: FourNationWarCallbacks<Callback>,
         nation_source: NationSource,
+        add_log_text: Log,
     ) -> FourNationWarReloadDisposition
     where
         NationSource: FnMut(i32) -> Option<Vec<u8>>,
+        Log: FnMut(&[u8]),
     {
         let previous_setups = self.setups.len();
         let mut kill_requests = 0u32;
@@ -578,7 +593,14 @@ impl CFourNationWarSys {
             }
         }
 
-        let load = self.initialize(source, now, timer, callbacks, nation_source);
+        let load = self.initialize(
+            source,
+            now,
+            timer,
+            callbacks,
+            nation_source,
+            add_log_text,
+        );
         FourNationWarReloadDisposition::Reloaded(FourNationWarReloadReport {
             previous_setups,
             kill_requests,
