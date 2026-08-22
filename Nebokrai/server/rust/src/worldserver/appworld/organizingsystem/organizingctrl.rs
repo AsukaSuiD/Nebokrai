@@ -15,8 +15,8 @@
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
 //! `CreateFaction` RVA `0x000381A0` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
-//! публикация DB-staging `COrganizingCtrl::Initialize` RVA `0x0003B830` —
-//! `IMPLEMENTED` для подтверждённой последовательности union/faction owner-ов;
+//! полный DB/calendar/log owner `COrganizingCtrl::Initialize` RVA `0x0003B830`
+//! — `IMPLEMENTED`;
 //! `ReSetPermitDemise` RVA `0x00034810` и calendar-prefix
 //! `Initialize/OnNewDay` RVA `0x0003B830/0x0003A490` — `IMPLEMENTED`;
 //! полный `COrganizingCtrl::Run` RVA `0x0003A550` —
@@ -473,9 +473,11 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use rustix::time::{ClockId, clock_gettime};
 
 use crate::dbaccess::worlddb::rsfaction::{
-    FactionLoadOutcome, FactionPropertyLoadStaging,
+    FactionLoadOutcome, FactionPropertyLoadStaging, RsFactionOwner,
 };
-use crate::dbaccess::worlddb::rsunion::{UnionDatabaseLoadRecord, UnionLoadOutcome};
+use crate::dbaccess::worlddb::rsunion::{
+    RsUnionOwner, UnionDatabaseLoadRecord, UnionLoadOutcome,
+};
 use super::attackcitysys::CAttackCitySys;
 use super::faction::{
     CFaction, CityWarEnemyRefreshOutcome, FactionCloneSaveBlock, FactionContributorBlock,
@@ -2970,6 +2972,19 @@ pub(crate) enum OrganizingInitializeSuffixBlock {
     Billboard(FactionBillboardStatBlock),
 }
 
+/// Полный наблюдаемый результат owner-а `COrganizingCtrl::Initialize`.
+pub(crate) struct OrganizingInitializeReport {
+    pub(crate) database: OrganizingDatabaseLoadReport,
+    pub(crate) suffix: OrganizingInitializeSuffixReport,
+}
+
+/// Safe-граница полного `Initialize` не откатывает ранее опубликованный prefix
+/// либо уже поставленный timer event.
+pub(crate) enum OrganizingInitializeBlock {
+    Database(OrganizingDatabasePublishBlock),
+    Suffix(OrganizingInitializeSuffixBlock),
+}
+
 /// Наблюдаемый no-op либо обе city-war мутации `SetEnemyFactionRelation`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EnemyFactionRelationOutcome {
@@ -3355,6 +3370,103 @@ impl COrganizingCtrl {
         Ok(OrganizingInitializeSuffixReport { new_day_schedule })
     }
 
+    /// Выполняет полный owner-порядок `Initialize`: очищает reservation-list
+    /// до первого DB-вызова, публикует union prefix до запуска faction-loader,
+    /// затем без success-gate ставит calendar event и собирает billboard.
+    ///
+    /// Оба DB `int` остаются в отчёте для исходных `%d`-логов. Отказ одного
+    /// loader-а не останавливает следующий; безопасная остановка возможна
+    /// только при недоказанном raw lifetime/constructor пути publication либо
+    /// при уже описанном suffix-block.
+    pub(crate) async fn initialize_from_database_owners<UnionDb, FactionDb, Callback>(
+        &mut self,
+        union_db: &mut UnionDb,
+        faction_db: &mut FactionDb,
+        union_master_title: &[u8],
+        faction_master_title: &[u8],
+        game: &CGame,
+        parameters: &COrganizingParam,
+        current_time: TagTime,
+        timer: &mut CTimer<Callback>,
+        on_new_day: Callback,
+        add_log_text: &mut dyn FnMut(&[u8]),
+    ) -> Result<OrganizingInitializeReport, OrganizingInitializeBlock>
+    where
+        UnionDb: RsUnionOwner,
+        FactionDb: RsFactionOwner,
+        Callback: Copy,
+    {
+        self.request_establishment_union_players.clear();
+        add_log_text(b"Load OrganizingCtrl:AllConfederation...");
+
+        let (union_load_returned_true, union_records, union_reported_count) =
+            match union_db.load_all_confederations().await {
+                UnionLoadOutcome::ReturnedTrue {
+                    records,
+                    reported_count,
+                } => (true, records, reported_count),
+                UnionLoadOutcome::ReturnedFalse {
+                    records,
+                    reported_count,
+                } => (false, records, reported_count),
+            };
+        let published_unions = self
+            .publish_database_unions(union_master_title, union_records)
+            .map_err(OrganizingInitializeBlock::Database)?;
+        let union_log = format!(
+            "Load {union_reported_count} OrganizingCtrl:AllConfederation Success..."
+        );
+        add_log_text(union_log.as_bytes());
+
+        add_log_text(b"Load Faction...");
+        let faction_load = faction_db
+            .load_all_factions(faction_master_title, game, parameters)
+            .await;
+        let database = match faction_load {
+            FactionLoadOutcome::ReturnedTrue {
+                factions,
+                reported_count,
+            } => OrganizingDatabaseLoadReport {
+                published_unions,
+                published_factions: self.publish_database_factions(factions),
+                union_reported_count,
+                faction_reported_count: reported_count,
+                union_load_returned_true,
+                disposition: OrganizingDatabaseLoadDisposition::PublishedAll,
+            },
+            // Raw `LoadAllFaction` удаляет temporary map на этой ветви, поэтому
+            // из готового prefix не возникает live faction-owner.
+            FactionLoadOutcome::ReturnedFalse { reported_count, .. } => {
+                OrganizingDatabaseLoadReport {
+                    published_unions,
+                    published_factions: 0,
+                    union_reported_count,
+                    faction_reported_count: reported_count,
+                    union_load_returned_true,
+                    disposition: OrganizingDatabaseLoadDisposition::FactionLoadFailed,
+                }
+            }
+            FactionLoadOutcome::BlockedInitial { reported_count, .. }
+            | FactionLoadOutcome::BlockedMember { reported_count, .. }
+            | FactionLoadOutcome::BlockedPronounce { reported_count, .. } => {
+                OrganizingDatabaseLoadReport {
+                    published_unions,
+                    published_factions: 0,
+                    union_reported_count,
+                    faction_reported_count: reported_count,
+                    union_load_returned_true,
+                    disposition: OrganizingDatabaseLoadDisposition::FactionLoadBlocked,
+                }
+            }
+        };
+        let faction_log = format!("Load {} Faction SUCCESS...", database.faction_reported_count);
+        add_log_text(faction_log.as_bytes());
+        let suffix = self
+            .finish_database_initialize(current_time, timer, on_new_day)
+            .map_err(OrganizingInitializeBlock::Suffix)?;
+        Ok(OrganizingInitializeReport { database, suffix })
+    }
+
     /// Публикует DB-готовые union/faction owner-ы в порядке `Initialize`.
     ///
     /// Exact `Initialize` сперва чистит request-list, затем `LoadAllConfederation`
@@ -3370,6 +3482,7 @@ impl COrganizingCtrl {
         unions: Vec<UnionDatabaseLoadRecord>,
         factions: FactionPropertyLoadStaging,
     ) -> Result<OrganizingDatabasePublishReport, OrganizingDatabasePublishBlock> {
+        self.request_establishment_union_players.clear();
         let published_unions = self.publish_database_unions(union_master_title, unions)?;
         let published_factions = self.publish_database_factions(factions);
         Ok(OrganizingDatabasePublishReport {
@@ -3385,6 +3498,7 @@ impl COrganizingCtrl {
         unions: UnionLoadOutcome,
         factions: FactionLoadOutcome,
     ) -> Result<OrganizingDatabaseLoadReport, OrganizingDatabasePublishBlock> {
+        self.request_establishment_union_players.clear();
         let (union_load_returned_true, union_records, union_reported_count) = match unions {
             UnionLoadOutcome::ReturnedTrue {
                 records,
@@ -3436,7 +3550,6 @@ impl COrganizingCtrl {
         union_master_title: &[u8],
         unions: Vec<UnionDatabaseLoadRecord>,
     ) -> Result<usize, OrganizingDatabasePublishBlock> {
-        self.request_establishment_union_players.clear();
         let published_unions = unions.len();
         for record in unions {
             let union_id = record.union_id;
@@ -9477,7 +9590,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::Initialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:106
@@ -9485,6 +9598,11 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 0043b830
 // PROTOTYPE: bool __thiscall Initialize(void)
 //
+// IMPLEMENTED_OWNER: `initialize_from_database_owners` выше. Порядок: clear
+// reservation-list, `AddLogText` старта union, loader/publication union-prefix,
+// `%d` log, старт faction, faction loader/publication-or-cleanup, второй `%d`
+// log, initial `OnNewDay` event и три billboard stat-owner-а. DB `int` не
+// является success-gate; Rust заменяет только недоказанный raw UB typed block-ом.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
