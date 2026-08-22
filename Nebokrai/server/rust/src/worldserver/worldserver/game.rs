@@ -6141,6 +6141,7 @@ pub(crate) enum WorldReloadBlock {
     FourNationWarOwnerRequired,
     FourNationWarSerialization(FourNationWarSerializationBlock),
     TimeToReturnOwnerRequired,
+    TimeToReturnLoad(TimeToReturnLoadError),
     VillageWarOwnerRequired,
     VillageWar(VillageWarReloadBlock),
     AttackCity(AttackCityReloadBlock<OrganizingCityWarResultContextBlock>),
@@ -8023,15 +8024,17 @@ impl CGame {
             let _ = self.load_server_resource_from_context(context);
         }
         let source = context.read_resource(b"setup/TimeToReturn.ini");
-        let loaded = time_to_return
-            .reload(source.as_deref(), now, timer, callbacks)
-            .is_ok();
-        context.add_log_text(if loaded {
-            b"Load TimeToReturn...OK!"
-        } else {
-            b"Load TimeToReturn...FAILED!"
-        });
-        Ok(0)
+        match time_to_return.reload(source.as_deref(), now, timer, callbacks) {
+            Ok(_) => {}
+            Err(TimeToReturnLoadError::ResourceMissing) => {
+                context.add_log_text(b"setup/TimeToReturn.ini can't found!");
+            }
+            Err(source) => return Err(WorldReloadBlock::TimeToReturnLoad(source)),
+        }
+        // VERIFIED_DISASSEMBLY 0x00473CC1 и caller 0x004173C7..0x004173D0:
+        // missing-файл тоже даёт bool `1`, который становится ReLoad result.
+        context.add_log_text(b"Load TimeToReturn...OK!");
+        Ok(1)
     }
 
     /// Выполняет concrete `CVillageWarSys::ReLoad` для main-loop профиля.
@@ -10764,6 +10767,15 @@ impl CGame {
             time_to_return_callbacks,
         ) {
             Ok(report) => report,
+            Err(TimeToReturnLoadError::ResourceMissing) => {
+                self.record_game_init_log(
+                    &mut events,
+                    log,
+                    callbacks,
+                    b"setup/TimeToReturn.ini can't found!",
+                );
+                TimeToReturnLoadReport::default()
+            }
             Err(source) => {
                 let owner = WorldGameInitBooleanOwner::InitializeTimeToReturn;
                 events.push(WorldGameInitEvent::BooleanOwner {

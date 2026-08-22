@@ -8,12 +8,14 @@
 //! `setup/TimeToReturn.ini`, а callback отправляет `0x7FA13` с двумя signed
 //! long: map ID и buffer time. `BTreeMap`, typed `TimerId` и typed errors
 //! заменяют STL, singleton и неинициализированные event IDs без смены wire,
-//! календарных границ или порядка side effects.
+//! календарных границ или порядка side effects. Exact load-epilogue
+//! `0x00473CC1` возвращает `1` и после missing-file log; safe `Result`
+//! отделяет эту legacy mapping от ошибок повреждённого содержимого.
 //!
 //! Exact `load` очищал map, но не отменял уже созданные events; эта странность
 //! сохранена. `reload` отдельно отменяет IDs в map-order перед `load`. Невалидный
 //! календарный input не получает старую неинициализированную запись: Rust
-//! возвращает явную ошибку на той же bool-гранящей позиции caller-а.
+//! возвращает явную ошибку вместо чтения неинициализированных значений.
 
 use std::collections::BTreeMap;
 
