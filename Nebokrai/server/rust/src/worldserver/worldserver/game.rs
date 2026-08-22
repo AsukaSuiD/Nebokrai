@@ -142,6 +142,11 @@
 //! all-numbers gate; initial-config проверяет `IsValid` и кодирует subtype
 //! `0x31` из того же owner-а. Прежние внешние callback/snapshot-ы этих путей
 //! удалены.
+//! Reload-профиль `InvalidStr` по exact
+//! `0x00416C75..0x00416CA8` вызывает тот же owned `ReloadFilter`: failure
+//! молча идёт в общий epilogue, success пишет только `Load InvalidStr...OK!`,
+//! а общий legacy return-slot остаётся нулевым. Resource-context заменяет
+//! `fopen`, но чтение charcode начинается только после доступного word-list.
 //!
 //! `EquipmentComposeList` также принадлежит единственному `CGame`: reload и
 //! initial-config serializer читают одну пару ordered map. Exact caller
@@ -4140,7 +4145,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     RegionLevelSetup,
     HitLevelSetup,
     AttackCity,
-    InvalidStrings,
     FourNationWar,
     IncrementShop,
     Contribute,
@@ -7752,7 +7756,16 @@ impl CGame {
                 }
             }
             WorldReloadProfile::InvalidStrings => {
-                if context.call_boolean_owner(WorldReloadBooleanOwner::InvalidStrings) != 0 {
+                let filter_path = self.words_filter.filter_file_name().to_vec();
+                let char_code_path = self.words_filter.char_code_file_name().to_vec();
+                let filter_source = context.read_resource(&filter_path);
+                let char_code_source = filter_source
+                    .as_ref()
+                    .and_then(|_| context.read_resource(&char_code_path));
+                if self
+                    .words_filter
+                    .reload(filter_source.as_deref(), char_code_source.as_deref())
+                {
                     context.add_log_text(b"Load InvalidStr...OK!");
                 }
             }
