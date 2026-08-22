@@ -4596,7 +4596,7 @@ fn read_player_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CPlayer::CPlayer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:26
@@ -4604,6 +4604,9 @@ fn read_player_array<const N: usize>(
 // ADDRESS: 0045eb10
 // PROTOTYPE: undefined __thiscall CPlayer(void)
 //
+// Реализовано выше как достигнутое constructor-state
+// строки/коллекции, type `400`, defaults и volume сохранены; недостигнутый
+// layout остаётся typed partial owner-ом, а не копией Windows ABI.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
