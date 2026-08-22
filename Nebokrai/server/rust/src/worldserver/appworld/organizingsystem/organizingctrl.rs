@@ -2877,6 +2877,14 @@ pub(crate) struct COrganizingCtrl {
     detached_union_membership_lookup: Cell<Option<(i32, FreeFactionLookup)>>,
 }
 
+/// Наблюдаемый no-op либо обе city-war мутации `SetEnemyFactionRelation`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EnemyFactionRelationOutcome {
+    FirstFactionMissing,
+    SecondFactionMissing,
+    Applied,
+}
+
 /// Разделённый borrow faction-map для union snapshot во время mutable union lookup.
 struct UnionFactionMapView<'a> {
     factions: &'a BTreeMap<i32, Option<Box<CFaction>>>,
@@ -5397,6 +5405,40 @@ impl COrganizingCtrl {
         };
         faction.add_city_war_enemy_organizing(enemy_organizing_id, context)?;
         Ok(true)
+    }
+
+    /// Применяет одну загруженную пару `CFactionWarSys` к обоим city-war set.
+    ///
+    /// Exact controller сначала отдельно ищет обе positive faction ID и
+    /// выполняет оба virtual `AddCityWarEnemyOrganizing` только когда обе
+    /// живы. Поэтому первый mutation и его `WS0160` log всегда происходят
+    /// раньше второго; `FactionEnemyMutationContext` остаётся тем же внешним
+    /// string-table/war-log owner-ом, а не упрощается до прямой вставки set.
+    pub(crate) fn set_enemy_faction_relation<Context>(
+        &mut self,
+        first_faction_id: i32,
+        second_faction_id: i32,
+        context: &mut Context,
+    ) -> Result<EnemyFactionRelationOutcome, FactionEnemyMutationBlock>
+    where
+        Context: FactionEnemyMutationContext,
+    {
+        let Some(first_id) = (first_faction_id > 0)
+            .then(|| self.faction_by_id(first_faction_id).map(CFaction::faction_id))
+            .flatten()
+        else {
+            return Ok(EnemyFactionRelationOutcome::FirstFactionMissing);
+        };
+        let Some(second_id) = (second_faction_id > 0)
+            .then(|| self.faction_by_id(second_faction_id).map(CFaction::faction_id))
+            .flatten()
+        else {
+            return Ok(EnemyFactionRelationOutcome::SecondFactionMissing);
+        };
+
+        self.add_city_war_enemy_organizing(first_id, second_id, context)?;
+        self.add_city_war_enemy_organizing(second_id, first_id, context)?;
+        Ok(EnemyFactionRelationOutcome::Applied)
     }
 
     /// Возвращает следующий organizing ID по exact signed maximum обоих map.
@@ -8807,7 +8849,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::SetEnemyFactionRelation
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1296
@@ -8815,6 +8857,10 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 00437a40
 // PROTOTYPE: void __thiscall SetEnemyFactionRelation(long param_1, long param_2)
 //
+// IMPLEMENTED_OWNER: `set_enemy_faction_relation` выше сохраняет две positive
+// lookup-гранцы, no-op при nullable miss и ordered два virtual
+// `AddCityWarEnemyOrganizing`; Rust `Result` локализует уже подтверждённую
+// safe-границу formatter-а, не подменяя её чтением за old stack buffer.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
