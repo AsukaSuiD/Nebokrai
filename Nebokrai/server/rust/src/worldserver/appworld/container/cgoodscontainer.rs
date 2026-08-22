@@ -31,6 +31,10 @@
 //! композицией двух safe state-owner-ов; embedded listeners конкретных goods-
 //! контейнеров пока не регистрируются, поскольку оба их callback-а доказанно
 //! сведены линкером к no-op `0x004DBD10`.
+//! GUID-object и typed-GUID forwarder-ы ниже делегируют concrete storage через
+//! общий `ContainerGuidStorage`: null object сохраняет null, а type scalar,
+//! как в EXE, не читается. Это заменяет только erased `CBaseObject*` и vtable,
+//! не меняя identity либо порядок lookup/remove у concrete контейнеров.
 
 use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsbaseproperties::GAP_PARTICULAR_ATTRIBUTE;
@@ -211,7 +215,7 @@ pub(crate) fn add_to_occupied_position(
 
 // ============================================================================
 // FUNCTION: CGoodsContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cgoodscontainer.cpp:238
@@ -219,13 +223,15 @@ pub(crate) fn add_to_occupied_position(
 // ADDRESS: 004e0630
 // PROTOTYPE: CBaseObject * __thiscall Remove(CBaseObject * param_1, void * param_2)
 //
+// IMPLEMENTED_OWNER: `remove_by_object_guid` из `ccontainer.rs` у concrete
+// `ContainerGuidStorage`; `None` сохраняет исходный null gate.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGoodsContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cgoodscontainer.cpp:243
@@ -233,13 +239,16 @@ pub(crate) fn add_to_occupied_position(
 // ADDRESS: 004e0640
 // PROTOTYPE: CBaseObject * __thiscall Remove(long param_1, CGUID * param_2, void * param_3)
 //
+// IMPLEMENTED_OWNER: `remove_by_typed_guid` из `ccontainer.rs` делегирует
+// GUID concrete storage-owner-у и, как exact virtual forwarder, не читает
+// type scalar либо context.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGoodsContainer::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cgoodscontainer.cpp:248
@@ -247,13 +256,15 @@ pub(crate) fn add_to_occupied_position(
 // ADDRESS: 004e0650
 // PROTOTYPE: CBaseObject * __thiscall Find(CBaseObject * param_1)
 //
+// IMPLEMENTED_OWNER: `find_by_object_guid` из `ccontainer.rs` сохраняет null
+// gate и передаёт embedded GUID concrete storage-owner-у.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CGoodsContainer::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cgoodscontainer.cpp:253
@@ -261,6 +272,8 @@ pub(crate) fn add_to_occupied_position(
 // ADDRESS: 004e0660
 // PROTOTYPE: CBaseObject * __thiscall Find(long param_1, CGUID * param_2)
 //
+// IMPLEMENTED_OWNER: `find_by_typed_guid` из `ccontainer.rs` игнорирует type
+// scalar и делает ровно concrete GUID lookup.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
