@@ -67,10 +67,13 @@
 //! Затем delete-faction и delete-union ID переносятся в list-order, и только
 //! после полного переноса каждый исходный список очищается. Все достигнутые
 //! caller-ы полного `CGame::GenerateDBData` передают `false`, но доказанная
-//! bool-ветвь сохранена. Null map-value исходно разыменовывался при clone и
-//! остаётся локальной typed-блокировкой; уже выполненные append/reset эффекты
-//! не откатываются. `BTreeMap`, `VecDeque`, `Clone` и `Drop` заменяют только
-//! MSVC tree/list/RTTI/allocator и compiler cleanup.
+//! bool-ветвь сохранена. Normal ingress помещает в обе map только живой owner;
+//! `None` бывает лишь кратким внутренним split-borrow в синхронных join-path и
+//! до save-фазы обязательно восстанавливается. Поэтому пустой технический
+//! slot пропускается без остановки уже начатой DB-публикации: это устраняет
+//! старое null-разыменование, не создавая нового observable отказа. `BTreeMap`,
+//! `VecDeque`, `Clone` и `Drop` заменяют только MSVC tree/list/RTTI/allocator
+//! и compiler cleanup.
 //!
 //! `GetpFactionById` ищет signed ID только в `m_FacOrg`. Miss возвращает
 //! `nullptr`; найденный null value возвращается тем же `nullptr` без
@@ -1795,18 +1798,12 @@ pub(crate) enum ApplyFactionLookup {
     BlockedNullFaction { map_key: i32 },
 }
 
-/// Локальная safe-граница ordered `GenerateSaveData` traversal.
+/// Локальная safe-граница concrete faction clone в `GenerateSaveData`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OrganizingSaveDataBlock {
-    NullFaction {
-        map_key: i32,
-    },
     FactionClone {
         map_key: i32,
         reason: FactionCloneSaveBlock,
-    },
-    NullConfederation {
-        map_key: i32,
     },
 }
 
@@ -4013,8 +4010,11 @@ impl COrganizingCtrl {
 
     /// Материализует organizing save/delete очереди в `CGame::tagDBData`.
     ///
-    /// Оба map обходятся в signed key-order. После успешного clone live-mask
-    /// сбрасывается, а delete-list очищается только после полного переноса.
+    /// Оба map обходятся в signed key-order. Empty технический slot пропускается:
+    /// normal ingress такого значения не создаёт, а синхронный split-borrow
+    /// восстанавливает owner до самостоятельной save-фазы. После успешного
+    /// clone live-mask сбрасывается, а delete-list очищается только после
+    /// полного переноса.
     pub(crate) fn generate_save_data(
         &mut self,
         game: &CGame,
@@ -4023,9 +4023,7 @@ impl COrganizingCtrl {
         let mut saved_factions = 0;
         for (&map_key, faction) in &mut self.factions {
             let Some(faction) = faction.as_deref_mut() else {
-                // BLOCKED_MISSING_FACT: RVA 0x00034A10 вызывает virtual
-                // CloneSaveData через null map-value. Продолжение не доказано.
-                return Err(OrganizingSaveDataBlock::NullFaction { map_key });
+                continue;
             };
             if force_all {
                 for change_data_type in [1, 2, 4, 8] {
@@ -4043,9 +4041,9 @@ impl COrganizingCtrl {
         }
 
         let mut saved_unions = 0;
-        for (&map_key, union) in &mut self.confederations {
+        for union in self.confederations.values_mut() {
             let Some(union) = union.as_deref_mut() else {
-                return Err(OrganizingSaveDataBlock::NullConfederation { map_key });
+                continue;
             };
             if force_all {
                 for change_data_type in [1, 2, 4, 8] {
