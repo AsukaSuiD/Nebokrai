@@ -3,8 +3,8 @@
 //!
 //! Статусы `SaveFacitonXYD` RVA `0x000ED0F0`, caller-connection overload
 //! `SaveNpcFaction` RVA `0x000ED4B0` и `GetTopTenSZLPlayer` RVA `0x000EE3E0` —
-//! `IMPLEMENTED`; constructor, destructor, load-владельцы и no-argument
-//! `SaveNpcFaction` ниже остаются
+//! `IMPLEMENTED`; constructor, destructor, оставшиеся load-владельцы и
+//! no-argument `SaveNpcFaction` ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -61,6 +61,15 @@
 //! в caller-vector частично прочитанные строки. Tiberius и параметр `@P1`
 //! заменяют только ADO и `_sprintf`; framing, TOP/order, кодировка и unsigned
 //! 32-bit диапазон остаются явным контрактом Miracle.
+//!
+//! `LoadFactionXYD` открывает самостоятельное соединение и буквально читает
+//! `SELECT * FROM CSL_GODSBATTLE` без `ORDER BY`. Пустой recordset возвращает
+//! `true` и не меняет конфигурацию; каждая непустая строка немедленно задаёт
+//! пару `m_XYD[1]/m_XYD[2]`, так что при нескольких строках виден результат
+//! последней строки в порядке провайдера. Практический C++ и Linux-донор ошибочно
+//! требуют ровно одну строку; exact `0x004ECE6F..0x004ED01B` подтверждает
+//! исходный цикл без такого gate. `WorldDatabaseSettings::connect`, Tiberius
+//! и Rust Drop заменяют только ADO/COM, не добавляя транзакцию или сортировку.
 
 use std::collections::VecDeque;
 use std::error::Error;
@@ -69,9 +78,13 @@ use std::fmt;
 use encoding_rs::WINDOWS_1251;
 use tiberius::{Query, Row};
 
-use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
+use crate::dbaccess::worlddb::rssetup::{
+    WorldDatabaseConnectionError, WorldDatabaseSettings, WorldTdsClient,
+};
+use crate::setup::godsbattleconf::CGodsBattleConf;
 
 const DELETE_FACTION_XYD_SQL: &str = "DELETE FROM CSL_GODSBATTLE";
+const LOAD_FACTION_XYD_SQL: &str = "SELECT * FROM CSL_GODSBATTLE";
 const INSERT_FACTION_XYD_SQL: &str =
     "INSERT INTO CSL_GODSBATTLE (RegionID, AFactionXYD, BFactionXYD) VALUES (@P1, @P2, @P3)";
 const DELETE_NPC_FACTIONS_SQL: &str = "DELETE FROM CSL_GODSBATTLE_NPC";
@@ -122,6 +135,24 @@ pub(crate) enum RsGodsBattleNotice {
         row_index: Option<usize>,
         failure: GodsBattleTopTenFailure,
     },
+    LoadFactionXydFailed {
+        row_index: Option<usize>,
+        failure: GodsBattleFactionXydLoadFailure,
+    },
+}
+
+/// Причина исходного `false` автономного `LoadFactionXYD`.
+#[derive(Debug)]
+pub(crate) enum GodsBattleFactionXydLoadFailure {
+    Connection(WorldDatabaseConnectionError),
+    Database(RsGodsBattleDatabaseError),
+    MissingRequiredValue {
+        column: &'static str,
+    },
+    NumericOutsideUnsignedLong {
+        column: &'static str,
+        value: i64,
+    },
 }
 
 /// Причина исходного `false` из достигнутого рейтингового DB-владельца.
@@ -162,6 +193,9 @@ impl From<tiberius::error::Error> for RsGodsBattleDatabaseError {
 
 /// Узкая объектная граница достигнутых save-функций `CRSGodsBattle`.
 pub(crate) trait RsGodsBattleOwner {
+    /// Загружает все XYD-строки в порядке провайдера через отдельное DB-соединение.
+    async fn load_faction_xyd(&mut self, configuration: &mut CGodsBattleConf) -> bool;
+
     /// Заменяет единственную faction-XYD строку внутри caller-транзакции.
     async fn save_faction_xyd(
         &mut self,
@@ -189,12 +223,20 @@ pub(crate) trait RsGodsBattleOwner {
 }
 
 /// Linux/TDS-замена достигнутой части исходного `CRSGodsBattle`.
-#[derive(Default)]
 pub(crate) struct TiberiusRsGodsBattle {
+    settings: WorldDatabaseSettings,
     notices: VecDeque<RsGodsBattleNotice>,
 }
 
 impl TiberiusRsGodsBattle {
+    /// Копирует setup для автономных read-владельцев исходного `CRSGodsBattle`.
+    pub(crate) fn new(settings: &WorldDatabaseSettings) -> Self {
+        Self {
+            settings: settings.clone(),
+            notices: VecDeque::new(),
+        }
+    }
+
     /// Ставит границу notice-очереди перед отдельным synchronous owner-call.
     pub(crate) fn notice_checkpoint(&self) -> usize {
         self.notices.len()
@@ -213,6 +255,82 @@ impl TiberiusRsGodsBattle {
 }
 
 impl RsGodsBattleOwner for TiberiusRsGodsBattle {
+    async fn load_faction_xyd(&mut self, configuration: &mut CGodsBattleConf) -> bool {
+        macro_rules! load_failed {
+            ($row_index:expr, $failure:expr) => {{
+                self.notices
+                    .push_back(RsGodsBattleNotice::LoadFactionXydFailed {
+                        row_index: $row_index,
+                        failure: $failure,
+                    });
+                return false;
+            }};
+        }
+
+        let mut connection = match self.settings.connect().await {
+            Ok(connection) => connection,
+            Err(error) => load_failed!(None, GodsBattleFactionXydLoadFailure::Connection(error)),
+        };
+        let rows = match connection.simple_query(LOAD_FACTION_XYD_SQL).await {
+            Ok(stream) => match stream.into_first_result().await {
+                Ok(rows) => rows,
+                Err(error) => load_failed!(
+                    None,
+                    GodsBattleFactionXydLoadFailure::Database(error.into())
+                ),
+            },
+            Err(error) => load_failed!(
+                None,
+                GodsBattleFactionXydLoadFailure::Database(error.into())
+            ),
+        };
+
+        for (row_index, row) in rows.iter().enumerate() {
+            let faction_a = match read_ado_unsigned_long(row, "AFactionXYD") {
+                Ok(Some(value)) => value,
+                Ok(None) => load_failed!(
+                    Some(row_index),
+                    GodsBattleFactionXydLoadFailure::MissingRequiredValue {
+                        column: "AFactionXYD",
+                    }
+                ),
+                Err(ReadUnsignedLongError::Database(error)) => load_failed!(
+                    Some(row_index),
+                    GodsBattleFactionXydLoadFailure::Database(error.into())
+                ),
+                Err(ReadUnsignedLongError::OutsideRange(value)) => load_failed!(
+                    Some(row_index),
+                    GodsBattleFactionXydLoadFailure::NumericOutsideUnsignedLong {
+                        column: "AFactionXYD",
+                        value,
+                    }
+                ),
+            };
+            let faction_b = match read_ado_unsigned_long(row, "BFactionXYD") {
+                Ok(Some(value)) => value,
+                Ok(None) => load_failed!(
+                    Some(row_index),
+                    GodsBattleFactionXydLoadFailure::MissingRequiredValue {
+                        column: "BFactionXYD",
+                    }
+                ),
+                Err(ReadUnsignedLongError::Database(error)) => load_failed!(
+                    Some(row_index),
+                    GodsBattleFactionXydLoadFailure::Database(error.into())
+                ),
+                Err(ReadUnsignedLongError::OutsideRange(value)) => load_failed!(
+                    Some(row_index),
+                    GodsBattleFactionXydLoadFailure::NumericOutsideUnsignedLong {
+                        column: "BFactionXYD",
+                        value,
+                    }
+                ),
+            };
+            configuration.set_xyd_from_db(faction_a, faction_b);
+        }
+        true
+    }
+
     async fn save_faction_xyd(
         &mut self,
         snapshot: GodsBattleFactionXydSnapshot,
@@ -478,7 +596,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRSGodsBattle::LoadFactionXYD
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsgodsbattle.cpp:16
@@ -486,6 +604,9 @@ async fn execute_batch(
 // ADDRESS: 004ecd60
 // PROTOTYPE: bool __thiscall LoadFactionXYD(void)
 //
+// IMPLEMENTED_OWNER: `TiberiusRsGodsBattle::load_faction_xyd` выше сохраняет
+// отдельное соединение, успех пустого набора, порядок провайдера и итог
+// последней строки.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
