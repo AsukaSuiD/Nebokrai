@@ -1,9 +1,9 @@
 //! DB-владелец `CRsEnemyFactions` исторического WorldServer из
 //! `rsenemyfactions.cpp`.
 //!
-//! Статус `SaveAllEnemyFactions` RVA `0x000F7C50` — `IMPLEMENTED` с локальной
-//! `BLOCKED_MISSING_FACT` границей для null-элемента; constructor, destructor,
-//! `LoadAllEnemyFactions` и прочий корпус ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Статус `LoadAllEnemyFactions` RVA `0x000F7800` и
+//! `SaveAllEnemyFactions` RVA `0x000F7C50` — `IMPLEMENTED`; constructor,
+//! destructor и прочий корпус ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
 //! SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -11,7 +11,16 @@
 //! исходный путь PDB:
 //! `e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsenemyfactions.cpp`.
 //!
-//! Владелец выполнял буквальный `DELETE FROM CSL_FactionWar`, затем обходил
+//! Загрузчик очищал live-list до открытия собственного независимого World DB
+//! connection, читал `SELECT * FROM CSL_FactionWar` в recordset-order и после
+//! каждой успешно разобранной строки немедленно вызывал
+//! `CFactionWarSys::AddOneEnmeyFaction`. Ошибка connection/query/field оставляла
+//! очищенный либо уже набранный prefix; caller игнорировал его bool, писал
+//! success-log и продолжал relation/INI стадиями. Rust возвращает этот prefix
+//! как typed outcome и не подменяет самостоятельное connection открытием
+//! caller-транзакции.
+//!
+//! Save-владелец выполнял буквальный `DELETE FROM CSL_FactionWar`, затем обходил
 //! переданную по значению копию `std::list<tagEnemyFaction*>` в list-order и
 //! для каждой записи выполнял
 //! `INSERT INTO CSL_FactionWar VALUES(%d,%d,%d)`. Первая ошибка DELETE либо
@@ -41,12 +50,15 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 
-use tiberius::Query;
+use tiberius::{Query, Row};
 
-use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
+use crate::dbaccess::worlddb::rssetup::{
+    WorldDatabaseConnectionError, WorldDatabaseSettings, WorldTdsClient,
+};
 
 const DELETE_ENEMY_FACTIONS_SQL: &str = "DELETE FROM CSL_FactionWar";
 const INSERT_ENEMY_FACTION_SQL: &str = "INSERT INTO CSL_FactionWar VALUES(@P1,@P2,@P3)";
+const LOAD_ENEMY_FACTIONS_SQL: &str = "SELECT * FROM CSL_FactionWar";
 
 /// Три точных 32-битных поля одной caller-owned save-копии.
 #[derive(Clone, Copy, Debug)]
@@ -54,6 +66,21 @@ pub(crate) struct EnemyFactionSaveSnapshot {
     pub(crate) faction_id_1: i32,
     pub(crate) faction_id_2: i32,
     pub(crate) disband_time: u32,
+}
+
+/// Три exact поля одной DB-строки, загруженной до faction-war registry.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EnemyFactionLoadSnapshot {
+    pub(crate) faction_id_1: i32,
+    pub(crate) faction_id_2: i32,
+    pub(crate) disband_time: u32,
+}
+
+/// Bool loader-а вместе с уже применяемым caller-ом list-prefix.
+#[derive(Debug)]
+pub(crate) enum EnemyFactionsLoadOutcome {
+    ReturnedTrue(Vec<EnemyFactionLoadSnapshot>),
+    ReturnedFalse(Vec<EnemyFactionLoadSnapshot>),
 }
 
 /// Локальная неизвестность исходного null-разыменования внутри ordered списка.
@@ -73,6 +100,18 @@ pub(crate) enum EnemyFactionsSaveOutcome {
 /// Структурированная замена достигнутых `PrintErr`-ветвей владельца.
 #[derive(Debug)]
 pub(crate) enum RsEnemyFactionsNotice {
+    LoadSettingsMissing,
+    LoadConnectionFailed(WorldDatabaseConnectionError),
+    LoadQueryFailed(RsEnemyFactionsDatabaseError),
+    LoadRowMissingValue {
+        row_index: usize,
+        column: &'static str,
+    },
+    LoadRowFailed {
+        row_index: usize,
+        column: &'static str,
+        error: RsEnemyFactionsDatabaseError,
+    },
     MissingConnection,
     DeleteFailed(RsEnemyFactionsDatabaseError),
     InsertFailed {
@@ -105,6 +144,9 @@ impl From<tiberius::error::Error> for RsEnemyFactionsDatabaseError {
 
 /// Узкая объектная граница достигнутого `CRsEnemyFactions` save-владельца.
 pub(crate) trait RsEnemyFactionsOwner {
+    /// Открывает самостоятельное connection и читает relation rows в DB-order.
+    async fn load_all_enemy_factions(&mut self) -> EnemyFactionsLoadOutcome;
+
     /// Полностью заменяет строки `CSL_FactionWar` внутри caller-транзакции.
     async fn save_all_enemy_factions(
         &mut self,
@@ -119,10 +161,92 @@ pub(crate) trait RsEnemyFactionsOwner {
 /// Linux/TDS-замена достигнутой части исходного `CRsEnemyFactions`.
 #[derive(Default)]
 pub(crate) struct TiberiusRsEnemyFactions {
+    settings: Option<WorldDatabaseSettings>,
     notices: VecDeque<RsEnemyFactionsNotice>,
 }
 
+impl TiberiusRsEnemyFactions {
+    /// Создаёт DB-owner с тем же immutable World DB snapshot, из которого
+    /// оригинал открывал свой отдельный ADO connection.
+    pub(crate) fn new(settings: WorldDatabaseSettings) -> Self {
+        Self {
+            settings: Some(settings),
+            notices: VecDeque::new(),
+        }
+    }
+}
+
 impl RsEnemyFactionsOwner for TiberiusRsEnemyFactions {
+    async fn load_all_enemy_factions(&mut self) -> EnemyFactionsLoadOutcome {
+        let Some(settings) = self.settings.as_ref() else {
+            self.notices
+                .push_back(RsEnemyFactionsNotice::LoadSettingsMissing);
+            return EnemyFactionsLoadOutcome::ReturnedFalse(Vec::new());
+        };
+        let mut connection = match settings.connect().await {
+            Ok(connection) => connection,
+            Err(error) => {
+                self.notices
+                    .push_back(RsEnemyFactionsNotice::LoadConnectionFailed(error));
+                return EnemyFactionsLoadOutcome::ReturnedFalse(Vec::new());
+            }
+        };
+        let stream = match Query::new(LOAD_ENEMY_FACTIONS_SQL)
+            .query(&mut connection)
+            .await
+        {
+            Ok(stream) => stream,
+            Err(error) => {
+                self.notices
+                    .push_back(RsEnemyFactionsNotice::LoadQueryFailed(error.into()));
+                return EnemyFactionsLoadOutcome::ReturnedFalse(Vec::new());
+            }
+        };
+        let rows = match stream.into_first_result().await {
+            Ok(rows) => rows,
+            Err(error) => {
+                self.notices
+                    .push_back(RsEnemyFactionsNotice::LoadQueryFailed(error.into()));
+                return EnemyFactionsLoadOutcome::ReturnedFalse(Vec::new());
+            }
+        };
+
+        let mut relations = Vec::with_capacity(rows.len());
+        for (row_index, row) in rows.iter().enumerate() {
+            macro_rules! required_i32 {
+                ($column:literal) => {
+                    match read_required_i32(row, $column) {
+                        Ok(value) => value,
+                        Err(EnemyFactionRowReadError::Missing) => {
+                            self.notices.push_back(RsEnemyFactionsNotice::LoadRowMissingValue {
+                                row_index,
+                                column: $column,
+                            });
+                            return EnemyFactionsLoadOutcome::ReturnedFalse(relations);
+                        }
+                        Err(EnemyFactionRowReadError::Database(error)) => {
+                            self.notices.push_back(RsEnemyFactionsNotice::LoadRowFailed {
+                                row_index,
+                                column: $column,
+                                error: error.into(),
+                            });
+                            return EnemyFactionsLoadOutcome::ReturnedFalse(relations);
+                        }
+                    }
+                };
+            }
+            let faction_id_1 = required_i32!("FactionID1");
+            let faction_id_2 = required_i32!("FactionID2");
+            let disband_time = required_i32!("LeaveTime") as u32;
+            relations.push(EnemyFactionLoadSnapshot {
+                faction_id_1,
+                faction_id_2,
+                disband_time,
+            });
+        }
+        EnemyFactionsLoadOutcome::ReturnedTrue(relations)
+    }
+
     async fn save_all_enemy_factions(
         &mut self,
         snapshot: &[Option<EnemyFactionSaveSnapshot>],
@@ -171,6 +295,19 @@ impl RsEnemyFactionsOwner for TiberiusRsEnemyFactions {
     }
 }
 
+enum EnemyFactionRowReadError {
+    Missing,
+    Database(tiberius::error::Error),
+}
+
+fn read_required_i32(row: &Row, column: &'static str) -> Result<i32, EnemyFactionRowReadError> {
+    match row.try_get::<i32, _>(column) {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => Err(EnemyFactionRowReadError::Missing),
+        Err(error) => Err(EnemyFactionRowReadError::Database(error)),
+    }
+}
+
 async fn execute_batch(
     connection: &mut WorldTdsClient,
     sql: &'static str,
@@ -189,7 +326,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsEnemyFactions::LoadAllEnemyFactions
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsenemyfactions.cpp:21
@@ -197,6 +334,11 @@ async fn execute_batch(
 // ADDRESS: 004f7800
 // PROTOTYPE: bool __thiscall LoadAllEnemyFactions(void)
 //
+// IMPLEMENTED_OWNER: `RsEnemyFactionsOwner::load_all_enemy_factions` открывает
+// отдельный World DB connection, читает recordset-order `CSL_FactionWar` и
+// возвращает успешный prefix вместе с legacy bool. Caller применяет prefix к
+// `CFactionWarSys` после clear-before-open; Tiberius/owned Vec заменяют
+// ADO/recordset/STL, не меняя самостоятельную connection-границу.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
