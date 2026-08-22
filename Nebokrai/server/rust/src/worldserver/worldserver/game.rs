@@ -54,6 +54,7 @@
 //! `CGame::AppendDelFaction/AppendDelUnion` RVA `0x00011190/0x000111F0`,
 //! `CGame::AppendRegionParam` RVA `0x00011250`,
 //! `CGame::AddGoodsLink/FindGoodsLink` RVA `0x000112B0/0x00005A10`,
+//! `CGame::AddOrginGoodsToPlayer` RVA `0x00005A40`,
 //! `CGame::AppendDBCountry` RVA `0x00011070`,
 //! `CGame::SetEnemyFactions` RVA `0x00014D90` и
 //! `CGame::ClearDBData` RVA `0x0000D490`, live restore/deletion list-owner-ы
@@ -84,6 +85,11 @@
 //! ping-tick. Остальные достигнутые
 //! numeric/bool члены исходно не инициализированы; `Option` сохраняет эту
 //! границу и не назначает ей выдуманный ноль.
+//!
+//! `AddOrginGoodsToPlayer` сохраняет list-order, occupation filter, original-
+//! name lookup, factory roll-order, GUID-before-positional-add и продолжение
+//! после rejected equipment. `uuid`/`getrandom` заменяют только `CoCreateGuid`,
+//! а системный отказ остаётся typed block вместо скрытого нулевого GUID.
 //!
 //! Исключение сделано только для `m_GlobeVariable` по итогам точной проверки
 //! всего EXE. PDB задаёт четыре signed `long` по `CGame+0x04..+0x13`, точный
@@ -1036,6 +1042,7 @@ use crate::public::timer::{
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::godsbattleconf::CGodsBattleConf;
 use crate::setup::leitingsetup::{CThingSetup, ThingSetupCodecError};
+use crate::setup::playerlist::CPlayerList;
 use crate::setup::regionrouter::RegionRouter;
 use crate::public::tools::{ini_decode, put_string_to_file};
 use crate::transport::bind_tcp_ipv4;
@@ -1261,9 +1268,10 @@ use crate::worldserver::appworld::player::{
     PlayerFactionInfoUpdateReport,
     PlayerLeiTingClock, PlayerLeiTingUpdateBlock, PlayerLeiTingUpdateReport,
     PlayerMurderCounterReset, PlayerMurderCounterUpdate, PlayerOrganizingUpdateError,
-    PlayerOrganizingState, PlayerOrganizingUpdater, PlayerPropertyCoefficients,
+    PlayerOrganizingState, PlayerOrganizingUpdater, PlayerOriginEquipmentBlock,
+    PlayerOriginEquipmentOutcome, PlayerPropertyCoefficients,
 };
-use crate::worldserver::appworld::region::RegionSerializationBlock;
+use crate::worldserver::appworld::region::{CRegion, RegionSerializationBlock};
 use crate::worldserver::appworld::script::variablelist::{
     CVariableList, VariableListSaveSource,
 };
@@ -5789,6 +5797,22 @@ pub(crate) enum WorldCreationPlayerAppendOutcome {
     },
 }
 
+/// Ordered результат полного `CGame::AddOrginGoodsToPlayer`.
+#[derive(Debug)]
+pub(crate) struct WorldOriginGoodsReport {
+    pub(crate) entries: Vec<PlayerOriginEquipmentOutcome>,
+}
+
+#[derive(Debug)]
+pub(crate) struct WorldOriginGoodsBlock {
+    pub(crate) origin_index: usize,
+    pub(crate) source: PlayerOriginEquipmentBlock,
+}
+
+/// Safe-граница constructor-loaded process-wide player ID.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerIdBlock;
+
 /// Результат точной nullable insertion-границы `AppendMapPlayer`.
 pub(crate) enum WorldMapPlayerAppendOutcome {
     Inserted {
@@ -7392,6 +7416,13 @@ impl CGame {
             .ok_or(WorldLeaveWordIdBlock)?;
         *leave_word_id = leave_word_id.wrapping_add(1);
         Ok(*leave_word_id)
+    }
+
+    /// Выполняет точный `++m_nPlayerID` create-role ветки с x86 wrapping.
+    pub(crate) fn allocate_player_id(&mut self) -> Result<i32, WorldPlayerIdBlock> {
+        let player_id = self.player_id.as_mut().ok_or(WorldPlayerIdBlock)?;
+        *player_id = player_id.wrapping_add(1);
+        Ok(*player_id as i32)
     }
 
     /// Полностью очищает live restore-list.
@@ -13322,6 +13353,32 @@ impl CGame {
         WorldCreationPlayerAppendOutcome::Inserted { player_id }
     }
 
+    /// Выполняет exact list-order `AddOrginGoodsToPlayer`; reject одного slot-а
+    /// не останавливает дальнейший обход, как исходный debug-only failure.
+    pub(crate) fn add_origin_goods_to_player<Random>(
+        &self,
+        player: &mut CPlayer,
+        player_list: &CPlayerList,
+        registry: &GoodsBasePropertiesRegistry,
+        original_name_index: &GoodsOriginalNameIndex,
+        random: &mut Random,
+    ) -> Result<WorldOriginGoodsReport, WorldOriginGoodsBlock>
+    where
+        Random: FnMut(i32) -> i32 + ?Sized,
+    {
+        let mut entries = Vec::with_capacity(player_list.origin_equipment().len());
+        for (origin_index, origin) in player_list.origin_equipment().iter().enumerate() {
+            let outcome = player
+                .add_origin_equipment(origin, registry, original_name_index, random)
+                .map_err(|source| WorldOriginGoodsBlock {
+                    origin_index,
+                    source,
+                })?;
+            entries.push(outcome);
+        }
+        Ok(WorldOriginGoodsReport { entries })
+    }
+
     /// Добавляет унаследованный ID игрока в хвост, если его ещё нет в списке.
     pub(crate) fn append_offline_player(&mut self, player: &CPlayer) {
         let _ = self.append_offline_player_id(player.get_id() as u32);
@@ -13407,6 +13464,16 @@ impl CGame {
     /// Возвращает регион по signed numeric ID либо старый `nullptr` как `None`.
     pub(crate) fn region(&self, region_id: i32) -> Option<&WorldRegionAssignment> {
         self.regions.get(&region_id)
+    }
+
+    /// Возвращает только живой concrete `CRegion` create-role ветки.
+    pub(crate) fn creation_region_base(&self, region_id: i32) -> Option<&CRegion> {
+        self.regions
+            .get(&region_id)?
+            .region
+            .as_ref()
+            .map(WorldRegionOwner::base)
+            .map(CWorldRegion::creation_region_base)
     }
 
     /// Применяет три tax-поля к достигнутому `tagRegion::pRegion`.
@@ -18786,7 +18853,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::AddOrginGoodsToPlayer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:4755
@@ -18794,6 +18861,8 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 // ADDRESS: 00405a40
 // PROTOTYPE: void __thiscall AddOrginGoodsToPlayer(CPlayer * param_1)
 //
+// IMPLEMENTED_OWNER: `CGame::add_origin_goods_to_player` и
+// `CPlayer::add_origin_equipment` выше сохраняют exact list/factory/GUID/add.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

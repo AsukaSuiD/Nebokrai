@@ -385,6 +385,11 @@ impl CWorldRegion {
         }
     }
 
+    /// Заимствует concrete `CRegion`, достигнутый create-role lookup-ом.
+    pub(crate) const fn creation_region_base(&self) -> &CRegion {
+        &self.region
+    }
+
     /// Заимствует унаследованное byte-exact имя без служебного NUL.
     pub(crate) fn get_name(&self) -> &[u8] {
         self.region.get_name()

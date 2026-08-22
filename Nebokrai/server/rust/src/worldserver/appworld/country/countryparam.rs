@@ -314,12 +314,15 @@ impl CCountryParam {
         *self.start_regions.entry(country).or_insert(0)
     }
 
-    /// Возвращает rect/direction, которые create-role читает только после
-    /// успешного lookup живого region-owner-а.
-    pub(crate) fn start_area_or_insert(&mut self, country: u8) -> (CountryRect, i32) {
-        let rect = *self.start_rects.entry(country).or_default();
-        let direction = *self.start_directions.entry(country).or_insert(0);
-        (rect, direction)
+    /// Возвращает rect, который create-role читает только после успешного
+    /// lookup живого region-owner-а и до выбора случайной клетки.
+    pub(crate) fn start_rect_or_insert(&mut self, country: u8) -> CountryRect {
+        *self.start_rects.entry(country).or_default()
+    }
+
+    /// Возвращает direction, который exact owner читает уже после выбора клетки.
+    pub(crate) fn start_direction_or_insert(&mut self, country: u8) -> i32 {
+        *self.start_directions.entry(country).or_insert(0)
     }
 
     pub(crate) const fn max_country_power(&self) -> Option<i32> {

@@ -127,6 +127,11 @@ impl CMoveShape {
         self.shape_base.set_speed(speed);
     }
 
+    /// Присваивает graphics ID через единственный shape-owner.
+    pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
+        self.shape_base.set_graphics_id(graphics_id);
+    }
+
     /// Ставит shape в центр клетки через единственный shape-owner.
     pub(crate) fn set_tile_xy(&mut self, tile_x: i32, tile_y: i32) {
         self.shape_base.set_tile_xy(tile_x, tile_y);

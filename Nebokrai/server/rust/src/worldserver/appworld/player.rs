@@ -8,6 +8,7 @@
 //! RVA `0x0005AEB0/0x0005AEC0/0x0005AEE0` и `AddQuestFromDB` RVA
 //! `0x0005EA00`,
 //! `CPlayer::UpdateFactionInfo` RVA `0x0005C1D0`,
+//! `CPlayer::LoadDefaultProperty` RVA `0x0005E560`,
 //! `CPlayer::ClearOwnedRegion` RVA `0x00033B50` и
 //! `CPlayer::AddOwnedRegion` RVA `0x0005DD10`
 //! accessors для level/friends и inherited `CShape::SetState`,
@@ -69,6 +70,14 @@
 //! `ApplyForJoin` этот эффект происходит после online lookup, но до проверки
 //! лимита union, поэтому даже отказ по лимиту расходует ID. `AtomicI32`
 //! устраняет исходную data race, сохраняя process lifetime и 32-битный шаблон.
+//!
+//! `LoadDefaultProperty` получает прежние process-global country/duplicate-
+//! region/player-list/globe/thing owners явно. Exact порядок `operator[]`,
+//! region lookup, random position, base/property записей, daily-list и time
+//! сохранён; `VecDeque` и typed arithmetic/region errors заменяют только STL,
+//! unchecked overflow и raw pointers. Временная запись default JJC level не
+//! материализована отдельно: тот же owner без промежуточного вызова всегда
+//! перезаписывает её нулём до единственного downstream чтения.
 //!
 //! `CFaction::Demise` дважды читает `m_bFactionWarOperator` по PDB-offset
 //! `CPlayer+0x8ED`; exact диапазон `0x004BFF25..0x004BFF39` подтверждает оба
@@ -338,7 +347,13 @@ use crate::dbaccess::worlddb::rsplayer::{
 };
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::public::dupliregionsetup::CDupliRegionSetup;
+use crate::public::guid::CGuid;
+use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::leitingsetup::{CThingSetup, LeiTingDailyThing, LeiTingLocalTime};
+use crate::setup::playerlist::{
+    CPlayerList, PlayerCreationPropertiesLookup, PlayerOriginEquipment,
+};
 
 use super::container::camountlimitgoodscontainer::{
     AmountContainerCodecError, CAmountLimitGoodsContainer,
@@ -354,11 +369,16 @@ use super::container::cvolumelimitgoodscontainer::{
 };
 use super::container::cwallet::CWallet;
 use super::container::cyuanbao::CYuanBao;
+use super::country::countryparam::{CCountryParam, CountryRect};
 use super::goods::cgoods::{GoodsCodecError, GoodsDbSnapshotBlock};
 use super::goods::cgoodsbaseproperties::GAP_WEAPON_LEVEL;
-use super::goods::cgoodsfactory::{GoodsBasePropertiesRegistry, GoodsOriginalNameIndex};
+use super::goods::cgoodsfactory::{
+    GoodsBasePropertiesRegistry, GoodsOriginalNameIndex, create_goods,
+    query_goods_id_by_original_name_bytes,
+};
 use super::listener::cseekgoodslistener::CSeekGoodsListener;
 use super::moveshape::CMoveShape;
+use super::region::{CRegion, RegionRandomPositionBlock};
 use super::shape::{ShapeDecodeError, ShapeTileCoordinateBlock};
 
 const BASE_PROPERTY_WIRE_LEN: usize = 0x194;
@@ -429,6 +449,10 @@ const BASE_PROPERTY_EXPLOIT_OFFSET: usize = 0x114;
 const BASE_PROPERTY_KUDOS_OFFSET: usize = 0x118;
 const BASE_PROPERTY_FAIRY_ENABLED_OFFSET: usize = 0x11C;
 const BASE_PROPERTY_BATTLE_FAIRY_ENABLED_OFFSET: usize = 0x128;
+const BASE_PROPERTY_BREAK_ARMOUR_OFFSET: usize = 0x12C;
+const BASE_PROPERTY_BREAK_ELEMENT_OFFSET: usize = 0x134;
+const BASE_PROPERTY_BREAK_BOUND_OFFSET: usize = 0x138;
+const BASE_PROPERTY_POWER_OF_GOLD_OFFSET: usize = 0x13C;
 const BASE_PROPERTY_DAYS_HONOR_OFFSET: usize = 0x140;
 const BASE_PROPERTY_WEEKS_HONOR_OFFSET: usize = 0x144;
 const BASE_PROPERTY_MONTHS_HONOR_OFFSET: usize = 0x148;
@@ -699,6 +723,14 @@ struct PlayerProperty {
 }
 
 impl PlayerProperty {
+    fn read_u32(&self, offset: usize) -> u32 {
+        u32::from_le_bytes(
+            self.wire[offset..offset + 4]
+                .try_into()
+                .expect("PDB-offset находится внутри tagProperty"),
+        )
+    }
+
     fn write_u16(&mut self, offset: usize, value: u16) {
         self.wire[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
     }
@@ -706,6 +738,39 @@ impl PlayerProperty {
     fn write_u32(&mut self, offset: usize, value: u32) {
         self.wire[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
+}
+
+/// Наблюдаемая часть завершённого `CPlayer::LoadDefaultProperty`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerDefaultPropertyReport {
+    pub(crate) selected_region_id: i32,
+    pub(crate) tile_x: i32,
+    pub(crate) tile_y: i32,
+    pub(crate) direction: i32,
+    pub(crate) creation_property_key: u32,
+    pub(crate) creation_property_inserted: bool,
+}
+
+/// Safe-границы, которых у старого unchecked owner-а не было.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerDefaultPropertyBlock {
+    RandomPosition(RegionRandomPositionBlock),
+    Property(PlayerCodecError),
+}
+
+/// Результат одной записи exact `CGame::AddOrginGoodsToPlayer`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerOriginEquipmentOutcome {
+    OccupationMismatch,
+    GoodsFactoryMiss { goods_id: u32 },
+    Added { goods_id: u32, position: u16 },
+    Rejected { goods_id: u32, position: u16 },
+}
+
+#[derive(Debug)]
+pub(crate) enum PlayerOriginEquipmentBlock {
+    Guid(getrandom::Error),
+    Equipment(EquipmentContainerCodecError),
 }
 
 /// Точный восьмибайтовый mapped value `tagThing`.
@@ -1467,6 +1532,308 @@ impl CPlayer {
             create_union_operator: false,
             faction_war_operator: false,
         }
+    }
+
+    /// Выполняет exact create-role `CPlayer::LoadDefaultProperty` с явными
+    /// заменами process-global setup/game owners и platform callbacks.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "исходный owner достигает region, country, player-list, globe и thing setup"
+    )]
+    pub(crate) fn load_default_property<'region, FindRegion, Random, WeekDay>(
+        &mut self,
+        sex: u8,
+        occupation: u8,
+        country: u8,
+        country_parameters: &mut CCountryParam,
+        duplicate_regions: &CDupliRegionSetup,
+        player_list: &mut CPlayerList,
+        globe_setup: &GlobeSetupSnapshot,
+        thing_setup: &CThingSetup,
+        coefficients: &PlayerPropertyCoefficients,
+        mut find_region: FindRegion,
+        random: &mut Random,
+        mut get_week_day: WeekDay,
+        timestamp: u32,
+    ) -> Result<PlayerDefaultPropertyReport, PlayerDefaultPropertyBlock>
+    where
+        FindRegion: FnMut(i32) -> Option<&'region CRegion>,
+        Random: FnMut(i32) -> i32 + ?Sized,
+        WeekDay: FnMut() -> u16,
+    {
+        let start_region_id = country_parameters.start_region_or_insert(country);
+        let selected_region_id =
+            duplicate_regions.get_random_region(start_region_id, &mut *random);
+        let mut tile_x = -1;
+        let mut tile_y = -1;
+        let mut direction = 0;
+
+        if let Some(region) = find_region(selected_region_id) {
+            let CountryRect {
+                left,
+                top,
+                right,
+                bottom,
+            } = country_parameters.start_rect_or_insert(country);
+            let width = right.checked_sub(left).ok_or(
+                PlayerDefaultPropertyBlock::RandomPosition(
+                    RegionRandomPositionBlock::CoordinateOverflow {
+                        operation: "start rect right - left",
+                    },
+                ),
+            )?;
+            let height = bottom.checked_sub(top).ok_or(
+                PlayerDefaultPropertyBlock::RandomPosition(
+                    RegionRandomPositionBlock::CoordinateOverflow {
+                        operation: "start rect bottom - top",
+                    },
+                ),
+            )?;
+            let position = region
+                .get_random_pos_in_range(left, top, width, height, &mut *random)
+                .map_err(PlayerDefaultPropertyBlock::RandomPosition)?;
+            tile_x = position.x;
+            tile_y = position.y;
+            direction = country_parameters.start_direction_or_insert(country);
+        }
+
+        self.set_region_id(selected_region_id);
+        self.set_tile_xy(tile_x, tile_y);
+        let _ = self.set_direction(direction);
+        self.move_shape_base.set_graphics_id(
+            i32::from(sex)
+                .wrapping_add(i32::from(occupation).wrapping_mul(2))
+                .wrapping_add(1),
+        );
+
+        let PlayerCreationPropertiesLookup {
+            key: creation_property_key,
+            inserted: creation_property_inserted,
+            properties,
+        } = player_list.creation_properties(sex, occupation);
+        self.base_property
+            .write_u8(BASE_PROPERTY_OCCUPATION_OFFSET, occupation);
+        self.base_property.write_u8(BASE_PROPERTY_SEX_OFFSET, sex);
+        self.base_property.write_u8(BASE_PROPERTY_LEVEL_OFFSET, 1);
+        self.base_property
+            .write_u8(BASE_PROPERTY_IS_CHARGED_OFFSET, 0);
+        self.base_property.write_u32(BASE_PROPERTY_EXP_OFFSET, 0);
+        self.base_property.title = b"temptitle".to_vec();
+        self.base_property.write_u8(BASE_PROPERTY_HEAD_PIC_OFFSET, 0);
+        self.base_property.write_u8(BASE_PROPERTY_FACE_PIC_OFFSET, 0);
+        self.base_property
+            .write_u32(BASE_PROPERTY_HOT_HIT_OFFSET, properties.hot_hit);
+        self.base_property.write_u32(BASE_PROPERTY_LOAN_TIME_OFFSET, 0);
+        self.base_property.write_u32(BASE_PROPERTY_LOAN_OFFSET, 0);
+        self.base_property.write_u32(BASE_PROPERTY_LOAN_MAX_OFFSET, 0);
+        self.base_property
+            .write_u16(BASE_PROPERTY_REMAIN_POINT_OFFSET, properties.remain_point);
+        self.base_property.write_u32(BASE_PROPERTY_SPOUSE_ID_OFFSET, 0);
+        self.base_property.write_u32(BASE_PROPERTY_UNION_ID_OFFSET, 0);
+        self.base_property.write_u16(BASE_PROPERTY_PK_COUNT_OFFSET, 0);
+        self.base_property.write_u32(BASE_PROPERTY_KILL_COUNT_OFFSET, 0);
+        self.base_property.write_u16(BASE_PROPERTY_HIT_TOP_LOG_OFFSET, 0);
+        self.base_property.write_u8(BASE_PROPERTY_PK_NORMAL_OFFSET, 0);
+        self.base_property.write_u8(BASE_PROPERTY_PK_TEAM_OFFSET, 0);
+        self.base_property.write_u8(BASE_PROPERTY_PK_UNION_OFFSET, 0);
+        self.base_property.write_u8(BASE_PROPERTY_PK_BADMAN_OFFSET, 1);
+        self.base_property.write_u8(BASE_PROPERTY_PK_COUNTRY_OFFSET, 1);
+        self.base_property.write_u16(BASE_PROPERTY_YP_OFFSET, properties.yp);
+        self.base_property.write_u32(BASE_PROPERTY_HP_OFFSET, properties.hp);
+        self.base_property.write_u32(BASE_PROPERTY_MP_OFFSET, properties.mp);
+        self.base_property.write_u16(BASE_PROPERTY_RP_OFFSET, properties.rp);
+        self.base_property
+            .write_u32(BASE_PROPERTY_MAX_HP_OFFSET, properties.base_maximum_hp);
+        self.base_property
+            .write_u32(BASE_PROPERTY_MAX_MP_OFFSET, properties.base_maximum_mp);
+        self.base_property
+            .write_u16(BASE_PROPERTY_MAX_YP_OFFSET, properties.base_maximum_yp);
+        self.base_property
+            .write_u16(BASE_PROPERTY_MAX_RP_OFFSET, properties.base_maximum_rp);
+        self.base_property
+            .write_u32(BASE_PROPERTY_STR_OFFSET, properties.base_strength);
+        self.base_property
+            .write_u32(BASE_PROPERTY_DEX_OFFSET, properties.base_dexterity);
+        self.base_property
+            .write_u32(BASE_PROPERTY_CON_OFFSET, properties.base_constitution);
+        self.base_property
+            .write_u32(BASE_PROPERTY_INT_OFFSET, properties.base_intelligence);
+        self.base_property
+            .write_u32(BASE_PROPERTY_MIN_ATK_OFFSET, properties.base_minimum_attack);
+        self.base_property
+            .write_u32(BASE_PROPERTY_MAX_ATK_OFFSET, properties.base_maximum_attack);
+        self.base_property
+            .write_u16(BASE_PROPERTY_HIT_OFFSET, properties.base_hit);
+        self.base_property
+            .write_u16(BASE_PROPERTY_BURDEN_OFFSET, properties.base_burden);
+        self.base_property
+            .write_u16(BASE_PROPERTY_CCH_OFFSET, properties.base_cch);
+        self.base_property
+            .write_u32(BASE_PROPERTY_DEF_OFFSET, properties.base_defence);
+        self.base_property
+            .write_u16(BASE_PROPERTY_DODGE_OFFSET, properties.base_dodge);
+        self.base_property
+            .write_u16(BASE_PROPERTY_ATC_SPEED_OFFSET, properties.base_attack_speed);
+        self.base_property.write_u32(
+            BASE_PROPERTY_ELEMENT_RESISTANT_OFFSET,
+            properties.base_element_resistant,
+        );
+        self.base_property.write_u16(
+            BASE_PROPERTY_HP_RECOVER_SPEED_OFFSET,
+            properties.base_hp_recover_speed,
+        );
+        self.base_property.write_u16(
+            BASE_PROPERTY_MP_RECOVER_SPEED_OFFSET,
+            properties.base_mp_recover_speed,
+        );
+        self.base_property.write_u32(BASE_PROPERTY_VIGOUR_OFFSET, 0);
+        self.base_property.write_u32(BASE_PROPERTY_MAX_VIGOUR_OFFSET, 0);
+        self.base_property.write_u32(BASE_PROPERTY_ENERGY_OFFSET, 0);
+        self.base_property.write_u32(BASE_PROPERTY_MAX_ENERGY_OFFSET, 0);
+        self.base_property.write_u32(BASE_PROPERTY_CREDIT_OFFSET, 0);
+        self.base_property
+            .write_u8(BASE_PROPERTY_DISPLAY_HEAD_PIECE_OFFSET, 1);
+        self.base_property.write_u32(BASE_PROPERTY_MODE_OFFSET, 0);
+        self.base_property
+            .write_u8(BASE_PROPERTY_BATTLE_FAIRY_ENABLED_OFFSET, 0);
+        self.base_property.write_u32(BASE_PROPERTY_FETCH_POWER_OFFSET, 0);
+        self.base_property
+            .write_u32(BASE_PROPERTY_QUEST_TIME_BEGIN_OFFSET, 0);
+        self.base_property
+            .write_u32(BASE_PROPERTY_QUEST_TIME_LIMIT_OFFSET, 0);
+        self.base_property.write_u8(BASE_PROPERTY_QUEST_OFFSET, 0);
+        self.base_property
+            .write_u32(BASE_PROPERTY_BREAK_ARMOUR_OFFSET, 0);
+        self.base_property
+            .write_u32(BASE_PROPERTY_BREAK_BOUND_OFFSET, 0);
+        self.base_property
+            .write_u32(BASE_PROPERTY_BREAK_ELEMENT_OFFSET, 0);
+        self.base_property
+            .write_u32(BASE_PROPERTY_POWER_OF_GOLD_OFFSET, 0);
+        self.base_property.write_u32(BASE_PROPERTY_JJC_LEVEL_OFFSET, 0);
+        self.base_property.write_u32(BASE_PROPERTY_JJC_SCORE_OFFSET, 0);
+        self.base_property.write_u16(
+            BASE_PROPERTY_REMAIN_JING_LI_DAN_COUNT_OFFSET,
+            globe_setup.total_jing_li_dan_count(),
+        );
+        self.base_property
+            .write_u8(BASE_PROPERTY_IS_CHARGED_OFFSET, 0);
+        self.country = Some(country);
+        self.contribute = Some(0);
+
+        self.update_property(coefficients)
+            .map_err(PlayerDefaultPropertyBlock::Property)?;
+        self.base_property.write_u32(
+            BASE_PROPERTY_MP_OFFSET,
+            self.property.read_u32(PROPERTY_MAX_MP_OFFSET),
+        );
+        self.base_property.write_u32(
+            BASE_PROPERTY_HP_OFFSET,
+            self.property.read_u32(PROPERTY_MAX_HP_OFFSET),
+        );
+        self.move_shape_base.set_speed(globe_setup.player_speed());
+
+        let mut daily_things = VecDeque::new();
+        thing_setup.get_daily_thing_list(&mut get_week_day, &mut daily_things);
+        if !daily_things.is_empty() {
+            self.daily_things = daily_things
+                .into_iter()
+                .map(
+                    |LeiTingDailyThing {
+                         thing_id,
+                         count,
+                         max_count,
+                         point,
+                     }| PlayerThing {
+                        thing_id,
+                        count,
+                        max_count,
+                        point,
+                    },
+                )
+                .collect();
+        }
+        self.base_property
+            .write_u32(BASE_PROPERTY_LT_60_STAMP_OFFSET, timestamp);
+
+        Ok(PlayerDefaultPropertyReport {
+            selected_region_id,
+            tile_x,
+            tile_y,
+            direction,
+            creation_property_key,
+            creation_property_inserted,
+        })
+    }
+
+    /// Применяет одну ordered запись начальной экипировки. Factory probability
+    /// и modifier roll-ы остаются на общем legacy `random(bound)` callback-е.
+    pub(crate) fn add_origin_equipment<Random>(
+        &mut self,
+        origin: &PlayerOriginEquipment,
+        registry: &GoodsBasePropertiesRegistry,
+        original_name_index: &GoodsOriginalNameIndex,
+        random: &mut Random,
+    ) -> Result<PlayerOriginEquipmentOutcome, PlayerOriginEquipmentBlock>
+    where
+        Random: FnMut(i32) -> i32 + ?Sized,
+    {
+        if self
+            .base_property
+            .read_u8(BASE_PROPERTY_OCCUPATION_OFFSET)
+            != origin.occupation
+        {
+            return Ok(PlayerOriginEquipmentOutcome::OccupationMismatch);
+        }
+
+        let goods_id = query_goods_id_by_original_name_bytes(
+            original_name_index,
+            Some(&origin.original_name),
+        );
+        let Some(mut goods) = create_goods(registry, goods_id, random) else {
+            return Ok(PlayerOriginEquipmentOutcome::GoodsFactoryMiss { goods_id });
+        };
+        let guid = CGuid::create().map_err(PlayerOriginEquipmentBlock::Guid)?;
+        goods.set_ex_id(&guid);
+        let rejected = self
+            .equipment
+            .add_at(u32::from(origin.place_position), goods, registry)
+            .map_err(PlayerOriginEquipmentBlock::Equipment)?
+            .is_some();
+        if rejected {
+            Ok(PlayerOriginEquipmentOutcome::Rejected {
+                goods_id,
+                position: origin.place_position,
+            })
+        } else {
+            Ok(PlayerOriginEquipmentOutcome::Added {
+                goods_id,
+                position: origin.place_position,
+            })
+        }
+    }
+
+    /// Применяет прямые create-role записи после `LoadDefaultProperty`.
+    pub(crate) fn set_creation_identity(
+        &mut self,
+        name: &[u8],
+        account: &[u8],
+        head_picture: u8,
+        face_picture: u8,
+    ) {
+        self.move_shape_base.set_name(name);
+        self.base_property.write_u8(BASE_PROPERTY_HEAD_PIC_OFFSET, head_picture);
+        self.base_property.write_u8(BASE_PROPERTY_FACE_PIC_OFFSET, face_picture);
+        self.base_property.account.clear();
+        self.base_property.account.extend_from_slice(account);
+    }
+
+    /// Применяет две post-default константы exact create-role ветки.
+    pub(crate) fn set_creation_service_defaults(&mut self) {
+        self.base_property
+            .write_u32(BASE_PROPERTY_AUCTION_SPACE_OFFSET, 5);
+        self.base_property
+            .write_u32(BASE_PROPERTY_JJC_LEVEL_OFFSET, 1000);
     }
 
     /// Повторяет `CPlayer::GetMoney` RVA `0x0005AEA0` через wallet-owner.
@@ -3443,7 +3810,7 @@ fn read_player_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CPlayer::LoadDefaultProperty
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp:194
@@ -3451,6 +3818,8 @@ fn read_player_array<const N: usize>(
 // ADDRESS: 0045e560
 // PROTOTYPE: void __thiscall LoadDefaultProperty(uchar param_1, uchar param_2, uchar param_3)
 //
+// IMPLEMENTED_OWNER: `CPlayer::load_default_property` выше сохраняет exact
+// singleton/data/random/property/daily/time порядок через явные Rust owners.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

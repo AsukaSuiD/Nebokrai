@@ -468,11 +468,15 @@ where
     query_goods_id_by_original_name_bytes(original_name_index, Some(&original_name))
 }
 
-fn query_goods_id_by_original_name_bytes(
+pub(crate) fn query_goods_id_by_original_name_bytes(
     index: &GoodsOriginalNameIndex,
     original_name: Option<&[u8]>,
 ) -> u32 {
     original_name
+        .map(|name| {
+            let visible = name.iter().position(|byte| *byte == 0).unwrap_or(name.len());
+            &name[..visible]
+        })
         .and_then(|name| index.get(name).copied())
         .unwrap_or(0)
 }
