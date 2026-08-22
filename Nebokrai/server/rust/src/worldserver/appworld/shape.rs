@@ -626,7 +626,7 @@ fn read_shape_array<const N: usize>(
 
 // ============================================================================
 // FUNCTION: CWorldCityRegion::tagBuild::tagBuild
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\shape.cpp
@@ -634,6 +634,9 @@ fn read_shape_array<const N: usize>(
 // ADDRESS: 00479660
 // PROTOTYPE: undefined __thiscall tagBuild(tagBuild * param_1)
 //
+// IMPLEMENTED_OWNER: `WorldCityBuild::clone` в `worldcityregion.rs` копирует
+// все одиннадцать signed scalar-полей и оба byte-string поля в том же порядке;
+// обычный Rust `Clone` заменяет только внутреннее владение строкой MSVC.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

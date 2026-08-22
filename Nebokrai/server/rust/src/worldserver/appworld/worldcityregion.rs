@@ -2,6 +2,11 @@
 //!
 //! Constructor RVA `0x00079850`, `LoadCitySetup` RVA `0x00079930`, virtual
 //! `Load` RVA `0x00079F10` и serializer RVA `0x00079570` — `IMPLEMENTED`.
+//! Конструктор копирования вложенного `tagBuild` RVA `0x00079660` также
+//! `IMPLEMENTED`: он копирует одиннадцать signed `long` в порядке wire-а, а
+//! затем оба C-string значения `strName` и `strScript`. `WorldCityBuild` хранит
+//! эти поля именованно, а обычный `Clone` Rust заменяет только копирование
+//! MSVC `std::string` без переноса SSO и обработки исключений.
 //! Exact EXE подтверждает композицию: один `CWorldWarRegion`, list gates по
 //! `+0x12C`, defence `tagRegionSetup` по `+0x138`; constructor задаёт war
 //! `3/3/2`, но defence setup не инициализирует. `.city` очищает gates только
@@ -72,11 +77,44 @@ pub(crate) enum WorldCityRegionEnterBlock {
     RandomPosition(RegionRandomPositionBlock),
 }
 
-#[derive(Clone, Debug)]
+/// Одни городские ворота из `CWorldCityRegion::tagBuild`.
+///
+/// Порядок полей равен точному 44-байтному scalar-prefix конструктора и
+/// сериализатора. Два byte-вектора сохраняют legacy C-строки без MSVC ABI.
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct WorldCityBuild {
-    header: [u8; 0x2C],
+    id: i32,
+    picture_id: i32,
+    direction: i32,
+    action: i32,
+    maximum_hp: i32,
+    defence: i32,
+    element_resistant: i32,
+    title_x: i32,
+    title_y: i32,
+    width_increment: i32,
+    height_increment: i32,
     name: Vec<u8>,
     script: Vec<u8>,
+}
+
+impl WorldCityBuild {
+    /// Возвращает scalar-prefix в точном порядке legacy wire-а.
+    const fn wire_scalars(&self) -> [i32; 11] {
+        [
+            self.id,
+            self.picture_id,
+            self.direction,
+            self.action,
+            self.maximum_hp,
+            self.defence,
+            self.element_resistant,
+            self.title_x,
+            self.title_y,
+            self.width_increment,
+            self.height_increment,
+        ]
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -185,18 +223,31 @@ impl CWorldCityRegion {
             if token != b"#" {
                 continue;
             }
-            let mut header = [0; 0x2C];
-            let index = tokens.next_i32("tagBuild.lIndex")?;
-            header[..4].copy_from_slice(&index.to_le_bytes());
+            let id = tokens.next_i32("tagBuild.lID")?;
             let string_id = tokens.next("tagBuild.stringID")?;
-            for (field_index, field) in CITY_BUILD_FIELDS.iter().enumerate().skip(1) {
-                let value = tokens.next_i32(field)?;
-                let offset = field_index * 4;
-                header[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-            }
+            let picture_id = tokens.next_i32("tagBuild.lPicID")?;
+            let direction = tokens.next_i32("tagBuild.lDir")?;
+            let action = tokens.next_i32("tagBuild.lAction")?;
+            let maximum_hp = tokens.next_i32("tagBuild.lMaxHP")?;
+            let defence = tokens.next_i32("tagBuild.lDef")?;
+            let element_resistant = tokens.next_i32("tagBuild.lElementResistant")?;
+            let title_x = tokens.next_i32("tagBuild.lTitleX")?;
+            let title_y = tokens.next_i32("tagBuild.lTitleY")?;
+            let width_increment = tokens.next_i32("tagBuild.lWidthInc")?;
+            let height_increment = tokens.next_i32("tagBuild.lHeightInc")?;
             let script = tokens.next("tagBuild.strScript")?.to_vec();
             gates.push(WorldCityBuild {
-                header,
+                id,
+                picture_id,
+                direction,
+                action,
+                maximum_hp,
+                defence,
+                element_resistant,
+                title_x,
+                title_y,
+                width_increment,
+                height_increment,
                 name: resolve_name(string_id),
                 script,
             });
@@ -241,7 +292,9 @@ impl CWorldCityRegion {
         })?;
         destination.extend_from_slice(&count.to_le_bytes());
         for gate in &self.gates {
-            destination.extend_from_slice(&gate.header);
+            for scalar in gate.wire_scalars() {
+                destination.extend_from_slice(&scalar.to_le_bytes());
+            }
             append_city_c_string(destination, &gate.name);
             append_city_c_string(destination, &gate.script);
         }
@@ -335,20 +388,6 @@ impl CWorldCityRegion {
         Ok(())
     }
 }
-
-const CITY_BUILD_FIELDS: [&str; 11] = [
-    "tagBuild.lIndex",
-    "tagBuild.field_04",
-    "tagBuild.field_08",
-    "tagBuild.field_0C",
-    "tagBuild.field_10",
-    "tagBuild.field_14",
-    "tagBuild.field_18",
-    "tagBuild.field_1C",
-    "tagBuild.field_20",
-    "tagBuild.field_24",
-    "tagBuild.field_28",
-];
 
 const CITY_DEFENCE_FIELDS: [&str; 8] = [
     "m_DefenceSideRS.lReturnRegionID",
