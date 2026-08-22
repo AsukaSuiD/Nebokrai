@@ -6,7 +6,7 @@
 //! `DigUpTheHatchet` RVA `0x00064D80`, `OnPlayerDied` RVA `0x00065750`,
 //! `StopFactionWar` RVA `0x00065D10`,
 //! `GenerateSaveData` RVA `0x000662F0`, constructor RVA `0x000663F0` и
-//! `Run` RVA `0x00066590` —
+//! `Run` RVA `0x00066590` и `LoadIni` RVA `0x00064BB0` —
 //! `IMPLEMENTED`; остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
 //! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
 //! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
@@ -75,6 +75,7 @@ use std::error::Error;
 use std::fmt;
 
 use crate::dbaccess::worlddb::rsenemyfactions::EnemyFactionSaveSnapshot;
+use crate::public::readwrite::read_to;
 use crate::worldserver::worldserver::game::CGame;
 
 /// Точные три поля live `tagEnemyFaction` без копирования MSVC list-layout.
@@ -106,6 +107,26 @@ impl FactionWarType {
     pub(crate) const fn fight_time_ms(self) -> i32 {
         self.fight_time_ms
     }
+}
+
+/// Наблюдаемый результат одного `CFactionWarSys::LoadIni`.
+///
+/// Старый метод всегда завершался истинным result: отсутствие файла только
+/// очищало map и писало literal в общий лог. Неудачная formatted-extraction
+/// оставляла уже применённый prefix; безопасный owner не читает остающиеся
+/// неинициализированные stack-значения и останавливает только parser.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactionWarIniLoadCompletion {
+    FileMissing,
+    FormatStopped,
+    Loaded,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FactionWarIniLoadReport {
+    pub(crate) completion: FactionWarIniLoadCompletion,
+    pub(crate) parsed_records: u32,
+    pub(crate) legacy_result: bool,
 }
 
 /// Причина, по которой safe Rust не может выбрать продолжение старой цепочки.
@@ -356,6 +377,68 @@ impl CFactionWarSys {
             faction_wars: BTreeMap::new(),
             enemy_factions: VecDeque::new(),
             start_time_ms,
+        }
+    }
+
+    /// Загружает package-resource `data/FactionWarSys.ini` в exact map-order.
+    ///
+    /// `ReadTo("#")` находит marker среди whitespace-токенов, после чего
+    /// три signed значения образуют `lType`, минуты и `lMoney`. Минуты
+    /// умножаются тем же 32-bit wrapping-product, с которым MSVC записывал
+    /// `lFightTime`; повторный тип заменяет map-value. Отсутствующий resource
+    /// очищает map и возвращает literal старого лога через report, поэтому
+    /// caller сохраняет его исходную позицию в общем log owner-е.
+    pub(crate) fn load_ini_from_resource(
+        &mut self,
+        source: Option<&[u8]>,
+    ) -> FactionWarIniLoadReport {
+        self.faction_wars.clear();
+        let Some(source) = source else {
+            return FactionWarIniLoadReport {
+                completion: FactionWarIniLoadCompletion::FileMissing,
+                parsed_records: 0,
+                legacy_result: true,
+            };
+        };
+
+        let mut records = 0_u32;
+        let mut tokens = source
+            .split(u8::is_ascii_whitespace)
+            .filter(|token| !token.is_empty());
+        while read_to(&mut tokens, b"#") {
+            let Some(war_type) = next_signed_long(&mut tokens) else {
+                return FactionWarIniLoadReport {
+                    completion: FactionWarIniLoadCompletion::FormatStopped,
+                    parsed_records: records,
+                    legacy_result: true,
+                };
+            };
+            let Some(fight_minutes) = next_signed_long(&mut tokens) else {
+                return FactionWarIniLoadReport {
+                    completion: FactionWarIniLoadCompletion::FormatStopped,
+                    parsed_records: records,
+                    legacy_result: true,
+                };
+            };
+            let Some(money) = next_signed_long(&mut tokens) else {
+                return FactionWarIniLoadReport {
+                    completion: FactionWarIniLoadCompletion::FormatStopped,
+                    parsed_records: records,
+                    legacy_result: true,
+                };
+            };
+            self.insert_faction_war_type(FactionWarType::new(
+                war_type,
+                fight_minutes.wrapping_mul(60_000),
+                money,
+            ));
+            records = records.wrapping_add(1);
+        }
+
+        FactionWarIniLoadReport {
+            completion: FactionWarIniLoadCompletion::Loaded,
+            parsed_records: records,
+            legacy_result: true,
         }
     }
 
@@ -768,6 +851,16 @@ impl CFactionWarSys {
     }
 }
 
+/// Один formatted `long` extraction после найденного marker-а `#`.
+///
+/// При неуспехе MSVC stream оставлял destination неинициализированным; его
+/// последующее использование не имеет подтверждённого результата. Вызывающий
+/// останавливает parser после уже опубликованных map-records.
+fn next_signed_long<'a>(tokens: &mut impl Iterator<Item = &'a [u8]>) -> Option<i32> {
+    let token = tokens.next()?;
+    std::str::from_utf8(token).ok()?.parse().ok()
+}
+
 fn collect_declaration_side_names<Context>(
     context: &mut Context,
     faction_ids: &[i32],
@@ -810,12 +903,13 @@ where
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\factionwarsys.cpp
 
 // IMPLEMENTED: registry/lifecycle, IsEnemyRelation, ClearEnemyFaction,
-// AddOneEnmeyFaction, GetDecWarMoneyByType, OnPlayerDied, StopFactionWar,
-// GenerateSaveData и Run; точные RVA и контракт сохранены в верхнем `//!`.
+// AddOneEnmeyFaction, LoadIni, GetDecWarMoneyByType, OnPlayerDied,
+// StopFactionWar, GenerateSaveData и Run; точные RVA и контракт сохранены в
+// верхнем `//!`.
 
 // ============================================================================
 // FUNCTION: CFactionWarSys::LoadIni
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\factionwarsys.cpp:70
@@ -823,6 +917,10 @@ where
 // ADDRESS: 00464bb0
 // PROTOTYPE: bool __thiscall LoadIni(void)
 //
+// IMPLEMENTED_OWNER: `load_ini_from_resource` выше сохраняет clear-before-open,
+// literal missing-file log через report и legacy true. Нечитаемый formatted
+// token прекращает parser после уже применённого prefix-а вместо чтения
+// неинициализированного MSVC stack-slot.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
