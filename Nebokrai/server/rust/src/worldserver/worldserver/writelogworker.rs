@@ -25,6 +25,10 @@
 //! это сохраняет штатные значения и не воспроизводит `_sprintf`, ручное SQL
 //! quoting, stack overflow и injection через неэкранированный `context_id`.
 //! Provider из setup является ADO plumbing и Tiberius-у не передаётся.
+//! Producer `OnLogMessage::0x4FB02` дополнительно ставит exact
+//! `player_delete_log(player_id,player_name,ip_addr)` после login-response;
+//! typed variant сохраняет общий FIFO, а parameter binding заменяет только
+//! исходный `_sprintf` INSERT.
 //!
 //! Остаются `UNKNOWN` (исследовательский декомпилят хранится локально): внешний thread/exit owner, 1-ms polling, exact
 //! operator-log публикация и отменяемая замена бесконечного 10-sec reconnect.
@@ -127,6 +131,9 @@ const INSERT_CHAT_LOG_SQL: &str = "INSERT INTO chat_log(\
 const INSERT_CHANGE_MAP_LOG_SQL: &str = "INSERT INTO change_map_log(\
     player_id,player_name,money,bank,s_map_id,s_pos_x,s_pos_y,d_map_id,d_pos_x,d_pos_y,log_type\
 ) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11)";
+const INSERT_PLAYER_DELETE_LOG_SQL: &str = "INSERT INTO player_delete_log(\
+    player_id,player_name,ip_addr\
+) VALUES(@P1,@P2,@P3)";
 
 /// Cloneable FIFO-owner для producer-а главного цикла и отдельного DB worker-а.
 ///
@@ -792,6 +799,14 @@ pub(crate) async fn execute_world_write_log_command(
             query.execute(connection).await?;
             Ok(())
         }
+        WorldWriteLogCommand::PlayerDeleteLog(write) => {
+            let mut query = Query::new(INSERT_PLAYER_DELETE_LOG_SQL);
+            query.bind(write.player_id);
+            query.bind(decode_legacy_text(&write.player_name));
+            query.bind(decode_legacy_text(&write.ip_address));
+            query.execute(connection).await?;
+            Ok(())
+        }
     }
 }
 
@@ -845,5 +860,6 @@ fn world_write_log_command_name(command: &WorldWriteLogCommand) -> &'static str 
         WorldWriteLogCommand::ChatLog(_) => "ChatLog",
         WorldWriteLogCommand::LegacyEmptyChatSql { .. } => "LegacyEmptyChatSql",
         WorldWriteLogCommand::ChangeMapLog(_) => "ChangeMapLog",
+        WorldWriteLogCommand::PlayerDeleteLog(_) => "PlayerDeleteLog",
     }
 }

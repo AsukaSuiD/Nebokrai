@@ -2,8 +2,8 @@
 //!
 //! Статус `CCountry::SetCountryPower/SetCountryTreasury/SetCountryTech` RVA
 //! `0x000A4750/0x000A4790/0x000A47D0`, `CCountry::AddToByteArray` RVA `0x000C6E30`,
-//! `CCountry::IsKing/CanOperate/Exile/SuccessExiled/Silence/Absolve` RVA
-//! `0x000C7160/0x000C7520/0x000C7AD0/0x000C7EE0/0x000C81D0/0x000C8570`,
+//! `CCountry::IsKing/HasJob/CanOperate/Exile/SuccessExiled/Silence/Absolve` RVA
+//! `0x000C7160/0x000C8820/0x000C7520/0x000C7AD0/0x000C7EE0/0x000C81D0/0x000C8570`,
 //! governance-цепочка `CanAscend/CanDemise/DeposeKing/RegisterKing/Demise`
 //! RVA `0x000CA830/0x000CAC30/0x000CB030/0x000CB8F0/0x000CC320`,
 //! `CCountry::CloneCountryData` RVA `0x000C9CE0` и
@@ -623,6 +623,37 @@ pub(crate) trait CountryExileResultContext {
     ) -> Vec<CountryExileMessageDelivery>;
     fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError>;
     fn put_king_log(&mut self, text: &[u8]);
+}
+
+/// Узкая граница единственных трёх эффектов, которые достигает
+/// `CCountry::HasJob`: локализованное имя страны, форматирование `WS0034` и
+/// запись отрицательной проверки короля в исторический файл `king`.
+pub(crate) trait CountryHasJobContext {
+    fn country_name(&mut self, country_id: u8) -> Vec<u8>;
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8>;
+    fn put_king_log(&mut self, text: &[u8]);
+}
+
+impl<Context: CountryExileResultContext + ?Sized> CountryHasJobContext for Context {
+    fn country_name(&mut self, country_id: u8) -> Vec<u8> {
+        CountryExileResultContext::country_name(self, country_id)
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8> {
+        CountryExileResultContext::format_world_string(self, string_id, arguments)
+    }
+
+    fn put_king_log(&mut self, text: &[u8]) {
+        CountryExileResultContext::put_king_log(self, text);
+    }
 }
 
 /// Узкая граница online/organizing/network эффектов player-list owner-а.
@@ -1701,6 +1732,31 @@ impl CCountry {
         candidate: i32,
         context: &mut Context,
     ) -> bool {
+        self.authorize_king_for_job(candidate, context)
+    }
+
+    /// Повторяет exact `CCountry::HasJob`: сначала вызывает полный `IsKing`
+    /// (включая его отрицательный `WS0034` king-log), затем ищет первый
+    /// minister ID в unsigned job-order.
+    pub(crate) fn has_job<Context: CountryHasJobContext + ?Sized>(
+        &self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> u8 {
+        if self.authorize_king_for_job(player_id, context) {
+            return 1;
+        }
+        self.ministers
+            .iter()
+            .find_map(|(&job, minister)| (minister.snapshot.id == player_id).then_some(job))
+            .unwrap_or(0)
+    }
+
+    fn authorize_king_for_job<Context: CountryHasJobContext + ?Sized>(
+        &self,
+        candidate: i32,
+        context: &mut Context,
+    ) -> bool {
         if candidate != 0 && self.king.id == candidate {
             return true;
         }
@@ -2644,13 +2700,7 @@ impl CCountry {
         player_id: i32,
         context: &mut Context,
     ) -> u8 {
-        if self.authorize_king(player_id, context) {
-            return 1;
-        }
-        self.ministers
-            .iter()
-            .find_map(|(&job, minister)| (minister.snapshot.id == player_id).then_some(job))
-            .unwrap_or(0)
+        self.has_job(player_id, context)
     }
 
     fn reject_appoint_minister<Context: CountryExileResultContext + ?Sized>(
@@ -4249,7 +4299,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 
 // ============================================================================
 // FUNCTION: CCountry::HasJob
-// STATUS: IMPLEMENTED_SOURCE_REFERENCE
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\country.cpp:1790
@@ -4257,7 +4307,7 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
 // ADDRESS: 004c8820
 // PROTOTYPE: uchar __thiscall HasJob(long param_1)
 //
-// Реализация с исходным вложенным `IsKing` log-side-effect находится выше.
+// Реализация с исходным вложенным `IsKing` log-side-effect находится выше в
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

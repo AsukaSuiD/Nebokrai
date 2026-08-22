@@ -1,8 +1,9 @@
 //! WorldServer dispatcher-owner `OnLogMessage`.
 //!
 //! Корпус остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме player lifecycle leaf-ов
-//! `0x5FB01/0x5FB02`, player-list leaf `0x4FB01`, restore-role leaf `0x4FB03`
-//! и account cleanup leaf-ов `0x4FB06/0x4FB07` со статусом `IMPLEMENTED`.
+//! `0x5FB01/0x5FB02`, player-list leaf `0x4FB01`, delete-role leaf `0x4FB02`,
+//! restore-role leaf `0x4FB03` и account cleanup leaf-ов `0x4FB06/0x4FB07`
+//! со статусом `IMPLEMENTED`.
 //! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\logmessage.cpp:30`.
@@ -47,6 +48,19 @@
 //! parameter binding и owned wire snapshots заменяют только ADO/COM,
 //! `_sprintf` и временные C++ locals; исходный clone-codec, SQL-порядок, N+1
 //! DelDate lookup и wire остаются явными.
+//! Exact `0x004B12CE..0x004B168D` для `0x4FB02` читает account/player/IP,
+//! форматирует все четыре octet-а little-endian long, снимает `_time` до
+//! organizing/DB gates и вызывает полный `OnDeleteRole`. Коды `1..=4` дают
+//! `0x1FF03 + char(0x13) + player + account\0 + long(code)`; уже поставленное
+//! удаление даёт тот же ответ с нулём. Успех строго снимает restore, добавляет
+//! live deletion time и посылает `char(0x14)` с signed byte `dwDelDays`.
+//! Optional `player_delete_log` начинается только после send и сохраняет
+//! отдельный name lookup/FIFO; Tiberius parameter binding заменяет лишь raw
+//! SQL-formatting. Exact `OnDeleteRole` `0x0043A2C0..0x0043A420` также
+//! исправляет Linux-донор: свободный master проверяет `_Mysize > 0` у
+//! `GetMembers`, а не `GetMemberNum() > 1`, поэтому штатно возвращает `1`.
+//! Union-ветвь достигает concrete `CUnion::DelMember`, который всегда true,
+//! отвязывает faction и даёт код `3`; код `2` concrete машиной недостижим.
 //!
 //! Декомпилятор: Ghidra 12.1.2. Сырой C++ ниже сохранён как локальная
 //! документация, а не как Rust-реализация.
@@ -57,8 +71,20 @@ use crate::dbaccess::worlddb::rsplayer::{
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::setup::globesetup::GlobeSetupSnapshot;
+use crate::public::tools::put_string_to_file;
+use crate::worldserver::appworld::country::country::{
+    CountryExileTextArgument, CountryHasJobContext,
+};
+use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
-use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
+use crate::worldserver::appworld::message::writelogmessage::{
+    WorldPlayerDeleteLogWrite, WorldWriteLogCommand,
+};
+use crate::worldserver::appworld::organizingsystem::organizingctrl::{
+    COrganizingCtrl, OrganizingDeleteRoleBlock, OrganizingDeleteRoleOutcome,
+};
+use crate::worldserver::appworld::organizingsystem::organizingparam::COrganizingParam;
+use crate::worldserver::appworld::organizingsystem::union::UnionFormatArgument;
 use crate::worldserver::appworld::player::{
     PlayerBaseWireSnapshot, PlayerCodecError, PlayerPropertyCoefficients,
 };
@@ -70,12 +96,16 @@ use crate::worldserver::worldserver::game::{
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
 const PLAYER_BASE_REQUEST: i32 = 0x0004_FB01;
+const DELETE_ROLE_REQUEST: i32 = 0x0004_FB02;
 const PLAYER_DETAIL_REQUEST: i32 = 0x0005_FB01;
 const PLAYER_RETURN_REQUEST: i32 = 0x0005_FB02;
 const RESTORE_ROLE_REQUEST: i32 = 0x0004_FB03;
 const ACCOUNT_LOGIN_CLEANUP_REQUEST: i32 = 0x0004_FB06;
 const ACCOUNT_DISCONNECT_REQUEST: i32 = 0x0004_FB07;
 const PLAYER_BASE_RESPONSE: i32 = 0x0001_FF02;
+const DELETE_ROLE_RESPONSE: i32 = 0x0001_FF03;
+const DELETE_ROLE_REJECTED_STATUS: i8 = 0x13;
+const DELETE_ROLE_SCHEDULED_STATUS: i8 = 0x14;
 const RESTORE_ROLE_RESPONSE: i32 = 0x0001_FF04;
 const RESTORE_ROLE_STATUS: i8 = 0x15;
 const ACCOUNT_DISCONNECT_GAME_RESPONSE: i32 = 0x0007_F903;
@@ -103,6 +133,51 @@ pub(crate) struct WorldPlayerBaseOutcome {
     pub(crate) response_type: i32,
     pub(crate) wire: Vec<u8>,
     pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerDeleteLogOutcome {
+    pub(crate) player_name: Vec<u8>,
+    pub(crate) ip_address: Vec<u8>,
+    pub(crate) queue_length_after: usize,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldDeleteRoleDisposition {
+    OrganizingRejected {
+        code: i32,
+    },
+    AlreadyScheduled {
+        deletion_time: i32,
+    },
+    Scheduled {
+        deletion_time: i32,
+        restore_was_present: bool,
+        deletion_days: i8,
+        delete_log: Option<WorldPlayerDeleteLogOutcome>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldDeleteRoleOutcome {
+    OrganizingBlocked {
+        account: Vec<u8>,
+        player_id: u32,
+        ip_address: Vec<u8>,
+        source: OrganizingDeleteRoleBlock,
+    },
+    Responded {
+        account: Vec<u8>,
+        player_id: u32,
+        ip_address: Vec<u8>,
+        organizing: OrganizingDeleteRoleOutcome,
+        disposition: WorldDeleteRoleDisposition,
+        response_type: i32,
+        status: i8,
+        trailing_value: i32,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -225,6 +300,7 @@ pub(crate) enum WorldPlayerReturnOutcome {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldLogMessageOutcome {
     PlayerBase(WorldPlayerBaseOutcome),
+    DeleteRole(WorldDeleteRoleOutcome),
     RestoreRole(WorldRestoreRoleOutcome),
     AccountLoginCleanup(WorldAccountLoginCleanupOutcome),
     AccountDisconnect(WorldAccountDisconnectOutcome),
@@ -240,12 +316,17 @@ pub(crate) enum WorldLogMessageDispatch {
 pub(crate) async fn on_log_message(
     game: &mut CGame,
     organizing: &mut COrganizingCtrl,
+    organizing_parameters: &COrganizingParam,
+    country_handler: &CCountryHandler,
     session_factory: &mut CSessionFactory,
     registry: &GoodsBasePropertiesRegistry,
     coefficients: &PlayerPropertyCoefficients,
     globe_setup: &GlobeSetupSnapshot,
     rs_player: &mut TiberiusRsPlayer,
     player_database: Option<&mut WorldTdsClient>,
+    format_world_string:
+        &mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+    delete_log_enabled: bool,
     add_error_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     message: CMessage,
 ) -> WorldLogMessageDispatch {
@@ -259,6 +340,21 @@ pub(crate) async fn on_log_message(
                 globe_setup,
                 rs_player,
                 player_database,
+                message,
+            )
+            .await
+        }
+        DELETE_ROLE_REQUEST => {
+            delete_role(
+                game,
+                organizing,
+                organizing_parameters,
+                country_handler,
+                globe_setup,
+                rs_player,
+                player_database,
+                format_world_string,
+                delete_log_enabled,
                 message,
             )
             .await
@@ -375,6 +471,244 @@ fn remaining_deletion_days(deletion_days: u32, deletion_time: i32) -> i8 {
     let elapsed_days = (elapsed_seconds as f64 / 86_400.0) as i32;
     let remaining = (deletion_days as u8 as i8).wrapping_sub(elapsed_days as u8 as i8);
     remaining.max(0)
+}
+
+struct DeleteRoleCountryEffects<'a> {
+    globe_setup: &'a GlobeSetupSnapshot,
+    format_world_string:
+        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+}
+
+impl CountryHasJobContext for DeleteRoleCountryEffects<'_> {
+    fn country_name(&mut self, country_id: u8) -> Vec<u8> {
+        self.globe_setup
+            .country_name(country_id)
+            .unwrap_or_default()
+            .to_vec()
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| match argument {
+                CountryExileTextArgument::Text(value) => UnionFormatArgument::Text(value),
+                CountryExileTextArgument::Signed(value) => UnionFormatArgument::Signed(*value),
+            })
+            .collect::<Vec<_>>();
+        (self.format_world_string)(string_id, &arguments)
+    }
+
+    fn put_king_log(&mut self, text: &[u8]) {
+        put_string_to_file("king", text);
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "границы один к одному соответствуют exact OnLogMessage/OnDeleteRole owner-ам"
+)]
+async fn delete_role(
+    game: &mut CGame,
+    organizing: &mut COrganizingCtrl,
+    organizing_parameters: &COrganizingParam,
+    country_handler: &CCountryHandler,
+    globe_setup: &GlobeSetupSnapshot,
+    rs_player: &mut TiberiusRsPlayer,
+    mut player_database: Option<&mut WorldTdsClient>,
+    format_world_string: &mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+    delete_log_enabled: bool,
+    mut request: CMessage,
+) -> WorldLogMessageDispatch {
+    let account = request
+        .base_mut()
+        .get_str_bytes(0x100)
+        .expect("literal 0x100 исключает zero-capacity GetStr");
+    let player_id = request.base_mut().get_long().unwrap_or(0) as u32;
+    let ip_raw = request.base_mut().get_long().unwrap_or(0) as u32;
+    let ip_address = format!(
+        "{}.{}.{}.{}",
+        ip_raw & 0xff,
+        (ip_raw >> 8) & 0xff,
+        (ip_raw >> 16) & 0xff,
+        (ip_raw >> 24) & 0xff,
+    )
+    .into_bytes();
+    // Exact `_time` расположен до DB/organizing gates; в deletion-list
+    // сохранялись младшие 32 бита Windows `long`.
+    let deletion_time = chrono::Local::now().timestamp() as i32;
+
+    let country = rs_player
+        .get_player_country_by_id(player_id, player_database.as_deref_mut())
+        .await;
+    let country_has_job = if country == 0 {
+        false
+    } else if let Some(country_state) = country_handler.get_country(country) {
+        let mut effects = DeleteRoleCountryEffects {
+            globe_setup,
+            format_world_string,
+        };
+        country_state.has_job(player_id as i32, &mut effects) != 0
+    } else {
+        false
+    };
+    let organizing_outcome = match organizing.on_delete_role(
+        game,
+        organizing_parameters,
+        player_id as i32,
+        country_has_job,
+    ) {
+        Ok(outcome) => outcome,
+        Err(source) => {
+            return WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::DeleteRole(
+                WorldDeleteRoleOutcome::OrganizingBlocked {
+                    account,
+                    player_id,
+                    ip_address,
+                    source,
+                },
+            ));
+        }
+    };
+
+    let organizing_code = organizing_outcome.legacy_code();
+    if organizing_code != 0 {
+        return send_delete_role_response(
+            game,
+            account,
+            player_id,
+            ip_address,
+            organizing_outcome,
+            WorldDeleteRoleDisposition::OrganizingRejected {
+                code: organizing_code,
+            },
+            DELETE_ROLE_REJECTED_STATUS,
+            organizing_code,
+        );
+    }
+
+    let mut existing_deletion_time = game.deletion_player_time(player_id);
+    if existing_deletion_time == 0 {
+        existing_deletion_time = rs_player
+            .get_player_deletion_date(player_id, player_database.as_deref_mut())
+            .await;
+    }
+    if existing_deletion_time != 0 {
+        return send_delete_role_response(
+            game,
+            account,
+            player_id,
+            ip_address,
+            organizing_outcome,
+            WorldDeleteRoleDisposition::AlreadyScheduled {
+                deletion_time: existing_deletion_time,
+            },
+            DELETE_ROLE_REJECTED_STATUS,
+            0,
+        );
+    }
+
+    let restore_was_present = game.is_restore_player_exist(player_id);
+    game.delete_restore_player(player_id);
+    game.append_deletion_player(player_id, deletion_time);
+    let deletion_days = globe_setup.deletion_days() as u8 as i8;
+    let mut response = CMessage::new(DELETE_ROLE_RESPONSE);
+    response.base_mut().add_char(DELETE_ROLE_SCHEDULED_STATUS);
+    response.base_mut().add_ulong(player_id);
+    response.base_mut().add(c_string_prefix(&account));
+    response.base_mut().add_char(0);
+    response.base_mut().add_char(deletion_days);
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = response.send(
+        game.current_login_client().map(|client| client.send_queue()),
+        false,
+    );
+
+    // Exact optional log начинается только после постановки success-ответа в
+    // LoginServer queue. Parameter binding заменяет `_sprintf`, не меняя FIFO.
+    let delete_log = if delete_log_enabled {
+        let player_name = rs_player
+            .get_player_name_by_id(player_id, player_database.as_deref_mut())
+            .await;
+        let queue_length_after = game.push_write_log_command(
+            WorldWriteLogCommand::PlayerDeleteLog(WorldPlayerDeleteLogWrite {
+                player_id: player_id as i32,
+                player_name: player_name.clone(),
+                ip_address: ip_address.clone(),
+            }),
+        );
+        Some(WorldPlayerDeleteLogOutcome {
+            player_name,
+            ip_address: ip_address.clone(),
+            queue_length_after,
+        })
+    } else {
+        None
+    };
+
+    WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::DeleteRole(
+        WorldDeleteRoleOutcome::Responded {
+            account,
+            player_id,
+            ip_address,
+            organizing: organizing_outcome,
+            disposition: WorldDeleteRoleDisposition::Scheduled {
+                deletion_time,
+                restore_was_present,
+                deletion_days,
+                delete_log,
+            },
+            response_type: DELETE_ROLE_RESPONSE,
+            status: DELETE_ROLE_SCHEDULED_STATUS,
+            trailing_value: i32::from(deletion_days),
+            wire,
+            delivery,
+        },
+    ))
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "typed outcome сохраняет все наблюдаемые поля одного exact ответа"
+)]
+fn send_delete_role_response(
+    game: &CGame,
+    account: Vec<u8>,
+    player_id: u32,
+    ip_address: Vec<u8>,
+    organizing: OrganizingDeleteRoleOutcome,
+    disposition: WorldDeleteRoleDisposition,
+    status: i8,
+    trailing_value: i32,
+) -> WorldLogMessageDispatch {
+    let mut response = CMessage::new(DELETE_ROLE_RESPONSE);
+    response.base_mut().add_char(status);
+    response.base_mut().add_ulong(player_id);
+    response.base_mut().add(c_string_prefix(&account));
+    response.base_mut().add_char(0);
+    response.base_mut().add_long(trailing_value);
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = response.send(
+        game.current_login_client().map(|client| client.send_queue()),
+        false,
+    );
+    WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::DeleteRole(
+        WorldDeleteRoleOutcome::Responded {
+            account,
+            player_id,
+            ip_address,
+            organizing,
+            disposition,
+            response_type: DELETE_ROLE_RESPONSE,
+            status,
+            trailing_value,
+            wire,
+            delivery,
+        },
+    ))
 }
 
 fn send_player_base(

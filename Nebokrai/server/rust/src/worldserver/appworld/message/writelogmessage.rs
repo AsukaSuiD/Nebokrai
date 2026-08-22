@@ -440,6 +440,13 @@ pub(crate) struct WorldChangeMapLogWrite {
     pub(crate) log_type: u8,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerDeleteLogWrite {
+    pub(crate) player_id: i32,
+    pub(crate) player_name: Vec<u8>,
+    pub(crate) ip_address: Vec<u8>,
+}
+
 /// Typed очередь сохраняет старый FIFO, но оставляет SQL transport Tiberius-у.
 #[derive(Clone, Debug)]
 pub(crate) enum WorldWriteLogCommand {
@@ -459,6 +466,7 @@ pub(crate) enum WorldWriteLogCommand {
     /// Exact chat jump-table ставил в FIFO очищенный SQL-buffer.
     LegacyEmptyChatSql { log_type: u8 },
     ChangeMapLog(WorldChangeMapLogWrite),
+    PlayerDeleteLog(WorldPlayerDeleteLogWrite),
 }
 
 #[derive(Debug)]

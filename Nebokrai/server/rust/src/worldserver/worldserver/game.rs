@@ -3412,6 +3412,8 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     /// Внешние feature-gates exact `CLogSystem::bFactionChat/bPrivateChat`.
     pub(crate) faction_chat_log_enabled: bool,
     pub(crate) private_chat_log_enabled: bool,
+    /// Внешний feature-gate exact `CLogSystem::bDeleteLog`.
+    pub(crate) delete_log_enabled: bool,
     /// Внешний feature-gate `CLogSystem::FactionCreateEnabled`.
     pub(crate) faction_create_log_enabled: bool,
     pub(crate) write_faction_create_log:
@@ -9735,6 +9737,7 @@ impl CGame {
         check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
         faction_chat_log_enabled: bool,
         private_chat_log_enabled: bool,
+        delete_log_enabled: bool,
         faction_create_log_enabled: bool,
         write_faction_create_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
         faction_title_log_enabled: bool,
@@ -9832,6 +9835,7 @@ impl CGame {
                             &mut *check_invalid_organizing_string,
                             faction_chat_log_enabled,
                             private_chat_log_enabled,
+                            delete_log_enabled,
                             faction_create_log_enabled,
                             &mut *write_faction_create_log,
                             faction_title_log_enabled,
@@ -9925,6 +9929,7 @@ impl CGame {
                     &mut *check_invalid_organizing_string,
                     faction_chat_log_enabled,
                     private_chat_log_enabled,
+                    delete_log_enabled,
                     faction_create_log_enabled,
                     &mut *write_faction_create_log,
                     faction_title_log_enabled,
@@ -10021,6 +10026,7 @@ impl CGame {
         check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
         faction_chat_log_enabled: bool,
         private_chat_log_enabled: bool,
+        delete_log_enabled: bool,
         faction_create_log_enabled: bool,
         write_faction_create_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
         faction_title_log_enabled: bool,
@@ -10115,6 +10121,7 @@ impl CGame {
             check_invalid_organizing_string,
             faction_chat_log_enabled,
             private_chat_log_enabled,
+            delete_log_enabled,
             faction_create_log_enabled,
             write_faction_create_log,
             faction_title_log_enabled,
@@ -11411,6 +11418,7 @@ impl CGame {
             &mut *callbacks.check_invalid_organizing_string,
             callbacks.faction_chat_log_enabled,
             callbacks.private_chat_log_enabled,
+            callbacks.delete_log_enabled,
             callbacks.faction_create_log_enabled,
             &mut *callbacks.write_faction_create_log,
             callbacks.faction_title_log_enabled,
@@ -15101,6 +15109,7 @@ async fn process_world_message<TimerCallback, JjcContext>(
     check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
     faction_chat_log_enabled: bool,
     private_chat_log_enabled: bool,
+    delete_log_enabled: bool,
     faction_create_log_enabled: bool,
     write_faction_create_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
     faction_title_log_enabled: bool,
@@ -15189,15 +15198,20 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::Log) {
+        let delete_log_enabled = game.setup.use_log_system && delete_log_enabled;
         match on_log_message(
             game,
             organizing,
+            organizing_parameters,
+            country_handler,
             session_factory,
             registry,
             coefficients,
             globe_setup,
             rs_player,
             player_database.as_deref_mut(),
+            &mut *application_callbacks.format_world_string,
+            delete_log_enabled,
             add_log_text,
             message,
         )

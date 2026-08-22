@@ -11,6 +11,8 @@
 //! `GetPlayerID` RVA `0x00102080`, `GetCDKey` RVA `0x0010EA20`,
 //! `GetPlayerCountInDBbyCdkey` RVA `0x00100C40`, `GetPlayerDeletionDate` RVA
 //! `0x00100EA0`, `OpenPlayerBaseInDB` RVA `0x0010D2D0`,
+//! `GetPlayerCountryByID` RVA `0x00101E30`, `GetPlayerNameByID` RVA
+//! `0x00105980`,
 //! `OpenPlayerBaseInMem` RVA `0x0010F280`, внешний `OpenPlayerBase` RVA
 //! `0x0010F750`,
 //! `RestorePlayer` RVA `0x00101260` и
@@ -45,6 +47,12 @@
 //! `_mktime == -1` в `0`, но catch возвращает signed `-1`; null `DelDate`, EOF
 //! и нулевой player ID возвращают `0`. Эти различающиеся значения сохранены,
 //! потому что caller считает `-1` ненулевым deletion timestamp.
+//! `GetPlayerCountryByID` и `GetPlayerNameByID` выполняют отдельные exact
+//! `SELECT Country/Name ... WHERE id=%d`; EOF/exception оставляют заранее
+//! обнулённый output. Rust использует параметризованный TDS-запрос на
+//! переданном синхронном connection и возвращает соответственно `0`/пустой
+//! ANSI-вектор. Это заменяет отдельный ADO connection и небезопасные
+//! `_sprintf/lstrcpyA`, сохраняя DB-порядок caller-а и значения отказа.
 //!
 //! Exact `0x005023BE..0x005026A8` исправляет потерянный raw vararg-хвост:
 //! после одиннадцатого equipment level последним `%d` передаётся signed
@@ -974,6 +982,8 @@ pub(crate) enum RsPlayerOperation {
     OpenPlayerBaseCount,
     OpenPlayerBase,
     GetPlayerDeletionDate,
+    GetPlayerCountryById,
+    GetPlayerNameById,
     IsNameExist,
     GetPlayerId,
     GetCdKey,
@@ -1141,6 +1151,20 @@ pub(crate) trait RsPlayerOwner {
         player_id: u32,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> i32;
+
+    /// Возвращает byte country либо исходный ноль при EOF/DB-отказе.
+    async fn get_player_country_by_id(
+        &mut self,
+        player_id: u32,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> u8;
+
+    /// Возвращает ANSI player-name либо исходную пустую строку при отказе.
+    async fn get_player_name_by_id(
+        &mut self,
+        player_id: u32,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> Vec<u8>;
 
     /// Проверяет case-insensitive player-name через parameterized TDS query.
     async fn is_name_exist(
@@ -2299,6 +2323,107 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         };
         // Exact `_mktime == -1` нормализовался в ноль до возврата.
         i32::try_from(local_midnight.timestamp()).unwrap_or(0)
+    }
+
+    async fn get_player_country_by_id(
+        &mut self,
+        player_id: u32,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> u8 {
+        let Some(active_transaction) = active_transaction else {
+            self.notices.push_back(RsPlayerNotice {
+                operation: RsPlayerOperation::GetPlayerCountryById,
+                error: RsPlayerSaveError::MissingConnection,
+            });
+            return 0;
+        };
+        let mut query = Query::new("SELECT Country FROM CSL_PLAYER_BASE WHERE id=@P1");
+        query.bind(player_id as i32);
+        let row = match query.query(active_transaction).await {
+            Ok(stream) => match stream.into_row().await {
+                Ok(row) => row,
+                Err(error) => {
+                    self.notices.push_back(RsPlayerNotice {
+                        operation: RsPlayerOperation::GetPlayerCountryById,
+                        error: RsPlayerSaveError::Database(error.into()),
+                    });
+                    return 0;
+                }
+            },
+            Err(error) => {
+                self.notices.push_back(RsPlayerNotice {
+                    operation: RsPlayerOperation::GetPlayerCountryById,
+                    error: RsPlayerSaveError::Database(error.into()),
+                });
+                return 0;
+            }
+        };
+        let Some(row) = row else {
+            return 0;
+        };
+        match read_ado_integer(&row, "Country") {
+            Ok(Some(country)) => country as u8,
+            Ok(None) => 0,
+            Err(error) => {
+                self.notices.push_back(RsPlayerNotice {
+                    operation: RsPlayerOperation::GetPlayerCountryById,
+                    error: RsPlayerSaveError::Database(error.into()),
+                });
+                0
+            }
+        }
+    }
+
+    async fn get_player_name_by_id(
+        &mut self,
+        player_id: u32,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> Vec<u8> {
+        let Some(active_transaction) = active_transaction else {
+            self.notices.push_back(RsPlayerNotice {
+                operation: RsPlayerOperation::GetPlayerNameById,
+                error: RsPlayerSaveError::MissingConnection,
+            });
+            return Vec::new();
+        };
+        let mut query = Query::new("SELECT Name FROM CSL_PLAYER_BASE WHERE id=@P1");
+        query.bind(player_id as i32);
+        let row = match query.query(active_transaction).await {
+            Ok(stream) => match stream.into_row().await {
+                Ok(row) => row,
+                Err(error) => {
+                    self.notices.push_back(RsPlayerNotice {
+                        operation: RsPlayerOperation::GetPlayerNameById,
+                        error: RsPlayerSaveError::Database(error.into()),
+                    });
+                    return Vec::new();
+                }
+            },
+            Err(error) => {
+                self.notices.push_back(RsPlayerNotice {
+                    operation: RsPlayerOperation::GetPlayerNameById,
+                    error: RsPlayerSaveError::Database(error.into()),
+                });
+                return Vec::new();
+            }
+        };
+        let Some(row) = row else {
+            return Vec::new();
+        };
+        match row.try_get::<&str, _>("Name") {
+            Ok(Some(name)) => {
+                let (name, _, _) = WINDOWS_1251.encode(name);
+                name.into_owned()
+            }
+            Ok(None) => Vec::new(),
+            Err(error) => {
+                self.notices.push_back(RsPlayerNotice {
+                    operation: RsPlayerOperation::GetPlayerNameById,
+                    error: RsPlayerSaveError::Database(error.into()),
+                });
+                Vec::new()
+            }
+        }
     }
 
     async fn is_name_exist(
@@ -3678,7 +3803,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::GetPlayerCountryByID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:768
@@ -3686,6 +3811,7 @@ async fn execute_batch(
 // ADDRESS: 00501e30
 // PROTOTYPE: void __thiscall GetPlayerCountryByID(ulong param_1, uchar * param_2)
 //
+// IMPLEMENTED_OWNER: `RsPlayerOwner::get_player_country_by_id` находится выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -3901,7 +4027,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::GetPlayerNameByID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:739
@@ -3909,6 +4035,7 @@ async fn execute_batch(
 // ADDRESS: 00505980
 // PROTOTYPE: void __thiscall GetPlayerNameByID(ulong param_1, char * param_2)
 //
+// IMPLEMENTED_OWNER: `RsPlayerOwner::get_player_name_by_id` находится выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

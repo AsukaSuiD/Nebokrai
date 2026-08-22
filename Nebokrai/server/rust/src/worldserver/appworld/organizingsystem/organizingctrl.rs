@@ -11,6 +11,8 @@
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
 //! `OnPlayerInviteFaction` RVA `0x0003A780` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
+//! `OnDeleteRole` RVA `0x0003A2C0` —
+//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
 //! `CreateFaction` RVA `0x000381A0` —
 //! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
 //! полный `COrganizingCtrl::Run` RVA `0x0003A550` —
@@ -196,6 +198,17 @@
 //! первый положительный concrete faction ID, чей master равен входному player
 //! ID. Null value был разыменованием, а отсутствующий reached Rust master ID
 //! не получает выдуманного продолжения: обе границы возвращаются typed.
+//!
+//! `OnDeleteRole` сначала принимает доказанный результат внешнего DB/country
+//! префикса, затем ищет faction через `IsFreePlayer`. Job-level `<1` вызывает
+//! concrete `CFaction::DelMember` и возвращает `0`. Для job-level `>=1`
+//! exact virtual slot `+0x90` возвращает `GetMembers`; проверка `_Mysize > 0`
+//! после успешного membership lookup штатно даёт код `1`, так что донорское
+//! условие `GetMemberNum() > 1` неверно, а достигнутый `DisbandFaction` path
+//! логически недостижим. Положительный union ID требует живой union-owner,
+//! после чего concrete `CUnion::DelMember` отвязывает faction и всегда даёт
+//! код `3`. Safe Rust останавливает только неполную faction/property проекцию,
+//! соответствующую старому null/invalid-state UB.
 //!
 //! `IsFreePlayer` проходит `m_FacOrg` в порядке исходного ordered map и для
 //! каждого `COrganizing*` вызывает virtual slot `+0xDC`. Точный PDB
@@ -462,6 +475,7 @@ use super::faction::{
     FactionApplyForJoinOutcome, FactionContributorContext, FactionDoJoinBlock,
     FactionDoJoinContext, FactionDoJoinEffects, FactionDoJoinOutcome,
     FactionContributorOutcome, FactionDeleteOrganizingBuildError,
+    FactionDelMemberBlock, FactionDelMemberReport,
     FactionDeleteOrganizingOutcome, FactionDisbandBlock, FactionDisbandContext,
     FactionDisbandOutcome, FactionDisbandProgress, FactionDisbandRejection,
     FactionExperienceBlock, FactionExperienceUpdate,
@@ -1907,6 +1921,52 @@ pub(crate) enum UnionMemberDetachBlockSource {
 pub(crate) struct UnionMemberDetachBlock {
     pub(crate) faction_id: i32,
     pub(crate) source: UnionMemberDetachBlockSource,
+}
+
+/// Наблюдаемый результат `COrganizingCtrl::OnDeleteRole` до wire-ответа
+/// LoginServer. Числа совпадают с exact switch `0..=4`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingDeleteRoleOutcome {
+    AllowedNoFaction,
+    CountryJob,
+    MemberRemoved {
+        faction_id: i32,
+        removal: Option<FactionDelMemberReport>,
+    },
+    FactionMaster {
+        faction_id: i32,
+    },
+    UnionMissing {
+        faction_id: i32,
+        union_id: i32,
+    },
+    UnionDetached {
+        faction_id: i32,
+        union_id: i32,
+        detach: UnionMemberDetachOutcome,
+    },
+}
+
+impl OrganizingDeleteRoleOutcome {
+    pub(crate) const fn legacy_code(&self) -> i32 {
+        match self {
+            Self::AllowedNoFaction | Self::MemberRemoved { .. } | Self::UnionMissing { .. } => 0,
+            Self::FactionMaster { .. } => 1,
+            Self::UnionDetached { .. } => 3,
+            Self::CountryJob => 4,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingDeleteRoleBlock {
+    NullFactionDuringMembershipScan { map_key: i32 },
+    MemberRemoval {
+        faction_id: i32,
+        source: FactionDelMemberBlock,
+    },
+    MissingFactionProperty { faction_id: i32 },
+    UnionDetach(UnionMemberDetachBlock),
 }
 
 /// Один concrete faction-result controller-wide other-faction broadcast-а.
@@ -5182,6 +5242,80 @@ impl COrganizingCtrl {
             }
         })?;
         Ok(UnionMemberDetachOutcome::Detached { deliveries })
+    }
+
+    /// Повторяет organizing-часть exact `OnDeleteRole` после синхронного
+    /// `CRsPlayer::GetPlayerCountryByID`/`CCountry::HasJob` префикса.
+    ///
+    /// Для обычного участника `DelMember` выполняется до результата `0`.
+    /// Master свободной faction получает `1`: машинный slot `+0x90` возвращает
+    /// `GetMembers`, а проверка читает `_Mysize > 0`; после только что
+    /// успешного `IsFreePlayer` нулевая ветвь `DisbandFaction` недостижима.
+    /// Для faction в союзе достаточно существования union-owner-а: concrete
+    /// `CUnion::DelMember` не читает receiver, отвязывает faction и всегда
+    /// возвращает true, поэтому точный результат равен `3`, а не `2`.
+    pub(crate) fn on_delete_role(
+        &mut self,
+        game: &CGame,
+        parameters: &COrganizingParam,
+        player_id: i32,
+        country_has_job: bool,
+    ) -> Result<OrganizingDeleteRoleOutcome, OrganizingDeleteRoleBlock> {
+        if country_has_job {
+            return Ok(OrganizingDeleteRoleOutcome::CountryJob);
+        }
+
+        let faction_id = match self.is_free_player(player_id) {
+            FreePlayerLookup::NoFaction => {
+                return Ok(OrganizingDeleteRoleOutcome::AllowedNoFaction);
+            }
+            FreePlayerLookup::Faction(faction_id) => faction_id,
+            FreePlayerLookup::BlockedNullFaction { map_key } => {
+                return Err(OrganizingDeleteRoleBlock::NullFactionDuringMembershipScan {
+                    map_key,
+                });
+            }
+        };
+
+        let Some(faction) = self
+            .factions
+            .get_mut(&faction_id)
+            .and_then(Option::as_deref_mut)
+        else {
+            return Ok(OrganizingDeleteRoleOutcome::AllowedNoFaction);
+        };
+        if faction.member_job_level(player_id) < 1 {
+            let removal = faction.del_member(player_id, parameters).map_err(|source| {
+                OrganizingDeleteRoleBlock::MemberRemoval { faction_id, source }
+            })?;
+            return Ok(OrganizingDeleteRoleOutcome::MemberRemoved {
+                faction_id,
+                removal,
+            });
+        }
+
+        let union_id = faction
+            .superior_organizing()
+            .ok_or(OrganizingDeleteRoleBlock::MissingFactionProperty { faction_id })?;
+        if union_id < 1 {
+            debug_assert!(faction.get_member_num() > 0);
+            return Ok(OrganizingDeleteRoleOutcome::FactionMaster { faction_id });
+        }
+
+        if self.confederation_by_id(union_id).is_none() {
+            return Ok(OrganizingDeleteRoleOutcome::UnionMissing {
+                faction_id,
+                union_id,
+            });
+        }
+        let detach = self
+            .detach_union_member(game, parameters, faction_id)
+            .map_err(OrganizingDeleteRoleBlock::UnionDetach)?;
+        Ok(OrganizingDeleteRoleOutcome::UnionDetached {
+            faction_id,
+            union_id,
+            detach,
+        })
     }
 
     /// Ищет первый положительный faction ID в signed map-порядке.
@@ -8849,7 +8983,7 @@ fn legacy_tick_ms() -> u32 {
 
 // ============================================================================
 // FUNCTION: COrganizingCtrl::OnDeleteRole
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:1665
@@ -8857,6 +8991,8 @@ fn legacy_tick_ms() -> u32 {
 // ADDRESS: 0043a2c0
 // PROTOTYPE: int __thiscall OnDeleteRole(long param_1)
 //
+// IMPLEMENTED_OWNER: organizing state-machine находится выше в
+// `COrganizingCtrl::on_delete_role`; DB/country prefix и wire caller-а — в
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
