@@ -4,8 +4,8 @@
 //! `RecvResultFromGS` RVA `0x00093C60` и `ConvertMoraleToExploit` RVA
 //! `0x00093F80`, `OnRefreshRegion`/`OnClearWar`/`RequestWarResultFromGS` RVA
 //! `0x00093B10/0x00093B80/0x00093BF0`, `GetWarRegionIDByTime` RVA
-//! `0x00094200`: `IMPLEMENTED`; loader, timers и
-//! остальной Game runtime ниже остаются
+//! `0x00094200`, `OnWarEnd` RVA `0x00095E90`: `IMPLEMENTED`; loader, прочие
+//! calendar branches и остальной Game runtime ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -56,6 +56,14 @@
 //! инфраструктура. SQL выполняется параметризованным `tiberius`-запросом в
 //! dispatcher-owner-е; COM exception plumbing заменён явным Rust-исходом без
 //! повторного player-поиска после ошибки выполнения.
+//!
+//! Exact `OnWarEnd` RVA `0x00095E90` сначала передаёт `XBWS0032` в
+//! общий `AddLogText`, ставит `CIS_NO`, отправляет `0x7FE43 { index }` и
+//! `0x7FE45 { index }`. Лишь затем успешный live-region lookup даёт
+//! `XBWS0033/0034`; перенос каждой из девяти calendar time на 7 дней и
+//! регистрация нового ID происходят только после этого gate и в точном
+//! порядке. Небезопасный доступ оригинала по timer index заменён typed block;
+//! normal valid-index последовательность не меняется.
 //!
 //! Exact static `OneCountrySignUp` `0x00494340..0x00494431` принимает только
 //! countries `1..=4`, получает `XBWS0035` и форматирует локальный `char[256]`,
@@ -173,8 +181,8 @@ pub(crate) struct FourNationWarRegionIndexBlock {
     pub(crate) setup_count: usize,
 }
 
-/// Внешние owner-ы достигнутого `OnWarStart`.
-pub(crate) trait FourNationWarStartContext {
+/// Внешние owner-ы достигнутых calendar callback-ов войны.
+pub(crate) trait FourNationWarCallbackContext {
     fn send_all(&mut self, message: &CMessage);
     fn region_name(&mut self, region_id: i32) -> Option<Vec<u8>>;
     fn war_start_notice(&mut self, region_name: &[u8]) -> Vec<u8>;
@@ -186,10 +194,27 @@ pub(crate) trait FourNationWarStartContext {
     fn enter_end_notice(&mut self, region_name: &[u8]) -> Vec<u8>;
     fn enter_end_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8>;
     fn sign_up_end_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8>;
+    fn war_end_started_log(&mut self) -> Vec<u8>;
+    fn add_log_text(&mut self, text: &[u8]);
+    fn war_end_notice(&mut self, region_name: &[u8]) -> Vec<u8>;
+    fn war_end_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8>;
     fn current_time(&mut self) -> TagTime;
     fn war_end_info_text(&mut self) -> Vec<u8>;
     fn add_timed_top_info(&mut self, timer_flag: i32, milliseconds: i32, text: &[u8]) -> i32;
     fn send_timed_top_info(&mut self, info_id: i32, timer_flag: i32, milliseconds: i32, text: &[u8]);
+}
+
+/// Безопасная граница calendar reschedule `OnWarEnd`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FourNationWarEndBlock {
+    RegionIndex(FourNationWarRegionIndexBlock),
+    Calendar(TagTimeArithmeticBlock),
+}
+
+impl From<TagTimeArithmeticBlock> for FourNationWarEndBlock {
+    fn from(value: TagTimeArithmeticBlock) -> Self {
+        Self::Calendar(value)
+    }
 }
 
 impl From<TagTimeArithmeticBlock> for FourNationWarLoadError {
@@ -485,7 +510,7 @@ impl CFourNationWarSys {
 
     /// `OnWarStart`: state `CIS_Fight`, broadcast `0x7FE3C`, затем region
     /// notice `XBWS0022` и war-log `XBWS0023`.
-    pub(crate) fn on_war_start<Context: FourNationWarStartContext + ?Sized>(
+    pub(crate) fn on_war_start<Context: FourNationWarCallbackContext + ?Sized>(
         &mut self,
         index: i32,
         context: &mut Context,
@@ -510,7 +535,7 @@ impl CFourNationWarSys {
     }
 
     /// `OnEnterStart`: `CIS_Mass`, broadcast `0x7FE3F`, `XBWS0027/0028`.
-    pub(crate) fn on_enter_start<Context: FourNationWarStartContext + ?Sized>(
+    pub(crate) fn on_enter_start<Context: FourNationWarCallbackContext + ?Sized>(
         &mut self,
         index: i32,
         context: &mut Context,
@@ -534,7 +559,7 @@ impl CFourNationWarSys {
     }
 
     /// `OnEnterEnd`: только `XBWS0029` top-info и `XBWS0030` war-log.
-    pub(crate) fn on_enter_end<Context: FourNationWarStartContext + ?Sized>(
+    pub(crate) fn on_enter_end<Context: FourNationWarCallbackContext + ?Sized>(
         &self,
         index: i32,
         context: &mut Context,
@@ -550,7 +575,7 @@ impl CFourNationWarSys {
     }
 
     /// `OnSignUpWarEnd`: broadcast `0x7FE3E { index, 1 × 5 }`, затем war-log.
-    pub(crate) fn on_sign_up_war_end<Context: FourNationWarStartContext + ?Sized>(
+    pub(crate) fn on_sign_up_war_end<Context: FourNationWarCallbackContext + ?Sized>(
         &self,
         index: i32,
         context: &mut Context,
@@ -568,7 +593,7 @@ impl CFourNationWarSys {
     }
 
     /// `OnWarEndInfo`: `0x7FE42`, затем `XBWS0031` до EndTime в CIS_Fight.
-    pub(crate) fn on_war_end_info<Context: FourNationWarStartContext + ?Sized>(
+    pub(crate) fn on_war_end_info<Context: FourNationWarCallbackContext + ?Sized>(
         &self,
         index: i32,
         context: &mut Context,
@@ -586,6 +611,61 @@ impl CFourNationWarSys {
         let text = context.war_end_info_text();
         let info_id = context.add_timed_top_info(2, milliseconds, &text);
         context.send_timed_top_info(info_id, 2, milliseconds, &text);
+        Ok(())
+    }
+
+    /// `OnWarEnd`: `XBWS0032`, `CIS_NO`, `0x7FE43`, `0x7FE45`, затем под
+    /// live-region gate `XBWS0033/0034` и weekly перенос девяти событий.
+    ///
+    /// Raw допускает unchecked доступ к `s_vSetup[index]`; Rust сначала
+    /// отсекает невозможный индекс, чтобы повреждённый timer param не давал
+    /// неопределённого поведения. Для валидного setup-а порядок observable
+    /// effects совпадает с EXE, включая намеренно поздний weekly reschedule.
+    pub(crate) fn on_war_end<Callback: Copy, Context: FourNationWarCallbackContext + ?Sized>(
+        &mut self,
+        index: i32,
+        timer: &mut CTimer<Callback>,
+        callbacks: FourNationWarCallbacks<Callback>,
+        context: &mut Context,
+    ) -> Result<(), FourNationWarEndBlock> {
+        let setup_count = self.setups.len();
+        let setup_index = usize::try_from(index).map_err(|_| {
+            FourNationWarEndBlock::RegionIndex(FourNationWarRegionIndexBlock { index, setup_count })
+        })?;
+        if self.setups.get(setup_index).is_none() {
+            return Err(FourNationWarEndBlock::RegionIndex(FourNationWarRegionIndexBlock {
+                index,
+                setup_count,
+            }));
+        }
+
+        let start_log = context.war_end_started_log();
+        context.add_log_text(&start_log);
+        let region_id = {
+            let setup = &mut self.setups[setup_index];
+            setup.region_state = 0; // PDB общего `eCityState`: CIS_NO.
+            setup.region_id
+        };
+
+        let mut ended = CMessage::new(0x7FE43);
+        ended.base_mut().add_long(index);
+        context.send_all(&ended);
+        let mut result_request = CMessage::new(0x7FE45);
+        result_request.base_mut().add_long(index);
+        context.send_all(&result_request);
+
+        let Some(region_name) = context.region_name(region_id) else {
+            return Ok(());
+        };
+        let notice = context.war_end_notice(&region_name);
+        context.send_organizing_info(&notice, 0xFFFF_FE92, 0xFFFF_0000);
+        let log = context.war_end_log(index, &region_name);
+        context.put_war_log(&log);
+
+        let setup = &mut self.setups[setup_index];
+        if setup.is_every_week != 0 {
+            setup.reschedule_next_week(index, timer, callbacks)?;
+        }
         Ok(())
     }
     /// Сохраняет единственный внешний контракт exact `OneCountrySignUp`.
@@ -960,6 +1040,61 @@ impl FourNationWarSetup {
                 .get();
         }
     }
+
+    /// Точный порядок `OnWarEnd`: каждое время сдвигается на семь дней и
+    /// немедленно получает новый event ID, а не переносится общей абстракцией.
+    fn reschedule_next_week<Callback: Copy>(
+        &mut self,
+        index: i32,
+        timer: &mut CTimer<Callback>,
+        callbacks: FourNationWarCallbacks<Callback>,
+    ) -> Result<(), TagTimeArithmeticBlock> {
+        self.sign_up_start_time.add_day(7)?;
+        self.sign_up_start_event_id = timer
+            .set_time_event(self.sign_up_start_time, callbacks.sign_up_start, index)
+            .get();
+
+        self.sign_up_end_time.add_day(7)?;
+        self.sign_up_end_event_id = timer
+            .set_time_event(self.sign_up_end_time, callbacks.sign_up_end, index)
+            .get();
+
+        self.enter_start_time.add_day(7)?;
+        self.enter_start_event_id = timer
+            .set_time_event(self.enter_start_time, callbacks.enter_start, index)
+            .get();
+
+        self.enter_end_time.add_day(7)?;
+        self.enter_end_event_id = timer
+            .set_time_event(self.enter_end_time, callbacks.enter_end, index)
+            .get();
+
+        self.refresh_region_time.add_day(7)?;
+        self.refresh_event_id = timer
+            .set_time_event(self.refresh_region_time, callbacks.refresh_region, index)
+            .get();
+
+        self.start_time.add_day(7)?;
+        self.start_event_id = timer
+            .set_time_event(self.start_time, callbacks.war_start, index)
+            .get();
+
+        self.end_info_time.add_day(7)?;
+        self.end_info_event_id = timer
+            .set_time_event(self.end_info_time, callbacks.war_end_info, index)
+            .get();
+
+        self.end_time.add_day(7)?;
+        self.end_event_id = timer
+            .set_time_event(self.end_time, callbacks.war_end, index)
+            .get();
+
+        self.clear_war_time.add_day(7)?;
+        self.clear_war_event_id = timer
+            .set_time_event(self.clear_war_time, callbacks.clear_war, index)
+            .get();
+        Ok(())
+    }
 }
 
 fn read_weekly_setup<'a>(
@@ -1312,7 +1447,7 @@ fn next_war_i32<'a>(
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::OnWarEnd
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:565
@@ -1320,6 +1455,7 @@ fn next_war_i32<'a>(
 // ADDRESS: 00495e90
 // PROTOTYPE: void __stdcall OnWarEnd(long param_1)
 //
+// IMPLEMENTED_OWNER: `CFourNationWarSys::on_war_end` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
