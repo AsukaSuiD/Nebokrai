@@ -2037,10 +2037,6 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn seed_random(&mut self, seed: u32);
     fn random(&mut self, upper_bound: i32) -> i32;
     fn put_debug_string(&mut self, payload: &[u8]);
-    /// Вызывает `CGame::load_server_resource`: exact owner заменяет global
-    /// resource до `LoadEx`, игнорирует его bool и публикует success-log.
-    fn load_server_resources(&mut self, game: &mut CGame);
-
     /// Возвращает `true`, если Linux single-instance owner закрепил title.
     fn claim_single_instance(&mut self, title: &[u8]) -> bool;
     fn notify_operator(&mut self, notice: &WorldGameInitOperatorNotice);
@@ -4502,7 +4498,6 @@ pub(crate) type WorldReloadOneScriptResult = Result<bool, WorldReloadOneScriptBl
 
 /// Resource/domain границы, непосредственно вызываемые готовым `CGame::ReLoad`.
 pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
-    fn load_reload_server_resources(&mut self, game: &mut CGame);
     /// Отдельный mutable owner исторических static `CPlayerList` data.
     ///
     /// Он остаётся вне `CGame`, поскольку тот же экземпляр участвует в
@@ -7169,6 +7164,22 @@ impl CGame {
         report
     }
 
+    /// Связывает resource replacement с тем же owner-ом, из которого
+    /// `WorldRegionResourceContext::read_resource` обслуживает дальнейшие
+    /// загрузки. Отдельная публикация log после освобождения mutable borrow
+    /// меняет только Rust-заимствование, но не исходный порядок side effects.
+    fn load_server_resource_from_context<Context: WorldReloadContext + ?Sized>(
+        &mut self,
+        context: &mut Context,
+    ) -> DefaultClientResourceReplacement {
+        let report = self.load_server_resource(
+            context.default_client_resource(),
+            &mut |_payload: &[u8]| {},
+        );
+        context.add_log_text(LOAD_SERVER_RESOURCE_SUCCESS_LOG);
+        report
+    }
+
     /// Exact `ClearStringTable`: очищает map и прежний coded buffer.
     pub(crate) fn clear_string_table(&mut self) {
         self.string_table.table_mut().free();
@@ -7918,7 +7929,7 @@ impl CGame {
         TimerCallback: Copy,
     {
         if reload_server_resources {
-            context.load_reload_server_resources(self);
+            let _ = self.load_server_resource_from_context(context);
         }
         let source = context.read_resource(b"setup/CountryWarSys.ini");
         let sender = self.current_game_server_sender();
@@ -7957,7 +7968,7 @@ impl CGame {
         TimerCallback: Copy,
     {
         if reload_server_resources {
-            context.load_reload_server_resources(self);
+            let _ = self.load_server_resource_from_context(context);
         }
         let country_names = context.four_nation_country_names();
         let source = context.read_resource(b"setup/FourNationWarSys.ini");
@@ -8009,7 +8020,7 @@ impl CGame {
         TimerCallback: Copy,
     {
         if reload_server_resources {
-            context.load_reload_server_resources(self);
+            let _ = self.load_server_resource_from_context(context);
         }
         let source = context.read_resource(b"setup/TimeToReturn.ini");
         let loaded = time_to_return
@@ -8038,7 +8049,7 @@ impl CGame {
         TimerCallback: Copy,
     {
         if reload_server_resources {
-            context.load_reload_server_resources(self);
+            let _ = self.load_server_resource_from_context(context);
         }
         let source = context.read_resource(b"setup/villageWarSys.ini");
         let sender = self.current_game_server_sender();
@@ -8084,7 +8095,7 @@ impl CGame {
         TimerCallback: Copy,
     {
         if reload_server_resources {
-            context.load_reload_server_resources(self);
+            let _ = self.load_server_resource_from_context(context);
         }
         let source = context.read_resource(b"setup/CityWarSys.ini");
         match reload_attack_city(
@@ -8148,7 +8159,7 @@ impl CGame {
         TimerCallback: Copy,
     {
         if reload_server_resources {
-            context.load_reload_server_resources(self);
+            let _ = self.load_server_resource_from_context(context);
         }
         let source = context.read_resource(b"setup/CityWarSys.ini");
         match reload_attack_city(
@@ -8191,7 +8202,7 @@ impl CGame {
     ) -> WorldReloadResult {
         let mut legacy_result = 0i32;
         if reload_server_resources {
-            context.load_reload_server_resources(self);
+            let _ = self.load_server_resource_from_context(context);
         }
         let profile_name = legacy_c_string_prefix(profile);
         let Some(profile) = WorldReloadProfile::parse(profile_name) else {
@@ -10460,7 +10471,7 @@ impl CGame {
         events.push(WorldGameInitEvent::RustLocksReady);
         context.put_debug_string(b"WorldServer start!");
         events.push(WorldGameInitEvent::DebugStartPublished);
-        context.load_server_resources(self);
+        let _ = self.load_server_resource_from_context(context);
         events.push(WorldGameInitEvent::ServerResourcesLoaded);
 
         let setup = match self.load_setup(runtime_directory, |title| {

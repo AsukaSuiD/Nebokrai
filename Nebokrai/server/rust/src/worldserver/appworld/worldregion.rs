@@ -134,6 +134,7 @@ use super::region::{
     CRegion, RegionLoadError, RegionRandomPositionBlock, RegionSerializationBlock,
 };
 use crate::dbaccess::worlddb::rsregion::RegionSaveSnapshot;
+use crate::public::clientresource::DefaultClientResourceOwner;
 use crate::worldserver::worldserver::game::CGame;
 
 /// Полная достигнутая семантика исходного `tagRegionParam`.
@@ -249,7 +250,13 @@ pub(crate) enum WorldRegionTextLoadError {
 /// Resource/string граница, которую exact `CWorldRegion::Load` вызывает
 /// последовательно и потому не разрешает caller-у заранее читать весь набор.
 pub(crate) trait WorldRegionResourceContext {
-    fn read_resource(&mut self, path: &[u8]) -> Option<Vec<u8>>;
+    /// Единственный опубликованный World resource-owner, общий для reload и
+    /// всех последующих `rfOpen`-эквивалентов этого context-а.
+    fn default_client_resource(&mut self) -> &mut DefaultClientResourceOwner;
+
+    fn read_resource(&mut self, path: &[u8]) -> Option<Vec<u8>> {
+        self.default_client_resource().read_resource(path)
+    }
     fn reload_world_string_by_id(&mut self, string_id: &[u8]) -> Vec<u8>;
     fn region_monster_num_scale(&mut self) -> f32;
 }
