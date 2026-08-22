@@ -125,14 +125,15 @@
 //! `VecDeque::remove` и `Drop` заменяют unlink/destructor/delete.
 //!
 //! `LoadNoQueueCdkeyList` очищает ordered set до открытия case-insensitive
-//! `NoQueueAccounts.conf`, читает whitespace-token, применяет ASCII `_strlwr`
+//! `NoQueueAccounts.conf`, читает whitespace-token, применяет C-locale `_strlwr`
 //! и вставляет каждый account немедленно, сохраняя partial mutation и
 //! дедупликацию. Размер `char[0x100]` имеет статус `VERIFIED_DISASSEMBLY`:
 //! `0x004196F0` передаёт `ESP+0xC8`, верхняя граница локала находится на
 //! `ESP+0x1C8`; безопасный предел равен 255 bytes плюс NUL. Найденный fixture
 //! непустой, содержит два коротких ASCII-token. Пустой файл, более длинный
 //! token безопасно отклоняется до переполнения; пустой файл даёт пустой set.
-//! High-bit locale mapping остаётся локальной доказательной неизвестностью.
+//! Exact EXE не устанавливает process locale: встроенный CRT `_strlwr` поэтому
+//! меняет только ASCII `A..Z`, а high-bit bytes сохраняет.
 //! `IsInNoQueueList` представлен byte-exact поиском в том же `BTreeSet`;
 //! nullable C-string не переносится во внутренний owned API.
 //!
@@ -430,6 +431,8 @@ pub(crate) enum QuestCdkeyError {
     InsideModeMissing,
     /// Оригинал без проверки читал первые 16 байт более короткого digest.
     PasswordDigestTooShort { actual_len: usize },
+    /// `CharLowerA` зависит от внешней ANSI locale исходной Windows-системы.
+    AuthAnsiCaseMappingUnknown,
     /// Фактическая Client/World transport-граница не выполнила send.
     Route(GameRouteError),
 }
@@ -448,6 +451,9 @@ impl fmt::Display for QuestCdkeyError {
                 formatter,
                 "password digest короче исходных 16 байт: {actual_len}"
             ),
+            Self::AuthAnsiCaseMappingUnknown => formatter.write_str(
+                "для Auth account с high-bit байтами неизвестна системная ANSI lowercase-карта",
+            ),
             Self::Route(error) => error.fmt(formatter),
         }
     }
@@ -460,6 +466,7 @@ impl Error for QuestCdkeyError {
             Self::DatabaseOwnerMissing
             | Self::IpSetupMissing
             | Self::InsideModeMissing
+            | Self::AuthAnsiCaseMappingUnknown
             | Self::PasswordDigestTooShort { .. } => None,
         }
     }
@@ -730,8 +737,6 @@ pub(crate) enum NoQueueAccountsLoadError {
         actual: usize,
         maximum: usize,
     },
-    /// Активная ANSI locale исходного `_strlwr` для high-bit byte неизвестна.
-    NonAsciiCaseMappingUnknown { token_index: usize },
 }
 
 impl fmt::Display for NoQueueAccountsLoadError {
@@ -746,10 +751,6 @@ impl fmt::Display for NoQueueAccountsLoadError {
                 formatter,
                 "token {token_index} NoQueueAccounts.conf имеет {actual} байт при пределе {maximum}",
             ),
-            Self::NonAsciiCaseMappingUnknown { token_index } => write!(
-                formatter,
-                "для token {token_index} NoQueueAccounts.conf не доказана ANSI lowercase-карта",
-            ),
         }
     }
 }
@@ -758,8 +759,7 @@ impl Error for NoQueueAccountsLoadError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
-            Self::TokenTooLong { .. }
-            | Self::NonAsciiCaseMappingUnknown { .. } => None,
+            Self::TokenTooLong { .. } => None,
         }
     }
 }
@@ -991,8 +991,8 @@ impl CLoginQueue {
         if game.is_connect_as() {
             let mut auth_account = account;
             let mut auth_password = password;
-            legacy_lower_ascii(&mut auth_account);
-            legacy_lower_ascii(&mut auth_password);
+            legacy_lower_auth(&mut auth_account)?;
+            legacy_lower_auth(&mut auth_password)?;
             let sender = game
                 .auth_send_queue()
                 .expect("IsConnectAS подтверждает существующий Auth client");
@@ -1788,11 +1788,7 @@ impl CLoginQueue {
                 .position(|byte| *byte == 0)
                 .unwrap_or(token.len());
             let mut account = token[..end].to_vec();
-            if account.iter().any(|byte| !byte.is_ascii()) {
-                // BLOCKED_MISSING_FACT: `_strlwr` RVA 0x000195E0 зависит от
-                // активной ANSI locale; найденный fixture целиком ASCII.
-                return Err(NoQueueAccountsLoadError::NonAsciiCaseMappingUnknown { token_index });
-            }
+            // В C locale встроенный CRT меняет только ASCII `A..Z`.
             account.make_ascii_lowercase();
             self.no_queue_accounts.lock().insert(account);
             extracted_accounts += 1;
@@ -2120,13 +2116,12 @@ fn password_digest_hex(digest: &[u8]) -> Result<Vec<u8>, QuestCdkeyError> {
     Ok(encoded)
 }
 
-fn legacy_lower_ascii(value: &mut [u8]) {
-    for byte in value {
-        // BLOCKED_MISSING_FACT: Login RVA 0x0001A130 вызывает `CharLowerA`.
-        // ASCII account/hex однозначны; активная ANSI locale для high-bit
-        // bytes не доказана, поэтому они сохраняются вместо Linux-locale догадки.
-        if byte.is_ascii() {
-            byte.make_ascii_lowercase();
-        }
+fn legacy_lower_auth(value: &mut [u8]) -> Result<(), QuestCdkeyError> {
+    if value.iter().any(|byte| !byte.is_ascii()) {
+        // `CharLowerA` использовал внешнюю user-default ANSI locale Windows;
+        // EXE/PDB не могут определить её таблицу для high-bit account bytes.
+        return Err(QuestCdkeyError::AuthAnsiCaseMappingUnknown);
     }
+    value.make_ascii_lowercase();
+    Ok(())
 }

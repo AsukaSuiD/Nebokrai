@@ -926,10 +926,8 @@ fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
 
 fn legacy_lower_account(account: &mut [u8]) {
     for byte in account {
-        // BLOCKED_MISSING_FACT: Login RVA 0x0007F3F0 вызывает CRT `tolower`
-        // с signed char. ASCII-часть однозначна; активная Windows locale и
-        // high-bit результат в текущем корпусе не доказаны, поэтому такие bytes
-        // пока сохраняются буквально вместо Linux-locale догадки.
+        // EXE не меняет process locale, поэтому встроенный CRT `tolower`
+        // преобразует только ASCII `A..Z`; прочие signed-char значения остаются.
         if byte.is_ascii() {
             byte.make_ascii_lowercase();
         }

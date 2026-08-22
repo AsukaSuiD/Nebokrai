@@ -121,6 +121,66 @@ pub(crate) fn legacy_bind_endpoint(address: Option<Ipv4Addr>, port: u32) -> Sock
     SocketAddrV4::new(address.unwrap_or(Ipv4Addr::UNSPECIFIED), port as u16)
 }
 
+/// Разбирает числовой IPv4 в формате WinSock `inet_addr`.
+///
+/// Поддерживаются исторические формы `a`, `a.b`, `a.b.c`, `a.b.c.d` и
+/// decimal/octal/hex-компоненты. Как исходный API, функция не различает
+/// broadcast `255.255.255.255` и ошибку: оба результата представлены `None`.
+pub(crate) fn legacy_inet_addr(value: &[u8]) -> Option<Ipv4Addr> {
+    let value = value.split(|byte| *byte == 0).next().unwrap_or_default();
+    if value.is_empty() {
+        return None;
+    }
+
+    let parts = value.split(|byte| *byte == b'.').collect::<Vec<_>>();
+    if parts.len() > 4 || parts.iter().any(|part| part.is_empty()) {
+        return None;
+    }
+    let numbers = parts
+        .iter()
+        .map(|part| parse_inet_number(part))
+        .collect::<Option<Vec<_>>>()?;
+
+    let address = match numbers.as_slice() {
+        [a] => *a,
+        [a, b] if *a <= 0xff && *b <= 0x00ff_ffff => (*a << 24) | *b,
+        [a, b, c] if *a <= 0xff && *b <= 0xff && *c <= 0xffff => {
+            (*a << 24) | (*b << 16) | *c
+        }
+        [a, b, c, d] if [a, b, c, d].iter().all(|part| **part <= 0xff) => {
+            (*a << 24) | (*b << 16) | (*c << 8) | *d
+        }
+        _ => return None,
+    };
+    (address != u32::MAX).then(|| Ipv4Addr::from(address.to_be_bytes()))
+}
+
+fn parse_inet_number(part: &[u8]) -> Option<u32> {
+    let (digits, radix) = if let Some(hex) = part
+        .strip_prefix(b"0x")
+        .or_else(|| part.strip_prefix(b"0X"))
+    {
+        (hex, 16)
+    } else if part.len() > 1 && part[0] == b'0' {
+        (&part[1..], 8)
+    } else {
+        (part, 10)
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    digits.iter().try_fold(0_u32, |value, byte| {
+        let digit = match byte {
+            b'0'..=b'9' => u32::from(byte - b'0'),
+            b'a'..=b'f' => u32::from(byte - b'a') + 10,
+            b'A'..=b'F' => u32::from(byte - b'A') + 10,
+            _ => return None,
+        };
+        (digit < radix).then_some(())?;
+        value.checked_mul(radix)?.checked_add(digit)
+    })
+}
+
 /// Независимый счётчик socket ID одного исторического сервиса.
 pub(crate) struct SocketIdAllocator {
     last_issued: AtomicU32,
@@ -147,8 +207,3 @@ impl Default for SocketIdAllocator {
         Self::new()
     }
 }
-
-// BLOCKED_MISSING_FACT: `inet_addr` принимал legacy IPv4-формы (не только
-// dotted-decimal) и одновременно представлял `255.255.255.255` как
-// `INADDR_NONE`. До аудита реальных конфигурационных значений строковый parser
-// не заменяется строгим `Ipv4Addr::from_str` и не переносится в transport.

@@ -80,9 +80,9 @@
 //! `LoadASList` сначала очищал список, затем читал whitespace-пары
 //! `string + unsigned short` и возвращал успех даже для пустого либо частично
 //! разобранного файла. Rust сохраняет этот partial-read контракт и bytes имени
-//! без требования UTF-8. Текущий оригинальный `aslist.ini` содержит строгий
-//! dotted IPv4 `127.0.0.1`; legacy hostname resolution и расширенные формы
-//! `inet_addr` остаются локальной `BLOCKED_MISSING_FACT` границей.
+//! без требования UTF-8. Числовой endpoint разбирается в формах `inet_addr`,
+//! включая сокращённые, octal и hex; `INADDR_NONE` запускает исходный DNS
+//! fallback с выбором первого IPv4.
 //!
 //! `InitAuthClient` всегда возвращал `true`, даже если список пуст или ни один
 //! AuthServer не подключился. После попыток он безусловно включал
@@ -361,7 +361,7 @@ use encoding_rs::WINDOWS_1251;
 use parking_lot::Mutex;
 use rustix::system::uname;
 use rustix::time::{ClockId, clock_gettime};
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, lookup_host};
 use tokio::task::{JoinError, JoinHandle, JoinSet};
 use tokio::time::Instant;
 
@@ -387,7 +387,7 @@ use crate::loginserver::loginserver::loginqueue::{
 };
 use crate::loginserver::loginserver::servlogqueue::{ServLog, ServLogQueue};
 use crate::nets::clients::{ClientConnectError, ClientSendQueue};
-use crate::nets::mysocket::{DEFAULT_SOCKET_TYPE, legacy_ipv4_word};
+use crate::nets::mysocket::{DEFAULT_SOCKET_TYPE, legacy_inet_addr, legacy_ipv4_word};
 use crate::nets::netlogin::message::{CMessage, SendMessageError};
 use crate::nets::netlogin::mynetclient_auth::{
     AuthClientEvent, AuthClientEventPublisher, AuthClientIoError, AuthClientIoStep,
@@ -447,18 +447,29 @@ impl AuthServerConfig {
         }
     }
 
-    fn resolve_baseline_ipv4(&self) -> Result<SocketAddrV4, AuthConnectFailure> {
-        let host = std::str::from_utf8(&self.host).map_err(|_| {
-            AuthConnectFailure::LegacyAddressResolutionMissing {
+    async fn resolve_ipv4(&self) -> Result<SocketAddrV4, AuthConnectFailure> {
+        if let Some(address) = legacy_inet_addr(&self.host) {
+            return Ok(SocketAddrV4::new(address, self.port));
+        }
+        let host = std::str::from_utf8(legacy_c_string_prefix(&self.host)).map_err(|_| {
+            AuthConnectFailure::AddressEncodingUnsupported {
                 host: self.host.clone(),
             }
         })?;
-        let address = host.parse::<Ipv4Addr>().map_err(|_| {
-            AuthConnectFailure::LegacyAddressResolutionMissing {
+        lookup_host((host, self.port))
+            .await
+            .map_err(|error| AuthConnectFailure::AddressResolution {
                 host: self.host.clone(),
-            }
-        })?;
-        Ok(SocketAddrV4::new(address, self.port))
+                error,
+            })?
+            .find_map(|address| match address {
+                SocketAddr::V4(address) => Some(address),
+                SocketAddr::V6(_) => None,
+            })
+            .ok_or_else(|| AuthConnectFailure::AddressResolution {
+                host: self.host.clone(),
+                error: io::Error::new(io::ErrorKind::AddrNotAvailable, "IPv4-адрес отсутствует"),
+            })
     }
 }
 
@@ -474,10 +485,12 @@ pub(crate) struct LoadAsListOutcome {
 /// Ошибка одной попытки подключиться к Auth endpoint.
 #[derive(Debug)]
 pub(crate) enum AuthConnectFailure {
-    /// Текущий baseline доказал только строгий dotted IPv4.
-    LegacyAddressResolutionMissing { host: Vec<u8> },
-    /// Bind IP из setup не является подтверждённым strict dotted IPv4.
-    LegacyBindAddressResolutionMissing { host: Vec<u8> },
+    /// Byte-oriented hostname нельзя передать системному Linux resolver.
+    AddressEncodingUnsupported { host: Vec<u8> },
+    /// Числовой адрес и исходный DNS fallback не дали IPv4.
+    AddressResolution { host: Vec<u8>, error: io::Error },
+    /// Bind IP из setup не принимается исходным `inet_addr`.
+    BindAddressInvalid { host: Vec<u8> },
     /// Не удалось создать либо bind-нуть очередной Linux socket.
     Bind(io::Error),
     /// Общий `CClient` не завершил connect успешно.
@@ -487,14 +500,19 @@ pub(crate) enum AuthConnectFailure {
 impl fmt::Display for AuthConnectFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::LegacyAddressResolutionMissing { host } => write!(
+            Self::AddressEncodingUnsupported { host } => write!(
                 formatter,
-                "не восстановлено legacy-разрешение Auth-адреса {}",
+                "кодировка Auth-адреса {} не поддерживается Linux resolver",
                 String::from_utf8_lossy(host)
             ),
-            Self::LegacyBindAddressResolutionMissing { host } => write!(
+            Self::AddressResolution { host, error } => write!(
                 formatter,
-                "не восстановлено legacy-разрешение Auth bind-адреса {}",
+                "Auth-адрес {} не разрешён в IPv4: {error}",
+                String::from_utf8_lossy(host)
+            ),
+            Self::BindAddressInvalid { host } => write!(
+                formatter,
+                "Auth bind-адрес {} отклонён inet_addr",
                 String::from_utf8_lossy(host)
             ),
             Self::Bind(error) => write!(formatter, "не удалось bind-нуть Auth socket: {error}"),
@@ -506,10 +524,9 @@ impl fmt::Display for AuthConnectFailure {
 impl Error for AuthConnectFailure {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Bind(error) => Some(error),
+            Self::AddressResolution { error, .. } | Self::Bind(error) => Some(error),
             Self::Connect(error) => Some(error),
-            Self::LegacyAddressResolutionMissing { .. }
-            | Self::LegacyBindAddressResolutionMissing { .. } => None,
+            Self::AddressEncodingUnsupported { .. } | Self::BindAddressInvalid { .. } => None,
         }
     }
 }
@@ -5296,10 +5313,8 @@ fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
 }
 
 fn resolve_baseline_bind_ipv4(raw: &[u8]) -> Result<Ipv4Addr, AuthConnectFailure> {
-    std::str::from_utf8(legacy_c_string_prefix(raw))
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .ok_or_else(|| AuthConnectFailure::LegacyBindAddressResolutionMissing {
+    legacy_inet_addr(legacy_c_string_prefix(raw))
+        .ok_or_else(|| AuthConnectFailure::BindAddressInvalid {
             host: raw.to_vec(),
         })
 }
@@ -5327,7 +5342,7 @@ async fn connect_new_auth_client(
     let mut connected = None;
 
     for configured in &plan.auth_servers {
-        let result = match configured.resolve_baseline_ipv4() {
+        let result = match configured.resolve_ipv4().await {
             Ok(remote) => match resolve_baseline_bind_ipv4(&plan.bind_ip) {
                 Ok(bind_address) => match bind_tcp_ipv4(Some(bind_address), plan.bind_port) {
                     Ok(socket) => client
