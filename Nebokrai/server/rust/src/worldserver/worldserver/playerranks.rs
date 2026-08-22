@@ -59,6 +59,13 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     COrganizingCtrl, FreePlayerLookup,
 };
 
+/// Owned запись исторического `CPlayerRanks::tagRank`.
+///
+/// Exact PDB приписывает copy-constructor и destructor этой записи
+/// `savedb.cpp`, но оба тела не содержат DB-эффектов: copy последовательно
+/// переносит ID, два C++ string и два `u16`, а destructor освобождает только
+/// string storage. `Clone` и обычный Rust `Drop` сохраняют все пять данных и
+/// устраняют только MSVC/heap lifetime plumbing.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerRankEntry {
     pub(crate) player_id: i32,

@@ -4,8 +4,9 @@
 //! Delete Union, Delete Faction, Save Faction, Save Union, Save Region, Save
 //! HonorRanks, двух GodsBattle, EnemyFactions, Update Country Data и Save
 //! Charactor LoadDetails Data, Save Charactor Data и финального отчёта
-//! transaction-участков `DoSaveData` RVA `0x0001C610` — `IMPLEMENTED`;
-//! остальные фазы владельца ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! transaction-участков `DoSaveData` RVA `0x0001C610`, а также folded
+//! copy/destructor `CPlayerRanks::tagRank` RVA `0x0001B920/0x0001B7F0` —
+//! `IMPLEMENTED`; остальные фазы владельца ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -5177,7 +5178,7 @@ async fn run_transaction_command(
 
 // ============================================================================
 // FUNCTION: CPlayerRanks::tagRank::~tagRank
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\savedb.cpp
@@ -5185,13 +5186,15 @@ async fn run_transaction_command(
 // ADDRESS: 0041b7f0
 // PROTOTYPE: void __thiscall ~tagRank(void)
 //
+// IMPLEMENTED_OWNER: `PlayerRankEntry` в `playerranks.rs`: Rust `Drop`
+// освобождает owned byte-векторы без отдельного MSVC SSO/heap plumbing.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CPlayerRanks::tagRank::tagRank
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\savedb.cpp
@@ -5199,6 +5202,9 @@ async fn run_transaction_command(
 // ADDRESS: 0041b920
 // PROTOTYPE: undefined __thiscall tagRank(tagRank * param_1)
 //
+// IMPLEMENTED_OWNER: `PlayerRankEntry::clone` копирует ID, оба byte-string и
+// occupation/level в том же составе записи; C++ exception cleanup заменён
+// безопасным ownership Rust.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
