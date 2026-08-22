@@ -3,9 +3,9 @@
 //! Статусы `LoadVarList` RVA `0x000A1320`, `LoadOneVar` `0x000A1680`,
 //! `SetVarValue` RVA `0x000A11B0/0x000A1240`, `SaveVarData` RVA `0x000A1930`
 //! `AddToByteArray` RVA `0x000A1B10` и `LoadVarData` `0x000A1630` —
-//! `IMPLEMENTED`; только посторонний `CBattleFairyProperty::tagCompose` ниже
-//! остаётся
-//! `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `IMPLEMENTED`; посторонние copy/destructor
+//! `CBattleFairyProperty::tagCompose` ниже также выражены живым owner-ом
+//! `goods::cbattlefairyproperty`, а оставшиеся блоки — compiler/STL cleanup.
 //! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -602,10 +602,12 @@ pub(crate) async fn save_var_data<S: VariableListSaveSource, O: RsGenVarOwner>(
 
 // ============================================================================
 // FUNCTION: CBattleFairyProperty::tagCompose::~tagCompose
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\script\variablelist.cpp
+// RUST: четыре строки `BattleFairyCompose` освобождаются структурным Drop;
+// MSVC string cleanup не имеет самостоятельного игрового эффекта.
 // RVA: 0x0003FED0
 // ADDRESS: 0043fed0
 // PROTOTYPE: void __thiscall ~tagCompose(void)
@@ -616,10 +618,12 @@ pub(crate) async fn save_var_data<S: VariableListSaveSource, O: RsGenVarOwner>(
 
 // ============================================================================
 // FUNCTION: CBattleFairyProperty::tagCompose::tagCompose
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\script\variablelist.cpp
+// RUST: `BattleFairyCompose: Clone` копирует четыре byte-строки, оба scalar
+// и `f32` success rate; промежуточный MSVC string lifecycle заменён Rust.
 // RVA: 0x0003FFD0
 // ADDRESS: 0043ffd0
 // PROTOTYPE: undefined __thiscall tagCompose(tagCompose * param_1)
