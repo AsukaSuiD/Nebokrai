@@ -1467,7 +1467,7 @@ fn next_war_i32<'a>(
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::RecvResultFromGS
-// STATUS: IMPLEMENTED_SOURCE_REFERENCE
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:676
@@ -1475,13 +1475,14 @@ fn next_war_i32<'a>(
 // ADDRESS: 00493c60
 // PROTOTYPE: void __cdecl RecvResultFromGS(CMessage * param_1)
 //
+// IMPLEMENTED_OWNER: `CFourNationWarSys::receive_result_from_game_server` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::SendPlayerWarTimeToGS
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:839
@@ -1489,6 +1490,7 @@ fn next_war_i32<'a>(
 // ADDRESS: 00493d50
 // PROTOTYPE: void __thiscall SendPlayerWarTimeToGS(long param_1, ulong param_2, long param_3)
 //
+// IMPLEMENTED_OWNER: `CFourNationWarSys::send_player_war_time_to_game_server` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1552,7 +1554,7 @@ fn next_war_i32<'a>(
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:721
@@ -1560,13 +1562,14 @@ fn next_war_i32<'a>(
 // ADDRESS: 00494250
 // PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
 //
+// IMPLEMENTED_OWNER: `CFourNationWarSys::add_to_byte_array` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::OneCountrySignUp
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:654
@@ -1574,13 +1577,14 @@ fn next_war_i32<'a>(
 // ADDRESS: 00494340
 // PROTOTYPE: void __cdecl OneCountrySignUp(int param_1)
 //
+// IMPLEMENTED_OWNER: `CFourNationWarSys::one_country_sign_up` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::OneCountryFail
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:869
@@ -1588,6 +1592,7 @@ fn next_war_i32<'a>(
 // ADDRESS: 00494440
 // PROTOTYPE: void __cdecl OneCountryFail(int param_1, int param_2)
 //
+// IMPLEMENTED_OWNER: `CFourNationWarSys::one_country_fail` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
