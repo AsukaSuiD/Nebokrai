@@ -34,6 +34,10 @@
 //! события, lookup `WS0263` и append в `war` сохраняют исходный порядок.
 //! Небезопасный `strcpy` в 256-byte local заменён записью всей owned строки:
 //! переполнение локального буфера не является требуемой семантикой Miracle.
+//! `Release` потребляет явный owner и снимает только его calendar events до
+//! `Drop`. В исходнике singleton удалялся без обращения к `CTimer`; Rust
+//! устраняет этот внутренний dangling-lifecycle дефект, не добавляя ни пакетов,
+//! ни игровых мутаций в shutdown.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -119,6 +123,19 @@ pub(crate) struct OrganizingTodayTaxRefreshReport {
     pub(crate) logged_bytes: usize,
 }
 
+/// Наблюдаемый до `Drop` итог освобождения параметров организаций.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OrganizingParamReleaseReport {
+    /// Последнее назначенное tax-событие до consuming release.
+    pub(crate) latest_tax_event_id: Option<TimerId>,
+    /// Число calendar registrations, сохранённых данным owner-ом.
+    pub(crate) registered_tax_events: usize,
+    /// Число реально снятых записей в общем `CTimer`.
+    pub(crate) cancelled_tax_events: usize,
+    /// Число level-записей, переданных стандартному Rust Drop.
+    pub(crate) released_level_records: usize,
+}
+
 #[derive(Debug, Default)]
 struct ParsedOrganizingParam {
     upload_icon_minimum_level: i32,
@@ -142,6 +159,30 @@ struct ParsedOrganizingParam {
 }
 
 impl COrganizingParam {
+    /// Завершает owner и снимает его calendar callbacks до обычного `Drop`.
+    ///
+    /// Exact `Release` удалял только singleton: в исходном shutdown timer
+    /// освобождался отдельно. Явные Rust owners могут жить раздельно, поэтому
+    /// registrations отменяются здесь, чтобы callback не пережил параметры.
+    pub(crate) fn release<Callback>(
+        self,
+        timer: &mut CTimer<Callback>,
+    ) -> OrganizingParamReleaseReport {
+        let registered_tax_events = self.tax_event_ids.len();
+        let cancelled_tax_events = self
+            .tax_event_ids
+            .iter()
+            .copied()
+            .filter(|event_id| timer.kill_time_event(*event_id))
+            .count();
+        OrganizingParamReleaseReport {
+            latest_tax_event_id: self.latest_tax_event_id,
+            registered_tax_events,
+            cancelled_tax_events,
+            released_level_records: self.levels.len(),
+        }
+    }
+
     /// Открывает точный runtime-path, разбирает owner и ставит первое tax-событие.
     pub(crate) fn initialize<Callback: Copy>(
         &mut self,
@@ -528,7 +569,7 @@ fn next_time<'a>(
 
 // ============================================================================
 // FUNCTION: COrganizingParam::Release
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED / API_SHAPE_REPLACED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingparam.cpp:45
@@ -536,6 +577,11 @@ fn next_time<'a>(
 // ADDRESS: 004414e0
 // PROTOTYPE: void __thiscall Release(void)
 //
+// IMPLEMENTED_OWNER: consuming `COrganizingParam::release` выше отменяет
+// только записанные этим owner-ом calendar events, затем передаёт уровни,
+// строки и scalars обычному Rust Drop. Exact singleton/delete plumbing не
+// переносится; cancellation устраняет внутренний dangling callback после
+// раздельного shutdown `CTimer`/параметров без внешнего сообщения.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
