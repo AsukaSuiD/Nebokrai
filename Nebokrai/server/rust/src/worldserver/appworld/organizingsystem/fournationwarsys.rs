@@ -185,6 +185,7 @@ pub(crate) trait FourNationWarStartContext {
     fn enter_start_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8>;
     fn enter_end_notice(&mut self, region_name: &[u8]) -> Vec<u8>;
     fn enter_end_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8>;
+    fn sign_up_end_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8>;
 }
 
 impl From<TagTimeArithmeticBlock> for FourNationWarLoadError {
@@ -540,6 +541,24 @@ impl CFourNationWarSys {
         let notice = context.enter_end_notice(&region_name);
         context.send_organizing_info(&notice, 0xFFFF_FE92, 0xFFFF_0000);
         let log = context.enter_end_log(index, &region_name);
+        context.put_war_log(&log);
+        Ok(())
+    }
+
+    /// `OnSignUpWarEnd`: broadcast `0x7FE3E { index, 1 × 5 }`, затем war-log.
+    pub(crate) fn on_sign_up_war_end<Context: FourNationWarStartContext + ?Sized>(
+        &self,
+        index: i32,
+        context: &mut Context,
+    ) -> Result<(), FourNationWarRegionIndexBlock> {
+        let mut message = CMessage::new(0x7FE3E);
+        message.base_mut().add_long(index);
+        for _ in 0..5 { message.base_mut().add_long(1); }
+        context.send_all(&message);
+        let region_id = self.war_region_id_by_time(index)?;
+        if region_id == 0 { return Ok(()); }
+        let Some(region_name) = context.region_name(region_id) else { return Ok(()); };
+        let log = context.sign_up_end_log(index, &region_name);
         context.put_war_log(&log);
         Ok(())
     }
@@ -1207,7 +1226,7 @@ fn next_war_i32<'a>(
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::OnSignUpWarEnd
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:416
@@ -1215,6 +1234,7 @@ fn next_war_i32<'a>(
 // ADDRESS: 00495370
 // PROTOTYPE: void __stdcall OnSignUpWarEnd(long param_1)
 //
+// IMPLEMENTED_OWNER: `CFourNationWarSys::on_sign_up_war_end` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
