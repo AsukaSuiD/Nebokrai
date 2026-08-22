@@ -223,6 +223,11 @@
 //! накапливается между reload. Успех публикует exact subtype `0x2B`; generic
 //! callback не может скрыть эти два разных lifecycle.
 //!
+//! `CChangeBodyConf` читает `data/CHBYRestrictionsGoods.xml`: vector чистится
+//! до открытия, StringTable diagnostics `GS1148..1151` остаются owner-контрактом,
+//! и только missing `index` повторно очищает partial result. После успеха
+//! CGame публикует его exact `0x24` wire.
+//!
 //! `CBattleFairyProperty` аналогично остаётся внешним runtime owner-ом:
 //! `BattleFairyCombineConfig` читает `BattleFairyReleate/CombineConfig.ini`,
 //! не меняет старый compose-vector при missing resource и после успешного
@@ -1220,6 +1225,9 @@ use crate::setup::contributesetup::{
     CContributeSetup, ContributeSetupFormatError, ContributeSetupSerializeError,
 };
 use crate::setup::cbattlefairyexpconfig::{BattleFairyExpSerializeError, CBattleFairyExpConfig};
+use crate::setup::changebody::{
+    CChangeBodyConf, ChangeBodySerializeError,
+};
 use crate::setup::emotion::{CEmotion, EmotionFormatError, EmotionSerializeError};
 use crate::setup::fairyexpconf::CFairyExpConf;
 use crate::setup::goodsdestructionconfig::{
@@ -4265,7 +4273,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     FourNationWar,
     TimeToReturn,
     PreciousBox,
-    ChangeBody,
     GodsBattle,
 }
 
@@ -4298,7 +4305,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     FourNationWar,
     Quest,
     PreciousBox,
-    ChangeBody,
     LingBao,
     GodsBattle,
 }
@@ -4350,6 +4356,8 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn fairy_exp_conf(&mut self) -> &mut CFairyExpConf;
     /// Конфигурация большого отверстия, общая для initial-config и reload wire.
     fn da_kong_xiang_qian(&mut self) -> &mut CDaKongXiangQian;
+    /// Ограничения товаров смены тела, общие для initial-config и reload wire.
+    fn change_body_conf(&mut self) -> &mut CChangeBodyConf;
     /// Возвращает исходный 32-битный result; bool owners обязаны дать `0/1`.
     fn call_boolean_owner(&mut self, owner: WorldReloadBooleanOwner) -> u32;
     fn call_void_owner(&mut self, owner: WorldReloadVoidOwner);
@@ -5940,6 +5948,7 @@ pub(crate) enum WorldReloadBlock {
     BattleFairyExpSerialization(BattleFairyExpSerializeError),
     FairyExpSerialization(BattleFairyExpSerializeError),
     DaKongSerialization(DaKongSerializeError),
+    ChangeBodySerialization(ChangeBodySerializeError),
     BattleFairyCombineSerialization(BattleFairyComposeWireError),
     SynthesisSerialization(SynthesisSerializeError),
     EquipmentComposeSerialization(EquipmentComposeSerializeError),
@@ -8331,17 +8340,39 @@ impl CGame {
                 }
             }
             WorldReloadProfile::ChangeBody => {
-                self.reload_simple_serialized(
-                    context,
-                    WorldReloadBooleanOwner::ChangeBody,
-                    WorldReloadSerializationOwner::ChangeBody,
-                    0x24,
-                    b"Load CHBYRestrictionsGoods.xml...ok!",
-                    b"Load CHBYRestrictionsGoods.xml...failed!",
-                    send_to_game_servers,
-                    true,
-                    &mut legacy_result,
-                );
+                const PATH: &[u8] = b"data/CHBYRestrictionsGoods.xml";
+                let loaded = match context.read_resource(PATH) {
+                    Some(source) => match context.change_body_conf().load_from_bytes(&source) {
+                        Ok(()) => true,
+                        Err(error) => {
+                            let diagnostic = self
+                                .get_string_by_id(error.string_id())
+                                .to_vec();
+                            context.add_log_text(&diagnostic);
+                            false
+                        }
+                    },
+                    None => {
+                        context.change_body_conf().clear();
+                        let diagnostic = format_legacy_percent_s(self.get_string_by_id(b"GS1148"), PATH);
+                        context.add_log_text(&diagnostic);
+                        false
+                    }
+                };
+                context.add_log_text(if loaded {
+                    b"Load CHBYRestrictionsGoods.xml...ok!"
+                } else {
+                    b"Load CHBYRestrictionsGoods.xml...failed!"
+                });
+                if loaded && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    context
+                        .change_body_conf()
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::ChangeBodySerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(0x24, &payload);
+                }
             }
             WorldReloadProfile::CountryWar => {
                 return Err(WorldReloadBlock::CountryWarOwnerRequired);
@@ -20445,6 +20476,18 @@ fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
         .position(|byte| *byte == 0)
         .unwrap_or(value.len());
     &value[..end]
+}
+
+/// Узкая safe-замена единственного `%s` в подтверждённом `GS1148`.
+fn format_legacy_percent_s(template: &[u8], argument: &[u8]) -> Vec<u8> {
+    let Some(position) = template.windows(2).position(|window| window == b"%s") else {
+        return template.to_vec();
+    };
+    let mut formatted = Vec::with_capacity(template.len() + argument.len());
+    formatted.extend_from_slice(&template[..position]);
+    formatted.extend_from_slice(argument);
+    formatted.extend_from_slice(&template[position + 2..]);
+    formatted
 }
 
 fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {

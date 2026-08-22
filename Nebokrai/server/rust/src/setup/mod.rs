@@ -7,6 +7,11 @@
 pub(crate) mod cbattlefairyexpconfig;
 #[allow(
     dead_code,
+    reason = "ChangeBody owner подключён к World reload и initial-config до GameServer decoder-а"
+)]
+pub(crate) mod changebody;
+#[allow(
+    dead_code,
     reason = "FairyExp owner подключён к reload и initial-config wire до runtime query прохода"
 )]
 pub(crate) mod fairyexpconf;
