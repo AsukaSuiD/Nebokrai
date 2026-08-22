@@ -439,6 +439,7 @@ pub(crate) struct AttackCityLoadReport {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AttackCityLoadError {
+    ResourceMissing,
     MissingValue { field: &'static str },
     InvalidValue { field: &'static str },
     TimeParse(TagTimeParseBlock),
@@ -507,6 +508,10 @@ impl CAttackCitySys {
     }
 
     /// Загружает расписания и регистрирует достигнутые calendar events.
+    ///
+    /// Как exact bool-owner, сначала очищает registry, а отсутствующий resource
+    /// возвращает false caller-у. Поэтому `CGame::Init` публикует свой
+    /// fail-log и завершает init вместо прежнего ошибочного Rust success-path.
     pub(crate) fn initialize<Callback: Copy>(
         &mut self,
         source: Option<&[u8]>,
@@ -516,7 +521,7 @@ impl CAttackCitySys {
     ) -> Result<AttackCityLoadReport, AttackCityLoadError> {
         self.attacks.clear();
         let Some(source) = source else {
-            return Ok(AttackCityLoadReport::default());
+            return Err(AttackCityLoadError::ResourceMissing);
         };
         let mut report = AttackCityLoadReport {
             resource_found: true,

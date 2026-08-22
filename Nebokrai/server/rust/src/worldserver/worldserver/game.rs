@@ -1472,7 +1472,8 @@ use crate::worldserver::appworld::organizingsystem::faction::{
     FactionUploadIconBlock,
 };
 use crate::worldserver::appworld::organizingsystem::attackcitysys::{
-    AttackCityCallbacks, CAttackCitySys,
+    AttackCityCallbacks, AttackCityEnemyRelationContext, AttackCityEnemyRelationReport,
+    AttackCityLoadError, AttackCityLoadReport, CAttackCitySys,
 };
 use crate::worldserver::appworld::organizingsystem::factionwarsys::{
     CFactionWarSys, FactionWarIniLoadCompletion, FactionWarInitializationBlock,
@@ -1748,7 +1749,6 @@ pub(crate) enum WorldGameDatabaseOwner {
 pub(crate) enum WorldGameInitVoidOwner {
     InitializeLargess,
     LoadGodsBattleFactionXyd,
-    InitializeAttackCityEnemyRelations,
     InitializeOrganizingController,
     InitializeFactionWar,
     InitializeQuestSystem,
@@ -1814,6 +1814,8 @@ pub(crate) enum WorldGameInitEvent {
     GoodsWarMemberLoaded(GoodsWarDatabaseLoadReport),
     RsSetupOwnerCreated(LoadedSetupIds),
     VoidOwner(WorldGameInitVoidOwner),
+    AttackCityInitialized(AttackCityLoadReport),
+    AttackCityEnemyRelationsInitialized(AttackCityEnemyRelationReport),
     FactionWarInitialized(FactionWarInitializationReport),
     QuestSystemInitialized(QuestSystemLoadReport),
     JjcConfigurationLoaded(JjcConfigurationLoadReport),
@@ -1918,6 +1920,8 @@ pub(crate) enum WorldGameInitBlockReason<ContextBlock> {
     Reload(WorldReloadBlock),
     JjcConfiguration(JjcConfigurationLoadReport),
     BooleanOwner(WorldGameInitBooleanOwner),
+    AttackCityLoad(AttackCityLoadError),
+    AttackCityEnemyRelation(ContextBlock),
     OrganizingParameters(OrganizingParamLoadError),
     CountryParameters(CountryParamLoadError),
     CountryHandler,
@@ -9940,6 +9944,8 @@ impl CGame {
         context: &mut Context,
         jjc: &mut CJJcSystem,
         organizing_parameters: &mut COrganizingParam,
+        attack_city: &mut CAttackCitySys,
+        attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
         faction_war: &mut CFactionWarSys,
         faction_enemy_context: &mut FactionEnemyContext,
         player_ranks: &mut CPlayerRanks,
@@ -9961,9 +9967,10 @@ impl CGame {
         auction_log: &mut CAuctionLog,
         log: &mut WorldLogTextOwner,
         callbacks: &mut WorldGameInitCallbacks<'_>,
-    ) -> WorldGameInitResult<Context::Block>
+    ) -> WorldGameInitResult<<Context as WorldGameInitContext>::Block>
     where
-        Context: WorldGameInitContext,
+        Context: WorldGameInitContext
+            + AttackCityEnemyRelationContext<Block = <Context as WorldGameInitContext>::Block>,
         TimerCallback: Copy,
         FactionEnemyContext: FactionEnemyMutationContext,
         CountryDatabase: DbCountryOwner,
@@ -10345,21 +10352,43 @@ impl CGame {
             WorldGameInitVoidOwner::LoadGodsBattleFactionXyd,
         ));
 
-        let owner = WorldGameInitBooleanOwner::InitializeAttackCity;
-        let succeeded = context.initialize_boolean_owner(owner);
-        events.push(WorldGameInitEvent::BooleanOwner { owner, succeeded });
-        if !succeeded {
-            self.record_game_init_log(
-                &mut events,
-                log,
-                callbacks,
-                b"Load setup/CityWarSys.ini FAILED...",
-            );
-            stop!(WorldGameInitBlockReason::BooleanOwner(owner));
-        }
-        context.initialize_void_owner(WorldGameInitVoidOwner::InitializeAttackCityEnemyRelations);
-        events.push(WorldGameInitEvent::VoidOwner(
-            WorldGameInitVoidOwner::InitializeAttackCityEnemyRelations,
+        let attack_city_now = (callbacks.get_timer_local_time)();
+        let attack_city_source = context.read_resource(b"setup/CityWarSys.ini");
+        let attack_city_initialization = match attack_city.initialize(
+            attack_city_source.as_deref(),
+            attack_city_now,
+            timer,
+            attack_city_callbacks,
+        ) {
+            Ok(report) => report,
+            Err(source) => {
+                let owner = WorldGameInitBooleanOwner::InitializeAttackCity;
+                events.push(WorldGameInitEvent::BooleanOwner {
+                    owner,
+                    succeeded: false,
+                });
+                self.record_game_init_log(
+                    &mut events,
+                    log,
+                    callbacks,
+                    b"Load setup/CityWarSys.ini FAILED...",
+                );
+                stop!(WorldGameInitBlockReason::AttackCityLoad(source));
+            }
+        };
+        events.push(WorldGameInitEvent::BooleanOwner {
+            owner: WorldGameInitBooleanOwner::InitializeAttackCity,
+            succeeded: true,
+        });
+        events.push(WorldGameInitEvent::AttackCityInitialized(
+            attack_city_initialization,
+        ));
+        let attack_city_relations = match attack_city.initial_city_all_faction_enemy_relation(context) {
+            Ok(report) => report,
+            Err(source) => stop!(WorldGameInitBlockReason::AttackCityEnemyRelation(source)),
+        };
+        events.push(WorldGameInitEvent::AttackCityEnemyRelationsInitialized(
+            attack_city_relations,
         ));
 
         let owner = WorldGameInitBooleanOwner::InitializeFourNationWar;
