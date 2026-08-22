@@ -50,6 +50,7 @@ use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::setup::godsbattleconf::CGodsBattleConf;
 use crate::worldserver::appworld::jjcsystem::CJJcSystem;
+use crate::worldserver::appworld::skills::skillfactory::CSkillFactory;
 use crate::worldserver::worldserver::game::{
     CGame, WorldNamedRegionLookup, WorldRegionIdRouteScan, WorldReloadBlock, WorldReloadContext,
 };
@@ -266,6 +267,7 @@ pub(crate) async fn on_gm_message(
     game: &mut CGame,
     jjc: &mut CJJcSystem,
     gods_battle: &mut CGodsBattleConf,
+    skills: &mut CSkillFactory,
     rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
     rs_player: &mut TiberiusRsPlayer,
     player_database: Option<&mut WorldTdsClient>,
@@ -358,6 +360,7 @@ pub(crate) async fn on_gm_message(
                     reload_context,
                     jjc,
                     gods_battle,
+                    skills,
                     rs_gods_battle,
                     &profile,
                     true,

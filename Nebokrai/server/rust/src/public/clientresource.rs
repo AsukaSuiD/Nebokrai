@@ -224,9 +224,34 @@ impl DefaultClientResourceOwner {
     /// списка и оставляет caller-у exact loose fallback.
     pub(crate) fn find_file_list(&self, root: &[u8], extension: &[u8]) -> Option<Vec<Vec<u8>>> {
         let resource = get_default_client_resource(self)?;
-        resource
-            .has_loaded_index()
+        (resource.has_loaded_index() && resource.is_file_exist(root))
             .then(|| resource.find_file_list(root, extension))
+    }
+
+    /// Exact выбор `CSkillFactory::{LoadSkillCache,LoadUsageCache}` между
+    /// package-index и рекурсивным loose `FindFile`.
+    ///
+    /// Наличие самого `.ril` недостаточно: исходный caller сначала проверял
+    /// `IsFileExist("\\skills")` и лишь для существующего root вызывал
+    /// `FindFileList`. Иначе он обходил loose `SKILLS`; `read_dir` уже не
+    /// выдаёт служебную первую запись `.`, которую старый `FindFile` пропускал
+    /// своим предварительным `FindNextFile`.
+    pub(crate) fn find_cache_file_list(&self, extension: &[u8]) -> Vec<Vec<u8>> {
+        const INDEX_ROOT: &[u8] = b"\\skills";
+        if let Some(files) = self.find_file_list(INDEX_ROOT, extension) {
+            return files;
+        }
+        let Some(installed) = self.installed.as_ref() else {
+            return Vec::new();
+        };
+        let mut files = Vec::new();
+        find_loose_cache_files(
+            &installed.root.join("SKILLS"),
+            b".\\skills".to_vec(),
+            extension,
+            &mut files,
+        );
+        files
     }
 
     /// Exact Release удаляет global pointer только если он был установлен.
@@ -236,6 +261,41 @@ impl DefaultClientResourceOwner {
 
     pub(crate) fn is_installed(&self) -> bool {
         self.installed.is_some()
+    }
+}
+
+fn find_loose_cache_files(
+    directory: &Path,
+    wire_directory: Vec<u8>,
+    extension: &[u8],
+    files: &mut Vec<Vec<u8>>,
+) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let mut name = entry.file_name().to_string_lossy().into_owned().into_bytes();
+        name.make_ascii_lowercase();
+        let mut wire_path = wire_directory.clone();
+        wire_path.push(b'\\');
+        wire_path.extend_from_slice(&name);
+        if file_type.is_dir() {
+            if name != b".." {
+                find_loose_cache_files(&entry.path(), wire_path, extension, files);
+            }
+            continue;
+        }
+        let extension = extension.strip_prefix(b".").unwrap_or(extension);
+        let matches_extension = name
+            .rsplit(|byte| *byte == b'.')
+            .next()
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(extension));
+        if matches_extension {
+            files.push(wire_path);
+        }
     }
 }
 

@@ -1375,6 +1375,10 @@ use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
 use crate::worldserver::appworld::leiting::{
     CLeiTing, LeiTingBlock, LeiTingContext, LeiTingLocalTime, LeiTingRunReport,
 };
+use crate::worldserver::appworld::skills::skillfactory::{
+    CSkillFactory, SkillFactoryCacheLoadReport, SkillFactoryCacheResource,
+    SkillFactorySerializeError,
+};
 use crate::worldserver::appworld::message::othermessage::{
     WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
 };
@@ -2336,6 +2340,9 @@ pub(crate) trait WorldGameThreadRuntime: WorldGameReleaseContext {
     /// Временно передаёт process-global increment-log owner полному Release.
     fn take_increment_log(&mut self) -> CIncrementLog;
     fn restore_increment_log(&mut self, owner: CIncrementLog);
+    /// Передаёт тот же SkillFactory owner, который обслуживал Init/reload/wire.
+    fn take_skill_factory(&mut self) -> CSkillFactory;
+    fn restore_skill_factory(&mut self, owner: CSkillFactory);
     fn signal_game_thread_exit(&mut self);
     fn request_window_close(&mut self);
 }
@@ -4160,6 +4167,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) player_database: Option<&'a mut WorldTdsClient>,
     pub(crate) general_variables: Option<&'a mut CVariableList>,
     pub(crate) gods_battle: &'a mut CGodsBattleConf,
+    pub(crate) skills: &'a mut CSkillFactory,
     pub(crate) rs_gods_battle: Option<&'a mut TiberiusRsGodsBattle>,
     pub(crate) gods_battle_database: Option<&'a mut WorldTdsClient>,
     pub(crate) auction_log: &'a mut CAuctionLog,
@@ -6131,6 +6139,7 @@ pub(crate) enum WorldReloadBlock {
     HitLevelSerialization(HitLevelSerializeError),
     TradeListFormat(TradeListFormatError),
     TradeListSerialization(TradeListSerializeError),
+    SkillListSerialization(SkillFactorySerializeError),
     IncrementShopSerialization(IncrementShopSerializeError),
     PrisonFormat(PrisonConfFormatError),
     PrisonSerialization(PrisonConfSerializeError),
@@ -8192,12 +8201,40 @@ impl CGame {
         Ok(legacy_result)
     }
 
+    fn load_skill_factory_cache<Context: WorldReloadContext + ?Sized>(
+        context: &mut Context,
+        skills: &mut CSkillFactory,
+        extension: &[u8],
+        skill_cache: bool,
+    ) -> SkillFactoryCacheLoadReport {
+        let paths = context
+            .default_client_resource()
+            .find_cache_file_list(extension);
+        let resources = paths
+            .into_iter()
+            .map(|path| {
+                let contents = context.default_client_resource().read_resource(&path);
+                (path, contents)
+            })
+            .collect::<Vec<_>>();
+        let resources = resources.iter().map(|(path, contents)| SkillFactoryCacheResource {
+            path,
+            contents: contents.as_deref(),
+        });
+        if skill_cache {
+            skills.load_skill_cache(resources)
+        } else {
+            skills.load_usage_cache(resources)
+        }
+    }
+
     /// Выполняет полный case-insensitive dispatcher `CGame::ReLoad`.
     pub(crate) async fn reload<Context: WorldReloadContext + ?Sized>(
         &mut self,
         context: &mut Context,
         jjc: &mut CJJcSystem,
         gods_battle: &mut CGodsBattleConf,
+        skills: &mut CSkillFactory,
         rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
         profile: &[u8],
         send_to_game_servers: bool,
@@ -8406,24 +8443,24 @@ impl CGame {
                 }
             }
             WorldReloadProfile::SkillList => {
-                if context.call_boolean_owner(WorldReloadBooleanOwner::SkillUsageCache) == 0 {
+                let usage = Self::load_skill_factory_cache(context, skills, b".usage", false);
+                if usage.failure().is_some() {
                     context.add_log_text(b"Load Skill Usage List...FAILED!");
                     return Ok(legacy_result);
                 }
-                if Self::reload_boolean_with_log(
-                    context,
-                    WorldReloadBooleanOwner::SkillCache,
-                    b"Load Skillist...OK!",
-                    b"Load Skillist...FAILED!",
-                ) && send_to_game_servers
-                {
-                    self.serialize_reload_owner(
-                        context,
-                        WorldReloadSerializationOwner::SkillList,
-                        6,
-                        true,
-                        &mut legacy_result,
-                    );
+                let loaded = Self::load_skill_factory_cache(context, skills, b".skill", true);
+                context.add_log_text(if loaded.failure().is_none() {
+                    b"Load Skillist...OK!"
+                } else {
+                    b"Load Skillist...FAILED!"
+                });
+                if loaded.failure().is_none() && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    skills
+                        .serialize(&mut payload)
+                        .map_err(WorldReloadBlock::SkillListSerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(6, &payload);
                 }
             }
             WorldReloadProfile::NewSkillMonsterList => {
@@ -10407,6 +10444,7 @@ impl CGame {
         context: &mut Context,
         jjc: &mut CJJcSystem,
         gods_battle: &mut CGodsBattleConf,
+        skills: &mut CSkillFactory,
         mut rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
         time_to_return: &mut TimeToReturn,
         time_to_return_callbacks: TimeToReturnCallbacks<TimerCallback>,
@@ -10698,6 +10736,7 @@ impl CGame {
                     context,
                     jjc,
                     gods_battle,
+                    skills,
                     rs_gods_battle.as_deref_mut(),
                     profile,
                     false,
@@ -10743,6 +10782,7 @@ impl CGame {
                     context,
                     jjc,
                     gods_battle,
+                    skills,
                     rs_gods_battle.as_deref_mut(),
                     profile,
                     false,
@@ -10821,6 +10861,7 @@ impl CGame {
                     context,
                     jjc,
                     gods_battle,
+                    skills,
                     rs_gods_battle.as_deref_mut(),
                     profile,
                     false,
@@ -10872,6 +10913,7 @@ impl CGame {
                 context,
                 jjc,
                 gods_battle,
+                skills,
                 rs_gods_battle.as_deref_mut(),
                 b"godsBattle",
                 false,
@@ -11384,6 +11426,7 @@ impl CGame {
         context: &mut Context,
         goods_war: &mut CGoodsWarMember,
         increment_log: &mut CIncrementLog,
+        skills: &mut CSkillFactory,
     ) -> WorldGameReleaseResult {
         let mut events = Vec::new();
 
@@ -11580,14 +11623,17 @@ impl CGame {
         // и не обнуляет его ни в одном Release call-site до skill-cache cleanup.
         events.push(WorldGameReleaseEvent::DatabaseMiscRetained);
 
-        for owner in [
+        skills.clear_skill_cache();
+        events.push(WorldGameReleaseEvent::VoidOwner(
             WorldGameReleaseVoidOwner::ClearSkillCache,
+        ));
+        skills.clear_usage_cache();
+        events.push(WorldGameReleaseEvent::VoidOwner(
             WorldGameReleaseVoidOwner::ClearSkillUsageCache,
-            WorldGameReleaseVoidOwner::ReleaseGoodsFactory,
-        ] {
-            context.release_void_owner(owner);
-            events.push(WorldGameReleaseEvent::VoidOwner(owner));
-        }
+        ));
+        let owner = WorldGameReleaseVoidOwner::ReleaseGoodsFactory;
+        context.release_void_owner(owner);
+        events.push(WorldGameReleaseEvent::VoidOwner(owner));
 
         // `db_data` и save serialization являются Rust owners; после этой
         // позиции Release к ним больше не обращается, фактический Drop — DeleteGame.
@@ -12202,6 +12248,7 @@ impl CGame {
         session_factory: &mut CSessionFactory,
         mut general_variables: Option<&mut CVariableList>,
         gods_battle: &mut CGodsBattleConf,
+        skills: &mut CSkillFactory,
         mut rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
         mut gods_battle_database: Option<&mut WorldTdsClient>,
         reload_context: &mut dyn WorldReloadContext,
@@ -12296,6 +12343,7 @@ impl CGame {
                             &mut *session_factory,
                             general_variables.as_deref_mut(),
                             &mut *gods_battle,
+                            &mut *skills,
                             rs_gods_battle.as_deref_mut(),
                             gods_battle_database.as_deref_mut(),
                             &mut *reload_context,
@@ -12394,6 +12442,7 @@ impl CGame {
                     &mut *session_factory,
                     general_variables.as_deref_mut(),
                     &mut *gods_battle,
+                    &mut *skills,
                     rs_gods_battle.as_deref_mut(),
                     gods_battle_database.as_deref_mut(),
                     &mut *reload_context,
@@ -12505,6 +12554,7 @@ impl CGame {
         session_factory: &mut CSessionFactory,
         general_variables: Option<&mut CVariableList>,
         gods_battle: &mut CGodsBattleConf,
+        skills: &mut CSkillFactory,
         rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
         gods_battle_database: Option<&mut WorldTdsClient>,
         reload_context: &mut dyn WorldReloadContext,
@@ -12596,6 +12646,7 @@ impl CGame {
             session_factory,
             general_variables,
             gods_battle,
+            skills,
             rs_gods_battle,
             gods_battle_database,
             reload_context,
@@ -13874,6 +13925,7 @@ impl CGame {
             &mut *callbacks.reload_context,
             owners.jjc,
             owners.gods_battle,
+            owners.skills,
             owners.rs_gods_battle.as_deref_mut(),
             &mut *callbacks.get_log_local_time,
             owners.country_war,
@@ -14088,6 +14140,7 @@ impl CGame {
             owners.session_factory,
             owners.general_variables.as_deref_mut(),
             owners.gods_battle,
+            owners.skills,
             owners.rs_gods_battle.as_deref_mut(),
             owners.gods_battle_database.as_deref_mut(),
             &mut *callbacks.reload_context,
@@ -16974,15 +17027,17 @@ pub(crate) async fn game_thread_func<Runtime: WorldGameThreadRuntime>(
 
     let mut goods_war = runtime.take_goods_war_member();
     let mut increment_log = runtime.take_increment_log();
+    let mut skills = runtime.take_skill_factory();
     let release = match game_slot
         .as_deref_mut()
         .expect("Release вызывается до DeleteGame")
-        .release(runtime, &mut goods_war, &mut increment_log)
+        .release(runtime, &mut goods_war, &mut increment_log, &mut skills)
     {
         Ok(release) => release,
         Err(block) => {
             runtime.restore_goods_war_member(goods_war);
             runtime.restore_increment_log(increment_log);
+            runtime.restore_skill_factory(skills);
             return WorldGameThreadReport::BlockedRelease {
                 game: game_slot
                     .take()
@@ -16997,6 +17052,7 @@ pub(crate) async fn game_thread_func<Runtime: WorldGameThreadRuntime>(
     };
     runtime.restore_goods_war_member(goods_war);
     runtime.restore_increment_log(increment_log);
+    runtime.restore_skill_factory(skills);
     let deletion = delete_game(&mut game_slot);
     runtime.signal_game_thread_exit();
     runtime.request_window_close();
@@ -18130,6 +18186,7 @@ async fn process_world_message<TimerCallback, DbMiscContextOwner, JjcContext>(
     session_factory: &mut CSessionFactory,
     general_variables: Option<&mut CVariableList>,
     gods_battle: &mut CGodsBattleConf,
+    skills: &mut CSkillFactory,
     mut rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
     mut gods_battle_database: Option<&mut WorldTdsClient>,
     reload_context: &mut dyn WorldReloadContext,
@@ -18283,6 +18340,7 @@ where
             game,
             jjc,
             gods_battle,
+            skills,
             rs_gods_battle.as_deref_mut(),
             rs_player,
             player_database.as_deref_mut(),
@@ -21258,6 +21316,7 @@ pub(crate) async fn reload_profiles<Context, GetLocalTime, GetTimerLocalTime, Ti
     context: &mut Context,
     jjc: &mut CJJcSystem,
     gods_battle: &mut CGodsBattleConf,
+    skills: &mut CSkillFactory,
     mut rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
     mut get_local_time: GetLocalTime,
     country_war: &mut CountryWarSys,
@@ -21376,6 +21435,7 @@ where
                     context,
                     jjc,
                     gods_battle,
+                    skills,
                     rs_gods_battle.as_deref_mut(),
                     action.reload_profile,
                     action.first_option,
