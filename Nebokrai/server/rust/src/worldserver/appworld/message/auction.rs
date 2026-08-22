@@ -658,7 +658,7 @@ pub(crate) fn on_msg_s2w_auction(
 
 // ============================================================================
 // FUNCTION: OnMSG_S2W_AUCTION
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\auction.cpp:10
@@ -666,6 +666,10 @@ pub(crate) fn on_msg_s2w_auction(
 // ADDRESS: 004a5650
 // PROTOTYPE: void __cdecl OnMSG_S2W_AUCTION(CMessage * param_1)
 //
+// IMPLEMENTED_OWNER: `on_msg_s2w_auction` выше покрывает все literal case
+// `0x60801..=0x60814`, включая exact смену opcode, порядок decode/DB/send и
+// сохранённые safe-границы повреждённого wire. Raw switch оставлен только как
+// локальное доказательство уже материализованного owner-а.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
