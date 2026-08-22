@@ -200,6 +200,11 @@
 //! рассылка subtype `3` заменяет legacy return размером payload; initial-config
 //! читает тот же owner без внешнего TradeList snapshot/callback.
 //!
+//! `CEmotion` owned `CGame`: `data/Emotions.ini` не очищает static map и
+//! возвращает false только при missing resource. Reload сохраняет исходный
+//! порядок после PlayerList и legacy return length от optional subtype `0x15`;
+//! initial-config читает тот же owner без внешнего snapshot/callback.
+//!
 //! `CContributeSetup` теперь owned `CGame`: dispatcher
 //! `0x004171CA..0x004172B1` читает `data/ContributeSetup.ini`, сохраняет bool
 //! load-result в legacy return-slot и при success + send-флаге публикует
@@ -1171,6 +1176,7 @@ use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelFormatError, HitLevelS
 use crate::setup::contributesetup::{
     CContributeSetup, ContributeSetupFormatError, ContributeSetupSerializeError,
 };
+use crate::setup::emotion::{CEmotion, EmotionFormatError, EmotionSerializeError};
 use crate::setup::incrementshoplist::{
     CIncrementShopList, IncrementShopGoodsQuery, IncrementShopGoodsResult,
     IncrementShopSerializeError,
@@ -4192,7 +4198,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     PlayerList,
     PlayerExpList,
     PlayerPropertiesUpgrade,
-    Emotion,
     GoodsList,
     MonsterList,
     DropGoodsList,
@@ -4238,7 +4243,6 @@ pub(crate) enum WorldReloadVoidOwner {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldReloadSerializationOwner {
     PlayerList,
-    Emotion,
     GoodsList,
     MonsterList,
     SkillList,
@@ -5869,6 +5873,8 @@ pub(crate) enum WorldReloadBlock {
     RegionList(WorldRegionListBlock),
     RegionSnapshot(WorldReloadRegionSnapshotBlock),
     ThingSetupCodec(ThingSetupCodecError),
+    EmotionFormat(EmotionFormatError),
+    EmotionSerialization(EmotionSerializeError),
     EquipmentComposeSerialization(EquipmentComposeSerializeError),
     CiQingSerialization(CiQingSerializationBlock),
     TaoZhuangSerialization(TaoZhuangSerializationBlock),
@@ -6638,6 +6644,7 @@ pub(crate) struct CGame {
     setup: WorldSetup,
     /// Process-global `CThingSetup` привязан к единственному World `CGame`.
     thing_setup: CThingSetup,
+    emotion: CEmotion,
     globe_variables: WorldGlobeVariables,
     string_table: MyStringTable,
     string_table_array: Vec<u8>,
@@ -6721,6 +6728,10 @@ impl CGame {
         &self.words_filter
     }
 
+    pub(crate) fn emotion(&self) -> &CEmotion {
+        &self.emotion
+    }
+
     pub(crate) fn equipment_compose_list(&self) -> &EquipmentComposeList {
         &self.equipment_compose_list
     }
@@ -6764,6 +6775,7 @@ impl CGame {
         Self {
             setup: WorldSetup::for_game(),
             thing_setup: CThingSetup::new(),
+            emotion: CEmotion::default(),
             globe_variables: WorldGlobeVariables::default(),
             string_table: MyStringTable::new(),
             string_table_array: Vec::new(),
@@ -7602,20 +7614,26 @@ impl CGame {
                         &mut legacy_result,
                     );
                 }
-                let emotion = Self::reload_boolean_with_log(
-                    context,
-                    WorldReloadBooleanOwner::Emotion,
-                    b"Load Emotins.ini...OK!",
-                    b"Load Emotins.ini...FAILED!",
-                );
+                let emotion = match context.read_resource(b"data/Emotions.ini") {
+                    Some(source) => self
+                        .emotion
+                        .load_from_bytes(&source)
+                        .map(|_| true)
+                        .map_err(WorldReloadBlock::EmotionFormat)?,
+                    None => false,
+                };
+                context.add_log_text(if emotion {
+                    b"Load Emotins.ini...OK!"
+                } else {
+                    b"Load Emotins.ini...FAILED!"
+                });
                 if emotion && send_to_game_servers {
-                    self.serialize_reload_owner(
-                        context,
-                        WorldReloadSerializationOwner::Emotion,
-                        0x15,
-                        true,
-                        &mut legacy_result,
-                    );
+                    let mut payload = Vec::new();
+                    self.emotion
+                        .serialize(&mut payload)
+                        .map_err(WorldReloadBlock::EmotionSerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(0x15, &payload);
                 }
             }
             WorldReloadProfile::GoodsList => {

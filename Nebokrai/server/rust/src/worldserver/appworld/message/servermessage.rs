@@ -292,7 +292,7 @@ use crate::setup::cbattlefairyexpconfig::{
     BattleFairyExpSerializeError, CBattleFairyExpConfig,
 };
 use crate::setup::contributesetup::ContributeSetupSerializeError;
-use crate::setup::emotion::{CEmotion, EmotionSerializeError};
+use crate::setup::emotion::EmotionSerializeError;
 use crate::setup::goodsdestructionconfig::{GoodsDestroySerializeError, GoodsDestroySetup};
 use crate::setup::gmlist::{CGMList, GmListSerializationBlock};
 use crate::setup::globesetup::GlobeSetupSnapshot;
@@ -2893,10 +2893,9 @@ pub(crate) fn continue_game_server_player_list_configuration(
 pub(crate) fn continue_game_server_emotion_configuration(
     game: &CGame,
     socket_id: i32,
-    emotions: &CEmotion,
 ) -> WorldEmotionConfigurationReport {
     let mut payload = Vec::new();
-    if let Err(error) = emotions.serialize(&mut payload) {
+    if let Err(error) = game.emotion().serialize(&mut payload) {
         return WorldEmotionConfigurationReport {
             delivery: None,
             completion: WorldEmotionConfigurationCompletion::Emotion(error),
