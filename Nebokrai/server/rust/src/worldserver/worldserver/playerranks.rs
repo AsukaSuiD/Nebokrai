@@ -38,9 +38,12 @@
 //! `Default` повторяет подтверждённую inline-инициализацию singleton-а, а
 //! явная передача единственного `CPlayerRanks` заменяет process-global
 //! `getInstance`/`GetPlayerRanks`. `Vec` освобождается обычным Rust `Drop`;
-//! исходный dangling singleton после `Release` не воспроизводится. Сам
-//! `Release` остаётся сырой границей до прямой связи с timer-owner-ом в
-//! shutdown-пути `CGame`.
+//! exact `0x0041C0AA..0x0041C0BB` уничтожает owner и обнуляет singleton после
+//! `Release`, что Rust выражает обычным владением. Сам `Release` сначала
+//! снимает назначенное calendar-событие, затем очищает ranks. Constructor-ная
+//! дыра event ID не
+//! превращается в случайный `KillTimeEvent`: `None` исправляет внутреннее
+//! чтение неинициализированного DWORD, которое не является контрактом игры.
 //! Два входных поля теперь приходят из восстановленного `COrganizingParam`;
 //! PlayerRanks по-прежнему принимает узкую typed-проекцию и не дублирует его
 //! позиционный parser.
@@ -85,6 +88,14 @@ pub(crate) struct PlayerRanksInitializationReport {
     pub(crate) scheduled_time: TagTime,
     pub(crate) event_id: TimerId,
     pub(crate) legacy_result: bool,
+}
+
+/// Наблюдаемый prefix `Release` до уничтожения Rust owner-а контекстом.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerRanksReleaseReport {
+    pub(crate) previous_event_id: Option<TimerId>,
+    pub(crate) timer_event_removed: Option<bool>,
+    pub(crate) cleared_ranks: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -168,6 +179,22 @@ impl CPlayerRanks {
 
     pub(crate) fn clear(&mut self) {
         self.ranks.clear();
+    }
+
+    /// Снимает calendar callback до очистки list-owner-а, как exact `Release`.
+    pub(crate) fn release<Callback>(
+        &mut self,
+        timer: &mut CTimer<Callback>,
+    ) -> PlayerRanksReleaseReport {
+        let previous_event_id = self.stat_event_id.take();
+        let timer_event_removed = previous_event_id.map(|id| timer.kill_time_event(id));
+        let cleared_ranks = self.ranks.len();
+        self.ranks.clear();
+        PlayerRanksReleaseReport {
+            previous_event_id,
+            timer_event_removed,
+            cleared_ranks,
+        }
     }
 
     pub(crate) fn push(&mut self, rank: PlayerRankEntry) {
@@ -398,7 +425,7 @@ fn write_player_rank_string(destination: &mut Vec<u8>, value: &[u8]) {
 
 // ============================================================================
 // FUNCTION: CPlayerRanks::Release
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\playerranks.cpp:63
@@ -406,6 +433,8 @@ fn write_player_rank_string(destination: &mut Vec<u8>, value: &[u8]) {
 // ADDRESS: 0041c090
 // PROTOTYPE: void __thiscall Release(void)
 //
+// IMPLEMENTED_OWNER: `CPlayerRanks::release` выше снимает event до очистки;
+// `Option<TimerId>` не воспроизводит constructor-ное чтение мусорного DWORD.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

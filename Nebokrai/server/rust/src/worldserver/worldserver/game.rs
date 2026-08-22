@@ -1328,7 +1328,8 @@ use crate::worldserver::worldserver::honorranks::{
 };
 use crate::worldserver::worldserver::playerranks::{
     CPlayerRanks, PlayerRanksGameServerUpdate, PlayerRanksInitializationConfig,
-    PlayerRanksInitializationReport, PlayerRanksScheduleBlock, PlayerRanksSerializationBlock,
+    PlayerRanksInitializationReport, PlayerRanksReleaseReport, PlayerRanksScheduleBlock,
+    PlayerRanksSerializationBlock,
 };
 use crate::worldserver::worldserver::savedb::{
     DoSaveDataLifecycleReport, SaveDataFinalDisposition, SaveDataLifecycleState, SaveDataLogEvent,
@@ -1835,7 +1836,6 @@ pub(crate) enum WorldGameReleaseVoidOwner {
     ReleaseOrganizingParameters,
     ReleaseQuestSystem,
     ReleaseFactionWar,
-    ReleasePlayerRanks,
     ReleaseTimer,
     ClearSkillCache,
     ClearSkillUsageCache,
@@ -1894,6 +1894,7 @@ pub(crate) enum WorldGameReleaseEvent {
         entries: usize,
     },
     DbDataCleared,
+    PlayerRanksReleased(PlayerRanksReleaseReport),
     SaveWorkerJoined {
         previous_handle: WorldSaveThreadHandleState,
     },
@@ -1946,6 +1947,8 @@ pub(crate) trait WorldGameReleaseContext {
     fn release_void_owner(&mut self, owner: WorldGameReleaseVoidOwner);
     fn release_optional_owner(&mut self, owner: WorldGameReleaseOptionalOwner) -> bool;
     fn release_database_owner(&mut self, owner: WorldGameReleaseDatabaseOwner) -> bool;
+    /// Снимает rank-event с ещё живого timer-а, затем уничтожает rank-owner.
+    fn release_player_ranks(&mut self) -> PlayerRanksReleaseReport;
 
     /// Ждёт и закрывает даже исходный пустой `g_hSavingThread`, затем обнуляет owner.
     fn join_save_worker(&mut self) -> WorldSaveThreadHandleState;
@@ -9701,12 +9704,15 @@ impl CGame {
             WorldGameReleaseVoidOwner::ReleaseOrganizingParameters,
             WorldGameReleaseVoidOwner::ReleaseQuestSystem,
             WorldGameReleaseVoidOwner::ReleaseFactionWar,
-            WorldGameReleaseVoidOwner::ReleasePlayerRanks,
-            WorldGameReleaseVoidOwner::ReleaseTimer,
         ] {
             context.release_void_owner(owner);
             events.push(WorldGameReleaseEvent::VoidOwner(owner));
         }
+        let player_ranks = context.release_player_ranks();
+        events.push(WorldGameReleaseEvent::PlayerRanksReleased(player_ranks));
+        let owner = WorldGameReleaseVoidOwner::ReleaseTimer;
+        context.release_void_owner(owner);
+        events.push(WorldGameReleaseEvent::VoidOwner(owner));
 
         if let Some(client) = self.net_client.take() {
             drop(client);
