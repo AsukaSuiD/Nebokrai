@@ -4,8 +4,9 @@
 //! `RecvResultFromGS` RVA `0x00093C60` и `ConvertMoraleToExploit` RVA
 //! `0x00093F80`, `OnRefreshRegion`/`OnClearWar`/`RequestWarResultFromGS` RVA
 //! `0x00093B10/0x00093B80/0x00093BF0`, `GetWarRegionIDByTime` RVA
-//! `0x00094200`, `OnWarEnd` RVA `0x00095E90`: `IMPLEMENTED`; loader, прочие
-//! calendar branches и остальной Game runtime ниже остаются
+//! `0x00094200`, `OnSignUpWarStart`/`OnWarEnd` RVA
+//! `0x00094F10/0x00095E90`: `IMPLEMENTED`; loader, прочие calendar branches и
+//! остальной Game runtime ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
@@ -64,6 +65,13 @@
 //! регистрация нового ID происходят только после этого gate и в точном
 //! порядке. Небезопасный доступ оригинала по timer index заменён typed block;
 //! normal valid-index последовательность не меняется.
+//!
+//! Exact `OnSignUpWarStart` RVA `0x00094F10` переводит setup в `CIS_DUTH`,
+//! посылает `0x7FE3D { index }`, а затем под live-region gate материализует
+//! `XBWS0024` и `XBWS0025` с именем региона. Второй текст публикуется только
+//! до `StartTime`; exact `GetTimeDifference` и выражение milliseconds берут
+//! только minute/second. Дизассемблирование exact EXE подтверждает war-log
+//! `(Num:%d)[%s]Four Nation War System start!!.` с аргументами index/name.
 //!
 //! Exact static `OneCountrySignUp` `0x00494340..0x00494431` принимает только
 //! countries `1..=4`, получает `XBWS0035` и форматирует локальный `char[256]`,
@@ -194,6 +202,9 @@ pub(crate) trait FourNationWarCallbackContext {
     fn enter_end_notice(&mut self, region_name: &[u8]) -> Vec<u8>;
     fn enter_end_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8>;
     fn sign_up_end_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8>;
+    fn sign_up_start_notice(&mut self, region_name: &[u8]) -> Vec<u8>;
+    fn sign_up_start_timed_text(&mut self, region_name: &[u8]) -> Vec<u8>;
+    fn sign_up_start_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8>;
     fn war_end_started_log(&mut self) -> Vec<u8>;
     fn add_log_text(&mut self, text: &[u8]);
     fn war_end_notice(&mut self, region_name: &[u8]) -> Vec<u8>;
@@ -204,14 +215,14 @@ pub(crate) trait FourNationWarCallbackContext {
     fn send_timed_top_info(&mut self, info_id: i32, timer_flag: i32, milliseconds: i32, text: &[u8]);
 }
 
-/// Безопасная граница calendar reschedule `OnWarEnd`.
+/// Безопасная граница calendar callback-ов войны.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FourNationWarEndBlock {
+pub(crate) enum FourNationWarCalendarBlock {
     RegionIndex(FourNationWarRegionIndexBlock),
     Calendar(TagTimeArithmeticBlock),
 }
 
-impl From<TagTimeArithmeticBlock> for FourNationWarEndBlock {
+impl From<TagTimeArithmeticBlock> for FourNationWarCalendarBlock {
     fn from(value: TagTimeArithmeticBlock) -> Self {
         Self::Calendar(value)
     }
@@ -574,6 +585,54 @@ impl CFourNationWarSys {
         Ok(())
     }
 
+    /// `OnSignUpWarStart`: `CIS_DUTH`, `0x7FE3D`, `XBWS0024/0025` и только
+    /// до `StartTime` timed top-info и точный war-log старта.
+    pub(crate) fn on_sign_up_war_start<Context: FourNationWarCallbackContext + ?Sized>(
+        &mut self,
+        index: i32,
+        context: &mut Context,
+    ) -> Result<(), FourNationWarCalendarBlock> {
+        let setup_count = self.setups.len();
+        let setup_index = usize::try_from(index).map_err(|_| {
+            FourNationWarCalendarBlock::RegionIndex(FourNationWarRegionIndexBlock {
+                index,
+                setup_count,
+            })
+        })?;
+        let (region_id, start_time) = {
+            let setup = self.setups.get_mut(setup_index).ok_or(
+                FourNationWarCalendarBlock::RegionIndex(FourNationWarRegionIndexBlock {
+                    index,
+                    setup_count,
+                }),
+            )?;
+            setup.region_state = 1; // PDB общего `eCityState`: CIS_DUTH.
+            (setup.region_id, setup.start_time)
+        };
+
+        let mut message = CMessage::new(0x7FE3D);
+        message.base_mut().add_long(index);
+        context.send_all(&message);
+        let Some(region_name) = context.region_name(region_id) else {
+            return Ok(());
+        };
+
+        let notice = context.sign_up_start_notice(&region_name);
+        context.send_organizing_info(&notice, 0xFFFF_FE92, 0xFFFF_0000);
+        let timed_text = context.sign_up_start_timed_text(&region_name);
+        let now = context.current_time();
+        if start_time.legacy_le(now) {
+            return Ok(());
+        }
+        let difference = start_time.get_time_difference(now)?;
+        let milliseconds = ((i32::from(difference.minute) * 60) + i32::from(difference.second)) * 1000;
+        let info_id = context.add_timed_top_info(2, milliseconds, &timed_text);
+        context.send_timed_top_info(info_id, 2, milliseconds, &timed_text);
+        let log = context.sign_up_start_log(index, &region_name);
+        context.put_war_log(&log);
+        Ok(())
+    }
+
     /// `OnSignUpWarEnd`: broadcast `0x7FE3E { index, 1 × 5 }`, затем war-log.
     pub(crate) fn on_sign_up_war_end<Context: FourNationWarCallbackContext + ?Sized>(
         &self,
@@ -627,13 +686,13 @@ impl CFourNationWarSys {
         timer: &mut CTimer<Callback>,
         callbacks: FourNationWarCallbacks<Callback>,
         context: &mut Context,
-    ) -> Result<(), FourNationWarEndBlock> {
+    ) -> Result<(), FourNationWarCalendarBlock> {
         let setup_count = self.setups.len();
         let setup_index = usize::try_from(index).map_err(|_| {
-            FourNationWarEndBlock::RegionIndex(FourNationWarRegionIndexBlock { index, setup_count })
+            FourNationWarCalendarBlock::RegionIndex(FourNationWarRegionIndexBlock { index, setup_count })
         })?;
         if self.setups.get(setup_index).is_none() {
-            return Err(FourNationWarEndBlock::RegionIndex(FourNationWarRegionIndexBlock {
+            return Err(FourNationWarCalendarBlock::RegionIndex(FourNationWarRegionIndexBlock {
                 index,
                 setup_count,
             }));
@@ -1373,7 +1432,7 @@ fn next_war_i32<'a>(
 
 // ============================================================================
 // FUNCTION: CFourNationWarSys::OnSignUpWarStart
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\fournationwarsys.cpp:363
@@ -1381,6 +1440,7 @@ fn next_war_i32<'a>(
 // ADDRESS: 00494f10
 // PROTOTYPE: void __stdcall OnSignUpWarStart(long param_1)
 //
+// IMPLEMENTED_OWNER: `CFourNationWarSys::on_sign_up_war_start` выше.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
