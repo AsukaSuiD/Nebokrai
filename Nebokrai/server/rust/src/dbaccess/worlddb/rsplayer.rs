@@ -9,6 +9,10 @@
 //! `CreatePlayerAbilities` RVA `0x00106CE0`, внешний
 //! `CreatePlayer` RVA `0x0010ED40`, внешний `SavePlayer` RVA `0x0010EE70`,
 //! `GetPlayerID` RVA `0x00102080`, `GetCDKey` RVA `0x0010EA20`,
+//! `GetPlayerCountInDBbyCdkey` RVA `0x00100C40`, `GetPlayerDeletionDate` RVA
+//! `0x00100EA0`, `OpenPlayerBaseInDB` RVA `0x0010D2D0`,
+//! `OpenPlayerBaseInMem` RVA `0x0010F280`, внешний `OpenPlayerBase` RVA
+//! `0x0010F750`,
 //! `RestorePlayer` RVA `0x00101260` и
 //! `DeletePlayer` RVA `0x00101A60`, а также `LoadHonorRanksByType` RVA
 //! `0x0010FB90`, внешний `LoadHonorRanks` RVA `0x001113B0`, `InsertHonorRanks`
@@ -31,6 +35,16 @@
 //! `HELM, BODY, GLOV, BOOT, WEAPON, BACK, HEADGEAR, FROCK, WING, MANTEAU,
 //! FAIRY`. Rust получает один caller-owned snapshot вместо чтения частично
 //! материализованного `CPlayer` и singleton `CGame` внутри DB-owner-а.
+//! `OpenPlayerBase` отдельно сохраняет два исходных SQL-прохода: byte-count
+//! через `SELECT ID`, затем ordered `SELECT *`; при необходимости для каждой
+//! DB-строки выполняется прежний `SELECT DelDate`. Parameter binding устраняет
+//! только injection/stack-buffer дефект. Row wire и live/save/creation merge
+//! принадлежат достигнутому caller-у `OnLogMessage`, поэтому DB-owner отдаёт
+//! typed scalar rows без второго протокольного builder-а.
+//! Exact `GetPlayerDeletionDate` `0x0050116B..0x00501238` нормализует
+//! `_mktime == -1` в `0`, но catch возвращает signed `-1`; null `DelDate`, EOF
+//! и нулевой player ID возвращают `0`. Эти различающиеся значения сохранены,
+//! потому что caller считает `-1` ненулевым deletion timestamp.
 //!
 //! Exact `0x005023BE..0x005026A8` исправляет потерянный raw vararg-хвост:
 //! после одиннадцатого equipment level последним `%d` передаётся signed
@@ -431,7 +445,7 @@ use std::error::Error;
 use std::fmt;
 use std::mem::{offset_of, size_of};
 
-use chrono::{Datelike, Days, Local, NaiveDate, TimeZone, Timelike};
+use chrono::{Datelike, Days, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike};
 use encoding_rs::WINDOWS_1251;
 use futures_util::TryStreamExt;
 use tiberius::{Query, Row};
@@ -862,6 +876,37 @@ pub(crate) struct PlayerBaseSaveSnapshot<'a> {
     pub(crate) region_id: i32,
 }
 
+/// Одна DB-строка exact `OpenPlayerBaseInDB` до подмены live/save-копией.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerBaseDatabaseRow {
+    pub(crate) id: u32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) level: u8,
+    pub(crate) occupation: u8,
+    pub(crate) sex: u8,
+    pub(crate) country: u8,
+    pub(crate) head: u8,
+    pub(crate) equipment_ids: [u32; 11],
+    pub(crate) equipment_levels: [u8; 11],
+    pub(crate) region_id: i32,
+}
+
+/// Safe-граница ADO row-conversion внутри `OpenPlayerBaseInDB`.
+#[derive(Debug)]
+pub(crate) enum PlayerBaseLoadFailure {
+    MissingConnection,
+    Database,
+    MissingRequiredValue {
+        row_index: usize,
+        column: &'static str,
+    },
+    NumericOutsideLegacyRange {
+        row_index: usize,
+        column: &'static str,
+        value: i64,
+    },
+}
+
 /// Неразрешённая граница старого `_sprintf(local_418[1024], ...)`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PlayerBaseSqlBufferBlock {
@@ -926,6 +971,9 @@ pub(crate) struct RsPlayerNotice {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum RsPlayerOperation {
+    OpenPlayerBaseCount,
+    OpenPlayerBase,
+    GetPlayerDeletionDate,
     IsNameExist,
     GetPlayerId,
     GetCdKey,
@@ -952,6 +1000,7 @@ pub(crate) enum RsPlayerSaveError {
     MissingBaseRow,
     MissingAbilityRow,
     MissingHonorRanksRow { period: HonorRanksSavePeriod },
+    MalformedPlayerBaseRow,
     JjcSaveFailed,
 }
 
@@ -969,6 +1018,9 @@ impl fmt::Display for RsPlayerSaveError {
                 formatter,
                 "не найдена строка CSL_HonorRanks для {period:?}"
             ),
+            Self::MalformedPlayerBaseRow => {
+                write!(formatter, "некорректная строка CSL_PLAYER_BASE")
+            }
             Self::JjcSaveFailed => {
                 write!(formatter, "отдельное сохранение JJc завершилось ошибкой")
             }
@@ -985,6 +1037,7 @@ impl Error for RsPlayerSaveError {
             | Self::MissingBaseRow
             | Self::MissingAbilityRow
             | Self::MissingHonorRanksRow { .. }
+            | Self::MalformedPlayerBaseRow
             | Self::JjcSaveFailed => None,
         }
     }
@@ -1068,6 +1121,27 @@ fn read_ado_integer(
 
 /// Узкая объектная граница достигнутой стадии исходного `CRsPlayer`.
 pub(crate) trait RsPlayerOwner {
+    /// Повторяет отдельный `SELECT ID`/ADO RecordCount и его byte/`0xFF` контракт.
+    async fn get_player_count_in_db_by_cdkey(
+        &mut self,
+        account: &[u8],
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> Option<u8>;
+
+    /// Читает ordered DB-часть списка; live/save merge остаётся у `CGame`.
+    async fn open_player_base_in_db(
+        &mut self,
+        account: &[u8],
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> Result<Vec<PlayerBaseDatabaseRow>, PlayerBaseLoadFailure>;
+
+    /// Возвращает local-midnight `DelDate`: null/missing даёт `0`, catch — `-1`.
+    async fn get_player_deletion_date(
+        &mut self,
+        player_id: u32,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> i32;
+
     /// Проверяет case-insensitive player-name через parameterized TDS query.
     async fn is_name_exist(
         &mut self,
@@ -1957,6 +2031,276 @@ pub(crate) fn save_thing_field<S: PlayerAbilityFieldSink>(
 }
 
 impl RsPlayerOwner for TiberiusRsPlayer {
+    async fn get_player_count_in_db_by_cdkey(
+        &mut self,
+        account: &[u8],
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> Option<u8> {
+        let Some(active_transaction) = active_transaction else {
+            self.notices.push_back(RsPlayerNotice {
+                operation: RsPlayerOperation::OpenPlayerBaseCount,
+                error: RsPlayerSaveError::MissingConnection,
+            });
+            return None;
+        };
+
+        let (account, _, _) = WINDOWS_1251.decode(visible_c_string(account));
+        let mut query = Query::new("SELECT ID FROM csl_player_base WHERE Account=@P1");
+        query.bind(account.into_owned());
+        let rows = match query.query(active_transaction).await {
+            Ok(stream) => match stream.into_first_result().await {
+                Ok(rows) => rows,
+                Err(error) => {
+                    self.notices.push_back(RsPlayerNotice {
+                        operation: RsPlayerOperation::OpenPlayerBaseCount,
+                        error: RsPlayerSaveError::Database(error.into()),
+                    });
+                    return None;
+                }
+            },
+            Err(error) => {
+                self.notices.push_back(RsPlayerNotice {
+                    operation: RsPlayerOperation::OpenPlayerBaseCount,
+                    error: RsPlayerSaveError::Database(error.into()),
+                });
+                return None;
+            }
+        };
+
+        // ADO GetRecordCount возвращался через `unsigned char`; `0xFF`
+        // одновременно был sentinel-ом ошибки внешнего owner-а.
+        let count = rows.len() as u8;
+        (count != u8::MAX).then_some(count)
+    }
+
+    async fn open_player_base_in_db(
+        &mut self,
+        account: &[u8],
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> Result<Vec<PlayerBaseDatabaseRow>, PlayerBaseLoadFailure> {
+        const EQUIPMENT_ID_FIELDS: [&str; 11] = [
+            "HELM", "BODY", "GLOV", "BOOT", "WEAPON", "BACK", "HEADGEAR", "FROCK",
+            "WING", "MANTEAU", "FAIRY",
+        ];
+        const EQUIPMENT_LEVEL_FIELDS: [&str; 11] = [
+            "HelmLevel",
+            "BodyLevel",
+            "GlovLevel",
+            "BootLevel",
+            "WeaponLevel",
+            "BackLevel",
+            "HEADGEARLevel",
+            "FROCKLevel",
+            "WINGLevel",
+            "MANTEAULevel",
+            "FAIRYLevel",
+        ];
+
+        let Some(active_transaction) = active_transaction else {
+            self.notices.push_back(RsPlayerNotice {
+                operation: RsPlayerOperation::OpenPlayerBase,
+                error: RsPlayerSaveError::MissingConnection,
+            });
+            return Err(PlayerBaseLoadFailure::MissingConnection);
+        };
+
+        let (account, _, _) = WINDOWS_1251.decode(visible_c_string(account));
+        let mut query =
+            Query::new("SELECT * FROM csl_player_base WHERE Account=@P1 ORDER BY id");
+        query.bind(account.into_owned());
+        let rows = match query.query(active_transaction).await {
+            Ok(stream) => match stream.into_first_result().await {
+                Ok(rows) => rows,
+                Err(error) => {
+                    self.notices.push_back(RsPlayerNotice {
+                        operation: RsPlayerOperation::OpenPlayerBase,
+                        error: RsPlayerSaveError::Database(error.into()),
+                    });
+                    return Err(PlayerBaseLoadFailure::Database);
+                }
+            },
+            Err(error) => {
+                self.notices.push_back(RsPlayerNotice {
+                    operation: RsPlayerOperation::OpenPlayerBase,
+                    error: RsPlayerSaveError::Database(error.into()),
+                });
+                return Err(PlayerBaseLoadFailure::Database);
+            }
+        };
+
+        let mut result = Vec::with_capacity(rows.len());
+        for (row_index, row) in rows.into_iter().enumerate() {
+            macro_rules! required {
+                ($value:expr) => {
+                    match $value {
+                        Ok(value) => value,
+                        Err(failure) => {
+                            self.notices.push_back(RsPlayerNotice {
+                                operation: RsPlayerOperation::OpenPlayerBase,
+                                error: RsPlayerSaveError::MalformedPlayerBaseRow,
+                            });
+                            return Err(failure);
+                        }
+                    }
+                };
+            }
+            let integer = |column: &'static str| {
+                read_ado_integer(&row, column)
+                    .map_err(|_| PlayerBaseLoadFailure::Database)?
+                    .ok_or(PlayerBaseLoadFailure::MissingRequiredValue {
+                        row_index,
+                        column,
+                    })
+            };
+            let narrow_u8 = |column: &'static str| {
+                let value = integer(column)?;
+                u8::try_from(value).map_err(|_| {
+                    PlayerBaseLoadFailure::NumericOutsideLegacyRange {
+                        row_index,
+                        column,
+                        value,
+                    }
+                })
+            };
+            let narrow_u32 = |column: &'static str| {
+                let value = integer(column)?;
+                u32::try_from(value).map_err(|_| {
+                    PlayerBaseLoadFailure::NumericOutsideLegacyRange {
+                        row_index,
+                        column,
+                        value,
+                    }
+                })
+            };
+
+            let id = required!(narrow_u32("ID"));
+            let name = match row.try_get::<&str, _>("Name") {
+                Ok(Some(name)) => {
+                    let (name, _, _) = WINDOWS_1251.encode(name);
+                    visible_c_string(name.as_ref()).to_vec()
+                }
+                Ok(None) => {
+                    self.notices.push_back(RsPlayerNotice {
+                        operation: RsPlayerOperation::OpenPlayerBase,
+                        error: RsPlayerSaveError::MalformedPlayerBaseRow,
+                    });
+                    return Err(PlayerBaseLoadFailure::MissingRequiredValue {
+                        row_index,
+                        column: "Name",
+                    });
+                }
+                Err(error) => {
+                    self.notices.push_back(RsPlayerNotice {
+                        operation: RsPlayerOperation::OpenPlayerBase,
+                        error: RsPlayerSaveError::Database(error.into()),
+                    });
+                    return Err(PlayerBaseLoadFailure::Database);
+                }
+            };
+            let level = required!(narrow_u8("Levels"));
+            let occupation = required!(narrow_u8("Occupation"));
+            let sex = required!(narrow_u8("Sex"));
+            let country = required!(narrow_u8("Country"));
+            let head = required!(narrow_u8("HEAD"));
+
+            let mut equipment_ids = [0; 11];
+            for (destination, column) in equipment_ids.iter_mut().zip(EQUIPMENT_ID_FIELDS) {
+                *destination = required!(narrow_u32(column));
+            }
+            let mut equipment_levels = [0; 11];
+            for (destination, column) in equipment_levels
+                .iter_mut()
+                .zip(EQUIPMENT_LEVEL_FIELDS)
+            {
+                *destination = required!(narrow_u8(column));
+            }
+            let region_value = required!(integer("Region"));
+            let region_id = required!(i32::try_from(region_value).map_err(|_| {
+                PlayerBaseLoadFailure::NumericOutsideLegacyRange {
+                    row_index,
+                    column: "Region",
+                    value: region_value,
+                }
+            }));
+            result.push(PlayerBaseDatabaseRow {
+                id,
+                name,
+                level,
+                occupation,
+                sex,
+                country,
+                head,
+                equipment_ids,
+                equipment_levels,
+                region_id,
+            });
+        }
+        Ok(result)
+    }
+
+    async fn get_player_deletion_date(
+        &mut self,
+        player_id: u32,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> i32 {
+        if player_id == 0 {
+            return 0;
+        }
+        let Some(active_transaction) = active_transaction else {
+            self.notices.push_back(RsPlayerNotice {
+                operation: RsPlayerOperation::GetPlayerDeletionDate,
+                error: RsPlayerSaveError::MissingConnection,
+            });
+            return -1;
+        };
+
+        let mut query = Query::new("SELECT DelDate FROM csl_player_base WHERE ID=@P1");
+        query.bind(player_id as i32);
+        let row = match query.query(active_transaction).await {
+            Ok(stream) => match stream.into_row().await {
+                Ok(row) => row,
+                Err(error) => {
+                    self.notices.push_back(RsPlayerNotice {
+                        operation: RsPlayerOperation::GetPlayerDeletionDate,
+                        error: RsPlayerSaveError::Database(error.into()),
+                    });
+                    return -1;
+                }
+            },
+            Err(error) => {
+                self.notices.push_back(RsPlayerNotice {
+                    operation: RsPlayerOperation::GetPlayerDeletionDate,
+                    error: RsPlayerSaveError::Database(error.into()),
+                });
+                return -1;
+            }
+        };
+        let Some(row) = row else {
+            return 0;
+        };
+        let deletion_date = match row.try_get::<NaiveDateTime, _>("DelDate") {
+            Ok(value) => value,
+            Err(error) => {
+                self.notices.push_back(RsPlayerNotice {
+                    operation: RsPlayerOperation::GetPlayerDeletionDate,
+                    error: RsPlayerSaveError::Database(error.into()),
+                });
+                return -1;
+            }
+        };
+        let Some(deletion_date) = deletion_date else {
+            return 0;
+        };
+        let Some(midnight) = deletion_date.date().and_hms_opt(0, 0, 0) else {
+            return 0;
+        };
+        let Some(local_midnight) = Local.from_local_datetime(&midnight).earliest() else {
+            return 0;
+        };
+        // Exact `_mktime == -1` нормализовался в ноль до возврата.
+        i32::try_from(local_midnight.timestamp()).unwrap_or(0)
+    }
+
     async fn is_name_exist(
         &mut self,
         player_name: &[u8],
@@ -3163,7 +3507,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::GetPlayerCountInDBbyCdkey
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2416
@@ -3205,7 +3549,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::GetPlayerDeletionDate
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2479
@@ -3642,7 +3986,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::OpenPlayerBaseInDB
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:160
@@ -3754,7 +4098,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::OpenPlayerBaseInMem
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:44
@@ -3768,7 +4112,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRsPlayer::OpenPlayerBase
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:389

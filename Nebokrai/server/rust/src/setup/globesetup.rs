@@ -25,6 +25,7 @@
 //! `+0xA46`, восемь slots по `0x40`; второй accessor не копирует строки.
 //! PDB type `CGlobeSetup::tagSetup` дополнительно подтверждает
 //! `strSpeStr[0x40]` по `+0x520` и `wTotalJingLiDanCnt` по `+0x1110`;
+//! соседний `dwDelDays` по `+0x51C` читает World player-list owner;
 //! player rename и LeiTing owners читают их прямо из того же snapshot без
 //! отдельного дублирующего state.
 
@@ -38,6 +39,7 @@ const COUNTRY_IDENTITY_OFFSET: usize = 0xA46;
 const COUNTRY_IDENTITY_COUNT: usize = 8;
 const SPECIAL_STRING_OFFSET: usize = 0x520;
 const SPECIAL_STRING_LENGTH: usize = 0x40;
+const DELETION_DAYS_OFFSET: usize = 0x51C;
 const TOTAL_JING_LI_DAN_COUNT_OFFSET: usize = 0x1110;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -92,6 +94,15 @@ impl GlobeSetupSnapshot {
             &self.bytes[SPECIAL_STRING_OFFSET..SPECIAL_STRING_OFFSET + SPECIAL_STRING_LENGTH];
         let visible_len = slot.iter().position(|byte| *byte == 0).unwrap_or(slot.len());
         &slot[..visible_len]
+    }
+
+    /// Возвращает exact `dwDelDays` перед `strSpeStr` по PDB-offset `+0x51C`.
+    pub(crate) fn deletion_days(&self) -> u32 {
+        u32::from_le_bytes(
+            self.bytes[DELETION_DAYS_OFFSET..DELETION_DAYS_OFFSET + 4]
+                .try_into()
+                .expect("PDB-offset находится внутри globe snapshot"),
+        )
     }
 
     /// Возвращает exact `wTotalJingLiDanCnt` по PDB-offset `+0x1110`.

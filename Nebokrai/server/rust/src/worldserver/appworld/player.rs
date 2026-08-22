@@ -977,6 +977,26 @@ pub(crate) enum PlayerDbProjectionBlock {
     FriendNameContainsNul { friend_index: usize, offset: usize },
 }
 
+/// Узкая owned-проекция полей, которые `CRsPlayer::OpenPlayerBase*`
+/// публиковал в списке персонажей.
+///
+/// Это не DB-save snapshot: owner списка не читал остальные containers,
+/// abilities или variable-data. Отдельная проекция не превращает их
+/// инициализацию в ложное условие открытия списка.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerBaseWireSnapshot {
+    pub(crate) id: i32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) level: u8,
+    pub(crate) occupation: u8,
+    pub(crate) sex: u8,
+    pub(crate) country: u8,
+    pub(crate) head: u8,
+    pub(crate) equipment_ids: [u32; 11],
+    pub(crate) equipment_levels: [u8; 11],
+    pub(crate) region_id: i32,
+}
+
 impl From<GoodsDbSnapshotBlock> for PlayerDbProjectionBlock {
     fn from(block: GoodsDbSnapshotBlock) -> Self {
         Self::Goods(block)
@@ -1088,19 +1108,7 @@ pub(crate) struct CPlayer {
 
 impl PlayerDbProjection<'_> {
     fn equipment_fields(&self) -> Result<([u32; 11], [i32; 11]), PlayerDbProjectionBlock> {
-        const SQL_EQUIPMENT_ORDER: [u32; 11] = [0, 1, 3, 4, 2, 9, 10, 12, 13, 14, 15];
-        let mut ids = [0; 11];
-        let mut levels = [0; 11];
-        for (index, position) in SQL_EQUIPMENT_ORDER.into_iter().enumerate() {
-            let Some(goods) = self.player.equipment.get_goods(position) else {
-                continue;
-            };
-            ids[index] = goods
-                .get_base_properties_index()
-                .ok_or(GoodsDbSnapshotBlock::MissingBasePropertiesIndex)?;
-            levels[index] = goods.get_addon_property_value(GAP_WEAPON_LEVEL, 1);
-        }
-        Ok((ids, levels))
+        self.player.base_equipment_fields()
     }
 
     fn jjc_snapshot(&self) -> PlayerJjcDataSnapshot {
@@ -1304,6 +1312,51 @@ impl PlayerDbProjection<'_> {
 }
 
 impl CPlayer {
+    fn base_equipment_fields(
+        &self,
+    ) -> Result<([u32; 11], [i32; 11]), PlayerDbProjectionBlock> {
+        // Exact `CGame::GetPlayerEquipID`, RVA 0x00001B50.
+        const SQL_EQUIPMENT_ORDER: [u32; 11] = [0, 1, 3, 4, 2, 9, 10, 12, 13, 14, 15];
+        let mut ids = [0; 11];
+        let mut levels = [0; 11];
+        for (index, position) in SQL_EQUIPMENT_ORDER.into_iter().enumerate() {
+            let Some(goods) = self.equipment.get_goods(position) else {
+                continue;
+            };
+            ids[index] = goods
+                .get_base_properties_index()
+                .ok_or(GoodsDbSnapshotBlock::MissingBasePropertiesIndex)?;
+            levels[index] = goods.get_addon_property_value(GAP_WEAPON_LEVEL, 1);
+        }
+        Ok((ids, levels))
+    }
+
+    /// Материализует только exact-поля одного `OpenPlayerBaseInDB/InMem` row.
+    pub(crate) fn player_base_wire_snapshot(
+        &self,
+    ) -> Result<PlayerBaseWireSnapshot, PlayerDbProjectionBlock> {
+        let country = self
+            .country
+            .ok_or(PlayerDbProjectionBlock::UninitializedField {
+                field: "m_btCountry",
+            })?;
+        let (equipment_ids, equipment_levels) = self.base_equipment_fields()?;
+        Ok(PlayerBaseWireSnapshot {
+            id: self.get_id(),
+            name: self.get_name().to_vec(),
+            level: self.base_property.read_u8(BASE_PROPERTY_LEVEL_OFFSET),
+            occupation: self
+                .base_property
+                .read_u8(BASE_PROPERTY_OCCUPATION_OFFSET),
+            sex: self.base_property.read_u8(BASE_PROPERTY_SEX_OFFSET),
+            country,
+            head: self.base_property.read_u8(BASE_PROPERTY_HEAD_PIC_OFFSET),
+            equipment_ids,
+            equipment_levels: equipment_levels.map(|level| level as u8),
+            region_id: self.get_region_id(),
+        })
+    }
+
     /// Создаёт constructor-state, необходимый точному `CloneMapPlayer` decoder-у.
     ///
     /// Это не объявление полного старого constructor-а: ещё не достигнутые поля

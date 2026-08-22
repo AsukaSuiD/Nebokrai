@@ -59,7 +59,8 @@
 //! `CGame::ClearDBData` RVA `0x0000D490`, live restore/deletion list-owner-ы
 //! `0x00004B70/0x00004BB0/0x000054E0/0x00005530/0x00005560/0x00007140/
 //! 0x00010CA0/0x00010CF0`, `CGame::AppendMapPlayer` RVA `0x00010A40`,
-//! `CGame::CloneMapPlayer` RVA `0x00010AB0` и
+//! `CGame::CloneMapPlayer` RVA `0x00010AB0`, `CGame::CloneSavingPlayer` RVA
+//! `0x00010EB0`, `CGame::GetCreationPlayerVectorByCdkey` RVA `0x00012760` и
 //! полный `CGame::GenerateDBData` RVA `0x00012E50`,
 //! `CGame::GeterateRegionDBData` RVA `0x00012860`,
 //! `SaveThreadFunc` RVA `0x00001E30`, полный `CGame::AI` RVA `0x000148A0`,
@@ -7499,6 +7500,31 @@ impl CGame {
         Ok(Some(Box::new(cloned)))
     }
 
+    /// Повторяет `CloneSavingPlayer` под save-list lock через тот же clone-codec.
+    pub(crate) fn clone_saving_player(
+        &self,
+        player_id: u32,
+        registry: &GoodsBasePropertiesRegistry,
+        organizing_ctrl: &COrganizingCtrl,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<Option<Box<CPlayer>>, PlayerCodecError> {
+        let region_types = self.player_organizing_region_types();
+        let mut db_data = self.db_data.lock();
+        let Some(source) = db_data.players.get_mut(&player_id) else {
+            return Ok(None);
+        };
+
+        let mut cloned = CPlayer::with_clone_decode_constructor_state();
+        let mut wire = Vec::new();
+        let mut updater = organizing_ctrl.player_updater(&region_types);
+        let _ = source.add_to_byte_array(&mut wire, true, registry, &mut updater, coefficients)?;
+        let mut cursor = 0;
+        if !cloned.decord_from_byte_array(&wire, &mut cursor, true, registry, coefficients)? {
+            return Ok(None);
+        }
+        Ok(Some(Box::new(cloned)))
+    }
+
     /// Материализует player-prefix `GenerateDBData` до доменных generators.
     ///
     /// Restore-копирование выполняется через эксклюзивный `&mut self` без lock;
@@ -13235,6 +13261,23 @@ impl CGame {
         count
     }
 
+    /// Материализует exact `GetCreationPlayerVectorByCdkey` ID-vector.
+    pub(crate) fn creation_player_ids_by_cdkey(&self, cdkey: &[u8]) -> Vec<u32> {
+        let cdkey = legacy_c_string_prefix(cdkey);
+        let mut player_ids = Vec::new();
+        for (&player_id, player) in &self.players {
+            if !legacy_c_string_prefix(player.get_account()).eq_ignore_ascii_case(cdkey) {
+                continue;
+            }
+            for &creation_id in &self.creation_players {
+                if creation_id as u32 == player_id {
+                    player_ids.push(player_id);
+                }
+            }
+        }
+        player_ids
+    }
+
     /// Передаёт уникального creation-игрока владеющему map после list-вставки.
     ///
     /// На обеих collision-ветвях синхронно передаёт точный payload исходного
@@ -15152,9 +15195,14 @@ where
             session_factory,
             registry,
             coefficients,
+            globe_setup,
+            rs_player,
+            player_database.as_deref_mut(),
             add_log_text,
             message,
-        ) {
+        )
+        .await
+        {
             WorldLogMessageDispatch::Handled(outcome) => {
                 return ProcessedWorldEvent::LogMessage {
                     source,
@@ -19070,7 +19118,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::CloneSavingPlayer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:3870
@@ -19153,7 +19201,7 @@ fn copy_name_for_legacy_lowercase(value: &[u8]) -> Result<Vec<u8>, usize> {
 
 // ============================================================================
 // FUNCTION: CGame::GetCreationPlayerVectorByCdkey
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:3129

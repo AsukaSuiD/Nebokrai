@@ -1,8 +1,9 @@
 //! WorldServer dispatcher-owner `OnLogMessage`.
 //!
 //! Корпус остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме player lifecycle leaf-ов
-//! `0x5FB01/0x5FB02`, restore-role leaf `0x4FB03` и account cleanup leaf-ов
-//! `0x4FB06/0x4FB07` со статусом `IMPLEMENTED`. Точная пара:
+//! `0x5FB01/0x5FB02`, player-list leaf `0x4FB01`, restore-role leaf `0x4FB03`
+//! и account cleanup leaf-ов `0x4FB06/0x4FB07` со статусом `IMPLEMENTED`.
+//! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\logmessage.cpp:30`.
 //! Exact `0x004B1692..0x004B171F` читает account через `GetStr(..., 0x14)`,
@@ -36,14 +37,31 @@
 //! lifecycle из его очереди. `VecDeque` заменяет только старые list/deque
 //! nodes, а существующая client FIFO — WinSock transport без изменения
 //! wire/order.
+//! Exact `CRsPlayer::OpenPlayerBase` `0x0050F750..0x0050F851` сначала делает
+//! отдельный `SELECT ID` count, затем добавляет `1 + account\0 + word(byte
+//! wrapping DB+creation count)`. При нуле машинный код добавляет второй
+//! `1 + account\0 + long(0)`; этот legacy quirk сохранён. Ненулевой путь
+//! читает `SELECT * ... ORDER BY id`, публикует DB rows перед creation rows,
+//! подменяет DB scalar-ы достигнутой map/save-копией и вычисляет signed
+//! deletion-status с приоритетом restore/live deletion/DB DelDate. Tiberius,
+//! parameter binding и owned wire snapshots заменяют только ADO/COM,
+//! `_sprintf` и временные C++ locals; исходный clone-codec, SQL-порядок, N+1
+//! DelDate lookup и wire остаются явными.
 //!
 //! Декомпилятор: Ghidra 12.1.2. Сырой C++ ниже сохранён как локальная
 //! документация, а не как Rust-реализация.
 
+use crate::dbaccess::worlddb::rsplayer::{
+    PlayerBaseDatabaseRow, RsPlayerOwner, TiberiusRsPlayer,
+};
+use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
-use crate::worldserver::appworld::player::{PlayerCodecError, PlayerPropertyCoefficients};
+use crate::worldserver::appworld::player::{
+    PlayerBaseWireSnapshot, PlayerCodecError, PlayerPropertyCoefficients,
+};
 use crate::worldserver::appworld::session::csessionfactory::CSessionFactory;
 use crate::worldserver::worldserver::game::{
     CGame, WorldLoginTimeoutTeamExit, WorldOnlinePlayerAppendOutcome,
@@ -51,11 +69,13 @@ use crate::worldserver::worldserver::game::{
 };
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
+const PLAYER_BASE_REQUEST: i32 = 0x0004_FB01;
 const PLAYER_DETAIL_REQUEST: i32 = 0x0005_FB01;
 const PLAYER_RETURN_REQUEST: i32 = 0x0005_FB02;
 const RESTORE_ROLE_REQUEST: i32 = 0x0004_FB03;
 const ACCOUNT_LOGIN_CLEANUP_REQUEST: i32 = 0x0004_FB06;
 const ACCOUNT_DISCONNECT_REQUEST: i32 = 0x0004_FB07;
+const PLAYER_BASE_RESPONSE: i32 = 0x0001_FF02;
 const RESTORE_ROLE_RESPONSE: i32 = 0x0001_FF04;
 const RESTORE_ROLE_STATUS: i8 = 0x15;
 const ACCOUNT_DISCONNECT_GAME_RESPONSE: i32 = 0x0007_F903;
@@ -70,6 +90,17 @@ pub(crate) struct WorldRestoreRoleOutcome {
     pub(crate) player_id_complete: bool,
     pub(crate) response_type: i32,
     pub(crate) status: i8,
+    pub(crate) wire: Vec<u8>,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorldPlayerBaseOutcome {
+    pub(crate) account: Vec<u8>,
+    pub(crate) succeeded: bool,
+    pub(crate) declared_count: Option<u8>,
+    pub(crate) emitted_rows: i32,
+    pub(crate) response_type: i32,
     pub(crate) wire: Vec<u8>,
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
@@ -193,6 +224,7 @@ pub(crate) enum WorldPlayerReturnOutcome {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldLogMessageOutcome {
+    PlayerBase(WorldPlayerBaseOutcome),
     RestoreRole(WorldRestoreRoleOutcome),
     AccountLoginCleanup(WorldAccountLoginCleanupOutcome),
     AccountDisconnect(WorldAccountDisconnectOutcome),
@@ -205,16 +237,32 @@ pub(crate) enum WorldLogMessageDispatch {
     Pending(CMessage),
 }
 
-pub(crate) fn on_log_message(
+pub(crate) async fn on_log_message(
     game: &mut CGame,
     organizing: &mut COrganizingCtrl,
     session_factory: &mut CSessionFactory,
     registry: &GoodsBasePropertiesRegistry,
     coefficients: &PlayerPropertyCoefficients,
+    globe_setup: &GlobeSetupSnapshot,
+    rs_player: &mut TiberiusRsPlayer,
+    player_database: Option<&mut WorldTdsClient>,
     add_error_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     message: CMessage,
 ) -> WorldLogMessageDispatch {
     match message.message_type() {
+        PLAYER_BASE_REQUEST => {
+            player_base(
+                game,
+                organizing,
+                registry,
+                coefficients,
+                globe_setup,
+                rs_player,
+                player_database,
+                message,
+            )
+            .await
+        }
         PLAYER_DETAIL_REQUEST => player_detail(
             game,
             organizing,
@@ -239,6 +287,275 @@ pub(crate) fn on_log_message(
         ACCOUNT_DISCONNECT_REQUEST => account_disconnect(game, session_factory, message),
         _ => WorldLogMessageDispatch::Pending(message),
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PlayerBaseWireRow {
+    player_id: u32,
+    name: Vec<u8>,
+    level: u8,
+    occupation: u8,
+    sex: u8,
+    country: u8,
+    head: u8,
+    equipment_ids: [u32; 11],
+    equipment_levels: [u8; 11],
+    region_id: i32,
+    deletion_status: i8,
+}
+
+impl PlayerBaseWireRow {
+    fn from_database(row: PlayerBaseDatabaseRow, deletion_status: i8) -> Self {
+        Self {
+            player_id: row.id,
+            name: row.name,
+            level: row.level,
+            occupation: row.occupation,
+            sex: row.sex,
+            country: row.country,
+            head: row.head,
+            equipment_ids: row.equipment_ids,
+            equipment_levels: row.equipment_levels,
+            region_id: row.region_id,
+            deletion_status,
+        }
+    }
+
+    fn from_snapshot(
+        player_id: u32,
+        snapshot: PlayerBaseWireSnapshot,
+        deletion_status: i8,
+    ) -> Self {
+        Self {
+            player_id,
+            name: snapshot.name,
+            level: snapshot.level,
+            occupation: snapshot.occupation,
+            sex: snapshot.sex,
+            country: snapshot.country,
+            head: snapshot.head,
+            equipment_ids: snapshot.equipment_ids,
+            equipment_levels: snapshot.equipment_levels,
+            region_id: snapshot.region_id,
+            deletion_status,
+        }
+    }
+
+    fn append_to(self, row_index: i32, response: &mut CMessage) {
+        response.base_mut().add_short(row_index as i16);
+        response.base_mut().add_ulong(self.player_id);
+        response.base_mut().add(c_string_prefix(&self.name));
+        response.base_mut().add_char(0);
+        response.base_mut().add_byte(self.level);
+        response.base_mut().add_byte(self.occupation);
+        response.base_mut().add_byte(self.sex);
+        response.base_mut().add_byte(self.country);
+        response.base_mut().add_byte(self.head);
+        for equipment_id in self.equipment_ids {
+            response.base_mut().add_ulong(equipment_id);
+        }
+        for equipment_level in self.equipment_levels {
+            response.base_mut().add_byte(equipment_level);
+        }
+        response.base_mut().add_long(self.region_id);
+        response.base_mut().add_char(self.deletion_status);
+    }
+}
+
+fn c_string_prefix(bytes: &[u8]) -> &[u8] {
+    bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .map_or(bytes, |end| &bytes[..end])
+}
+
+fn remaining_deletion_days(deletion_days: u32, deletion_time: i32) -> i8 {
+    let now = chrono::Local::now().timestamp();
+    let elapsed_seconds = now - i64::from(deletion_time);
+    let elapsed_days = (elapsed_seconds as f64 / 86_400.0) as i32;
+    let remaining = (deletion_days as u8 as i8).wrapping_sub(elapsed_days as u8 as i8);
+    remaining.max(0)
+}
+
+fn send_player_base(
+    game: &CGame,
+    account: Vec<u8>,
+    succeeded: bool,
+    declared_count: Option<u8>,
+    emitted_rows: i32,
+    response: CMessage,
+) -> WorldLogMessageDispatch {
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = response.send(
+        game.current_login_client().map(|client| client.send_queue()),
+        false,
+    );
+    WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::PlayerBase(
+        WorldPlayerBaseOutcome {
+            account,
+            succeeded,
+            declared_count,
+            emitted_rows,
+            response_type: PLAYER_BASE_RESPONSE,
+            wire,
+            delivery,
+        },
+    ))
+}
+
+fn send_player_base_failure(
+    game: &CGame,
+    account: Vec<u8>,
+    declared_count: Option<u8>,
+) -> WorldLogMessageDispatch {
+    let mut response = CMessage::new(PLAYER_BASE_RESPONSE);
+    response.base_mut().add_char(0);
+    response.base_mut().add(&account);
+    response.base_mut().add_char(0);
+    send_player_base(game, account, false, declared_count, 0, response)
+}
+
+async fn player_base(
+    game: &mut CGame,
+    organizing: &COrganizingCtrl,
+    registry: &GoodsBasePropertiesRegistry,
+    coefficients: &PlayerPropertyCoefficients,
+    globe_setup: &GlobeSetupSnapshot,
+    rs_player: &mut TiberiusRsPlayer,
+    mut player_database: Option<&mut WorldTdsClient>,
+    mut request: CMessage,
+) -> WorldLogMessageDispatch {
+    let account = request
+        .base_mut()
+        .get_str_bytes(0x14)
+        .unwrap_or_default();
+    let Some(database_count) = rs_player
+        .get_player_count_in_db_by_cdkey(&account, player_database.as_deref_mut())
+        .await
+    else {
+        return send_player_base_failure(game, account, None);
+    };
+
+    let creation_count = game.creation_player_count_in_cdkey(&account);
+    let declared_count = database_count.wrapping_add(creation_count);
+    let mut response = CMessage::new(PLAYER_BASE_RESPONSE);
+    response.base_mut().add_char(1);
+    response.base_mut().add(&account);
+    response.base_mut().add_char(0);
+    response.base_mut().add_word(u16::from(declared_count));
+    if declared_count == 0 {
+        response.base_mut().add_char(1);
+        response.base_mut().add(&account);
+        response.base_mut().add_char(0);
+        response.base_mut().add_long(0);
+        return send_player_base(game, account, true, Some(0), 0, response);
+    }
+
+    let database_rows = match rs_player
+        .open_player_base_in_db(&account, player_database.as_deref_mut())
+        .await
+    {
+        Ok(rows) => rows,
+        Err(_) => return send_player_base_failure(game, account, Some(declared_count)),
+    };
+
+    let mut row_index = 0_i32;
+    for database_row in database_rows {
+        let player_id = database_row.id;
+        let deletion_status = if game.is_restore_player_exist(player_id) {
+            -1
+        } else {
+            let mut deletion_time = game.deletion_player_time(player_id);
+            if deletion_time == 0 {
+                deletion_time = rs_player
+                    .get_player_deletion_date(player_id, player_database.as_deref_mut())
+                    .await;
+            }
+            if deletion_time == 0 {
+                -1
+            } else {
+                remaining_deletion_days(globe_setup.deletion_days(), deletion_time)
+            }
+        };
+
+        let runtime = match game.clone_map_player(
+            player_id,
+            registry,
+            organizing,
+            coefficients,
+        ) {
+            Ok(Some(player)) => match player.player_base_wire_snapshot() {
+                Ok(snapshot) => Some(snapshot),
+                Err(_) => {
+                    return send_player_base_failure(game, account, Some(declared_count));
+                }
+            },
+            Ok(None) => match game.clone_saving_player(
+                player_id,
+                registry,
+                organizing,
+                coefficients,
+            ) {
+                Ok(Some(player)) => match player.player_base_wire_snapshot() {
+                    Ok(snapshot) => Some(snapshot),
+                    Err(_) => {
+                        return send_player_base_failure(game, account, Some(declared_count));
+                    }
+                },
+                Ok(None) => None,
+                Err(_) => {
+                    return send_player_base_failure(game, account, Some(declared_count));
+                }
+            },
+            Err(_) => return send_player_base_failure(game, account, Some(declared_count)),
+        };
+        let row = runtime.map_or_else(
+            || PlayerBaseWireRow::from_database(database_row, deletion_status),
+            |snapshot| {
+                PlayerBaseWireRow::from_snapshot(player_id, snapshot, deletion_status)
+            },
+        );
+        row.append_to(row_index, &mut response);
+        row_index = row_index.wrapping_add(1);
+    }
+
+    let creation_player_ids = game.creation_player_ids_by_cdkey(&account);
+    for player_id in creation_player_ids {
+        let snapshot = match game.clone_map_player(
+            player_id,
+            registry,
+            organizing,
+            coefficients,
+        ) {
+            Ok(Some(player)) => match player.player_base_wire_snapshot() {
+                Ok(snapshot) if snapshot.id != 0 => snapshot,
+                Ok(_) => continue,
+                Err(_) => {
+                    return send_player_base_failure(game, account, Some(declared_count));
+                }
+            },
+            Ok(None) => continue,
+            Err(_) => return send_player_base_failure(game, account, Some(declared_count)),
+        };
+        let deletion_time = game.deletion_player_time(player_id);
+        let deletion_status = if deletion_time == 0 {
+            -1
+        } else {
+            remaining_deletion_days(globe_setup.deletion_days(), deletion_time)
+        };
+        PlayerBaseWireRow::from_snapshot(player_id, snapshot, deletion_status)
+            .append_to(row_index, &mut response);
+        row_index = row_index.wrapping_add(1);
+    }
+
+    send_player_base(
+        game,
+        account,
+        true,
+        Some(declared_count),
+        row_index,
+        response,
+    )
 }
 
 fn player_return(
