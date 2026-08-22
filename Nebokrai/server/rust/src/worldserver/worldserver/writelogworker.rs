@@ -48,6 +48,9 @@ use crate::worldserver::appworld::message::writelogmessage::WorldWriteLogCommand
 const INSERT_INCREMENT_LOG_SQL: &str = "INSERT INTO increment_log(\
     context_id,type,money,description,player_id,player_acc,player_lel,item_name,item_amount,ip_addr\
 ) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10)";
+const INSERT_CARRIAGE_LOG_SQL: &str = "INSERT INTO carriage_log(\
+    player_id,carriage_idx,carriage_region_id,carriage_coordinate_x,carriage_coordinate_y,event_type,event_time\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7)";
 
 /// Cloneable FIFO-owner для producer-а главного цикла и отдельного DB worker-а.
 ///
@@ -262,6 +265,26 @@ pub(crate) async fn execute_world_write_log_command(
             query.execute(connection).await?;
             Ok(())
         }
+        WorldWriteLogCommand::CarriageLog(record) => {
+            let mut query = Query::new(INSERT_CARRIAGE_LOG_SQL);
+            query.bind(record.player_id);
+            query.bind(record.carriage_id);
+            query.bind(record.region_id);
+            query.bind(i32::from(record.coordinate_x));
+            query.bind(i32::from(record.coordinate_y));
+            query.bind(record.event_type);
+            query.bind(format!(
+                "{}-{}-{} {}:{}:{}",
+                record.event_time.year,
+                record.event_time.day_of_week,
+                record.event_time.day,
+                record.event_time.hour,
+                record.event_time.minute,
+                record.event_time.second,
+            ));
+            query.execute(connection).await?;
+            Ok(())
+        }
     }
 }
 
@@ -272,5 +295,6 @@ fn decode_legacy_text(bytes: &[u8]) -> String {
 fn world_write_log_command_name(command: &WorldWriteLogCommand) -> &'static str {
     match command {
         WorldWriteLogCommand::IncrementLog(_) => "IncrementLog",
+        WorldWriteLogCommand::CarriageLog(_) => "CarriageLog",
     }
 }

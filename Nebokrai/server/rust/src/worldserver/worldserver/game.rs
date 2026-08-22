@@ -1205,7 +1205,7 @@ use crate::worldserver::appworld::message::teammessage::{
     WorldTeamMessageOutcome, on_team_message,
 };
 use crate::worldserver::appworld::message::writelogmessage::{
-    WorldIncrementLogMessageOutcome, WorldWriteLogCommand, WorldWriteLogMessageDispatch,
+    WorldWriteLogCommand, WorldWriteLogMessageDispatch, WorldWriteLogMessageOutcome,
     on_write_log_message,
 };
 use crate::worldserver::appworld::incrementlog::incrementlog::{
@@ -2268,7 +2268,7 @@ pub(crate) enum ProcessedWorldEvent {
     WriteLogMessage {
         source: WorldMessageSource,
         legacy_run_result: i32,
-        outcome: WorldIncrementLogMessageOutcome,
+        outcome: WorldWriteLogMessageOutcome,
     },
     PlayerMessage {
         source: WorldMessageSource,

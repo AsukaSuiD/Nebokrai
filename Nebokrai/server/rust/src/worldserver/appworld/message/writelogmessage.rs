@@ -1,7 +1,8 @@
 //! WorldServer dispatcher-owner `OnWriteLogMessage`.
 //!
 //! Весь dispatcher RVA `0x000A8AB0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме
-//! increment-shop producer `0x6020D` со статусом `IMPLEMENTED`. Точная пара:
+//! increment-shop `0x6020D` и carriage `0x6020E` producers со статусом
+//! `IMPLEMENTED`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\writelogmessage.cpp:18`.
 //!
@@ -18,6 +19,12 @@
 //! проверяет signed amount через `cmp 0x3E8/jle`, вызывает `GetLocalTime`,
 //! затем `PushWriteLogData` `0x004AA023` и только после него `CIncrementLog::Add`
 //! `0x004AA048`. Null player поэтому сохраняет пустой account и level `0`.
+//! Ветка carriage `0x6020E` по exact `0x004AA07A..0x004AA127` читает три
+//! signed long, два signed short и ещё один signed long, затем снимает один
+//! `SYSTEMTIME` и ставит INSERT в общий FIFO. Машинный `_sprintf` неожиданно
+//! подставляет `wDayOfWeek`, а не `wMonth`: event-time имеет вид
+//! `year-weekday-day hour:minute:second`. Это DB-наблюдаемый quirk сохранён;
+//! Linux-донор исправлял его на обычную календарную дату без доказательства.
 //!
 //! Rust хранит параметризуемую DB-команду вместо SQL-строки: будущий Tiberius
 //! worker не должен повторять `_sprintf`, ручное quoting и stack buffers.
@@ -36,6 +43,7 @@ use crate::worldserver::worldserver::game::CGame;
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
 const INCREMENT_LOG_MESSAGE: i32 = 0x0006_020D;
+const CARRIAGE_LOG_MESSAGE: i32 = 0x0006_020E;
 
 /// Параметры одной исходной INSERT-команды без самодельного SQL quoting.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -52,10 +60,23 @@ pub(crate) struct WorldIncrementLogWrite {
     pub(crate) ip_address: Vec<u8>,
 }
 
+/// Поля `carriage_log`, включая SYSTEMTIME, снятый до enqueue.
+#[derive(Clone, Debug)]
+pub(crate) struct WorldCarriageLogWrite {
+    pub(crate) player_id: i32,
+    pub(crate) carriage_id: i32,
+    pub(crate) region_id: i32,
+    pub(crate) coordinate_x: i16,
+    pub(crate) coordinate_y: i16,
+    pub(crate) event_type: i32,
+    pub(crate) event_time: TagTime,
+}
+
 /// Typed очередь сохраняет старый FIFO, но оставляет SQL transport Tiberius-у.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) enum WorldWriteLogCommand {
     IncrementLog(WorldIncrementLogWrite),
+    CarriageLog(WorldCarriageLogWrite),
 }
 
 #[derive(Debug)]
@@ -78,18 +99,36 @@ pub(crate) enum WorldIncrementLogMessageOutcome {
     },
 }
 
+#[derive(Debug)]
+pub(crate) struct WorldCarriageLogMessageOutcome {
+    pub(crate) record: WorldCarriageLogWrite,
+    pub(crate) payload_complete: [bool; 6],
+    pub(crate) queue_length_after: usize,
+}
+
+#[derive(Debug)]
+pub(crate) enum WorldWriteLogMessageOutcome {
+    IncrementLog(WorldIncrementLogMessageOutcome),
+    CarriageLog(WorldCarriageLogMessageOutcome),
+}
+
 pub(crate) enum WorldWriteLogMessageDispatch {
-    Handled(WorldIncrementLogMessageOutcome),
+    Handled(WorldWriteLogMessageOutcome),
     Pending(CMessage),
 }
 
-/// Исполняет достигнутую increment-shop ветку `OnWriteLogMessage`.
+/// Исполняет достигнутые increment-shop и carriage ветки `OnWriteLogMessage`.
 pub(crate) fn on_write_log_message(
     game: &mut CGame,
     increment_log: &mut CIncrementLog,
     add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     mut message: CMessage,
 ) -> WorldWriteLogMessageDispatch {
+    if message.message_type() == CARRIAGE_LOG_MESSAGE {
+        return WorldWriteLogMessageDispatch::Handled(
+            WorldWriteLogMessageOutcome::CarriageLog(on_carriage_log_message(game, message)),
+        );
+    }
     if message.message_type() != INCREMENT_LOG_MESSAGE {
         return WorldWriteLogMessageDispatch::Pending(message);
     }
@@ -145,15 +184,17 @@ pub(crate) fn on_write_log_message(
         truncated_file_text.truncate(0x7f);
         put_string_to_file("Increment_error_log", &truncated_file_text);
         return WorldWriteLogMessageDispatch::Handled(
-            WorldIncrementLogMessageOutcome::RejectedItemAmount {
-                player_id,
-                player_account,
-                item_name,
-                item_amount,
-                payload_complete,
-                operator_log,
-                file_text: truncated_file_text,
-            },
+            WorldWriteLogMessageOutcome::IncrementLog(
+                WorldIncrementLogMessageOutcome::RejectedItemAmount {
+                    player_id,
+                    player_account,
+                    item_name,
+                    item_amount,
+                    payload_complete,
+                    operator_log,
+                    file_text: truncated_file_text,
+                },
+            ),
         );
     }
 
@@ -180,13 +221,52 @@ pub(crate) fn on_write_log_message(
         money,
         &description,
     );
-    WorldWriteLogMessageDispatch::Handled(WorldIncrementLogMessageOutcome::Queued {
+    WorldWriteLogMessageDispatch::Handled(WorldWriteLogMessageOutcome::IncrementLog(
+        WorldIncrementLogMessageOutcome::Queued {
+            record,
+            time,
+            payload_complete,
+            queue_length_after,
+            live_published,
+        },
+    ))
+}
+
+fn on_carriage_log_message(
+    game: &CGame,
+    mut message: CMessage,
+) -> WorldCarriageLogMessageOutcome {
+    let player_id = message.base_mut().get_long();
+    let carriage_id = message.base_mut().get_long();
+    let region_id = message.base_mut().get_long();
+    let coordinate_x = message.base_mut().get_short();
+    let coordinate_y = message.base_mut().get_short();
+    let event_type = message.base_mut().get_long();
+    let event_time = TagTime::local_now();
+    let payload_complete = [
+        player_id.is_some(),
+        carriage_id.is_some(),
+        region_id.is_some(),
+        coordinate_x.is_some(),
+        coordinate_y.is_some(),
+        event_type.is_some(),
+    ];
+    let record = WorldCarriageLogWrite {
+        player_id: player_id.unwrap_or(0),
+        carriage_id: carriage_id.unwrap_or(0),
+        region_id: region_id.unwrap_or(0),
+        coordinate_x: coordinate_x.unwrap_or(0),
+        coordinate_y: coordinate_y.unwrap_or(0),
+        event_type: event_type.unwrap_or(0),
+        event_time,
+    };
+    let queue_length_after =
+        game.push_write_log_command(WorldWriteLogCommand::CarriageLog(record.clone()));
+    WorldCarriageLogMessageOutcome {
         record,
-        time,
         payload_complete,
         queue_length_after,
-        live_published,
-    })
+    }
 }
 
 fn get_limited_string(message: &mut CMessage, maximum: usize) -> (Vec<u8>, bool) {
