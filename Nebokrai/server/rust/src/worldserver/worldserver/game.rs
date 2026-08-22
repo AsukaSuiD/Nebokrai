@@ -465,6 +465,10 @@
 //! `FourNationWarOwnerRequired`; при success exact payload `0x25` строится из
 //! того же live owner-а, а legacy failure-log остаётся после active-war gate
 //! либо запрета отправки.
+//! `TimeToReturn` также получает concrete main-loop границу: тот же live
+//! owner отменяет map-ordered event IDs и загружает `setup/TimeToReturn.ini`.
+//! Как в EXE, его bool влияет только на success/failure log, а общий legacy
+//! return-slot `CGame::ReLoad` остаётся нулём.
 //! Результат `SendAll(0x7FF1D)`
 //! старый код игнорировал; Rust хранит его как `Result` только в typed report,
 //! не назначая искусственный legacy error code.
@@ -4030,6 +4034,8 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) country: &'a mut CCountryHandler,
     pub(crate) country_parameters: &'a mut CCountryParam,
     pub(crate) player_list: &'a mut CPlayerList,
+    pub(crate) time_to_return: &'a mut TimeToReturn,
+    pub(crate) time_to_return_callbacks: TimeToReturnCallbacks<TimerCallback>,
     pub(crate) country_war: &'a mut CountryWarSys,
     pub(crate) country_war_callbacks: CountryWarCallbacks<TimerCallback>,
     pub(crate) four_nation_war: &'a mut CFourNationWarSys,
@@ -4327,7 +4333,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     PlayerGmList,
     RegionLevelSetup,
     AttackCity,
-    TimeToReturn,
     GodsBattle,
 }
 
@@ -6026,6 +6031,7 @@ pub(crate) enum WorldReloadBlock {
     CountryWar(CountryWarReloadBlock),
     FourNationWarOwnerRequired,
     FourNationWarSerialization(FourNationWarSerializationBlock),
+    TimeToReturnOwnerRequired,
 }
 
 pub(crate) type WorldReloadResult = Result<i32, WorldReloadBlock>;
@@ -7795,6 +7801,38 @@ impl CGame {
         Ok(legacy_result)
     }
 
+    /// Выполняет concrete `TimeToReturn::reload` для main-loop профиля.
+    ///
+    /// Его bool в старом dispatcher-е не записывался в общий return-slot:
+    /// результат определяет только exact success/failure log.
+    fn reload_time_to_return<Context, TimerCallback>(
+        &mut self,
+        context: &mut Context,
+        time_to_return: &mut TimeToReturn,
+        timer: &mut CTimer<TimerCallback>,
+        callbacks: TimeToReturnCallbacks<TimerCallback>,
+        now: TagTime,
+        reload_server_resources: bool,
+    ) -> WorldReloadResult
+    where
+        Context: WorldReloadContext + ?Sized,
+        TimerCallback: Copy,
+    {
+        if reload_server_resources {
+            context.load_reload_server_resources(self);
+        }
+        let source = context.read_resource(b"setup/TimeToReturn.ini");
+        let loaded = time_to_return
+            .reload(source.as_deref(), now, timer, callbacks)
+            .is_ok();
+        context.add_log_text(if loaded {
+            b"Load TimeToReturn...OK!"
+        } else {
+            b"Load TimeToReturn...FAILED!"
+        });
+        Ok(0)
+    }
+
     /// Выполняет полный case-insensitive dispatcher `CGame::ReLoad`.
     pub(crate) fn reload<Context: WorldReloadContext + ?Sized>(
         &mut self,
@@ -8429,12 +8467,7 @@ impl CGame {
                 }
             }
             WorldReloadProfile::TimeToReturn => {
-                let _ = Self::reload_boolean_with_log(
-                    context,
-                    WorldReloadBooleanOwner::TimeToReturn,
-                    b"Load TimeToReturn...OK!",
-                    b"Load TimeToReturn...FAILED!",
-                );
+                return Err(WorldReloadBlock::TimeToReturnOwnerRequired);
             }
             WorldReloadProfile::PreciousBox => {
                 const PATH: &[u8] = b"data/preciousboxconf.xml";
@@ -13284,6 +13317,8 @@ impl CGame {
             owners.country_war_callbacks,
             owners.four_nation_war,
             owners.four_nation_war_callbacks,
+            owners.time_to_return,
+            owners.time_to_return_callbacks,
             &mut *callbacks.get_timer_local_time,
         );
         let reload = match reload {
@@ -20552,6 +20587,8 @@ pub(crate) fn reload_profiles<Context, GetLocalTime, GetTimerLocalTime, TimerCal
     country_war_callbacks: CountryWarCallbacks<TimerCallback>,
     four_nation_war: &mut CFourNationWarSys,
     four_nation_war_callbacks: FourNationWarCallbacks<TimerCallback>,
+    time_to_return: &mut TimeToReturn,
+    time_to_return_callbacks: TimeToReturnCallbacks<TimerCallback>,
     mut get_timer_local_time: GetTimerLocalTime,
 ) -> WorldReloadProfilesReport
 where
@@ -20593,6 +20630,15 @@ where
                     four_nation_war_callbacks,
                     get_timer_local_time(),
                     action.first_option,
+                    action.second_option,
+                )
+            } else if action.reload_profile == b"TimeToReturn" {
+                game.reload_time_to_return(
+                    context,
+                    time_to_return,
+                    timer,
+                    time_to_return_callbacks,
+                    get_timer_local_time(),
                     action.second_option,
                 )
             } else {
