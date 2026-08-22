@@ -87,7 +87,10 @@ use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::worldserver::appworld::goods::cgoods::{
     CGoods, GAP_GOODS_PACKAGE_EXTENTION,
 };
-use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
+use crate::public::guid::CGuid;
+use crate::worldserver::appworld::goods::cgoodsfactory::{
+    GoodsBasePropertiesRegistry, create_goods,
+};
 use crate::worldserver::appworld::player::{CPlayer, PlayerCodecError};
 
 const LEGACY_SQL_BUFFER_SIZE: usize = 256;
@@ -101,6 +104,47 @@ const LARGESS_DEPOT_EXTENSION_END: u32 = 0xA1;
 pub(crate) enum LargessDepotAddOutcome {
     Added { position: u32 },
     Rejected { position: u32 },
+}
+
+/// Typed запись исходного `goods_largess_log`, ещё до transport/FIFO owner-а.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct LargessWriteLog {
+    pub(crate) account: Vec<u8>,
+    pub(crate) player_id: i32,
+    pub(crate) send_time: Vec<u8>,
+    pub(crate) goods_id: Vec<u8>,
+    pub(crate) goods_index: u32,
+    pub(crate) goods_name: Vec<u8>,
+    pub(crate) goods_level: i32,
+    pub(crate) send_num: i32,
+    pub(crate) sent_num: i32,
+    pub(crate) current_sent_num: i32,
+    pub(crate) result: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LoadLargessCompletion {
+    Disabled,
+    EmptyAccount,
+    MissingEntry,
+    AlreadyComplete,
+    Processed,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct LoadLargessReport {
+    pub(crate) completion: LoadLargessCompletion,
+    pub(crate) charged: bool,
+    pub(crate) current_sent_num: i32,
+    pub(crate) obtained_num: Option<i32>,
+    pub(crate) write_log: Option<LargessWriteLog>,
+}
+
+#[derive(Debug)]
+pub(crate) enum LoadLargessBlock {
+    Player(PlayerCodecError),
+    Guid(getrandom::Error),
+    ZeroMaximumStack { goods_index: u32 },
 }
 
 /// Делегирует `CLargess::AddGoldCoin` готовому bank-wallet owner-у.
@@ -333,6 +377,215 @@ impl TiberiusLargess {
         Client::connect(config, tcp.compat_write())
             .await
             .map_err(LargessDatabaseError::Tds)
+    }
+
+    /// Выполняет одну синхронную выдачу `CLargess::LoadLargess` под map-lock.
+    pub(crate) fn load_largess<Random, Upgrade>(
+        &self,
+        player: &mut CPlayer,
+        registry: &GoodsBasePropertiesRegistry,
+        gold_coin_index: u32,
+        gold_coin_limit: u32,
+        use_log_system: bool,
+        random: &mut Random,
+        upgrade_equipment: &mut Upgrade,
+    ) -> Result<LoadLargessReport, LoadLargessBlock>
+    where
+        Random: FnMut(i32) -> i32 + ?Sized,
+        Upgrade: FnMut(&mut CGoods, i32) + ?Sized,
+    {
+        let unchanged = |completion| LoadLargessReport {
+            completion,
+            charged: false,
+            current_sent_num: 0,
+            obtained_num: None,
+            write_log: None,
+        };
+        if self.load_largess_time == 0 {
+            return Ok(unchanged(LoadLargessCompletion::Disabled));
+        }
+        let account = c_string_prefix(player.get_account()).to_vec();
+        if account.is_empty() {
+            return Ok(unchanged(LoadLargessCompletion::EmptyAccount));
+        }
+        let player_id = player.get_id();
+        let mut entries = self.entries.lock();
+        let Some(entry) = entries.get_mut(&player_id) else {
+            return Ok(unchanged(LoadLargessCompletion::MissingEntry));
+        };
+
+        player.mark_largess_charged();
+        let remaining = entry.send_num.wrapping_sub(entry.obtained_num) as u32;
+        if remaining == 0 {
+            return Ok(LoadLargessReport {
+                completion: LoadLargessCompletion::AlreadyComplete,
+                charged: true,
+                current_sent_num: 0,
+                obtained_num: Some(entry.obtained_num),
+                write_log: None,
+            });
+        }
+
+        let mut send_time = Vec::new();
+        let mut goods_id = Vec::new();
+        let mut goods_name = Vec::new();
+        let mut sent_num = 0_i32;
+        let mut current_sent_num = 0_i32;
+        let mut result = Vec::new();
+
+        if entry.goods_index == gold_coin_index {
+            let Some(mut goods) = create_goods(registry, entry.goods_index, random) else {
+                send_time = format_local_time().into_bytes();
+                entry.sent_time.clone_from(&send_time);
+                entry.failed_reason.clear();
+                entry.failed_reason.extend_from_slice(ERROR_GOODS_ID);
+                result.clone_from(&entry.failed_reason);
+                return Ok(finish_largess_load(
+                    entry,
+                    account,
+                    player_id,
+                    send_time,
+                    goods_id,
+                    goods_name,
+                    sent_num,
+                    current_sent_num,
+                    result,
+                    use_log_system,
+                ));
+            };
+            goods.set_amount(remaining);
+            goods_name = goods.get_goods_name().to_vec();
+            goods_id = goods.get_ex_id().to_string().into_bytes();
+            if add_gold_coin(player, goods, gold_coin_limit)
+                .map_err(LoadLargessBlock::Player)?
+            {
+                // Exact gold-ветка пишет literal `1`, а не количество монет.
+                current_sent_num = 1;
+                entry.obtained_num = entry.send_num;
+                entry.failed_reason.clear();
+                entry.failed_reason.extend_from_slice(b"money OK");
+                send_time = format_local_time().into_bytes();
+                result.clone_from(&entry.failed_reason);
+                sent_num = entry.obtained_num;
+            } else {
+                send_time = format_local_time().into_bytes();
+                entry.sent_time.clone_from(&send_time);
+                entry.failed_reason.clear();
+                entry
+                    .failed_reason
+                    .extend_from_slice(b"Money is excess for bank");
+                result.clone_from(&entry.failed_reason);
+                sent_num = entry.obtained_num;
+            }
+        } else {
+            let mut prepared_num = 0_u32;
+            while prepared_num < remaining {
+                let Some(mut goods) = create_goods(registry, entry.goods_index, random) else {
+                    goods_id.clear();
+                    goods_name.clear();
+                    send_time = format_local_time().into_bytes();
+                    entry.sent_time.clone_from(&send_time);
+                    entry.failed_reason.clear();
+                    entry.failed_reason.extend_from_slice(ERROR_GOODS_ID);
+                    result.clone_from(&entry.failed_reason);
+                    sent_num = 0;
+                    break;
+                };
+                let maximum_stack = goods
+                    .get_max_stack_number(registry)
+                    .map_err(|source| LoadLargessBlock::Player(source.into()))?;
+                if maximum_stack == 0 {
+                    return Err(LoadLargessBlock::ZeroMaximumStack {
+                        goods_index: entry.goods_index,
+                    });
+                }
+                let amount = maximum_stack.min(remaining.wrapping_sub(prepared_num));
+                prepared_num = prepared_num.wrapping_add(amount);
+                if amount > 1 {
+                    goods.set_amount(amount);
+                }
+                let guid = CGuid::create().map_err(LoadLargessBlock::Guid)?;
+                goods.set_ex_id(&guid);
+                if entry.goods_level > 0 {
+                    upgrade_equipment(&mut goods, entry.goods_level);
+                }
+                goods_name = goods.get_goods_name().to_vec();
+                goods_id = goods.get_ex_id().to_string().into_bytes();
+                match add_one_largess(player, goods, registry)
+                    .map_err(LoadLargessBlock::Player)?
+                {
+                    LargessDepotAddOutcome::Added { .. } => {
+                        current_sent_num = current_sent_num.wrapping_add(amount as i32);
+                        entry.obtained_num = entry.obtained_num.wrapping_add(amount as i32);
+                        send_time = format_local_time().into_bytes();
+                        entry.sent_time.clone_from(&send_time);
+                        entry.failed_reason.clear();
+                        entry.failed_reason.extend_from_slice(b"goods OK");
+                        result.clone_from(&entry.failed_reason);
+                        sent_num = entry.obtained_num;
+                    }
+                    LargessDepotAddOutcome::Rejected { .. } => {
+                        send_time = format_local_time().into_bytes();
+                        entry.sent_time.clone_from(&send_time);
+                        entry.failed_reason.clear();
+                        entry
+                            .failed_reason
+                            .extend_from_slice(b"Depot space is not enough");
+                        result.clone_from(&entry.failed_reason);
+                        sent_num = entry.obtained_num;
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(finish_largess_load(
+            entry,
+            account,
+            player_id,
+            send_time,
+            goods_id,
+            goods_name,
+            sent_num,
+            current_sent_num,
+            result,
+            use_log_system,
+        ))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_largess_load(
+    entry: &LargessSnapshot,
+    account: Vec<u8>,
+    player_id: i32,
+    send_time: Vec<u8>,
+    goods_id: Vec<u8>,
+    goods_name: Vec<u8>,
+    sent_num: i32,
+    current_sent_num: i32,
+    result: Vec<u8>,
+    use_log_system: bool,
+) -> LoadLargessReport {
+    let write_log = (use_log_system && current_sent_num != 0).then(|| LargessWriteLog {
+        account,
+        player_id,
+        send_time,
+        goods_id,
+        goods_index: entry.goods_index,
+        goods_name,
+        goods_level: entry.goods_level,
+        send_num: entry.send_num,
+        sent_num,
+        current_sent_num,
+        result,
+    });
+    LoadLargessReport {
+        completion: LoadLargessCompletion::Processed,
+        charged: true,
+        current_sent_num,
+        obtained_num: Some(entry.obtained_num),
+        write_log,
     }
 }
 
@@ -589,7 +842,7 @@ fn format_local_time() -> String {
 
 // ============================================================================
 // FUNCTION: CLargess::LoadLargess
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED_PARTIAL/VERIFIED_DISASSEMBLY
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:417
@@ -597,6 +850,8 @@ fn format_local_time() -> String {
 // ADDRESS: 004e6ec0
 // PROTOTYPE: void __cdecl LoadLargess(CPlayer * param_1)
 //
+// IMPLEMENTED_OWNER: `TiberiusLargess::load_largess` выше; выдача и map-
+// мутации полны, typed write-log ещё подключается к World FIFO отдельным шагом.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
