@@ -1,8 +1,8 @@
 //! Конфигурация LingBao исторического Miracle.
 //!
-//! Статус World `CLingBaoSetup::AddByteLingBao` RVA `0x0007C7C0`:
-//! `IMPLEMENTED`; loader, queries и Game decoder ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Статус World `CLingBaoSetup::LoadLingBaoSetup` RVA `0x0007DB70` и
+//! `AddByteLingBao` RVA `0x0007C7C0`: `IMPLEMENTED`; queries и Game decoder
+//! ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -16,8 +16,10 @@
 //! сохраняет byte-order ключей и insertion-order эквивалентных ключей. Rust
 //! пишет поля little-endian вместо raw ABI-copy, сохраняя размеры 32/20/12
 //! bytes без padding. Внутренний NUL и невозможные signed counts блокируют весь
-//! append до изменения destination. Точная token-parser семантика loader-а
-//! остаётся отдельным проходом.
+//! append до изменения destination. Loader очищает multimap до resource-open,
+//! игнорирует textual labels positional token-stream-а и при missing resource
+//! оставляет state пустым; Rust останавливает повреждённый поток на последней
+//! полной записи вместо исходного чтения неинициализированной памяти.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -71,6 +73,80 @@ impl CLingBaoSetup {
 
     pub(crate) fn entries(&self) -> &BTreeMap<Vec<u8>, Vec<LingBaoNodeInfo>> {
         &self.entries
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Exact owner lifecycle without Win32 file/MessageBox plumbing.
+    pub(crate) fn load_from_bytes(&mut self, source: Option<&[u8]>) -> LingBaoLoadReport {
+        self.clear();
+        let Some(source) = source else {
+            return LingBaoLoadReport {
+                missing_resource: true,
+            };
+        };
+
+        let mut parser = LingBaoTokenParser::new(source);
+        let Some(total) = parser.labeled_u32() else {
+            return LingBaoLoadReport::default();
+        };
+        for _ in 0..total {
+            let (Some(_label), Some(original_name), Some(_transform_label), Some(transforms)) = (
+                parser.token(),
+                parser.token(),
+                parser.token(),
+                parser.u32(),
+            ) else {
+                break;
+            };
+            for ticket in 1..=transforms {
+                let Some(first_count) = parser.two_labels_and_u32() else {
+                    return LingBaoLoadReport::default();
+                };
+                let mut first = Vec::new();
+                for _ in 0..first_count {
+                    let Some(node) = parser.first_node() else {
+                        return LingBaoLoadReport::default();
+                    };
+                    first.push(node);
+                }
+
+                let Some(second_count) = parser.labeled_u32() else {
+                    return LingBaoLoadReport::default();
+                };
+                let mut second = Vec::new();
+                for _ in 0..second_count {
+                    let Some(node) = parser.second_node() else {
+                        return LingBaoLoadReport::default();
+                    };
+                    second.push(node);
+                }
+
+                let Some(third_count) = parser.labeled_u32() else {
+                    return LingBaoLoadReport::default();
+                };
+                let mut third = Vec::new();
+                for _ in 0..third_count {
+                    let Some(node) = parser.third_node() else {
+                        return LingBaoLoadReport::default();
+                    };
+                    third.push(node);
+                }
+
+                self.insert(
+                    original_name.to_vec(),
+                    LingBaoNodeInfo {
+                        ticket,
+                        first,
+                        second,
+                        third,
+                    },
+                );
+            }
+        }
+        LingBaoLoadReport::default()
     }
 
     pub(crate) fn add_byte_ling_bao(
@@ -155,6 +231,125 @@ impl CLingBaoSetup {
         destination.extend_from_slice(&payload);
         Ok(())
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct LingBaoLoadReport {
+    pub(crate) missing_resource: bool,
+}
+
+struct LingBaoTokenParser<'a> {
+    remaining: &'a [u8],
+}
+
+impl<'a> LingBaoTokenParser<'a> {
+    fn new(source: &'a [u8]) -> Self {
+        Self { remaining: source }
+    }
+
+    fn token(&mut self) -> Option<&'a [u8]> {
+        let start = self
+            .remaining
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())?;
+        self.remaining = &self.remaining[start..];
+        let end = self
+            .remaining
+            .iter()
+            .position(u8::is_ascii_whitespace)
+            .unwrap_or(self.remaining.len());
+        let (token, remaining) = self.remaining.split_at(end);
+        self.remaining = remaining;
+        Some(token)
+    }
+
+    fn u32(&mut self) -> Option<u32> {
+        legacy_u32(self.token()?)
+    }
+
+    fn labeled_u32(&mut self) -> Option<u32> {
+        self.token()?;
+        self.u32()
+    }
+
+    fn two_labels_and_u32(&mut self) -> Option<u32> {
+        self.token()?;
+        self.token()?;
+        self.u32()
+    }
+
+    fn first_node(&mut self) -> Option<LingBaoFirstNode> {
+        self.token()?;
+        self.token()?;
+        let node_type = self.u32()?;
+        let use_ticket = self.labeled_u32()?;
+        self.token()?;
+        let add_value_1 = self.u32()?;
+        let add_value_2 = self.u32()?;
+        let add_value_3 = self.u32()?;
+        self.token()?;
+        let probability_1 = self.u32()?;
+        let probability_2 = self.u32()?;
+        let probability_3 = self.u32()?;
+        Some(LingBaoFirstNode {
+            node_type,
+            use_ticket,
+            probability_1,
+            add_value_1,
+            probability_2,
+            add_value_2,
+            probability_3,
+            add_value_3,
+        })
+    }
+
+    fn second_node(&mut self) -> Option<LingBaoSecondNode> {
+        self.token()?;
+        self.token()?;
+        let node_type = self.u32()?;
+        let probability = self.labeled_u32()?;
+        let use_ticket = self.labeled_u32()?;
+        let add_value_min = self.labeled_u32()?;
+        let add_value_max = self.labeled_u32()?;
+        Some(LingBaoSecondNode {
+            node_type,
+            probability,
+            use_ticket,
+            add_value_min,
+            add_value_max,
+        })
+    }
+
+    fn third_node(&mut self) -> Option<LingBaoThirdNode> {
+        self.token()?;
+        self.token()?;
+        let node_type = self.u32()?;
+        let use_ticket = self.labeled_u32()?;
+        let use_ticket_max = self.labeled_u32()?;
+        Some(LingBaoThirdNode {
+            node_type,
+            use_ticket,
+            use_ticket_max,
+        })
+    }
+}
+
+fn legacy_u32(token: &[u8]) -> Option<u32> {
+    let mut bytes = token.iter().copied().peekable();
+    let negative = matches!(bytes.peek(), Some(b'-'));
+    if matches!(bytes.peek(), Some(b'-' | b'+')) {
+        bytes.next();
+    }
+    let mut parsed = false;
+    let mut result = 0_u32;
+    for byte in bytes {
+        let Some(digit) = byte.checked_sub(b'0').filter(|digit| *digit <= 9) else {
+            break;
+        };
+        parsed = true;
+        result = result.saturating_mul(10).saturating_add(u32::from(digit));
+    }
+    parsed.then_some(if negative { 0_u32.wrapping_sub(result) } else { result })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -314,7 +509,7 @@ fn write_ling_bao_fields(destination: &mut Vec<u8>, values: &[u32]) {
 
 // ============================================================================
 // FUNCTION: CLingBaoSetup::LoadLingBaoSetup
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\lingbao.cpp:9

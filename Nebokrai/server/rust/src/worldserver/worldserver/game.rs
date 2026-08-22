@@ -159,10 +159,10 @@
 //! `CCiQingSetup` теперь также принадлежит `CGame`. Reload `ciqing` по exact
 //! `0x00417D96..0x00417E63` читает `/data/ciqing.ini`, пишет прежний success/
 //! failure log, сохраняет bool в общий legacy return-slot и затем безусловно
-//! перезагружает LingBao; только успешный CiQing при включённой рассылке
-//! кодирует owned CiQing перед оставшимся LingBao-owner-ом в subtype `0x35`.
-//! Initial-config читает тот же owned экземпляр,
-//! поэтому внешний CiQing snapshot и два прежних reload callback-а удалены.
+//! перезагружает `CLingBaoSetup` из `/data/lingbao.ini`; только успешный CiQing
+//! при включённой рассылке кодирует owned CiQing перед его wire в subtype `0x35`.
+//! Initial-config читает те же owned экземпляры, поэтому внешние CiQing/LingBao
+//! snapshot и reload callback-ы удалены.
 //! `Vec` и resource-context заменяют только STL/file backend; original-name
 //! lookup остаётся явной границей уже загруженного World `CGoodsFactory`.
 //!
@@ -1256,6 +1256,7 @@ use crate::public::timer::{
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::godsbattleconf::CGodsBattleConf;
 use crate::setup::leitingsetup::{CThingSetup, ThingSetupCodecError};
+use crate::setup::lingbao::{CLingBaoSetup, LingBaoSerializationBlock};
 use crate::setup::newskillmonsterlist::{
     NewSkillMonsterConf, NewSkillMonsterSerializeError,
 };
@@ -4293,7 +4294,6 @@ pub(crate) enum WorldReloadVoidOwner {
     FactionWarParameters,
     Quest,
     CountryParameters,
-    LingBao,
     GodsBattleNpcFaction,
 }
 
@@ -4311,7 +4311,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     VillageWar,
     FourNationWar,
     Quest,
-    LingBao,
     GodsBattle,
 }
 
@@ -4366,6 +4365,8 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn change_body_conf(&mut self) -> &mut CChangeBodyConf;
     /// Raw XML state и отдельный serializer state PreciousBox.
     fn precious_box_conf(&mut self) -> &mut PreciousBoxConf;
+    /// Token-stream LingBao, идущий следом за CiQing в combined payload `0x35`.
+    fn ling_bao_setup(&mut self) -> &mut CLingBaoSetup;
     /// Возвращает исходный 32-битный result; bool owners обязаны дать `0/1`.
     fn call_boolean_owner(&mut self, owner: WorldReloadBooleanOwner) -> u32;
     fn call_void_owner(&mut self, owner: WorldReloadVoidOwner);
@@ -5958,6 +5959,7 @@ pub(crate) enum WorldReloadBlock {
     DaKongSerialization(DaKongSerializeError),
     ChangeBodySerialization(ChangeBodySerializeError),
     PreciousBoxSerialization(PreciousBoxSerializeError),
+    LingBaoSerialization(LingBaoSerializationBlock),
     BattleFairyCombineSerialization(BattleFairyComposeWireError),
     SynthesisSerialization(SynthesisSerializeError),
     EquipmentComposeSerialization(EquipmentComposeSerializeError),
@@ -8670,15 +8672,26 @@ impl CGame {
                     b"Add ciqing.ini...failed!"
                 });
                 legacy_result = i32::from(succeeded);
-                context.call_void_owner(WorldReloadVoidOwner::LingBao);
+                const LING_BAO_PATH: &[u8] = b"/data/lingbao.ini";
+                let ling_bao_source = context.read_resource(LING_BAO_PATH);
+                let ling_bao_report = context
+                    .ling_bao_setup()
+                    .load_from_bytes(ling_bao_source.as_deref());
+                if ling_bao_report.missing_resource {
+                    let mut message = b"file '".to_vec();
+                    message.extend_from_slice(LING_BAO_PATH);
+                    message.extend_from_slice(b"' can't found!");
+                    context.notify_reload_operator(b"error", &message);
+                }
                 if succeeded && send_to_game_servers {
                     let mut payload = Vec::new();
                     self.ci_qing_setup
                         .add_byte_to_array(&mut payload)
                         .map_err(WorldReloadBlock::CiQingSerialization)?;
-                    payload.extend_from_slice(
-                        &context.serialize_owner(WorldReloadSerializationOwner::LingBao),
-                    );
+                    context
+                        .ling_bao_setup()
+                        .add_byte_ling_bao(&mut payload)
+                        .map_err(WorldReloadBlock::LingBaoSerialization)?;
                     self.send_reload_payload(0x35, &payload);
                 }
             }
