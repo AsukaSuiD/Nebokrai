@@ -3,9 +3,8 @@
 //!
 //! Статусы `SaveFacitonXYD` RVA `0x000ED0F0`, caller-connection overload
 //! `SaveNpcFaction` RVA `0x000ED4B0` и `GetTopTenSZLPlayer` RVA `0x000EE3E0` —
-//! `IMPLEMENTED`; constructor, destructor, оставшиеся load-владельцы и
-//! no-argument `SaveNpcFaction` ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `IMPLEMENTED`; constructor, destructor и оставшиеся load-владельцы ниже
+//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
@@ -80,6 +79,14 @@
 //! игнорируется. Поэтому пустая таблица успешна, а ошибка поздней строки не
 //! отменяет ранее применённые фракции. Linux-донор с буферизацией/merge и
 //! лимитом строк не используется.
+//!
+//! No-argument `SaveNpcFaction` открывает отдельное соединение, но в остальном
+//! повторяет caller-connection overload: сначала пытается `DELETE`, игнорируя
+//! его результат, затем проверяет доступность таблицы и добавляет NPC-строки в
+//! vector-order без транзакции. Rust выделяет только безопасную границу connect;
+//! отклонённые null/COM continuation и их внутренние crashes не являются
+//! контрактом, а все DB side effects после удачного connect остаются общими с
+//! overload-ом.
 
 use std::collections::VecDeque;
 use std::error::Error;
@@ -154,6 +161,9 @@ pub(crate) enum RsGodsBattleNotice {
     GetNpcFactionFailed {
         row_index: Option<usize>,
         failure: GodsBattleNpcFactionLoadFailure,
+    },
+    AutonomousNpcSaveConnectionFailed {
+        error: WorldDatabaseConnectionError,
     },
 }
 
@@ -241,6 +251,12 @@ pub(crate) trait RsGodsBattleOwner {
         &mut self,
         snapshot: &[GodsBattleNpcFactionSnapshot],
         active_transaction: Option<&mut WorldTdsClient>,
+    ) -> bool;
+
+    /// Выполняет legacy no-argument сохранение на отдельном соединении.
+    async fn save_npc_faction_autonomous(
+        &mut self,
+        snapshot: &[GodsBattleNpcFactionSnapshot],
     ) -> bool;
 
     /// Дописывает одну faction-секцию рейтинга в существующий byte-vector.
@@ -523,6 +539,21 @@ impl RsGodsBattleOwner for TiberiusRsGodsBattle {
         true
     }
 
+    async fn save_npc_faction_autonomous(
+        &mut self,
+        snapshot: &[GodsBattleNpcFactionSnapshot],
+    ) -> bool {
+        let mut connection = match self.settings.connect().await {
+            Ok(connection) => connection,
+            Err(error) => {
+                self.notices
+                    .push_back(RsGodsBattleNotice::AutonomousNpcSaveConnectionFailed { error });
+                return false;
+            }
+        };
+        self.save_npc_faction(snapshot, Some(&mut connection)).await
+    }
+
     async fn get_top_ten_szl_players(
         &mut self,
         faction: i32,
@@ -747,7 +778,7 @@ async fn execute_batch(
 
 // ============================================================================
 // FUNCTION: CRSGodsBattle::SaveNpcFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsgodsbattle.cpp:229
@@ -755,6 +786,8 @@ async fn execute_batch(
 // ADDRESS: 004ed9a0
 // PROTOTYPE: bool __thiscall SaveNpcFaction(void)
 //
+// открывает отдельное соединение и вызывает общий caller-connection owner,
+// сохраняя delete-first, table-open и vector-order без transaction.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
