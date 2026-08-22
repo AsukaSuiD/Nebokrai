@@ -1,10 +1,12 @@
 //! Владелец `CLargess` исторического WorldServer из `largess.cpp`.
 //!
-//! Статус двух перегрузок `SaveLoadDetails` RVA `0x000E8CA0` и
+//! Статус `Init` RVA `0x000E6630`, `UnInit` RVA `0x000E6650`, двух перегрузок
+//! `SaveLoadDetails` RVA `0x000E8CA0` и
 //! `0x000E91B0`, `GetTime` RVA `0x000E6800`, `AddGoldCoin` RVA `0x000E6690`,
 //! `AddOneLargess` RVA `0x000E6A60`, `TransferLargessThread` RVA `0x000E7500`,
-//! `AppendLargessToMap` RVA `0x000E9D40` и `CycleLoadLargessThread` RVA
-//! `0x000E9FD0` — `IMPLEMENTED`; остальной
+//! `AppendLargessToMap` RVA `0x000E9D40`, `CycleLoadLargessThread` RVA
+//! `0x000E9FD0`, `WorkerThread` RVA `0x000EAC80` и `StartWorkerThread` RVA
+//! `0x000EACC0` — `IMPLEMENTED`; остальной
 //! корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
 //! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
 //! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
@@ -82,11 +84,16 @@
 //! donor staging/swap не переносится. Прочитанный `Cdkey` и его `_strlwr`
 //! удалены как мёртвая локальная работа; exact вызов append передаёт
 //! `ObtainedNum=0` независимо от выбранной DB-строки, и этот quirk сохранён.
+//! Worker остаётся одним короткоживущим проходом: стандартный `JoinHandle`
+//! заменяет CRT handle, его живое состояние — `TryEnterCriticalSection`, а
+//! тело всегда вызывает transfer и затем cycle независимо от первого bool.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::sync::Arc;
+use std::thread::{self, JoinHandle};
 
 use chrono::{Datelike, Local, NaiveDateTime, Timelike};
 use encoding_rs::WINDOWS_1251;
@@ -94,6 +101,7 @@ use futures_util::TryStreamExt;
 use parking_lot::Mutex;
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel, Query, Row};
 use tokio::net::TcpStream;
+use tokio::runtime::Handle;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
@@ -235,6 +243,34 @@ pub(crate) enum TransferLargessFailure {
 pub(crate) enum TransferLargessOutcome {
     ReturnedTrue { row_count: usize },
     ReturnedFalse(TransferLargessFailure),
+}
+
+#[derive(Debug)]
+pub(crate) struct LargessWorkerReport {
+    pub(crate) transfer: TransferLargessOutcome,
+    pub(crate) cycle_load: CycleLoadLargessOutcome,
+}
+
+#[derive(Debug)]
+pub(crate) enum LargessWorkerCompletion {
+    Returned(LargessWorkerReport),
+    Panicked,
+}
+
+#[derive(Debug)]
+pub(crate) enum LargessWorkerStartOutcome {
+    Disabled,
+    Busy,
+    Started {
+        previous: Option<LargessWorkerCompletion>,
+    },
+    MissingRuntime {
+        previous: Option<LargessWorkerCompletion>,
+    },
+    SpawnFailed {
+        previous: Option<LargessWorkerCompletion>,
+        source: io::Error,
+    },
 }
 
 /// Делегирует `CLargess::AddGoldCoin` готовому bank-wallet owner-у.
@@ -439,8 +475,9 @@ pub(crate) struct TiberiusLargess {
     load_largess_time: u32,
     incoming_cost_database: CostDatabaseSettings,
     cost_database: CostDatabaseSettings,
-    entries: Mutex<BTreeMap<i32, LargessSnapshot>>,
+    entries: Arc<Mutex<BTreeMap<i32, LargessSnapshot>>>,
     notices: VecDeque<LargessNotice>,
+    worker: Mutex<Option<JoinHandle<LargessWorkerReport>>>,
 }
 
 impl TiberiusLargess {
@@ -456,9 +493,64 @@ impl TiberiusLargess {
             load_largess_time,
             incoming_cost_database,
             cost_database,
-            entries: Mutex::new(entries),
+            entries: Arc::new(Mutex::new(entries)),
             notices: VecDeque::new(),
+            worker: Mutex::new(None),
         }
+    }
+
+    /// Эквивалент `StartWorkerThread`: пропускает запуск при нулевом интервале
+    /// и пока предыдущий проход ещё владеет worker-slot.
+    pub(crate) fn start_worker(&self, world_number: u32) -> LargessWorkerStartOutcome {
+        if self.load_largess_time == 0 {
+            return LargessWorkerStartOutcome::Disabled;
+        }
+
+        let mut worker = self.worker.lock();
+        if worker.as_ref().is_some_and(|handle| !handle.is_finished()) {
+            return LargessWorkerStartOutcome::Busy;
+        }
+        let previous = worker.take().map(join_largess_worker);
+        let runtime = match Handle::try_current() {
+            Ok(runtime) => runtime,
+            Err(_) => return LargessWorkerStartOutcome::MissingRuntime { previous },
+        };
+        let load_largess_time = self.load_largess_time;
+        let incoming_cost_database = self.incoming_cost_database.clone();
+        let cost_database = self.cost_database.clone();
+        let entries = Arc::clone(&self.entries);
+        match thread::Builder::new()
+            .name("world-largess".to_owned())
+            .spawn(move || {
+                let owner = TiberiusLargess {
+                    load_largess_time,
+                    incoming_cost_database,
+                    cost_database,
+                    entries,
+                    notices: VecDeque::new(),
+                    worker: Mutex::new(None),
+                };
+                runtime.block_on(async move {
+                    let transfer = owner.transfer_largess(world_number).await;
+                    let cycle_load = owner.cycle_load_largess().await;
+                    LargessWorkerReport {
+                        transfer,
+                        cycle_load,
+                    }
+                })
+            })
+        {
+            Ok(handle) => {
+                *worker = Some(handle);
+                LargessWorkerStartOutcome::Started { previous }
+            }
+            Err(source) => LargessWorkerStartOutcome::SpawnFailed { previous, source },
+        }
+    }
+
+    /// Эквивалент `UnInit`-ожидания единственного worker handle.
+    pub(crate) fn wait_for_worker(&self) -> Option<LargessWorkerCompletion> {
+        self.worker.lock().take().map(join_largess_worker)
     }
 
     /// Переносит входящие назначения текущего World в рабочую Cost DB.
@@ -878,6 +970,21 @@ impl TiberiusLargess {
             result,
             use_log_system,
         ))
+    }
+}
+
+impl Drop for TiberiusLargess {
+    fn drop(&mut self) {
+        if let Some(handle) = self.worker.get_mut().take() {
+            let _ = join_largess_worker(handle);
+        }
+    }
+}
+
+fn join_largess_worker(handle: JoinHandle<LargessWorkerReport>) -> LargessWorkerCompletion {
+    match handle.join() {
+        Ok(report) => LargessWorkerCompletion::Returned(report),
+        Err(_) => LargessWorkerCompletion::Panicked,
     }
 }
 
@@ -1345,7 +1452,7 @@ fn format_local_time() -> String {
 
 // ============================================================================
 // FUNCTION: CLargess::Init
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:30
@@ -1353,13 +1460,16 @@ fn format_local_time() -> String {
 // ADDRESS: 004e6630
 // PROTOTYPE: bool __cdecl Init(void)
 //
+// IMPLEMENTED_OWNER: `TiberiusLargess::new`; `parking_lot::Mutex` и owned
+// `JoinHandle` не требуют ручной Win32-инициализации. Неиспользуемый больше
+// нигде `csConnectSatus` не перенесён.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CLargess::UnInit
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:42
@@ -1367,6 +1477,8 @@ fn format_local_time() -> String {
 // ADDRESS: 004e6650
 // PROTOTYPE: bool __cdecl UnInit(void)
 //
+// IMPLEMENTED_OWNER: `TiberiusLargess::wait_for_worker` сохраняет бесконечное
+// ожидание последнего worker-а; Rust RAII освобождает обе mutex после owner-а.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
@@ -1512,7 +1624,7 @@ fn format_local_time() -> String {
 
 // ============================================================================
 // FUNCTION: CLargess::WorkerThread
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:692
@@ -1520,13 +1632,16 @@ fn format_local_time() -> String {
 // ADDRESS: 004eac80
 // PROTOTYPE: uint __stdcall WorkerThread(void * param_1)
 //
+// IMPLEMENTED_OWNER: closure внутри `TiberiusLargess::start_worker` выполняет
+// `transfer_largess`, затем безусловно `cycle_load_largess`; runtime Handle
+// заменяет COM apartment только для async TDS-драйвера.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 // ============================================================================
 // FUNCTION: CLargess::StartWorkerThread
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:674
@@ -1534,6 +1649,8 @@ fn format_local_time() -> String {
 // ADDRESS: 004eacc0
 // PROTOTYPE: void __cdecl StartWorkerThread(void)
 //
+// сохраняет nonblocking TryEnter/skip, а `std::thread::Builder` заменяет
+// `_beginthreadex`. `CGame::main_loop` вызывает owner напрямую.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

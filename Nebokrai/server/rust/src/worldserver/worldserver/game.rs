@@ -3572,7 +3572,8 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     pub(crate) put_log_info: &'a mut dyn FnMut(&[u8]),
     pub(crate) get_auction_month_day: &'a mut dyn FnMut() -> i32,
     pub(crate) reload_context: &'a mut dyn WorldReloadContext,
-    pub(crate) start_largess_worker: &'a mut dyn FnMut(),
+    /// Конкретный `CLargess` owner для исходного `StartWorkerThread` вызова.
+    pub(crate) largess: &'a TiberiusLargess,
     pub(crate) launch_save_thread:
         &'a mut dyn FnMut(&WorldSaveThreadLaunchRequest) -> WorldSaveThreadHandleState,
     pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
@@ -11635,7 +11636,11 @@ impl CGame {
                 return Err(Box::new(WorldMainLoopBlock::Largess(largess)));
             }
             WorldMainLoopLargessGateReport::StartWorkerRequested { .. } => {
-                (callbacks.start_largess_worker)();
+                let world_number = self
+                    .setup
+                    .world_number
+                    .expect("Largess gate проверил dwNumber до запроса worker-а");
+                let _ = callbacks.largess.start_worker(world_number);
             }
             WorldMainLoopLargessGateReport::Disabled { .. }
             | WorldMainLoopLargessGateReport::Waiting { .. } => {}
@@ -12075,6 +12080,13 @@ impl CGame {
             return WorldMainLoopLargessGateReport::Disabled {
                 load_interval_ms,
                 pass_count: state.pass_count,
+            };
+        }
+        if self.setup.world_number.is_none() {
+            // BLOCKED_MISSING_FACT: TransferLargessThread форматировал `%d`
+            // непосредственно из исходно неинициализированного dwNumber.
+            return WorldMainLoopLargessGateReport::BlockedMissingFact {
+                field: "dwNumber",
             };
         }
 
