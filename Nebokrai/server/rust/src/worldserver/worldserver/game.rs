@@ -205,6 +205,13 @@
 //! порядок после PlayerList и legacy return length от optional subtype `0x15`;
 //! initial-config читает тот же owner без внешнего snapshot/callback.
 //!
+//! `CBattleFairyExpConfig` остаётся отдельным World owner: reload читает
+//! `BattleFairyReleate/BattleFairyExp.xml`, очищает map до открытия, при
+//! ошибке берёт exact `ZHGS0029..0036` из owned StringTable и лишь после
+//! успешного XML loader-а публикует subtype `0x2C`. Legacy return получает
+//! длину wire только при отправке. `quick-xml` заменяет TinyXML внутри owner-а,
+//! а CGame сохраняет наблюдаемые путь, диагностики, log-order и wire boundary.
+//!
 //! `CContributeSetup` теперь owned `CGame`: dispatcher
 //! `0x004171CA..0x004172B1` читает `data/ContributeSetup.ini`, сохраняет bool
 //! load-result в legacy return-slot и при success + send-флаге публикует
@@ -1176,6 +1183,7 @@ use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelFormatError, HitLevelS
 use crate::setup::contributesetup::{
     CContributeSetup, ContributeSetupFormatError, ContributeSetupSerializeError,
 };
+use crate::setup::cbattlefairyexpconfig::{BattleFairyExpSerializeError, CBattleFairyExpConfig};
 use crate::setup::emotion::{CEmotion, EmotionFormatError, EmotionSerializeError};
 use crate::setup::goodsdestructionconfig::{
     GoodsDestroyFormatError, GoodsDestroySerializeError, GoodsDestroySetup,
@@ -4218,7 +4226,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     PreciousBox,
     FairyExp,
     ChangeBody,
-    BattleFairyExp,
     BattleFairyCombine,
     Synthesis,
     DaKongXiangQian,
@@ -4257,7 +4264,6 @@ pub(crate) enum WorldReloadSerializationOwner {
     PreciousBox,
     FairyExp,
     ChangeBody,
-    BattleFairyExp,
     BattleFairyCombine,
     Synthesis,
     DaKongXiangQian,
@@ -4300,6 +4306,8 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn goods_destroy_setup(&mut self) -> &mut GoodsDestroySetup;
     /// Отдельный owner списков монстров новых навыков для reload и initial-config.
     fn new_skill_monster_conf(&mut self) -> &mut NewSkillMonsterConf;
+    /// Таблица опыта боевых духов, общая для reload и initial-config wire.
+    fn battle_fairy_exp_config(&mut self) -> &mut CBattleFairyExpConfig;
     /// Возвращает исходный 32-битный result; bool owners обязаны дать `0/1`.
     fn call_boolean_owner(&mut self, owner: WorldReloadBooleanOwner) -> u32;
     fn call_void_owner(&mut self, owner: WorldReloadVoidOwner);
@@ -5887,6 +5895,7 @@ pub(crate) enum WorldReloadBlock {
     GoodsDestroyFormat(GoodsDestroyFormatError),
     GoodsDestroySerialization(GoodsDestroySerializeError),
     NewSkillMonsterSerialization(NewSkillMonsterSerializeError),
+    BattleFairyExpSerialization(BattleFairyExpSerializeError),
     EquipmentComposeSerialization(EquipmentComposeSerializeError),
     CiQingSerialization(CiQingSerializationBlock),
     TaoZhuangSerialization(TaoZhuangSerializationBlock),
@@ -8274,17 +8283,48 @@ impl CGame {
                 return Err(WorldReloadBlock::CountryWarOwnerRequired);
             }
             WorldReloadProfile::BattleFairyExp => {
-                self.reload_simple_serialized(
-                    context,
-                    WorldReloadBooleanOwner::BattleFairyExp,
-                    WorldReloadSerializationOwner::BattleFairyExp,
-                    0x2C,
-                    b"Add BattleFairyExpConfig.ini...ok!",
-                    b"Add BattleFairyExpConfig.ini...failed!",
-                    send_to_game_servers,
-                    true,
-                    &mut legacy_result,
-                );
+                const PATH: &[u8] = b"BattleFairyReleate/BattleFairyExp.xml";
+                let loaded = match context.read_resource(PATH) {
+                    Some(source) => match context.battle_fairy_exp_config().load_from_bytes(&source)
+                    {
+                        Ok(_) => true,
+                        Err(error) => {
+                            let diagnostic = self
+                                .string_table
+                                .table()
+                                .get_string_by_id(error.string_id())
+                                .map(ToOwned::to_owned)
+                                .unwrap_or_default();
+                            context.add_log_text(&diagnostic);
+                            false
+                        }
+                    },
+                    None => {
+                        context.battle_fairy_exp_config().clear();
+                        let diagnostic = self
+                            .string_table
+                            .table()
+                            .get_string_by_id(b"ZHGS0029")
+                            .map(ToOwned::to_owned)
+                            .unwrap_or_default();
+                        context.add_log_text(&diagnostic);
+                        false
+                    }
+                };
+                context.add_log_text(if loaded {
+                    b"Add BattleFairyExpConfig.ini...ok!"
+                } else {
+                    b"Add BattleFairyExpConfig.ini...failed!"
+                });
+                if loaded && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    context
+                        .battle_fairy_exp_config()
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::BattleFairyExpSerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(0x2C, &payload);
+                }
             }
             WorldReloadProfile::BattleFairyCombine => {
                 self.reload_simple_serialized(
