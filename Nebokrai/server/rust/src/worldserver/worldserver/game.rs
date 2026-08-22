@@ -227,6 +227,12 @@
 //! удалены. `quick-xml` и safe temporary extraction owner-а заменяют только
 //! TinyXML и aliasing, не меняя порядок state transitions или lookup-ов.
 //!
+//! `HonorElimilateConfig` также освобождён от generic callback: reload читает
+//! `data/honorelimilate.ini` в единственные два runtime scalar-а, при missing
+//! resource сохраняет старые значения и выдаёт exact operator notice, а при
+//! доступном, но повреждённом тексте сохраняет legacy success/partial-write.
+//! Dispatcher не отправляет его eight-byte wire и не меняет legacy return.
+//!
 //! `CContributeSetup` теперь owned `CGame`: dispatcher
 //! `0x004171CA..0x004172B1` читает `data/ContributeSetup.ini`, сохраняет bool
 //! load-result в legacy return-slot и при success + send-флаге публикует
@@ -1195,6 +1201,7 @@ use crate::public::equipmentcomposelist::{
 };
 use crate::public::taozhuangsetup::{CTaoZhuangSetup, TaoZhuangSerializationBlock};
 use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelFormatError, HitLevelSerializeError};
+use crate::setup::honorelimilateconfig::HonorElimilateConfig;
 use crate::setup::contributesetup::{
     CContributeSetup, ContributeSetupFormatError, ContributeSetupSerializeError,
 };
@@ -4246,7 +4253,6 @@ pub(crate) enum WorldReloadBooleanOwner {
     FairyExp,
     ChangeBody,
     DaKongXiangQian,
-    HonorEliminate,
     GodsBattle,
 }
 
@@ -4327,6 +4333,8 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn battle_fairy_property(&mut self) -> &mut CBattleFairyProperty;
     /// Статические map/vector синтеза, shared с игровыми запросами и reload wire.
     fn synthesis(&mut self) -> &mut CSynthesis;
+    /// Два scalar-а honor-eliminate, общие для runtime и initial-config wire.
+    fn honor_eliminate_config(&mut self) -> &mut HonorElimilateConfig;
     /// Возвращает исходный 32-битный result; bool owners обязаны дать `0/1`.
     fn call_boolean_owner(&mut self, owner: WorldReloadBooleanOwner) -> u32;
     fn call_void_owner(&mut self, owner: WorldReloadVoidOwner);
@@ -8483,12 +8491,25 @@ impl CGame {
                 }
             }
             WorldReloadProfile::HonorEliminate => {
-                let _ = Self::reload_boolean_with_log(
-                    context,
-                    WorldReloadBooleanOwner::HonorEliminate,
-                    b"Load HonorElimilate.ini Config...ok!",
-                    b"Load HonorElimilate.ini Config...failed!",
-                );
+                const PATH: &[u8] = b"data/honorelimilate.ini";
+                let loaded = match context.read_resource(PATH) {
+                    Some(source) => {
+                        context.honor_eliminate_config().load_from_bytes(&source);
+                        true
+                    }
+                    None => {
+                        let mut message = b"file '".to_vec();
+                        message.extend_from_slice(PATH);
+                        message.extend_from_slice(b"' can't found!");
+                        context.notify_reload_operator(b"error", &message);
+                        false
+                    }
+                };
+                context.add_log_text(if loaded {
+                    b"Load HonorElimilate.ini Config...ok!"
+                } else {
+                    b"Load HonorElimilate.ini Config...failed!"
+                });
             }
             WorldReloadProfile::TaoZhuang => {
                 const PATH: &[u8] = b"data/taozhuang.ini";

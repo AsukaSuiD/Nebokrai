@@ -1,8 +1,8 @@
 //! Ограничения начисления honor за убийство в историческом Miracle.
 //!
-//! Статус World `HonorElimilateConfig::AddToByteArray` RVA `0x0008A560`:
-//! `IMPLEMENTED`; singleton lifecycle, loader и Game decoder ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Статус World `HonorElimilateConfig::LoadConfig` RVA `0x0008A5D0` и
+//! `AddToByteArray` RVA `0x0008A560`: `IMPLEMENTED`; singleton lifecycle и
+//! Game decoder ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -14,6 +14,11 @@
 //! Отдельные таблицы `CHonorRanks` сюда не входят и отправляются следующими
 //! subtype `0x27/0x28`. Два typed `i32` заменяют process-global singleton без
 //! изменения payload; неизвестный legacy return loader-а не выдумывается.
+//!
+//! После успешного открытия formatted extraction читает два `label + long`
+//! поля и всегда возвращает success: обрыв/некорректное число сохраняют уже
+//! присвоенный scalar, не становясь новой failure-веткой. Missing resource
+//! state не меняет; caller заменяет только `MessageBoxA` operator notice.
 
 /// Восьмибайтовый wire-value вместо singleton `HonorElimilateConfig`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -23,10 +28,31 @@ pub(crate) struct HonorElimilateConfig {
 }
 
 impl HonorElimilateConfig {
+    /// Exact successful `LoadConfig` branch после resource-open.
+    pub(crate) fn load_from_bytes(&mut self, source: &[u8]) {
+        let mut tokens = source
+            .split(|byte: &u8| byte.is_ascii_whitespace())
+            .filter(|token| !token.is_empty());
+        let _ = tokens.next();
+        if let Some(value) = tokens.next().and_then(parse_legacy_i32) {
+            self.level_difference = value;
+        }
+        let _ = tokens.next();
+        if let Some(value) = tokens.next().and_then(parse_legacy_i32) {
+            self.minimum_level = value;
+        }
+    }
+
     pub(crate) fn add_to_byte_array(&self, destination: &mut Vec<u8>) {
         destination.extend_from_slice(&self.level_difference.to_le_bytes());
         destination.extend_from_slice(&self.minimum_level.to_le_bytes());
     }
+}
+
+/// `operator>>(long)` принимает десятичный token целиком; overflow/failure
+/// не присваивают target, в отличие от `_atol`-семантики других INI owner-ов.
+fn parse_legacy_i32(token: &[u8]) -> Option<i32> {
+    std::str::from_utf8(token).ok()?.parse().ok()
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
@@ -76,7 +102,7 @@ impl HonorElimilateConfig {
 
 // ============================================================================
 // FUNCTION: HonorElimilateConfig::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\honorelimilateconfig.cpp:50
@@ -104,7 +130,7 @@ impl HonorElimilateConfig {
 
 // ============================================================================
 // FUNCTION: HonorElimilateConfig::LoadConfig
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: WorldServer
 // ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\setup\honorelimilateconfig.cpp:27
