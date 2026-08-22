@@ -485,7 +485,8 @@ impl CFourNationWarSys {
         let setup = self.setups.get_mut(usize::try_from(index).map_err(|_| {
             FourNationWarRegionIndexBlock { index, setup_count }
         })?).ok_or(FourNationWarRegionIndexBlock { index, setup_count })?;
-        setup.region_state = 1;
+        // PDB общего `eCityState`: CIS_Fight = 3 (не CIS_DUTH = 1).
+        setup.region_state = 3;
         let mut message = CMessage::new(0x7FE3C);
         message.base_mut().add_long(index);
         context.send_all(&message);
