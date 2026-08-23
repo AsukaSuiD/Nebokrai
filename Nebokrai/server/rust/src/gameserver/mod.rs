@@ -14,10 +14,11 @@ pub(crate) mod appserver {
         pub(crate) mod cbank;
         pub(crate) mod ccontainer;
         pub(crate) mod cdepot;
-        pub(crate) mod cequipmentcontainer;
         pub(crate) mod cequipmentcomposeshadowcontainer;
+        pub(crate) mod cequipmentcontainer;
         pub(crate) mod cequipmentdakongcontainer;
         pub(crate) mod cequipmentupgradeshadowcontainer;
+        pub(crate) mod cfairycontainer;
         pub(crate) mod cgoodscontainer;
         pub(crate) mod cgoodsshadowcontainer;
         pub(crate) mod cjifen;
@@ -52,8 +53,8 @@ pub(crate) mod appserver {
         pub(crate) mod sequencestring;
         pub(crate) mod servermessage;
     }
-    pub(crate) mod moveshape;
     pub(crate) mod monster;
+    pub(crate) mod moveshape;
     pub(crate) mod npc;
     pub(crate) mod player;
     pub(crate) mod proxyserverregion;

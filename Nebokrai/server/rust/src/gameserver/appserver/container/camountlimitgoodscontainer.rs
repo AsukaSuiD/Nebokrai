@@ -171,6 +171,13 @@ impl CAmountLimitGoodsContainer {
         self.goods.get(&ex_id)
     }
 
+    pub(crate) fn find_mut(&mut self, ex_id: CGuid) -> Option<&mut CGoods> {
+        if self.locked_goods.contains(&ex_id) {
+            return None;
+        }
+        self.goods.get_mut(&ex_id)
+    }
+
     pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
         if self.goods_amount_limit <= position {
             return None;

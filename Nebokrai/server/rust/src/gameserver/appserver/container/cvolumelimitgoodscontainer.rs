@@ -164,6 +164,13 @@ impl CVolumeLimitGoodsContainer {
         self.base.find(ex_id)
     }
 
+    pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
+        let VolumeCell::Goods(ex_id) = *self.cells.get(position as usize)? else {
+            return None;
+        };
+        self.base.find_mut(ex_id)
+    }
+
     pub(crate) fn query_goods_position(&self, ex_id: CGuid) -> Option<u32> {
         self.cells
             .iter()

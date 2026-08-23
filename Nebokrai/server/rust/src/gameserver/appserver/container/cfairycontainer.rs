@@ -1,6 +1,160 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Storage-prefix `CFairyContainer` исторического GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
+//! `server/gameserver/appserver/container/cfairycontainer.cpp`. Контейнер
+//! владеет ordinary-fairy товарами через `CVolumeLimitGoodsContainer`:
+//! auto-add сначала выбирает ячейку base-owner-а, positional add сохраняет
+//! отдельное правило `0..12` для headgear с fairy property и исключение
+//! `13/FZ0885`, а remove блокирует фею с ненулевым hatch timer.
+//!
+//! `CVolumeLimitGoodsContainer` и owned `CGoods` заменяют vtable dispatch/raw
+//! pointers, не меняя lock/stack/listener semantics base-owner-а. State change,
+//! hatch/exp traversal, codec-tail и syncretize ниже пока остаются RAW.
+
+use super::cvolumelimitgoodscontainer::{
+    CVolumeLimitGoodsContainer, VolumeGoodsAddBlock, VolumeGoodsAddOutcome,
+    VolumeGoodsRemoveOutcome,
+};
+use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
+    EQUIP_PLACE_HEADGEAR, GAP_BF_BATTLE_FAIRY,
+};
+use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::public::guid::CGuid;
+
+const FAIRY_SPECIAL_POSITION: u32 = 13;
+const FAIRY_SPECIAL_ORIGINAL_NAME: &[u8] = b"FZ0885";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FairyContainerAddBlock {
+    MissingGoods,
+    BattleFairy,
+    MissingBaseProperties { index: u32 },
+    InvalidFairyPosition { position: u32 },
+    InvalidFairyGoods { position: u32 },
+}
+
+#[must_use = "outcome определяет ownership incoming и base listener effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FairyContainerAddOutcome {
+    Base(VolumeGoodsAddOutcome),
+    Rejected(FairyContainerAddBlock),
+}
+
+#[must_use = "remove может быть заблокирован живым hatch timer"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FairyContainerRemoveOutcome {
+    Missing,
+    Hatching {
+        position: Option<u32>,
+        goods_id: CGuid,
+    },
+    Removed(VolumeGoodsRemoveOutcome),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CFairyContainer {
+    base: CVolumeLimitGoodsContainer,
+}
+
+impl Default for CFairyContainer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CFairyContainer {
+    pub(crate) fn new() -> Self {
+        Self {
+            base: CVolumeLimitGoodsContainer::new(),
+        }
+    }
+
+    pub(crate) const fn base(&self) -> &CVolumeLimitGoodsContainer {
+        &self.base
+    }
+
+    pub(crate) const fn base_mut(&mut self) -> &mut CVolumeLimitGoodsContainer {
+        &mut self.base
+    }
+
+    pub(crate) fn add(
+        &mut self,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> FairyContainerAddOutcome {
+        let Some(goods) = incoming.as_ref() else {
+            return FairyContainerAddOutcome::Rejected(FairyContainerAddBlock::MissingGoods);
+        };
+        let Some(position) = self.base.find_position_for_goods(goods, factory) else {
+            return FairyContainerAddOutcome::Base(VolumeGoodsAddOutcome::Rejected(
+                VolumeGoodsAddBlock::NoSpace,
+            ));
+        };
+        self.add_at(position, incoming, factory, owner_progress_allows)
+    }
+
+    pub(crate) fn add_at(
+        &mut self,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> FairyContainerAddOutcome {
+        let Some(goods) = incoming.as_ref() else {
+            return FairyContainerAddOutcome::Rejected(FairyContainerAddBlock::MissingGoods);
+        };
+        if goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) == 1 {
+            return FairyContainerAddOutcome::Rejected(FairyContainerAddBlock::BattleFairy);
+        }
+        let index = goods.base_properties_index();
+        let Some(properties) = factory.query_goods_base_properties(index) else {
+            return FairyContainerAddOutcome::Rejected(
+                FairyContainerAddBlock::MissingBaseProperties { index },
+            );
+        };
+
+        let accepted = if position < FAIRY_SPECIAL_POSITION {
+            properties.equip_place() == EQUIP_PLACE_HEADGEAR && goods.fairy_properties().is_some()
+        } else if position == FAIRY_SPECIAL_POSITION {
+            properties.original_name() == FAIRY_SPECIAL_ORIGINAL_NAME
+        } else {
+            return FairyContainerAddOutcome::Rejected(
+                FairyContainerAddBlock::InvalidFairyPosition { position },
+            );
+        };
+        if !accepted {
+            return FairyContainerAddOutcome::Rejected(FairyContainerAddBlock::InvalidFairyGoods {
+                position,
+            });
+        }
+
+        FairyContainerAddOutcome::Base(self.base.add_goods_at(
+            position,
+            incoming,
+            factory,
+            owner_progress_allows,
+        ))
+    }
+
+    pub(crate) fn remove(&mut self, goods_id: CGuid) -> FairyContainerRemoveOutcome {
+        let position = self.base.query_goods_position(goods_id);
+        let Some(goods) = self.base.base().find(goods_id) else {
+            return FairyContainerRemoveOutcome::Missing;
+        };
+        if goods
+            .fairy_properties()
+            .is_some_and(|fairy| fairy.hatch_start_time != 0)
+        {
+            return FairyContainerRemoveOutcome::Hatching { position, goods_id };
+        }
+        self.base
+            .remove_goods(goods_id)
+            .map(FairyContainerRemoveOutcome::Removed)
+            .unwrap_or(FairyContainerRemoveOutcome::Missing)
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -161,6 +315,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // COMPONENT_VARIANT_END: GameServer
