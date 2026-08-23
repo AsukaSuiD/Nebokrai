@@ -68,6 +68,9 @@
 //! полностью собранный goods/money batch вместо ADO/COM recordset; async
 //! bridge, который append-ит batch в общий output FIFO из World MainLoop,
 //! остаётся у concrete context и не подменяется блокирующим вызовом драйвера.
+//! Архивная GameDB05 подтверждает `Auction.GoodsID` как `uniqueidentifier`, а
+//! `dwauctiontime/timebuyer` как `bigint`; read-query явно преобразует GUID в
+//! legacy-текст и читает оба времени 64-битно до сохранения DWORD-снимка.
 //! `TiberiusAuctionWriteOwner` так же не прячет async I/O за синхронным
 //! `DbMiscContext`: удаление лота открывает собственное соединение, а остальные
 //! остальные точные SQL-команды, включая `AddNewGoods`, принимают normal
@@ -1338,7 +1341,12 @@ impl TiberiusAuctionGoodsReader {
             }
         };
         let mut query = Query::new(
-            "SELECT a.*, CONVERT(int,b.type) AS type, b.modifierValue1, b.modifierValue2 \
+            "SELECT CONVERT(varchar(38),a.GoodsID) AS GoodsID, \
+             a.dwAddTicket,a.GoodsIndex,a.strAccount,a.dwOwerId,a.dwauctiontime, \
+             a.btMoneyType,a.btGoodsType,a.NpcPrice,a.Amount,a.GoodsState,a.bOfferPrice, \
+             a.strGoodsName,a.strSellerName,a.dwMoneySeller,a.dwTimeSeller,a.dwSellerId, \
+             a.strBuyerName,a.dwMoneyBuyer,a.BuyerId,a.timebuyer,a.dwLvLimit, \
+             CONVERT(int,b.type) AS type, b.modifierValue1, b.modifierValue2 \
              FROM Auction AS a WITH (NOLOCK) \
              LEFT JOIN AuctionGoods AS b WITH (NOLOCK) ON a.id=b.id \
              WHERE dwOwerId=@P1 AND GoodsState=@P2 ORDER BY dwOwerId",
@@ -1707,7 +1715,7 @@ impl AuctionGoodsRecord {
             base_index: required!(i32, "GoodsIndex") as u32,
             account: ansi!("strAccount"),
             owner_id: required!(i32, "dwOwerId") as u32,
-            auction_time: required!(i32, "dwauctiontime") as u32,
+            auction_time: required!(i64, "dwauctiontime") as u32,
             money_type: required!(i32, "btMoneyType") as u8,
             goods_type: required!(i32, "btGoodsType") as u8,
             npc_price: required!(i32, "NpcPrice"),
@@ -1722,7 +1730,7 @@ impl AuctionGoodsRecord {
             buyer_name: ansi!("strBuyerName"),
             money_buyer: required!(i32, "dwMoneyBuyer") as u32,
             buyer_id: required!(i32, "BuyerId") as u32,
-            time_buyer: required!(i32, "TimeBuyer") as u32,
+            time_buyer: required!(i64, "TimeBuyer") as u32,
             level_limit: required!(i32, "dwLvLimit") as u32,
             addon,
         })
