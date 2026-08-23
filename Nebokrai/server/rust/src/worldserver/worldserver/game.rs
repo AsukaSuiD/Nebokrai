@@ -8599,6 +8599,11 @@ impl CGame {
         &self.thing_setup
     }
 
+    /// Интервал общего log-owner-а, уже прочитанный обязательным World setup.
+    pub(crate) const fn save_info_time_ms(&self) -> u32 {
+        self.setup.save_info_time_ms
+    }
+
     /// Nullable raw owner начального пакета function-list subtype `0x0A`.
     pub(crate) fn function_list_file_data(&self) -> Option<&[u8]> {
         self.function_list_file_data.as_deref()

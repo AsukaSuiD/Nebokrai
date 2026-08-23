@@ -881,6 +881,7 @@ dependencies = [
  "freetype-rs",
  "futures-util",
  "getrandom 0.4.3",
+ "libc",
  "lzo",
  "md-5",
  "parking_lot",
