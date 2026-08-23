@@ -8300,6 +8300,16 @@ impl CGame {
             .unwrap_or_default()
     }
 
+    /// Форматирует строку того же live `StringTable`, не создавая внешний
+    /// callback, способный разойтись с reload-состоянием `CGame`.
+    pub(crate) fn format_world_string(
+        &self,
+        string_id: &[u8],
+        arguments: &[UnionFormatArgument<'_>],
+    ) -> Vec<u8> {
+        format_union_world_string(self.get_string_by_id(string_id), arguments)
+    }
+
     /// Выполняет `CQuestSystem::Initialize` в его точной позиции World init.
     /// `Initialize` всегда возвращал true после void `Load`, поэтому report не
     /// превращается в init-block и сохраняет уже сделанные in-place изменения.
@@ -20590,7 +20600,6 @@ where
             game,
             organizing,
             faction_war_sys,
-            application_callbacks,
             update_player,
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
@@ -20828,7 +20837,6 @@ where
             faction_war_sys,
             registry,
             coefficients,
-            application_callbacks,
             update_player,
             game_server_sender.as_ref(),
         ) {
@@ -23462,7 +23470,7 @@ fn format_faction_enemy_world_string(
 /// Поддерживаются только реально передаваемые `%s`, `%d`, `%i`, `%u` и `%%`;
 /// неизвестный либо не согласованный с аргументом specifier сохраняется как
 /// текст вместо чтения отсутствующего vararg и внутреннего UB оригинала.
-fn format_union_world_string(
+pub(crate) fn format_union_world_string(
     template: &[u8],
     arguments: &[UnionFormatArgument<'_>],
 ) -> Vec<u8> {

@@ -571,6 +571,7 @@ use crate::worldserver::worldserver::game::{
     CGame, WorldPlayerNameLookupError, WorldRegionNameLookup,
 };
 use crate::public::timer::{CTimer, TimerId};
+use crate::public::tools::put_string_to_file;
 
 const TOP_INFO_MESSAGE_TYPE: i32 = 0x7FA04;
 const UNION_INITIAL_MESSAGE_TYPE: i32 = 0x7FE04;
@@ -699,10 +700,6 @@ pub(crate) enum OrganizingFactionWarPlayerDiedBlock {
 pub(crate) struct WorldFactionWarDeclarationEffects<'a> {
     game: &'a CGame,
     organizing: &'a mut COrganizingCtrl,
-    world_string: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
-    format_world_string:
-        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
-    put_war_log: &'a mut dyn FnMut(&[u8]),
     update_player: &'a mut dyn FnMut(i32),
 }
 
@@ -710,31 +707,20 @@ impl<'a> WorldFactionWarDeclarationEffects<'a> {
     pub(crate) fn new(
         game: &'a CGame,
         organizing: &'a mut COrganizingCtrl,
-        world_string: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
-        format_world_string: &'a mut dyn FnMut(
-            &[u8],
-            &[UnionFormatArgument<'_>],
-        ) -> Vec<u8>,
-        put_war_log: &'a mut dyn FnMut(&[u8]),
         update_player: &'a mut dyn FnMut(i32),
     ) -> Self {
         Self {
             game,
             organizing,
-            world_string,
-            format_world_string,
-            put_war_log,
             update_player,
         }
     }
 }
 
 struct DeclarationEnemyMutationEffects<'a> {
+    game: &'a CGame,
     enemy_id: i32,
     enemy_name: Vec<u8>,
-    format_world_string:
-        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
-    put_war_log: &'a mut dyn FnMut(&[u8]),
 }
 
 impl FactionEnemyMutationContext for DeclarationEnemyMutationEffects<'_> {
@@ -756,11 +742,11 @@ impl FactionEnemyMutationContext for DeclarationEnemyMutationEffects<'_> {
                 }
             })
             .collect::<Vec<_>>();
-        (self.format_world_string)(string_id, &arguments)
+        self.game.format_world_string(string_id, &arguments)
     }
 
     fn put_war_log(&mut self, text: &[u8]) {
-        (self.put_war_log)(text);
+        put_string_to_file("war", text);
     }
 }
 
@@ -838,10 +824,9 @@ impl FactionWarDeclarationContext for WorldFactionWarDeclarationEffects<'_> {
             OrganizingFactionWarDeclarationBlock::MissingFactionForMutation { faction_id },
         )?;
         let mut effects = DeclarationEnemyMutationEffects {
+            game: self.game,
             enemy_id,
             enemy_name,
-            format_world_string: &mut *self.format_world_string,
-            put_war_log: &mut *self.put_war_log,
         };
         faction
             .add_enemy_organizing(enemy_id, &mut effects)
@@ -869,7 +854,7 @@ impl FactionWarDeclarationContext for WorldFactionWarDeclarationEffects<'_> {
     }
 
     fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
-        (self.world_string)(string_id)
+        self.game.get_string_by_id(string_id).to_vec()
     }
 
     fn format_world_string(
@@ -884,7 +869,7 @@ impl FactionWarDeclarationContext for WorldFactionWarDeclarationEffects<'_> {
                 FactionWarFormatArgument::Signed(value) => UnionFormatArgument::Signed(*value),
             })
             .collect::<Vec<_>>();
-        (self.format_world_string)(string_id, &arguments)
+        self.game.format_world_string(string_id, &arguments)
     }
 
     fn send_player_info(
@@ -911,7 +896,7 @@ impl FactionWarDeclarationContext for WorldFactionWarDeclarationEffects<'_> {
     }
 
     fn put_war_log(&mut self, info: &[u8]) {
-        (self.put_war_log)(info);
+        put_string_to_file("war", info);
     }
 }
 
@@ -999,10 +984,9 @@ impl FactionWarPlayerDiedContext for WorldFactionWarDeclarationEffects<'_> {
             OrganizingFactionWarPlayerDiedBlock::MissingFactionForMutation { faction_id },
         )?;
         let mut effects = DeclarationEnemyMutationEffects {
+            game: self.game,
             enemy_id,
             enemy_name,
-            format_world_string: &mut *self.format_world_string,
-            put_war_log: &mut *self.put_war_log,
         };
         faction
             .del_enemy_organizing(enemy_id, &mut effects)
@@ -1036,7 +1020,7 @@ impl FactionWarPlayerDiedContext for WorldFactionWarDeclarationEffects<'_> {
             .iter()
             .map(|argument| UnionFormatArgument::Text(argument))
             .collect::<Vec<_>>();
-        (self.format_world_string)(string_id, &arguments)
+        self.game.format_world_string(string_id, &arguments)
     }
 
     fn send_orga_info_to_all(&mut self, info: &[u8], kind: u32, color: u32) {
@@ -1044,7 +1028,7 @@ impl FactionWarPlayerDiedContext for WorldFactionWarDeclarationEffects<'_> {
     }
 
     fn put_war_log(&mut self, info: &[u8]) {
-        (self.put_war_log)(info);
+        put_string_to_file("war", info);
     }
 }
 

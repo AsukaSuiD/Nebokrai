@@ -511,7 +511,8 @@ use crate::worldserver::appworld::player::{
     PlayerPropertyCoefficients,
 };
 use crate::worldserver::worldserver::game::{
-    CGame, WorldRegionNameLookup, WorldRegionParamUpdateOutcome, legacy_tick_ms,
+    CGame, WorldRegionNameLookup, WorldRegionParamUpdateOutcome, format_union_world_string,
+    legacy_tick_ms,
 };
 
 const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
@@ -1003,7 +1004,7 @@ impl UnionApplyForJoinEffects for WorldUnionApplicationEffects<'_> {
     type SessionBlock = UnionApplicationSessionBlock;
 
     fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
-        (self.callbacks.world_string)(string_id)
+        self.game.get_string_by_id(string_id).to_vec()
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1033,7 +1034,7 @@ impl UnionInviteEffects for WorldUnionApplicationEffects<'_> {
     type SessionBlock = UnionApplicationSessionBlock;
 
     fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
-        (self.callbacks.world_string)(string_id)
+        self.game.get_string_by_id(string_id).to_vec()
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1058,7 +1059,7 @@ impl UnionInviteEffects for WorldUnionApplicationEffects<'_> {
 
 impl UnionAddFactionEffects for WorldUnionApplicationEffects<'_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
-        (self.callbacks.world_string)(string_id)
+        self.game.get_string_by_id(string_id).to_vec()
     }
 
     fn format_world_string(
@@ -1066,11 +1067,11 @@ impl UnionAddFactionEffects for WorldUnionApplicationEffects<'_> {
         string_id: &'static [u8],
         arguments: &[UnionFormatArgument<'_>],
     ) -> Vec<u8> {
-        (self.callbacks.format_world_string)(string_id, arguments)
+        format_union_world_string(self.game.get_string_by_id(string_id), arguments)
     }
 
     fn put_war_log(&mut self, text: &[u8]) {
-        (self.callbacks.put_war_log)(text);
+        put_string_to_file("war", text);
     }
 
     fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32) {
@@ -1087,7 +1088,7 @@ impl ConfederationCreationEffects for WorldUnionApplicationEffects<'_> {
     type SessionBlock = ConfederationCreationSessionBlock;
 
     fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
-        (self.callbacks.world_string)(string_id)
+        self.game.get_string_by_id(string_id).to_vec()
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1132,7 +1133,7 @@ impl FactionCreationEffects for WorldFactionCreationEffects<'_, '_, '_, '_> {
     }
 
     fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
-        (self.callbacks.world_string)(string_id)
+        self.game.get_string_by_id(string_id).to_vec()
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1166,7 +1167,7 @@ struct WorldUnionFireOutEffects<'game, 'callbacks, 'effects> {
 
 impl UnionFireOutEffects for WorldUnionFireOutEffects<'_, '_, '_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
-        (self.callbacks.world_string)(string_id)
+        self.game.get_string_by_id(string_id).to_vec()
     }
 
     fn format_world_string(
@@ -1174,7 +1175,7 @@ impl UnionFireOutEffects for WorldUnionFireOutEffects<'_, '_, '_> {
         string_id: &'static [u8],
         arguments: &[UnionFormatArgument<'_>],
     ) -> Vec<u8> {
-        (self.callbacks.format_world_string)(string_id, arguments)
+        format_union_world_string(self.game.get_string_by_id(string_id), arguments)
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1182,7 +1183,7 @@ impl UnionFireOutEffects for WorldUnionFireOutEffects<'_, '_, '_> {
     }
 
     fn put_war_log(&mut self, text: &[u8]) {
-        (self.callbacks.put_war_log)(text);
+        put_string_to_file("war", text);
     }
 
     fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32) {
@@ -1203,7 +1204,7 @@ struct WorldFactionDubEffects<'game, 'callbacks, 'effects, 'update, 'log> {
 
 impl FactionOrganizingInfoContext for WorldFactionDubEffects<'_, '_, '_, '_, '_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
-        Some((self.callbacks.world_string)(string_id))
+        Some(self.game.get_string_by_id(string_id).to_vec())
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1228,7 +1229,7 @@ impl FactionDubContext for WorldFactionDubEffects<'_, '_, '_, '_, '_> {
                 FactionDubFormatArgument::Signed(value) => UnionFormatArgument::Signed(*value),
             })
             .collect::<Vec<_>>();
-        (self.callbacks.format_world_string)(string_id, &arguments)
+        format_union_world_string(self.game.get_string_by_id(string_id), &arguments)
     }
 
     fn update_player_faction_info(&mut self, player_id: i32) {
@@ -1275,7 +1276,7 @@ struct WorldFactionPurviewEffects<'game, 'callbacks, 'effects, 'log> {
 
 impl FactionOrganizingInfoContext for WorldFactionPurviewEffects<'_, '_, '_, '_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
-        Some((self.callbacks.world_string)(string_id))
+        Some(self.game.get_string_by_id(string_id).to_vec())
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1285,8 +1286,8 @@ impl FactionOrganizingInfoContext for WorldFactionPurviewEffects<'_, '_, '_, '_>
 
 impl FactionPurviewChangeContext for WorldFactionPurviewEffects<'_, '_, '_, '_> {
     fn format_world_string(&mut self, string_id: &'static [u8], member_name: &[u8]) -> Vec<u8> {
-        (self.callbacks.format_world_string)(
-            string_id,
+        format_union_world_string(
+            self.game.get_string_by_id(string_id),
             &[UnionFormatArgument::Text(member_name)],
         )
     }
@@ -1328,7 +1329,7 @@ impl CityTransferEffects for WorldUnionApplicationEffects<'_> {
     type SessionBlock = CityTransferSessionBlock;
 
     fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
-        (self.callbacks.world_string)(string_id)
+        self.game.get_string_by_id(string_id).to_vec()
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1355,7 +1356,7 @@ impl CityTransferEffects for WorldUnionApplicationEffects<'_> {
         string_id: &'static [u8],
         arguments: &[UnionFormatArgument<'_>],
     ) -> Vec<u8> {
-        (self.callbacks.format_world_string)(string_id, arguments)
+        format_union_world_string(self.game.get_string_by_id(string_id), arguments)
     }
 
     fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32) {
@@ -1378,7 +1379,7 @@ impl AttackCityEndEffects for WorldUnionApplicationEffects<'_> {
         string_id: &'static [u8],
         arguments: &[UnionFormatArgument<'_>],
     ) -> Vec<u8> {
-        (self.callbacks.format_world_string)(string_id, arguments)
+        format_union_world_string(self.game.get_string_by_id(string_id), arguments)
     }
 
     fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32) {
@@ -1397,7 +1398,7 @@ impl AttackCityEndEffects for WorldUnionApplicationEffects<'_> {
 
 impl FactionOrganizingInfoContext for WorldUnionApplicationEffects<'_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
-        Some((self.callbacks.world_string)(string_id))
+        Some(self.game.get_string_by_id(string_id).to_vec())
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1426,7 +1427,7 @@ struct WorldFactionApplicationEffects<'owner, 'effects> {
 
 impl FactionOrganizingInfoContext for WorldFactionApplicationEffects<'_, '_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
-        Some((self.owner.callbacks.world_string)(string_id))
+        Some(self.owner.game.get_string_by_id(string_id).to_vec())
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1448,7 +1449,7 @@ impl FactionApplyForJoinEffects for WorldFactionApplicationEffects<'_, '_> {
             .iter()
             .map(|argument| UnionFormatArgument::Text(*argument))
             .collect::<Vec<_>>();
-        (self.owner.callbacks.format_world_string)(string_id, &arguments)
+        format_union_world_string(self.owner.game.get_string_by_id(string_id), &arguments)
     }
 
     fn faction_apply_log_enabled(&self) -> bool {
@@ -1489,7 +1490,7 @@ struct WorldFactionDoJoinEffects<'game, 'callbacks, 'effects, 'update, 'log> {
 
 impl FactionOrganizingInfoContext for WorldFactionDoJoinEffects<'_, '_, '_, '_, '_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
-        Some((self.callbacks.world_string)(string_id))
+        Some(self.game.get_string_by_id(string_id).to_vec())
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1517,7 +1518,7 @@ impl FactionDoJoinEffects for WorldFactionDoJoinEffects<'_, '_, '_, '_, '_> {
             .iter()
             .map(|argument| UnionFormatArgument::Text(*argument))
             .collect::<Vec<_>>();
-        (self.callbacks.format_world_string)(string_id, &arguments)
+        format_union_world_string(self.game.get_string_by_id(string_id), &arguments)
     }
 
     fn update_player_faction_info(&mut self, player_id: i32) {
@@ -1565,7 +1566,7 @@ struct WorldFactionDemiseEffects<'game, 'callbacks, 'effects, 'update, 'log> {
 
 impl FactionOrganizingInfoContext for WorldFactionDemiseEffects<'_, '_, '_, '_, '_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
-        Some((self.callbacks.world_string)(string_id))
+        Some(self.game.get_string_by_id(string_id).to_vec())
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1595,8 +1596,8 @@ impl FactionDemiseContext for WorldFactionDemiseEffects<'_, '_, '_, '_, '_> {
         string_id: &'static [u8],
         value: i32,
     ) -> Vec<u8> {
-        (self.callbacks.format_world_string)(
-            string_id,
+        format_union_world_string(
+            self.game.get_string_by_id(string_id),
             &[UnionFormatArgument::Signed(value)],
         )
     }
@@ -1607,8 +1608,8 @@ impl FactionDemiseContext for WorldFactionDemiseEffects<'_, '_, '_, '_, '_> {
         old_master_name: &[u8],
         new_master_name: &[u8],
     ) -> Vec<u8> {
-        (self.callbacks.format_world_string)(
-            string_id,
+        format_union_world_string(
+            self.game.get_string_by_id(string_id),
             &[
                 UnionFormatArgument::Text(old_master_name),
                 UnionFormatArgument::Text(new_master_name),
@@ -1659,7 +1660,7 @@ struct WorldFactionExitEffects<'game, 'callbacks, 'effects, 'update, 'log> {
 
 impl FactionOrganizingInfoContext for WorldFactionExitEffects<'_, '_, '_, '_, '_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
-        Some((self.callbacks.world_string)(string_id))
+        Some(self.game.get_string_by_id(string_id).to_vec())
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1687,7 +1688,7 @@ impl FactionExitContext for WorldFactionExitEffects<'_, '_, '_, '_, '_> {
             .iter()
             .map(|argument| UnionFormatArgument::Text(*argument))
             .collect::<Vec<_>>();
-        (self.callbacks.format_world_string)(string_id, &arguments)
+        format_union_world_string(self.game.get_string_by_id(string_id), &arguments)
     }
 
     fn update_player_faction_info(&mut self, player_id: i32) {
@@ -1749,7 +1750,7 @@ impl GoodsWarDeliveryContext for WorldFactionFireOutGoodsWarDelivery<'_> {
 
 impl FactionOrganizingInfoContext for WorldFactionFireOutEffects<'_, '_, '_, '_, '_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
-        Some((self.callbacks.world_string)(string_id))
+        Some(self.game.get_string_by_id(string_id).to_vec())
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1777,7 +1778,7 @@ impl FactionFireOutContext for WorldFactionFireOutEffects<'_, '_, '_, '_, '_> {
             .iter()
             .map(|argument| UnionFormatArgument::Text(*argument))
             .collect::<Vec<_>>();
-        (self.callbacks.format_world_string)(string_id, &arguments)
+        format_union_world_string(self.game.get_string_by_id(string_id), &arguments)
     }
 
     fn update_player_faction_info(&mut self, player_id: i32) {
@@ -1824,7 +1825,7 @@ struct WorldFactionSetParameterEffects<'game, 'callbacks, 'effects, 'update> {
 
 impl FactionOrganizingInfoContext for WorldFactionSetParameterEffects<'_, '_, '_, '_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
-        Some((self.callbacks.world_string)(string_id))
+        Some(self.game.get_string_by_id(string_id).to_vec())
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1838,8 +1839,8 @@ impl FactionLevelContext for WorldFactionSetParameterEffects<'_, '_, '_, '_> {
         string_id: &'static [u8],
         value: i32,
     ) -> Vec<u8> {
-        (self.callbacks.format_world_string)(
-            string_id,
+        format_union_world_string(
+            self.game.get_string_by_id(string_id),
             &[UnionFormatArgument::Signed(value)],
         )
     }
@@ -1863,7 +1864,7 @@ struct WorldFactionUpgradeEffects<'game, 'callbacks, 'effects, 'update> {
 
 impl FactionOrganizingInfoContext for WorldFactionUpgradeEffects<'_, '_, '_, '_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
-        Some((self.callbacks.world_string)(string_id))
+        Some(self.game.get_string_by_id(string_id).to_vec())
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1877,8 +1878,8 @@ impl FactionLevelContext for WorldFactionUpgradeEffects<'_, '_, '_, '_> {
         string_id: &'static [u8],
         value: i32,
     ) -> Vec<u8> {
-        (self.callbacks.format_world_string)(
-            string_id,
+        format_union_world_string(
+            self.game.get_string_by_id(string_id),
             &[UnionFormatArgument::Signed(value)],
         )
     }
@@ -1924,7 +1925,7 @@ impl FactionUpgradeContext for WorldFactionUpgradeEffects<'_, '_, '_, '_> {
                 }
             })
             .collect::<Vec<_>>();
-        (self.callbacks.format_world_string)(string_id, &arguments)
+        format_union_world_string(self.game.get_string_by_id(string_id), &arguments)
     }
 
     fn update_player_faction_info(&mut self, player_id: i32) {
@@ -1961,7 +1962,7 @@ struct WorldFactionUploadIconEffects<'game, 'callbacks, 'effects> {
 
 impl FactionOrganizingInfoContext for WorldFactionUploadIconEffects<'_, '_, '_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
-        Some((self.callbacks.world_string)(string_id))
+        Some(self.game.get_string_by_id(string_id).to_vec())
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1975,8 +1976,8 @@ impl FactionUploadIconContext for WorldFactionUploadIconEffects<'_, '_, '_> {
         string_id: &'static [u8],
         interval_minutes: i32,
     ) -> Vec<u8> {
-        (self.callbacks.format_world_string)(
-            string_id,
+        format_union_world_string(
+            self.game.get_string_by_id(string_id),
             &[UnionFormatArgument::Signed(interval_minutes)],
         )
     }
@@ -1991,7 +1992,7 @@ struct WorldFactionContributorEffects<'game, 'callbacks, 'effects, 'update> {
 
 impl FactionOrganizingInfoContext for WorldFactionContributorEffects<'_, '_, '_, '_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
-        Some((self.callbacks.world_string)(string_id))
+        Some(self.game.get_string_by_id(string_id).to_vec())
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -2005,8 +2006,8 @@ impl FactionContributorContext for WorldFactionContributorEffects<'_, '_, '_, '_
         string_id: &'static [u8],
         member_name: &[u8],
     ) -> Vec<u8> {
-        (self.callbacks.format_world_string)(
-            string_id,
+        format_union_world_string(
+            self.game.get_string_by_id(string_id),
             &[UnionFormatArgument::Text(member_name)],
         )
     }
@@ -2322,7 +2323,6 @@ pub(crate) fn dispatch_faction_war_player_died(
     game: &CGame,
     organizing: &mut COrganizingCtrl,
     faction_war: &mut CFactionWarSys,
-    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     update_player: &mut dyn FnMut(i32),
 ) -> Option<OrganizingFactionWarPlayerDiedDispatch> {
     if message.message_type() != FACTION_WAR_PLAYER_DIED_MESSAGE_TYPE {
@@ -2333,9 +2333,6 @@ pub(crate) fn dispatch_faction_war_player_died(
     let mut effects = WorldFactionWarDeclarationEffects::new(
         game,
         organizing,
-        &mut *callbacks.world_string,
-        &mut *callbacks.format_world_string,
-        &mut *callbacks.put_war_log,
         update_player,
     );
     let outcome = faction_war.on_player_died(
@@ -2591,8 +2588,8 @@ pub(crate) async fn dispatch_create_faction(
     let response = send_create_faction_response(
         game, map_id, request_id, cookie, player_id, result,
     );
-    let first_text = (callbacks.world_string)(notice_id);
-    let second_text = (callbacks.world_string)(b"WS0118");
+    let first_text = game.get_string_by_id(notice_id).to_vec();
+    let second_text = game.get_string_by_id(b"WS0118").to_vec();
     let notice = COrganizingCtrl::send_organizing_info_to_client(
         game,
         FactionMemberInfoRequest {
@@ -4274,7 +4271,6 @@ pub(crate) fn dispatch_declare_faction_war(
     faction_wars: &mut CFactionWarSys,
     registry: &GoodsBasePropertiesRegistry,
     coefficients: &PlayerPropertyCoefficients,
-    callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     update_player: &mut dyn FnMut(i32),
     sender: Option<&ServerCommandHandle>,
 ) -> Option<Result<OrganizingDeclareFactionWarDispatch, OrganizingDeclareFactionWarBlock>> {
@@ -4309,9 +4305,6 @@ pub(crate) fn dispatch_declare_faction_war(
         let mut effects = WorldFactionWarDeclarationEffects::new(
             game,
             organizing,
-            &mut *callbacks.world_string,
-            &mut *callbacks.format_world_string,
-            &mut *callbacks.put_war_log,
             update_player,
         );
         let declaration = match faction_wars.dig_up_the_hatchet(
@@ -5402,8 +5395,8 @@ impl VillageWarApplicationContext for WorldVillageWarApplicationContext<'_, '_, 
         title_string_id: &'static [u8],
         text_string_id: &'static [u8],
     ) -> Result<(), Self::Block> {
-        let title = (self.callbacks.world_string)(title_string_id);
-        let text = (self.callbacks.world_string)(text_string_id);
+        let title = self.game.get_string_by_id(title_string_id).to_vec();
+        let text = self.game.get_string_by_id(text_string_id).to_vec();
         let _ = COrganizingCtrl::send_organizing_info_to_client(
             self.game,
             FactionMemberInfoRequest {
@@ -5427,7 +5420,7 @@ impl VillageWarApplicationContext for WorldVillageWarApplicationContext<'_, '_, 
             .iter()
             .map(|argument| UnionFormatArgument::Text(legacy_c_string_prefix(argument)))
             .collect::<Vec<_>>();
-        let formatted = (self.callbacks.format_world_string)(string_id, &arguments);
+        let formatted = self.game.format_world_string(string_id, &arguments);
         let formatted = legacy_c_string_prefix(&formatted);
         Ok(formatted.to_vec())
     }
@@ -5443,7 +5436,7 @@ impl VillageWarApplicationContext for WorldVillageWarApplicationContext<'_, '_, 
     }
 
     fn write_war_log(&mut self, text: &[u8]) -> Result<(), Self::Block> {
-        (self.callbacks.put_war_log)(text);
+        put_string_to_file("war", text);
         Ok(())
     }
 
@@ -5536,13 +5529,13 @@ pub(crate) struct OrganizingCityWarApplicationDispatch {
     pub(crate) response: Option<Result<i32, SendMessageError>>,
 }
 
-struct CityWarEnemyMutationEffects<'callbacks, 'effects> {
+struct CityWarEnemyMutationEffects<'game> {
+    game: &'game CGame,
     enemy_id: i32,
     enemy_name: Vec<u8>,
-    callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
 }
 
-impl FactionEnemyMutationContext for CityWarEnemyMutationEffects<'_, '_> {
+impl FactionEnemyMutationContext for CityWarEnemyMutationEffects<'_> {
     fn organizing_name(&self, organizing_id: i32) -> Option<Vec<u8>> {
         (organizing_id == self.enemy_id).then(|| self.enemy_name.clone())
     }
@@ -5561,11 +5554,11 @@ impl FactionEnemyMutationContext for CityWarEnemyMutationEffects<'_, '_> {
                 }
             })
             .collect::<Vec<_>>();
-        (self.callbacks.format_world_string)(string_id, &arguments)
+        self.game.format_world_string(string_id, &arguments)
     }
 
     fn put_war_log(&mut self, text: &[u8]) {
-        (self.callbacks.put_war_log)(text);
+        put_string_to_file("war", text);
     }
 }
 
@@ -5621,9 +5614,9 @@ impl AttackCityEnemyRelationContext
                 organizing_id: enemy_organizing_id,
             })?;
         let mut effects = CityWarEnemyMutationEffects {
+            game: self.game,
             enemy_id: enemy_organizing_id,
             enemy_name,
-            callbacks: self.callbacks,
         };
         let found = self
             .organizing
@@ -5757,8 +5750,8 @@ impl AttackCityApplicationContext
         title_string_id: &'static [u8],
         text_string_id: &'static [u8],
     ) -> Result<(), Self::Block> {
-        let title = (self.callbacks.world_string)(title_string_id);
-        let text = (self.callbacks.world_string)(text_string_id);
+        let title = self.game.get_string_by_id(title_string_id).to_vec();
+        let text = self.game.get_string_by_id(text_string_id).to_vec();
         let _ = COrganizingCtrl::send_organizing_info_to_client(
             self.game,
             FactionMemberInfoRequest {
@@ -5778,11 +5771,11 @@ impl AttackCityApplicationContext
         country_id: u8,
         faction_name: &[u8],
     ) -> Result<Vec<u8>, Self::Block> {
-        let fallback = (self.callbacks.world_string)(b"WS0103");
+        let fallback = self.game.get_string_by_id(b"WS0103").to_vec();
         let (string_id, notice) = match self.globe_setup.country_name(country_id) {
             Some(country_name) => (
                 b"WS0145" as &'static [u8],
-                (self.callbacks.format_world_string)(
+                self.game.format_world_string(
                     b"WS0145",
                     &[
                         UnionFormatArgument::Text(country_name),
@@ -5814,7 +5807,7 @@ impl AttackCityApplicationContext
             .collect::<Vec<_>>();
         bounded_city_war_notice(
             string_id,
-            (self.callbacks.format_world_string)(string_id, &arguments),
+            self.game.format_world_string(string_id, &arguments),
         )
     }
 
@@ -5829,7 +5822,7 @@ impl AttackCityApplicationContext
     }
 
     fn write_war_log(&mut self, text: &[u8]) -> Result<(), Self::Block> {
-        (self.callbacks.put_war_log)(text);
+        put_string_to_file("war", text);
         Ok(())
     }
 
@@ -6014,9 +6007,9 @@ impl AttackCityEnemyRelationContext
                 organizing_id: enemy_organizing_id,
             })?;
         let mut effects = CityWarEnemyMutationEffects {
+            game: self.game,
             enemy_id: enemy_organizing_id,
             enemy_name,
-            callbacks: self.callbacks,
         };
         let found = self
             .organizing
@@ -6155,7 +6148,7 @@ impl CountryExileResultContext
                 CountryExileTextArgument::Signed(value) => UnionFormatArgument::Signed(*value),
             })
             .collect::<Vec<_>>();
-        (self.callbacks.format_world_string)(string_id, &arguments)
+        self.game.format_world_string(string_id, &arguments)
     }
 
     fn game_server_number_by_player_id(&mut self, player_id: i32) -> i32 {
@@ -6420,7 +6413,7 @@ impl AttackCityWarResultContext
                 }
             })
             .collect::<Vec<_>>();
-        let formatted = (self.callbacks.format_world_string)(string_id, &arguments);
+        let formatted = self.game.format_world_string(string_id, &arguments);
         let formatted = legacy_c_string_prefix(&formatted);
         Ok(formatted.to_vec())
     }
@@ -6436,7 +6429,7 @@ impl AttackCityWarResultContext
     }
 
     fn write_war_log(&mut self, text: &[u8]) -> Result<(), Self::Block> {
-        (self.callbacks.put_war_log)(text);
+        put_string_to_file("war", text);
         Ok(())
     }
 
@@ -7169,7 +7162,7 @@ impl VillageWarResultContext for WorldVillageWarResultContext<'_, '_, '_, '_, '_
             .iter()
             .map(|argument| UnionFormatArgument::Text(legacy_c_string_prefix(argument)))
             .collect::<Vec<_>>();
-        let formatted = (self.callbacks.format_world_string)(string_id, &arguments);
+        let formatted = self.game.format_world_string(string_id, &arguments);
         let formatted = legacy_c_string_prefix(&formatted);
         Ok(formatted.to_vec())
     }
@@ -7185,7 +7178,7 @@ impl VillageWarResultContext for WorldVillageWarResultContext<'_, '_, '_, '_, '_
     }
 
     fn write_war_log(&mut self, text: &[u8]) -> Result<(), Self::Block> {
-        (self.callbacks.put_war_log)(text);
+        put_string_to_file("war", text);
         Ok(())
     }
 
