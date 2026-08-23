@@ -25,9 +25,15 @@
 //! CMyNetServer`, а runtime context сохраняет только ещё не материализованные
 //! concrete derived AI lookup и realtime clock.
 //!
-//! Combat, skills, pets, общий AI tick и остальные поля/методы ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Derived HP/figure передаются как факты, а не копируются из
-//! ещё сырых player/monster owners.
+//! Combat, pets, общий AI tick и остальные поля/методы ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Для battle-fairy combine материализован `AddSkill` common
+//! state: factory подтверждает level/type/name, а `BTreeMap` хранит identity
+//! вместо четырёх raw pointer-vector-ов. Concrete skill execution, его virtual
+//! параметры и char-name overload остаются у отдельных skill owners. Derived
+//! HP/figure передаются как факты, а не копируются из ещё сырых player/monster
+//! owners.
+
+use std::collections::BTreeMap;
 
 use super::ai::baseai::{AiShapeAction, CBaseAI};
 use super::region::{CRegion, RegionCellAccessBlock};
@@ -36,6 +42,7 @@ use super::shape::{
     CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
     ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapePositionDispatch, ShapeResolver,
 };
+use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
 use crate::public::tools::get_line_direction;
 
@@ -43,6 +50,39 @@ const NPC_TYPE: i32 = 500;
 const SET_POSITION_MESSAGE: i32 = 0xBF603;
 const FORCE_MOVE_MESSAGE: i32 = 0xBF604;
 const MOVE_MESSAGE: i32 = 0xBF605;
+const SKILL_TYPE_ATTACK: u32 = 0;
+const SKILL_TYPE_DEFENSE: u32 = 1;
+const SKILL_TYPE_STATE: u32 = 2;
+const SKILL_TYPE_SUMMON: u32 = 3;
+
+/// Достигнутая common-проекция `CSkill`: identity, level, category и name.
+/// Исполнение concrete attack/defense/state/summon owners остаётся у самих
+/// skill owners; здесь хранится точный результат `CMoveShape::AddSkill`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MoveShapeSkill {
+    id: u32,
+    level: i32,
+    skill_type: u32,
+    name: Vec<u8>,
+}
+
+impl MoveShapeSkill {
+    pub(crate) const fn id(&self) -> u32 {
+        self.id
+    }
+
+    pub(crate) const fn level(&self) -> i32 {
+        self.level
+    }
+
+    pub(crate) const fn skill_type(&self) -> u32 {
+        self.skill_type
+    }
+
+    pub(crate) fn name(&self) -> &[u8] {
+        &self.name
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MoveShapePositionBlock {
@@ -83,6 +123,7 @@ pub(crate) trait MoveShapeResolver: ShapeResolver {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CMoveShape {
     shape: CShape,
+    skills: BTreeMap<u32, MoveShapeSkill>,
 }
 
 impl CMoveShape {
@@ -92,6 +133,46 @@ impl CMoveShape {
 
     pub(crate) const fn shape_mut(&mut self) -> &mut CShape {
         &mut self.shape
+    }
+
+    pub(crate) const fn skills(&self) -> &BTreeMap<u32, MoveShapeSkill> {
+        &self.skills
+    }
+
+    pub(crate) fn skill(&self, skill_id: u32) -> Option<&MoveShapeSkill> {
+        self.skills.get(&skill_id)
+    }
+
+    /// Exact `AddSkill(tagSkillID, long)` для already decoded factory registry:
+    /// прежний ненулевой уровень не понижается; иначе entry заменяется только
+    /// для одной из четырёх canonical категорий.
+    pub(crate) fn add_skill(&mut self, skill_id: u32, level: i32, factory: &CSkillFactory) -> bool {
+        if let Some(existing) = self.skills.get(&skill_id) {
+            if existing.level != 0 && level <= existing.level {
+                return true;
+            }
+        }
+        self.skills.remove(&skill_id);
+        let Some(properties) = factory.query_skill_base_properties(skill_id, level) else {
+            return false;
+        };
+        let skill_type = properties.skill_type();
+        if !matches!(
+            skill_type,
+            SKILL_TYPE_ATTACK | SKILL_TYPE_DEFENSE | SKILL_TYPE_STATE | SKILL_TYPE_SUMMON
+        ) {
+            return false;
+        }
+        self.skills.insert(
+            skill_id,
+            MoveShapeSkill {
+                id: skill_id,
+                level,
+                skill_type,
+                name: properties.skill_name().to_vec(),
+            },
+        );
+        true
     }
 
     pub(crate) fn set_pos_xy(
@@ -1578,7 +1659,5 @@ fn clamp_force_y(destination: i32, width: i32, height: i32) -> i32 {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
 
 // COMPONENT_VARIANT_END: GameServer

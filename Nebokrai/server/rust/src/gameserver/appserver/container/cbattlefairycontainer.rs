@@ -9,25 +9,37 @@
 //! записи compose, публикуя legacy packet `0xbf92c`; его `fistp` использует
 //! truncation к нулю. Gem success/fail/probability и upgrade-price queries
 //! сохраняют positional RNG, signed clamp и неинициализированный cached price
-//! как `Option`.
+//! как `Option`. Полный combine теперь разделяет check-only `0xbf92c` и
+//! execution: global gate, точные различия notification для missing catalog,
+//! порядок remove `body → stone → material`, RNG-result и ownership
+//! созданного товара выполняются в `CPlayer`; этот owner даёт recipe,
+//! positional storage и `LoadBFDefualtProperty` callback в том же порядке.
 //!
 //! Автоматический overload читает неинициализированный `m_eBFEquipPlace` у
 //! catalog owner-а. Rust выражает этот UB как typed block, а не выбирает
-//! логичную ячейку из позднего C++-донора. Остальные combine/upgrade/summon и
-//! player-integrated remove методы ниже пока остаются RAW.
+//! логичную ячейку из позднего C++-донора. Upgrade/summon и остальные
+//! player-integrated методы ниже остаются RAW.
 
-use super::camountlimitgoodscontainer::{AmountLimitGoodsCleared, AmountLimitGoodsRelease};
-use super::cvolumelimitgoodscontainer::{CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome};
+use super::camountlimitgoodscontainer::{
+    AmountLimitGoodsCleared, AmountLimitGoodsRelease, AmountLimitGoodsTaken,
+};
+use super::cvolumelimitgoodscontainer::{
+    CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome,
+};
 use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyCompose;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
-    GAP_BF_BATTLE_FAIRY, GAP_BF_BFEQUIPEMENT, GAP_BF_CLOTH, GAP_BF_FETCH_BODY, GAP_BF_FETCH_STONE,
-    GAP_BF_GEM, GAP_BF_GLOVE, GAP_BF_HUXINJING, GAP_BF_JEWELLERY, GAP_BF_MATERIAL, GAP_BF_PIFENG,
-    GAP_BF_WEAPON, GAP_BF_XIEZI, GAP_BF_YAODAI, GAP_GEM_PROBABILITY, GAP_GEM_TYPE,
-    GAP_GEM_UPGRADE_FAILED_RESULT, GAP_GEM_UPGRADE_SUCCEED_RESULT, GAP_GOODS_UPGRADE_PRICE,
-    GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
+    GAP_BF_BATTLE_FAIRY, GAP_BF_BFEQUIPEMENT, GAP_BF_CLOTH, GAP_BF_DEFUALT_SKLL, GAP_BF_EARTH,
+    GAP_BF_FETCH_BODY, GAP_BF_FETCH_STONE, GAP_BF_GEM, GAP_BF_GLOVE, GAP_BF_HP,
+    GAP_BF_HUOXIESHU_SKILL, GAP_BF_HUXINJING, GAP_BF_JEWELLERY, GAP_BF_LINGZHISHU_SKILL,
+    GAP_BF_MAN, GAP_BF_MATERIAL, GAP_BF_MAX_HP, GAP_BF_MAX_MP, GAP_BF_MP, GAP_BF_PIFENG,
+    GAP_BF_SKY, GAP_BF_SPRITUALISM_BASE, GAP_BF_STRENGH_BASE, GAP_BF_WEAPON, GAP_BF_XIEZI,
+    GAP_BF_YAODAI, GAP_GEM_PROBABILITY, GAP_GEM_TYPE, GAP_GEM_UPGRADE_FAILED_RESULT,
+    GAP_GEM_UPGRADE_SUCCEED_RESULT, GAP_GOODS_UPGRADE_PRICE, GOODS_TYPE_CONSUMABLE,
+    GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::gameserver::appserver::shape::ShapeIdentity;
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,6 +99,9 @@ pub(crate) struct BattleFairyPropertyAddEffect {
 }
 
 pub(crate) const BATTLE_FAIRY_COMBINE_MESSAGE_TYPE: u32 = 0x0b_f92c;
+const SKILL_HUOXIESHU: u32 = 546;
+const SKILL_LINGZHISHU: u32 = 547;
+const SKILL_BATTLEFAIRY_BASE_ATTACK: u32 = 548;
 
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -129,6 +144,66 @@ pub(crate) struct BattleFairyCombineCheck {
     pub(crate) player_id: Option<i32>,
     pub(crate) notification: Option<BattleFairyCombineNotification>,
     pub(crate) availability: Option<BattleFairyCombineAvailability>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyDefaultSkill {
+    pub(crate) id: u32,
+    pub(crate) level: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyDefaultAddonWrite {
+    pub(crate) property_type: i32,
+    pub(crate) value_id: u32,
+    pub(crate) value: i32,
+    /// У setter-а нет registry fallback: false означает, что catalog-addon
+    /// существовал только в статическом описании и instance не изменён.
+    pub(crate) stored: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyDefaultGoodsUpdate {
+    pub(crate) message_type: u32,
+    pub(crate) player_id: i32,
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) old_client_payload: Vec<u8>,
+}
+
+/// Результат `LoadBFDefualtProperty`: callback регистрирует skill в owner-е
+/// player до следующей addon-записи, а отчёт сохраняет только успешно
+/// найденные через `GetSkill` registrations.
+#[must_use = "report содержит обязательные skill-state и goods-update effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyDefaultPropertyReport {
+    pub(crate) attempted_writes: Vec<BattleFairyDefaultAddonWrite>,
+    pub(crate) registered_skills: Vec<BattleFairyDefaultSkill>,
+    pub(crate) goods_update: BattleFairyDefaultGoodsUpdate,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyCombineExecutionNotification {
+    MissingMaterial,
+    MissingFetchStone,
+    MissingFetchBody,
+    CannotSummon,
+}
+
+impl BattleFairyCombineExecutionNotification {
+    pub(crate) const fn string_id(self) -> &'static str {
+        match self {
+            Self::MissingMaterial => "ZHGS0056",
+            Self::MissingFetchStone => "ZHGS0057",
+            Self::MissingFetchBody => "ZHGS0058",
+            Self::CannotSummon => "ZHGS0060",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyCombineRemovedInput {
+    pub(crate) cell: BattleFairyCell,
+    pub(crate) goods: ShapeIdentity,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -372,6 +447,168 @@ impl CBattleFairyContainer {
 
     pub(crate) const fn stored_upgrade_price(&self) -> Option<u32> {
         self.upgrade_price
+    }
+
+    /// Exact `LoadBFDefualtProperty` меняет только товар принадлежащего
+    /// существующему player-а. Базовые HP/MP копируются в current и maximum,
+    /// затем выставляются три стартовых skill ID и три talent ID.
+    pub(crate) fn load_default_properties<Register>(
+        player_id: Option<i32>,
+        goods: &mut CGoods,
+        factory: &CGoodsFactory,
+        register_skill: &mut Register,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> Option<BattleFairyDefaultPropertyReport>
+    where
+        Register: FnMut(BattleFairyDefaultSkill) -> bool,
+    {
+        let player_id = player_id?;
+        let strength = goods.addon_property_value(factory, GAP_BF_STRENGH_BASE, 1);
+        let spiritualism = goods.addon_property_value(factory, GAP_BF_SPRITUALISM_BASE, 1);
+        let mut attempted_writes: Vec<_> = [
+            (GAP_BF_HP, 1, strength),
+            (GAP_BF_MAX_HP, 1, strength),
+            (GAP_BF_MP, 1, spiritualism),
+            (GAP_BF_MAX_MP, 1, spiritualism),
+        ]
+        .into_iter()
+        .map(
+            |(property_type, value_id, value)| BattleFairyDefaultAddonWrite {
+                property_type,
+                value_id,
+                value,
+                stored: goods.set_addon_property_value_core(property_type, value_id, value),
+            },
+        )
+        .collect();
+
+        let mut registered_skills = Vec::with_capacity(3);
+        for (property_type, skill) in [
+            (
+                GAP_BF_HUOXIESHU_SKILL,
+                BattleFairyDefaultSkill {
+                    id: SKILL_HUOXIESHU,
+                    level: 1,
+                },
+            ),
+            (
+                GAP_BF_LINGZHISHU_SKILL,
+                BattleFairyDefaultSkill {
+                    id: SKILL_LINGZHISHU,
+                    level: 1,
+                },
+            ),
+            (
+                GAP_BF_DEFUALT_SKLL,
+                BattleFairyDefaultSkill {
+                    id: SKILL_BATTLEFAIRY_BASE_ATTACK,
+                    level: 1,
+                },
+            ),
+        ] {
+            attempted_writes.push(BattleFairyDefaultAddonWrite {
+                property_type,
+                value_id: 2,
+                value: skill.id as i32,
+                stored: goods.set_addon_property_value_core(property_type, 2, skill.id as i32),
+            });
+            if register_skill(skill) {
+                registered_skills.push(skill);
+            }
+        }
+
+        attempted_writes.extend(
+            [
+                (GAP_BF_SKY, 2, 0x3c0),
+                (GAP_BF_EARTH, 2, 0x3c1),
+                (GAP_BF_MAN, 2, 0x3c2),
+            ]
+            .into_iter()
+            .map(
+                |(property_type, value_id, value)| BattleFairyDefaultAddonWrite {
+                    property_type,
+                    value_id,
+                    value,
+                    stored: goods.set_addon_property_value_core(property_type, value_id, value),
+                },
+            ),
+        );
+        Some(BattleFairyDefaultPropertyReport {
+            attempted_writes,
+            registered_skills,
+            goods_update: BattleFairyDefaultGoodsUpdate {
+                message_type: crate::gameserver::appserver::goods::cbattlefairyproperty::BATTLE_FAIRY_GOODS_UPDATE_MESSAGE_TYPE,
+                player_id,
+                goods: goods.identity(),
+                old_client_payload: encode_old_client(goods),
+            },
+        })
+    }
+
+    /// Actual `BatllteFairyCombine` различает отсутствие properties fetch-body
+    /// (`ZHGS0060`) от check-only opcode, который возвращает `ZHGS0056`.
+    pub(crate) fn battle_fairy_combine_recipe(
+        &self,
+        factory: &CGoodsFactory,
+        compose: &[BattleFairyCompose],
+    ) -> Result<BattleFairyCompose, BattleFairyCombineExecutionNotification> {
+        let material = self
+            .base
+            .get_goods(BattleFairyCell::Material.position())
+            .ok_or(BattleFairyCombineExecutionNotification::MissingMaterial)?;
+        let material_properties = factory
+            .query_goods_base_properties(material.base_properties_index())
+            .ok_or(BattleFairyCombineExecutionNotification::MissingMaterial)?;
+        let fetch_stone = self
+            .base
+            .get_goods(BattleFairyCell::FetchStone.position())
+            .ok_or(BattleFairyCombineExecutionNotification::MissingFetchStone)?;
+        let fetch_stone_properties = factory
+            .query_goods_base_properties(fetch_stone.base_properties_index())
+            .ok_or(BattleFairyCombineExecutionNotification::MissingFetchStone)?;
+        let fetch_body = self
+            .base
+            .get_goods(BattleFairyCell::FetchBody.position())
+            .ok_or(BattleFairyCombineExecutionNotification::MissingFetchBody)?;
+        let fetch_body_properties = factory
+            .query_goods_base_properties(fetch_body.base_properties_index())
+            .ok_or(BattleFairyCombineExecutionNotification::CannotSummon)?;
+        compose
+            .iter()
+            .find(|recipe| {
+                recipe.fetch_stone == fetch_stone_properties.original_name()
+                    && recipe.fetch_body == fetch_body_properties.original_name()
+                    && recipe.material == material_properties.original_name()
+            })
+            .cloned()
+            .ok_or(BattleFairyCombineExecutionNotification::CannotSummon)
+    }
+
+    /// `BatllteFairyCombine` удаляет input именно в порядке body, stone,
+    /// material. Returned identity остаётся доступной для `OT_DELETE_OBJECT`;
+    /// detached `CGoods` затем уничтожается тем же owner-ом.
+    pub(crate) fn remove_battle_fairy_combine_input(
+        &mut self,
+        cell: BattleFairyCell,
+    ) -> Option<BattleFairyCombineRemovedInput> {
+        let identity = self.base.get_goods(cell.position())?.identity();
+        let outcome = self.base.remove_goods(identity.ex_id)?;
+        match outcome {
+            VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Removed(removed))
+            | VolumeGoodsRemoveOutcome::RemovedButCellMissing(AmountLimitGoodsTaken::Removed(
+                removed,
+            )) => {
+                let _released = removed.goods;
+                Some(BattleFairyCombineRemovedInput {
+                    cell,
+                    goods: identity,
+                })
+            }
+            VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Split(_))
+            | VolumeGoodsRemoveOutcome::RemovedButCellMissing(AmountLimitGoodsTaken::Split(_)) => {
+                None
+            }
+        }
     }
 
     /// Проверяет только публично наблюдаемый запрос combine. Оригинал сначала

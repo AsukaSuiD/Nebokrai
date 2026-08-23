@@ -27,23 +27,111 @@
 //! остальные constructor-owned containers пока не материализованы.
 //! Exact `GetWarSoulGoods` читает headgear cell 10 и признаёт её боевой феей
 //! только при addon `GAP_BF_BATTLE_FAIRY` value-id 1, равном единице.
+//! `BatllteFairyCombine` соединяет container inputs, global BattleFairy gate,
+//! fetch power, shared Game RNG/factory, `CMoveShape::AddSkill` и ordered
+//! адресные object/skill/goods/audit effects. `BTreeMap` skill storage в
+//! `CMoveShape` заменяет четыре pointer-vector-а только для общего confirmed
+//! identity/level/type/name state; выполнение concrete skill owners не
+//! перенесено сюда. Account для audit принадлежит player snapshot и пока
+//! заполняется отдельным caller-ом при восстановлении player identity.
 //! Поэтому `from_send_state` остаётся явной assembly-границей уже
 //! восстановленного runtime. Figure передаётся как доказанный derived virtual
 //! fact; владение spatial state остаётся у `CMoveShape`.
 
-use super::container::cbattlefairycontainer::{BattleFairyCombineCheck, CBattleFairyContainer};
+use super::container::cbattlefairycontainer::{
+    BattleFairyCombineCheck, BattleFairyCombineRemovedInput, BattleFairyContainerAddOutcome,
+    BattleFairyDefaultGoodsUpdate, BattleFairyDefaultSkill, CBattleFairyContainer,
+};
 use super::container::cequipmentcontainer::CEquipmentContainer;
+use super::container::cvolumelimitgoodscontainer::VolumeGoodsAddOutcome;
 use super::goods::cbattlefairyproperty::BattleFairyCompose;
 use super::goods::cgoods::CGoods;
 use super::goods::cgoodsbaseproperties::GAP_BF_BATTLE_FAIRY;
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::moveshape::CMoveShape;
 use super::shape::{CShape, ShapeFigure, ShapeView};
+use super::skills::skillfactory::CSkillFactory;
 
 const PLAYER_TYPE: i32 = 400;
 const LEGACY_COMBAT_MAXIMUM: u32 = i32::MAX as u32;
 const CONTRIBUTION_MINIMUM: i32 = -2_000_000_000;
 const CONTRIBUTION_MAXIMUM: i32 = 2_000_000_000;
+const BATTLE_FAIRY_SKILL_ADDED_MESSAGE_TYPE: u32 = 0x0b_f71d;
+const BATTLE_FAIRY_FETCH_POWER_MESSAGE_TYPE: u32 = 0x0b_f80c;
+const BATTLE_FAIRY_CONTAINER_EXTEND_ID: u32 = 0x0c;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyObjectMoveOperation {
+    Delete,
+    New,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyObjectMove {
+    pub(crate) operation: BattleFairyObjectMoveOperation,
+    pub(crate) player_id: i32,
+    pub(crate) container_extend_id: u32,
+    pub(crate) goods: super::shape::ShapeIdentity,
+    pub(crate) old_client_payload: Option<Vec<u8>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairySkillAdded {
+    pub(crate) message_type: u32,
+    pub(crate) player_id: i32,
+    pub(crate) skill_id: u32,
+    pub(crate) skill_level: i32,
+    pub(crate) skill_type: u32,
+    pub(crate) skill_name: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyAuditLog {
+    pub(crate) string_id: &'static str,
+    pub(crate) account: Vec<u8>,
+    pub(crate) goods_name: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyCombineEffect {
+    Notification {
+        player_id: i32,
+        string_id: &'static str,
+        color: u32,
+    },
+    FetchPowerChanged {
+        message_type: u32,
+        player_id: i32,
+        subject_id: i32,
+        property_name: &'static str,
+        value: u32,
+    },
+    ObjectMove(BattleFairyObjectMove),
+    SkillAdded(BattleFairySkillAdded),
+    GoodsUpdated(BattleFairyDefaultGoodsUpdate),
+    Audit(BattleFairyAuditLog),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyCombineOutcome {
+    FeatureDisabled,
+    Rejected,
+    InsufficientFetchPower,
+    InputRemovalStopped,
+    Failed,
+    CreationFailed,
+    CreationRejected,
+    Created,
+}
+
+#[must_use = "combine report содержит последовательность адресных packet/log effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyCombineReport {
+    pub(crate) player_id: i32,
+    pub(crate) outcome: BattleFairyCombineOutcome,
+    pub(crate) removed_inputs: Vec<BattleFairyCombineRemovedInput>,
+    pub(crate) effects: Vec<BattleFairyCombineEffect>,
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerBaseProperties {
@@ -100,6 +188,7 @@ pub(crate) struct CPlayer {
     contribution: i32,
     silence_minutes: i32,
     silence_timestamp_minutes: u32,
+    account: Vec<u8>,
     equipment: CEquipmentContainer,
     battle_fairy_container: CBattleFairyContainer,
 }
@@ -130,6 +219,7 @@ impl CPlayer {
             contribution: 0,
             silence_minutes: 0,
             silence_timestamp_minutes: 0,
+            account: Vec::new(),
             equipment: CEquipmentContainer::new(),
             battle_fairy_container: CBattleFairyContainer::new(),
         };
@@ -191,6 +281,17 @@ impl CPlayer {
 
     pub(crate) const fn battle_fairy_container_mut(&mut self) -> &mut CBattleFairyContainer {
         &mut self.battle_fairy_container
+    }
+
+    /// Account принадлежит player snapshot и используется exact audit-log
+    /// combine; отсутствие ещё не загруженного account остаётся пустой строкой.
+    pub(crate) fn set_account(&mut self, account: impl AsRef<[u8]>) {
+        self.account.clear();
+        self.account.extend_from_slice(account.as_ref());
+    }
+
+    pub(crate) fn account(&self) -> &[u8] {
+        &self.account
     }
 
     /// Exact `GetWarSoulGoods`: боевой дух — только headgear в позиции 10,
@@ -370,6 +471,238 @@ impl CPlayer {
             factory,
             compose,
         )
+    }
+
+    /// Полный player-side `BatllteFairyCombine`: gate, validation, exact
+    /// random/deplete/remove order, creation, skill-state и адресные effects.
+    /// Transport получает уже ordered report, не подменяя неизвестные поля
+    /// исторических packet-encoder-ов выдуманными нулями.
+    pub(crate) fn combine_battle_fairy<Create>(
+        &mut self,
+        battle_fairy_enabled: bool,
+        setup_maximum_fetch_power: i32,
+        factory: &CGoodsFactory,
+        compose: &[BattleFairyCompose],
+        skill_factory: &CSkillFactory,
+        random: &mut dyn FnMut(i32) -> i32,
+        create_goods: &mut Create,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> BattleFairyCombineReport
+    where
+        Create: FnMut(u32, &mut dyn FnMut(i32) -> i32) -> Option<CGoods>,
+    {
+        let player_id = self.player_id();
+        let mut report = BattleFairyCombineReport {
+            player_id,
+            outcome: BattleFairyCombineOutcome::Rejected,
+            removed_inputs: Vec::with_capacity(3),
+            effects: Vec::new(),
+        };
+        if !battle_fairy_enabled {
+            report.outcome = BattleFairyCombineOutcome::FeatureDisabled;
+            report.effects.push(BattleFairyCombineEffect::Notification {
+                player_id,
+                string_id: "ZHGS0008",
+                color: 0xffff_0000,
+            });
+            return report;
+        }
+
+        let recipe = match self
+            .battle_fairy_container
+            .battle_fairy_combine_recipe(factory, compose)
+        {
+            Ok(recipe) => recipe,
+            Err(notification) => {
+                report.effects.push(BattleFairyCombineEffect::Notification {
+                    player_id,
+                    string_id: notification.string_id(),
+                    color: 0xffff_ffff,
+                });
+                return report;
+            }
+        };
+        let fetch_power = self.base_properties.fetch_power;
+        if fetch_power < recipe.deplete_fetch {
+            report.outcome = BattleFairyCombineOutcome::InsufficientFetchPower;
+            report.effects.push(BattleFairyCombineEffect::Notification {
+                player_id,
+                string_id: "ZHGS0061",
+                color: 0xffff_ffff,
+            });
+            return report;
+        }
+
+        let success = (random(100) as f32) < recipe.success_rate;
+        if !success {
+            report.effects.push(BattleFairyCombineEffect::Notification {
+                player_id,
+                string_id: "ZHGS0006",
+                color: 0xffff_ffff,
+            });
+        }
+        self.set_fetch_power(
+            fetch_power.wrapping_sub(recipe.deplete_fetch),
+            setup_maximum_fetch_power,
+        );
+        report
+            .effects
+            .push(BattleFairyCombineEffect::FetchPowerChanged {
+                message_type: BATTLE_FAIRY_FETCH_POWER_MESSAGE_TYPE,
+                player_id,
+                subject_id: player_id,
+                property_name: "dwFetchPower",
+                value: self.base_properties.fetch_power,
+            });
+
+        for cell in [
+            super::container::cbattlefairycontainer::BattleFairyCell::FetchBody,
+            super::container::cbattlefairycontainer::BattleFairyCell::FetchStone,
+            super::container::cbattlefairycontainer::BattleFairyCell::Material,
+        ] {
+            let Some(removed) = self
+                .battle_fairy_container
+                .remove_battle_fairy_combine_input(cell)
+            else {
+                report.outcome = BattleFairyCombineOutcome::InputRemovalStopped;
+                return report;
+            };
+            report.effects.push(BattleFairyCombineEffect::ObjectMove(
+                BattleFairyObjectMove {
+                    operation: BattleFairyObjectMoveOperation::Delete,
+                    player_id,
+                    container_extend_id: BATTLE_FAIRY_CONTAINER_EXTEND_ID,
+                    goods: removed.goods,
+                    old_client_payload: None,
+                },
+            ));
+            report.removed_inputs.push(removed);
+        }
+
+        if !success {
+            report.outcome = BattleFairyCombineOutcome::Failed;
+            report
+                .effects
+                .push(BattleFairyCombineEffect::Audit(BattleFairyAuditLog {
+                    string_id: "ZHGS0007",
+                    account: self.account.clone(),
+                    goods_name: Vec::new(),
+                }));
+            return report;
+        }
+
+        let Some(created) = create_goods(recipe.index, random) else {
+            report.outcome = BattleFairyCombineOutcome::CreationFailed;
+            report
+                .effects
+                .push(BattleFairyCombineEffect::Audit(BattleFairyAuditLog {
+                    string_id: "ZHGS0003",
+                    account: self.account.clone(),
+                    goods_name: Vec::new(),
+                }));
+            return report;
+        };
+        let created_identity = created.identity();
+        let mut incoming = Some(created);
+        let stored = matches!(
+            self.battle_fairy_container.add_at(
+                super::container::cbattlefairycontainer::BattleFairyCell::Battle,
+                &mut incoming,
+                factory,
+                true,
+            ),
+            BattleFairyContainerAddOutcome::Stored {
+                base: VolumeGoodsAddOutcome::Added(_),
+                ..
+            }
+        );
+        if !stored {
+            report.outcome = BattleFairyCombineOutcome::CreationRejected;
+            return report;
+        }
+
+        let old_client_payload = {
+            let goods = self
+                .battle_fairy_container
+                .base()
+                .get_goods(
+                    super::container::cbattlefairycontainer::BattleFairyCell::Battle.position(),
+                )
+                .expect("успешный add боевой феи сохранил goods в Battle cell");
+            encode_old_client(goods)
+        };
+        report.effects.push(BattleFairyCombineEffect::ObjectMove(
+            BattleFairyObjectMove {
+                operation: BattleFairyObjectMoveOperation::New,
+                player_id,
+                container_extend_id: BATTLE_FAIRY_CONTAINER_EXTEND_ID,
+                goods: created_identity,
+                old_client_payload: Some(old_client_payload),
+            },
+        ));
+        report.effects.push(BattleFairyCombineEffect::Notification {
+            player_id,
+            string_id: "ZHGS0004",
+            color: 0xffff_ffff,
+        });
+
+        let mut skill_effects = Vec::with_capacity(3);
+        let default_properties = {
+            let (move_shape, container) = (&mut self.move_shape, &mut self.battle_fairy_container);
+            let goods = container
+                .base_mut()
+                .get_goods_mut(
+                    super::container::cbattlefairycontainer::BattleFairyCell::Battle.position(),
+                )
+                .expect("успешный add боевой феи оставляет Battle cell доступной");
+            let mut register_skill = |skill: BattleFairyDefaultSkill| {
+                if !move_shape.add_skill(skill.id, skill.level, skill_factory) {
+                    return false;
+                }
+                let stored = move_shape
+                    .skill(skill.id)
+                    .expect("успешный AddSkill публикует найденный skill");
+                skill_effects.push(BattleFairyCombineEffect::SkillAdded(
+                    BattleFairySkillAdded {
+                        message_type: BATTLE_FAIRY_SKILL_ADDED_MESSAGE_TYPE,
+                        player_id,
+                        skill_id: stored.id(),
+                        skill_level: stored.level(),
+                        skill_type: stored.skill_type(),
+                        skill_name: stored.name().to_vec(),
+                    },
+                ));
+                true
+            };
+            CBattleFairyContainer::load_default_properties(
+                Some(player_id),
+                goods,
+                factory,
+                &mut register_skill,
+                encode_old_client,
+            )
+            .expect("existing player ID разрешает LoadBFDefualtProperty")
+        };
+        report.effects.extend(skill_effects);
+        report.effects.push(BattleFairyCombineEffect::GoodsUpdated(
+            default_properties.goods_update,
+        ));
+        let goods_name = self
+            .battle_fairy_container
+            .base()
+            .get_goods(super::container::cbattlefairycontainer::BattleFairyCell::Battle.position())
+            .expect("созданная боевая фея остаётся в Battle cell")
+            .name()
+            .to_vec();
+        report
+            .effects
+            .push(BattleFairyCombineEffect::Audit(BattleFairyAuditLog {
+                string_id: "ZHGS0005",
+                account: self.account.clone(),
+                goods_name,
+            }));
+        report.outcome = BattleFairyCombineOutcome::Created;
+        report
     }
 
     pub(crate) fn shape_view(&self) -> Option<ShapeView> {

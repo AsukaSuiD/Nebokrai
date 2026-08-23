@@ -11,7 +11,8 @@
 //! или неполная группа очищает всю map; child `Level` не читается.
 //! Game decoder очищает map, но создаёт key только при первом exp value;
 //! повторная wire-группа того же owner level дописывается в прежний vector.
-//! Gameplay query `GetUpdateLevelExp` остаётся за границей этого snapshot-шага.
+//! `dwExpUp` выбирает `level - 1`, возвращая ноль для нулевого level,
+//! отсутствующей owner-группы и выхода за её границы.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -38,6 +39,17 @@ impl CBattleFairyExpConfig {
 
     pub(crate) fn contains_exp_list(&self, owner_level: u32) -> bool {
         self.exp_lists.contains_key(&owner_level)
+    }
+
+    pub(crate) fn dw_exp_up(&self, equip_level: u32, level: u32) -> u32 {
+        if level == 0 {
+            return 0;
+        }
+        self.exp_lists
+            .get(&equip_level)
+            .and_then(|values| values.get((level - 1) as usize))
+            .copied()
+            .unwrap_or(0)
     }
 
     pub(crate) fn exp_lists(&self) -> &BTreeMap<u32, Vec<u32>> {

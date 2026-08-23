@@ -169,6 +169,10 @@ impl CFairyExpConf {
     ) -> Result<BattleFairyExpDecodeReport, BattleFairyExpDecodeError> {
         self.base.decord_from_byte_array(source, cursor)
     }
+
+    pub(crate) fn dw_exp_up(&self, equip_level: u32, level: u32) -> u32 {
+        self.base.dw_exp_up(equip_level, level)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

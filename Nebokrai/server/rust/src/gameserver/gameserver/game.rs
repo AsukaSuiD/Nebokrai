@@ -54,6 +54,10 @@
 //! lookup-ы без process-global raw pointers.
 //! `CGoodsFactory` аналогично хранит startup selector `0x00`, включая оба
 //! byte-name index-а для последующего container/goods lifecycle.
+//! Battle-fairy combine теперь замыкает game player-map с GlobeSetup gate и
+//! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
+//! registry и явным old-client serializer-ом; он возвращает ordered адресные
+//! effects, потому что transport encoder этого семейства ещё отдельный owner.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
@@ -95,7 +99,7 @@ use crate::gameserver::appserver::message::sequencestring::{
 };
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::organizingsystem::fournationwarsys::CFourNationWarSys;
-use crate::gameserver::appserver::player::CPlayer;
+use crate::gameserver::appserver::player::{BattleFairyCombineReport, CPlayer};
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::servercityregion::CServerCityRegion;
 use crate::gameserver::appserver::servercountryregion::CServerCountryRegion;
@@ -1994,6 +1998,57 @@ impl CGame {
                     self.battle_fairy_property.compose(),
                 )
             })
+    }
+
+    /// Исполняемый caller combine из `goodsmessage` после lookup player-а.
+    /// Отсутствующий player, как и исходный outer lookup, не посылает packet.
+    /// Old-client serializer остаётся explicit transport boundary: его нельзя
+    /// заменить пустым payload без изменения `OT_NEW_OBJECT/0xbf918`.
+    pub(crate) fn combine_battle_fairy(
+        &mut self,
+        player_id: i32,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> Option<BattleFairyCombineReport> {
+        let battle_fairy_enabled = self.globe_setup.battle_fairy_enabled();
+        let maximum_fetch_power = self.globe_setup.maximum_fetch_power();
+        let (
+            players,
+            random_state,
+            goods_factory,
+            skill_factory,
+            fairy_exp_conf,
+            battle_fairy_exp_config,
+            battle_fairy_property,
+        ) = (
+            &mut self.players,
+            &mut self.random_state,
+            &self.goods_factory,
+            &self.skill_factory,
+            &self.fairy_exp_conf,
+            &self.battle_fairy_exp_config,
+            &self.battle_fairy_property,
+        );
+        let player = players.get_mut(&player_id)?;
+        let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
+        let mut create_goods = |goods_index, random: &mut dyn FnMut(i32) -> i32| {
+            goods_factory.create_goods(
+                goods_index,
+                |upper_bound| random(upper_bound),
+                || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+                |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
+                |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
+            )
+        };
+        Some(player.combine_battle_fairy(
+            battle_fairy_enabled,
+            maximum_fetch_power,
+            goods_factory,
+            battle_fairy_property.compose(),
+            skill_factory,
+            &mut random,
+            &mut create_goods,
+            encode_old_client,
+        ))
     }
 
     /// Исполняет один исходный snapshot входящих FIFO в порядке WS, BS, GS.

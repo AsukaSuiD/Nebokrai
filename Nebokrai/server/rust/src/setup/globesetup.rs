@@ -52,6 +52,8 @@ const GOODS_AI_OFFSET: usize = 0xC4C;
 const DA_KONG_KEY_OFFSET: usize = 0xC85;
 const AREA_WIDTH_OFFSET: usize = 0x514;
 const AREA_HEIGHT_OFFSET: usize = 0x518;
+const MAX_FETCH_POWER_OFFSET: usize = 0x900;
+const BATTLE_FAIRY_ENABLED_OFFSET: usize = 0x904;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -175,8 +177,8 @@ impl GlobeSetupSnapshot {
         })
     }
 
- /// Читает positional `setup/globesetup.ini` в точные PDB-offsets.
- /// Активный snapshot меняется только после полного успешного разбора.
+    /// Читает positional `setup/globesetup.ini` в точные PDB-offsets.
+    /// Активный snapshot меняется только после полного успешного разбора.
     pub(crate) fn load_globe_setup(
         &mut self,
         source: &[u8],
@@ -201,9 +203,9 @@ impl GlobeSetupSnapshot {
         })
     }
 
- /// Накладывает `setup/gamesetup.ini` поверх уже загруженного Globe blob.
- /// Поставочный RU-файл содержит 47 записей; EXE допускает 48-ю запись
- /// `lTransferMoneyTime`, оставляя ноль при её отсутствии.
+    /// Накладывает `setup/gamesetup.ini` поверх уже загруженного Globe blob.
+    /// Поставочный RU-файл содержит 47 записей; EXE допускает 48-ю запись
+    /// `lTransferMoneyTime`, оставляя ноль при её отсутствии.
     pub(crate) fn load_game_setup(
         &mut self,
         source: &[u8],
@@ -322,6 +324,18 @@ impl GlobeSetupSnapshot {
         self.read_i32(AREA_HEIGHT_OFFSET)
     }
 
+    /// `lMaxFetchPower +0x900`: `CPlayer::SetFetchPower` сравнивает его
+    /// после unsigned cast, поэтому отрицательное значение не нормализуется.
+    pub(crate) fn maximum_fetch_power(&self) -> i32 {
+        self.read_i32(MAX_FETCH_POWER_OFFSET)
+    }
+
+    /// `bBattleFairy +0x904` — общий gate для combine и связанных skill
+    /// сообщений; это не persisted `CPlayer::bBattleFairyEnabled`.
+    pub(crate) const fn battle_fairy_enabled(&self) -> bool {
+        self.bytes[BATTLE_FAIRY_ENABLED_OFFSET] != 0
+    }
+
     pub(crate) const fn da_kong_key(&self) -> bool {
         self.bytes[DA_KONG_KEY_OFFSET] != 0
     }
@@ -334,8 +348,8 @@ impl GlobeSetupSnapshot {
         self.read_f32(MONSTER_NUMBER_SCALE_OFFSET)
     }
 
- /// Возвращает точное поле `dwSavePointTime` по PDB-смещению `+0x510`.
- /// `CGame::MainLoop` читает это значение при interval-gate сохранения.
+    /// Возвращает точное поле `dwSavePointTime` по PDB-смещению `+0x510`.
+    /// `CGame::MainLoop` читает это значение при interval-gate сохранения.
     pub(crate) fn save_point_time_ms(&self) -> u32 {
         self.read_u32(SAVE_POINT_TIME_OFFSET)
     }
@@ -352,9 +366,9 @@ impl GlobeSetupSnapshot {
         self.bytes[0xcd1] != 0
     }
 
- /// Возвращает process-настройки, которые `CJJcSystem::Run` читает из
- /// загруженного `gamesetup.ini`. Неиспользуемые этим owner-ом соседние
- /// `DefaultJJcLevel`, queue interval и buff ID в проекцию не входят.
+    /// Возвращает process-настройки, которые `CJJcSystem::Run` читает из
+    /// загруженного `gamesetup.ini`. Неиспользуемые этим owner-ом соседние
+    /// `DefaultJJcLevel`, queue interval и buff ID в проекцию не входят.
     pub(crate) fn jjc_run_config(&self) -> crate::worldserver::appworld::jjcsystem::JjcRunConfig {
         crate::worldserver::appworld::jjcsystem::JjcRunConfig {
             use_jjc: self.read_i32(JJC_ENABLED_OFFSET),
@@ -366,9 +380,9 @@ impl GlobeSetupSnapshot {
         }
     }
 
- /// Возвращает `lTransferMoneyTime` для reconnect-gate `CDbMisc`.
- /// Поставочный файл может не содержать последнюю запись; zero-filled
- /// snapshot тогда сохраняет исходный нулевой интервал.
+    /// Возвращает `lTransferMoneyTime` для reconnect-gate `CDbMisc`.
+    /// Поставочный файл может не содержать последнюю запись; zero-filled
+    /// snapshot тогда сохраняет исходный нулевой интервал.
     pub(crate) fn transfer_money_interval_ms(&self) -> i32 {
         self.read_i32(TRANSFER_MONEY_INTERVAL_OFFSET)
     }
@@ -435,7 +449,10 @@ impl GlobeSetupSnapshot {
         }
         let start = COUNTRY_NAME_OFFSET + index * COUNTRY_NAME_SLOT_LENGTH;
         let slot = &self.bytes[start..start + COUNTRY_NAME_SLOT_LENGTH];
-        let visible_len = slot.iter().position(|byte| *byte == 0).unwrap_or(slot.len());
+        let visible_len = slot
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(slot.len());
         Some(&slot[..visible_len])
     }
 
@@ -446,14 +463,20 @@ impl GlobeSetupSnapshot {
         }
         let start = COUNTRY_IDENTITY_OFFSET + index * COUNTRY_NAME_SLOT_LENGTH;
         let slot = &self.bytes[start..start + COUNTRY_NAME_SLOT_LENGTH];
-        let visible_len = slot.iter().position(|byte| *byte == 0).unwrap_or(slot.len());
+        let visible_len = slot
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(slot.len());
         Some(&slot[..visible_len])
     }
 
     pub(crate) fn special_string(&self) -> &[u8] {
         let slot =
             &self.bytes[SPECIAL_STRING_OFFSET..SPECIAL_STRING_OFFSET + SPECIAL_STRING_LENGTH];
-        let visible_len = slot.iter().position(|byte| *byte == 0).unwrap_or(slot.len());
+        let visible_len = slot
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(slot.len());
         &slot[..visible_len]
     }
 
@@ -549,7 +572,11 @@ impl fmt::Display for GlobeSetupLoadError {
                 formatter,
                 "ожидалось от {expected_minimum} до {expected_maximum} записей GlobeSetup, найдено {actual}"
             ),
-            Self::Record { line, label, reason } => write!(
+            Self::Record {
+                line,
+                label,
+                reason,
+            } => write!(
                 formatter,
                 "GlobeSetup, строка {line} ('{}'): {reason}",
                 String::from_utf8_lossy(label)
@@ -622,10 +649,9 @@ fn globe_record_specs() -> Vec<Vec<GlobeField>> {
     add_array(&mut records, 144, K::I32, 3, 4);
     add_array(&mut records, 156, K::F32, 4, 4);
 
- // Два назначения offset 396 и отсутствующий 268 повторяют extraction-chain EXE.
+    // Два назначения offset 396 и отсутствующий 268 повторяют extraction-chain EXE.
     let drop_bases = [
-        172, 204, 236, 396, 300, 332, 364, 396, 428, 460, 492, 524, 556, 588, 620,
-        652, 684, 716,
+        172, 204, 236, 396, 300, 332, 364, 396, 428, 460, 492, 524, 556, 588, 620, 652, 684, 716,
     ];
     for row in 0..2 {
         for column in 0..4 {
@@ -661,14 +687,20 @@ fn globe_record_specs() -> Vec<Vec<GlobeField>> {
     add_one(&mut records, 1004, K::I32);
     add_array(&mut records, 1008, K::U16, 5, 2);
     for index in 0..6 {
-        records.push(vec![field(1020 + index * 4, K::F32), field(1044 + index * 2, K::U16)]);
+        records.push(vec![
+            field(1020 + index * 4, K::F32),
+            field(1044 + index * 2, K::U16),
+        ]);
     }
     add_one(&mut records, 1056, K::I32);
     add_one(&mut records, 1060, K::I32);
     add_one(&mut records, 1064, K::F32);
     add_one(&mut records, 1068, K::F32);
     for index in 0..12 {
-        records.push(vec![field(1072 + index * 4, K::U32), field(1120 + index * 4, K::U32)]);
+        records.push(vec![
+            field(1072 + index * 4, K::U32),
+            field(1120 + index * 4, K::U32),
+        ]);
     }
     add_array(&mut records, 1168, K::I32, 3, 4);
     add_array(&mut records, 1180, K::I32, 3, 4);
@@ -676,7 +708,10 @@ fn globe_record_specs() -> Vec<Vec<GlobeField>> {
     add_array(&mut records, 0, K::Ignore, 3, 0);
     add_one(&mut records, 1216, K::U16);
     for index in 0..4 {
-        records.push(vec![field(1220 + index * 4, K::F32), field(1236 + index * 2, K::U16)]);
+        records.push(vec![
+            field(1220 + index * 4, K::F32),
+            field(1236 + index * 2, K::U16),
+        ]);
     }
     add_array(&mut records, 1244, K::U32, 11, 4);
     add_one(&mut records, 1288, K::F32);
@@ -688,7 +723,9 @@ fn globe_record_specs() -> Vec<Vec<GlobeField>> {
     add_one(&mut records, 1380, K::U32);
     add_one(&mut records, 1384, K::F32);
     add_one(&mut records, 1388, K::I32);
-    for offset in [1392, 1432, 1472, 1512, 1552, 1592, 1632, 1672, 1712, 1752, 1792] {
+    for offset in [
+        1392, 1432, 1472, 1512, 1552, 1592, 1632, 1672, 1712, 1752, 1792,
+    ] {
         add_array(&mut records, offset, K::F32, 10, 4);
     }
     add_one(&mut records, 1832, K::U32);
@@ -831,22 +868,46 @@ fn apply_field(
             Ok(())
         }
         K::Char64 => write_fixed_string(&mut candidate.bytes, field.offset, value),
-        K::U8 => write_number::<u8>(&mut candidate.bytes, field.offset, value, "ожидалось unsigned 8-bit число"),
+        K::U8 => write_number::<u8>(
+            &mut candidate.bytes,
+            field.offset,
+            value,
+            "ожидалось unsigned 8-bit число",
+        ),
         K::Bool => {
             if !matches!(value, b"0" | b"1") {
                 return Err("ожидалось boolean 0 или 1");
             }
-            write_number::<u8>(&mut candidate.bytes, field.offset, value, "ожидалось boolean 0 или 1")
+            write_number::<u8>(
+                &mut candidate.bytes,
+                field.offset,
+                value,
+                "ожидалось boolean 0 или 1",
+            )
         }
-        K::U16 => write_number::<u16>(&mut candidate.bytes, field.offset, value, "ожидалось unsigned 16-bit число"),
-        K::I32 => write_number::<i32>(&mut candidate.bytes, field.offset, value, "ожидалось signed 32-bit число"),
-        K::U32 => write_number::<u32>(&mut candidate.bytes, field.offset, value, "ожидалось unsigned 32-bit число"),
+        K::U16 => write_number::<u16>(
+            &mut candidate.bytes,
+            field.offset,
+            value,
+            "ожидалось unsigned 16-bit число",
+        ),
+        K::I32 => write_number::<i32>(
+            &mut candidate.bytes,
+            field.offset,
+            value,
+            "ожидалось signed 32-bit число",
+        ),
+        K::U32 => write_number::<u32>(
+            &mut candidate.bytes,
+            field.offset,
+            value,
+            "ожидалось unsigned 32-bit число",
+        ),
         K::F32 => {
             let parsed = parse_number::<f32>(value)
                 .filter(|number| number.is_finite())
                 .ok_or("ожидалось конечное 32-bit floating-point число")?;
-            candidate.bytes[field.offset..field.offset + 4]
-                .copy_from_slice(&parsed.to_le_bytes());
+            candidate.bytes[field.offset..field.offset + 4].copy_from_slice(&parsed.to_le_bytes());
             Ok(())
         }
     }
