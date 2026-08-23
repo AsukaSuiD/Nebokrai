@@ -77,6 +77,7 @@ use crate::nets::servers::ServerHostError;
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::setup::contributesetup::CContributeSetup;
+use crate::setup::fairyexpconf::CFairyExpConf;
 use crate::setup::gmlist::CGMList;
 use crate::setup::hitlevelsetup::CHitLevelSetup;
 use crate::setup::incrementshoplist::CIncrementShopList;
@@ -86,6 +87,7 @@ use crate::setup::playerlist::CPlayerList;
 use crate::setup::preciousboxconf::PreciousBoxConf;
 use crate::setup::prisonconf::PrisonConf;
 use crate::setup::regionsetup::CRegionSetup;
+use crate::setup::synthesis::CSynthesis;
 use crate::setup::tradelist::CTradeList;
 use crate::transport::bind_tcp_ipv4;
 
@@ -710,6 +712,8 @@ pub(crate) struct CGame {
     hit_level_setup: CHitLevelSetup,
     prison_conf: PrisonConf,
     precious_box_conf: PreciousBoxConf,
+    fairy_exp_conf: CFairyExpConf,
+    synthesis: CSynthesis,
     dupli_region_setup: Option<CDupliRegionSetup>,
     move_check_cells: MoveCheckCellRegistry,
     player_ranks: Option<CPlayerRanks>,
@@ -747,6 +751,8 @@ impl CGame {
             hit_level_setup: CHitLevelSetup::default(),
             prison_conf: PrisonConf::default(),
             precious_box_conf: PreciousBoxConf::default(),
+            fairy_exp_conf: CFairyExpConf::default(),
+            synthesis: CSynthesis::default(),
             dupli_region_setup: None,
             move_check_cells: MoveCheckCellRegistry::new(),
             player_ranks: None,
@@ -1004,6 +1010,14 @@ impl CGame {
 
     pub(crate) const fn precious_box_conf_mut(&mut self) -> &mut PreciousBoxConf {
         &mut self.precious_box_conf
+    }
+
+    pub(crate) const fn fairy_exp_conf_mut(&mut self) -> &mut CFairyExpConf {
+        &mut self.fairy_exp_conf
+    }
+
+    pub(crate) const fn synthesis_mut(&mut self) -> &mut CSynthesis {
+        &mut self.synthesis
     }
 
     pub(crate) const fn dupli_region_setup(&self) -> Option<&CDupliRegionSetup> {

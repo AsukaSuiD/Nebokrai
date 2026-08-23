@@ -38,6 +38,7 @@ use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::nets::netserver::mynetclient::CMyNetClient;
 use crate::public::dupliregionsetup::DupliRegionDecodeError;
+use crate::setup::cbattlefairyexpconfig::{BattleFairyExpDecodeError, BattleFairyExpDecodeReport};
 use crate::setup::contributesetup::ContributeSetupDecodeError;
 use crate::setup::gmlist::{GmListDecodeError, GmListDecodeReport};
 use crate::setup::hitlevelsetup::HitLevelDecodeError;
@@ -48,6 +49,7 @@ use crate::setup::playerlist::{PlayerListDecodeError, PlayerListDecodeReport};
 use crate::setup::preciousboxconf::PreciousBoxDecodeError;
 use crate::setup::prisonconf::PrisonConfDecodeError;
 use crate::setup::regionsetup::RegionSetupDecodeError;
+use crate::setup::synthesis::{SynthesisDecodeError, SynthesisDecodeReport};
 use crate::setup::tradelist::TradeListDecodeError;
 
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
@@ -64,6 +66,8 @@ const PLAYER_RANKS_SELECTOR: i32 = 0x17;
 const DUPLI_REGION_SELECTOR: i32 = 0x1a;
 const PRISON_CONF_SELECTOR: i32 = 0x1d;
 const PRECIOUS_BOX_CONF_SELECTOR: i32 = 0x1e;
+const FAIRY_EXP_SELECTOR: i32 = 0x20;
+const SYNTHESIS_SELECTOR: i32 = 0x21;
 const THING_SETUP_SELECTOR: i32 = 0x36;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -149,6 +153,8 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     DupliRegions { entries: usize },
     PrisonConf { entries: usize },
     PreciousBoxConf { entries: usize },
+    FairyExp(BattleFairyExpDecodeReport),
+    Synthesis(SynthesisDecodeReport),
     ThingSetup { entries: usize },
 }
 
@@ -167,6 +173,8 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     DupliRegions(DupliRegionDecodeError),
     PrisonConf(PrisonConfDecodeError),
     PreciousBoxConf(PreciousBoxDecodeError),
+    FairyExp(BattleFairyExpDecodeError),
+    Synthesis(SynthesisDecodeError),
     ThingSetup(ThingSetupCodecError),
 }
 
@@ -191,6 +199,8 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::DupliRegions(error) => error.fmt(formatter),
             Self::PrisonConf(error) => error.fmt(formatter),
             Self::PreciousBoxConf(error) => error.fmt(formatter),
+            Self::FairyExp(error) => error.fmt(formatter),
+            Self::Synthesis(error) => error.fmt(formatter),
             Self::ThingSetup(error) => error.fmt(formatter),
         }
     }
@@ -212,6 +222,8 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::DupliRegions(error) => Some(error),
             Self::PrisonConf(error) => Some(error),
             Self::PreciousBoxConf(error) => Some(error),
+            Self::FairyExp(error) => Some(error),
+            Self::Synthesis(error) => Some(error),
             Self::ThingSetup(error) => Some(error),
         }
     }
@@ -368,6 +380,25 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             Some(Ok(GameOwnedStartupSnapshotReport::PreciousBoxConf {
                 entries,
             }))
+        }
+        FAIRY_EXP_SELECTOR => {
+            let report = match game
+                .fairy_exp_conf_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(report) => report,
+                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::FairyExp(error))),
+            };
+            add_log_text("Initial SI_FAIRY_EXP...ok!");
+            Some(Ok(GameOwnedStartupSnapshotReport::FairyExp(report)))
+        }
+        SYNTHESIS_SELECTOR => {
+            let report = match game.synthesis_mut().decord_from_byte_array(source, cursor) {
+                Ok(report) => report,
+                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::Synthesis(error))),
+            };
+            add_log_text("Initial SI_SYNTHESIS...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::Synthesis(report)))
         }
         THING_SETUP_SELECTOR => {
             if let Err(error) = game

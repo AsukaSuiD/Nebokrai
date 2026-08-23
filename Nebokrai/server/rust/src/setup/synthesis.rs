@@ -1,5 +1,6 @@
-//! Синтез `CSynthesis` из WorldServer, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Синтез `CSynthesis` из WorldServer/GameServer.
+//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходный owner `setup/synthesis.cpp`.
 //!
 //! Wire сначала передаёт ordered broadcast map, затем recipes и их formula
 //! records. В recipe probability идёт раньше type, хотя C++ layout обратный;
@@ -8,13 +9,17 @@
 //! Loader очищает recipes, но сохраняет прежний broadcast map: это разные
 //! static owners, и ошибка позднего Item не откатывает ранние Broadcast.
 //! `quick-xml` с узкой нормализацией unquoted attributes заменяет TinyXML.
+//! Game decoder, напротив, очищает оба owners. Recipe публикуется лишь после
+//! полного временного formula-vector; safe NUL reader заменяет старый
+//! безразмерный `_GetStringFromByteArray` и не воспроизводит его overflow.
+//! Gameplay query-family `Get*` ещё не связана с runtime call sites.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
+use quick_xml::events::{BytesStart, Event};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SynthesisFormula {
@@ -59,6 +64,14 @@ impl CSynthesis {
         self.recipes.clear();
     }
 
+    pub(crate) fn broadcasts(&self) -> &BTreeMap<u16, Vec<u8>> {
+        &self.broadcasts
+    }
+
+    pub(crate) fn recipes(&self) -> &[SynthesisRecipe] {
+        &self.recipes
+    }
+
     pub(crate) fn load_from_bytes<GoodsLookup>(
         &mut self,
         source: &[u8],
@@ -68,10 +81,7 @@ impl CSynthesis {
         GoodsLookup: FnMut(&[u8]) -> (u32, Option<Vec<u8>>),
     {
         self.clear_recipes();
-        let result = self.load_from_bytes_after_clear(
-            source,
-            &mut goods_lookup,
-        );
+        let result = self.load_from_bytes_after_clear(source, &mut goods_lookup);
         if result.is_err() {
             self.clear_recipes();
         }
@@ -266,7 +276,9 @@ impl CSynthesis {
                 formulas: Vec::new(),
             });
         } else if depth == 3 && name == b"Formula" {
-            let item = active_item.as_mut().ok_or(SynthesisLoadError::InvalidFormat)?;
+            let item = active_item
+                .as_mut()
+                .ok_or(SynthesisLoadError::InvalidFormat)?;
             let original_name = required_attribute(
                 start,
                 b"strFormulaName",
@@ -281,7 +293,10 @@ impl CSynthesis {
                 b"wFormulaNum",
                 SynthesisLoadError::MissingFormulaNumber,
             )?) as u32;
-            item.formulas.push(SynthesisFormula { goods_index, amount });
+            item.formulas.push(SynthesisFormula {
+                goods_index,
+                amount,
+            });
         }
         Ok(())
     }
@@ -319,11 +334,7 @@ impl CSynthesis {
             destination.push(0);
         }
 
-        write_count(
-            destination,
-            self.recipes.len(),
-            SynthesisCount::Recipes,
-        )?;
+        write_count(destination, self.recipes.len(), SynthesisCount::Recipes)?;
         for recipe in &self.recipes {
             ensure_c_string(
                 &recipe.key,
@@ -332,7 +343,7 @@ impl CSynthesis {
                 },
             )?;
             destination.extend_from_slice(&recipe.synthesis_index.to_le_bytes());
- // Compatibility quirk: EXE отправляет probability раньше type.
+            // Compatibility quirk: EXE отправляет probability раньше type.
             destination.extend_from_slice(&recipe.probability.to_le_bytes());
             destination.extend_from_slice(&recipe.synthesis_type.to_le_bytes());
             destination.extend_from_slice(&recipe.goods_index.to_le_bytes());
@@ -354,6 +365,73 @@ impl CSynthesis {
             }
         }
         Ok(())
+    }
+
+    /// Воспроизводит `CSynthesis::DecordFromByteArray` GameServer.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<SynthesisDecodeReport, SynthesisDecodeError> {
+        self.clear();
+
+        let broadcast_count = read_wire_i32(source, cursor)?;
+        for _ in 0..broadcast_count.max(0) {
+            let tag = read_wire_u16(source, cursor)?;
+            let text = read_wire_c_string(source, cursor)?;
+            self.broadcasts.insert(tag, text);
+        }
+
+        let recipe_count = read_wire_i32(source, cursor)?;
+        self.recipes
+            .try_reserve(recipe_count.max(0) as usize)
+            .map_err(|source| SynthesisDecodeError::Allocation {
+                field: SynthesisDecodeField::Recipes,
+                source,
+            })?;
+        for recipe_index in 0..recipe_count.max(0) {
+            let synthesis_index = read_wire_u32(source, cursor)?;
+            // Compatibility quirk: wire передаёт probability раньше type.
+            let probability = read_wire_u16(source, cursor)?;
+            let synthesis_type = read_wire_u16(source, cursor)?;
+            let goods_index = read_wire_u32(source, cursor)?;
+            let coins = read_wire_i32(source, cursor)?;
+            let prestige = read_wire_i32(source, cursor)?;
+            let broadcast_tag = read_wire_u16(source, cursor)?;
+            let key = read_wire_c_string(source, cursor)?;
+            let formula_count = read_wire_i32(source, cursor)?;
+            let mut formulas = Vec::new();
+            formulas
+                .try_reserve(formula_count.max(0) as usize)
+                .map_err(|source| SynthesisDecodeError::Allocation {
+                    field: SynthesisDecodeField::Formulas {
+                        recipe_index: recipe_index as usize,
+                    },
+                    source,
+                })?;
+            for _ in 0..formula_count.max(0) {
+                formulas.push(SynthesisFormula {
+                    goods_index: read_wire_u32(source, cursor)?,
+                    amount: read_wire_u32(source, cursor)?,
+                });
+            }
+            self.recipes.push(SynthesisRecipe {
+                synthesis_index,
+                synthesis_type,
+                probability,
+                goods_index,
+                coins,
+                prestige,
+                broadcast_tag,
+                key,
+                formulas,
+            });
+        }
+
+        Ok(SynthesisDecodeReport {
+            broadcasts: self.broadcasts.len(),
+            recipes: self.recipes.len(),
+        })
     }
 }
 
@@ -448,7 +526,11 @@ fn legacy_atoi(value: &[u8]) -> i32 {
 }
 
 fn legacy_atol(value: &[u8]) -> i32 {
-    let mut bytes = value.iter().copied().skip_while(u8::is_ascii_whitespace).peekable();
+    let mut bytes = value
+        .iter()
+        .copied()
+        .skip_while(u8::is_ascii_whitespace)
+        .peekable();
     let negative = matches!(bytes.peek(), Some(b'-'));
     if matches!(bytes.peek(), Some(b'-' | b'+')) {
         bytes.next();
@@ -564,13 +646,8 @@ impl fmt::Display for SynthesisString {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SynthesisSerializeError {
-    CountOutOfRange {
-        field: SynthesisCount,
-        count: usize,
-    },
-    StringContainsNul {
-        field: SynthesisString,
-    },
+    CountOutOfRange { field: SynthesisCount, count: usize },
+    StringContainsNul { field: SynthesisString },
 }
 
 impl fmt::Display for SynthesisSerializeError {
@@ -580,12 +657,85 @@ impl fmt::Display for SynthesisSerializeError {
                 formatter,
                 "количество {field} ({count}) не помещается в signed 32-битный диапазон"
             ),
-            Self::StringContainsNul { field } => write!(formatter, "{field} содержит внутренний NUL"),
+            Self::StringContainsNul { field } => {
+                write!(formatter, "{field} содержит внутренний NUL")
+            }
         }
     }
 }
 
 impl Error for SynthesisSerializeError {}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct SynthesisDecodeReport {
+    pub(crate) broadcasts: usize,
+    pub(crate) recipes: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SynthesisDecodeField {
+    Recipes,
+    Formulas { recipe_index: usize },
+}
+
+impl fmt::Display for SynthesisDecodeField {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Recipes => formatter.write_str("recipes синтеза"),
+            Self::Formulas { recipe_index } => {
+                write!(formatter, "formulas recipe #{recipe_index}")
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum SynthesisDecodeError {
+    UnexpectedEnd {
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    UnterminatedString {
+        offset: usize,
+        available: usize,
+    },
+    Allocation {
+        field: SynthesisDecodeField,
+        source: std::collections::TryReserveError,
+    },
+}
+
+impl fmt::Display for SynthesisDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd {
+                offset,
+                needed,
+                available,
+            } => write!(
+                formatter,
+                "Synthesis snapshot обрывается на {offset}: нужно {needed}, доступно {available}"
+            ),
+            Self::UnterminatedString { offset, available } => write!(
+                formatter,
+                "Synthesis string с позиции {offset} не имеет NUL в {available} доступных байтах"
+            ),
+            Self::Allocation { field, .. } => {
+                write!(formatter, "не удалось выделить память для {field}")
+            }
+        }
+    }
+}
+
+impl Error for SynthesisDecodeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Allocation { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
 
 fn write_count(
     destination: &mut Vec<u8>,
@@ -605,4 +755,52 @@ fn ensure_c_string(value: &[u8], field: SynthesisString) -> Result<(), Synthesis
     Ok(())
 }
 
-// queries и Game decoder-а, а не как Rust-реализация.
+fn read_wire_u16(source: &[u8], cursor: &mut usize) -> Result<u16, SynthesisDecodeError> {
+    Ok(u16::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, SynthesisDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, SynthesisDecodeError> {
+    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], SynthesisDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(SynthesisDecodeError::UnexpectedEnd {
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("размер Synthesis scalar уже проверен"))
+}
+
+fn read_wire_c_string(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, SynthesisDecodeError> {
+    let offset = *cursor;
+    let tail = source
+        .get(offset..)
+        .ok_or(SynthesisDecodeError::UnexpectedEnd {
+            offset,
+            needed: 1,
+            available: 0,
+        })?;
+    let Some(length) = tail.iter().position(|byte| *byte == 0) else {
+        return Err(SynthesisDecodeError::UnterminatedString {
+            offset,
+            available: tail.len(),
+        });
+    };
+    *cursor = offset + length + 1;
+    Ok(tail[..length].to_vec())
+}

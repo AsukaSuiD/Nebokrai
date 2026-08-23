@@ -12,6 +12,7 @@
 //! Game decoder очищает только `_box` и публикует box после полного разбора
 //! его временного odds-vector. Safe short-buffer поэтому оставляет прежние
 //! полные box-ы, но не текущий; неизвестный UB безразмерного pointer отброшен.
+//! Random reward query остаётся за границей восстановленного snapshot-owner-а.
 
 use std::collections::BTreeMap;
 use std::error::Error;

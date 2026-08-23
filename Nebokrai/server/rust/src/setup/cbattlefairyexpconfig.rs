@@ -1,5 +1,7 @@
-//! Опыт battle fairy `CBattleFairyExpConfig` из WorldServer, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Опыт fairy/battle fairy `CBattleFairyExpConfig` из WorldServer/GameServer.
+//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходный owner
+//! `server/setup/cbattlefairyexpconfig.h/.cpp`.
 //!
 //! Wire — signed group count, затем ordered owner level, signed value count и
 //! `u32` exp values. `CFairyExpConf` наследует этот serializer.
@@ -7,6 +9,9 @@
 //! Loader принимает `ZHUANHUNJINGYANLIEBIAO/ZhanHunPinZhong`, требует
 //! `RenZhuLevel`, `MaxLevel` и не менее `MaxLevel - 1` значений. Duplicate level
 //! или неполная группа очищает всю map; child `Level` не читается.
+//! Game decoder очищает map, но создаёт key только при первом exp value;
+//! повторная wire-группа того же owner level дописывается в прежний vector.
+//! Gameplay query `GetUpdateLevelExp` остаётся за границей этого snapshot-шага.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -14,8 +19,8 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 
-use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::events::Event;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CBattleFairyExpConfig {
@@ -33,6 +38,10 @@ impl CBattleFairyExpConfig {
 
     pub(crate) fn contains_exp_list(&self, owner_level: u32) -> bool {
         self.exp_lists.contains_key(&owner_level)
+    }
+
+    pub(crate) fn exp_lists(&self) -> &BTreeMap<u32, Vec<u32>> {
+        &self.exp_lists
     }
 
     pub(crate) fn clear(&mut self) {
@@ -178,7 +187,9 @@ impl CBattleFairyExpConfig {
             return Err(BattleFairyExpLoadError::MissingRoot);
         }
         if active_group.is_some() || depth != 0 {
-            return Err(BattleFairyExpLoadError::Xml("незавершённый XML element".into()));
+            return Err(BattleFairyExpLoadError::Xml(
+                "незавершённый XML element".into(),
+            ));
         }
         Ok(report)
     }
@@ -206,6 +217,28 @@ impl CBattleFairyExpConfig {
             }
         }
         Ok(())
+    }
+
+    /// Воспроизводит `CBattleFairyExpConfig::DecordFromByteArray` GameServer.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<BattleFairyExpDecodeReport, BattleFairyExpDecodeError> {
+        self.exp_lists.clear();
+        let group_count = read_wire_i32(source, cursor)?;
+        for _ in 0..group_count.max(0) {
+            let owner_level = read_wire_u32(source, cursor)?;
+            let value_count = read_wire_i32(source, cursor)?;
+            for _ in 0..value_count.max(0) {
+                let value = read_wire_u32(source, cursor)?;
+                self.exp_lists.entry(owner_level).or_default().push(value);
+            }
+        }
+        Ok(BattleFairyExpDecodeReport {
+            groups: self.exp_lists.len(),
+            experience_values: self.exp_lists.values().map(Vec::len).sum(),
+        })
     }
 }
 
@@ -266,7 +299,9 @@ impl fmt::Display for BattleFairyExpLoadError {
                 formatter,
                 "RenZhuLevel {owner_level} содержит {actual} exp values при MaxLevel {max_level}"
             ),
-            Self::ZhanHunOutsideGroup => formatter.write_str("ZhanHun находится вне ZhanHunPinZhong"),
+            Self::ZhanHunOutsideGroup => {
+                formatter.write_str("ZhanHun находится вне ZhanHunPinZhong")
+            }
             Self::Xml(error) => write!(formatter, "некорректный XML: {error}"),
         }
     }
@@ -330,7 +365,11 @@ fn ensure_minimum_exp_values(
 }
 
 fn legacy_atol(value: &[u8]) -> i32 {
-    let mut bytes = value.iter().copied().skip_while(u8::is_ascii_whitespace).peekable();
+    let mut bytes = value
+        .iter()
+        .copied()
+        .skip_while(u8::is_ascii_whitespace)
+        .peekable();
     let negative = matches!(bytes.peek(), Some(b'-'));
     if matches!(bytes.peek(), Some(b'-' | b'+')) {
         bytes.next();
@@ -378,17 +417,65 @@ impl fmt::Display for BattleFairyExpSerializeError {
 
 impl Error for BattleFairyExpSerializeError {}
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct BattleFairyExpDecodeReport {
+    pub(crate) groups: usize,
+    pub(crate) experience_values: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyExpDecodeError {
+    pub(crate) offset: usize,
+    pub(crate) needed: usize,
+    pub(crate) available: usize,
+}
+
+impl fmt::Display for BattleFairyExpDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "FairyExp snapshot обрывается на {}: нужно {}, доступно {}",
+            self.offset, self.needed, self.available
+        )
+    }
+}
+
+impl Error for BattleFairyExpDecodeError {}
+
 fn write_count(
     destination: &mut Vec<u8>,
     count: usize,
     owner_level: Option<u32>,
 ) -> Result<(), BattleFairyExpSerializeError> {
-    let count_i32 = i32::try_from(count).map_err(|_| BattleFairyExpSerializeError {
-        owner_level,
-        count,
-    })?;
+    let count_i32 =
+        i32::try_from(count).map_err(|_| BattleFairyExpSerializeError { owner_level, count })?;
     destination.extend_from_slice(&count_i32.to_le_bytes());
     Ok(())
 }
 
-// Game decoder/query, а не как Rust-реализация.
+fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, BattleFairyExpDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, BattleFairyExpDecodeError> {
+    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], BattleFairyExpDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(BattleFairyExpDecodeError {
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("размер FairyExp scalar уже проверен"))
+}

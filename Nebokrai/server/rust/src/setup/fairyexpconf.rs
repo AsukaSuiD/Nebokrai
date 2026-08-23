@@ -1,16 +1,20 @@
-//! Опыт fairy `CFairyExpConf` из WorldServer, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Опыт fairy `CFairyExpConf` из WorldServer/GameServer.
+//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`. Game-пара использует наследованный
+//! decoder `CBattleFairyExpConfig`; исходные owners `setup/fairyexpconf.*` и
+//! `setup/cbattlefairyexpconfig.*`.
 //!
 //! Owner использует тот же ordered map и wire, что `CBattleFairyExpConfig`,
 //! но загружает отдельный `fairyexp.xml`. Direct-child traversal, duplicate
 //! checks и минимум `maxdengji - 1` exp values сохранены; `quick-xml` заменяет
 //! TinyXML.
 
-use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
+use quick_xml::events::{BytesStart, Event};
 
 use crate::setup::cbattlefairyexpconfig::{
-    BattleFairyExpSerializeError, CBattleFairyExpConfig,
+    BattleFairyExpDecodeError, BattleFairyExpDecodeReport, BattleFairyExpSerializeError,
+    CBattleFairyExpConfig,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -45,11 +49,25 @@ impl CFairyExpConf {
         loop {
             match reader.read_event_into(&mut buffer) {
                 Ok(Event::Start(start)) => {
-                    self.process_start(&start, depth, &mut root_seen, &mut groups, &mut pending, &mut values)?;
+                    self.process_start(
+                        &start,
+                        depth,
+                        &mut root_seen,
+                        &mut groups,
+                        &mut pending,
+                        &mut values,
+                    )?;
                     depth += 1;
                 }
                 Ok(Event::Empty(empty)) => {
-                    self.process_start(&empty, depth, &mut root_seen, &mut groups, &mut pending, &mut values)?;
+                    self.process_start(
+                        &empty,
+                        depth,
+                        &mut root_seen,
+                        &mut groups,
+                        &mut pending,
+                        &mut values,
+                    )?;
                     if depth == 1 && empty.name().as_ref() == b"wuhunpinzhong" {
                         self.finish_group(&mut pending, &mut values)?;
                     }
@@ -98,7 +116,8 @@ impl CFairyExpConf {
             }
             *root_seen = true;
         } else if depth == 1 && name == b"wuhunpinzhong" {
-            let owner_level = required_u32(start, b"renzhudengji", FairyExpLoadError::MissingOwnerLevel)?;
+            let owner_level =
+                required_u32(start, b"renzhudengji", FairyExpLoadError::MissingOwnerLevel)?;
             if self.base.contains_exp_list(owner_level) {
                 return Err(FairyExpLoadError::DuplicateOwnerLevel);
             }
@@ -131,7 +150,8 @@ impl CFairyExpConf {
         if values.len().saturating_add(1) < max_level as usize {
             return Err(FairyExpLoadError::InsufficientExperience);
         }
-        self.base.insert_exp_list(owner_level, std::mem::take(values));
+        self.base
+            .insert_exp_list(owner_level, std::mem::take(values));
         Ok(())
     }
 
@@ -140,6 +160,14 @@ impl CFairyExpConf {
         destination: &mut Vec<u8>,
     ) -> Result<(), BattleFairyExpSerializeError> {
         self.base.add_to_byte_array(destination)
+    }
+
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<BattleFairyExpDecodeReport, BattleFairyExpDecodeError> {
+        self.base.decord_from_byte_array(source, cursor)
     }
 }
 
@@ -164,7 +192,9 @@ impl FairyExpLoadError {
             Self::DuplicateOwnerLevel => b"it`s the second time to configure fairy  owner`s step! ",
             Self::MissingMaxLevel => b"this fairy has not configure the max step!  ",
             Self::MissingExperience => b"this fairy have not configure the Exp value!",
-            Self::InsufficientExperience => b"the number of offairy `s max step is not match the number of Exp value! ",
+            Self::InsufficientExperience => {
+                b"the number of offairy `s max step is not match the number of Exp value! "
+            }
         }
     }
 }
@@ -185,7 +215,11 @@ fn required_u32(
 }
 
 fn legacy_atol(value: &[u8]) -> i32 {
-    let mut bytes = value.iter().copied().skip_while(u8::is_ascii_whitespace).peekable();
+    let mut bytes = value
+        .iter()
+        .copied()
+        .skip_while(u8::is_ascii_whitespace)
+        .peekable();
     let negative = matches!(bytes.peek(), Some(b'-'));
     if matches!(bytes.peek(), Some(b'-' | b'+')) {
         bytes.next();
@@ -193,9 +227,17 @@ fn legacy_atol(value: &[u8]) -> i32 {
     let mut parsed = false;
     let mut result = 0_i32;
     for byte in bytes {
-        let Some(digit) = byte.checked_sub(b'0').filter(|digit| *digit <= 9) else { break; };
+        let Some(digit) = byte.checked_sub(b'0').filter(|digit| *digit <= 9) else {
+            break;
+        };
         parsed = true;
         result = result.saturating_mul(10).saturating_add(i32::from(digit));
     }
-    if !parsed { 0 } else if negative { result.saturating_neg() } else { result }
+    if !parsed {
+        0
+    } else if negative {
+        result.saturating_neg()
+    } else {
+        result
+    }
 }
