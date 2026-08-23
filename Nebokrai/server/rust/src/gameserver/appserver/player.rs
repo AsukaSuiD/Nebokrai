@@ -63,6 +63,10 @@
 //! guards, странный special-skill fallback `546/547`, self-target rewrite и
 //! socket reject сохранены; concrete `CPlayerAI`, region symbol rule и полный
 //! monster registry передаются как explicit facts.
+//! Periodic `ComputeWarSoulXY` сохраняет float follow-state, exact dead/snap
+//! thresholds, общий area-map tail и последующий `0xBF605`; restored-state
+//! concrete skill остаётся входным фактом. Non-finite повреждённый float-state
+//! блокируется typed outcome до старого x87 integer conversion.
 
 use super::area::WarSoulPoint;
 use super::container::cbattlefairycontainer::{
@@ -243,6 +247,41 @@ pub(crate) struct BattleFairySummonReport {
     pub(crate) spatial_action: Option<BattleFairyWarSoulAction>,
     pub(crate) spatial_applied: bool,
     pub(crate) effects: Vec<BattleFairySummonEffect>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyFollowOutcome {
+    ActiveSkill,
+    NotSummoned,
+    CoordinateBlocked(ShapeCoordinateBlock),
+    NonFiniteVisualState,
+    InsideDeadZone,
+    Moved,
+    Snapped,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyFollowEffect {
+    AroundMove {
+        message_type: u32,
+        player_id: i32,
+        object_type: i32,
+        x: u32,
+        y: u32,
+    },
+}
+
+#[must_use = "follow report содержит spatial tail и обязательный move broadcast"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyFollowReport {
+    pub(crate) player_id: i32,
+    pub(crate) outcome: BattleFairyFollowOutcome,
+    pub(crate) region_id: Option<i32>,
+    pub(crate) visual_x_bits: u32,
+    pub(crate) visual_y_bits: u32,
+    pub(crate) spatial_action: Option<BattleFairyWarSoulAction>,
+    pub(crate) spatial_applied: bool,
+    pub(crate) effects: Vec<BattleFairyFollowEffect>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -629,7 +668,8 @@ pub(crate) struct CPlayer {
     server_region_id: Option<i32>,
     war_soul_state: u32,
     war_soul_point: WarSoulPoint,
-    war_soul_visual_point: WarSoulPoint,
+    war_soul_visual_x_bits: u32,
+    war_soul_visual_y_bits: u32,
     battle_fairy_summoned: bool,
     active_pet_count: u32,
     base_properties: PlayerBaseProperties,
@@ -670,7 +710,8 @@ impl CPlayer {
             server_region_id,
             war_soul_state: 0,
             war_soul_point: WarSoulPoint::default(),
-            war_soul_visual_point: WarSoulPoint::default(),
+            war_soul_visual_x_bits: 0.0f32.to_bits(),
+            war_soul_visual_y_bits: 0.0f32.to_bits(),
             battle_fairy_summoned: false,
             active_pet_count: 0,
             base_properties: PlayerBaseProperties::default(),
@@ -889,7 +930,8 @@ impl CPlayer {
                 self.war_soul_state = 1;
                 self.base_properties.battle_fairy_recall = false;
                 self.base_properties.battle_fairy_died = false;
-                self.war_soul_visual_point = player_position;
+                self.war_soul_visual_x_bits = (player_position.x as f32).to_bits();
+                self.war_soul_visual_y_bits = (player_position.y as f32).to_bits();
                 report.outcome = BattleFairySummonOutcome::Summoned;
                 report.spatial_action = Some(BattleFairyWarSoulAction::SetPosition {
                     previous: self.war_soul_point,
@@ -918,7 +960,8 @@ impl CPlayer {
                 self.war_soul_state = 0;
                 self.base_properties.battle_fairy_recall = true;
                 self.base_properties.battle_fairy_died = false;
-                self.war_soul_visual_point = WarSoulPoint { x: -1, y: -1 };
+                self.war_soul_visual_x_bits = (-1.0f32).to_bits();
+                self.war_soul_visual_y_bits = (-1.0f32).to_bits();
                 report.outcome = BattleFairySummonOutcome::Recalled;
                 report.spatial_action = Some(BattleFairyWarSoulAction::Delete {
                     previous: self.war_soul_point,
@@ -957,6 +1000,115 @@ impl CPlayer {
             }
             BattleFairyWarSoulAction::SetPosition { .. } => {}
         }
+    }
+
+    /// Один живой `ComputeWarSoulXY` tick. `Some(false)` означает найденный
+    /// current war-soul skill с `IsRestored()==0`; `None` точно соответствует
+    /// отсутствующему skill и не блокирует follow.
+    pub(crate) fn compute_war_soul_xy(
+        &mut self,
+        current_war_soul_skill_restored: Option<bool>,
+    ) -> BattleFairyFollowReport {
+        let player_id = self.player_id();
+        let mut report = BattleFairyFollowReport {
+            player_id,
+            outcome: BattleFairyFollowOutcome::NotSummoned,
+            region_id: self.server_region_id,
+            visual_x_bits: self.war_soul_visual_x_bits,
+            visual_y_bits: self.war_soul_visual_y_bits,
+            spatial_action: None,
+            spatial_applied: false,
+            effects: Vec::new(),
+        };
+        if current_war_soul_skill_restored == Some(false) {
+            report.outcome = BattleFairyFollowOutcome::ActiveSkill;
+            return report;
+        }
+        if self.war_soul_state != 1 {
+            return report;
+        }
+        let (tile_x, tile_y) = match (self.shape().get_tile_x(), self.shape().get_tile_y()) {
+            (Ok(x), Ok(y)) => (x, y),
+            (Err(error), _) | (_, Err(error)) => {
+                report.outcome = BattleFairyFollowOutcome::CoordinateBlocked(error);
+                return report;
+            }
+        };
+        let current_x = tile_x as f32;
+        let current_y = tile_y as f32;
+        let mut visual_x = f32::from_bits(self.war_soul_visual_x_bits);
+        let mut visual_y = f32::from_bits(self.war_soul_visual_y_bits);
+        let delta_x = current_x - visual_x;
+        let delta_y = current_y - visual_y;
+        let distance = (delta_x * delta_x + delta_y * delta_y).sqrt().abs();
+        if !distance.is_finite() {
+            report.outcome = BattleFairyFollowOutcome::NonFiniteVisualState;
+            return report;
+        }
+        if distance < 0.5 {
+            report.outcome = BattleFairyFollowOutcome::InsideDeadZone;
+            return report;
+        }
+
+        let (target, outcome) = if distance <= 5.0 {
+            let coefficient = if distance > 3.75 {
+                0.265f32
+            } else if distance > 0.75 {
+                0.065f32
+            } else {
+                0.045f32
+            };
+            let step = distance * (coefficient + coefficient);
+            if (current_x - visual_x).abs() > 0.1 {
+                visual_x = if current_x <= visual_x {
+                    visual_x - step
+                } else {
+                    visual_x + step
+                };
+            }
+            if (current_y - visual_y).abs() > 0.1 {
+                visual_y = if current_y <= visual_y {
+                    visual_y - step
+                } else {
+                    visual_y + step
+                };
+            }
+            (
+                WarSoulPoint {
+                    // EXE временно ставит x87 RC=truncate перед обоими fistp.
+                    x: visual_x.trunc() as i32,
+                    y: visual_y.trunc() as i32,
+                },
+                BattleFairyFollowOutcome::Moved,
+            )
+        } else {
+            visual_x = current_x;
+            visual_y = current_y;
+            (
+                WarSoulPoint {
+                    x: tile_x,
+                    y: tile_y,
+                },
+                BattleFairyFollowOutcome::Snapped,
+            )
+        };
+        self.war_soul_visual_x_bits = visual_x.to_bits();
+        self.war_soul_visual_y_bits = visual_y.to_bits();
+        report.visual_x_bits = self.war_soul_visual_x_bits;
+        report.visual_y_bits = self.war_soul_visual_y_bits;
+        report.outcome = outcome;
+        report.spatial_action = Some(BattleFairyWarSoulAction::SetPosition {
+            previous: self.war_soul_point,
+            target,
+        });
+        report.effects.push(BattleFairyFollowEffect::AroundMove {
+            message_type: BATTLE_FAIRY_MOVE_MESSAGE_TYPE,
+            player_id,
+            object_type: 700,
+            x: legacy_f32_to_u32(visual_x),
+            y: legacy_f32_to_u32(visual_y),
+        });
+        report
     }
 
     fn apply_battle_fairy_property(
@@ -2669,6 +2821,10 @@ fn push_battle_fairy_skill_reject(report: &mut BattleFairySkillRequestReport) {
             reason: SKILL_REJECT_WAR_SOUL_REASON,
             code: SKILL_REJECT_CODE,
         });
+}
+
+fn legacy_f32_to_u32(value: f32) -> u32 {
+    (value.trunc() as i64) as u32
 }
 
 /// Exact constructor map `m_UnPairSkills`, подтверждённый immediate-ами
@@ -4476,20 +4632,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x00030430
 // ADDRESS: 00430430
 // PROTOTYPE: void __thiscall WriteGoodsDelLog(CGoods * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::ComputeWarSoulXY
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13366
-// RVA: 0x00030930
-// ADDRESS: 00430930
-// PROTOTYPE: void __thiscall ComputeWarSoulXY(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
