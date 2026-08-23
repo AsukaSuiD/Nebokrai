@@ -24,11 +24,19 @@ use std::collections::BTreeMap;
 use super::ccontainer::ContainerListenerHandle;
 use super::cgoodscontainer::{CGoodsContainer, GoodsContainerMode};
 use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
+    EQUIP_PLACE_BODY, EQUIP_PLACE_BOOT, EQUIP_PLACE_FAIRY, EQUIP_PLACE_FROCK, EQUIP_PLACE_GLOVE,
+    EQUIP_PLACE_HAND, EQUIP_PLACE_HEAD, EQUIP_PLACE_HEADGEAR, EQUIP_PLACE_JEWELRY,
+    EQUIP_PLACE_LING_BAO, EQUIP_PLACE_MANTEAU, EQUIP_PLACE_MEDAL, EQUIP_PLACE_ORNAMENTS,
+    EQUIP_PLACE_POSTERIOR, EQUIP_PLACE_TALISMAN, EQUIP_PLACE_WING, GAP_BF_BFEQUIPEMENT,
+    GAP_GOODS_PACKAGE_EXTENTION, GOODS_TYPE_EQUIPMENT,
+};
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
 
 pub(crate) const EQUIPMENT_COLUMN_LIMIT: u32 = 17;
+const PLAYER_OWNER_TYPE: i32 = 400;
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -94,6 +102,80 @@ pub(crate) struct EquipmentClearedGoods {
 pub(crate) struct EquipmentReleaseReport {
     pub(crate) garbage_collected: Vec<ShapeIdentity>,
     pub(crate) detached: Vec<(EquipmentColumn, CGoods)>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct EquipmentAddPartialEffects {
+    pub(crate) start_point_initialized: bool,
+    pub(crate) registered_with_goods_ai: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentAddBlock {
+    MissingGoods,
+    BattleFairyEquipment,
+    MountRejected {
+        result: i32,
+    },
+    Occupied {
+        column: EquipmentColumn,
+    },
+    MissingBaseProperties {
+        index: u32,
+    },
+    NotEquipment {
+        goods_type: i32,
+    },
+    InvalidPosition {
+        position: u32,
+    },
+    EquipPlaceMismatch {
+        column: EquipmentColumn,
+        equip_place: i32,
+    },
+    UnsupportedEquipPlace {
+        equip_place: i32,
+    },
+    NoFreeOrnamentSlot,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentOwnerPlayerFacts {
+    /// Exact `CanMountEquip` должен вернуть magic success-code 9.
+    pub(crate) can_mount_result: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentAddRuntimeFacts {
+    /// `None` означает, что lookup игрока по owner id не дал объект.
+    pub(crate) owner_player: Option<EquipmentOwnerPlayerFacts>,
+    pub(crate) pack_add_enabled: bool,
+    pub(crate) now: u64,
+}
+
+#[must_use = "report содержит обязательные internal/player/listener эффекты"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentAddedReport {
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) column: EquipmentColumn,
+    pub(crate) identity: ShapeIdentity,
+    pub(crate) base_properties_index: u32,
+    pub(crate) amount: u32,
+    pub(crate) partial_effects: EquipmentAddPartialEffects,
+    pub(crate) requires_player_callback: bool,
+    pub(crate) package_extension_delta: u32,
+    pub(crate) listeners: Vec<ContainerListenerHandle>,
+}
+
+#[must_use = "blocked add может уже содержать timed/AI partial effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentAddOutcome {
+    Added(EquipmentAddedReport),
+    Blocked {
+        reason: EquipmentAddBlock,
+        partial_effects: EquipmentAddPartialEffects,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -212,6 +294,238 @@ impl CEquipmentContainer {
                     .is_some()
             })
             .count() as u32
+    }
+
+    /// Exact positional `Add` сохраняет необычный порядок: BF/mount/occupied/
+    /// catalog проверки, затем timed mutation и AI-registration, и только
+    /// после них проверку соответствия equip-place. Поэтому late block
+    /// возвращает уже применённые partial effects и не забирает `incoming`.
+    pub(crate) fn add_at(
+        &mut self,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        runtime: EquipmentAddRuntimeFacts,
+        register_with_goods_ai: &mut dyn FnMut(&CGoods),
+    ) -> EquipmentAddOutcome {
+        let Some(goods) = incoming.as_mut() else {
+            return Self::blocked_add(EquipmentAddBlock::MissingGoods, Default::default());
+        };
+        if goods.addon_property_value(factory, GAP_BF_BFEQUIPEMENT, 1) == 1 {
+            return Self::blocked_add(EquipmentAddBlock::BattleFairyEquipment, Default::default());
+        }
+        if self.base.owner_type() == PLAYER_OWNER_TYPE
+            && let Some(player) = runtime.owner_player
+            && player.can_mount_result != 9
+        {
+            return Self::blocked_add(
+                EquipmentAddBlock::MountRejected {
+                    result: player.can_mount_result,
+                },
+                Default::default(),
+            );
+        }
+
+        let column = EquipmentColumn::from_position(position);
+        if let Some(column) = column
+            && self.equipment.contains_key(&column)
+        {
+            return Self::blocked_add(EquipmentAddBlock::Occupied { column }, Default::default());
+        }
+
+        let base_properties_index = goods.base_properties_index();
+        let Some(properties) = factory.query_goods_base_properties(base_properties_index) else {
+            return Self::blocked_add(
+                EquipmentAddBlock::MissingBaseProperties {
+                    index: base_properties_index,
+                },
+                Default::default(),
+            );
+        };
+        if properties.goods_type() != GOODS_TYPE_EQUIPMENT {
+            return Self::blocked_add(
+                EquipmentAddBlock::NotEquipment {
+                    goods_type: properties.goods_type(),
+                },
+                Default::default(),
+            );
+        }
+
+        let mut partial_effects = EquipmentAddPartialEffects::default();
+        partial_effects.start_point_initialized =
+            goods.initialize_equipment_start_point(factory, runtime.now);
+        if runtime.owner_player.is_some() {
+            register_with_goods_ai(goods);
+            partial_effects.registered_with_goods_ai = true;
+        }
+
+        let Some(column) = column else {
+            return Self::blocked_add(
+                EquipmentAddBlock::InvalidPosition { position },
+                partial_effects,
+            );
+        };
+        let equip_place = properties.equip_place();
+        if !Self::does_equip_place_fit(column, equip_place) {
+            return Self::blocked_add(
+                EquipmentAddBlock::EquipPlaceMismatch {
+                    column,
+                    equip_place,
+                },
+                partial_effects,
+            );
+        }
+
+        let goods = incoming
+            .take()
+            .expect("incoming проверен и не изменяется до commit");
+        let identity = goods.identity();
+        let amount = goods.amount();
+        let owner_type = self.base.owner_type();
+        let owner_id = self.base.owner_id();
+        let requires_player_callback =
+            owner_type == PLAYER_OWNER_TYPE && runtime.owner_player.is_some();
+        let package_extension_delta = if requires_player_callback
+            && runtime.pack_add_enabled
+            && goods.query_attribute(GAP_GOODS_PACKAGE_EXTENTION)
+            && goods.addon_property_value(factory, GAP_GOODS_PACKAGE_EXTENTION, 1) == 2
+        {
+            goods.addon_property_value(factory, GAP_GOODS_PACKAGE_EXTENTION, 2) as u32
+        } else {
+            0
+        };
+
+        let replaced = self.equipment.insert(column, goods);
+        debug_assert!(replaced.is_none());
+        self.expanded_package_num = self
+            .expanded_package_num
+            .wrapping_add(package_extension_delta);
+
+        EquipmentAddOutcome::Added(EquipmentAddedReport {
+            owner_type,
+            owner_id,
+            column,
+            identity,
+            base_properties_index,
+            amount,
+            partial_effects,
+            requires_player_callback,
+            package_extension_delta,
+            listeners: self.base.base().listeners().to_vec(),
+        })
+    }
+
+    /// Auto-add выбирает фиксированную колонку до вызова positional owner-а;
+    /// для ornaments проверяет сначала 6, затем 7 и при обеих занятых не
+    /// запускает BF/mount/timed/AI ветви.
+    pub(crate) fn add_preferred(
+        &mut self,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        runtime: EquipmentAddRuntimeFacts,
+        register_with_goods_ai: &mut dyn FnMut(&CGoods),
+    ) -> EquipmentAddOutcome {
+        let Some(goods) = incoming.as_ref() else {
+            return Self::blocked_add(EquipmentAddBlock::MissingGoods, Default::default());
+        };
+        let base_properties_index = goods.base_properties_index();
+        let Some(properties) = factory.query_goods_base_properties(base_properties_index) else {
+            return Self::blocked_add(
+                EquipmentAddBlock::MissingBaseProperties {
+                    index: base_properties_index,
+                },
+                Default::default(),
+            );
+        };
+        if properties.goods_type() != GOODS_TYPE_EQUIPMENT {
+            return Self::blocked_add(
+                EquipmentAddBlock::NotEquipment {
+                    goods_type: properties.goods_type(),
+                },
+                Default::default(),
+            );
+        }
+        let equip_place = properties.equip_place();
+        let Some(column) = self.preferred_column(equip_place) else {
+            let reason = if equip_place == EQUIP_PLACE_ORNAMENTS {
+                EquipmentAddBlock::NoFreeOrnamentSlot
+            } else {
+                EquipmentAddBlock::UnsupportedEquipPlace { equip_place }
+            };
+            return Self::blocked_add(reason, Default::default());
+        };
+        self.add_at(
+            column.position(),
+            incoming,
+            factory,
+            runtime,
+            register_with_goods_ai,
+        )
+    }
+
+    fn blocked_add(
+        reason: EquipmentAddBlock,
+        partial_effects: EquipmentAddPartialEffects,
+    ) -> EquipmentAddOutcome {
+        EquipmentAddOutcome::Blocked {
+            reason,
+            partial_effects,
+        }
+    }
+
+    fn preferred_column(&self, equip_place: i32) -> Option<EquipmentColumn> {
+        Some(match equip_place {
+            EQUIP_PLACE_HEAD => EquipmentColumn::Head,
+            EQUIP_PLACE_BODY => EquipmentColumn::Body,
+            EQUIP_PLACE_HAND => EquipmentColumn::Hand,
+            EQUIP_PLACE_GLOVE => EquipmentColumn::Glove,
+            EQUIP_PLACE_BOOT => EquipmentColumn::Boot,
+            EQUIP_PLACE_ORNAMENTS => {
+                if self.is_slot_empty(EquipmentColumn::OrnamentsOne) {
+                    EquipmentColumn::OrnamentsOne
+                } else if self.is_slot_empty(EquipmentColumn::OrnamentsTwo) {
+                    EquipmentColumn::OrnamentsTwo
+                } else {
+                    return None;
+                }
+            }
+            EQUIP_PLACE_MEDAL => EquipmentColumn::Medal,
+            EQUIP_PLACE_POSTERIOR => EquipmentColumn::Posterior,
+            EQUIP_PLACE_JEWELRY => EquipmentColumn::Jewelry,
+            EQUIP_PLACE_HEADGEAR => EquipmentColumn::Headgear,
+            EQUIP_PLACE_TALISMAN => EquipmentColumn::Talisman,
+            EQUIP_PLACE_FROCK => EquipmentColumn::Frock,
+            EQUIP_PLACE_WING => EquipmentColumn::Wing,
+            EQUIP_PLACE_MANTEAU => EquipmentColumn::Manteau,
+            EQUIP_PLACE_FAIRY => EquipmentColumn::Fairy,
+            EQUIP_PLACE_LING_BAO => EquipmentColumn::LingBao,
+            _ => return None,
+        })
+    }
+
+    fn does_equip_place_fit(column: EquipmentColumn, equip_place: i32) -> bool {
+        match equip_place {
+            EQUIP_PLACE_HEAD => column == EquipmentColumn::Head,
+            EQUIP_PLACE_BODY => column == EquipmentColumn::Body,
+            EQUIP_PLACE_HAND => column == EquipmentColumn::Hand,
+            EQUIP_PLACE_GLOVE => column == EquipmentColumn::Glove,
+            EQUIP_PLACE_BOOT => column == EquipmentColumn::Boot,
+            EQUIP_PLACE_ORNAMENTS => matches!(
+                column,
+                EquipmentColumn::OrnamentsOne | EquipmentColumn::OrnamentsTwo
+            ),
+            EQUIP_PLACE_MEDAL => column == EquipmentColumn::Medal,
+            EQUIP_PLACE_POSTERIOR => column == EquipmentColumn::Posterior,
+            EQUIP_PLACE_JEWELRY => column == EquipmentColumn::Jewelry,
+            EQUIP_PLACE_HEADGEAR => column == EquipmentColumn::Headgear,
+            EQUIP_PLACE_TALISMAN => column == EquipmentColumn::Talisman,
+            EQUIP_PLACE_FROCK => column == EquipmentColumn::Frock,
+            EQUIP_PLACE_WING => column == EquipmentColumn::Wing,
+            EQUIP_PLACE_MANTEAU => column == EquipmentColumn::Manteau,
+            EQUIP_PLACE_FAIRY => column == EquipmentColumn::Fairy,
+            EQUIP_PLACE_LING_BAO => column == EquipmentColumn::LingBao,
+            _ => false,
+        }
     }
 
     /// Internal self-callback должен быть применён dispatcher-ом перед
