@@ -1040,6 +1040,18 @@ pub(crate) struct LoginNetworkTurn {
     pub(crate) auth: Option<Result<AuthClientIoStep, AuthClientIoError>>,
 }
 
+/// Наблюдаемый итог одного полного runtime-turn и накопленных side effects.
+#[derive(Debug, Default)]
+pub(crate) struct LoginRuntimeStep {
+    pub(crate) network: LoginNetworkTurn,
+    pub(crate) main_loop: Option<LoginMainLoopOutcome>,
+    pub(crate) auth_handler_notices: Vec<AuthHandlerNotice>,
+    pub(crate) world_operator_log_records: Vec<WorldOperatorLogRecord>,
+    pub(crate) online_user_database_reports: Vec<OnlineUserDatabaseReport>,
+    pub(crate) server_info_database_reports: Vec<ServerInfoDatabaseReport>,
+    pub(crate) rs_cdkey_notices: Vec<RsCdKeyNotice>,
+}
+
 /// Фатальная ошибка owned-задачи либо отсутствующего init-owner.
 #[derive(Debug)]
 pub(crate) enum LoginNetworkRuntimeError {
@@ -1991,6 +2003,29 @@ pub(crate) fn resolve_legacy_ascii_case(
     Ok(requested_path)
 }
 
+/// Читает обязательный `area_id` до создания `CGame` process-owner-ом.
+///
+/// В оригинальном constructor поле не инициализировалось, а первый успешный
+/// positional read `setupex.ini` задавал его до использования. Rust не
+/// воспроизводит чтение неопределённого значения: отсутствующая или malformed
+/// первая пара останавливает запуск с явной ошибкой.
+pub(crate) fn load_runtime_area_id(runtime_directory: &Path) -> Result<i32, io::Error> {
+    let bytes = fs::read(runtime_directory.join("setupex.ini"))?;
+    let mut tokens = SetupTokens::new(&bytes);
+    let raw = tokens.next_value().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "setupex.ini не содержит первую пару area_id",
+        )
+    })?;
+    parse_ascii::<i32>(raw).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "первая пара area_id в setupex.ini не является i32",
+        )
+    })
+}
+
 fn required_setup<T: Copy>(
     value: Option<T>,
     field: &'static str,
@@ -2626,7 +2661,40 @@ impl CGame {
             Some(client) if client.is_connected() => poll_once(client.run_io_once()).await,
             Some(_) | None => None,
         };
+        if matches!(
+            turn.auth.as_ref(),
+            Some(Err(AuthClientIoError::Io(_) | AuthClientIoError::Send(_)))
+        ) {
+            // EOF уже проходит этот путь внутри `run_io_once`. Ошибка
+            // установленного transport также означает потерю соединения:
+            // synthetic 0xCF301 в следующем MainLoop запускает тот же
+            // доказанный OnClose/reconnect lifecycle. Ошибка framing сюда не
+            // относится: политика закрытия malformed frame оригиналом не
+            // подтверждена.
+            self.auth_client
+                .as_mut()
+                .expect("Auth owner существовал при выполнении I/O")
+                .handle_transport_close();
+        }
         Ok(turn)
+    }
+
+    fn drain_runtime_observations(&mut self, step: &mut LoginRuntimeStep) {
+        while let Some(notice) = self.pop_auth_handler_notice() {
+            step.auth_handler_notices.push(notice);
+        }
+        while let Some(record) = self.pop_world_operator_log_record() {
+            step.world_operator_log_records.push(record);
+        }
+        while let Some(report) = self.pop_online_user_database_report() {
+            step.online_user_database_reports.push(report);
+        }
+        while let Some(report) = self.pop_server_info_database_report() {
+            step.server_info_database_reports.push(report);
+        }
+        while let Some(notice) = self.pop_rs_cdkey_notice() {
+            step.rs_cdkey_notices.push(notice);
+        }
     }
 
     async fn run_world_network_turn(
@@ -5327,6 +5395,7 @@ pub(crate) async fn game_thread_func<Shutdown>(
     runtime_directory: &Path,
     area_id: i32,
     shutdown: Shutdown,
+    mut observe_step: impl FnMut(&LoginRuntimeStep),
 ) -> LoginGameThreadReport
 where
     Shutdown: Future<Output = ()>,
@@ -5338,35 +5407,63 @@ where
     let runtime_error = if initialization.is_ok() {
         tokio::pin!(shutdown);
         loop {
-            let turn = async {
-                let _network = game
-                    .run_network_turn()
-                    .await
-                    .map_err(LoginRuntimeError::Network)?;
-                game.main_loop_turn(&mut auth_manager)
-                    .await
-                    .map_err(LoginRuntimeError::MainLoop)
-            };
-            let outcome = tokio::select! {
+            let network = tokio::select! {
                 biased;
                 () = &mut shutdown => break None,
-                result = turn => result,
+                result = game.run_network_turn() => match result {
+                    Ok(network) => network,
+                    Err(error) => break Some(LoginRuntimeError::Network(error)),
+                },
             };
-            match outcome {
-                Ok(LoginMainLoopOutcome::Continue { .. }) => {
-                    completed_turns = completed_turns.wrapping_add(1);
-                }
-                Ok(LoginMainLoopOutcome::Exit { .. }) => {
-                    completed_turns = completed_turns.wrapping_add(1);
+            let main_loop = tokio::select! {
+                biased;
+                () = &mut shutdown => {
+                    let mut step = LoginRuntimeStep {
+                        network,
+                        ..LoginRuntimeStep::default()
+                    };
+                    game.drain_runtime_observations(&mut step);
+                    observe_step(&step);
                     break None;
                 }
-                Err(error) => break Some(error),
+                result = game.main_loop_turn(&mut auth_manager) => result,
+            };
+            match main_loop {
+                Ok(main_loop) => {
+                    let exit = matches!(main_loop, LoginMainLoopOutcome::Exit { .. });
+                    let mut step = LoginRuntimeStep {
+                        network,
+                        main_loop: Some(main_loop),
+                        ..LoginRuntimeStep::default()
+                    };
+                    game.drain_runtime_observations(&mut step);
+                    observe_step(&step);
+                    completed_turns = completed_turns.wrapping_add(1);
+                    if exit {
+                        break None;
+                    }
+                }
+                Err(error) => {
+                    let mut step = LoginRuntimeStep {
+                        network,
+                        ..LoginRuntimeStep::default()
+                    };
+                    game.drain_runtime_observations(&mut step);
+                    observe_step(&step);
+                    break Some(LoginRuntimeError::MainLoop(error));
+                }
             }
         }
     } else {
         None
     };
+    let mut final_step = LoginRuntimeStep::default();
+    game.drain_runtime_observations(&mut final_step);
+    observe_step(&final_step);
     let release = game.release().await;
+    final_step = LoginRuntimeStep::default();
+    game.drain_runtime_observations(&mut final_step);
+    observe_step(&final_step);
     drop(game);
     LoginGameThreadReport {
         initialization,

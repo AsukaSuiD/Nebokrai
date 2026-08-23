@@ -26,4 +26,6 @@ mod worldserver;
 
 mod process;
 
-pub use process::{run_authserver_process, run_billingserver_process};
+pub use process::{
+    run_authserver_process, run_billingserver_process, run_loginserver_process,
+};

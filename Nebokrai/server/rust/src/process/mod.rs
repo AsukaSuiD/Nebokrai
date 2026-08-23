@@ -9,9 +9,11 @@ use tokio::signal::unix::{SignalKind, signal};
 
 mod authserver;
 mod billingserver;
+mod loginserver;
 
 pub use authserver::run_authserver_process;
 pub use billingserver::run_billingserver_process;
+pub use loginserver::run_loginserver_process;
 
 fn run_process<Run, RunFuture>(service: &str, run: Run) -> ExitCode
 where

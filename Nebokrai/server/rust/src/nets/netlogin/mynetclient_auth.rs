@@ -268,8 +268,9 @@ impl CMyNetClientAuth {
     ///
     /// Read и send обслуживались разными Windows threads без доказанного
     /// взаимного порядка. `tokio::select!` сохраняет отсутствие такого порядка,
-    /// не создавая busy-loop `Sleep(1)`. Ошибка I/O сама не назначает close-
-    /// политику; доказанный EOF выполняет component `OnClose` немедленно.
+    /// не создавая busy-loop `Sleep(1)`. Доказанный EOF выполняет component
+    /// `OnClose` немедленно; остальные transport-ошибки возвращаются внешнему
+    /// runtime-owner, который применяет тот же общий `CClient::OnClose`.
     pub(crate) async fn run_io_once(&mut self) -> Result<AuthClientIoStep, AuthClientIoError> {
         enum Ready {
             Read(io::Result<Vec<u8>>),
