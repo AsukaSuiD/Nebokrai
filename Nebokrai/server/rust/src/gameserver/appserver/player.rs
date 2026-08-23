@@ -22,10 +22,17 @@
 //! не требуется.
 //! Текущие HP/MP имеют собственные setter-и с clamp к текущим max-свойствам;
 //! изменение самих max не выполняет этот clamp без конкретного caller-а.
+//! Как в связном `RefreshContainerOwners`, достигнутые equipment и
+//! battle-fairy containers принадлежат player type `400` с его numeric ID;
+//! остальные constructor-owned containers пока не материализованы.
 //! Поэтому `from_send_state` остаётся явной assembly-границей уже
 //! восстановленного runtime. Figure передаётся как доказанный derived virtual
 //! fact; владение spatial state остаётся у `CMoveShape`.
 
+use super::container::cbattlefairycontainer::{BattleFairyCombineCheck, CBattleFairyContainer};
+use super::container::cequipmentcontainer::CEquipmentContainer;
+use super::goods::cbattlefairyproperty::BattleFairyCompose;
+use super::goods::cgoodsfactory::CGoodsFactory;
 use super::moveshape::CMoveShape;
 use super::shape::{CShape, ShapeFigure, ShapeView};
 
@@ -89,6 +96,8 @@ pub(crate) struct CPlayer {
     contribution: i32,
     silence_minutes: i32,
     silence_timestamp_minutes: u32,
+    equipment: CEquipmentContainer,
+    battle_fairy_container: CBattleFairyContainer,
 }
 
 impl CPlayer {
@@ -104,7 +113,8 @@ impl CPlayer {
         if move_shape.shape().identity().object_type != PLAYER_TYPE {
             return None;
         }
-        Some(Self {
+        let owner_id = move_shape.shape().identity().id;
+        let mut player = Self {
             move_shape,
             figure,
             team_id,
@@ -116,7 +126,11 @@ impl CPlayer {
             contribution: 0,
             silence_minutes: 0,
             silence_timestamp_minutes: 0,
-        })
+            equipment: CEquipmentContainer::new(),
+            battle_fairy_container: CBattleFairyContainer::new(),
+        };
+        player.refresh_reached_container_owners(owner_id);
+        Some(player)
     }
 
     pub(crate) const fn shape(&self) -> &CShape {
@@ -157,6 +171,33 @@ impl CPlayer {
 
     pub(crate) const fn silence_minutes(&self) -> i32 {
         self.silence_minutes
+    }
+
+    pub(crate) const fn equipment(&self) -> &CEquipmentContainer {
+        &self.equipment
+    }
+
+    pub(crate) const fn equipment_mut(&mut self) -> &mut CEquipmentContainer {
+        &mut self.equipment
+    }
+
+    pub(crate) const fn battle_fairy_container(&self) -> &CBattleFairyContainer {
+        &self.battle_fairy_container
+    }
+
+    pub(crate) const fn battle_fairy_container_mut(&mut self) -> &mut CBattleFairyContainer {
+        &mut self.battle_fairy_container
+    }
+
+    /// Достигнутая часть exact `RefreshContainerOwners`: owner ID должен быть
+    /// перепривязан после создания player identity или его восстановления.
+    pub(crate) const fn refresh_reached_container_owners(&mut self, player_id: i32) {
+        self.equipment.base_mut().set_owner(PLAYER_TYPE, player_id);
+        self.battle_fairy_container
+            .base_mut()
+            .base_mut()
+            .base_mut()
+            .set_owner(PLAYER_TYPE, player_id);
     }
 
     pub(crate) const fn set_pk_count(&mut self, value: u16) {
@@ -303,6 +344,20 @@ impl CPlayer {
         self.silence_minutes = 0;
         self.silence_timestamp_minutes = 0;
         false
+    }
+
+    /// Player caller `CheckBattleFairyCombine` всегда передаёт собственный ID
+    /// в исходный owner; global compose configuration остаётся явным входом.
+    pub(crate) fn check_battle_fairy_combine(
+        &self,
+        factory: &CGoodsFactory,
+        compose: &[BattleFairyCompose],
+    ) -> BattleFairyCombineCheck {
+        self.battle_fairy_container.check_battle_fairy_combine(
+            Some(self.player_id()),
+            factory,
+            compose,
+        )
     }
 
     pub(crate) fn shape_view(&self) -> Option<ShapeView> {
