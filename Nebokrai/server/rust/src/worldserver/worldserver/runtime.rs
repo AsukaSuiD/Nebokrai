@@ -45,6 +45,7 @@ use crate::dbaccess::worlddb::rsunion::TiberiusRsUnion;
 use crate::dbaccess::worlddb::writelogqueue::WorldWriteLogQueue;
 
 use crate::public::clientresource::DefaultClientResourceOwner;
+use crate::public::netsessionmanager::{CNetSessionManager, NetSessionManagerVariant};
 use crate::public::auctionnode::CGoodsNode;
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::auctionlog::CAuctionLog;
@@ -77,6 +78,8 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
     upgrade_equipment, GoodsBasePropertiesRegistry, GoodsNameIndex, GoodsOriginalNameIndex,
 };
 use crate::worldserver::appworld::player::{CPlayer, PlayerPropertyCoefficients};
+use crate::worldserver::appworld::message::organsysmessage::WorldUnionApplicationRuntimeOwner;
+use crate::worldserver::appworld::session::csessionfactory::CSessionFactory;
 use crate::worldserver::appworld::country::countrywarsys::CountryWarCallbacks;
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::country::countryparam::CCountryParam;
@@ -256,6 +259,9 @@ pub(crate) struct WorldProcessDomainOwners {
     pub(crate) auction_log: CAuctionLog,
     /// Единственные входная/выходная FIFO аукционного DB-конвейера.
     pub(crate) db_misc: CDbMisc,
+    pub(crate) session_factory: CSessionFactory,
+    pub(crate) net_sessions: CNetSessionManager,
+    pub(crate) union_application_runtime: WorldUnionApplicationRuntimeOwner,
     pub(crate) log: WorldLogTextOwner,
 }
 
@@ -285,6 +291,9 @@ impl WorldProcessDomainOwners {
             increment_log: CIncrementLog::new(),
             auction_log: Default::default(),
             db_misc: CDbMisc::with_empty_queues(),
+            session_factory: CSessionFactory::new(),
+            net_sessions: CNetSessionManager::new(NetSessionManagerVariant::WorldServer),
+            union_application_runtime: WorldUnionApplicationRuntimeOwner::default(),
             log: Default::default(),
         }
     }
