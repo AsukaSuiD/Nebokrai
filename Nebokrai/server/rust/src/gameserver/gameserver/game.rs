@@ -77,6 +77,8 @@
 //! Synthesis/new-skill/goods-destruction/change-body `0x21..0x24` проходят
 //! общий mutation-rules FIFO pass с полными decode reports, partial registries,
 //! точными logs и сохранёнными allocation-error sources.
+//! DaKong/WordsFilter/JJC levels `0x2B/0x31/0x32` проходят общий lookup/filter
+//! FIFO pass с исходными clear/append, partial publication и success logs.
 //! Battle-fairy combine теперь замыкает game player-map с GlobeSetup gate и
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные

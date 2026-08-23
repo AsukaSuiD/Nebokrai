@@ -48,6 +48,9 @@
 //! Mutation rules `0x21..0x24` тем же FIFO pass публикуют synthesis recipes,
 //! new-skill monster groups, destruction filters и change-body restrictions;
 //! их partial registries, decode reports, allocation sources и logs сохранены.
+//! Lookup/filter resources `0x2B/0x31/0x32` публикуют DaKong tables,
+//! WordsFilter additions и JJC level map одним FIFO pass с исходными
+//! clear/append, partial decode и success-log контрактами.
 //! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
 //! публикует runtime repeated-emotion lookup до финального startup log.
 //! Goods list `0x00` заменяет ID/original-name/name registry из парного
@@ -765,6 +768,26 @@ pub(crate) struct GameMutationRulesStartupMessageReport {
     pub(crate) log_effects: Vec<Vec<u8>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameLookupFilterStartupReport {
+    DaKong(DaKongDecodeReport),
+    WordsFilter(WordsFilterDecodeReport),
+    JjcRegionLevels { entries: usize },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameLookupFilterStartupError {
+    DaKong(DaKongDecodeError),
+    WordsFilter(WordsFilterDecodeError),
+    JjcRegionLevels(JjcRegionLevelDecodeError),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameLookupFilterStartupMessageReport {
+    pub(crate) decoded: GameLookupFilterStartupReport,
+    pub(crate) log_effects: Vec<Vec<u8>>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageReport {
     ClientServerStart(GameClientServerStartReport),
@@ -779,6 +802,7 @@ pub(crate) enum GameServerMessageReport {
     SpatialStartup(GameSpatialStartupMessageReport),
     EnvironmentConfigurationStartup(GameEnvironmentConfigurationStartupMessageReport),
     MutationRulesStartup(GameMutationRulesStartupMessageReport),
+    LookupFilterStartup(GameLookupFilterStartupMessageReport),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -794,6 +818,7 @@ pub(crate) enum GameServerMessageError {
     SpatialStartup(GameSpatialStartupError),
     EnvironmentConfigurationStartup(GameEnvironmentConfigurationStartupError),
     MutationRulesStartup(GameMutationRulesStartupError),
+    LookupFilterStartup(GameLookupFilterStartupError),
 }
 
 /// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
@@ -1087,6 +1112,88 @@ pub(crate) fn dispatch_server_message(
                     log_effects,
                 },
             )))
+        }
+        DA_KONG_SELECTOR | WORDS_FILTER_SELECTOR | JJC_REGION_LEVEL_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("lookup/filter selector проверен без изменения cursor");
+            let mut log_effects = Vec::new();
+            let decoded = match {
+                let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                decode_lookup_filter_startup(consumed_selector, wire, cursor, game, |text| {
+                    log_effects.push(text.to_vec())
+                })
+                .expect("lookup/filter selector проверен outer dispatcher-ом")
+                .map_err(GameServerMessageError::LookupFilterStartup)
+            } {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(Ok(GameServerMessageReport::LookupFilterStartup(
+                GameLookupFilterStartupMessageReport {
+                    decoded,
+                    log_effects,
+                },
+            )))
+        }
+        _ => None,
+    }
+}
+
+fn decode_lookup_filter_startup(
+    selector: i32,
+    source: &[u8],
+    cursor: &mut usize,
+    game: &mut CGame,
+    mut add_log_text: impl FnMut(&[u8]),
+) -> Option<Result<GameLookupFilterStartupReport, GameLookupFilterStartupError>> {
+    match selector {
+        DA_KONG_SELECTOR => Some(
+            game.da_kong_xiang_qian_mut()
+                .decord_from_byte_array(source, cursor)
+                .map(GameLookupFilterStartupReport::DaKong)
+                .map_err(GameLookupFilterStartupError::DaKong),
+        ),
+        WORDS_FILTER_SELECTOR => {
+            let result = game
+                .words_filter_mut()
+                .from_byte_array(source, cursor)
+                .map(GameLookupFilterStartupReport::WordsFilter)
+                .map_err(GameLookupFilterStartupError::WordsFilter);
+            if result.is_ok() {
+                add_log_text(b"Initial SI_WORDSFILTER...OK!");
+            }
+            Some(result)
+        }
+        JJC_REGION_LEVEL_SELECTOR => {
+            game.clear_jjc_level_data();
+            let count = match read_jjc_level_i32(source, cursor) {
+                Ok(count) => count,
+                Err(error) => {
+                    return Some(Err(GameLookupFilterStartupError::JjcRegionLevels(error)));
+                }
+            };
+            for _ in 0..count.max(0) {
+                let key = match read_jjc_level_i32(source, cursor) {
+                    Ok(key) => key,
+                    Err(error) => {
+                        return Some(Err(GameLookupFilterStartupError::JjcRegionLevels(error)));
+                    }
+                };
+                let value = match read_jjc_level_i32(source, cursor) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return Some(Err(GameLookupFilterStartupError::JjcRegionLevels(error)));
+                    }
+                };
+                game.insert_jjc_level_data(key, value);
+            }
+            let entries = game.jjc_level_data().len();
+            add_log_text(b"Initial SI_JJCREGIONLEVELSETUP...OK!");
+            Some(Ok(GameLookupFilterStartupReport::JjcRegionLevels {
+                entries,
+            }))
         }
         _ => None,
     }
@@ -2241,6 +2348,30 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
     if let Some(result) =
+        decode_lookup_filter_startup(selector, source, cursor, game, &mut add_log_text)
+    {
+        return Some(match result {
+            Ok(GameLookupFilterStartupReport::DaKong(report)) => {
+                Ok(GameOwnedStartupSnapshotReport::DaKong(report))
+            }
+            Ok(GameLookupFilterStartupReport::WordsFilter(report)) => {
+                Ok(GameOwnedStartupSnapshotReport::WordsFilter(report))
+            }
+            Ok(GameLookupFilterStartupReport::JjcRegionLevels { entries }) => {
+                Ok(GameOwnedStartupSnapshotReport::JjcRegionLevel { entries })
+            }
+            Err(GameLookupFilterStartupError::DaKong(error)) => {
+                Err(GameOwnedStartupSnapshotError::DaKong(error))
+            }
+            Err(GameLookupFilterStartupError::WordsFilter(error)) => {
+                Err(GameOwnedStartupSnapshotError::WordsFilter(error))
+            }
+            Err(GameLookupFilterStartupError::JjcRegionLevels(error)) => {
+                Err(GameOwnedStartupSnapshotError::JjcRegionLevel(error))
+            }
+        });
+    }
+    if let Some(result) =
         decode_mutation_rules_startup(selector, source, cursor, game, &mut add_log_text)
     {
         return Some(match result {
@@ -2627,16 +2758,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
                 minimum_level,
             }))
         }
-        DA_KONG_SELECTOR => {
-            let report = match game
-                .da_kong_xiang_qian_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                Ok(report) => report,
-                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::DaKong(error))),
-            };
-            Some(Ok(GameOwnedStartupSnapshotReport::DaKong(report)))
-        }
         STRING_TABLE_SELECTOR => {
             let report = match game.create_string_table(source, cursor, &mut add_log_text) {
                 Ok(report) => report,
@@ -2645,45 +2766,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
                 }
             };
             Some(Ok(GameOwnedStartupSnapshotReport::StringTable(report)))
-        }
-        WORDS_FILTER_SELECTOR => {
-            let report = match game.words_filter_mut().from_byte_array(source, cursor) {
-                Ok(report) => report,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::WordsFilter(error)));
-                }
-            };
-            add_log_text(b"Initial SI_WORDSFILTER...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::WordsFilter(report)))
-        }
-        JJC_REGION_LEVEL_SELECTOR => {
-            game.clear_jjc_level_data();
-            let count = match read_jjc_level_i32(source, cursor) {
-                Ok(count) => count,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::JjcRegionLevel(error)));
-                }
-            };
-            for _ in 0..count.max(0) {
-                let key = match read_jjc_level_i32(source, cursor) {
-                    Ok(key) => key,
-                    Err(error) => {
-                        return Some(Err(GameOwnedStartupSnapshotError::JjcRegionLevel(error)));
-                    }
-                };
-                let value = match read_jjc_level_i32(source, cursor) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        return Some(Err(GameOwnedStartupSnapshotError::JjcRegionLevel(error)));
-                    }
-                };
-                game.insert_jjc_level_data(key, value);
-            }
-            let entries = game.jjc_level_data().len();
-            add_log_text(b"Initial SI_JJCREGIONLEVELSETUP...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::JjcRegionLevel {
-                entries,
-            }))
         }
         TAO_ZHUANG_SELECTOR => {
             let decoded = match game.tao_zhuang_setup_mut().decode_from_byte(source, cursor) {
