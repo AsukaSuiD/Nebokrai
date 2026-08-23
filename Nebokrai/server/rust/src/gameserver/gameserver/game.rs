@@ -3,6 +3,7 @@
 //! PDB подтверждает nullable `s_pNetClientOfWS +0x8`,
 //! `s_pNetClientOfBS +0xC`, `s_pNetServer +0x10`, ordered
 //! `s_mapPlayer +0x14` типа `long -> CPlayer*` и ordered
+//! `m_JJcLevelData` типа `long -> long` в startup dispatcher-е и
 //! `m_mTeamSessionID +0x188` типа `unsigned long -> long`. `FindPlayer` RVA
 //! `0x00014930`, `GetTeamSessionID` RVA `0x00013690` и достигнутые
 //! `CMessage` sends `0x00013910..0x00014923` имеют статус `IMPLEMENTED,
@@ -725,6 +726,7 @@ pub(crate) struct CGame {
     battle_fairy_property: CBattleFairyProperty,
     equipment_compose_list: EquipmentComposeList,
     words_filter: CWordsFilter,
+    jjc_level_data: BTreeMap<i32, i32>,
     synthesis: CSynthesis,
     new_skill_monster_conf: NewSkillMonsterConf,
     goods_destroy_setup: GoodsDestroySetup,
@@ -772,6 +774,7 @@ impl CGame {
             battle_fairy_property: CBattleFairyProperty::default(),
             equipment_compose_list: EquipmentComposeList::default(),
             words_filter: CWordsFilter::default(),
+            jjc_level_data: BTreeMap::new(),
             synthesis: CSynthesis::default(),
             new_skill_monster_conf: NewSkillMonsterConf::default(),
             goods_destroy_setup: GoodsDestroySetup::default(),
@@ -1062,6 +1065,22 @@ impl CGame {
 
     pub(crate) const fn words_filter_mut(&mut self) -> &mut CWordsFilter {
         &mut self.words_filter
+    }
+
+    pub(crate) const fn jjc_level_data(&self) -> &BTreeMap<i32, i32> {
+        &self.jjc_level_data
+    }
+
+    pub(crate) fn clear_jjc_level_data(&mut self) {
+        self.jjc_level_data.clear();
+    }
+
+    pub(crate) fn insert_jjc_level_data(&mut self, key: i32, value: i32) -> bool {
+        if self.jjc_level_data.contains_key(&key) {
+            return false;
+        }
+        self.jjc_level_data.insert(key, value);
+        true
     }
 
     pub(crate) const fn synthesis_mut(&mut self) -> &mut CSynthesis {

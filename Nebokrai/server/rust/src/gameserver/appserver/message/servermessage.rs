@@ -89,6 +89,7 @@ const BATTLE_FAIRY_EXP_SELECTOR: i32 = 0x2c;
 const BATTLE_FAIRY_COMBINE_SELECTOR: i32 = 0x2d;
 const EQUIPMENT_COMPOSE_SELECTOR: i32 = 0x30;
 const WORDS_FILTER_SELECTOR: i32 = 0x31;
+const JJC_REGION_LEVEL_SELECTOR: i32 = 0x32;
 const THING_SETUP_SELECTOR: i32 = 0x36;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -213,6 +214,9 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     },
     EquipmentCompose(EquipmentComposeDecodeReport),
     WordsFilter(WordsFilterDecodeReport),
+    JjcRegionLevel {
+        entries: usize,
+    },
     ThingSetup {
         entries: usize,
     },
@@ -244,6 +248,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     BattleFairyCombine(BattleFairyComposeDecodeError),
     EquipmentCompose(EquipmentComposeDecodeError),
     WordsFilter(WordsFilterDecodeError),
+    JjcRegionLevel(JjcRegionLevelDecodeError),
     ThingSetup(ThingSetupCodecError),
 }
 
@@ -279,6 +284,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::BattleFairyCombine(error) => error.fmt(formatter),
             Self::EquipmentCompose(error) => error.fmt(formatter),
             Self::WordsFilter(error) => error.fmt(formatter),
+            Self::JjcRegionLevel(error) => error.fmt(formatter),
             Self::ThingSetup(error) => error.fmt(formatter),
         }
     }
@@ -311,6 +317,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::BattleFairyCombine(error) => Some(error),
             Self::EquipmentCompose(error) => Some(error),
             Self::WordsFilter(error) => Some(error),
+            Self::JjcRegionLevel(error) => Some(error),
             Self::ThingSetup(error) => Some(error),
         }
     }
@@ -602,6 +609,35 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             add_log_text(b"Initial SI_WORDSFILTER...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::WordsFilter(report)))
         }
+        JJC_REGION_LEVEL_SELECTOR => {
+            game.clear_jjc_level_data();
+            let count = match read_jjc_level_i32(source, cursor) {
+                Ok(count) => count,
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::JjcRegionLevel(error)));
+                }
+            };
+            for _ in 0..count.max(0) {
+                let key = match read_jjc_level_i32(source, cursor) {
+                    Ok(key) => key,
+                    Err(error) => {
+                        return Some(Err(GameOwnedStartupSnapshotError::JjcRegionLevel(error)));
+                    }
+                };
+                let value = match read_jjc_level_i32(source, cursor) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return Some(Err(GameOwnedStartupSnapshotError::JjcRegionLevel(error)));
+                    }
+                };
+                game.insert_jjc_level_data(key, value);
+            }
+            let entries = game.jjc_level_data().len();
+            add_log_text(b"Initial SI_JJCREGIONLEVELSETUP...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::JjcRegionLevel {
+                entries,
+            }))
+        }
         THING_SETUP_SELECTOR => {
             if let Err(error) = game
                 .thing_setup_mut()
@@ -625,6 +661,43 @@ pub(crate) struct GameBillingClientReplacement {
     pub(crate) previous_client_closed: bool,
     pub(crate) registration: Result<i32, SendMessageError>,
     pub(crate) connected_notice: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct JjcRegionLevelDecodeError {
+    pub(crate) offset: usize,
+    pub(crate) needed: usize,
+    pub(crate) available: usize,
+}
+
+impl fmt::Display for JjcRegionLevelDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "JJC region-level snapshot обрывается на {}: нужно {}, доступно {}",
+            self.offset, self.needed, self.available
+        )
+    }
+}
+
+impl Error for JjcRegionLevelDecodeError {}
+
+fn read_jjc_level_i32(source: &[u8], cursor: &mut usize) -> Result<i32, JjcRegionLevelDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(4)) else {
+        return Err(JjcRegionLevelDecodeError {
+            offset,
+            needed: 4,
+            available,
+        });
+    };
+    *cursor += 4;
+    Ok(i32::from_le_bytes(
+        bytes
+            .try_into()
+            .expect("размер JJC region-level scalar уже проверен"),
+    ))
 }
 
 /// Выполняет полную самодостаточную ветвь Billing reconnect handoff.
