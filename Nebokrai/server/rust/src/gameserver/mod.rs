@@ -12,6 +12,7 @@ pub(crate) mod appserver {
         pub(crate) mod camountlimitgoodscontainer;
         pub(crate) mod ccontainer;
         pub(crate) mod cgoodscontainer;
+        pub(crate) mod cvolumelimitgoodscontainer;
     }
     pub(crate) mod country {
         pub(crate) mod country;

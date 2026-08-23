@@ -11,41 +11,50 @@
 //! Constructor RVA `0x000FCD60` задаёт limit `1`, пустые goods/locks и
 //! регистрирует собственный listener-subobject. В Rust его OnObjectAdded/
 //! OnObjectRemoved structurally принадлежат concrete owner-у и не требуют
-//! самоссылочного pointer handle. Read-only traversal, lock/unlock и lookup
-//! перенесены буквально; locked goods скрыты от public find/get. Add/remove,
-//! listener messages, player AI tree, codec и mode-dependent release ниже
-//! остаются RAW до замыкания соседних owners.
+//! самоссылочного pointer handle. Read-only traversal, lock/unlock, lookup,
+//! ordered clear и mode-dependent release перенесены буквально; locked goods
+//! скрыты от public find/get. `GCM_TEST` не уничтожает отделённые goods: Rust
+//! возвращает их вызывающему, сохраняя ownership без legacy raw pointers.
+//! Listener messages, player AI tree и codec ниже остаются RAW до замыкания
+//! соседних owners.
 
 use super::ccontainer::ContainerListenerHandle;
-use super::cgoodscontainer::{CGoodsContainer, GoodsStackMergeOutcome};
+use super::cgoodscontainer::{CGoodsContainer, GoodsContainerMode, GoodsStackMergeOutcome};
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
 use indexmap::IndexMap;
 
+#[must_use = "report содержит обязательные listener- и ownership-эффекты"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AmountLimitGoodsAdded {
+    pub(crate) owner_type: i32,
     pub(crate) owner_id: i32,
-    pub(crate) position: u32,
+    pub(crate) position: Option<u32>,
     pub(crate) identity: ShapeIdentity,
     pub(crate) amount: u32,
     pub(crate) listeners: Vec<ContainerListenerHandle>,
     pub(crate) replaced: Option<CGoods>,
 }
 
+#[must_use = "report содержит обязательные listener- и ownership-эффекты"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AmountLimitGoodsRemoved {
+    pub(crate) owner_type: i32,
     pub(crate) owner_id: i32,
-    pub(crate) position: u32,
+    pub(crate) position: Option<u32>,
     pub(crate) amount: u32,
     pub(crate) listeners: Vec<ContainerListenerHandle>,
     pub(crate) goods: CGoods,
 }
 
+#[must_use = "report содержит обязательные listener- и ownership-эффекты"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AmountLimitGoodsSplit {
+    pub(crate) owner_type: i32,
     pub(crate) owner_id: i32,
+    pub(crate) position: Option<u32>,
     pub(crate) base_properties_index: u32,
     pub(crate) source: ShapeIdentity,
     pub(crate) amount: u32,
@@ -53,10 +62,24 @@ pub(crate) struct AmountLimitGoodsSplit {
     pub(crate) goods: CGoods,
 }
 
+#[must_use = "результат удаления нужно передать runtime owner-у"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AmountLimitGoodsTaken {
     Split(AmountLimitGoodsSplit),
     Removed(AmountLimitGoodsRemoved),
+}
+
+#[must_use = "очищенные goods и listener-эффекты нельзя потерять"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AmountLimitGoodsCleared {
+    pub(crate) removed: Vec<AmountLimitGoodsRemoved>,
+}
+
+#[must_use = "в test mode результат владеет отделёнными goods"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum AmountLimitGoodsRelease {
+    Collected { count: usize },
+    Detached { goods: Vec<CGoods> },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,6 +112,10 @@ impl CAmountLimitGoodsContainer {
 
     pub(crate) const fn base_mut(&mut self) -> &mut CGoodsContainer {
         &mut self.base
+    }
+
+    pub(crate) fn traversing_goods(&self) -> impl ExactSizeIterator<Item = &CGoods> {
+        self.goods.values()
     }
 
     pub(crate) const fn set_owner(&mut self, owner_type: i32, owner_id: i32) {
@@ -203,8 +230,9 @@ impl CAmountLimitGoodsContainer {
         let amount = goods.amount();
         let (position, replaced) = self.goods.insert_full(identity.ex_id, goods);
         Ok(AmountLimitGoodsAdded {
+            owner_type: self.base.owner_type(),
             owner_id: self.base.owner_id(),
-            position: position as u32,
+            position: Some(position as u32),
             identity,
             amount,
             listeners: self.base.base().listeners().to_vec(),
@@ -221,8 +249,9 @@ impl CAmountLimitGoodsContainer {
         let (position, _, goods) = self.goods.shift_remove_full(&ex_id)?;
         let amount = goods.amount();
         Some(AmountLimitGoodsRemoved {
+            owner_type: self.base.owner_type(),
             owner_id: self.base.owner_id(),
-            position: position as u32,
+            position: Some(position as u32),
             amount,
             listeners: self.base.base().listeners().to_vec(),
             goods,
@@ -246,10 +275,20 @@ impl CAmountLimitGoodsContainer {
         else {
             return GoodsStackMergeOutcome::Incompatible;
         };
+        self.merge_goods_by_ex_id(ex_id, incoming, factory, owner_progress_allows)
+    }
+
+    pub(crate) fn merge_goods_by_ex_id(
+        &mut self,
+        ex_id: CGuid,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> GoodsStackMergeOutcome {
         if self.is_locked(ex_id) {
             return GoodsStackMergeOutcome::Incompatible;
         }
-        let Some((_, target)) = self.goods.get_index_mut(position as usize) else {
+        let Some(target) = self.goods.get_mut(&ex_id) else {
             return GoodsStackMergeOutcome::Incompatible;
         };
         self.base
@@ -265,6 +304,24 @@ impl CAmountLimitGoodsContainer {
         position: u32,
         requested_amount: u32,
         factory: &CGoodsFactory,
+        create_goods: Create,
+    ) -> Option<AmountLimitGoodsTaken>
+    where
+        Create: FnMut(u32) -> Option<CGoods>,
+    {
+        if requested_amount == 0 {
+            return None;
+        }
+        let ex_id = self.get_goods(position)?.identity().ex_id;
+        self.take_goods_by_ex_id(ex_id, position, requested_amount, factory, create_goods)
+    }
+
+    pub(crate) fn take_goods_by_ex_id<Create>(
+        &mut self,
+        ex_id: CGuid,
+        position: u32,
+        requested_amount: u32,
+        factory: &CGoodsFactory,
         mut create_goods: Create,
     ) -> Option<AmountLimitGoodsTaken>
     where
@@ -273,17 +330,16 @@ impl CAmountLimitGoodsContainer {
         if requested_amount == 0 {
             return None;
         }
-        let target = self.get_goods(position)?;
-        let identity = target.identity();
+        let target = self.find(ex_id)?;
         let base_properties_index = target.base_properties_index();
         let current_amount = target.amount();
         if current_amount < requested_amount {
             return None;
         }
         if current_amount == requested_amount {
-            return self
-                .remove_goods(identity.ex_id)
-                .map(AmountLimitGoodsTaken::Removed);
+            let mut removed = self.remove_goods(ex_id)?;
+            removed.position = Some(position);
+            return Some(AmountLimitGoodsTaken::Removed(removed));
         }
         if target.max_stack_number(factory) <= 1 {
             return None;
@@ -294,18 +350,58 @@ impl CAmountLimitGoodsContainer {
         split.set_amount(requested_amount);
         let source = target.identity();
         self.goods
-            .get_index_mut(position as usize)
-            .expect("target position проверена до создания split goods")
-            .1
+            .get_mut(&ex_id)
+            .expect("target GUID проверен до создания split goods")
             .set_amount(current_amount.wrapping_sub(requested_amount));
         Some(AmountLimitGoodsTaken::Split(AmountLimitGoodsSplit {
+            owner_type: self.base.owner_type(),
             owner_id: self.base.owner_id(),
+            position: Some(position),
             base_properties_index,
             source,
             amount: requested_amount,
             listeners: self.base.base().listeners().to_vec(),
             goods: split,
         }))
+    }
+
+    /// `Clear` сохраняет insertion order listener-событий, отделяет все
+    /// objects и очищает locks, не меняя owner, mode или limit.
+    pub(crate) fn clear_goods(&mut self) -> AmountLimitGoodsCleared {
+        let owner_type = self.base.owner_type();
+        let owner_id = self.base.owner_id();
+        let listeners = self.base.base().listeners().to_vec();
+        let goods = std::mem::take(&mut self.goods);
+        self.locked_goods.clear();
+        let removed = goods
+            .into_values()
+            .enumerate()
+            .map(|(position, goods)| AmountLimitGoodsRemoved {
+                owner_type,
+                owner_id,
+                position: Some(position as u32),
+                amount: goods.amount(),
+                listeners: listeners.clone(),
+                goods,
+            })
+            .collect();
+        AmountLimitGoodsCleared { removed }
+    }
+
+    /// `Release` не вызывает listener callbacks. Normal mode уничтожает
+    /// owned goods, а test mode только отделяет их от container-а.
+    pub(crate) fn release(&mut self) -> AmountLimitGoodsRelease {
+        self.goods_amount_limit = 1;
+        let mode = self.base.container_mode();
+        let goods = std::mem::take(&mut self.goods)
+            .into_values()
+            .collect::<Vec<_>>();
+        self.locked_goods.clear();
+        self.base.release();
+        match mode {
+            GoodsContainerMode::Normal => AmountLimitGoodsRelease::Collected { count: goods.len() },
+            GoodsContainerMode::Test => AmountLimitGoodsRelease::Detached { goods },
+        }
     }
 }
 

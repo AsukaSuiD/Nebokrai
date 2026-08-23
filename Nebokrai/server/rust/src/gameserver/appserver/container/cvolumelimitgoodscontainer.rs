@@ -1,6 +1,406 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Cell/storage core `CVolumeLimitGoodsContainer` исторического GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
+//! `server/gameserver/appserver/container/cvolumelimitgoodscontainer.cpp`.
+//! Container хранит owned goods в `CAmountLimitGoodsContainer`, а позиционный
+//! слой различает available, inactive и occupied cells. `Vec` заменяет legacy
+//! vector, `IndexMap` в base owner-е отвечает за GUID-index и insertion order;
+//! выбор позиции, stacking, lock visibility и partial remove остаются точным
+//! GameServer-адаптером.
+//!
+//! Constructor, volume reset, space/cell queries, add/remove и lifecycle
+//! материализованы. Expansion policy, player packet checks, listener message
+//! assembly, codec, swap, clone и auction-scale mutation ниже остаются RAW до
+//! замыкания соответствующих setup/player/message/goods owners.
+
+use super::camountlimitgoodscontainer::{
+    AmountLimitGoodsAdded, AmountLimitGoodsCleared, AmountLimitGoodsRelease, AmountLimitGoodsTaken,
+    CAmountLimitGoodsContainer,
+};
+use super::cgoodscontainer::GoodsStackMergeOutcome;
+use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_PARTICULAR_ATTRIBUTE;
+use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::public::guid::CGuid;
+
+const EXPANSION_BASE_CELL: usize = 48;
+const EXPANSION_CELL_COUNT: usize = 48;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum VolumeCell {
+    #[default]
+    Available,
+    Inactive,
+    Goods(CGuid),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum VolumeGoodsAddBlock {
+    MissingGoods,
+    InvalidCurrency,
+    PositionUnavailable,
+    MissingBaseProperties,
+    AmountLimitReached,
+    NoSpace,
+}
+
+#[must_use = "результат add определяет ownership и последующие listener-эффекты"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum VolumeGoodsAddOutcome {
+    Added(AmountLimitGoodsAdded),
+    Stack(GoodsStackMergeOutcome),
+    Rejected(VolumeGoodsAddBlock),
+}
+
+#[must_use = "результат remove определяет ownership и последующие listener-эффекты"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum VolumeGoodsRemoveOutcome {
+    Removed(AmountLimitGoodsTaken),
+    RemovedButCellMissing(AmountLimitGoodsTaken),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CVolumeLimitGoodsContainer {
+    base: CAmountLimitGoodsContainer,
+    size: u32,
+    cells: Vec<VolumeCell>,
+}
+
+impl Default for CVolumeLimitGoodsContainer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CVolumeLimitGoodsContainer {
+    pub(crate) fn new() -> Self {
+        Self {
+            base: CAmountLimitGoodsContainer::new(),
+            size: 0,
+            cells: Vec::new(),
+        }
+    }
+
+    pub(crate) const fn base(&self) -> &CAmountLimitGoodsContainer {
+        &self.base
+    }
+
+    pub(crate) const fn base_mut(&mut self) -> &mut CAmountLimitGoodsContainer {
+        &mut self.base
+    }
+
+    pub(crate) const fn size(&self) -> u32 {
+        self.size
+    }
+
+    pub(crate) fn set_container_volume(&mut self, size: u32) -> AmountLimitGoodsRelease {
+        let released = self.release();
+        self.size = size;
+        self.cells.resize(size as usize, VolumeCell::Available);
+        self.base.set_goods_amount_limit(size);
+        released
+    }
+
+    pub(crate) fn set_container_dimensions(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> AmountLimitGoodsRelease {
+        self.set_container_volume(width.wrapping_mul(height))
+    }
+
+    pub(crate) fn check_space(&self, requested: u32) -> bool {
+        let mut available = 0u32;
+        for cell in &self.cells {
+            if *cell == VolumeCell::Available {
+                available = available.wrapping_add(1);
+                if requested <= available {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub(crate) fn space(&self) -> u32 {
+        self.cells.iter().fold(0u32, |available, cell| {
+            available.wrapping_add(u32::from(*cell == VolumeCell::Available))
+        })
+    }
+
+    pub(crate) fn find_empty_space_for_goods(&self) -> Option<u32> {
+        self.cells
+            .iter()
+            .position(|cell| *cell == VolumeCell::Available)
+            .map(|position| position as u32)
+    }
+
+    pub(crate) fn is_space_enough(&self, position: u32) -> bool {
+        position < self.size && self.cells.get(position as usize) == Some(&VolumeCell::Available)
+    }
+
+    pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
+        let VolumeCell::Goods(ex_id) = *self.cells.get(position as usize)? else {
+            return None;
+        };
+        self.base.find(ex_id)
+    }
+
+    pub(crate) fn query_goods_position(&self, ex_id: CGuid) -> Option<u32> {
+        self.cells
+            .iter()
+            .position(|cell| *cell == VolumeCell::Goods(ex_id))
+            .map(|position| position as u32)
+    }
+
+    pub(crate) fn goods_amount(&self, factory: &CGoodsFactory) -> u32 {
+        self.base.traversing_goods().fold(0u32, |amount, goods| {
+            amount.wrapping_add(u32::from(
+                factory
+                    .query_goods_base_properties(goods.base_properties_index())
+                    .is_some()
+                    && self.query_goods_position(goods.identity().ex_id).is_some(),
+            ))
+        })
+    }
+
+    pub(crate) fn is_full(&self, factory: &CGoodsFactory) -> bool {
+        self.base.is_full(factory) || !self.cells.contains(&VolumeCell::Available)
+    }
+
+    pub(crate) fn find_position_for_goods(
+        &self,
+        incoming: &CGoods,
+        factory: &CGoodsFactory,
+    ) -> Option<u32> {
+        let maximum = incoming.max_stack_number(factory);
+        if 1 < maximum {
+            for stored in self.base.traversing_goods() {
+                if stored.base_properties_index() == incoming.base_properties_index()
+                    && incoming.amount().wrapping_add(stored.amount()) <= maximum
+                    && incoming.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1)
+                        == stored.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1)
+                {
+                    if let Some(position) = self.query_goods_position(stored.identity().ex_id) {
+                        return Some(position);
+                    }
+                }
+            }
+        }
+        self.find_empty_space_for_goods()
+    }
+
+    pub(crate) fn add_goods(
+        &mut self,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> VolumeGoodsAddOutcome {
+        let Some(goods) = incoming.as_ref() else {
+            return VolumeGoodsAddOutcome::Rejected(VolumeGoodsAddBlock::MissingGoods);
+        };
+        let Some(position) = self.find_position_for_goods(goods, factory) else {
+            return VolumeGoodsAddOutcome::Rejected(VolumeGoodsAddBlock::NoSpace);
+        };
+        self.add_goods_at(position, incoming, factory, owner_progress_allows)
+    }
+
+    pub(crate) fn add_goods_at(
+        &mut self,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> VolumeGoodsAddOutcome {
+        let Some(goods) = incoming.as_ref() else {
+            return VolumeGoodsAddOutcome::Rejected(VolumeGoodsAddBlock::MissingGoods);
+        };
+        let base_properties_index = goods.base_properties_index();
+        if base_properties_index == factory.get_gold_coin_index()
+            || base_properties_index == factory.get_yuan_bao_index()
+        {
+            return VolumeGoodsAddOutcome::Rejected(VolumeGoodsAddBlock::InvalidCurrency);
+        }
+        if let Some(VolumeCell::Goods(ex_id)) = self.cells.get(position as usize).copied() {
+            return VolumeGoodsAddOutcome::Stack(self.base.merge_goods_by_ex_id(
+                ex_id,
+                incoming,
+                factory,
+                owner_progress_allows,
+            ));
+        }
+        if !self.is_space_enough(position) {
+            return VolumeGoodsAddOutcome::Rejected(VolumeGoodsAddBlock::PositionUnavailable);
+        }
+        if factory
+            .query_goods_base_properties(base_properties_index)
+            .is_none()
+        {
+            return VolumeGoodsAddOutcome::Rejected(VolumeGoodsAddBlock::MissingBaseProperties);
+        }
+
+        let goods = incoming.take().expect("incoming проверен до storage add");
+        let ex_id = goods.identity().ex_id;
+        let mut added = match self.base.add_goods(goods, factory) {
+            Ok(added) => added,
+            Err(goods) => {
+                *incoming = Some(goods);
+                return VolumeGoodsAddOutcome::Rejected(VolumeGoodsAddBlock::AmountLimitReached);
+            }
+        };
+        self.cells[position as usize] = VolumeCell::Goods(ex_id);
+        added.position = Some(position);
+        VolumeGoodsAddOutcome::Added(added)
+    }
+
+    pub(crate) fn remove_goods(&mut self, ex_id: CGuid) -> Option<VolumeGoodsRemoveOutcome> {
+        let position = self.query_goods_position(ex_id);
+        let mut removed = self.base.remove_goods(ex_id)?;
+        removed.position = position;
+        let taken = AmountLimitGoodsTaken::Removed(removed);
+        let Some(position) = position else {
+            return Some(VolumeGoodsRemoveOutcome::RemovedButCellMissing(taken));
+        };
+        self.cells[position as usize] = VolumeCell::Available;
+        Some(VolumeGoodsRemoveOutcome::Removed(taken))
+    }
+
+    pub(crate) fn take_goods<Create>(
+        &mut self,
+        position: u32,
+        requested_amount: u32,
+        factory: &CGoodsFactory,
+        create_goods: Create,
+    ) -> Option<VolumeGoodsRemoveOutcome>
+    where
+        Create: FnMut(u32) -> Option<CGoods>,
+    {
+        let VolumeCell::Goods(ex_id) = *self.cells.get(position as usize)? else {
+            return None;
+        };
+        let taken = self.base.take_goods_by_ex_id(
+            ex_id,
+            position,
+            requested_amount,
+            factory,
+            create_goods,
+        )?;
+        if matches!(&taken, AmountLimitGoodsTaken::Removed(_)) {
+            self.cells[position as usize] = VolumeCell::Available;
+        }
+        Some(VolumeGoodsRemoveOutcome::Removed(taken))
+    }
+
+    pub(crate) fn clean_cell(&mut self) {
+        for cell in &mut self.cells {
+            if *cell == VolumeCell::Inactive {
+                *cell = VolumeCell::Available;
+            }
+        }
+    }
+
+    pub(crate) fn have_cell(&mut self, mut count: i32) {
+        if count <= 0 {
+            return;
+        }
+        for cell in self.cells.iter_mut().rev() {
+            if *cell == VolumeCell::Available {
+                *cell = VolumeCell::Inactive;
+                count -= 1;
+                if count == 0 {
+                    return;
+                }
+            }
+        }
+    }
+
+    pub(crate) fn set_all_inactive(&mut self) {
+        for cell in self.cells.iter_mut().skip(EXPANSION_BASE_CELL) {
+            if *cell == VolumeCell::Available {
+                *cell = VolumeCell::Inactive;
+            }
+        }
+    }
+
+    pub(crate) fn activated_but_unused_count(&self, pack_add_enabled: bool) -> u32 {
+        if !pack_add_enabled {
+            return 0;
+        }
+        self.cells
+            .iter()
+            .skip(EXPANSION_BASE_CELL)
+            .fold(0u32, |count, cell| {
+                count.wrapping_add(u32::from(*cell == VolumeCell::Available))
+            })
+    }
+
+    /// Legacy `CanSwap`: базовая зона разрешена без cell bounds-check, а при
+    /// выключенном `bPackAdd` сохраняется странное разрешение ровно позиции 48.
+    pub(crate) fn can_swap(
+        &self,
+        position: u32,
+        expanded_cells: u32,
+        pack_add_enabled: bool,
+    ) -> bool {
+        if position < EXPANSION_BASE_CELL as u32 {
+            return true;
+        }
+        if EXPANSION_BASE_CELL.wrapping_add(EXPANSION_CELL_COUNT) as u32 <= position {
+            return false;
+        }
+        if !pack_add_enabled {
+            return position == EXPANSION_BASE_CELL as u32;
+        }
+        let occupied = self
+            .cells
+            .iter()
+            .skip(EXPANSION_BASE_CELL)
+            .take(EXPANSION_CELL_COUNT)
+            .fold(0u32, |count, cell| {
+                count.wrapping_add(u32::from(matches!(cell, VolumeCell::Goods(_))))
+            });
+        occupied <= expanded_cells.min(EXPANSION_CELL_COUNT as u32)
+    }
+
+    /// Добавляет wire-коды к уже накопленному вектору: exact owner не очищал
+    /// аргумент. `0` — available, `1` — goods, `2` — inactive.
+    pub(crate) fn compute_cell(&self, cells: &mut Vec<u32>) -> i32 {
+        cells.reserve(self.cells.len());
+        let mut active_count = 0i32;
+        for cell in &self.cells {
+            let code = match cell {
+                VolumeCell::Available => {
+                    active_count = active_count.wrapping_add(1);
+                    0
+                }
+                VolumeCell::Goods(_) => {
+                    active_count = active_count.wrapping_add(1);
+                    1
+                }
+                VolumeCell::Inactive => 2,
+            };
+            cells.push(code);
+        }
+        active_count
+    }
+
+    pub(crate) fn clear_goods(&mut self) -> AmountLimitGoodsCleared {
+        let mut cleared = self.base.clear_goods();
+        for removed in &mut cleared.removed {
+            removed.position = self.query_goods_position(removed.goods.identity().ex_id);
+        }
+        self.cells.clear();
+        self.cells.resize(self.size as usize, VolumeCell::Available);
+        cleared
+    }
+
+    pub(crate) fn release(&mut self) -> AmountLimitGoodsRelease {
+        let released = self.base.release();
+        self.size = 0;
+        self.cells.clear();
+        released
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -595,8 +995,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

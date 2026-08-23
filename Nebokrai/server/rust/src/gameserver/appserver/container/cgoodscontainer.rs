@@ -26,6 +26,7 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 pub(crate) enum GoodsContainerMode {
     #[default]
     Normal,
+    Test,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
