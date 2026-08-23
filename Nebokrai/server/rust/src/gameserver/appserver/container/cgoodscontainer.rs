@@ -17,6 +17,10 @@
 //! RAW до materialization `CGoods` и listener callbacks.
 
 use super::ccontainer::CContainer;
+use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_PARTICULAR_ATTRIBUTE;
+use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::gameserver::appserver::shape::ShapeIdentity;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum GoodsContainerMode {
@@ -30,6 +34,13 @@ pub(crate) struct CGoodsContainer {
     owner_type: i32,
     owner_id: i32,
     mode: GoodsContainerMode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GoodsStackMergeOutcome {
+    BlockedByOwnerProgress,
+    Incompatible,
+    Merged { target: ShapeIdentity, amount: u32 },
 }
 
 impl CGoodsContainer {
@@ -76,6 +87,46 @@ impl CGoodsContainer {
         self.owner_id = 0;
         self.mode = GoodsContainerMode::Normal;
         self.base.release();
+    }
+
+    /// Общая stack-ветка exact `Add(position, CGoods*)` RVA `0x001DB970`.
+    /// Проверка player progress выполнялась перед stack compatibility и
+    /// передаётся уже вычисленным owner policy.
+    pub(crate) fn merge_stack(
+        &self,
+        target: &mut CGoods,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> GoodsStackMergeOutcome {
+        let Some(source) = incoming.as_ref() else {
+            return GoodsStackMergeOutcome::Incompatible;
+        };
+        if !owner_progress_allows {
+            return GoodsStackMergeOutcome::BlockedByOwnerProgress;
+        }
+        if target.base_properties_index() != source.base_properties_index() {
+            return GoodsStackMergeOutcome::Incompatible;
+        }
+        let maximum = target.max_stack_number(factory);
+        if maximum <= 1
+            || target.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1)
+                != source.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1)
+        {
+            return GoodsStackMergeOutcome::Incompatible;
+        }
+        let source_amount = source.amount();
+        if maximum.wrapping_sub(target.amount()) < source_amount {
+            return GoodsStackMergeOutcome::Incompatible;
+        }
+        if self.mode == GoodsContainerMode::Normal {
+            target.set_amount(target.amount().wrapping_add(source_amount));
+            let _garbage_collected = incoming.take();
+        }
+        GoodsStackMergeOutcome::Merged {
+            target: target.identity(),
+            amount: source_amount,
+        }
     }
 }
 

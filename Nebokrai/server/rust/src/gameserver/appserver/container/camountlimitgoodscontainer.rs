@@ -16,7 +16,7 @@
 //! остаются RAW до замыкания соседних owners.
 
 use super::ccontainer::ContainerListenerHandle;
-use super::cgoodscontainer::CGoodsContainer;
+use super::cgoodscontainer::{CGoodsContainer, GoodsStackMergeOutcome};
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -226,6 +226,33 @@ impl CAmountLimitGoodsContainer {
             listeners: self.base.base().listeners().to_vec(),
             goods,
         })
+    }
+
+    pub(crate) fn merge_goods_at(
+        &mut self,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> GoodsStackMergeOutcome {
+        if self.goods_amount_limit <= position {
+            return GoodsStackMergeOutcome::Incompatible;
+        }
+        let Some(ex_id) = self
+            .goods
+            .get(position as usize)
+            .map(|goods| goods.identity().ex_id)
+        else {
+            return GoodsStackMergeOutcome::Incompatible;
+        };
+        if self.is_locked(ex_id) {
+            return GoodsStackMergeOutcome::Incompatible;
+        }
+        let Some(target) = self.goods.get_mut(position as usize) else {
+            return GoodsStackMergeOutcome::Incompatible;
+        };
+        self.base
+            .merge_stack(target, incoming, factory, owner_progress_allows)
     }
 }
 
