@@ -11,7 +11,7 @@
 //! pointers, не меняя lock/stack/listener semantics base-owner-а. Пять hatch
 //! timer-ов codec suffix сохранены с partial decode, а state change — с
 //! необратимым remove/add и detached replacement на отказе. Hatch/exp traversal
-//! и syncretize ниже пока остаются RAW.
+//! материализованы с явным clock/config; syncretize ниже пока остаётся RAW.
 
 use super::camountlimitgoodscontainer::{
     AmountLimitGoodsAdded, AmountLimitGoodsCleared, AmountLimitGoodsTaken,
@@ -26,6 +26,9 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     EQUIP_PLACE_HEADGEAR, GAP_BF_BATTLE_FAIRY, GAP_PARTICULAR_ATTRIBUTE,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::gameserver::appserver::goods::fairyproperties::{
+    FairyExpBlock, FairyExpReport, FairyExpRuntime, FairyExpUpResult,
+};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
 
@@ -33,6 +36,9 @@ const FAIRY_SPECIAL_POSITION: u32 = 13;
 const FAIRY_SPECIAL_ORIGINAL_NAME: &[u8] = b"FZ0885";
 const HATCHER_POSITIONS: std::ops::Range<u32> = 5..10;
 const FAIRY_CONTAINER_EXTEND_ID: u32 = 0x0b;
+const FAIRY_EXP_POSITIONS: std::ops::Range<u32> = 0..5;
+const FAIRY_GOODS_UPDATE_MESSAGE_TYPE: u32 = 0x0b_f918;
+const FAIRY_WORLD_LOG_MESSAGE_TYPE: u32 = 0x06_0210;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FairyContainerAddBlock {
@@ -151,6 +157,54 @@ pub(crate) enum FairyStateChangeOutcome {
         goods: ShapeIdentity,
         effects: Vec<FairyStateChangeEffect>,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FairyIncubateLog {
+    pub(crate) message_type: u32,
+    pub(crate) log_type: i32,
+    pub(crate) player_id: i32,
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) goods_name: Vec<u8>,
+}
+
+#[must_use = "hatcher entry содержит полный state transition и optional world log"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FairyHatcherEntry {
+    pub(crate) position: u32,
+    pub(crate) transition: FairyStateChangeOutcome,
+    pub(crate) incubate_log: Option<FairyIncubateLog>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FairyContainerGoodsUpdate {
+    pub(crate) message_type: u32,
+    pub(crate) player_id: i32,
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) old_client_payload: Vec<u8>,
+}
+
+#[must_use = "exp entry содержит ordered property logs и delivery effect"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FairyContainerExpEntry {
+    Updated {
+        position: u32,
+        exp: FairyExpReport,
+        update: FairyContainerGoodsUpdate,
+    },
+    StateChanged {
+        position: u32,
+        exp: FairyExpReport,
+        transition: FairyStateChangeOutcome,
+    },
+}
+
+#[must_use = "failure сохраняет уже обработанный prefix позиций"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FairyContainerExpFailure {
+    pub(crate) position: u32,
+    pub(crate) error: FairyExpBlock,
+    pub(crate) entries: Vec<FairyContainerExpEntry>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -396,6 +450,169 @@ impl CFairyContainer {
             goods: added_identity,
             effects,
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// Исходный параметр owner не читал; callback заменяет внутренний
+    /// `timeGetTime()` и вызывается отдельно для каждого живого timer-а.
+    pub(crate) fn check_hatcher(
+        &mut self,
+        current_tick: &mut dyn FnMut() -> u32,
+        hatch_duration: u32,
+        incubate_log_enabled: bool,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+        fairy_threshold_for_level: &mut dyn FnMut(u32, u32) -> u32,
+        create_goods: &mut dyn FnMut(u32) -> Option<CGoods>,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> Vec<FairyHatcherEntry> {
+        let mut entries = Vec::new();
+        for position in HATCHER_POSITIONS {
+            let Some((goods_id, hatch_start_time)) =
+                self.base.get_goods(position).and_then(|goods| {
+                    goods
+                        .fairy_properties()
+                        .filter(|fairy| fairy.hatch_start_time != 0)
+                        .map(|fairy| (goods.identity().ex_id, fairy.hatch_start_time))
+                })
+            else {
+                continue;
+            };
+            if current_tick() < hatch_start_time.wrapping_add(hatch_duration) {
+                continue;
+            }
+            let transition = self.fairy_change_state(
+                goods_id,
+                FairyState::Egg,
+                position,
+                factory,
+                owner_progress_allows,
+                fairy_threshold_for_level,
+                create_goods,
+                encode_old_client,
+            );
+            let incubate_log = incubate_log_enabled.then(|| {
+                self.base.get_goods(position).map(|goods| FairyIncubateLog {
+                    message_type: FAIRY_WORLD_LOG_MESSAGE_TYPE,
+                    log_type: 3,
+                    player_id: self.base.base().base().owner_id(),
+                    goods: goods.identity(),
+                    goods_name: goods.name().to_vec(),
+                })
+            });
+            entries.push(FairyHatcherEntry {
+                position,
+                transition,
+                incubate_log: incubate_log.flatten(),
+            });
+        }
+        entries
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn fairy_exp_up(
+        &mut self,
+        experience: u32,
+        grow_log_enabled: bool,
+        egg_max_level: u32,
+        upgrade_rate: f32,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+        fairy_threshold_for_level: &mut dyn FnMut(u32, u32) -> u32,
+        create_goods: &mut dyn FnMut(u32) -> Option<CGoods>,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> Result<Vec<FairyContainerExpEntry>, FairyContainerExpFailure> {
+        enum Delivery {
+            None,
+            Update(FairyContainerGoodsUpdate),
+            ChangeState(CGuid),
+        }
+
+        let owner_id = self.base.base().base().owner_id();
+        let mut entries = Vec::new();
+        for position in FAIRY_EXP_POSITIONS {
+            let (exp, delivery) = {
+                let Some(goods) = self.base.get_goods_mut(position) else {
+                    continue;
+                };
+                if goods.fairy_properties().is_none() {
+                    continue;
+                }
+                let fairy_guid = goods.identity().ex_id.to_string().into_bytes();
+                let fairy_name = goods.name().to_vec();
+                let mut remaining = experience;
+                let Some(exp) = goods
+                    .fairy_exp_up(
+                        &mut remaining,
+                        FairyExpRuntime {
+                            player_id: owner_id,
+                            fairy_guid: &fairy_guid,
+                            fairy_name: &fairy_name,
+                            log_value: 0,
+                            suppress_grow_log: false,
+                            grow_log_enabled,
+                            egg_max_level,
+                            upgrade_rate,
+                        },
+                        &mut *fairy_threshold_for_level,
+                    )
+                    .map_err(|error| FairyContainerExpFailure {
+                        position,
+                        error,
+                        entries: std::mem::take(&mut entries),
+                    })?
+                else {
+                    continue;
+                };
+                if exp.result <= FairyExpUpResult::None {
+                    (exp, Delivery::None)
+                } else {
+                    goods
+                        .save_fairy_properties(factory)
+                        .expect("stored fairy сохраняет живую catalog entry");
+                    if exp.result == FairyExpUpResult::ChangeState {
+                        (exp, Delivery::ChangeState(goods.identity().ex_id))
+                    } else {
+                        (
+                            exp,
+                            Delivery::Update(FairyContainerGoodsUpdate {
+                                message_type: FAIRY_GOODS_UPDATE_MESSAGE_TYPE,
+                                player_id: owner_id,
+                                goods: goods.identity(),
+                                old_client_payload: encode_old_client(goods),
+                            }),
+                        )
+                    }
+                }
+            };
+
+            match delivery {
+                Delivery::None => {}
+                Delivery::Update(update) => entries.push(FairyContainerExpEntry::Updated {
+                    position,
+                    exp,
+                    update,
+                }),
+                Delivery::ChangeState(goods_id) => {
+                    let transition = self.fairy_change_state(
+                        goods_id,
+                        FairyState::Young,
+                        position,
+                        factory,
+                        owner_progress_allows,
+                        fairy_threshold_for_level,
+                        create_goods,
+                        encode_old_client,
+                    );
+                    entries.push(FairyContainerExpEntry::StateChanged {
+                        position,
+                        exp,
+                        transition,
+                    });
+                }
+            }
+        }
+        Ok(entries)
     }
 
     /// Base payload сохраняет собственного owner-а; fairy suffix всегда
