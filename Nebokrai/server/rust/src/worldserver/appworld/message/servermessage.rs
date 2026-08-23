@@ -268,7 +268,7 @@
 //! Равенство сначала сбрасывает счётчик, затем выполняет `GenerateDBData` и строго
 //! `ClearMapPlayerForOffline -> ClearRestorePlayer -> ClearCreationPlayer ->
 //! ClearDeletionPlayer -> ClearOfflinePlayer`. После cleanup прежний handle-state
-//! закрывается, внешний launcher получает точные аргументы `SaveThreadFunc`, а
+//! закрывается, process launcher получает frozen `SaveThreadFunc` job, а
 //! возвращённое состояние становится новым handle. Exact disassembly
 //! `0x004B01DC..0x004B03CC`; поздний Linux cycle-tracker остаётся только донором
 //! назначения и не подменяет более слабую исходную семантику.
@@ -318,6 +318,10 @@ use crate::setup::newskillmonsterlist::{
     NewSkillMonsterConf, NewSkillMonsterSerializeError,
 };
 use crate::setup::playerlist::{CPlayerList, PlayerListSerializeError};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
+
 use crate::setup::preciousboxconf::{PreciousBoxConf, PreciousBoxSerializeError};
 use crate::setup::prisonconf::PrisonConfSerializeError;
 use crate::setup::questsystem::QuestSystemSerializationBlock;
@@ -364,10 +368,12 @@ use crate::worldserver::worldserver::game::{
     WorldOnlinePlayerAppendOutcome, WorldPingGameServerInfo, WorldReconnectedPlayerDecode,
     WorldPlayerSaveResponseProgress, WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate,
     WorldRegionParamDecodeOutcome, WorldRegionChangePlayerTransition,
-    WorldRegionChangeTeamUpdate, WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest,
+    WorldRegionChangeTeamUpdate, WorldSaveThreadHandleState, WorldSaveThreadJob,
+    WorldSaveThreadLaunchRequest,
     WorldServerSnapshotPlayerDecode, WorldServerSnapshotPlayerOwner, prepare_save_thread_launch,
 };
 use crate::worldserver::worldserver::honorranks::{CHonorRanks, HonorRanksSerializationBlock};
+use crate::worldserver::worldserver::savedb::SaveDataLifecycleState;
 use crate::worldserver::worldserver::playerranks::{
     CPlayerRanks, PlayerRanksSerializationBlock,
 };
@@ -1739,13 +1745,19 @@ pub(crate) fn materialize_completed_save_response_snapshot<LaunchSaveThread>(
     faction_war_sys: &CFactionWarSys,
     country_handler: &CCountryHandler,
     country_limits: CountryKingSaveLimits,
+    variables: &CVariableList,
     honor_ranks: &mut CHonorRanks,
+    gods_battle: &CGodsBattleConf,
+    lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
     save_thread_handle: &mut WorldSaveThreadHandleState,
     launch_save_thread: &mut LaunchSaveThread,
 ) -> Result<WorldCompletedSaveResponseLaunchReport, WorldGenerateDbDataBlock>
 where
-    LaunchSaveThread:
-        FnMut(&WorldSaveThreadLaunchRequest) -> WorldSaveThreadHandleState + ?Sized,
+    LaunchSaveThread: FnMut(
+            &WorldSaveThreadLaunchRequest,
+            WorldSaveThreadJob,
+        ) -> WorldSaveThreadHandleState
+        + ?Sized,
 {
     let snapshot = game.generate_db_data(
         registry,
@@ -1762,7 +1774,14 @@ where
     game.clear_deletion_player();
     game.clear_offline_player();
     let launch = prepare_save_thread_launch(save_thread_handle);
-    let resulting_handle = launch_save_thread(&launch);
+    let job = game.take_save_thread_job(
+        variables,
+        registry,
+        honor_ranks,
+        gods_battle,
+        lifecycle,
+    );
+    let resulting_handle = launch_save_thread(&launch, job);
     *save_thread_handle = resulting_handle;
     Ok(WorldCompletedSaveResponseLaunchReport {
         snapshot,
@@ -1782,9 +1801,11 @@ pub(crate) async fn on_server_message(
     country_handler: &CCountryHandler,
     country_limits: CountryKingSaveLimits,
     honor_ranks: &mut CHonorRanks,
+    save_lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
     save_thread_handle: &mut WorldSaveThreadHandleState,
     launch_save_thread: &mut dyn FnMut(
         &WorldSaveThreadLaunchRequest,
+        WorldSaveThreadJob,
     ) -> WorldSaveThreadHandleState,
     add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     session_factory: &mut CSessionFactory,
@@ -2107,6 +2128,9 @@ pub(crate) async fn on_server_message(
                 });
                 let progress = game.record_player_save_response(completion.is_some());
                 let materialization = if progress.save_triggered {
+                    let variables = general_variables
+                        .as_deref()
+                        .expect("World message loop запускается после загрузки general variables");
                     match materialize_completed_save_response_snapshot(
                         game,
                         registry,
@@ -2115,7 +2139,10 @@ pub(crate) async fn on_server_message(
                         faction_war,
                         country_handler,
                         country_limits,
+                        variables,
                         honor_ranks,
+                        gods_battle,
+                        Arc::clone(&save_lifecycle),
                         save_thread_handle,
                         launch_save_thread,
                     ) {

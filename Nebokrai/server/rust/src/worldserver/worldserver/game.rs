@@ -918,15 +918,17 @@
 //! вокруг готового `DoSaveData`
 //! lifecycle и возвращает guard при границе, где исходник не дошёл до unlock.
 //! COM apartment удалён как заменённый Windows DB-механизм. Оба достигнутых
-//! `CloseHandle/__beginthreadex` caller-а закрывают только opaque handle-state и
-//! возвращают одноразовый launch request; thread не создаётся.
+//! `CloseHandle/__beginthreadex` caller-а передают одному process-worker-у
+//! одноразовые launch request и полный frozen job; system thread создаётся в
+//! `worldserver::runtime`, а прежний завершившийся handle закрывается перед
+//! его заменой.
 //! `WorldDbDataSaveSession` теперь предоставляет узкие owner-операции для всех
 //! четырёх player-коллекций frozen snapshot-а. Creation/restore/deletion
 //! удаляют текущий `VecDeque` node только после доказанного успеха; player-map
 //! уничтожает `Box<CPlayer>` и стирает key только после successful Save
-//! Character. Failure сохраняет owner для retry. Эксклюзивный `&mut CGame`
-//! заменяет внешнюю save-thread сериализацию, поэтому внутренний mutex не
-//! удерживается через DB-await и новая конкурентная политика не вводится.
+//! Character. Failure сохраняет frozen job у process-worker-а. Отдельная
+//! async-сериализация сохраняет общий барьер trigger/save-thread, не удерживая
+//! mutable `CGame` через DB-await; MainLoop сразу пишет в новый accumulator.
 //!
 //! `SetEnemyFactions` полностью заменяет pointer-list по `tagDBData+0x6C` под
 //! той же save-блокировкой. Старые non-null значения уничтожаются до очистки
@@ -5209,7 +5211,7 @@ pub(crate) struct WorldMainLoopStateOwners<'a> {
     pub(crate) refresh_high_water: &'a mut WorldRefreshInfoHighWater,
     pub(crate) collect_player_data: &'a mut WorldCollectPlayerDataRequestState,
     pub(crate) save_trigger: &'a mut WorldRunSaveTriggerState,
-    pub(crate) save_lifecycle: &'a SaveDataLifecycleState,
+    pub(crate) save_lifecycle: &'a Arc<Mutex<SaveDataLifecycleState>>,
     pub(crate) reload_flags: &'a WorldReloadProfileFlags,
     pub(crate) player_ranks_request: &'a WorldPlayerRanksRequestState,
     pub(crate) save_thread_handle: &'a mut WorldSaveThreadHandleState,
@@ -5291,7 +5293,10 @@ pub(crate) struct WorldMainLoopCallbacks<'a> {
     /// typed записи в тот же FIFO непосредственно в своих точках вызова.
     pub(crate) write_log_queue: WorldWriteLogQueue,
     pub(crate) launch_save_thread:
-        &'a mut dyn FnMut(&WorldSaveThreadLaunchRequest) -> WorldSaveThreadHandleState,
+        &'a mut dyn FnMut(
+            &WorldSaveThreadLaunchRequest,
+            WorldSaveThreadJob,
+        ) -> WorldSaveThreadHandleState,
     pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
     pub(crate) get_timer_local_time: &'a mut dyn FnMut() -> TagTime,
     pub(crate) refresh_union_owned_city: &'a mut dyn FnMut(i32, i32, i32),
@@ -7716,6 +7721,26 @@ pub(crate) struct WorldDbDataSaveSession<'game> {
 pub(crate) struct WorldSaveDataOwner {
     data: WorldDbData,
     login_sender: Option<Arc<ClientSendQueue>>,
+}
+
+/// Полный frozen-вход одного системного `SaveThreadFunc`.
+///
+/// Изменяемые данные следующего MainLoop-прохода остаются у process-owner-ов;
+/// worker получает только снимки, которые исходный поток читал после launch.
+pub(crate) struct WorldSaveThreadJob {
+    pub(crate) save: WorldSaveDataOwner,
+    pub(crate) variables: CVariableList,
+    pub(crate) registry: GoodsBasePropertiesRegistry,
+    pub(crate) honor_ranks: CHonorRanks,
+    pub(crate) gods_battle_faction_xyd: GodsBattleFactionXydSnapshot,
+    pub(crate) gods_battle_npc_factions: Vec<GodsBattleNpcFactionSnapshot>,
+    pub(crate) use_old_save_largess_way: bool,
+    pub(crate) save_info_time_ms: u32,
+    pub(crate) lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
+    pub(crate) server_name: Vec<u8>,
+    pub(crate) server_id: i32,
+    pub(crate) world_number_bits: u32,
+    pub(crate) write_log_queue: WorldWriteLogQueue,
 }
 
 impl WorldDbDataSaveSession<'_> {
@@ -10820,6 +10845,54 @@ impl CGame {
         }
     }
 
+    /// Снимает все process-global входы save-thread в достигнутой launch-точке.
+    pub(crate) fn take_save_thread_job(
+        &mut self,
+        variables: &CVariableList,
+        registry: &GoodsBasePropertiesRegistry,
+        honor_ranks: &mut CHonorRanks,
+        gods_battle: &CGodsBattleConf,
+        lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
+    ) -> WorldSaveThreadJob {
+        let (a_faction_xyd, b_faction_xyd) = gods_battle.faction_xyd();
+        let gods_battle_npc_factions = gods_battle
+            .npc_names()
+            .iter()
+            .map(|npc| GodsBattleNpcFactionSnapshot {
+                faction: npc.faction,
+                name: npc.name.clone(),
+            })
+            .collect();
+        let server_id = self
+            .net_server
+            .as_ref()
+            .expect("save-trigger достигается только после World network init")
+            .local_ipv4_word() as i32;
+        let world_number_bits = self
+            .setup
+            .world_number
+            .expect("save-trigger достигается только после обязательного setup dwNumber");
+
+        WorldSaveThreadJob {
+            save: self.take_save_data_owner(),
+            variables: variables.clone(),
+            registry: registry.clone(),
+            honor_ranks: honor_ranks.take_save_owner(),
+            gods_battle_faction_xyd: GodsBattleFactionXydSnapshot {
+                a_faction_xyd: a_faction_xyd as i32,
+                b_faction_xyd,
+            },
+            gods_battle_npc_factions,
+            use_old_save_largess_way: self.setup.use_old_save_largess_way,
+            save_info_time_ms: self.setup.save_info_time_ms,
+            lifecycle,
+            server_name: self.setup.name.clone(),
+            server_id,
+            world_number_bits,
+            write_log_queue: self.write_log_queue.clone(),
+        }
+    }
+
     /// Применяет два constructor-load результата `CRsSetup` к live `CGame`.
     pub(crate) const fn apply_loaded_setup_ids(&mut self, loaded: LoadedSetupIds) {
         self.player_id = loaded.player_id;
@@ -11088,19 +11161,33 @@ impl CGame {
         &mut self,
         organizing_ctrl: &mut COrganizingCtrl,
         faction_war_sys: &CFactionWarSys,
+        variables: &CVariableList,
+        registry: &GoodsBasePropertiesRegistry,
         honor_ranks: &mut CHonorRanks,
+        gods_battle: &CGodsBattleConf,
+        lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
         save_thread_handle: &mut WorldSaveThreadHandleState,
         launch_save_thread: &mut LaunchSaveThread,
     ) -> Result<WorldSaveAllOrganizationsLaunchReport, OrganizingSaveDataBlock>
     where
-        LaunchSaveThread: FnMut(&WorldSaveThreadLaunchRequest) -> WorldSaveThreadHandleState,
+        LaunchSaveThread: FnMut(
+            &WorldSaveThreadLaunchRequest,
+            WorldSaveThreadJob,
+        ) -> WorldSaveThreadHandleState,
     {
         let organizing = organizing_ctrl.generate_save_data(self, false)?;
         faction_war_sys.generate_save_data(self);
         self.geterate_region_db_data();
         honor_ranks.generate_save_data();
         let launch = prepare_save_thread_launch(save_thread_handle);
-        let resulting_handle = launch_save_thread(&launch);
+        let job = self.take_save_thread_job(
+            variables,
+            registry,
+            honor_ranks,
+            gods_battle,
+            lifecycle,
+        );
+        let resulting_handle = launch_save_thread(&launch, job);
         *save_thread_handle = resulting_handle;
         Ok(WorldSaveAllOrganizationsLaunchReport {
             organizing,
@@ -11125,12 +11212,18 @@ impl CGame {
         faction_war_sys: &CFactionWarSys,
         country_handler: &CCountryHandler,
         country_limits: CountryKingSaveLimits,
+        variables: &CVariableList,
         honor_ranks: &mut CHonorRanks,
+        gods_battle: &CGodsBattleConf,
+        lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
         save_thread_handle: &mut WorldSaveThreadHandleState,
         launch_save_thread: &mut LaunchSaveThread,
     ) -> Result<WorldRunSaveLaunchReport, WorldGenerateDbDataBlock>
     where
-        LaunchSaveThread: FnMut(&WorldSaveThreadLaunchRequest) -> WorldSaveThreadHandleState,
+        LaunchSaveThread: FnMut(
+            &WorldSaveThreadLaunchRequest,
+            WorldSaveThreadJob,
+        ) -> WorldSaveThreadHandleState,
     {
         let snapshot = self.generate_db_data(
             registry,
@@ -11147,7 +11240,14 @@ impl CGame {
         self.clear_deletion_player();
         self.clear_offline_player();
         let launch = prepare_save_thread_launch(save_thread_handle);
-        let resulting_handle = launch_save_thread(&launch);
+        let job = self.take_save_thread_job(
+            variables,
+            registry,
+            honor_ranks,
+            gods_battle,
+            lifecycle,
+        );
+        let resulting_handle = launch_save_thread(&launch, job);
         *save_thread_handle = resulting_handle;
         Ok(WorldRunSaveLaunchReport {
             snapshot,
@@ -11209,7 +11309,10 @@ impl CGame {
         faction_war_sys: &CFactionWarSys,
         country_handler: &CCountryHandler,
         country_limits: CountryKingSaveLimits,
+        variables: &CVariableList,
         honor_ranks: &mut CHonorRanks,
+        gods_battle: &CGodsBattleConf,
+        lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
         save_thread_handle: &mut WorldSaveThreadHandleState,
         log: &mut WorldLogTextOwner,
         get_tick: &mut GetTick,
@@ -11223,7 +11326,10 @@ impl CGame {
         GetTick: FnMut() -> u32,
         GetLocalTime: FnMut() -> WorldLogLocalTime,
         PutLogInfo: FnMut(&[u8]),
-        LaunchSaveThread: FnMut(&WorldSaveThreadLaunchRequest) -> WorldSaveThreadHandleState,
+        LaunchSaveThread: FnMut(
+            &WorldSaveThreadLaunchRequest,
+            WorldSaveThreadJob,
+        ) -> WorldSaveThreadHandleState,
     {
         let manual_request = if state.send_save_message_now {
             let log = log.add_log_text(
@@ -11276,7 +11382,10 @@ impl CGame {
             faction_war_sys,
             country_handler,
             country_limits,
+            variables,
             honor_ranks,
+            gods_battle,
+            lifecycle,
             save_thread_handle,
             log,
             get_tick,
@@ -11320,7 +11429,10 @@ impl CGame {
         faction_war_sys: &CFactionWarSys,
         country_handler: &CCountryHandler,
         country_limits: CountryKingSaveLimits,
+        variables: &CVariableList,
         honor_ranks: &mut CHonorRanks,
+        gods_battle: &CGodsBattleConf,
+        lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
         save_thread_handle: &mut WorldSaveThreadHandleState,
         log: &mut WorldLogTextOwner,
         get_tick: &mut GetTick,
@@ -11333,7 +11445,10 @@ impl CGame {
         GetTick: FnMut() -> u32,
         GetLocalTime: FnMut() -> WorldLogLocalTime,
         PutLogInfo: FnMut(&[u8]),
-        LaunchSaveThread: FnMut(&WorldSaveThreadLaunchRequest) -> WorldSaveThreadHandleState,
+        LaunchSaveThread: FnMut(
+            &WorldSaveThreadLaunchRequest,
+            WorldSaveThreadJob,
+        ) -> WorldSaveThreadHandleState,
     {
         let save_info_time_ms = self.setup.save_info_time_ms;
         let guard = WorldRunSaveGuard { game: self };
@@ -11344,7 +11459,11 @@ impl CGame {
             let save = match guard.game.materialize_save_all_organizations_snapshot(
                 organizing_ctrl,
                 faction_war_sys,
+                variables,
+                registry,
                 honor_ranks,
+                gods_battle,
+                Arc::clone(&lifecycle),
                 save_thread_handle,
                 launch_save_thread,
             ) {
@@ -11377,7 +11496,10 @@ impl CGame {
                 faction_war_sys,
                 country_handler,
                 country_limits,
+                variables,
                 honor_ranks,
+                gods_battle,
+                Arc::clone(&lifecycle),
                 save_thread_handle,
                 launch_save_thread,
             ) {
@@ -13856,9 +13978,11 @@ impl CGame {
         write_faction_disband_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
         rs_player: &mut TiberiusRsPlayer,
         mut player_database: Option<&mut WorldTdsClient>,
+        save_lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
         save_thread_handle: &mut WorldSaveThreadHandleState,
         launch_save_thread: &mut dyn FnMut(
             &WorldSaveThreadLaunchRequest,
+            WorldSaveThreadJob,
         ) -> WorldSaveThreadHandleState,
         session_factory: &mut CSessionFactory,
         mut general_variables: Option<&mut CVariableList>,
@@ -13953,6 +14077,7 @@ impl CGame {
                             &mut *write_faction_disband_log,
                             &mut *rs_player,
                             player_database.as_deref_mut(),
+                            Arc::clone(&save_lifecycle),
                             &mut *save_thread_handle,
                             &mut *launch_save_thread,
                             &mut *session_factory,
@@ -14052,6 +14177,7 @@ impl CGame {
                     &mut *write_faction_disband_log,
                     &mut *rs_player,
                     player_database.as_deref_mut(),
+                    Arc::clone(&save_lifecycle),
                     &mut *save_thread_handle,
                     &mut *launch_save_thread,
                     &mut *session_factory,
@@ -14162,9 +14288,11 @@ impl CGame {
         write_faction_disband_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
         rs_player: &mut TiberiusRsPlayer,
         player_database: Option<&mut WorldTdsClient>,
+        save_lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
         save_thread_handle: &mut WorldSaveThreadHandleState,
         launch_save_thread: &mut dyn FnMut(
             &WorldSaveThreadLaunchRequest,
+            WorldSaveThreadJob,
         ) -> WorldSaveThreadHandleState,
         session_factory: &mut CSessionFactory,
         general_variables: Option<&mut CVariableList>,
@@ -14256,6 +14384,7 @@ impl CGame {
             write_faction_disband_log,
             rs_player,
             player_database,
+            save_lifecycle,
             save_thread_handle,
             launch_save_thread,
             session_factory,
@@ -15765,13 +15894,14 @@ impl CGame {
 
         let refresh_profile_started_at_ms =
             start_main_loop_profile_stage(state.clocks, &mut *callbacks.get_tick);
+        let save_lifecycle_snapshot = *state.save_lifecycle.lock();
         let refresh = self.run_main_loop_refresh_stage(
             state.clocks,
             state.profile,
             state.process_message,
             state.refresh_high_water,
             configuration.refresh_external_counts,
-            state.save_lifecycle,
+            &save_lifecycle_snapshot,
             owners.log,
             &mut callbacks.get_tick,
             &mut callbacks.get_save_point_time,
@@ -15872,7 +16002,13 @@ impl CGame {
             owners.faction_war,
             owners.country,
             configuration.country_limits,
+            owners
+                .general_variables
+                .as_deref()
+                .expect("World MainLoop запускается после загрузки general variables"),
             owners.honor_ranks,
+            owners.gods_battle,
+            Arc::clone(state.save_lifecycle),
             state.save_thread_handle,
             owners.log,
             &mut callbacks.get_tick,
@@ -16010,6 +16146,7 @@ impl CGame {
             &mut write_faction_disband_log,
             owners.rs_player,
             owners.player_database.as_deref_mut(),
+            Arc::clone(state.save_lifecycle),
             state.save_thread_handle,
             &mut *callbacks.launch_save_thread,
             owners.session_factory,
@@ -20047,9 +20184,11 @@ async fn process_world_message<TimerCallback, DbMiscContextOwner, JjcContext>(
     write_faction_disband_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
     rs_player: &mut TiberiusRsPlayer,
     mut player_database: Option<&mut WorldTdsClient>,
+    save_lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
     save_thread_handle: &mut WorldSaveThreadHandleState,
     launch_save_thread: &mut dyn FnMut(
         &WorldSaveThreadLaunchRequest,
+        WorldSaveThreadJob,
     ) -> WorldSaveThreadHandleState,
     session_factory: &mut CSessionFactory,
     mut general_variables: Option<&mut CVariableList>,
@@ -20086,6 +20225,7 @@ where
             country_handler,
             country_limits,
             honor_ranks,
+            Arc::clone(&save_lifecycle),
             save_thread_handle,
             launch_save_thread,
             add_log_text,
@@ -22707,7 +22847,7 @@ impl<'save> WorldSaveThreadGuard<'save> {
     fn stop_outer_owner(self) {}
 }
 
-/// Доказанный результат тела `SaveThreadFunc` без создания системного потока.
+/// Доказанный результат тела `SaveThreadFunc` внутри process-owned потока.
 pub(crate) enum WorldSaveThreadReport<'save> {
     /// Start-log остановился после входа в save-сериализацию.
     BlockedStartLog {
@@ -22908,7 +23048,7 @@ fn save_thread_log_event(payload: &'static [u8]) -> SaveDataLogEvent {
     }
 }
 
-/// Выполняет exact body `SaveThreadFunc`, но не создаёт и не завершает thread.
+/// Выполняет exact body `SaveThreadFunc` внутри уже созданного worker-thread.
 ///
 /// `CoInitialize/CoUninitialize` не имеют Linux runtime-аналога: достигнутые
 /// DB-owner-ы используют Tiberius, поэтому COM apartment был заменяемым
@@ -22933,6 +23073,8 @@ pub(crate) async fn save_thread_func<
     C,
     L,
     Log,
+    PublishState,
+    ReleaseSerialization,
     GetMonitoring,
 >(
     save: &'save mut WorldSaveDataOwner,
@@ -22957,6 +23099,8 @@ pub(crate) async fn save_thread_func<
     country_database: &mut C,
     largess: &mut L,
     log_sink: &mut Log,
+    publish_state: PublishState,
+    release_serialization: ReleaseSerialization,
     get_monitoring: GetMonitoring,
 ) -> WorldSaveThreadReport<'save>
 where
@@ -22974,6 +23118,8 @@ where
     C: DbCountryOwner,
     L: LargessOwner,
     Log: SaveDataLogSink,
+    PublishState: FnMut(SaveDataLifecycleState),
+    ReleaseSerialization: FnOnce(),
     GetMonitoring: FnOnce() -> SaveDataMonitoringSnapshot,
 {
     let guard = WorldSaveThreadGuard { save };
@@ -23014,6 +23160,7 @@ where
             country_database,
             largess,
             log_sink,
+            publish_state,
             get_monitoring,
             |monitoring| {
                 let _legacy_result = send_err_log_to_login(
@@ -23038,6 +23185,7 @@ where
 
     // Эта точка одновременно заменяет CoUninitialize и исходный unlock.
     guard.release();
+    release_serialization();
     let end_log = match log_sink.publish(&save_thread_log_event(b"SaveThread end...")) {
         SaveDataLogPublishDisposition::BlockedMissingFact(block) => {
             return WorldSaveThreadReport::BlockedEndLog {

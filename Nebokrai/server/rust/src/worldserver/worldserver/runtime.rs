@@ -11,6 +11,7 @@ use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr as UnixSocketAddr, UnixListener};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use parking_lot::RwLock;
@@ -90,11 +91,13 @@ use super::game::{
     CGame, WorldGameDatabaseInitialization, WorldGameDatabaseOwner, WorldGameInitContext,
     WorldGameInitCallbacks, WorldGameInitOperatorNotice, WorldGameInitResult,
     WorldGameInitWorkerKind, WorldPlayerDataLoadOwner, WorldPlayerLoadDataAdapter,
-    WorldReloadContext,
+    WorldReloadContext, WorldSaveThreadHandleState, WorldSaveThreadJob, WorldSaveThreadReport,
+    save_thread_func,
 };
 use super::honorranks::CHonorRanks;
 use super::playerranks::CPlayerRanks;
 use super::worldserver::{WorldLogLocalTime, WorldLogTextOwner};
+use super::savedb::{SaveDataLogPublisher, SaveDataMonitoringSnapshot};
 use crate::worldserver::appworld::message::writelogmessage::WorldWriteLogCommand;
 
 /// Стабильные typed-ключи всех callback-ов единственного World timer-owner-а.
@@ -331,6 +334,199 @@ impl WorldProcessDomainOwners {
             &mut callbacks,
         )
         .await
+    }
+}
+
+/// Результат одного завершившегося системного save-worker-а.
+pub(crate) struct WorldSaveWorkerCompletion {
+    /// Незавершённый batch остаётся owned до Release вместо тихой потери.
+    pub(crate) retained_job: Option<WorldSaveThreadJob>,
+    /// Blocked-путь не изображает достигнутый `LeaveCriticalSection`.
+    retained_serialization: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+/// Единственный process-owner `g_hSavingThread` и общей save-сериализации.
+pub(crate) struct WorldSaveWorker {
+    runtime: tokio::runtime::Handle,
+    started_at: Instant,
+    settings: WorldDatabaseSettings,
+    largess: Arc<TiberiusLargess>,
+    log: WorldLogTextOwner,
+    serialization: Arc<tokio::sync::Mutex<()>>,
+    handle: Option<JoinHandle<WorldSaveWorkerCompletion>>,
+    retained_jobs: Vec<WorldSaveThreadJob>,
+    retained_serializations: Vec<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl WorldSaveWorker {
+    pub(crate) fn new(
+        runtime: tokio::runtime::Handle,
+        started_at: Instant,
+        settings: WorldDatabaseSettings,
+        largess: Arc<TiberiusLargess>,
+        log: WorldLogTextOwner,
+    ) -> Self {
+        Self {
+            runtime,
+            started_at,
+            settings,
+            largess,
+            log,
+            serialization: Arc::new(tokio::sync::Mutex::new(())),
+            handle: None,
+            retained_jobs: Vec::new(),
+            retained_serializations: Vec::new(),
+        }
+    }
+
+    pub(crate) fn serialization(&self) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(&self.serialization)
+    }
+
+    /// Закрывает прежний завершившийся handle и запускает exact background role.
+    pub(crate) fn launch(&mut self, job: WorldSaveThreadJob) -> WorldSaveThreadHandleState {
+        self.collect_previous();
+
+        let runtime = self.runtime.clone();
+        let started_at = self.started_at;
+        let settings = self.settings.clone();
+        let mut largess = self.largess.clone_save_owner();
+        let mut log = self.log.clone();
+        let serialization = Arc::clone(&self.serialization);
+        let pending_job = Arc::new(parking_lot::Mutex::new(Some(job)));
+        let thread_job = Arc::clone(&pending_job);
+        let handle = thread::Builder::new()
+            .name("world-save".to_owned())
+            .spawn(move || {
+                let mut job = thread_job
+                    .lock()
+                    .take()
+                    .expect("save job принадлежит единственному worker-у");
+                let mut setup_database = TiberiusRsSetup::new_for_save(settings.clone());
+                let mut variable_database = TiberiusRsGenVar::new(settings.clone());
+                let mut player_database = TiberiusRsPlayer::new(&settings);
+                let mut jjc_database = TiberiusRsJjcSys::new(&settings);
+                let mut goods_database = TiberiusDbGoods::new(&settings);
+                let mut union_database = TiberiusRsUnion::new(settings.clone());
+                let mut faction_database = TiberiusRsFaction::new(settings.clone());
+                let mut region_database = TiberiusRsRegion::new(settings.clone());
+                let mut gods_battle_database = TiberiusRsGodsBattle::new(&settings);
+                let mut enemy_factions_database = TiberiusRsEnemyFactions::new(settings.clone());
+                let mut country_database = TiberiusDbCountry::default();
+                let mut lifecycle = *job.lifecycle.lock();
+                let shared_lifecycle = Arc::clone(&job.lifecycle);
+                let write_log_queue = job.write_log_queue.clone();
+                let server_name = job.server_name.clone();
+                let server_id = job.server_id;
+                let world_number_bits = job.world_number_bits;
+                let save_info_time_ms = job.save_info_time_ms;
+                let mut publisher = SaveDataLogPublisher::new(
+                    false,
+                    save_info_time_ms,
+                    &mut log,
+                    move || started_at.elapsed().as_millis() as u32,
+                    || {
+                        let now = chrono::Local::now();
+                        WorldLogLocalTime {
+                            year: now.year() as u16,
+                            month: now.month() as u16,
+                            day: now.day() as u16,
+                            hour: now.hour() as u16,
+                            minute: now.minute() as u16,
+                            second: now.second() as u16,
+                        }
+                    },
+                    |payload: &[u8]| {
+                        eprintln!("WorldServer: {}", String::from_utf8_lossy(payload));
+                    },
+                );
+
+                let completed = runtime.block_on(async {
+                    let mut serialization = Some(serialization.lock_owned().await);
+                    let report = save_thread_func(
+                        &mut job.save,
+                        &settings,
+                        &mut lifecycle,
+                        &job.variables,
+                        &job.registry,
+                        &mut job.honor_ranks,
+                        job.gods_battle_faction_xyd,
+                        &job.gods_battle_npc_factions,
+                        job.use_old_save_largess_way,
+                        &mut setup_database,
+                        &mut variable_database,
+                        &mut player_database,
+                        &mut jjc_database,
+                        &mut goods_database,
+                        &mut union_database,
+                        &mut faction_database,
+                        &mut region_database,
+                        &mut gods_battle_database,
+                        &mut enemy_factions_database,
+                        &mut country_database,
+                        &mut largess,
+                        &mut publisher,
+                        move |snapshot| *shared_lifecycle.lock() = snapshot,
+                        || drop(serialization.take()),
+                        move || SaveDataMonitoringSnapshot {
+                            server_name,
+                            write_log_count: write_log_queue.len() as u32,
+                            server_id,
+                            world_number_bits,
+                        },
+                    )
+                    .await;
+                    let completed = matches!(&report, WorldSaveThreadReport::Complete { .. });
+                    drop(report);
+                    (completed, serialization)
+                });
+
+                WorldSaveWorkerCompletion {
+                    retained_job: (!completed.0).then_some(job),
+                    retained_serialization: completed.1,
+                }
+            });
+
+        match handle {
+            Ok(handle) => {
+                self.handle = Some(handle);
+                WorldSaveThreadHandleState::Open
+            }
+            Err(error) => {
+                eprintln!("WorldServer: не создан save-worker: {error}");
+                if let Some(job) = pending_job.lock().take() {
+                    self.retained_jobs.push(job);
+                }
+                WorldSaveThreadHandleState::Empty
+            }
+        }
+    }
+
+    fn collect_previous(&mut self) {
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        match handle.join() {
+            Ok(completion) => {
+                if let Some(job) = completion.retained_job {
+                    self.retained_jobs.push(job);
+                }
+                if let Some(serialization) = completion.retained_serialization {
+                    self.retained_serializations.push(serialization);
+                }
+            }
+            Err(_) => eprintln!("WorldServer: save-worker завершился panic"),
+        }
+    }
+
+    pub(crate) fn join(&mut self) -> WorldSaveThreadHandleState {
+        let previous = if self.handle.is_some() {
+            WorldSaveThreadHandleState::Open
+        } else {
+            WorldSaveThreadHandleState::Empty
+        };
+        self.collect_previous();
+        previous
     }
 }
 

@@ -279,6 +279,14 @@ pub(crate) struct TiberiusRsSetup {
 }
 
 impl TiberiusRsSetup {
+    /// Создаёт независимый save-owner без повторных constructor-load запросов.
+    pub(crate) fn new_for_save(settings: WorldDatabaseSettings) -> Self {
+        Self {
+            config: settings.tds_config(),
+            notices: VecDeque::new(),
+        }
+    }
+
     /// Создаёт owner и выполняет два constructor-load в исходном порядке.
     pub(crate) async fn initialize(settings: WorldDatabaseSettings) -> (Self, LoadedSetupIds) {
         let mut owner = Self {

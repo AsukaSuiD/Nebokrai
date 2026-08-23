@@ -46,6 +46,10 @@
 //! EXE: таблица VA `0x0056A69C` содержит `0x0053FE54 -> "(Normal)"` и
 //! `0x0053FE44 -> "(Abnormal!!!!)"` (`VERIFIED_DISASSEMBLY`).
 
+use std::sync::Arc;
+
+use parking_lot::Mutex;
+
 const LEGACY_LOG_BUFFER_CAPACITY: usize = 64_000;
 const LEGACY_WINDOW_TEXT_CAPACITY: usize = 64_000;
 const SAVE_LOG_HEADER: &[u8] =
@@ -99,8 +103,13 @@ pub(crate) enum AddLogTextDisposition {
 }
 
 /// Caller-owned замена двух MFC edit-control и двух log-tick globals.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Default)]
 pub(crate) struct WorldLogTextOwner {
+    state: Arc<Mutex<WorldLogTextState>>,
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct WorldLogTextState {
     initialized: bool,
     last_save_tick_ms: u32,
     info_text: Vec<u8>,
@@ -279,20 +288,21 @@ fn update_signed_u32_max(high_water: &mut u32, current: u32) {
 
 impl WorldLogTextOwner {
     /// Заменяет `SetWindowTextA(g_hInfoText, ...)` для будущих info-owner-ов.
-    pub(crate) fn set_info_text(&mut self, text: &[u8]) {
-        self.info_text.clear();
-        self.info_text
+    pub(crate) fn set_info_text(&self, text: &[u8]) {
+        let mut state = self.state.lock();
+        state.info_text.clear();
+        state.info_text
             .extend_from_slice(legacy_c_string_prefix(text));
     }
 
     /// Текущее содержимое старого `g_hLogText` без C NUL.
-    pub(crate) fn log_text(&self) -> &[u8] {
-        &self.log_text
+    pub(crate) fn log_text(&self) -> Vec<u8> {
+        self.state.lock().log_text.clone()
     }
 
     /// Воспроизводит `SaveLogText(force)` и точный порядок вызовов sink-а.
     pub(crate) fn save_log_text<GetTick, GetLocalTime, PutLogInfo>(
-        &mut self,
+        &self,
         force: bool,
         save_info_time_ms: u32,
         mut get_tick: GetTick,
@@ -304,7 +314,7 @@ impl WorldLogTextOwner {
         GetLocalTime: FnMut() -> WorldLogLocalTime,
         PutLogInfo: FnMut(&[u8]),
     {
-        self.save_log_text_with(
+        self.state.lock().save_log_text_with(
             force,
             save_info_time_ms,
             &mut get_tick,
@@ -315,7 +325,7 @@ impl WorldLogTextOwner {
 
     /// Воспроизводит `AddLogText` после безопасной materialization его varargs.
     pub(crate) fn add_log_text<GetTick, GetLocalTime, PutLogInfo>(
-        &mut self,
+        &self,
         message: &[u8],
         save_info_time_ms: u32,
         mut get_tick: GetTick,
@@ -327,7 +337,7 @@ impl WorldLogTextOwner {
         GetLocalTime: FnMut() -> WorldLogLocalTime,
         PutLogInfo: FnMut(&[u8]),
     {
-        self.add_log_text_with(
+        self.state.lock().add_log_text_with(
             message,
             false,
             false,
@@ -340,7 +350,7 @@ impl WorldLogTextOwner {
 
     /// Воспроизводит `AddErrorLogText` с exact ` <error> ` marker-ом.
     pub(crate) fn add_error_log_text<GetTick, GetLocalTime, PutLogInfo>(
-        &mut self,
+        &self,
         message: &[u8],
         save_info_time_ms: u32,
         mut get_tick: GetTick,
@@ -352,7 +362,7 @@ impl WorldLogTextOwner {
         GetLocalTime: FnMut() -> WorldLogLocalTime,
         PutLogInfo: FnMut(&[u8]),
     {
-        self.add_log_text_with(
+        self.state.lock().add_log_text_with(
             message,
             false,
             true,
@@ -365,7 +375,7 @@ impl WorldLogTextOwner {
 
     /// Сохраняет `AddLogText(local_104)` из `ShowSaveInfo` без varargs.
     pub(crate) fn add_log_text_no_arguments<GetTick, GetLocalTime, PutLogInfo>(
-        &mut self,
+        &self,
         format: &[u8],
         save_info_time_ms: u32,
         mut get_tick: GetTick,
@@ -377,7 +387,7 @@ impl WorldLogTextOwner {
         GetLocalTime: FnMut() -> WorldLogLocalTime,
         PutLogInfo: FnMut(&[u8]),
     {
-        self.add_log_text_with(
+        self.state.lock().add_log_text_with(
             format,
             true,
             false,
@@ -387,7 +397,9 @@ impl WorldLogTextOwner {
             &mut put_log_info,
         )
     }
+}
 
+impl WorldLogTextState {
     fn add_log_text_with<GetTick, GetLocalTime, PutLogInfo>(
         &mut self,
         message: &[u8],

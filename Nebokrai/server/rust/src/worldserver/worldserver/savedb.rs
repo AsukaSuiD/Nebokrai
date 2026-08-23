@@ -1870,16 +1870,22 @@ pub(crate) enum DoSaveDataLifecycleReport {
 /// observable-действием опубликовать `Save Variables Start...`. При ошибке
 /// прежнее значение флага сохраняется; `final_snapshot` ведёт в общий хвост с
 /// нулевыми счётчиками и тем же local start tick.
-pub(crate) async fn begin_do_save_data(
+pub(crate) async fn begin_do_save_data<PublishState>(
     settings: &WorldDatabaseSettings,
     state: &mut SaveDataLifecycleState,
-) -> DoSaveDataStart {
+    publish_state: &mut PublishState,
+) -> DoSaveDataStart
+where
+    PublishState: FnMut(SaveDataLifecycleState),
+{
     let started_at_tick_ms = capture_save_data_tick_ms();
     state.this_save_start_tick_ms = started_at_tick_ms;
+    publish_state(*state);
 
     match open_save_data_connection(settings).await {
         Ok(connection) => {
             state.is_saving_data = true;
+            publish_state(*state);
             DoSaveDataStart::Opened {
                 connection,
                 started_at_tick_ms,
@@ -4857,6 +4863,7 @@ pub(crate) async fn do_save_data_lifecycle<
     Log,
     GetMonitoring,
     SendMonitoring,
+    PublishState,
 >(
     settings: &WorldDatabaseSettings,
     state: &mut SaveDataLifecycleState,
@@ -4880,6 +4887,7 @@ pub(crate) async fn do_save_data_lifecycle<
     country_database: &mut C,
     largess: &mut L,
     log_sink: &mut Log,
+    mut publish_state: PublishState,
     get_monitoring: GetMonitoring,
     send_monitoring: SendMonitoring,
 ) -> DoSaveDataLifecycleReport
@@ -4900,8 +4908,10 @@ where
     Log: SaveDataLogSink,
     GetMonitoring: FnOnce() -> SaveDataMonitoringSnapshot,
     SendMonitoring: FnOnce(&SaveDataMonitoringReport),
+    PublishState: FnMut(SaveDataLifecycleState),
 {
-    let (evidence, final_snapshot) = match begin_do_save_data(settings, state).await {
+    let (evidence, final_snapshot) =
+        match begin_do_save_data(settings, state, &mut publish_state).await {
         DoSaveDataStart::Opened {
             mut connection,
             started_at_tick_ms,
@@ -5013,6 +5023,7 @@ where
         get_monitoring,
         send_monitoring,
     );
+    publish_state(*state);
     DoSaveDataLifecycleReport::Final { evidence, report }
 }
 

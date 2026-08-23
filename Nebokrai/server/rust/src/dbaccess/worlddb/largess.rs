@@ -489,6 +489,18 @@ impl TiberiusLargess {
         }
     }
 
+    /// Даёт save-thread отдельный notice/worker owner над тем же live map.
+    pub(crate) fn clone_save_owner(&self) -> Self {
+        Self {
+            load_largess_time: self.load_largess_time,
+            incoming_cost_database: self.incoming_cost_database.clone(),
+            cost_database: self.cost_database.clone(),
+            entries: Arc::clone(&self.entries),
+            notices: VecDeque::new(),
+            worker: Mutex::new(None),
+        }
+    }
+
     /// Эквивалент `StartWorkerThread`: пропускает запуск при нулевом интервале
     /// и пока предыдущий проход ещё владеет worker-slot.
     pub(crate) fn start_worker(&self, world_number: u32) -> LargessWorkerStartOutcome {
