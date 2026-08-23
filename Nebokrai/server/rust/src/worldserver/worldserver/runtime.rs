@@ -701,6 +701,26 @@ impl WorldProcessSaveRuntime {
     pub(crate) fn join(&mut self) -> WorldSaveThreadHandleState {
         self.worker.join()
     }
+
+    pub(crate) fn after_game_init(
+        runtime: tokio::runtime::Handle,
+        init: &WorldProcessInitContext,
+        domains: &WorldProcessDomainOwners,
+    ) -> Result<Self, WorldMainLoopContextBuildError> {
+        let settings = init
+            .database_settings()
+            .ok_or(WorldMainLoopContextBuildError::MissingDatabaseSettings)?;
+        let largess = init
+            .largess()
+            .ok_or(WorldMainLoopContextBuildError::MissingLargessOwner)?;
+        Ok(Self::new(WorldSaveWorker::new(
+            runtime,
+            init.started_at(),
+            settings,
+            largess,
+            domains.log.clone(),
+        )))
+    }
 }
 
 impl WorldSaveRuntimeContext for WorldProcessSaveRuntime {
@@ -1413,6 +1433,7 @@ impl WorldLeiTingRuntimeContext for WorldLeiTingProcessContext {
 pub(crate) enum WorldMainLoopContextBuildError {
     MissingDatabaseSettings,
     MissingDbMiscOwner,
+    MissingLargessOwner,
 }
 
 impl fmt::Display for WorldMainLoopContextBuildError {
@@ -1423,6 +1444,9 @@ impl fmt::Display for WorldMainLoopContextBuildError {
             }
             Self::MissingDbMiscOwner => {
                 formatter.write_str("World DbMisc owner не опубликован после Init")
+            }
+            Self::MissingLargessOwner => {
+                formatter.write_str("World Largess owner не опубликован после Init")
             }
         }
     }
@@ -1441,6 +1465,7 @@ pub(crate) struct WorldProcessMainLoopContexts {
     pub(crate) lei_ting_worker: Arc<WorldLeiTingResetWorker>,
     pub(crate) lei_ting: WorldLeiTingProcessContext,
     pub(crate) lei_ting_owner: CLeiTing,
+    pub(crate) load_player_largess: Box<dyn FnMut(&mut CPlayer) + Send>,
 }
 
 impl WorldProcessMainLoopContexts {
@@ -1455,6 +1480,9 @@ impl WorldProcessMainLoopContexts {
             .database_settings()
             .ok_or(WorldMainLoopContextBuildError::MissingDatabaseSettings)?;
         let snapshot = resources.player_load_snapshot.read().clone();
+        let largess = init
+            .largess()
+            .ok_or(WorldMainLoopContextBuildError::MissingLargessOwner)?;
         let (db_misc, db_misc_configuration) = init
             .take_db_misc_context(
                 snapshot.goods.clone(),
@@ -1500,6 +1528,10 @@ impl WorldProcessMainLoopContexts {
             lei_ting_worker,
             lei_ting,
             lei_ting_owner: CLeiTing::new(current_lei_ting_local_time()),
+            load_player_largess: world_player_load_largess(
+                largess,
+                resources.player_load_snapshot(),
+            ),
         })
     }
 }
