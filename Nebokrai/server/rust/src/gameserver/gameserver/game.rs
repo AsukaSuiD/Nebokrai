@@ -2136,6 +2136,27 @@ impl CGame {
         })
     }
 
+    /// Исполняемый entry point goods-message `0x8FC2A`; decoder передаёт пары
+    /// property/client-points без предварительного масштабирования.
+    pub(crate) fn allocate_battle_fairy_potential(
+        &mut self,
+        player_id: i32,
+        allocations: &[(i32, i32)],
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> Option<crate::gameserver::appserver::player::BattleFairyPotentialAllocationReport> {
+        let enabled = self.globe_setup.battle_fairy_enabled();
+        let coefficients = self.globe_setup.player_property_coefficients();
+        self.players.get_mut(&player_id).map(|player| {
+            player.allocate_battle_fairy_potential(
+                enabled,
+                allocations,
+                &self.goods_factory,
+                coefficients,
+                encode_old_client,
+            )
+        })
+    }
+
     /// Исполняет один исходный snapshot входящих FIFO в порядке WS, BS, GS.
     pub(crate) fn process_messages(&mut self, handlers: &mut dyn GameMessageHandlers) -> i32 {
         if let Some(client) = &self.world_client {

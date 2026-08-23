@@ -22,7 +22,7 @@
 //!
 //! Автоматический overload читает неинициализированный `m_eBFEquipPlace` у
 //! catalog owner-а. Rust выражает этот UB как typed block, а не выбирает
-//! логичную ячейку из позднего C++-донора. Upgrade, potential/skill reset и
+//! логичную ячейку из позднего C++-донора. Upgrade, potential reset/skill reset и
 //! остальные ещё не подключённые player-integrated методы ниже остаются RAW.
 
 use super::camountlimitgoodscontainer::{
@@ -904,20 +904,6 @@ fn x87_fistp_truncating(value: f32) -> i32 {
 // RVA: 0x000FEE20
 // ADDRESS: 004fee20
 // PROTOTYPE: void __thiscall ResetPotential(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyContainer::AllocatePotential
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:924
-// RVA: 0x000FF480
-// ADDRESS: 004ff480
-// PROTOTYPE: void __thiscall AllocatePotential(int param_1, GOODS_ADDON_PROPERTIES param_2, int param_3)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

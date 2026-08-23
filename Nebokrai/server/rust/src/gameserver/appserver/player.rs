@@ -45,6 +45,10 @@
 //! `GlobeSetup` occupation coefficients и player combat state. Сохранены
 //! ранний effect до результата Add, post-remove `-1`, clamp текущих HP/MP,
 //! двойное применение MaxHP/Str/Int/Dex и двойной `0xBF918` в Remove.
+//! Goods-message `0x8FC2A` материализован до ordered potential mutation:
+//! aggregate guard остаётся в клиентских единицах, отдельные allocation
+//! умножаются на `10000`, одинаковые property keys имеют `std::map` first-win,
+//! а каждый вызов и outer caller публикуют собственный `0xBF918`.
 
 use super::area::WarSoulPoint;
 use super::container::cbattlefairycontainer::{
@@ -59,11 +63,13 @@ use super::container::cvolumelimitgoodscontainer::{
 use super::goods::cbattlefairyproperty::BattleFairyCompose;
 use super::goods::cgoods::CGoods;
 use super::goods::cgoodsbaseproperties::{
-    GAP_BF_ABRAVE_ADDON, GAP_BF_AGILITY, GAP_BF_AGILITY_ADDON, GAP_BF_ATTACK, GAP_BF_ATTACK_ADDON,
-    GAP_BF_BATTLE_FAIRY, GAP_BF_BLAST, GAP_BF_BLAST_ADDON, GAP_BF_BRAVE, GAP_BF_CUT_HURT_ADDON,
-    GAP_BF_CUT_HURT_SCALE, GAP_BF_HP, GAP_BF_LIFE_ADDON, GAP_BF_MAX_HP, GAP_BF_MAX_MP, GAP_BF_MP,
-    GAP_BF_MP_ADDON, GAP_BF_SPRITE, GAP_BF_SPRITE_ADDON, GAP_BF_SPRITUALISE_ADDON,
-    GAP_BF_SPRITUALISM, GAP_BF_STRENGH, GAP_BF_STRENGH_ADDON,
+    GAP_BF_ABRAVE_ADDON, GAP_BF_AGILITY, GAP_BF_AGILITY_ADDON, GAP_BF_AGILITY_POTENTIAL,
+    GAP_BF_ATTACK, GAP_BF_ATTACK_ADDON, GAP_BF_ATTACK_POTENTIAL, GAP_BF_BATTLE_FAIRY, GAP_BF_BLAST,
+    GAP_BF_BLAST_ADDON, GAP_BF_BLAST_POTENTIAL, GAP_BF_BRAVE, GAP_BF_BRAVE_POTENTIAL,
+    GAP_BF_CUT_HURT_ADDON, GAP_BF_CUT_HURT_SCALE, GAP_BF_HP, GAP_BF_LIFE_ADDON, GAP_BF_MAX_HP,
+    GAP_BF_MAX_MP, GAP_BF_MP, GAP_BF_MP_ADDON, GAP_BF_POTENTIAL, GAP_BF_SPRITE,
+    GAP_BF_SPRITE_ADDON, GAP_BF_SPRITE_POTENTIAL, GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISM,
+    GAP_BF_SPRITUALISM_POTENTIAL, GAP_BF_STRENGH, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_POTENTIAL,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::moveshape::CMoveShape;
@@ -71,6 +77,7 @@ use super::shape::{CShape, ShapeCoordinateBlock, ShapeFigure, ShapeView};
 use super::skills::skillfactory::CSkillFactory;
 use crate::public::guid::CGuid;
 use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
+use std::collections::BTreeMap;
 
 const PLAYER_TYPE: i32 = 400;
 const LEGACY_COMBAT_MAXIMUM: u32 = i32::MAX as u32;
@@ -235,6 +242,37 @@ pub(crate) struct BattleFairyEquipmentMutationReport {
     pub(crate) property_applied: bool,
     pub(crate) outcome: BattleFairyEquipmentMutationOutcome,
     pub(crate) effects: Vec<BattleFairyEquipmentMutationEffect>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyPotentialAllocationOutcome {
+    MissingHeadgear,
+    InvalidHeadgear,
+    AggregateInsufficient,
+    Processed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyPotentialAllocationEffect {
+    Notification {
+        player_id: i32,
+        string_id: &'static str,
+        color: u32,
+    },
+    PropertiesChanged {
+        player_id: i32,
+    },
+    GoodsUpdated(BattleFairyDefaultGoodsUpdate),
+}
+
+#[must_use = "allocation report сохраняет ordered player и network effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyPotentialAllocationReport {
+    pub(crate) player_id: i32,
+    pub(crate) outcome: BattleFairyPotentialAllocationOutcome,
+    pub(crate) aggregate_client_points: i32,
+    pub(crate) processed_properties: Vec<i32>,
+    pub(crate) effects: Vec<BattleFairyPotentialAllocationEffect>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -847,6 +885,207 @@ impl CPlayer {
             }
         }
         report
+    }
+
+    /// Полный player-side opcode `0x8FC2A`. `allocations` содержат пары
+    /// property/client-points прямо из packet-а: legacy outer caller суммирует
+    /// unscaled points, но передаёт каждому `AllocatePotential` wrapping
+    /// `points * 10000`. `std::map::insert` сохраняет первую запись ключа.
+    pub(crate) fn allocate_battle_fairy_potential(
+        &mut self,
+        battle_fairy_enabled: bool,
+        allocations: &[(i32, i32)],
+        factory: &CGoodsFactory,
+        coefficients: GlobePlayerPropertyCoefficients,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> BattleFairyPotentialAllocationReport {
+        let player_id = self.player_id();
+        let aggregate_client_points = allocations
+            .iter()
+            .fold(0i32, |total, (_, points)| total.wrapping_add(*points));
+        let mut report = BattleFairyPotentialAllocationReport {
+            player_id,
+            outcome: BattleFairyPotentialAllocationOutcome::MissingHeadgear,
+            aggregate_client_points,
+            processed_properties: Vec::new(),
+            effects: Vec::new(),
+        };
+        let Some(goods) = self.equipment.get_goods(10) else {
+            return report;
+        };
+        if goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
+            report.outcome = BattleFairyPotentialAllocationOutcome::InvalidHeadgear;
+            report
+                .effects
+                .push(BattleFairyPotentialAllocationEffect::Notification {
+                    player_id,
+                    string_id: "ZHGS0009",
+                    color: 0xffff_ffff,
+                });
+            return report;
+        }
+        if goods
+            .addon_property_value(factory, GAP_BF_POTENTIAL, 1)
+            .wrapping_sub(aggregate_client_points)
+            < 0
+        {
+            report.outcome = BattleFairyPotentialAllocationOutcome::AggregateInsufficient;
+            return report;
+        }
+
+        let mut ordered = BTreeMap::new();
+        for &(property, points) in allocations {
+            ordered.entry(property).or_insert(points);
+        }
+        for (property, points) in ordered {
+            if !battle_fairy_enabled {
+                report
+                    .effects
+                    .push(BattleFairyPotentialAllocationEffect::Notification {
+                        player_id,
+                        string_id: "ZHGS0008",
+                        color: 0xffff_0000,
+                    });
+                continue;
+            }
+            let amount = points.wrapping_mul(10_000);
+            self.allocate_one_battle_fairy_potential(property, amount, factory, coefficients);
+            report.processed_properties.push(property);
+            report
+                .effects
+                .push(BattleFairyPotentialAllocationEffect::PropertiesChanged { player_id });
+            if let Some(goods) = self.war_soul_goods(factory) {
+                report
+                    .effects
+                    .push(BattleFairyPotentialAllocationEffect::GoodsUpdated(
+                        BattleFairyDefaultGoodsUpdate {
+                            message_type: 0x0b_f918,
+                            player_id,
+                            goods: goods.identity(),
+                            old_client_payload: encode_old_client(goods),
+                        },
+                    ));
+            }
+        }
+
+        // Outer goods-message сериализует headgear ещё раз независимо от
+        // feature-disabled/unknown-property результата внутренних вызовов.
+        if let Some(goods) = self.war_soul_goods(factory) {
+            report
+                .effects
+                .push(BattleFairyPotentialAllocationEffect::GoodsUpdated(
+                    BattleFairyDefaultGoodsUpdate {
+                        message_type: 0x0b_f918,
+                        player_id,
+                        goods: goods.identity(),
+                        old_client_payload: encode_old_client(goods),
+                    },
+                ));
+        }
+        report.outcome = BattleFairyPotentialAllocationOutcome::Processed;
+        report
+    }
+
+    fn allocate_one_battle_fairy_potential(
+        &mut self,
+        property: i32,
+        amount: i32,
+        factory: &CGoodsFactory,
+        coefficients: GlobePlayerPropertyCoefficients,
+    ) {
+        let occupation = usize::from(self.base_properties.occupation).min(2);
+        let mut player_delta = None;
+        {
+            let Some(goods) = self.equipment.get_goods_mut(10) else {
+                return;
+            };
+            let potential = goods.addon_property_value(factory, GAP_BF_POTENTIAL, 1);
+            if potential.wrapping_sub(amount) < 0 {
+                return;
+            }
+            let (tracked_property, applied_amount) = match property {
+                GAP_BF_ATTACK => (
+                    GAP_BF_ATTACK_POTENTIAL,
+                    (f64::from(amount) * 1.5).round() as i32,
+                ),
+                GAP_BF_SPRITE => (
+                    GAP_BF_SPRITE_POTENTIAL,
+                    (f64::from(amount) * 1.5).round() as i32,
+                ),
+                GAP_BF_BLAST => (GAP_BF_BLAST_POTENTIAL, amount),
+                GAP_BF_BRAVE => (GAP_BF_BRAVE_POTENTIAL, amount),
+                GAP_BF_AGILITY => (GAP_BF_AGILITY_POTENTIAL, amount),
+                GAP_BF_SPRITUALISM => (GAP_BF_SPRITUALISM_POTENTIAL, amount),
+                GAP_BF_STRENGH => (GAP_BF_STRENGH_POTENTIAL, amount),
+                _ => return,
+            };
+            add_battle_fairy_addon(goods, factory, property, applied_amount);
+            add_battle_fairy_addon(goods, factory, tracked_property, applied_amount);
+            let _stored = goods.set_addon_property_value_core(
+                GAP_BF_POTENTIAL,
+                1,
+                potential.wrapping_sub(amount),
+            );
+            if property == GAP_BF_SPRITUALISM {
+                add_battle_fairy_addon(goods, factory, GAP_BF_MAX_MP, amount);
+            } else if property == GAP_BF_STRENGH {
+                add_battle_fairy_addon(goods, factory, GAP_BF_MAX_HP, amount);
+            }
+            if matches!(
+                property,
+                GAP_BF_BRAVE | GAP_BF_AGILITY | GAP_BF_SPRITUALISM | GAP_BF_STRENGH
+            ) {
+                player_delta = Some((property, f64::from(amount) * 0.00001));
+            }
+        }
+
+        let Some((property, delta)) = player_delta else {
+            return;
+        };
+        let combat = &mut self.combat_properties;
+        match property {
+            GAP_BF_BRAVE => {
+                combat.strength = add_battle_fairy_u32(combat.strength, delta);
+                combat.maximum_attack = add_battle_fairy_u32(
+                    combat.maximum_attack,
+                    delta * f64::from(coefficients.str_to_max_attack[occupation]),
+                );
+                combat.burden = add_battle_fairy_u16(
+                    combat.burden,
+                    delta * f64::from(coefficients.str_to_burden[occupation]),
+                );
+            }
+            GAP_BF_AGILITY => {
+                combat.dexterity = add_battle_fairy_u32(combat.dexterity, delta);
+                combat.minimum_attack = add_battle_fairy_u32(
+                    combat.minimum_attack,
+                    delta * f64::from(coefficients.dex_to_min_attack[occupation]),
+                );
+                combat.reank = add_battle_fairy_u16(
+                    combat.reank,
+                    delta * f64::from(coefficients.dex_to_stiff[occupation]),
+                );
+            }
+            GAP_BF_SPRITUALISM => {
+                combat.intelligence = add_battle_fairy_u32(combat.intelligence, delta);
+                combat.element_modify = add_battle_fairy_i32(
+                    combat.element_modify,
+                    delta * f64::from(coefficients.int_to_element[occupation]),
+                );
+                combat.maximum_mp = add_battle_fairy_u32(
+                    combat.maximum_mp,
+                    delta * f64::from(coefficients.int_to_max_mp[occupation]),
+                );
+                combat.element_resistance = add_battle_fairy_u32(
+                    combat.element_resistance,
+                    delta * f64::from(coefficients.int_to_resistant[occupation]),
+                );
+            }
+            GAP_BF_STRENGH => {
+                combat.maximum_hp = add_battle_fairy_u32(combat.maximum_hp, delta);
+            }
+            _ => {}
+        }
     }
 
     /// Достигнутая часть exact `RefreshContainerOwners`: owner ID должен быть
