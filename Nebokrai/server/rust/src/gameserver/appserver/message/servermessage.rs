@@ -42,6 +42,8 @@
 //! Region selector `0x0E` маршрутизирует все шесть concrete subtype-ов через
 //! общий base decoder, публикует ordered `CGame` owner и лишь затем обновляет
 //! startup totals и GodsBattle region-set.
+//! Runtime selector `0x10` ищет concrete owner по ID и перечитывает только его
+//! setup/forbid-goods tail; miss не читает tail и не пишет log.
 //! FourNationWar `0x25` декодирует exact 196-byte setup records и пять rects,
 //! затем проецирует war state и relive rectangles в доступные nation regions.
 //! Script resources `0x0A..0x0D` сохраняют signed lengths, bounded path,
@@ -91,6 +93,7 @@ use crate::gameserver::appserver::servercountryregion::{
 };
 use crate::gameserver::appserver::servergodsbattleregion::CServerGodsBattleRegion;
 use crate::gameserver::appserver::servernationregion::ServerNationRegion;
+use crate::gameserver::appserver::serverregion::ServerRegionSetupDecodeError;
 use crate::gameserver::appserver::serverregion::{CServerRegion, ServerRegionDecodeError};
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::WarRegionDecodeError;
@@ -154,6 +157,7 @@ const GENERAL_VARIABLE_SELECTOR: i32 = 0x0c;
 const SCRIPT_FILE_SELECTOR: i32 = 0x0d;
 const REGION_SELECTOR: i32 = 0x0e;
 const PROXY_REGION_SELECTOR: i32 = 0x0f;
+const REGION_RELOAD_SELECTOR: i32 = 0x10;
 const REGION_SETUP_SELECTOR: i32 = 0x11;
 const ID_INDEX_SELECTOR: i32 = 0x12;
 const HIT_LEVEL_SELECTOR: i32 = 0x14;
@@ -414,6 +418,52 @@ fn read_initial_region_i32(
             .try_into()
             .expect("region subtype занимает четыре байта"),
     ))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum RegionSetupReloadError {
+    RegionId(InitialRegionSubtypeInputBlock),
+    Setup(ServerRegionSetupDecodeError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RegionSetupReloadReport {
+    pub(crate) region_id: i32,
+    pub(crate) found: bool,
+}
+
+pub(crate) fn dispatch_region_setup_reload(
+    selector: i32,
+    message: &mut CMessage,
+    game: &mut CGame,
+    mut add_log_text: impl FnMut(&[u8]),
+) -> Option<Result<RegionSetupReloadReport, RegionSetupReloadError>> {
+    if selector != REGION_RELOAD_SELECTOR {
+        return None;
+    }
+
+    let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    let region_id = match read_initial_region_i32(source, cursor) {
+        Ok(region_id) => region_id,
+        Err(error) => return Some(Err(RegionSetupReloadError::RegionId(error))),
+    };
+    let Some(region) = game.find_region_mut(region_id) else {
+        return Some(Ok(RegionSetupReloadReport {
+            region_id,
+            found: false,
+        }));
+    };
+    if let Err(error) = region
+        .base_mut()
+        .decord_setup_from_byte_array(source, cursor, true)
+    {
+        return Some(Err(RegionSetupReloadError::Setup(error)));
+    }
+    add_log_text(b"Reload Region : (%d)%s Setup...OK!");
+    Some(Ok(RegionSetupReloadReport {
+        region_id,
+        found: true,
+    }))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

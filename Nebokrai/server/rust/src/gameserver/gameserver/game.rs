@@ -792,6 +792,17 @@ impl ServerRegionOwner {
         }
     }
 
+    pub(crate) const fn base_mut(&mut self) -> &mut CServerRegion {
+        match self {
+            Self::Base(region) => region,
+            Self::Village(region) => &mut region.war.base,
+            Self::City(region) => &mut region.war.base,
+            Self::Country(region) => &mut region.base,
+            Self::Nation(region) => &mut region.war.base,
+            Self::GodsBattle(region) => &mut region.war.base,
+        }
+    }
+
     pub(crate) const fn region_id(&self) -> i32 {
         self.base().id
     }
