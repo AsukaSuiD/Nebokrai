@@ -73,15 +73,17 @@
 //! пяти player-фаз, Delete/Save Union/Faction, Region, EnemyFactions и Country,
 //! а из отдельного `CHonorRanks::m_stDBData` — для HonorRanks. Эксклюзивная
 //! save-сессия выражает внешний `g_CriticalSectionSaveThread`, не удерживая
-//! player-list lock во время DB I/O; success cleanup каждой связанной фазы
-//! применяется в исходной точке. DB-последовательность собрана, но общий
-//! lifecycle ещё не замкнут; `SaveThreadFunc` не запускается, сервис и MSSQL не
-//! поднимаются.
+//! блокировку списка игроков во время DB I/O; успешная очистка каждой связанной
+//! фазы применяется в исходной точке. `WorldProcessSaveRuntime` передаёт
+//! неизменяемый снимок системному worker-у, который открывает отдельное World
+//! DB-соединение, выполняет эту последовательность и хранится до
+//! последовательного ожидания в `Release`.
 //! Все DB/container-фазы от setup-ID до конца Save Character теперь связаны
 //! одной последовательностью поверх двух локальных участков. Все phase logs до
 //! конца Save Character публикуются синхронно. `do_save_data_lifecycle` также
-//! связывает connection begin/cleanup и общий final tail, но не создаёт runtime
-//! entry и не запускает `SaveThreadFunc`.
+//! связывает начало и закрытие соединения с общим завершающим участком;
+//! достигнутый процессный caller запускает его из восстановленного
+//! `SaveThreadFunc` и публикует состояние жизненного цикла обратно в MainLoop.
 //!
 //! New Character начинается с list-order обхода `liDBCreationPlayer`. Null
 //! `CPlayer*` только пишет `**Create New Charactor NULL Pointer!!!!!!!!!!!!!!!!`,

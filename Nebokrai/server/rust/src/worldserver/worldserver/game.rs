@@ -423,9 +423,9 @@
 //! Следующий Largess gate читает setup до остальных эффектов, wrapping
 //! увеличивает общий pass-counter и использует short-circuit
 //! `interval != 0 && interval < current - last`. Достигнутый gate сначала
-//! обновляет last tick и возвращает typed `StartWorkerRequested`: отдельный
-//! сырой `CLargess::StartWorkerThread` не выдаётся за созданный поток. Полный
-//! MainLoop на этой позиции вызывает переданную границу этого owner-а. Более
+//! обновляет last tick и возвращает typed `StartWorkerRequested`. Полный
+//! MainLoop на этой позиции вызывает конкретный `TiberiusLargess::start_worker`,
+//! который владеет системным worker-ом и его DB-результатом. Более
 //! поздний profiling-start также снимает ровно один tick в общий scratch,
 //! который следующие стадии исходно переиспользуют. Цельный следующий участок
 //! теперь также готов: strict refresh gate сначала назначает last-refresh tick,
@@ -555,7 +555,7 @@
 //! Следующий `CSessionFactory::AI` теперь также связан с profiling-порядком:
 //! он использует start tick, назначенный успешным `ProcessMessage`, после
 //! полного factory traversal одним tick wrapping добавляет `DAT_0056e528`, а
-//! следующим назначает общий start для ещё сырого `ProcessPlayerDataQueue`.
+//! следующим назначает общий start для готового `ProcessPlayerDataQueue`.
 //! Factory передаётся явно вместо process-global static registry; это меняет
 //! форму API, но не порядок вызова, clock-read либо accumulator side effects.
 //!
@@ -606,8 +606,8 @@
 //! `0x1FF06 + account\0 + name\0 + level`, затем signed `m_lTeamID` ищется в
 //! PDB-map `std::map<unsigned long,long>` и даже нулевой session ID проходит
 //! явную границу `QuerySession -> CTeam -> QueryPlugByOwner(type,id) -> Exit`.
-//! Эти ещё сырые session/team/plug owner-ы не объявлены готовыми и передаются
-//! одним typed callback-ом. После него удаляется текущий login-node, затем в
+//! Эта цепочка session/team/plug выполняется конкретными `CSessionFactory`,
+//! `CTeam` и `CTeamate` owner-ами. После неё удаляется текущий login-node, затем в
 //! точном порядке выполняются `RemoveOnlinePlayer`, уникальная offline-вставка
 //! и friend-list рассылки `0x7F905 + friendID + expiredName\0`. Friend lookup
 //! использует только online owner; route берётся через online player/region/
@@ -1018,7 +1018,7 @@
 //! `WorldPlayerLoadWorkerPool` завершает system-thread/exit/join lifecycle;
 //! cloneable queue-spec заменяет только исходный global `g_pGame` lookup.
 //! MainLoop использует назначенный предыдущей стадией shared tick, добавляет
-//! wrapping elapsed в `DAT_0056e524` и отдельным tick начинает сырой
+//! wrapping elapsed в `DAT_0056e524` и отдельным tick начинает готовый
 //! `CTimer::Run`; при safe block эти недостигнутые clock-эффекты не создаются.
 //! Timer-dispatch теперь сам выполняет exact `CPlayerRanks::OnStatRanks`:
 //! stat, публикация, отдельный local-time, событие следующего дня и только
@@ -1032,8 +1032,8 @@
 //! `DAT_0056e51c`. Перед следующим `CLeiTing::Run` новый shared tick в exact
 //! MainLoop отсутствует, поэтому Rust его не добавляет. Сам следующий
 //! непрофилированный `CLeiTing::Run` также связан: caller снимает ровно один
-//! local `tm`, а после полного daily owner-а оставляет следующей сырой
-//! границей `CDbMisc::DoneOutList`. Соседний DB batch теперь также связан
+//! local `tm`, а после полного daily owner-а переходит к готовому
+//! `CDbMisc::DoneOutList`. Соседний DB batch также связан
 //! целиком: output limit `8`, полное снятие input queue, ordered DB-dispatch и
 //! один `LoadAuction`. Только после них единственный tick назначает start
 //! следующей профилированной границы `CNetSessionManager::Run`. Полный
@@ -1076,8 +1076,8 @@
 //! Сразу после этого `run_main_loop_bai_tan_jjc_stage` без нового clock-call
 //! завершает весь BaiTan batch и запускает полный `CJJcSystem::Run`. JJC сам
 //! сохраняет rank gate, weekly/season reset, fight timeout, message и recycle;
-//! ещё сырые `CRsJJcSys`/INI/time/log границы остаются явным контекстом, а не
-//! объявляются готовыми через MainLoop wrapper.
+//! процессный контекст связывает его с `TiberiusRsJjcSys`, INI, часами, логом и
+//! отдельным weekly-reset worker-ом.
 //!
 //! Точный PDB задаёт старому `CGame::tagRegion` размер `0xC`: nullable
 //! `CWorldRegion* pRegion` по `+0x0`, `unsigned long dwGameServerIndex` по
@@ -2065,7 +2065,7 @@ pub(crate) struct WorldGameInitReport {
 pub(crate) type WorldGameInitResult<ContextBlock> =
     Result<WorldGameInitReport, Box<WorldGameInitBlock<ContextBlock>>>;
 
-/// Прямые ещё сырые owners, достигнутые полным `CGame::Init`.
+/// Прямые процессные владельцы, достигнутые полным `CGame::Init`.
 pub(crate) trait WorldGameInitContext {
     type Block;
     type PlayerDatabase: RsPlayerOwner;
@@ -14801,7 +14801,7 @@ impl CGame {
     ///
     /// `profile_state.ai_calls` является текущим `CGame::s_lAITick`. Timer
     /// получает тот же tick-provider, которым затем MainLoop закрывает стадию
-    /// и отдельно назначает shared start для сырого `CFactionWarSys::Run`.
+    /// и отдельно назначает shared start для готового `CFactionWarSys::Run`.
     #[allow(
         clippy::too_many_arguments,
         reason = "timer callback сохраняет явные DB, ranking, clock и log owners"
@@ -14999,7 +14999,7 @@ impl CGame {
     ///
     /// Между `CLeiTing::Run` и этими тремя owners исходный MainLoop не снимал
     /// tick. Единственный clock-call после `LoadAuction` назначает shared start
-    /// следующей пока сырой стадии `CNetSessionManager::Run`.
+    /// следующей готовой стадии `CNetSessionManager::Run`.
     pub(crate) fn run_main_loop_db_misc_stage<Context, Delivery, GetTick>(
         db_misc: &mut CDbMisc,
         context: &mut Context,

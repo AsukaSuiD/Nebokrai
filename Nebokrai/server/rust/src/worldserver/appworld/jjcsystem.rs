@@ -376,7 +376,7 @@ pub(crate) enum JjcLogEvent {
     },
 }
 
-/// Ещё сырые DB/INI/time/log owners, достигнутые полным `CJJcSystem::Run`.
+/// Явные DB/INI/time/log owners, достигнутые полным `CJJcSystem::Run`.
 pub(crate) trait JjcRunContext {
     /// Повторяет начальный `_time(nullptr)` уже в 32-bit signed форме.
     fn current_time_seconds(&mut self) -> i32;
@@ -387,13 +387,13 @@ pub(crate) trait JjcRunContext {
     fn system_time(&mut self) -> JjcSystemTime;
     fn tick_count_ms(&mut self) -> u32;
 
-    /// Сырой `CRsJJcSys::LoadJJcRank`; vector остаётся живым и при `false`.
+    /// `CRsJJcSys::LoadJJcRank`; vector остаётся живым и при `false`.
     fn load_jjc_rank(&mut self, ranks: &mut Vec<JjcRank>) -> bool;
 
-    /// Сырой `CRsJJcSys::JJcWeekClear`, возвращающий результат thread-start.
+    /// `CRsJJcSys::JJcWeekClear`, возвращающий результат thread-start.
     fn start_jjc_week_clear(&mut self) -> bool;
 
-    /// Сырой `CRsJJcSys::JJcSeasonClear`; caller исторически игнорировал bool.
+    /// `CRsJJcSys::JJcSeasonClear`; caller исторически игнорировал bool.
     fn clear_jjc_season(&mut self) -> bool;
 
     /// Повторяет одну запись в исходный `szIniFile`; return caller не читал.
