@@ -78,6 +78,7 @@ use crate::nets::servers::ServerHostError;
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::public::equipmentcomposelist::EquipmentComposeList;
+use crate::public::wordsfilter::CWordsFilter;
 use crate::setup::cbattlefairyexpconfig::CBattleFairyExpConfig;
 use crate::setup::changebody::CChangeBodyConf;
 use crate::setup::contributesetup::CContributeSetup;
@@ -723,6 +724,7 @@ pub(crate) struct CGame {
     battle_fairy_exp_config: CBattleFairyExpConfig,
     battle_fairy_property: CBattleFairyProperty,
     equipment_compose_list: EquipmentComposeList,
+    words_filter: CWordsFilter,
     synthesis: CSynthesis,
     new_skill_monster_conf: NewSkillMonsterConf,
     goods_destroy_setup: GoodsDestroySetup,
@@ -769,6 +771,7 @@ impl CGame {
             battle_fairy_exp_config: CBattleFairyExpConfig::default(),
             battle_fairy_property: CBattleFairyProperty::default(),
             equipment_compose_list: EquipmentComposeList::default(),
+            words_filter: CWordsFilter::default(),
             synthesis: CSynthesis::default(),
             new_skill_monster_conf: NewSkillMonsterConf::default(),
             goods_destroy_setup: GoodsDestroySetup::default(),
@@ -1051,6 +1054,14 @@ impl CGame {
 
     pub(crate) const fn equipment_compose_list_mut(&mut self) -> &mut EquipmentComposeList {
         &mut self.equipment_compose_list
+    }
+
+    pub(crate) const fn words_filter(&self) -> &CWordsFilter {
+        &self.words_filter
+    }
+
+    pub(crate) const fn words_filter_mut(&mut self) -> &mut CWordsFilter {
+        &mut self.words_filter
     }
 
     pub(crate) const fn synthesis_mut(&mut self) -> &mut CSynthesis {

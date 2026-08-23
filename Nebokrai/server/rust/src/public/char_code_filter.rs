@@ -40,6 +40,11 @@ impl CharCodeFilter {
         self.ranges.clear();
     }
 
+    /// Дописывает один wire range для Game `CWordsFilter::FromByteArray`.
+    pub(super) fn push_range(&mut self, first: u8, last: u8) {
+        self.ranges.push(CharRange { first, last });
+    }
+
     /// Дописывает пары точно в порядке formatted extraction исходного stream.
     pub(crate) fn load(&mut self, source: Option<&[u8]>) -> bool {
         let Some(source) = source else {

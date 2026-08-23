@@ -45,6 +45,7 @@ use crate::public::dupliregionsetup::DupliRegionDecodeError;
 use crate::public::equipmentcomposelist::{
     EquipmentComposeDecodeError, EquipmentComposeDecodeReport,
 };
+use crate::public::wordsfilter::{WordsFilterDecodeError, WordsFilterDecodeReport};
 use crate::setup::cbattlefairyexpconfig::{BattleFairyExpDecodeError, BattleFairyExpDecodeReport};
 use crate::setup::changebody::ChangeBodyDecodeError;
 use crate::setup::contributesetup::ContributeSetupDecodeError;
@@ -87,6 +88,7 @@ const DA_KONG_SELECTOR: i32 = 0x2b;
 const BATTLE_FAIRY_EXP_SELECTOR: i32 = 0x2c;
 const BATTLE_FAIRY_COMBINE_SELECTOR: i32 = 0x2d;
 const EQUIPMENT_COMPOSE_SELECTOR: i32 = 0x30;
+const WORDS_FILTER_SELECTOR: i32 = 0x31;
 const THING_SETUP_SELECTOR: i32 = 0x36;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -210,6 +212,7 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
         entries: usize,
     },
     EquipmentCompose(EquipmentComposeDecodeReport),
+    WordsFilter(WordsFilterDecodeReport),
     ThingSetup {
         entries: usize,
     },
@@ -240,6 +243,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     BattleFairyExp(BattleFairyExpDecodeError),
     BattleFairyCombine(BattleFairyComposeDecodeError),
     EquipmentCompose(EquipmentComposeDecodeError),
+    WordsFilter(WordsFilterDecodeError),
     ThingSetup(ThingSetupCodecError),
 }
 
@@ -274,6 +278,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::BattleFairyExp(error) => error.fmt(formatter),
             Self::BattleFairyCombine(error) => error.fmt(formatter),
             Self::EquipmentCompose(error) => error.fmt(formatter),
+            Self::WordsFilter(error) => error.fmt(formatter),
             Self::ThingSetup(error) => error.fmt(formatter),
         }
     }
@@ -305,6 +310,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::BattleFairyExp(error) => Some(error),
             Self::BattleFairyCombine(error) => Some(error),
             Self::EquipmentCompose(error) => Some(error),
+            Self::WordsFilter(error) => Some(error),
             Self::ThingSetup(error) => Some(error),
         }
     }
@@ -585,6 +591,16 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                 }
             };
             Some(Ok(GameOwnedStartupSnapshotReport::EquipmentCompose(report)))
+        }
+        WORDS_FILTER_SELECTOR => {
+            let report = match game.words_filter_mut().from_byte_array(source, cursor) {
+                Ok(report) => report,
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::WordsFilter(error)));
+                }
+            };
+            add_log_text(b"Initial SI_WORDSFILTER...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::WordsFilter(report)))
         }
         THING_SETUP_SELECTOR => {
             if let Err(error) = game

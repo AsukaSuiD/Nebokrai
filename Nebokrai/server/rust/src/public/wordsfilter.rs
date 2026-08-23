@@ -1,11 +1,21 @@
-//! Фильтр запрещённых слов WorldServer из точной пары EXE/PDB.
+//! Фильтр запрещённых слов WorldServer и GameServer из точных пар EXE/PDB.
+//!
+//! World `LoadFilter/AddToByteArray/Check` подтверждены парой
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, Game
+//! `FromByteArray` — парой `GameServer/gameserver.exe + GameServer/GameServer.pdb`.
+//! Исходный owner PDB:
+//! `e:\svn\fengyun_russia_dev\public\wordsfilter.cpp/.h`.
 //!
 //! Строки сохраняются byte-exact и проверяются case-sensitive в list-order.
 //! Двухаргументный `Check` фиксирует первый match, всё равно вызывает
 //! `CharCodeFilter::check` и возвращает conjunction результатов. Resource
 //! parser сохраняет text-mode CRLF, chunk `fgets(1024)` и удаление последнего
 //! byte каждой порции. `Vec` и owned owner заменяют singleton/STL lifetime
-//! без изменения replace/serialization semantics.
+//! без изменения replace/serialization semantics. Game wire содержит signed
+//! count диапазонов, пары bytes, signed count строк и NUL-terminated strings.
+//! `FromByteArray` не очищает singleton, а дописывает оба списка; отрицательные
+//! counts дают пустые секции. Safe decoder сохраняет полный prefix вместо
+//! исходного безразмерного overread.
 
 use std::error::Error;
 use std::fmt;
@@ -17,6 +27,12 @@ pub(crate) struct CWordsFilter {
     char_code_file_name: Vec<u8>,
     filters: Vec<Vec<u8>>,
     char_code_filter: CharCodeFilter,
+}
+
+impl Default for CWordsFilter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CWordsFilter {
@@ -141,6 +157,36 @@ impl CWordsFilter {
         Ok(())
     }
 
+    /// Воспроизводит Game `FromByteArray`, напрямую продвигая message cursor
+    /// вместо промежуточного pointer и возвращаемого числа consumed bytes.
+    pub(crate) fn from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<WordsFilterDecodeReport, WordsFilterDecodeError> {
+        let start = *cursor;
+        let range_count = read_wire_i32(source, cursor, WordsFilterDecodeSection::CharacterRanges)?;
+        let mut ranges_added = 0;
+        for _ in 0..range_count.max(0) {
+            let first = read_wire_u8(source, cursor, WordsFilterDecodeSection::CharacterRanges)?;
+            let last = read_wire_u8(source, cursor, WordsFilterDecodeSection::CharacterRanges)?;
+            self.char_code_filter.push_range(first, last);
+            ranges_added += 1;
+        }
+
+        let filter_count = read_wire_i32(source, cursor, WordsFilterDecodeSection::BannedWords)?;
+        let mut filters_added = 0;
+        for _ in 0..filter_count.max(0) {
+            self.filters.push(read_wire_c_string(source, cursor)?);
+            filters_added += 1;
+        }
+        Ok(WordsFilterDecodeReport {
+            ranges_added,
+            filters_added,
+            consumed: cursor.saturating_sub(start),
+        })
+    }
+
     pub(crate) fn filter_file_name(&self) -> &[u8] {
         &self.filter_file_name
     }
@@ -189,6 +235,111 @@ impl fmt::Display for WordsFilterSerializeError {
 }
 
 impl Error for WordsFilterSerializeError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WordsFilterDecodeReport {
+    pub(crate) ranges_added: usize,
+    pub(crate) filters_added: usize,
+    pub(crate) consumed: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WordsFilterDecodeSection {
+    CharacterRanges,
+    BannedWords,
+}
+
+impl fmt::Display for WordsFilterDecodeSection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::CharacterRanges => "WordsFilter character ranges",
+            Self::BannedWords => "WordsFilter banned words",
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WordsFilterDecodeError {
+    pub(crate) section: WordsFilterDecodeSection,
+    pub(crate) offset: usize,
+    pub(crate) needed: usize,
+    pub(crate) available: usize,
+}
+
+impl fmt::Display for WordsFilterDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} snapshot обрывается на {}: нужно {}, доступно {}",
+            self.section, self.offset, self.needed, self.available
+        )
+    }
+}
+
+impl Error for WordsFilterDecodeError {}
+
+fn read_wire_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    section: WordsFilterDecodeSection,
+) -> Result<i32, WordsFilterDecodeError> {
+    let bytes = read_wire_bytes(source, cursor, 4, section)?;
+    Ok(i32::from_le_bytes(
+        bytes
+            .try_into()
+            .expect("размер WordsFilter count уже проверен"),
+    ))
+}
+
+fn read_wire_u8(
+    source: &[u8],
+    cursor: &mut usize,
+    section: WordsFilterDecodeSection,
+) -> Result<u8, WordsFilterDecodeError> {
+    Ok(read_wire_bytes(source, cursor, 1, section)?[0])
+}
+
+fn read_wire_c_string(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<Vec<u8>, WordsFilterDecodeError> {
+    let offset = *cursor;
+    let Some(relative_end) = source
+        .get(offset..)
+        .and_then(|tail| tail.iter().position(|byte| *byte == 0))
+    else {
+        let available = source.len().saturating_sub(offset);
+        return Err(WordsFilterDecodeError {
+            section: WordsFilterDecodeSection::BannedWords,
+            offset,
+            needed: available.saturating_add(1),
+            available,
+        });
+    };
+    let end = offset + relative_end;
+    *cursor = end + 1;
+    Ok(source[offset..end].to_vec())
+}
+
+fn read_wire_bytes<'a>(
+    source: &'a [u8],
+    cursor: &mut usize,
+    needed: usize,
+    section: WordsFilterDecodeSection,
+) -> Result<&'a [u8], WordsFilterDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(needed)) else {
+        return Err(WordsFilterDecodeError {
+            section,
+            offset,
+            needed,
+            available,
+        });
+    };
+    *cursor += needed;
+    Ok(bytes)
+}
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     needle.is_empty()
