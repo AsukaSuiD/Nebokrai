@@ -45,6 +45,9 @@
 //! Prison и PreciousBox `0x1D/0x1E` публикуют environment-конфигурацию одним
 //! FIFO pass, сохраняя clear-before-decode, partial owners и точные success
 //! logs; PreciousBox allocation failure не теряет исходный `TryReserveError`.
+//! Mutation rules `0x21..0x24` тем же FIFO pass публикуют synthesis recipes,
+//! new-skill monster groups, destruction filters и change-body restrictions;
+//! их partial registries, decode reports, allocation sources и logs сохранены.
 //! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
 //! публикует runtime repeated-emotion lookup до финального startup log.
 //! Goods list `0x00` заменяет ID/original-name/name registry из парного
@@ -561,6 +564,207 @@ pub(crate) struct GameEnvironmentConfigurationStartupMessageReport {
     pub(crate) log_effects: Vec<Vec<u8>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameMutationRulesStartupReport {
+    Synthesis(SynthesisDecodeReport),
+    NewSkillMonsters(NewSkillMonsterDecodeReport),
+    GoodsDestruction(GoodsDestroyDecodeReport),
+    ChangeBody { entries: usize },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum GameMutationRulesStartupError {
+    Synthesis(Arc<SynthesisDecodeError>),
+    NewSkillMonsters(Arc<NewSkillMonsterDecodeError>),
+    GoodsDestruction(Arc<GoodsDestroyDecodeError>),
+    ChangeBody(Arc<ChangeBodyDecodeError>),
+}
+
+impl PartialEq for GameMutationRulesStartupError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Synthesis(left), Self::Synthesis(right)) => {
+                synthesis_decode_errors_equal(left, right)
+            }
+            (Self::NewSkillMonsters(left), Self::NewSkillMonsters(right)) => {
+                new_skill_monster_decode_errors_equal(left, right)
+            }
+            (Self::GoodsDestruction(left), Self::GoodsDestruction(right)) => {
+                goods_destroy_decode_errors_equal(left, right)
+            }
+            (Self::ChangeBody(left), Self::ChangeBody(right)) => {
+                change_body_decode_errors_equal(left, right)
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for GameMutationRulesStartupError {}
+
+fn synthesis_decode_errors_equal(
+    left: &SynthesisDecodeError,
+    right: &SynthesisDecodeError,
+) -> bool {
+    match (left, right) {
+        (
+            SynthesisDecodeError::UnexpectedEnd {
+                offset: left_offset,
+                needed: left_needed,
+                available: left_available,
+            },
+            SynthesisDecodeError::UnexpectedEnd {
+                offset: right_offset,
+                needed: right_needed,
+                available: right_available,
+            },
+        ) => {
+            left_offset == right_offset
+                && left_needed == right_needed
+                && left_available == right_available
+        }
+        (
+            SynthesisDecodeError::UnterminatedString {
+                offset: left_offset,
+                available: left_available,
+            },
+            SynthesisDecodeError::UnterminatedString {
+                offset: right_offset,
+                available: right_available,
+            },
+        ) => left_offset == right_offset && left_available == right_available,
+        (
+            SynthesisDecodeError::Allocation {
+                field: left_field, ..
+            },
+            SynthesisDecodeError::Allocation {
+                field: right_field, ..
+            },
+        ) => left_field == right_field,
+        _ => false,
+    }
+}
+
+fn new_skill_monster_decode_errors_equal(
+    left: &NewSkillMonsterDecodeError,
+    right: &NewSkillMonsterDecodeError,
+) -> bool {
+    match (left, right) {
+        (
+            NewSkillMonsterDecodeError::UnexpectedEnd {
+                offset: left_offset,
+                needed: left_needed,
+                available: left_available,
+            },
+            NewSkillMonsterDecodeError::UnexpectedEnd {
+                offset: right_offset,
+                needed: right_needed,
+                available: right_available,
+            },
+        ) => {
+            left_offset == right_offset
+                && left_needed == right_needed
+                && left_available == right_available
+        }
+        (
+            NewSkillMonsterDecodeError::UnterminatedString {
+                offset: left_offset,
+                available: left_available,
+            },
+            NewSkillMonsterDecodeError::UnterminatedString {
+                offset: right_offset,
+                available: right_available,
+            },
+        ) => left_offset == right_offset && left_available == right_available,
+        (
+            NewSkillMonsterDecodeError::Allocation {
+                skill_id: left_skill_id,
+                ..
+            },
+            NewSkillMonsterDecodeError::Allocation {
+                skill_id: right_skill_id,
+                ..
+            },
+        ) => left_skill_id == right_skill_id,
+        _ => false,
+    }
+}
+
+fn goods_destroy_decode_errors_equal(
+    left: &GoodsDestroyDecodeError,
+    right: &GoodsDestroyDecodeError,
+) -> bool {
+    match (left, right) {
+        (
+            GoodsDestroyDecodeError::UnexpectedEnd {
+                offset: left_offset,
+                needed: left_needed,
+                available: left_available,
+            },
+            GoodsDestroyDecodeError::UnexpectedEnd {
+                offset: right_offset,
+                needed: right_needed,
+                available: right_available,
+            },
+        ) => {
+            left_offset == right_offset
+                && left_needed == right_needed
+                && left_available == right_available
+        }
+        (
+            GoodsDestroyDecodeError::UnterminatedString {
+                offset: left_offset,
+                available: left_available,
+            },
+            GoodsDestroyDecodeError::UnterminatedString {
+                offset: right_offset,
+                available: right_available,
+            },
+        ) => left_offset == right_offset && left_available == right_available,
+        (
+            GoodsDestroyDecodeError::Allocation {
+                list: left_list, ..
+            },
+            GoodsDestroyDecodeError::Allocation {
+                list: right_list, ..
+            },
+        ) => left_list == right_list,
+        _ => false,
+    }
+}
+
+fn change_body_decode_errors_equal(
+    left: &ChangeBodyDecodeError,
+    right: &ChangeBodyDecodeError,
+) -> bool {
+    match (left, right) {
+        (
+            ChangeBodyDecodeError::UnexpectedEnd {
+                offset: left_offset,
+                needed: left_needed,
+                available: left_available,
+            },
+            ChangeBodyDecodeError::UnexpectedEnd {
+                offset: right_offset,
+                needed: right_needed,
+                available: right_available,
+            },
+        ) => {
+            left_offset == right_offset
+                && left_needed == right_needed
+                && left_available == right_available
+        }
+        (ChangeBodyDecodeError::Allocation(_), ChangeBodyDecodeError::Allocation(_)) => true,
+        _ => false,
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameMutationRulesStartupMessageReport {
+    pub(crate) decoded: GameMutationRulesStartupReport,
+    pub(crate) log_effects: Vec<Vec<u8>>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageReport {
     ClientServerStart(GameClientServerStartReport),
@@ -574,6 +778,7 @@ pub(crate) enum GameServerMessageReport {
     CountryStateStartup(GameCountryStateStartupMessageReport),
     SpatialStartup(GameSpatialStartupMessageReport),
     EnvironmentConfigurationStartup(GameEnvironmentConfigurationStartupMessageReport),
+    MutationRulesStartup(GameMutationRulesStartupMessageReport),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -588,6 +793,7 @@ pub(crate) enum GameServerMessageError {
     CountryStateStartup(GameCountryStateStartupError),
     SpatialStartup(GameSpatialStartupError),
     EnvironmentConfigurationStartup(GameEnvironmentConfigurationStartupError),
+    MutationRulesStartup(GameMutationRulesStartupError),
 }
 
 /// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
@@ -855,8 +1061,77 @@ pub(crate) fn dispatch_server_message(
                 ),
             ))
         }
+        SYNTHESIS_SELECTOR
+        | NEW_SKILL_MONSTER_SELECTOR
+        | GOODS_DESTROY_SELECTOR
+        | CHANGE_BODY_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("mutation-rules selector проверен без изменения cursor");
+            let mut log_effects = Vec::new();
+            let decoded = match {
+                let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                decode_mutation_rules_startup(consumed_selector, wire, cursor, game, |text| {
+                    log_effects.push(text.to_vec())
+                })
+                .expect("mutation-rules selector проверен outer dispatcher-ом")
+                .map_err(GameServerMessageError::MutationRulesStartup)
+            } {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(Ok(GameServerMessageReport::MutationRulesStartup(
+                GameMutationRulesStartupMessageReport {
+                    decoded,
+                    log_effects,
+                },
+            )))
+        }
         _ => None,
     }
+}
+
+fn decode_mutation_rules_startup(
+    selector: i32,
+    source: &[u8],
+    cursor: &mut usize,
+    game: &mut CGame,
+    mut add_log_text: impl FnMut(&[u8]),
+) -> Option<Result<GameMutationRulesStartupReport, GameMutationRulesStartupError>> {
+    let result = match selector {
+        SYNTHESIS_SELECTOR => game
+            .synthesis_mut()
+            .decord_from_byte_array(source, cursor)
+            .map(GameMutationRulesStartupReport::Synthesis)
+            .map_err(|error| GameMutationRulesStartupError::Synthesis(Arc::new(error))),
+        NEW_SKILL_MONSTER_SELECTOR => game
+            .new_skill_monster_conf_mut()
+            .decord_from_byte_array(source, cursor)
+            .map(GameMutationRulesStartupReport::NewSkillMonsters)
+            .map_err(|error| GameMutationRulesStartupError::NewSkillMonsters(Arc::new(error))),
+        GOODS_DESTROY_SELECTOR => game
+            .goods_destroy_setup_mut()
+            .decord_from_byte_array(source, cursor)
+            .map(GameMutationRulesStartupReport::GoodsDestruction)
+            .map_err(|error| GameMutationRulesStartupError::GoodsDestruction(Arc::new(error))),
+        CHANGE_BODY_SELECTOR => game
+            .change_body_conf_mut()
+            .decord_from_byte_array(source, cursor)
+            .map(|entries| GameMutationRulesStartupReport::ChangeBody { entries })
+            .map_err(|error| GameMutationRulesStartupError::ChangeBody(Arc::new(error))),
+        _ => return None,
+    };
+    if result.is_ok() {
+        add_log_text(match selector {
+            SYNTHESIS_SELECTOR => b"Initial SI_SYNTHESIS...OK!".as_slice(),
+            NEW_SKILL_MONSTER_SELECTOR => b"Initial SI_NEWSKILL_MONSTER_CONF...OK!".as_slice(),
+            GOODS_DESTROY_SELECTOR => b"Initial SI_GOODS_DESTROY_CONF...OK!".as_slice(),
+            CHANGE_BODY_SELECTOR => b"Initial SI_CHANGE_BODY...OK!".as_slice(),
+            _ => unreachable!("selector отфильтрован перед mutation-rules log lookup"),
+        });
+    }
+    Some(result)
 }
 
 fn decode_environment_configuration_startup(
@@ -1966,6 +2241,48 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
     if let Some(result) =
+        decode_mutation_rules_startup(selector, source, cursor, game, &mut add_log_text)
+    {
+        return Some(match result {
+            Ok(GameMutationRulesStartupReport::Synthesis(report)) => {
+                Ok(GameOwnedStartupSnapshotReport::Synthesis(report))
+            }
+            Ok(GameMutationRulesStartupReport::NewSkillMonsters(report)) => {
+                Ok(GameOwnedStartupSnapshotReport::NewSkillMonster(report))
+            }
+            Ok(GameMutationRulesStartupReport::GoodsDestruction(report)) => {
+                Ok(GameOwnedStartupSnapshotReport::GoodsDestroy(report))
+            }
+            Ok(GameMutationRulesStartupReport::ChangeBody { entries }) => {
+                Ok(GameOwnedStartupSnapshotReport::ChangeBody { entries })
+            }
+            Err(GameMutationRulesStartupError::Synthesis(error)) => {
+                Err(GameOwnedStartupSnapshotError::Synthesis(
+                    Arc::try_unwrap(error)
+                        .expect("Synthesis decode error ещё не разделён между reports"),
+                ))
+            }
+            Err(GameMutationRulesStartupError::NewSkillMonsters(error)) => {
+                Err(GameOwnedStartupSnapshotError::NewSkillMonster(
+                    Arc::try_unwrap(error)
+                        .expect("NewSkillMonster decode error ещё не разделён между reports"),
+                ))
+            }
+            Err(GameMutationRulesStartupError::GoodsDestruction(error)) => {
+                Err(GameOwnedStartupSnapshotError::GoodsDestroy(
+                    Arc::try_unwrap(error)
+                        .expect("GoodsDestroy decode error ещё не разделён между reports"),
+                ))
+            }
+            Err(GameMutationRulesStartupError::ChangeBody(error)) => {
+                Err(GameOwnedStartupSnapshotError::ChangeBody(
+                    Arc::try_unwrap(error)
+                        .expect("ChangeBody decode error ещё не разделён между reports"),
+                ))
+            }
+        });
+    }
+    if let Some(result) =
         decode_environment_configuration_startup(selector, source, cursor, game, &mut add_log_text)
     {
         return Some(match result {
@@ -2292,49 +2609,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
             Some(Ok(GameOwnedStartupSnapshotReport::PlayerRanks {
                 entries: ranks.ranks().len(),
             }))
-        }
-        SYNTHESIS_SELECTOR => {
-            let report = match game.synthesis_mut().decord_from_byte_array(source, cursor) {
-                Ok(report) => report,
-                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::Synthesis(error))),
-            };
-            add_log_text(b"Initial SI_SYNTHESIS...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::Synthesis(report)))
-        }
-        NEW_SKILL_MONSTER_SELECTOR => {
-            let report = match game
-                .new_skill_monster_conf_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                Ok(report) => report,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::NewSkillMonster(error)));
-                }
-            };
-            add_log_text(b"Initial SI_NEWSKILL_MONSTER_CONF...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::NewSkillMonster(report)))
-        }
-        GOODS_DESTROY_SELECTOR => {
-            let report = match game
-                .goods_destroy_setup_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                Ok(report) => report,
-                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::GoodsDestroy(error))),
-            };
-            add_log_text(b"Initial SI_GOODS_DESTROY_CONF...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::GoodsDestroy(report)))
-        }
-        CHANGE_BODY_SELECTOR => {
-            let entries = match game
-                .change_body_conf_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                Ok(entries) => entries,
-                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::ChangeBody(error))),
-            };
-            add_log_text(b"Initial SI_CHANGE_BODY...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::ChangeBody { entries }))
         }
         HONOR_ELIMINATE_SELECTOR => {
             let config = game.honor_eliminate_config_mut();

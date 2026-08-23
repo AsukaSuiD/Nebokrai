@@ -74,6 +74,9 @@
 //! Prison/PreciousBox `0x1D/0x1E` входят в общий environment-configuration
 //! FIFO pass с clear/partial-decode owners и сохранённой причиной allocation
 //! failure вложенных box-списков.
+//! Synthesis/new-skill/goods-destruction/change-body `0x21..0x24` проходят
+//! общий mutation-rules FIFO pass с полными decode reports, partial registries,
+//! точными logs и сохранёнными allocation-error sources.
 //! Battle-fairy combine теперь замыкает game player-map с GlobeSetup gate и
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные
