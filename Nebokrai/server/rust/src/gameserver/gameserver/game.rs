@@ -71,6 +71,9 @@
 //! Proxy/reload/region-level/dupli selectors `0x0F/0x10/0x11/0x1A` проходят
 //! общий spatial FIFO pass с canonical region owners, ранним reload miss и
 //! сохранённой allocation-error причиной duplicate registry.
+//! Prison/PreciousBox `0x1D/0x1E` входят в общий environment-configuration
+//! FIFO pass с clear/partial-decode owners и сохранённой причиной allocation
+//! failure вложенных box-списков.
 //! Battle-fairy combine теперь замыкает game player-map с GlobeSetup gate и
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные

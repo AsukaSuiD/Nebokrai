@@ -42,6 +42,9 @@
 //! pass: proxy публикуется только после полного decode, reload сохраняет
 //! ранний region miss, а region-level и duplicate registries — исходные
 //! replacement/partial-decode и success-log границы.
+//! Prison и PreciousBox `0x1D/0x1E` публикуют environment-конфигурацию одним
+//! FIFO pass, сохраняя clear-before-decode, partial owners и точные success
+//! logs; PreciousBox allocation failure не теряет исходный `TryReserveError`.
 //! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
 //! публикует runtime repeated-emotion lookup до финального startup log.
 //! Goods list `0x00` заменяет ID/original-name/name registry из парного
@@ -493,6 +496,71 @@ pub(crate) struct GameSpatialStartupMessageReport {
     pub(crate) log_effects: Vec<Vec<u8>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameEnvironmentConfigurationStartupReport {
+    Prison { entries: usize },
+    PreciousBoxes { entries: usize },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum GameEnvironmentConfigurationStartupError {
+    Prison(PrisonConfDecodeError),
+    PreciousBoxes(Arc<PreciousBoxDecodeError>),
+}
+
+impl PartialEq for GameEnvironmentConfigurationStartupError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Prison(left), Self::Prison(right)) => left == right,
+            (Self::PreciousBoxes(left), Self::PreciousBoxes(right)) => {
+                precious_box_decode_errors_equal(left, right)
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for GameEnvironmentConfigurationStartupError {}
+
+fn precious_box_decode_errors_equal(
+    left: &PreciousBoxDecodeError,
+    right: &PreciousBoxDecodeError,
+) -> bool {
+    match (left, right) {
+        (
+            PreciousBoxDecodeError::UnexpectedEnd {
+                offset: left_offset,
+                needed: left_needed,
+                available: left_available,
+            },
+            PreciousBoxDecodeError::UnexpectedEnd {
+                offset: right_offset,
+                needed: right_needed,
+                available: right_available,
+            },
+        ) => {
+            left_offset == right_offset
+                && left_needed == right_needed
+                && left_available == right_available
+        }
+        (
+            PreciousBoxDecodeError::Allocation {
+                field: left_field, ..
+            },
+            PreciousBoxDecodeError::Allocation {
+                field: right_field, ..
+            },
+        ) => left_field == right_field,
+        _ => false,
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameEnvironmentConfigurationStartupMessageReport {
+    pub(crate) decoded: GameEnvironmentConfigurationStartupReport,
+    pub(crate) log_effects: Vec<Vec<u8>>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageReport {
     ClientServerStart(GameClientServerStartReport),
@@ -505,6 +573,7 @@ pub(crate) enum GameServerMessageReport {
     PlayerRuleStartup(GamePlayerRuleStartupMessageReport),
     CountryStateStartup(GameCountryStateStartupMessageReport),
     SpatialStartup(GameSpatialStartupMessageReport),
+    EnvironmentConfigurationStartup(GameEnvironmentConfigurationStartupMessageReport),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -518,6 +587,7 @@ pub(crate) enum GameServerMessageError {
     PlayerRuleStartup(GamePlayerRuleStartupError),
     CountryStateStartup(GameCountryStateStartupError),
     SpatialStartup(GameSpatialStartupError),
+    EnvironmentConfigurationStartup(GameEnvironmentConfigurationStartupError),
 }
 
 /// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
@@ -754,6 +824,82 @@ pub(crate) fn dispatch_server_message(
                     log_effects,
                 },
             )))
+        }
+        PRISON_CONF_SELECTOR | PRECIOUS_BOX_CONF_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("environment-configuration selector проверен без изменения cursor");
+            let mut log_effects = Vec::new();
+            let decoded = match {
+                let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                decode_environment_configuration_startup(
+                    consumed_selector,
+                    wire,
+                    cursor,
+                    game,
+                    |text| log_effects.push(text.to_vec()),
+                )
+                .expect("environment-configuration selector проверен outer dispatcher-ом")
+                .map_err(GameServerMessageError::EnvironmentConfigurationStartup)
+            } {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(Ok(
+                GameServerMessageReport::EnvironmentConfigurationStartup(
+                    GameEnvironmentConfigurationStartupMessageReport {
+                        decoded,
+                        log_effects,
+                    },
+                ),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn decode_environment_configuration_startup(
+    selector: i32,
+    source: &[u8],
+    cursor: &mut usize,
+    game: &mut CGame,
+    mut add_log_text: impl FnMut(&[u8]),
+) -> Option<
+    Result<GameEnvironmentConfigurationStartupReport, GameEnvironmentConfigurationStartupError>,
+> {
+    match selector {
+        PRISON_CONF_SELECTOR => {
+            let entries = match game
+                .prison_conf_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(entries) => entries,
+                Err(error) => {
+                    return Some(Err(GameEnvironmentConfigurationStartupError::Prison(error)));
+                }
+            };
+            add_log_text(b"Initial SI_PRISON_CONF...OK!");
+            Some(Ok(GameEnvironmentConfigurationStartupReport::Prison {
+                entries,
+            }))
+        }
+        PRECIOUS_BOX_CONF_SELECTOR => {
+            let entries = match game
+                .precious_box_conf_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(entries) => entries,
+                Err(error) => {
+                    return Some(Err(
+                        GameEnvironmentConfigurationStartupError::PreciousBoxes(Arc::new(error)),
+                    ));
+                }
+            };
+            add_log_text(b"Initial SI_PRECIOUSBOX_CONF...OK!");
+            Some(Ok(
+                GameEnvironmentConfigurationStartupReport::PreciousBoxes { entries },
+            ))
         }
         _ => None,
     }
@@ -1819,6 +1965,27 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
     mut put_string_to_file: impl FnMut(&str, &[u8]),
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    if let Some(result) =
+        decode_environment_configuration_startup(selector, source, cursor, game, &mut add_log_text)
+    {
+        return Some(match result {
+            Ok(GameEnvironmentConfigurationStartupReport::Prison { entries }) => {
+                Ok(GameOwnedStartupSnapshotReport::PrisonConf { entries })
+            }
+            Ok(GameEnvironmentConfigurationStartupReport::PreciousBoxes { entries }) => {
+                Ok(GameOwnedStartupSnapshotReport::PreciousBoxConf { entries })
+            }
+            Err(GameEnvironmentConfigurationStartupError::Prison(error)) => {
+                Err(GameOwnedStartupSnapshotError::PrisonConf(error))
+            }
+            Err(GameEnvironmentConfigurationStartupError::PreciousBoxes(error)) => {
+                Err(GameOwnedStartupSnapshotError::PreciousBoxConf(
+                    Arc::try_unwrap(error)
+                        .expect("PreciousBox decode error ещё не разделён между reports"),
+                ))
+            }
+        });
+    }
     if matches!(
         selector,
         PROXY_REGION_SELECTOR | REGION_SETUP_SELECTOR | DUPLI_REGION_SELECTOR
@@ -2124,32 +2291,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
             }
             Some(Ok(GameOwnedStartupSnapshotReport::PlayerRanks {
                 entries: ranks.ranks().len(),
-            }))
-        }
-        PRISON_CONF_SELECTOR => {
-            let entries = match game
-                .prison_conf_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                Ok(entries) => entries,
-                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::PrisonConf(error))),
-            };
-            add_log_text(b"Initial SI_PRISON_CONF...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::PrisonConf { entries }))
-        }
-        PRECIOUS_BOX_CONF_SELECTOR => {
-            let entries = match game
-                .precious_box_conf_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                Ok(entries) => entries,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::PreciousBoxConf(error)));
-                }
-            };
-            add_log_text(b"Initial SI_PRECIOUSBOX_CONF...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::PreciousBoxConf {
-                entries,
             }))
         }
         SYNTHESIS_SELECTOR => {
