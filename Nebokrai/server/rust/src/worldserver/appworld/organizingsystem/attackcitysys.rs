@@ -29,9 +29,9 @@
 //! Rust регистрирует через `CTimer` те же calendar events и получает callback
 //! keys от caller-а. Фазовые callbacks сохраняют `Duth/Mass/Fight/No`, Fight-
 //! gate у end, затем exact World messages `0x7FE1F/20/21/23/24/25` с signed
-//! war number. Region lookup, localization, organizing-info, country flag и
-//! war-log остаются в точном месте порядка как явный context-контракт, не как
-//! имитация ещё сырых owners. Countdown игнорирует hours/days разности. City
+//! war number. MainLoop передаёт callback-ам живые region, localization,
+//! organizing-info, country, top-info и war-log owners через узкий контекст,
+//! сохраняя их исходный порядок. Countdown игнорирует hours/days разности. City
 //! end очищает заявки, закрывает country/enemy relations и пробует до пяти
 //! следующих недель перед восемью ordered registrations. Faction snapshot
 //! `0x0006E0F0` имеет формат signed war ID/count/ordered IDs; exact EXE
@@ -100,6 +100,39 @@ pub(crate) struct AttackCityCallbacks<Callback> {
     pub(crate) refresh_region: Callback,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AttackCityCallbackKind {
+    Declare,
+    StartInfo,
+    Start,
+    EndInfo,
+    End,
+    Mass,
+    ClearOtherPlayer,
+    RefreshRegion,
+}
+
+impl<Callback: PartialEq> AttackCityCallbacks<Callback> {
+    /// Сопоставляет сработавший типизированный идентификатор с исходной фазой таймера.
+    pub(crate) fn kind(&self, callback: &Callback) -> Option<AttackCityCallbackKind> {
+        [
+            (&self.declare, AttackCityCallbackKind::Declare),
+            (&self.start_info, AttackCityCallbackKind::StartInfo),
+            (&self.start, AttackCityCallbackKind::Start),
+            (&self.end_info, AttackCityCallbackKind::EndInfo),
+            (&self.end, AttackCityCallbackKind::End),
+            (&self.mass, AttackCityCallbackKind::Mass),
+            (
+                &self.clear_other_player,
+                AttackCityCallbackKind::ClearOtherPlayer,
+            ),
+            (&self.refresh_region, AttackCityCallbackKind::RefreshRegion),
+        ]
+        .into_iter()
+        .find_map(|(candidate, kind)| (candidate == callback).then_some(kind))
+    }
+}
+
 /// Внешние region/localization/organizing/country/log эффекты city phase.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AttackCityPhaseEffect {
@@ -116,7 +149,7 @@ pub(crate) enum AttackCityPhaseEffect {
     },
 }
 
-/// Точная граница ещё сырых внешних owners фаз городских войн.
+/// Контракт внешних эффектов фаз городской войны.
 pub(crate) trait AttackCityPhaseContext {
     type Block;
 
@@ -169,6 +202,7 @@ pub(crate) struct AttackCityCountdownReport {
     pub(crate) schedule_found: bool,
     pub(crate) region_found: bool,
     pub(crate) target_in_future: bool,
+    pub(crate) phase_allowed: bool,
     pub(crate) duration_ms: Option<i32>,
 }
 
@@ -970,6 +1004,7 @@ impl CAttackCitySys {
             war_number,
             now,
             |setup| setup.start_time,
+            |_| true,
             b"WS0142",
             context,
         )
@@ -981,20 +1016,29 @@ impl CAttackCitySys {
         now: TagTime,
         context: &mut Context,
     ) -> Result<AttackCityCountdownReport, AttackCityCountdownBlock<Context::Block>> {
-        self.publish_countdown(war_number, now, |setup| setup.end_time, b"WS0143", context)
+        self.publish_countdown(
+            war_number,
+            now,
+            |setup| setup.end_time,
+            |setup| setup.region_state == ECityState::Fight,
+            b"WS0143",
+            context,
+        )
     }
 
-    fn publish_countdown<Context, Target>(
+    fn publish_countdown<Context, Target, PhaseGate>(
         &self,
         war_number: i32,
         now: TagTime,
         target: Target,
+        phase_gate: PhaseGate,
         world_string_id: &'static [u8],
         context: &mut Context,
     ) -> Result<AttackCityCountdownReport, AttackCityCountdownBlock<Context::Block>>
     where
         Context: AttackCityCountdownContext + ?Sized,
         Target: FnOnce(&AttackCityTime) -> TagTime,
+        PhaseGate: FnOnce(&AttackCityTime) -> bool,
     {
         let Some(current) = self.attacks.get(&war_number) else {
             return Ok(AttackCityCountdownReport::default());
@@ -1024,6 +1068,16 @@ impl CAttackCitySys {
                 ..AttackCityCountdownReport::default()
             });
         }
+        // End-info существует только для уже начавшейся Fight-фазы; start-info
+        // проходит ту же позицию с безусловным предикатом.
+        if !phase_gate(&copied) {
+            return Ok(AttackCityCountdownReport {
+                schedule_found: true,
+                region_found: true,
+                target_in_future: true,
+                ..AttackCityCountdownReport::default()
+            });
+        }
         let difference = target
             .get_time_difference(now)
             .map_err(AttackCityCountdownBlock::Arithmetic)?;
@@ -1040,6 +1094,7 @@ impl CAttackCitySys {
             schedule_found: true,
             region_found: true,
             target_in_future: true,
+            phase_allowed: true,
             duration_ms: Some(duration_ms),
         })
     }

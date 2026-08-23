@@ -36,9 +36,9 @@
 //! Timer function pointers заменены переданными `Copy` callback keys. Phase
 //! callbacks сначала меняют state, затем строят точный World `CMessage` с
 //! signed war number и рассылают opcodes `0x7FE2F/30/31/33`. Достигнутые
-//! region lookup, localization, organizing-info, country flags и war-log
-//! сохранены единым явным context-контрактом в исходном месте порядка; их ещё
-//! сырые owners не имитируются. End callback доказанно снова ставит
+//! MainLoop передаёт callback-ам живые region, localization, organizing-info,
+//! country, top-info и war-log owners через единый узкий контекст, сохраняя
+//! исходный порядок. End callback доказанно снова ставит
 //! `m_bIsWarring=true` всем странам `1..=4`, и эта странность сохранена.
 //! Countdown сохраняет region-existence gate и вычисляет timer-2 duration
 //! только из component-wise `minute/second`, игнорируя hours/days. Weekly end
@@ -100,6 +100,32 @@ pub(crate) struct VillageWarCallbacks<Callback> {
     pub(crate) clear_player: Callback,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum VillageWarCallbackKind {
+    Declare,
+    StartInfo,
+    Start,
+    EndInfo,
+    End,
+    ClearPlayer,
+}
+
+impl<Callback: PartialEq> VillageWarCallbacks<Callback> {
+    /// Сопоставляет сработавший типизированный идентификатор с исходной фазой таймера.
+    pub(crate) fn kind(&self, callback: &Callback) -> Option<VillageWarCallbackKind> {
+        [
+            (&self.declare, VillageWarCallbackKind::Declare),
+            (&self.start_info, VillageWarCallbackKind::StartInfo),
+            (&self.start, VillageWarCallbackKind::Start),
+            (&self.end_info, VillageWarCallbackKind::EndInfo),
+            (&self.end, VillageWarCallbackKind::End),
+            (&self.clear_player, VillageWarCallbackKind::ClearPlayer),
+        ]
+        .into_iter()
+        .find_map(|(candidate, kind)| (candidate == callback).then_some(kind))
+    }
+}
+
 /// Внешняя часть одной village phase после обязательной wire-рассылки.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct VillageWarAnnouncement {
@@ -109,7 +135,7 @@ pub(crate) struct VillageWarAnnouncement {
     pub(crate) set_all_countries_warring: bool,
 }
 
-/// Точная граница ещё сырых region/localization/organizing/country/log owners.
+/// Контракт region/localization/organizing/country/log эффектов одной фазы.
 pub(crate) trait VillageWarPhaseContext {
     type Block;
 

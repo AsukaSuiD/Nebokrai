@@ -1549,8 +1549,11 @@ use crate::worldserver::appworld::organizingsystem::faction::{
     FactionInitialPropertyBlock, FactionOrganizingInfoContext, FactionUploadIconBlock,
 };
 use crate::worldserver::appworld::organizingsystem::attackcitysys::{
-    AttackCityCallbacks, AttackCityEnemyRelationContext, AttackCityEnemyRelationReport,
-    AttackCityLoadError, AttackCityLoadReport, AttackCityReloadBlock, CAttackCitySys,
+    AttackCityCallbackKind, AttackCityCallbacks, AttackCityCountdownBlock,
+    AttackCityCountdownContext, AttackCityCountdownReport, AttackCityCountdownRequest,
+    AttackCityEnemyRelationContext, AttackCityEnemyRelationReport, AttackCityLoadError,
+    AttackCityLoadReport, AttackCityPhaseContext, AttackCityPhaseEffect,
+    AttackCityPhaseReport, AttackCityReloadBlock, CAttackCitySys,
 };
 use crate::worldserver::appworld::organizingsystem::factionwarsys::{
     CFactionWarSys, FactionWarIniLoadCompletion, FactionWarInitializationBlock,
@@ -1587,8 +1590,10 @@ use crate::worldserver::appworld::organizingsystem::union::{
     UnionApplicationSessionReport, UnionFormatArgument,
 };
 use crate::worldserver::appworld::organizingsystem::villagewarsys::{
-    CVillageWarSys, VillageWarCallbacks, VillageWarLoadError, VillageWarLoadReport,
-    VillageWarReloadBlock,
+    CVillageWarSys, VillageWarAnnouncement, VillageWarCallbackKind, VillageWarCallbacks,
+    VillageWarCountdownBlock, VillageWarCountdownContext, VillageWarCountdownReport,
+    VillageWarCountdownRequest, VillageWarLoadError, VillageWarLoadReport,
+    VillageWarPhaseContext, VillageWarPhaseReport, VillageWarReloadBlock,
 };
 use crate::worldserver::appworld::player::{
     CPlayer, PlayerCodecError, PlayerCountryChangeReport, PlayerExploitUpdate,
@@ -3948,12 +3953,44 @@ pub(crate) enum CountryWarTimerBlock {
 }
 
 #[derive(Debug)]
+pub(crate) enum AttackCityTimerOutcome {
+    Phase(AttackCityPhaseReport),
+    Countdown(AttackCityCountdownReport),
+}
+
+#[derive(Debug)]
+pub(crate) struct AttackCityTimerReport {
+    pub(crate) callback: AttackCityCallbackKind,
+    pub(crate) war_number: i32,
+    pub(crate) outcome: AttackCityTimerOutcome,
+}
+
+#[derive(Debug)]
+pub(crate) enum VillageWarTimerOutcome {
+    Phase(VillageWarPhaseReport),
+    Countdown(VillageWarCountdownReport),
+}
+
+#[derive(Debug)]
+pub(crate) struct VillageWarTimerReport {
+    pub(crate) callback: VillageWarCallbackKind,
+    pub(crate) war_number: i32,
+    pub(crate) outcome: VillageWarTimerOutcome,
+}
+
+#[derive(Debug)]
 pub(crate) enum WorldTimerCallbackBlock {
     CopyNumber(CopyNumberScheduleBlock),
     PlayerRanks(PlayerRanksTimerRefreshBlock),
     OrganizingTax(OrganizingTaxScheduleBlock),
+    AttackCity(AttackCityCountdownBlock<Infallible>),
+    VillageWar(VillageWarCountdownBlock<Infallible>),
     CountryWar(CountryWarTimerBlock),
     FourNationWar(FourNationWarCalendarBlock),
+    UnexpectedCallback {
+        source: TimerCallbackSource,
+        parameter: i32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3977,6 +4014,8 @@ pub(crate) struct WorldMainLoopTimerStageReport {
     pub(crate) player_ranks: Vec<PlayerRanksTimerRefreshReport>,
     pub(crate) organizing_taxes: Vec<OrganizingTodayTaxRefreshReport>,
     pub(crate) time_to_returns: Vec<TimeToReturnFireReport>,
+    pub(crate) attack_city_wars: Vec<AttackCityTimerReport>,
+    pub(crate) village_wars: Vec<VillageWarTimerReport>,
     pub(crate) country_wars: Vec<CountryWarTimerReport>,
     pub(crate) four_nation_wars: Vec<FourNationWarTimerReport>,
     pub(crate) finished_at_ms: u32,
@@ -3996,6 +4035,188 @@ struct WorldFourNationWarTimerEffects<'a, GetTick> {
 
 struct WorldTimeToReturnEffects<'a> {
     game: &'a CGame,
+}
+
+struct WorldTerritoryWarTimerEffects<'a, GetTick> {
+    game: &'a CGame,
+    country_handler: &'a mut CCountryHandler,
+    get_tick: &'a mut GetTick,
+}
+
+impl<GetTick: FnMut() -> u32> WorldTerritoryWarTimerEffects<'_, GetTick> {
+    fn region_name(&self, region_id: i32) -> Option<Vec<u8>> {
+        match self.game.region_name(region_id) {
+            WorldRegionNameLookup::Name(name) => Some(legacy_c_string_prefix(name).to_vec()),
+            WorldRegionNameLookup::RegionNotFound | WorldRegionNameLookup::NullRegionPointer => {
+                None
+            }
+        }
+    }
+
+    fn format(&self, string_id: &[u8], arguments: &[UnionFormatArgument<'_>]) -> Vec<u8> {
+        format_union_world_string(self.game.get_string_by_id(string_id), arguments)
+    }
+
+    fn send_organizing_info(&self, text: &[u8]) {
+        let _ = COrganizingCtrl::send_organizing_info_to_all(
+            self.game,
+            text,
+            (-366_i32) as u32,
+            0xFFFF_0000,
+        );
+    }
+
+    fn publish_countdown(&mut self, duration_ms: i32, text: &[u8]) {
+        let info_id = self
+            .country_handler
+            .add_one_top_info(2, duration_ms, text, &mut *self.get_tick);
+        let mut delivery = WorldCountryInfoDelivery { game: self.game };
+        let _ = self.country_handler.send_top_info_to_client(
+            info_id,
+            2,
+            duration_ms,
+            text,
+            &mut delivery,
+        );
+    }
+}
+
+impl<GetTick: FnMut() -> u32> AttackCityPhaseContext
+    for WorldTerritoryWarTimerEffects<'_, GetTick>
+{
+    type Block = Infallible;
+
+    fn send_all(&mut self, message: &CMessage) -> i32 {
+        message
+            .send_all(self.game.current_game_server_sender().as_ref())
+            .unwrap_or(0)
+    }
+
+    fn apply_effect(&mut self, effect: AttackCityPhaseEffect) -> Result<(), Self::Block> {
+        match effect {
+            AttackCityPhaseEffect::RegionAnnouncement {
+                war_number,
+                city_region_id,
+                notice_string_id,
+                log_string_id,
+                set_region_country_warring,
+            } => {
+                let Some(region_name) = self.region_name(city_region_id) else {
+                    return Ok(());
+                };
+                let notice = self.format(
+                    notice_string_id,
+                    &[UnionFormatArgument::Text(&region_name)],
+                );
+                self.send_organizing_info(&notice);
+                if set_region_country_warring
+                    && let Some(country_id) = self.game.region_country_id(city_region_id)
+                    && let Some(country) = self.country_handler.get_country_mut(country_id)
+                {
+                    country.is_warring = true;
+                }
+                let log = self.format(
+                    log_string_id,
+                    &[
+                        UnionFormatArgument::Signed(war_number),
+                        UnionFormatArgument::Text(&region_name),
+                    ],
+                );
+                put_string_to_file("war", &log);
+            }
+            AttackCityPhaseEffect::EndLog {
+                war_number,
+                log_string_id,
+            } => {
+                let log = self.format(
+                    log_string_id,
+                    &[UnionFormatArgument::Signed(war_number)],
+                );
+                put_string_to_file("war", &log);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<GetTick: FnMut() -> u32> AttackCityCountdownContext
+    for WorldTerritoryWarTimerEffects<'_, GetTick>
+{
+    type Block = Infallible;
+
+    fn region_exists(&mut self, region_id: i32) -> Result<bool, Self::Block> {
+        Ok(self.game.has_materialized_region(region_id))
+    }
+
+    fn publish_countdown(
+        &mut self,
+        request: AttackCityCountdownRequest,
+    ) -> Result<(), Self::Block> {
+        if let Some(region_name) = self.region_name(request.city_region_id) {
+            let text = self.format(
+                request.world_string_id,
+                &[UnionFormatArgument::Text(&region_name)],
+            );
+            self.publish_countdown(request.duration_ms, &text);
+        }
+        Ok(())
+    }
+}
+
+impl<GetTick: FnMut() -> u32> VillageWarPhaseContext
+    for WorldTerritoryWarTimerEffects<'_, GetTick>
+{
+    type Block = Infallible;
+
+    fn send_all(&mut self, message: &CMessage) -> i32 {
+        message
+            .send_all(self.game.current_game_server_sender().as_ref())
+            .unwrap_or(0)
+    }
+
+    fn announce(&mut self, request: VillageWarAnnouncement) -> Result<(), Self::Block> {
+        let Some(region_name) = self.region_name(request.war_region_id) else {
+            return Ok(());
+        };
+        let text = self.format(
+            request.world_string_id,
+            &[UnionFormatArgument::Text(&region_name)],
+        );
+        self.send_organizing_info(&text);
+        if request.set_all_countries_warring {
+            for country_id in 1..=4 {
+                if let Some(country) = self.country_handler.get_country_mut(country_id) {
+                    country.is_warring = true;
+                }
+            }
+        }
+        put_string_to_file("war", &text);
+        Ok(())
+    }
+}
+
+impl<GetTick: FnMut() -> u32> VillageWarCountdownContext
+    for WorldTerritoryWarTimerEffects<'_, GetTick>
+{
+    type Block = Infallible;
+
+    fn region_exists(&mut self, region_id: i32) -> Result<bool, Self::Block> {
+        Ok(self.game.has_materialized_region(region_id))
+    }
+
+    fn publish_countdown(
+        &mut self,
+        request: VillageWarCountdownRequest,
+    ) -> Result<(), Self::Block> {
+        if let Some(region_name) = self.region_name(request.war_region_id) {
+            let text = self.format(
+                request.world_string_id,
+                &[UnionFormatArgument::Text(&region_name)],
+            );
+            self.publish_countdown(request.duration_ms, &text);
+        }
+        Ok(())
+    }
 }
 
 impl TimeToReturnContext for WorldTimeToReturnEffects<'_> {
@@ -4173,6 +4394,10 @@ impl<GetTick: FnMut() -> u32> FourNationWarCallbackContext
 
 struct WorldTimerHandler<'a, Callback> {
     game: &'a CGame,
+    attack_city: &'a mut CAttackCitySys,
+    attack_city_callbacks: AttackCityCallbacks<Callback>,
+    village_war: &'a mut CVillageWarSys,
+    village_war_callbacks: VillageWarCallbacks<Callback>,
     country_war: &'a mut CountryWarSys,
     country_handler: &'a mut CCountryHandler,
     country_war_callbacks: CountryWarCallbacks<Callback>,
@@ -4197,6 +4422,8 @@ struct WorldTimerHandler<'a, Callback> {
     refreshes: Vec<PlayerRanksTimerRefreshReport>,
     tax_refreshes: Vec<OrganizingTodayTaxRefreshReport>,
     time_to_returns: Vec<TimeToReturnFireReport>,
+    attack_city_wars: Vec<AttackCityTimerReport>,
+    village_wars: Vec<VillageWarTimerReport>,
     country_wars: Vec<CountryWarTimerReport>,
     four_nation_wars: Vec<FourNationWarTimerReport>,
     pending_copy_number_registration: Option<usize>,
@@ -4406,8 +4633,126 @@ where
             });
         }
 
+        if let Some(callback) = self.attack_city_callbacks.kind(&invocation.callback) {
+            let war_number = invocation.parameter;
+            let mut effects = WorldTerritoryWarTimerEffects {
+                game: self.game,
+                country_handler: self.country_handler,
+                get_tick,
+            };
+            let outcome = match callback {
+                AttackCityCallbackKind::Declare => AttackCityTimerOutcome::Phase(
+                    self.attack_city
+                        .on_declare_war(war_number, &mut effects)
+                        .unwrap_or_else(|never| match never {}),
+                ),
+                AttackCityCallbackKind::StartInfo => {
+                    let now = get_timer_local_time();
+                    AttackCityTimerOutcome::Countdown(
+                        self.attack_city
+                            .on_attack_city_start_info(war_number, now, &mut effects)
+                            .map_err(WorldTimerCallbackBlock::AttackCity)?,
+                    )
+                }
+                AttackCityCallbackKind::Start => AttackCityTimerOutcome::Phase(
+                    self.attack_city
+                        .on_attack_city_start(war_number, &mut effects)
+                        .unwrap_or_else(|never| match never {}),
+                ),
+                AttackCityCallbackKind::EndInfo => {
+                    let now = get_timer_local_time();
+                    AttackCityTimerOutcome::Countdown(
+                        self.attack_city
+                            .on_attack_city_end_info(war_number, now, &mut effects)
+                            .map_err(WorldTimerCallbackBlock::AttackCity)?,
+                    )
+                }
+                AttackCityCallbackKind::End => AttackCityTimerOutcome::Phase(
+                    self.attack_city
+                        .on_attack_city_end(war_number, &mut effects)
+                        .unwrap_or_else(|never| match never {}),
+                ),
+                AttackCityCallbackKind::Mass => AttackCityTimerOutcome::Phase(
+                    self.attack_city
+                        .on_mass(war_number, &mut effects)
+                        .unwrap_or_else(|never| match never {}),
+                ),
+                AttackCityCallbackKind::ClearOtherPlayer => AttackCityTimerOutcome::Phase(
+                    self.attack_city
+                        .on_clear_other_player(war_number, &mut effects),
+                ),
+                AttackCityCallbackKind::RefreshRegion => AttackCityTimerOutcome::Phase(
+                    self.attack_city.on_refresh_region(war_number, &mut effects),
+                ),
+            };
+            self.attack_city_wars.push(AttackCityTimerReport {
+                callback,
+                war_number,
+                outcome,
+            });
+            return Ok(AsyncTimerCallbackDisposition::Handled {
+                next_calendar_event: None,
+            });
+        }
+
+        if let Some(callback) = self.village_war_callbacks.kind(&invocation.callback) {
+            let war_number = invocation.parameter;
+            let mut effects = WorldTerritoryWarTimerEffects {
+                game: self.game,
+                country_handler: self.country_handler,
+                get_tick,
+            };
+            let outcome = match callback {
+                VillageWarCallbackKind::Declare => VillageWarTimerOutcome::Phase(
+                    self.village_war
+                        .on_declare_war(war_number, &mut effects)
+                        .unwrap_or_else(|never| match never {}),
+                ),
+                VillageWarCallbackKind::StartInfo => {
+                    let now = get_timer_local_time();
+                    VillageWarTimerOutcome::Countdown(
+                        self.village_war
+                            .on_attack_village_start_info(war_number, now, &mut effects)
+                            .map_err(WorldTimerCallbackBlock::VillageWar)?,
+                    )
+                }
+                VillageWarCallbackKind::Start => VillageWarTimerOutcome::Phase(
+                    self.village_war
+                        .on_attack_village_start(war_number, &mut effects)
+                        .unwrap_or_else(|never| match never {}),
+                ),
+                VillageWarCallbackKind::EndInfo => {
+                    let now = get_timer_local_time();
+                    VillageWarTimerOutcome::Countdown(
+                        self.village_war
+                            .on_attack_village_end_info(war_number, now, &mut effects)
+                            .map_err(WorldTimerCallbackBlock::VillageWar)?,
+                    )
+                }
+                VillageWarCallbackKind::End => VillageWarTimerOutcome::Phase(
+                    self.village_war
+                        .on_attack_village_end(war_number, &mut effects)
+                        .unwrap_or_else(|never| match never {}),
+                ),
+                VillageWarCallbackKind::ClearPlayer => VillageWarTimerOutcome::Phase(
+                    self.village_war.on_clear_player(war_number, &mut effects),
+                ),
+            };
+            self.village_wars.push(VillageWarTimerReport {
+                callback,
+                war_number,
+                outcome,
+            });
+            return Ok(AsyncTimerCallbackDisposition::Handled {
+                next_calendar_event: None,
+            });
+        }
+
         let Some(callback) = self.country_war_callbacks.kind(invocation.callback) else {
-            return Ok(AsyncTimerCallbackDisposition::PassThrough);
+            return Err(WorldTimerCallbackBlock::UnexpectedCallback {
+                source: invocation.source,
+                parameter: invocation.parameter,
+            });
         };
         let mut effects = WorldCountryWarEffects {
             game: self.game,
@@ -4893,7 +5238,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) log: &'a mut WorldLogTextOwner,
 }
 
-pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
+pub(crate) struct WorldMainLoopCallbacks<'a> {
     pub(crate) get_tick: &'a mut dyn FnMut() -> u32,
     pub(crate) get_save_point_time: &'a mut dyn FnMut() -> u32,
     pub(crate) try_enter_save: &'a mut dyn FnMut() -> bool,
@@ -4964,8 +5309,6 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
     pub(crate) faction_disband_log_enabled: bool,
     pub(crate) write_faction_disband_log:
         &'a mut dyn FnMut(i32, &[u8], i32, &[u8]),
-    pub(crate) dispatch_timer:
-        &'a mut dyn FnMut(&mut CTimer<TimerCallback>, TimerCallbackInvocation<TimerCallback>),
     pub(crate) get_lei_ting_local_time: &'a mut dyn FnMut() -> LeiTingLocalTime,
     pub(crate) wait: &'a mut dyn FnMut(u32),
     pub(crate) output_debug: &'a mut dyn FnMut(&'static str),
@@ -14322,16 +14665,15 @@ impl CGame {
         clippy::too_many_arguments,
         reason = "timer callback сохраняет явные DB, ranking, clock и log owners"
     )]
-    pub(crate) async fn run_main_loop_timer_stage<
-        Callback,
-        GetTick,
-        GetTimerLocalTime,
-        Dispatch,
-    >(
+    pub(crate) async fn run_main_loop_timer_stage<Callback, GetTick, GetTimerLocalTime>(
         &self,
         timer: &mut CTimer<Callback>,
         time_to_return: &mut TimeToReturn,
         time_to_return_callbacks: TimeToReturnCallbacks<Callback>,
+        attack_city: &mut CAttackCitySys,
+        attack_city_callbacks: AttackCityCallbacks<Callback>,
+        village_war: &mut CVillageWarSys,
+        village_war_callbacks: VillageWarCallbacks<Callback>,
         country_war: &mut CountryWarSys,
         country_handler: &mut CCountryHandler,
         country_war_callbacks: CountryWarCallbacks<Callback>,
@@ -14354,16 +14696,18 @@ impl CGame {
         world_string_by_id: &mut dyn FnMut(&[u8]) -> Vec<u8>,
         format_world_string:
             &mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
-        dispatch: &mut Dispatch,
     ) -> Result<WorldMainLoopTimerStageReport, WorldMainLoopTimerStageBlock>
     where
         Callback: Copy + PartialEq,
         GetTick: FnMut() -> u32 + ?Sized,
         GetTimerLocalTime: FnMut() -> TagTime + ?Sized,
-        Dispatch: FnMut(&mut CTimer<Callback>, TimerCallbackInvocation<Callback>) + ?Sized,
     {
         let mut handler = WorldTimerHandler {
             game: self,
+            attack_city,
+            attack_city_callbacks,
+            village_war,
+            village_war_callbacks,
             country_war,
             country_handler,
             country_war_callbacks,
@@ -14387,6 +14731,8 @@ impl CGame {
             refreshes: Vec::new(),
             tax_refreshes: Vec::new(),
             time_to_returns: Vec::new(),
+            attack_city_wars: Vec::new(),
+            village_wars: Vec::new(),
             country_wars: Vec::new(),
             four_nation_wars: Vec::new(),
             pending_copy_number_registration: None,
@@ -14399,7 +14745,7 @@ impl CGame {
                 &mut *get_tick,
                 &mut *get_timer_local_time,
                 &mut handler,
-                &mut *dispatch,
+                |_, _| unreachable!("WorldServer timer-owner обработал каждый callback"),
             )
             .await;
         let timer_report = match timer_report {
@@ -14412,6 +14758,8 @@ impl CGame {
         let player_ranks = handler.refreshes;
         let organizing_taxes = handler.tax_refreshes;
         let time_to_returns = handler.time_to_returns;
+        let attack_city_wars = handler.attack_city_wars;
+        let village_wars = handler.village_wars;
         let country_wars = handler.country_wars;
         let four_nation_wars = handler.four_nation_wars;
         let finished_at_ms = get_tick();
@@ -14425,6 +14773,8 @@ impl CGame {
             player_ranks,
             organizing_taxes,
             time_to_returns,
+            attack_city_wars,
+            village_wars,
             country_wars,
             four_nation_wars,
             finished_at_ms,
@@ -15117,7 +15467,7 @@ impl CGame {
             DbMiscContextOwner,
             JjcContext,
         >,
-        callbacks: &mut WorldMainLoopCallbacks<'_, TimerCallback>,
+        callbacks: &mut WorldMainLoopCallbacks<'_>,
     ) -> WorldMainLoopResult<LeiTingContextOwner::Block>
     where
         TimerCallback: Copy + PartialEq,
@@ -15455,6 +15805,10 @@ impl CGame {
                 owners.timer,
                 owners.time_to_return,
                 owners.time_to_return_callbacks,
+                owners.attack_city,
+                owners.attack_city_callbacks,
+                owners.village_war,
+                owners.village_war_callbacks,
                 owners.country_war,
                 owners.country,
                 owners.country_war_callbacks,
@@ -15476,7 +15830,6 @@ impl CGame {
                 &mut *callbacks.put_log_info,
                 &mut *callbacks.world_string_by_id,
                 &mut *callbacks.format_union_world_string,
-                &mut *callbacks.dispatch_timer,
             )
             .await
             .map_err(|block| Box::new(WorldMainLoopBlock::Timer(block)))?;
