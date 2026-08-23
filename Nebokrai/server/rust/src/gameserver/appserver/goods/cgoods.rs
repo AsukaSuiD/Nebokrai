@@ -3,21 +3,23 @@
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходные owners
 //! `server/gameserver/appserver/goods/cgoods.h/.cpp`. Материализованы shape
 //! identity, base-properties index, amount/price/add-ticket/description,
-//! ordered addon storage, first-match lookup с fallback в registry, stack
-//! classification/limit, equipment-upgrade eligibility и wrapping weight.
+//! ordered addon storage, first-match lookup с fallback в registry, exact
+//! instance-addon mutation, stack classification/limit, equipment-upgrade
+//! eligibility, timed equipment start-point и wrapping weight.
 //! `Vec` и owned bytes заменяют MSVC storage, не меняя порядка и signed 32-bit
 //! arithmetic.
 //! Единственный legacy null-deref в `CanStacked` при потерянном registry key
 //! выражен typed block-ом, а не тихим `false`.
 //!
-//! Constructor/release, fairy/battle-fairy, durability/time, полный codec и
-//! mutation gameplay ниже остаются RAW: достигнутый core не выдаётся за весь
-//! 0xCC-byte legacy object. `CGoodsFactory` передаётся явно вместо исходного
-//! process-global registry.
+//! Constructor/release, fairy/battle-fairy, остальная durability/time, полный
+//! codec и mutation gameplay ниже остаются RAW: достигнутый core не выдаётся
+//! за весь 0xCC-byte legacy object. `CGoodsFactory` передаётся явно вместо
+//! исходного process-global registry.
 
 use super::cgoodsbaseproperties::{
-    CGoodsBaseProperties, GAP_DAKONG_1, GAP_GOODS_STACKING_LIMIT, GAP_WEAPON_LEVEL,
-    GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
+    CGoodsBaseProperties, GAP_DAKONG_1, GAP_GOODS_LIFE_TYPE, GAP_GOODS_STACKING_LIMIT,
+    GAP_GOODS_START_POINT, GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT,
+    GOODS_TYPE_USELESS,
 };
 use super::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
@@ -226,6 +228,72 @@ impl CGoods {
                     .find(|value| value.id == value_id)
             })
             .map_or(0, |value| value.base_value)
+    }
+
+    /// Storage-prefix `SetAddonPropertyValue` меняет modifier первого
+    /// совпавшего value во всех instance-addon-ах данного типа и не создаёт
+    /// отсутствующие записи. Registry fallback при записи не используется;
+    /// последующий fairy/battle-fairy reload остаётся у их owner-ов.
+    pub(crate) fn set_addon_property_value_core(
+        &mut self,
+        property_type: i32,
+        value_id: u32,
+        value: i32,
+    ) -> bool {
+        let mut changed = false;
+        for property in self
+            .addon_properties
+            .iter_mut()
+            .filter(|property| property.property_type == property_type)
+        {
+            if let Some(found) = property
+                .values
+                .iter_mut()
+                .find(|candidate| candidate.id == value_id)
+            {
+                found.modifier = value.wrapping_sub(found.base_value);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    pub(crate) fn goods_time_type(&self, factory: &CGoodsFactory) -> u32 {
+        self.addon_property_value(factory, GAP_GOODS_LIFE_TYPE, 2) as u32
+    }
+
+    pub(crate) fn start_point(&self, factory: &CGoodsFactory) -> u64 {
+        let high = self.addon_property_value(factory, GAP_GOODS_START_POINT, 1) as u32;
+        let low = self.addon_property_value(factory, GAP_GOODS_START_POINT, 2) as u32;
+        (u64::from(high) << 32) | u64::from(low)
+    }
+
+    /// Legacy setter последовательно пишет low, затем high. На повреждённой
+    /// addon-схеме первая запись может состояться без второй, что намеренно не
+    /// сворачивается в атомарную замену.
+    pub(crate) fn set_start_point(&mut self, start_point: u64) {
+        let _ =
+            self.set_addon_property_value_core(GAP_GOODS_START_POINT, 2, start_point as u32 as i32);
+        let _ = self.set_addon_property_value_core(
+            GAP_GOODS_START_POINT,
+            1,
+            (start_point >> 32) as u32 as i32,
+        );
+    }
+
+    /// Timed-prefix `CEquipmentContainer::Add`: типы 2/4 получают текущую
+    /// точку только при нулевом старте. Возвращает факт попытки legacy setter-а.
+    pub(crate) fn initialize_equipment_start_point(
+        &mut self,
+        factory: &CGoodsFactory,
+        now: u64,
+    ) -> bool {
+        if matches!(self.goods_time_type(factory), 2 | 4) && self.start_point(factory) == 0 {
+            self.set_start_point(now);
+            true
+        } else {
+            false
+        }
     }
 
     pub(crate) fn can_stack(

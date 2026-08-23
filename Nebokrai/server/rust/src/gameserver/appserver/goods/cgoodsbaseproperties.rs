@@ -24,8 +24,28 @@ pub(crate) const GAP_GEM_TYPE: i32 = 79;
 pub(crate) const GAP_BAOSHI_COLOR: i32 = 139;
 pub(crate) const GAP_DAKONG_1: i32 = 140;
 pub(crate) const GAP_BF_GEM: i32 = 177;
+pub(crate) const GAP_BF_BFEQUIPEMENT: i32 = 226;
+pub(crate) const GAP_GOODS_LIFE_TYPE: i32 = 229;
+pub(crate) const GAP_GOODS_START_POINT: i32 = 230;
 pub(crate) const GAP_GOODS_PACKAGE_EXTENTION: i32 = 234;
 pub(crate) const ICON_TYPE_GROUND: i32 = 1;
+
+pub(crate) const EQUIP_PLACE_HEAD: i32 = 1;
+pub(crate) const EQUIP_PLACE_BODY: i32 = 2;
+pub(crate) const EQUIP_PLACE_HAND: i32 = 3;
+pub(crate) const EQUIP_PLACE_GLOVE: i32 = 4;
+pub(crate) const EQUIP_PLACE_BOOT: i32 = 5;
+pub(crate) const EQUIP_PLACE_ORNAMENTS: i32 = 6;
+pub(crate) const EQUIP_PLACE_MEDAL: i32 = 7;
+pub(crate) const EQUIP_PLACE_POSTERIOR: i32 = 8;
+pub(crate) const EQUIP_PLACE_JEWELRY: i32 = 9;
+pub(crate) const EQUIP_PLACE_HEADGEAR: i32 = 10;
+pub(crate) const EQUIP_PLACE_TALISMAN: i32 = 11;
+pub(crate) const EQUIP_PLACE_FROCK: i32 = 12;
+pub(crate) const EQUIP_PLACE_WING: i32 = 13;
+pub(crate) const EQUIP_PLACE_MANTEAU: i32 = 14;
+pub(crate) const EQUIP_PLACE_FAIRY: i32 = 15;
+pub(crate) const EQUIP_PLACE_LING_BAO: i32 = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GoodsBasePropertiesDecodeError {
