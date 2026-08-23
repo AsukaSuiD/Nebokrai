@@ -11077,6 +11077,57 @@ impl CGame {
         }
     }
 
+    /// Применяет одну DB-пару enemy factions через живые organizing owners.
+    ///
+    /// Контекст форматирования принадлежит текущему `CGame`: process-оболочка
+    /// не может корректно держать вторую копию StringTable или захватывать
+    /// `CGame` внешней closure на время его же `Init`.
+    fn apply_loaded_enemy_faction_relation(
+        &self,
+        organizing: &mut COrganizingCtrl,
+        first_faction_id: i32,
+        second_faction_id: i32,
+    ) -> Result<(), FactionEnemyMutationBlock> {
+        if first_faction_id <= 0 || second_faction_id <= 0 {
+            return Ok(());
+        }
+        let Some(first_name) = organizing
+            .faction_by_id(first_faction_id)
+            .map(|faction| legacy_c_string_prefix(faction.name()).to_vec())
+        else {
+            return Ok(());
+        };
+        let Some(second_name) = organizing
+            .faction_by_id(second_faction_id)
+            .map(|faction| legacy_c_string_prefix(faction.name()).to_vec())
+        else {
+            return Ok(());
+        };
+
+        let mut first_effects = WorldGameInitEnemyMutationEffects {
+            game: self,
+            enemy_id: second_faction_id,
+            enemy_name: second_name,
+        };
+        let _ = organizing.add_city_war_enemy_organizing(
+            first_faction_id,
+            second_faction_id,
+            &mut first_effects,
+        )?;
+
+        let mut second_effects = WorldGameInitEnemyMutationEffects {
+            game: self,
+            enemy_id: first_faction_id,
+            enemy_name: first_name,
+        };
+        let _ = organizing.add_city_war_enemy_organizing(
+            second_faction_id,
+            first_faction_id,
+            &mut second_effects,
+        )?;
+        Ok(())
+    }
+
     /// Выполняет полный `CGame::Init` до запуска write/player-load workers.
     ///
     /// Windows crash reporter, GUI notice и thread creation передаются точным
@@ -11112,7 +11163,6 @@ impl CGame {
         Context,
         ReloadContext,
         TimerCallback,
-        FactionEnemyContext,
         CountryDatabase,
         CountryContext,
     >(
@@ -11135,7 +11185,6 @@ impl CGame {
         village_war: &mut CVillageWarSys,
         village_war_callbacks: VillageWarCallbacks<TimerCallback>,
         faction_war: &mut CFactionWarSys,
-        faction_enemy_context: &mut FactionEnemyContext,
         player_ranks: &mut CPlayerRanks,
         timer: &mut CTimer<TimerCallback>,
         copy_number_timer: &mut CopyNumberTimerState,
@@ -11162,7 +11211,6 @@ impl CGame {
         Context: WorldGameInitContext,
         ReloadContext: WorldReloadContext,
         TimerCallback: Copy,
-        FactionEnemyContext: FactionEnemyMutationContext,
         CountryDatabase: DbCountryOwner,
         CountryContext: CountrySetNewDayContext + ?Sized,
     {
@@ -11810,13 +11858,11 @@ impl CGame {
             faction_war_load,
             faction_war_ini_source.as_deref(),
             |first_faction_id, second_faction_id| {
-                organizing
-                    .set_enemy_faction_relation(
-                        first_faction_id,
-                        second_faction_id,
-                        faction_enemy_context,
-                    )
-                    .map(|_| ())
+                self.apply_loaded_enemy_faction_relation(
+                    organizing,
+                    first_faction_id,
+                    second_faction_id,
+                )
             },
         );
         let faction_war_initialization = match faction_war_initialization {
