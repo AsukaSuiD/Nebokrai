@@ -78,10 +78,12 @@ use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::setup::contributesetup::CContributeSetup;
 use crate::setup::gmlist::CGMList;
+use crate::setup::hitlevelsetup::CHitLevelSetup;
 use crate::setup::incrementshoplist::CIncrementShopList;
 use crate::setup::leitingsetup::CThingSetup;
 use crate::setup::logsystem::CLogSystem;
 use crate::setup::playerlist::CPlayerList;
+use crate::setup::regionsetup::CRegionSetup;
 use crate::setup::tradelist::CTradeList;
 use crate::transport::bind_tcp_ipv4;
 
@@ -702,6 +704,8 @@ pub(crate) struct CGame {
     log_system: CLogSystem,
     gm_list: CGMList,
     da_kong_xiang_qian: CDaKongXiangQian,
+    region_setup: CRegionSetup,
+    hit_level_setup: CHitLevelSetup,
     dupli_region_setup: Option<CDupliRegionSetup>,
     move_check_cells: MoveCheckCellRegistry,
     player_ranks: Option<CPlayerRanks>,
@@ -735,6 +739,8 @@ impl CGame {
             log_system: CLogSystem::default(),
             gm_list: CGMList::default(),
             da_kong_xiang_qian: CDaKongXiangQian::default(),
+            region_setup: CRegionSetup::default(),
+            hit_level_setup: CHitLevelSetup::default(),
             dupli_region_setup: None,
             move_check_cells: MoveCheckCellRegistry::new(),
             player_ranks: None,
@@ -976,6 +982,14 @@ impl CGame {
 
     pub(crate) const fn da_kong_xiang_qian_mut(&mut self) -> &mut CDaKongXiangQian {
         &mut self.da_kong_xiang_qian
+    }
+
+    pub(crate) const fn region_setup_mut(&mut self) -> &mut CRegionSetup {
+        &mut self.region_setup
+    }
+
+    pub(crate) const fn hit_level_setup_mut(&mut self) -> &mut CHitLevelSetup {
+        &mut self.hit_level_setup
     }
 
     pub(crate) const fn dupli_region_setup(&self) -> Option<&CDupliRegionSetup> {

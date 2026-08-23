@@ -1,5 +1,6 @@
-//! Ограничения регионов `CRegionSetup` из WorldServer, подтверждённые
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Ограничения регионов `CRegionSetup` из WorldServer/GameServer.
+//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходный owner `setup/regionsetup.cpp`.
 //!
 //! Wire — signed count и ordered 12-байтные records: region ID, minimum level
 //! и required contribution. Map key задаёт signed order, но отдельно не идёт.
@@ -31,13 +32,10 @@ impl CRegionSetup {
         &self.entries
     }
 
- /// Читает оригинал World grammar: поиск маркера `#`, затем три signed long.
- /// Owner очищается до чтения; при некорректной записи сохраняется уже
- /// прочитанный префикс, а неизвестные значения остаются пустыми.
-    pub(crate) fn load_from_bytes(
-        &mut self,
-        source: &[u8],
-    ) -> Result<usize, RegionSetupLoadError> {
+    /// Читает оригинал World grammar: поиск маркера `#`, затем три signed long.
+    /// Owner очищается до чтения; при некорректной записи сохраняется уже
+    /// прочитанный префикс, а неизвестные значения остаются пустыми.
+    pub(crate) fn load_from_bytes(&mut self, source: &[u8]) -> Result<usize, RegionSetupLoadError> {
         self.entries.clear();
         let tokens: Vec<&[u8]> = source
             .split(|byte| byte.is_ascii_whitespace())
@@ -48,10 +46,12 @@ impl CRegionSetup {
         while let Some(relative) = tokens[next..].iter().position(|token| *token == b"#") {
             next += relative + 1;
             let read = |offset: usize, field| {
-                let token = tokens.get(next + offset).ok_or(RegionSetupLoadError::Missing {
-                    record: loaded,
-                    field,
-                })?;
+                let token = tokens
+                    .get(next + offset)
+                    .ok_or(RegionSetupLoadError::Missing {
+                        record: loaded,
+                        field,
+                    })?;
                 std::str::from_utf8(token)
                     .ok()
                     .and_then(|text| text.parse::<i32>().ok())
@@ -88,6 +88,24 @@ impl CRegionSetup {
         }
         Ok(())
     }
+
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<usize, RegionSetupDecodeError> {
+        self.entries.clear();
+        let count = read_wire_i32(source, cursor)?;
+        for _ in 0..count.max(0) {
+            let entry = RegionSetupEntry {
+                id: read_wire_i32(source, cursor)?,
+                can_enter_level: read_wire_i32(source, cursor)?,
+                required_contribute: read_wire_i32(source, cursor)?,
+            };
+            self.entries.insert(entry.id, entry);
+        }
+        Ok(self.entries.len())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -107,6 +125,25 @@ impl fmt::Display for RegionSetupSerializeError {
 
 impl Error for RegionSetupSerializeError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RegionSetupDecodeError {
+    pub(crate) offset: usize,
+    pub(crate) needed: usize,
+    pub(crate) available: usize,
+}
+
+impl fmt::Display for RegionSetupDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "RegionSetup snapshot обрывается на {}: нужно {}, доступно {}",
+            self.offset, self.needed, self.available
+        )
+    }
+}
+
+impl Error for RegionSetupDecodeError {}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RegionSetupLoadError {
     Missing {
@@ -124,7 +161,10 @@ impl fmt::Display for RegionSetupLoadError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Missing { record, field } => {
-                write!(formatter, "RegionSetup: запись {record}, отсутствует поле {field}")
+                write!(
+                    formatter,
+                    "RegionSetup: запись {record}, отсутствует поле {field}"
+                )
             }
             Self::Invalid {
                 record,
@@ -140,3 +180,21 @@ impl fmt::Display for RegionSetupLoadError {
 }
 
 impl Error for RegionSetupLoadError {}
+
+fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, RegionSetupDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(4)) else {
+        return Err(RegionSetupDecodeError {
+            offset,
+            needed: 4,
+            available,
+        });
+    };
+    *cursor += 4;
+    Ok(i32::from_le_bytes(
+        bytes
+            .try_into()
+            .expect("размер RegionSetup scalar уже проверен"),
+    ))
+}

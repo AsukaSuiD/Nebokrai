@@ -40,10 +40,12 @@ use crate::nets::netserver::mynetclient::CMyNetClient;
 use crate::public::dupliregionsetup::DupliRegionDecodeError;
 use crate::setup::contributesetup::ContributeSetupDecodeError;
 use crate::setup::gmlist::{GmListDecodeError, GmListDecodeReport};
+use crate::setup::hitlevelsetup::HitLevelDecodeError;
 use crate::setup::incrementshoplist::IncrementShopDecodeError;
 use crate::setup::leitingsetup::ThingSetupCodecError;
 use crate::setup::logsystem::LogSystemDecodeError;
 use crate::setup::playerlist::{PlayerListDecodeError, PlayerListDecodeReport};
+use crate::setup::regionsetup::RegionSetupDecodeError;
 use crate::setup::tradelist::TradeListDecodeError;
 
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
@@ -54,6 +56,8 @@ const INCREMENT_SHOP_SELECTOR: i32 = 0x04;
 const CONTRIBUTE_SETUP_SELECTOR: i32 = 0x05;
 const LOG_SYSTEM_SELECTOR: i32 = 0x08;
 const GM_LIST_SELECTOR: i32 = 0x09;
+const REGION_SETUP_SELECTOR: i32 = 0x11;
+const HIT_LEVEL_SELECTOR: i32 = 0x14;
 const PLAYER_RANKS_SELECTOR: i32 = 0x17;
 const DUPLI_REGION_SELECTOR: i32 = 0x1a;
 const THING_SETUP_SELECTOR: i32 = 0x36;
@@ -135,6 +139,8 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     ContributeSetup { entries: usize },
     LogSystem { entries: usize, da_kong_log: bool },
     GmList(GmListDecodeReport),
+    RegionSetup { entries: usize },
+    HitLevel { entries: usize },
     PlayerRanks { entries: usize },
     DupliRegions { entries: usize },
     ThingSetup { entries: usize },
@@ -149,6 +155,8 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     ContributeSetup(ContributeSetupDecodeError),
     LogSystem(LogSystemDecodeError),
     GmList(GmListDecodeError),
+    RegionSetup(RegionSetupDecodeError),
+    HitLevel(HitLevelDecodeError),
     PlayerRanks(PlayerRanksDecodeError),
     DupliRegions(DupliRegionDecodeError),
     ThingSetup(ThingSetupCodecError),
@@ -169,6 +177,8 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::ContributeSetup(error) => error.fmt(formatter),
             Self::LogSystem(error) => error.fmt(formatter),
             Self::GmList(error) => error.fmt(formatter),
+            Self::RegionSetup(error) => error.fmt(formatter),
+            Self::HitLevel(error) => error.fmt(formatter),
             Self::PlayerRanks(error) => error.fmt(formatter),
             Self::DupliRegions(error) => error.fmt(formatter),
             Self::ThingSetup(error) => error.fmt(formatter),
@@ -186,6 +196,8 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::ContributeSetup(error) => Some(error),
             Self::LogSystem(error) => Some(error),
             Self::GmList(error) => Some(error),
+            Self::RegionSetup(error) => Some(error),
+            Self::HitLevel(error) => Some(error),
             Self::PlayerRanks(error) => Some(error),
             Self::DupliRegions(error) => Some(error),
             Self::ThingSetup(error) => Some(error),
@@ -270,6 +282,28 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             };
             add_log_text("Initial SI_GMLIST...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::GmList(report)))
+        }
+        REGION_SETUP_SELECTOR => {
+            let entries = match game
+                .region_setup_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(entries) => entries,
+                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::RegionSetup(error))),
+            };
+            add_log_text("Initial SI_REGIONLEVELSETUP...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::RegionSetup { entries }))
+        }
+        HIT_LEVEL_SELECTOR => {
+            let entries = match game
+                .hit_level_setup_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(entries) => entries,
+                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::HitLevel(error))),
+            };
+            add_log_text("Initial SI_HITLEVEL...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::HitLevel { entries }))
         }
         PLAYER_RANKS_SELECTOR => {
             let Some(ranks) = game.player_ranks_mut() else {

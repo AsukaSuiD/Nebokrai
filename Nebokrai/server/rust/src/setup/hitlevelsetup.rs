@@ -1,7 +1,8 @@
 //! Таблица level/hit/experience Miracle.
 //!
-//! Источник контракта World `LoadHitLevelSetup` и `AddToByteArray` — `worldserver.exe`/`worldserver.pdb`;
-//! Game decoder в этот owner не входит.
+//! Контракт World loader/serializer и Game decoder подтверждён точными
+//! `worldserver.exe + worldserver.pdb` и `gameserver.exe + GameServer.pdb`;
+//! исходный owner `setup/hitlevelsetup.cpp`.
 //!
 //! Отсутствие
 //! файла явно ставит `AL=0`, любой открытый файл после token-scan — `AL=1`,
@@ -89,6 +90,24 @@ impl CHitLevelSetup {
         }
         Ok(())
     }
+
+    /// Очищает vector до count и сохраняет только полные records.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<usize, HitLevelDecodeError> {
+        self.entries.clear();
+        let count = read_wire_i32(source, cursor)?;
+        for _ in 0..count.max(0) {
+            self.entries.push(HitLevelEntry {
+                level: read_wire_u32(source, cursor)?,
+                hit: read_wire_u32(source, cursor)?,
+                experience: read_wire_u32(source, cursor)?,
+            });
+        }
+        Ok(self.entries.len())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -155,6 +174,25 @@ impl fmt::Display for HitLevelSerializeError {
 
 impl Error for HitLevelSerializeError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct HitLevelDecodeError {
+    pub(crate) offset: usize,
+    pub(crate) needed: usize,
+    pub(crate) available: usize,
+}
+
+impl fmt::Display for HitLevelDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "HitLevel snapshot обрывается на {}: нужно {}, доступно {}",
+            self.offset, self.needed, self.available
+        )
+    }
+}
+
+impl Error for HitLevelDecodeError {}
+
 fn read_u32<'a>(
     tokens: &mut impl Iterator<Item = &'a [u8]>,
     field: &'static str,
@@ -172,4 +210,31 @@ fn read_u32<'a>(
             field,
             token: token.to_vec(),
         })
+}
+
+fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, HitLevelDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, HitLevelDecodeError> {
+    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], HitLevelDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(HitLevelDecodeError {
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("размер HitLevel scalar уже проверен"))
 }
