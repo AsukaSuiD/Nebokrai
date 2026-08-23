@@ -53,6 +53,9 @@
 //! factory level/growth mutation, target failure outcome, positional расход
 //! gem-ов и ordered client/audit effects. Конкретный wallet-object codec и
 //! полная audit-wire упаковка остаются transport boundary returned report-а.
+//! `ResetPotential` использует owned packet `CVolumeLimitGoodsContainer` 8×12:
+//! первый `ZHQLS01` расходуется до addon/player mutation, семь tracked-вкладов
+//! возвращаются в общий potential и публикуется один итоговый `0xBF918`.
 
 use super::area::WarSoulPoint;
 use super::container::cbattlefairycontainer::{
@@ -62,7 +65,7 @@ use super::container::cbattlefairycontainer::{
 };
 use super::container::cequipmentcontainer::CEquipmentContainer;
 use super::container::cvolumelimitgoodscontainer::{
-    VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome,
+    CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome,
 };
 use super::goods::cbattlefairyproperty::BattleFairyCompose;
 use super::goods::cgoods::CGoods;
@@ -345,6 +348,45 @@ pub(crate) struct BattleFairyUpgradeReport {
     pub(crate) effects: Vec<BattleFairyUpgradeEffect>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyPotentialResetOutcome {
+    FeatureDisabled,
+    MissingHeadgear,
+    InvalidHeadgear,
+    MissingResetItem,
+    Reset,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyPotentialResetEffect {
+    Notification {
+        player_id: i32,
+        string_id: &'static str,
+        color: u32,
+    },
+    PacketItemConsumed {
+        player_id: i32,
+        goods: super::shape::ShapeIdentity,
+        previous_amount: u32,
+        remaining_amount: u32,
+        consumed: bool,
+        removal: Option<VolumeGoodsRemoveOutcome>,
+    },
+    PropertiesChanged {
+        player_id: i32,
+    },
+    GoodsUpdated(BattleFairyDefaultGoodsUpdate),
+}
+
+#[must_use = "reset report содержит packet ownership и player/network effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyPotentialResetReport {
+    pub(crate) player_id: i32,
+    pub(crate) outcome: BattleFairyPotentialResetOutcome,
+    pub(crate) recovered_potential: i32,
+    pub(crate) effects: Vec<BattleFairyPotentialResetEffect>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct BattleFairyGearAddons {
     attack: i32,
@@ -443,6 +485,7 @@ pub(crate) struct CPlayer {
     silence_timestamp_minutes: u32,
     money: u32,
     account: Vec<u8>,
+    packet: CVolumeLimitGoodsContainer,
     equipment: CEquipmentContainer,
     battle_fairy_container: CBattleFairyContainer,
 }
@@ -461,6 +504,8 @@ impl CPlayer {
             return None;
         }
         let owner_id = move_shape.shape().identity().id;
+        let mut packet = CVolumeLimitGoodsContainer::new();
+        let _empty_release = packet.set_container_dimensions(8, 12);
         let mut player = Self {
             move_shape,
             figure,
@@ -480,6 +525,7 @@ impl CPlayer {
             silence_timestamp_minutes: 0,
             money: 0,
             account: Vec::new(),
+            packet,
             equipment: CEquipmentContainer::new(),
             battle_fairy_container: CBattleFairyContainer::new(),
         };
@@ -537,6 +583,14 @@ impl CPlayer {
 
     pub(crate) const fn equipment(&self) -> &CEquipmentContainer {
         &self.equipment
+    }
+
+    pub(crate) const fn packet(&self) -> &CVolumeLimitGoodsContainer {
+        &self.packet
+    }
+
+    pub(crate) const fn packet_mut(&mut self) -> &mut CVolumeLimitGoodsContainer {
+        &mut self.packet
     }
 
     pub(crate) const fn equipment_mut(&mut self) -> &mut CEquipmentContainer {
@@ -1412,9 +1466,180 @@ impl CPlayer {
         report
     }
 
+    pub(crate) fn reset_battle_fairy_potential(
+        &mut self,
+        battle_fairy_enabled: bool,
+        factory: &CGoodsFactory,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> BattleFairyPotentialResetReport {
+        let player_id = self.player_id();
+        let mut report = BattleFairyPotentialResetReport {
+            player_id,
+            outcome: BattleFairyPotentialResetOutcome::MissingHeadgear,
+            recovered_potential: 0,
+            effects: Vec::new(),
+        };
+        if !battle_fairy_enabled {
+            report.outcome = BattleFairyPotentialResetOutcome::FeatureDisabled;
+            report
+                .effects
+                .push(BattleFairyPotentialResetEffect::Notification {
+                    player_id,
+                    string_id: "ZHGS0008",
+                    color: 0xffff_0000,
+                });
+            return report;
+        }
+        let Some(headgear) = self.equipment.get_goods(10) else {
+            return report;
+        };
+        if headgear.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
+            report.outcome = BattleFairyPotentialResetOutcome::InvalidHeadgear;
+            report
+                .effects
+                .push(BattleFairyPotentialResetEffect::Notification {
+                    player_id,
+                    string_id: "ZHGS0009",
+                    color: 0xffff_ffff,
+                });
+            return report;
+        }
+
+        let reset_index = factory.query_goods_id_by_original_name(Some(b"ZHQLS01"));
+        let reset_item = self
+            .packet
+            .base()
+            .traversing_goods()
+            .find(|goods| goods.base_properties_index() == reset_index)
+            .map(|goods| (goods.identity(), goods.amount()));
+        let Some((reset_identity, reset_amount)) = reset_item else {
+            report.outcome = BattleFairyPotentialResetOutcome::MissingResetItem;
+            report
+                .effects
+                .push(BattleFairyPotentialResetEffect::Notification {
+                    player_id,
+                    string_id: "ZHGS0010",
+                    color: 0xffff_ffff,
+                });
+            return report;
+        };
+        let reset_position = self.packet.query_goods_position(reset_identity.ex_id);
+        let (remaining_amount, consumed, removal) = if reset_amount == 0 {
+            (0, false, None)
+        } else if reset_amount == 1 {
+            let removal = self.packet.remove_goods(reset_identity.ex_id);
+            (
+                if removal.is_some() { 0 } else { reset_amount },
+                removal.is_some(),
+                removal,
+            )
+        } else {
+            let remaining = reset_amount.wrapping_sub(1);
+            let mut consumed = false;
+            if let Some(position) = reset_position
+                && let Some(goods) = self.packet.get_goods_mut(position)
+            {
+                goods.set_amount(remaining);
+                consumed = true;
+            }
+            (
+                if consumed { remaining } else { reset_amount },
+                consumed,
+                None,
+            )
+        };
+        report
+            .effects
+            .push(BattleFairyPotentialResetEffect::PacketItemConsumed {
+                player_id,
+                goods: reset_identity,
+                previous_amount: reset_amount,
+                remaining_amount,
+                consumed,
+                removal,
+            });
+
+        let recovered = {
+            let goods = self
+                .equipment
+                .get_goods_mut(10)
+                .expect("headgear проверен до packet consumption");
+            let mut take = |tracked, property| {
+                let value = goods.addon_property_value(factory, tracked, 1);
+                let _tracked_stored = goods.set_addon_property_value_core(tracked, 1, 0);
+                let current = goods.addon_property_value(factory, property, 1);
+                let _property_stored =
+                    goods.set_addon_property_value_core(property, 1, current.wrapping_sub(value));
+                value
+            };
+            let attack = take(GAP_BF_ATTACK_POTENTIAL, GAP_BF_ATTACK);
+            let sprite = take(GAP_BF_SPRITE_POTENTIAL, GAP_BF_SPRITE);
+            let blast = take(GAP_BF_BLAST_POTENTIAL, GAP_BF_BLAST);
+            let brave = take(GAP_BF_BRAVE_POTENTIAL, GAP_BF_BRAVE);
+            let agility = take(GAP_BF_AGILITY_POTENTIAL, GAP_BF_AGILITY);
+            let spiritualism = take(GAP_BF_SPRITUALISM_POTENTIAL, GAP_BF_SPRITUALISM);
+            let strength = take(GAP_BF_STRENGH_POTENTIAL, GAP_BF_STRENGH);
+            let recovered = ((f64::from(sprite) + f64::from(attack)) * (2.0 / 3.0)
+                + f64::from(blast)
+                + f64::from(brave)
+                + f64::from(agility)
+                + f64::from(spiritualism)
+                + f64::from(strength))
+            .round() as i32;
+            let potential = goods.addon_property_value(factory, GAP_BF_POTENTIAL, 1);
+            let _stored = goods.set_addon_property_value_core(
+                GAP_BF_POTENTIAL,
+                1,
+                potential.wrapping_add(recovered),
+            );
+            (recovered, brave, agility, spiritualism, strength)
+        };
+        report.recovered_potential = recovered.0;
+        self.set_strength(
+            self.combat_properties
+                .strength
+                .wrapping_sub((f64::from(recovered.1) * 0.00001).round() as u32),
+        );
+        self.set_dexterity(
+            self.combat_properties
+                .dexterity
+                .wrapping_sub((f64::from(recovered.2) * 0.00001).round() as u32),
+        );
+        self.set_maximum_hp(
+            self.combat_properties
+                .maximum_hp
+                .wrapping_sub((f64::from(recovered.4) * 0.00001).round() as u32),
+        );
+        self.set_intelligence(
+            self.combat_properties
+                .intelligence
+                .wrapping_sub((f64::from(recovered.3) * 0.00001).round() as u32),
+        );
+        report
+            .effects
+            .push(BattleFairyPotentialResetEffect::PropertiesChanged { player_id });
+        let headgear = self
+            .equipment
+            .get_goods(10)
+            .expect("reset не отделяет equipped headgear");
+        report
+            .effects
+            .push(BattleFairyPotentialResetEffect::GoodsUpdated(
+                BattleFairyDefaultGoodsUpdate {
+                    message_type: 0x0b_f918,
+                    player_id,
+                    goods: headgear.identity(),
+                    old_client_payload: encode_old_client(headgear),
+                },
+            ));
+        report.outcome = BattleFairyPotentialResetOutcome::Reset;
+        report
+    }
+
     /// Достигнутая часть exact `RefreshContainerOwners`: owner ID должен быть
     /// перепривязан после создания player identity или его восстановления.
     pub(crate) const fn refresh_reached_container_owners(&mut self, player_id: i32) {
+        self.packet.base_mut().set_owner(PLAYER_TYPE, player_id);
         self.equipment.base_mut().set_owner(PLAYER_TYPE, player_id);
         self.battle_fairy_container
             .base_mut()

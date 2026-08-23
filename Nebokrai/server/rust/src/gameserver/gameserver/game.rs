@@ -2185,6 +2185,19 @@ impl CGame {
         ))
     }
 
+    /// Исполняемый entry point goods-message `0x8FC2B`: reset item ищется и
+    /// расходуется в owned player packet до potential/player mutations.
+    pub(crate) fn reset_battle_fairy_potential(
+        &mut self,
+        player_id: i32,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> Option<crate::gameserver::appserver::player::BattleFairyPotentialResetReport> {
+        let enabled = self.globe_setup.battle_fairy_enabled();
+        self.players.get_mut(&player_id).map(|player| {
+            player.reset_battle_fairy_potential(enabled, &self.goods_factory, encode_old_client)
+        })
+    }
+
     /// Исполняет один исходный snapshot входящих FIFO в порядке WS, BS, GS.
     pub(crate) fn process_messages(&mut self, handlers: &mut dyn GameMessageHandlers) -> i32 {
         if let Some(client) = &self.world_client {
