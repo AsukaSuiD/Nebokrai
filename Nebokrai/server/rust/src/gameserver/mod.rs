@@ -50,6 +50,7 @@ pub(crate) mod appserver {
     }
     pub(crate) mod message {
         pub(crate) mod countrymessage;
+        pub(crate) mod depotmessage;
         pub(crate) mod gmamessage;
         pub(crate) mod gmmessage;
         pub(crate) mod onmsg_w2s_auction;

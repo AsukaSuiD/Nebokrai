@@ -25,7 +25,10 @@
 //! изменение самих max не выполняет этот clamp без конкретного caller-а.
 //! Как в связном `RefreshContainerOwners`, достигнутые equipment и
 //! battle-fairy containers принадлежат player type `400` с его numeric ID;
-//! остальные constructor-owned containers пока не материализованы.
+//! Depot-password vertical дополнительно материализует `m_eProgress`, оба
+//! changing-guard-а, password byte-string и owned `CBank/CDepot`; numeric
+//! значения внутреннего `eProgress` не выходят в wire и потому заменены typed
+//! enum без выдуманного `repr`.
 //! Exact `GetWarSoulGoods` читает headgear cell 10 и признаёт её боевой феей
 //! только при addon `GAP_BF_BATTLE_FAIRY` value-id 1, равном единице.
 //! `BatllteFairyCombine` соединяет container inputs, global BattleFairy gate,
@@ -81,11 +84,13 @@
 //! `0xBF720` с исключением owner-а и отражает даже zero-delta `PackExpand` log.
 
 use super::area::WarSoulPoint;
+use super::container::cbank::CBank;
 use super::container::cbattlefairycontainer::{
     BattleFairyCell, BattleFairyCombineCheck, BattleFairyCombineRemovedInput,
     BattleFairyContainerAddOutcome, BattleFairyDefaultGoodsUpdate, BattleFairyDefaultSkill,
     BattleFairyPropertyAddEffect, BattleFairyUpgradeConsumedGem, CBattleFairyContainer,
 };
+use super::container::cdepot::CDepot;
 use super::container::cequipmentcontainer::{
     CEquipmentContainer, EquipmentAddOutcome, EquipmentAddRuntimeFacts, EquipmentAroundUpdate,
     EquipmentColumn, EquipmentOwnerPlayerFacts, EquipmentRemoveOutcome,
@@ -768,6 +773,13 @@ impl PlayerCombatProperties {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum PlayerProgress {
+    #[default]
+    None,
+    Banking,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CPlayer {
     move_shape: CMoveShape,
@@ -775,6 +787,9 @@ pub(crate) struct CPlayer {
     team_id: i32,
     country: u8,
     server_region_id: Option<i32>,
+    in_changing_server: bool,
+    in_changing_region: bool,
+    current_progress: PlayerProgress,
     war_soul_state: u32,
     war_soul_point: WarSoulPoint,
     war_soul_visual_x_bits: u32,
@@ -790,6 +805,9 @@ pub(crate) struct CPlayer {
     silence_timestamp_minutes: u32,
     money: u32,
     account: Vec<u8>,
+    depot_password: Vec<u8>,
+    bank: CBank,
+    depot: CDepot,
     packet: CVolumeLimitGoodsContainer,
     equipment: CEquipmentContainer,
     battle_fairy_container: CBattleFairyContainer,
@@ -817,6 +835,9 @@ impl CPlayer {
             team_id,
             country,
             server_region_id,
+            in_changing_server: false,
+            in_changing_region: false,
+            current_progress: PlayerProgress::None,
             war_soul_state: 0,
             war_soul_point: WarSoulPoint::default(),
             war_soul_visual_x_bits: 0.0f32.to_bits(),
@@ -832,6 +853,9 @@ impl CPlayer {
             silence_timestamp_minutes: 0,
             money: 0,
             account: Vec::new(),
+            depot_password: Vec::new(),
+            bank: CBank::new(),
+            depot: CDepot::new(),
             packet,
             equipment: CEquipmentContainer::new(),
             battle_fairy_container: CBattleFairyContainer::new(),
@@ -858,6 +882,65 @@ impl CPlayer {
 
     pub(crate) const fn server_region_id(&self) -> Option<i32> {
         self.server_region_id
+    }
+
+    pub(crate) const fn in_changing_server(&self) -> bool {
+        self.in_changing_server
+    }
+
+    pub(crate) const fn in_changing_region(&self) -> bool {
+        self.in_changing_region
+    }
+
+    pub(crate) const fn set_changing_state_snapshot(
+        &mut self,
+        in_changing_server: bool,
+        in_changing_region: bool,
+    ) {
+        self.in_changing_server = in_changing_server;
+        self.in_changing_region = in_changing_region;
+    }
+
+    pub(crate) const fn current_progress(&self) -> PlayerProgress {
+        self.current_progress
+    }
+
+    pub(crate) const fn set_current_progress_snapshot(&mut self, progress: PlayerProgress) {
+        self.current_progress = progress;
+    }
+
+    pub(crate) fn depot_password(&self) -> &[u8] {
+        &self.depot_password
+    }
+
+    /// Exact `SetDepotPassword`: nullable C-string уже разрешена caller-ом;
+    /// сохраняются только bytes до первого NUL.
+    pub(crate) fn set_depot_password(&mut self, password: &[u8]) {
+        let length = password
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(password.len());
+        self.depot_password.clear();
+        self.depot_password.extend_from_slice(&password[..length]);
+    }
+
+    pub(crate) fn unlock_depot_storage(&mut self) {
+        let _legacy_bank_result = self.bank.unlock_if_authenticated(true);
+        let _legacy_depot_result = self.depot.unlock_if_authenticated(true);
+    }
+
+    pub(crate) fn close_depot_storage(&mut self) {
+        let _legacy_bank_result = self.bank.lock();
+        let _legacy_depot_result = self.depot.lock();
+        self.current_progress = PlayerProgress::None;
+    }
+
+    pub(crate) const fn bank_locked(&self) -> bool {
+        self.bank.is_locked()
+    }
+
+    pub(crate) const fn depot_locked(&self) -> bool {
+        self.depot.is_locked()
     }
 
     pub(crate) const fn base_properties(&self) -> PlayerBaseProperties {
@@ -2638,6 +2721,12 @@ impl CPlayer {
     /// Достигнутая часть exact `RefreshContainerOwners`: owner ID должен быть
     /// перепривязан после создания player identity или его восстановления.
     pub(crate) const fn refresh_reached_container_owners(&mut self, player_id: i32) {
+        self.bank.base_mut().set_owner(PLAYER_TYPE, player_id);
+        self.depot
+            .base_mut()
+            .base_mut()
+            .base_mut()
+            .set_owner(PLAYER_TYPE, player_id);
         self.packet.base_mut().set_owner(PLAYER_TYPE, player_id);
         self.equipment.base_mut().set_owner(PLAYER_TYPE, player_id);
         self.battle_fairy_container
@@ -3828,34 +3917,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::GetCurrentProgress
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:9547
-// RVA: 0x0002CCB0
-// ADDRESS: 0042ccb0
-// PROTOTYPE: eProgress __thiscall GetCurrentProgress(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SetCurrentProgress
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:9552
-// RVA: 0x0002CCC0
-// ADDRESS: 0042ccc0
-// PROTOTYPE: void __thiscall SetCurrentProgress(eProgress param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::SendNotifyMessageA
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -4850,20 +4911,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::GetDepotPassword
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:10270
-// RVA: 0x00030410
-// ADDRESS: 00430410
-// PROTOTYPE: char * __thiscall GetDepotPassword(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::WriteGoodsDelLog
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -5404,20 +5451,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x00033ED0
 // ADDRESS: 00433ed0
 // PROTOTYPE: void __thiscall UpdateLeiTingToWSandClient(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SetDepotPassword
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:10275
-// RVA: 0x000342D0
-// ADDRESS: 004342d0
-// PROTOTYPE: void __thiscall SetDepotPassword(char * param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

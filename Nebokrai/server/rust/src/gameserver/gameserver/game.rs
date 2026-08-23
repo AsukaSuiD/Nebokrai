@@ -109,6 +109,9 @@
 //! Полная GMA family `0x800xx` теперь входит в реальный FIFO message pass:
 //! address kick возвращает World `0x60401`, count — `0x60402`, а unknown
 //! сохраняет исходный warning без фиктивного handler success.
+//! Depot family `0x7FBxx/0x8FExx` проходит тот же FIFO до generic route:
+//! player guards, password mutation, bank/depot locks и адресные
+//! `0xBFB07/0xBFB08` выполняются одним owner-ом.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
@@ -147,6 +150,9 @@ use crate::gameserver::appserver::goods::cbattlefairyproperty::CBattleFairyPrope
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::goodswarmember::CGoodsWarMember;
+use crate::gameserver::appserver::message::depotmessage::{
+    DepotMessageReport, dispatch_depot_message,
+};
 use crate::gameserver::appserver::message::gmamessage::{
     GmaMessageError, GmaMessageReport, dispatch_gma_message,
 };
@@ -955,7 +961,7 @@ pub(crate) struct GameAuctionRunReport {
     pub(crate) state_request: Option<Result<i32, SendMessageError>>,
 }
 
-#[must_use = "ProcessMessage report сохраняет auction, GM и GMA effects"]
+#[must_use = "ProcessMessage report сохраняет auction, GM, GMA и depot effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameProcessMessagesReport {
     pub(crate) legacy_return: i32,
@@ -963,6 +969,7 @@ pub(crate) struct GameProcessMessagesReport {
         Vec<Result<WorldAuctionStateMessageReport, WorldAuctionStateMessageError>>,
     pub(crate) gm_messages: Vec<Result<GmMessageReport, GmMessageError>>,
     pub(crate) gma_messages: Vec<Result<GmaMessageReport, GmaMessageError>>,
+    pub(crate) depot_messages: Vec<DepotMessageReport>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2561,6 +2568,10 @@ impl CGame {
         self.players.get(&player_id)
     }
 
+    pub(crate) fn find_player_mut(&mut self, player_id: i32) -> Option<&mut CPlayer> {
+        self.players.get_mut(&player_id)
+    }
+
     /// Exact `CGame::KickPlayer`: queue side effect сохраняется, публичный
     /// bool исходника всегда остаётся `false`.
     pub(crate) fn kick_player(&self, player_id: i32) -> GameKickPlayerReport {
@@ -3367,6 +3378,7 @@ impl CGame {
         let mut auction_states = Vec::new();
         let mut gm_messages = Vec::new();
         let mut gma_messages = Vec::new();
+        let mut depot_messages = Vec::new();
         let world_messages = self
             .world_client
             .as_ref()
@@ -3379,6 +3391,7 @@ impl CGame {
                 &mut auction_states,
                 &mut gm_messages,
                 &mut gma_messages,
+                &mut depot_messages,
             );
         }
         let billing_messages = self
@@ -3393,6 +3406,7 @@ impl CGame {
                 &mut auction_states,
                 &mut gm_messages,
                 &mut gma_messages,
+                &mut depot_messages,
             );
         }
         let server_events = self
@@ -3409,6 +3423,7 @@ impl CGame {
                         &mut auction_states,
                         &mut gm_messages,
                         &mut gma_messages,
+                        &mut depot_messages,
                     );
                 }
                 GameServerEvent::WorldClientReconnected(client) => {
@@ -3424,6 +3439,7 @@ impl CGame {
             auction_states,
             gm_messages,
             gma_messages,
+            depot_messages,
         }
     }
 
@@ -3436,6 +3452,7 @@ impl CGame {
         >,
         gm_messages: &mut Vec<Result<GmMessageReport, GmMessageError>>,
         gma_messages: &mut Vec<Result<GmaMessageReport, GmaMessageError>>,
+        depot_messages: &mut Vec<DepotMessageReport>,
     ) {
         if let Some(report) =
             dispatch_world_auction_state(message, self, || runtime.wall_time_seconds())
@@ -3445,6 +3462,8 @@ impl CGame {
             gm_messages.push(report);
         } else if let Some(report) = dispatch_gma_message(message, self) {
             gma_messages.push(report);
+        } else if let Some(report) = dispatch_depot_message(message, self) {
+            depot_messages.push(report);
         } else {
             message.run(self, runtime);
         }

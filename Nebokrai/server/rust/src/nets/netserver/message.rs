@@ -310,8 +310,9 @@ impl CMessage {
         self.region_id = region_id;
     }
 
-    /// Выполняет exact selector, не материализуя тела выбранных handlers.
-    pub(crate) fn run(&mut self, game: &CGame, handlers: &mut dyn GameMessageHandlers) -> i32 {
+    /// Exact lazy numeric lookup prefix `Run`, доступный concrete handler-ам,
+    /// которые материализованы раньше общего route boundary.
+    pub(crate) fn resolve_player_context(&mut self, game: &CGame) {
         if self.player_id.is_none() && self.map_id != 0 {
             self.player_id = game
                 .find_player(self.map_id)
@@ -323,6 +324,11 @@ impl CMessage {
                 .and_then(|player_id| game.find_player(player_id))
                 .and_then(|player| player.server_region_id());
         }
+    }
+
+    /// Выполняет exact selector, не материализуя тела выбранных handlers.
+    pub(crate) fn run(&mut self, game: &CGame, handlers: &mut dyn GameMessageHandlers) -> i32 {
+        self.resolve_player_context(game);
 
         let family = self.message_type() as u32 & 0xFFFF_FF00;
         let player_region = self.player_id.zip(self.region_id);
