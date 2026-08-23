@@ -2,7 +2,8 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/gmmessage.cpp` подтверждают
-//! ветви `0x7FC0B/0x7FC0D/0x7FC0E/0x7FC0F`: requester ID читается до switch,
+//! ветви `0x7FC0B/0x7FC0C/0x7FC0D/0x7FC0E/0x7FC0F`: requester ID читается до
+//! switch,
 //! silence duration нормализуется к минимуму `1`, player map
 //! обходится дважды в signed ID-order, а ответы `0x5FF0D/0x5FF10`
 //! уходят WorldServer. Адресный `0x7FC0F` сохраняет length guards,
@@ -10,6 +11,10 @@
 //! `0xBF806`; recoverable allocation failure возвращает `GS0029`.
 //! Broadcast `0x7FC0D` сохраняет mode guard и публикует исходный
 //! `0xBF806` либо `0xBF804` через общий `SendAll`.
+//! Requester feedback `0x7FC0C` выбирает `GS0033/GS0034` и форматирует
+//! подтверждённые EXE-вызовом и shipped read-only language resource аргументы
+//! `%s/%d/%s`. Safe `Vec` заменяет raw `char[512]`; неизвестный format
+//! specifier не воспроизводит vararg/buffer UB, а остаётся typed boundary.
 //! Эти цепочки имеют статус `IMPLEMENTED`.
 //! `Vec` заменяет raw allocation; поле declared capacity сохраняет
 //! исходные `sum(name_len + 2) + 0x40`, включая возможное
@@ -20,6 +25,7 @@ use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const GM_SET_SILENCE_MESSAGE: i32 = 0x0007_FC0B;
+const GM_REQUESTER_FEEDBACK_MESSAGE: i32 = 0x0007_FC0C;
 const GM_BROADCAST_MESSAGE: i32 = 0x0007_FC0D;
 const GM_QUERY_SILENCE_MESSAGE: i32 = 0x0007_FC0E;
 const GM_PRIVATE_NOTICE_MESSAGE: i32 = 0x0007_FC0F;
@@ -40,6 +46,11 @@ pub(crate) enum GmMessageError {
     MissingRequesterId,
     MissingPlayerName,
     MissingDuration,
+    MissingFeedbackPlayerName,
+    MissingFeedbackValue,
+    MissingFeedbackOutcome,
+    MissingFeedbackText,
+    UnsupportedFeedbackFormat,
     MissingBroadcastText,
     MissingBroadcastFirstField,
     MissingBroadcastSecondField,
@@ -89,6 +100,16 @@ pub(crate) enum GmMessageReport {
         response_type: i32,
         delivery: Result<i32, SendMessageError>,
     },
+    RequesterFeedback {
+        requester_id: i32,
+        player_name: Vec<u8>,
+        value: i32,
+        successful: bool,
+        detail: Vec<u8>,
+        string_id: &'static [u8],
+        formatted_text: Vec<u8>,
+        delivery: i32,
+    },
 }
 
 /// Материализует связанные silence, broadcast и direct-notice ветви `OnGMMessage`.
@@ -102,6 +123,7 @@ pub(crate) fn dispatch_gm_message(
     if !matches!(
         message_type,
         GM_SET_SILENCE_MESSAGE
+            | GM_REQUESTER_FEEDBACK_MESSAGE
             | GM_BROADCAST_MESSAGE
             | GM_QUERY_SILENCE_MESSAGE
             | GM_PRIVATE_NOTICE_MESSAGE
@@ -139,6 +161,51 @@ pub(crate) fn dispatch_gm_message(
             player_name,
             minutes,
             player_id,
+            delivery,
+        }));
+    }
+
+    if message_type == GM_REQUESTER_FEEDBACK_MESSAGE {
+        let Some(player_name) = message.base_mut().get_str_bytes(GM_LEGACY_TEXT_LIMIT) else {
+            return Some(Err(GmMessageError::MissingFeedbackPlayerName));
+        };
+        let Some(value) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingFeedbackValue));
+        };
+        let Some(outcome) = message.base_mut().get_char() else {
+            return Some(Err(GmMessageError::MissingFeedbackOutcome));
+        };
+        let Some(detail) = message.base_mut().get_str_bytes(GM_LEGACY_TEXT_LIMIT) else {
+            return Some(Err(GmMessageError::MissingFeedbackText));
+        };
+        let successful = outcome != 0;
+        let string_id = if successful {
+            b"GS0033".as_slice()
+        } else {
+            b"GS0034".as_slice()
+        };
+        let formatted_text = match format_gm_feedback(
+            game.get_string_by_id(string_id),
+            &player_name,
+            value,
+            &detail,
+        ) {
+            Ok(formatted) => formatted,
+            Err(()) => return Some(Err(GmMessageError::UnsupportedFeedbackFormat)),
+        };
+        let mut response = CMessage::new(PLAYER_SYSTEM_MESSAGE);
+        response.add_long(-1);
+        response.add_long(0);
+        add_legacy_c_string(&mut response, &formatted_text);
+        let delivery = response.send_to_player(game.net_server(), requester_id);
+        return Some(Ok(GmMessageReport::RequesterFeedback {
+            requester_id,
+            player_name,
+            value,
+            successful,
+            detail,
+            string_id,
+            formatted_text,
             delivery,
         }));
     }
@@ -288,16 +355,70 @@ pub(crate) fn dispatch_gm_message(
 }
 
 fn add_legacy_c_string(message: &mut CMessage, value: &[u8]) {
-    let prefix = value
-        .get(
-            ..value
-                .iter()
-                .position(|byte| *byte == 0)
-                .unwrap_or(value.len()),
-        )
-        .expect("C-string prefix всегда внутри slice");
-    message.base_mut().add(prefix);
+    message.base_mut().add(legacy_c_string_prefix(value));
     message.add_byte(0);
+}
+
+fn format_gm_feedback(
+    template: &[u8],
+    player_name: &[u8],
+    value: i32,
+    detail: &[u8],
+) -> Result<Vec<u8>, ()> {
+    enum Argument<'a> {
+        Text(&'a [u8]),
+        Signed(i32),
+    }
+
+    let arguments = [
+        Argument::Text(player_name),
+        Argument::Signed(value),
+        Argument::Text(detail),
+    ];
+    let template = legacy_c_string_prefix(template);
+    let mut output = Vec::with_capacity(template.len());
+    let mut argument_index = 0usize;
+    let mut offset = 0usize;
+    while offset < template.len() {
+        if template[offset] != b'%' {
+            output.push(template[offset]);
+            offset += 1;
+            continue;
+        }
+        let Some(specifier) = template.get(offset + 1).copied() else {
+            return Err(());
+        };
+        if specifier == b'%' {
+            output.push(b'%');
+            offset += 2;
+            continue;
+        }
+        let Some(argument) = arguments.get(argument_index) else {
+            return Err(());
+        };
+        match (specifier, argument) {
+            (b's', Argument::Text(text)) => {
+                output.extend_from_slice(legacy_c_string_prefix(text));
+            }
+            (b'd' | b'i', Argument::Signed(value)) => {
+                output.extend_from_slice(value.to_string().as_bytes());
+            }
+            (b'u', Argument::Signed(value)) => {
+                output.extend_from_slice((*value as u32).to_string().as_bytes());
+            }
+            _ => return Err(()),
+        }
+        argument_index += 1;
+        offset += 2;
+    }
+    Ok(output)
+}
+
+fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
+    &value[..value
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(value.len())]
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

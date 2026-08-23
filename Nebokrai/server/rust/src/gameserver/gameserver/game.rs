@@ -85,6 +85,8 @@
 //! исполняются до оставшегося внешним GM route owner-а. Адресный `0x7FC0F`
 //! там же формирует player system message с local listener IP, а `0x7FC0D`
 //! выбирает один из двух player wire и публикует его через `SendAll`.
+//! Requester-localized `0x7FC0C` безопасно сохраняет подтверждённый
+//! `GS0033/GS0034` `%s/%d/%s` contract и адресный `0xBF806` результат.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
