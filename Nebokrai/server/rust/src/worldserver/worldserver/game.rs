@@ -1545,8 +1545,8 @@ use crate::worldserver::appworld::incrementlog::incrementlog::{
 use crate::worldserver::appworld::organizingsystem::faction::{
     goods_war_check_for_faction_id, CFaction, FactionDemiseContext, FactionDemiseOutcome,
     FactionDisbandContext, FactionExperienceBlock, FactionMemberInfoRequest,
-    FactionEnemyMutationContext, FactionInitialPropertyBlock, FactionOrganizingInfoContext,
-    FactionUploadIconBlock,
+    FactionEnemyMutationBlock, FactionEnemyMutationContext, FactionEnemyWarLogArgument,
+    FactionInitialPropertyBlock, FactionOrganizingInfoContext, FactionUploadIconBlock,
 };
 use crate::worldserver::appworld::organizingsystem::attackcitysys::{
     AttackCityCallbacks, AttackCityEnemyRelationContext, AttackCityEnemyRelationReport,
@@ -1573,8 +1573,9 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingPronounceBlock, OrganizingSaveDataReport, OrganizingUnionApplicationCallbackBlock,
     OrganizingUnionApplicationCallbackReport, OrganizingUnionApplyForJoinDispatchBlock,
     OrganizingUnionInvitationCallbackBlock, OrganizingUnionInvitationCallbackReport,
-    FreeFactionLookup, FreePlayerLookup, PlayerEnterGameOutcome, PlayerExitGameOutcome,
-    PlayerInviteFactionBlock, FactionReinitializationBlock,
+    FactionUnionMembershipLookupBlock, FreeFactionLookup, FreePlayerLookup,
+    PlayerEnterGameOutcome, PlayerExitGameOutcome, PlayerInviteFactionBlock,
+    FactionReinitializationBlock,
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::{
     COrganizingParam, OrganizingParamLoadError, OrganizingParamLoadReport,
@@ -2018,7 +2019,7 @@ pub(crate) enum WorldGameInitBlockReason<ContextBlock> {
     BooleanOwner(WorldGameInitBooleanOwner),
     TimeToReturnLoad(TimeToReturnLoadError),
     AttackCityLoad(AttackCityLoadError),
-    AttackCityEnemyRelation(ContextBlock),
+    AttackCityEnemyRelation(WorldGameInitAttackCityRelationBlock),
     FourNationWarLoad(FourNationWarLoadError),
     VillageWarLoad(VillageWarLoadError),
     OrganizingParameters(OrganizingParamLoadError),
@@ -2134,10 +2135,135 @@ pub(crate) struct WorldGameInitCallbacks<'a> {
     pub(crate) get_log_local_time: &'a mut dyn FnMut() -> WorldLogLocalTime,
     pub(crate) get_timer_local_time: &'a mut dyn FnMut() -> TagTime,
     pub(crate) put_log_info: &'a mut dyn FnMut(&[u8]),
-    pub(crate) update_player: &'a mut dyn FnMut(i32),
-    /// Тот же загруженный World StringTable, из которого constructors берут
-    /// стандартные титулы глав союза и фракции.
-    pub(crate) world_string_by_id: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
+}
+
+/// Ошибка пересборки city-war enemy relations на живых region/faction owner-ах.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldGameInitAttackCityRelationBlock {
+    NullUnion { map_key: i32 },
+    MissingOrganizing { organizing_id: i32 },
+    EnemyMutation {
+        organizing_id: i32,
+        enemy_organizing_id: i32,
+        source: FactionEnemyMutationBlock,
+    },
+}
+
+struct WorldGameInitEnemyMutationEffects<'a> {
+    game: &'a CGame,
+    enemy_id: i32,
+    enemy_name: Vec<u8>,
+}
+
+impl FactionEnemyMutationContext for WorldGameInitEnemyMutationEffects<'_> {
+    fn organizing_name(&self, organizing_id: i32) -> Option<Vec<u8>> {
+        (organizing_id == self.enemy_id).then(|| self.enemy_name.clone())
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[FactionEnemyWarLogArgument<'_>],
+    ) -> Vec<u8> {
+        format_faction_enemy_world_string(self.game.get_string_by_id(string_id), arguments)
+    }
+
+    fn put_war_log(&mut self, text: &[u8]) {
+        put_string_to_file("war", text);
+    }
+}
+
+struct WorldGameInitAttackCityContext<'a> {
+    game: &'a mut CGame,
+    organizing: &'a mut COrganizingCtrl,
+}
+
+impl AttackCityEnemyRelationContext for WorldGameInitAttackCityContext<'_> {
+    type Block = WorldGameInitAttackCityRelationBlock;
+
+    fn clear_all_city_faction_relations(&mut self) -> Result<(), Self::Block> {
+        self.organizing.clear_all_city_faction_relations();
+        Ok(())
+    }
+
+    fn city_owner_faction_id(
+        &mut self,
+        city_region_id: i32,
+    ) -> Result<Option<i32>, Self::Block> {
+        Ok(self.game.region_owned_faction_id(city_region_id))
+    }
+
+    fn expand_faction_organizings(
+        &mut self,
+        faction_id: i32,
+    ) -> Result<Vec<i32>, Self::Block> {
+        self.organizing
+            .expand_city_war_faction_organizings(faction_id)
+            .map_err(|FactionUnionMembershipLookupBlock { map_key }| {
+                WorldGameInitAttackCityRelationBlock::NullUnion { map_key }
+            })
+    }
+
+    fn add_city_war_enemy_organizing(
+        &mut self,
+        organizing_id: i32,
+        enemy_organizing_id: i32,
+    ) -> Result<(), Self::Block> {
+        let enemy_name = self
+            .organizing
+            .faction_by_id(enemy_organizing_id)
+            .map(|faction| legacy_c_string_prefix(faction.name()).to_vec())
+            .ok_or(WorldGameInitAttackCityRelationBlock::MissingOrganizing {
+                organizing_id: enemy_organizing_id,
+            })?;
+        let mut effects = WorldGameInitEnemyMutationEffects {
+            game: self.game,
+            enemy_id: enemy_organizing_id,
+            enemy_name,
+        };
+        let found = self
+            .organizing
+            .add_city_war_enemy_organizing(
+                organizing_id,
+                enemy_organizing_id,
+                &mut effects,
+            )
+            .map_err(|source| WorldGameInitAttackCityRelationBlock::EnemyMutation {
+                organizing_id,
+                enemy_organizing_id,
+                source,
+            })?;
+        if !found {
+            return Err(WorldGameInitAttackCityRelationBlock::MissingOrganizing {
+                organizing_id,
+            });
+        }
+        Ok(())
+    }
+
+    fn set_all_city_faction_enemy_changed(
+        &mut self,
+        changed: bool,
+    ) -> Result<(), Self::Block> {
+        self.organizing
+            .set_all_city_faction_enemy_changed(changed);
+        Ok(())
+    }
+
+    fn update_all_city_enemy_faction_relations(&mut self) -> Result<(), Self::Block> {
+        let mut players_to_refresh = Vec::new();
+        let _ = self
+            .organizing
+            .update_all_city_enemy_faction_relations(self.game, &mut |player_id| {
+                players_to_refresh.push(player_id);
+            });
+        for player_id in players_to_refresh {
+            let _ = self
+                .game
+                .update_player_faction_info(self.organizing, player_id);
+        }
+        Ok(())
+    }
 }
 
 /// Локальная safe-граница `SaveCityRegion(0)` до virtual save-вызова.
@@ -11017,8 +11143,7 @@ impl CGame {
         callbacks: &mut WorldGameInitCallbacks<'_>,
     ) -> WorldGameInitResult<<Context as WorldGameInitContext>::Block>
     where
-        Context: WorldGameInitContext
-            + AttackCityEnemyRelationContext<Block = <Context as WorldGameInitContext>::Block>,
+        Context: WorldGameInitContext,
         TimerCallback: Copy,
         FactionEnemyContext: FactionEnemyMutationContext,
         CountryDatabase: DbCountryOwner,
@@ -11506,7 +11631,13 @@ impl CGame {
         events.push(WorldGameInitEvent::AttackCityInitialized(
             attack_city_initialization,
         ));
-        let attack_city_relations = match attack_city.initial_city_all_faction_enemy_relation(context) {
+        let mut attack_city_context = WorldGameInitAttackCityContext {
+            game: self,
+            organizing,
+        };
+        let attack_city_relations = match attack_city
+            .initial_city_all_faction_enemy_relation(&mut attack_city_context)
+        {
             Ok(report) => report,
             Err(source) => stop!(WorldGameInitBlockReason::AttackCityEnemyRelation(source)),
         };
@@ -11580,8 +11711,8 @@ impl CGame {
             village_war_initialization,
         ));
 
-        let union_master_title = (callbacks.world_string_by_id)(b"WS0154");
-        let faction_master_title = (callbacks.world_string_by_id)(b"WS0157");
+        let union_master_title = self.get_string_by_id(b"WS0154").to_vec();
+        let faction_master_title = self.get_string_by_id(b"WS0157").to_vec();
         let organizing_now = (callbacks.get_timer_local_time)();
         let organizing_initialize = {
             let (union_database, faction_database) = context.organizing_databases();
@@ -11608,6 +11739,7 @@ impl CGame {
             Err(source) => stop!(WorldGameInitBlockReason::OrganizingController(source)),
         }
         let region_ids = self.regions.keys().copied().collect::<Vec<_>>();
+        let mut players_to_refresh = Vec::new();
         for region_id in region_ids {
             let Some(mut region_owner) = self
                 .regions
@@ -11619,7 +11751,7 @@ impl CGame {
             let relation = region_owner.base_mut().init_owner_relation(
                 organizing,
                 &*self,
-                &mut *callbacks.update_player,
+                &mut |player_id| players_to_refresh.push(player_id),
             );
             self.regions
                 .get_mut(&region_id)
@@ -11636,6 +11768,9 @@ impl CGame {
                 region_id,
                 report,
             });
+        }
+        for player_id in players_to_refresh {
+            let _ = self.update_player_faction_info(organizing, player_id);
         }
 
         self.record_game_init_log(
@@ -22463,6 +22598,50 @@ fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
         .position(|byte| *byte == 0)
         .unwrap_or(value.len());
     &value[..end]
+}
+
+fn format_faction_enemy_world_string(
+    template: &[u8],
+    arguments: &[FactionEnemyWarLogArgument<'_>],
+) -> Vec<u8> {
+    let template = legacy_c_string_prefix(template);
+    let mut output = Vec::with_capacity(template.len());
+    let mut argument_index = 0usize;
+    let mut offset = 0usize;
+    while offset < template.len() {
+        if template[offset] != b'%' || offset + 1 == template.len() {
+            output.push(template[offset]);
+            offset += 1;
+            continue;
+        }
+        let specifier = template[offset + 1];
+        if specifier == b'%' {
+            output.push(b'%');
+            offset += 2;
+            continue;
+        }
+        let Some(argument) = arguments.get(argument_index) else {
+            output.extend_from_slice(&template[offset..offset + 2]);
+            offset += 2;
+            continue;
+        };
+        match (specifier, argument) {
+            (b's', FactionEnemyWarLogArgument::Text(text)) => {
+                output.extend_from_slice(legacy_c_string_prefix(text));
+            }
+            (b'd' | b'i' | b'u', FactionEnemyWarLogArgument::Unsigned(value)) => {
+                output.extend_from_slice(value.to_string().as_bytes());
+            }
+            _ => {
+                output.extend_from_slice(&template[offset..offset + 2]);
+                offset += 2;
+                continue;
+            }
+        }
+        argument_index += 1;
+        offset += 2;
+    }
+    output
 }
 
 /// Узкая safe-замена единственного `%s` в подтверждённом `GS1148`.
