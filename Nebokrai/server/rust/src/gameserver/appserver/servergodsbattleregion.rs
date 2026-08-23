@@ -4,12 +4,14 @@
 //! Сырой C++ ниже после typed owner-а является комментарием, а не
 //! Rust-реализацией.
 //!
-//! Реализованный RVA `0x000AB260` сохраняет exact wire, section-local clear,
-//! намеренное append-поведение faction rules и обе внутренние audit-записи.
+//! Startup snapshot сохраняет exact wire, section-local clear, намеренное
+//! append-поведение faction rules и обе внутренние audit-записи. Region-set
+//! хранит ordered unique ID, а concrete startup region делегирует
+//! подтверждённому `CServerWarRegion` wire-owner-у.
 //! Безразмерный pointer и 256-байтный временный C-string buffer заменены
 //! bounded slice/cursor и owned bytes; обрыв возвращает typed error после уже
-//! завершённого prefix-а вместо неназначаемого legacy UB. Region/gameplay
-//! lifecycle и остальные методы manager-а пока остаются неизвестными здесь.
+//! завершённого prefix-а вместо неназначаемого legacy UB. Gameplay lifecycle
+//! и остальные методы manager-а пока остаются RAW ниже.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -21,6 +23,10 @@
 use crate::setup::godsbattleconf::{
     CGodsBattleConf, GodsBattleDecodeError, GodsBattleDecodeReport,
 };
+use std::collections::BTreeSet;
+
+use super::serverregion::ServerRegionDecodeError;
+use super::serverwarregion::{CServerWarRegion, WarRegionDecodeContext, WarRegionDecodeError};
 
 // Точные GBK payload из GameServer .rdata VA `0x00651870` и `0x00651850`.
 const REVISE_MONEY_CONFIGURATION_ERROR: &[u8] =
@@ -31,6 +37,7 @@ const EMPTY_DIE_BACK_CONFIGURATION: &[u8] =
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CGodsBattleMgr {
     configuration: CGodsBattleConf,
+    region_set: BTreeSet<i32>,
 }
 
 impl CGodsBattleMgr {
@@ -38,8 +45,16 @@ impl CGodsBattleMgr {
         &self.configuration
     }
 
-    /// Воспроизводит `CGodsBattleMgr::DecordFromByteArray` RVA `0x000AB260`,
-    /// включая оба внутренних audit side effect-а в исходных позициях.
+    pub(crate) fn add_region_set(&mut self, region_id: i32) -> bool {
+        self.region_set.insert(region_id)
+    }
+
+    pub(crate) fn contains_region(&self, region_id: i32) -> bool {
+        self.region_set.contains(&region_id)
+    }
+
+    /// Воспроизводит `CGodsBattleMgr::DecordFromByteArray`, включая оба
+    /// внутренних audit side effect-а в исходных позициях.
     pub(crate) fn decord_from_byte_array<AddLogText, PutStringToFile>(
         &mut self,
         source: &[u8],
@@ -60,19 +75,28 @@ impl CGodsBattleMgr {
     }
 }
 
-// ============================================================================
-// FUNCTION: CGodsBattleMgr::AddRegionSet
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.h:173
-// RVA: 0x0009D160
-// ADDRESS: 0049d160
-// PROTOTYPE: void __thiscall AddRegionSet(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+/// Startup-часть concrete GodsBattle region. Constructor подтверждает
+/// наследование `CServerWarRegion`; faction/player/NPC gameplay коллекции
+/// остаются owned defaults и будут подключены вместе с lifecycle owner-ом.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CServerGodsBattleRegion {
+    pub(crate) war: CServerWarRegion,
+    faction_players: [BTreeSet<i32>; 3],
+    faction_npcs: [BTreeSet<i32>; 3],
+}
+
+impl CServerGodsBattleRegion {
+    pub(crate) fn decord_from_byte_array<Context: WarRegionDecodeContext>(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        include_child: bool,
+        context: &mut Context,
+    ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>> {
+        self.war
+            .decord_from_byte_array(source, cursor, include_child, context)
+    }
+}
 
 // ============================================================================
 // FUNCTION: CGodsBattleMgr::GetFactionXYD

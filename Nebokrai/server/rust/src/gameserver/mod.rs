@@ -42,6 +42,7 @@ pub(crate) mod appserver {
     pub(crate) mod servercityregion;
     pub(crate) mod servercountryregion;
     pub(crate) mod servergodsbattleregion;
+    pub(crate) mod servernationregion;
     pub(crate) mod serverregion;
     pub(crate) mod servervillageregion;
     pub(crate) mod serverwarregion;

@@ -57,6 +57,9 @@
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
 //! `0x0000AD10` сохраняет map-assignment, а `FindProxyRegion` `0x0000AD30` —
 //! lookup/null. Proxy snapshot `0x0F` публикуется целиком до startup log.
+//! `s_mapRegion` хранит concrete enum всех шести subtype-ов; ID/name lookup,
+//! replace assignment, startup monster/NPC totals и GodsBattle registration
+//! связаны с selector-ом `0x0E`, не стирая subtype state через base slicing.
 //! `with_send_state/register_*/attach_*` являются явной assembly-границей
 //! baseline и не снимают их псевдокод. Network setup передаётся отдельной
 //! post-`LoadSetup*` проекцией. Windows thread handles заменены owned Tokio
@@ -90,7 +93,14 @@ use crate::gameserver::appserver::message::servermessage::on_billing_client_reco
 use crate::gameserver::appserver::organizingsystem::fournationwarsys::CFourNationWarSys;
 use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
-use crate::gameserver::appserver::servergodsbattleregion::CGodsBattleMgr;
+use crate::gameserver::appserver::servercityregion::CServerCityRegion;
+use crate::gameserver::appserver::servercountryregion::CServerCountryRegion;
+use crate::gameserver::appserver::servergodsbattleregion::{
+    CGodsBattleMgr, CServerGodsBattleRegion,
+};
+use crate::gameserver::appserver::servernationregion::ServerNationRegion;
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::shape::{
     MoveCheckCellRegistry, ShapeIdentity, ShapeResolver, ShapeView,
 };
@@ -760,6 +770,41 @@ pub(crate) enum GameSingleFilePublication {
     RepeatedOwnerFreed,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ServerRegionOwner {
+    Base(CServerRegion),
+    Village(CServerVillageRegion),
+    City(CServerCityRegion),
+    Country(CServerCountryRegion),
+    Nation(ServerNationRegion),
+    GodsBattle(CServerGodsBattleRegion),
+}
+
+impl ServerRegionOwner {
+    pub(crate) const fn base(&self) -> &CServerRegion {
+        match self {
+            Self::Base(region) => region,
+            Self::Village(region) => &region.war.base,
+            Self::City(region) => &region.war.base,
+            Self::Country(region) => &region.base,
+            Self::Nation(region) => &region.war.base,
+            Self::GodsBattle(region) => &region.war.base,
+        }
+    }
+
+    pub(crate) const fn region_id(&self) -> i32 {
+        self.base().id
+    }
+
+    pub(crate) fn name(&self) -> &[u8] {
+        self.base().region.get_name()
+    }
+
+    pub(crate) const fn is_gods_battle(&self) -> bool {
+        matches!(self, Self::GodsBattle(_))
+    }
+}
+
 pub(crate) struct CGame {
     setup: GameSetup,
     setup_ex: GameSetupEx,
@@ -825,7 +870,10 @@ pub(crate) struct CGame {
     world_reconnect_task: Option<GameReconnectTask>,
     billing_reconnect_task: Option<GameReconnectTask>,
     players: BTreeMap<i32, CPlayer>,
+    regions: BTreeMap<i32, ServerRegionOwner>,
     proxy_regions: BTreeMap<i32, CProxyServerRegion>,
+    initial_total_monsters: i32,
+    initial_total_npcs: i32,
     team_session_ids: BTreeMap<u32, i32>,
 }
 
@@ -898,7 +946,10 @@ impl CGame {
             world_reconnect_task: None,
             billing_reconnect_task: None,
             players: BTreeMap::new(),
+            regions: BTreeMap::new(),
             proxy_regions: BTreeMap::new(),
+            initial_total_monsters: 0,
+            initial_total_npcs: 0,
             team_session_ids: BTreeMap::new(),
         }
     }
@@ -1152,6 +1203,37 @@ impl CGame {
 
     pub(crate) fn find_proxy_region(&self, region_id: i32) -> Option<&CProxyServerRegion> {
         self.proxy_regions.get(&region_id)
+    }
+
+    pub(crate) fn add_region(&mut self, region: ServerRegionOwner) -> bool {
+        self.regions.insert(region.region_id(), region).is_some()
+    }
+
+    pub(crate) fn find_region(&self, region_id: i32) -> Option<&ServerRegionOwner> {
+        self.regions.get(&region_id)
+    }
+
+    pub(crate) fn find_region_mut(&mut self, region_id: i32) -> Option<&mut ServerRegionOwner> {
+        self.regions.get_mut(&region_id)
+    }
+
+    pub(crate) fn find_region_by_name(&self, name: &[u8]) -> Option<&ServerRegionOwner> {
+        let end = name
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(name.len());
+        self.regions
+            .values()
+            .find(|region| region.name() == &name[..end])
+    }
+
+    pub(crate) const fn set_initial_region_totals(&mut self, monsters: i32, npcs: i32) {
+        self.initial_total_monsters = monsters;
+        self.initial_total_npcs = npcs;
+    }
+
+    pub(crate) const fn initial_region_totals(&self) -> (i32, i32) {
+        (self.initial_total_monsters, self.initial_total_npcs)
     }
 
     pub(crate) const fn thing_setup(&self) -> &CThingSetup {
@@ -2322,20 +2404,6 @@ impl ShapeResolver for CGame {
 //
 
 // ============================================================================
-// FUNCTION: CGame::FindRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:1001
-// RVA: 0x000050F0
-// ADDRESS: 004050f0
-// PROTOTYPE: CServerRegion * __thiscall FindRegion(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CGame::SaveCityRegion
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -2633,20 +2701,6 @@ impl ShapeResolver for CGame {
 //
 
 // ============================================================================
-// FUNCTION: CGame::AddRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:986
-// RVA: 0x0000ACF0
-// ADDRESS: 0040acf0
-// PROTOTYPE: void __thiscall AddRegion(long param_1, CServerRegion * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CGame::~CGame
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -2747,21 +2801,6 @@ impl ShapeResolver for CGame {
 
 // `GetScriptFileData` материализован выше как lookup без вставки отсутствующего ключа.
 
-// ============================================================================
-// FUNCTION: CGame::FindRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.h:91
-// RVA: 0x00040BF0
-// ADDRESS: 00440bf0
-// PROTOTYPE: CServerRegion * __thiscall FindRegion(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// `GetTeamID` материализован выше с exact 24-bit wrap и Game index.
 // ============================================================================
 // FUNCTION: $L82323
 // STATUS: UNKNOWN (сохранены только метаданные исследования)

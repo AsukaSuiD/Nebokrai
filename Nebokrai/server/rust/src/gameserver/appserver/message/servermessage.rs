@@ -39,6 +39,9 @@
 //! парного WorldServer wire, затем пишет точный startup log.
 //! Proxy region `0x0F` создаёт отдельный owner, полностью декодирует короткий
 //! proxy wire и map-assignment-ом публикует его до точного startup log.
+//! Region selector `0x0E` маршрутизирует все шесть concrete subtype-ов через
+//! общий base decoder, публикует ordered `CGame` owner и лишь затем обновляет
+//! startup totals и GodsBattle region-set.
 //! FourNationWar `0x25` декодирует exact 196-byte setup records и пять rects,
 //! затем проецирует war state и relive rectangles в доступные nation regions.
 //! Script resources `0x0A..0x0D` сохраняют signed lengths, bounded path,
@@ -80,11 +83,23 @@ use crate::gameserver::appserver::goods::cgoodsfactory::{
     GoodsFactoryDecodeError, GoodsFactoryDecodeReport,
 };
 use crate::gameserver::appserver::proxyserverregion::{CProxyServerRegion, ProxyRegionDecodeError};
+use crate::gameserver::appserver::servercityregion::{
+    CServerCityRegion, CityRegionDecodeContext, CityRegionDecodeError,
+};
+use crate::gameserver::appserver::servercountryregion::{
+    CServerCountryRegion, CountryRegionDecodeContext, CountryRegionDecodeError,
+};
+use crate::gameserver::appserver::servergodsbattleregion::CServerGodsBattleRegion;
+use crate::gameserver::appserver::servernationregion::ServerNationRegion;
+use crate::gameserver::appserver::serverregion::{CServerRegion, ServerRegionDecodeError};
+use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
+use crate::gameserver::appserver::serverwarregion::WarRegionDecodeError;
 use crate::gameserver::appserver::skills::skillfactory::{
     SkillFactoryDecodeError, SkillFactoryDecodeReport,
 };
 use crate::gameserver::gameserver::game::{
     CGame, GameNetworkInitializationError, GameScriptResourceContext, GameSingleFilePublication,
+    ServerRegionOwner,
 };
 use crate::gameserver::gameserver::honorranks::{HonorRanksDecodeError, HonorRanksDecodeReport};
 use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
@@ -137,6 +152,7 @@ const FUNCTION_LIST_SELECTOR: i32 = 0x0a;
 const VARIABLE_LIST_SELECTOR: i32 = 0x0b;
 const GENERAL_VARIABLE_SELECTOR: i32 = 0x0c;
 const SCRIPT_FILE_SELECTOR: i32 = 0x0d;
+const REGION_SELECTOR: i32 = 0x0e;
 const PROXY_REGION_SELECTOR: i32 = 0x0f;
 const REGION_SETUP_SELECTOR: i32 = 0x11;
 const ID_INDEX_SELECTOR: i32 = 0x12;
@@ -238,6 +254,165 @@ fn read_start_long(
     *cursor += 4;
     Ok(i32::from_le_bytes(
         bytes.try_into().expect("server ID содержит четыре байта"),
+    ))
+}
+
+pub(crate) trait InitialRegionStartupContext:
+    CityRegionDecodeContext + CountryRegionDecodeContext
+{
+    fn total_region_monsters(&self) -> i32;
+    fn total_region_npcs(&self) -> i32;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct InitialRegionSubtypeInputBlock {
+    pub(crate) offset: usize,
+    pub(crate) needed: usize,
+    pub(crate) available: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum InitialRegionStartupError<RuntimeError> {
+    SubtypeInput(InitialRegionSubtypeInputBlock),
+    UnknownSubtype(i32),
+    Base(ServerRegionDecodeError<RuntimeError>),
+    War(WarRegionDecodeError<ServerRegionDecodeError<RuntimeError>>),
+    City(CityRegionDecodeError<ServerRegionDecodeError<RuntimeError>>),
+    Country(CountryRegionDecodeError<ServerRegionDecodeError<RuntimeError>>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct InitialRegionStartupReport {
+    pub(crate) subtype: i32,
+    pub(crate) region_id: i32,
+    pub(crate) added_to_region_list: bool,
+    pub(crate) replaced: bool,
+    pub(crate) total_monsters: i32,
+    pub(crate) total_npcs: i32,
+    pub(crate) gods_battle_registered: bool,
+}
+
+/// Выполняет startup case `0x0E`, включая allocation/decode, display-list
+/// gate, map assignment, totals snapshot и GodsBattle registration.
+pub(crate) fn dispatch_initial_region_startup<Context, AddRegionList, AddLogText>(
+    selector: i32,
+    message: &mut CMessage,
+    game: &mut CGame,
+    context: &mut Context,
+    mut add_region_list: AddRegionList,
+    mut add_log_text: AddLogText,
+) -> Option<Result<InitialRegionStartupReport, InitialRegionStartupError<Context::RuntimeError>>>
+where
+    Context: InitialRegionStartupContext,
+    AddRegionList: FnMut(&[u8], i32),
+    AddLogText: FnMut(&[u8]),
+{
+    if selector != REGION_SELECTOR {
+        return None;
+    }
+
+    let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    let subtype = match read_initial_region_i32(source, cursor) {
+        Ok(subtype) => subtype,
+        Err(error) => return Some(Err(InitialRegionStartupError::SubtypeInput(error))),
+    };
+    let owner = match subtype {
+        0 => {
+            let mut region = CServerRegion::default();
+            if let Err(error) = region.decord_from_byte_array(source, cursor, true, context) {
+                return Some(Err(InitialRegionStartupError::Base(error)));
+            }
+            ServerRegionOwner::Base(region)
+        }
+        1 => {
+            let mut region = CServerVillageRegion::default();
+            if let Err(error) = region.decord_from_byte_array(source, cursor, true, context) {
+                return Some(Err(InitialRegionStartupError::War(error)));
+            }
+            ServerRegionOwner::Village(region)
+        }
+        2 => {
+            let mut region = CServerCityRegion::default();
+            if let Err(error) = region.decord_from_byte_array(source, cursor, true, context) {
+                return Some(Err(InitialRegionStartupError::City(error)));
+            }
+            ServerRegionOwner::City(region)
+        }
+        3 => {
+            let mut region = CServerCountryRegion::default();
+            if let Err(error) = region.decord_from_byte_array(source, cursor, true, context) {
+                return Some(Err(InitialRegionStartupError::Country(error)));
+            }
+            ServerRegionOwner::Country(region)
+        }
+        4 => {
+            let mut region = ServerNationRegion::default();
+            if let Err(error) = region.decord_from_byte_array(source, cursor, true, context) {
+                return Some(Err(InitialRegionStartupError::War(error)));
+            }
+            ServerRegionOwner::Nation(region)
+        }
+        5 => {
+            let mut region = CServerGodsBattleRegion::default();
+            if let Err(error) = region.decord_from_byte_array(source, cursor, true, context) {
+                return Some(Err(InitialRegionStartupError::War(error)));
+            }
+            ServerRegionOwner::GodsBattle(region)
+        }
+        subtype => return Some(Err(InitialRegionStartupError::UnknownSubtype(subtype))),
+    };
+
+    let region_id = owner.region_id();
+    let added_to_region_list = game.find_region(region_id).is_none();
+    if added_to_region_list {
+        add_region_list(owner.name(), region_id);
+    }
+    let gods_battle = owner.is_gods_battle();
+    let replaced = game.add_region(owner);
+    add_log_text(b"Start Region : (%d) %s [m=%d n=%d] ...OK!");
+
+    let total_monsters = context.total_region_monsters();
+    let total_npcs = context.total_region_npcs();
+    game.set_initial_region_totals(total_monsters, total_npcs);
+    let gods_battle_registered =
+        gods_battle && game.gods_battle_mgr_mut().add_region_set(region_id);
+
+    Some(Ok(InitialRegionStartupReport {
+        subtype,
+        region_id,
+        added_to_region_list,
+        replaced,
+        total_monsters,
+        total_npcs,
+        gods_battle_registered,
+    }))
+}
+
+fn read_initial_region_i32(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<i32, InitialRegionSubtypeInputBlock> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(end) = offset.checked_add(4) else {
+        return Err(InitialRegionSubtypeInputBlock {
+            offset,
+            needed: 4,
+            available,
+        });
+    };
+    let Some(bytes) = source.get(offset..end) else {
+        return Err(InitialRegionSubtypeInputBlock {
+            offset,
+            needed: 4,
+            available,
+        });
+    };
+    *cursor = end;
+    Ok(i32::from_le_bytes(
+        bytes
+            .try_into()
+            .expect("region subtype занимает четыре байта"),
     ))
 }
 

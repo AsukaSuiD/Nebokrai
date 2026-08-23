@@ -1,6 +1,32 @@
 //! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
+//!
+//! Startup inheritance подтверждён constructor-ом: `ServerNationRegion`
+//! начинается с `CServerWarRegion` и не имеет собственного wire decoder-а.
+//! Поэтому typed startup owner делегирует exact War -> ServerRegion chain;
+//! nation gameplay state ниже остаётся RAW до отдельного прохода.
+
+use super::serverregion::ServerRegionDecodeError;
+use super::serverwarregion::{CServerWarRegion, WarRegionDecodeContext, WarRegionDecodeError};
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ServerNationRegion {
+    pub(crate) war: CServerWarRegion,
+}
+
+impl ServerNationRegion {
+    pub(crate) fn decord_from_byte_array<Context: WarRegionDecodeContext>(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        include_child: bool,
+        context: &mut Context,
+    ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>> {
+        self.war
+            .decord_from_byte_array(source, cursor, include_child, context)
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
