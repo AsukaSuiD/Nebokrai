@@ -49,9 +49,10 @@
 //! `CShape::SetTileXY`: region дополняет runtime area facts и передаёт virtual
 //! dispatch, не дублируя tile-center либо `CMoveShape::SetPosXY`.
 //! Полный startup decoder сохраняет base/area/NPC/cache/monster/weather/
-//! setup/param wire-order. Создание NPC и monster принадлежит их factories и
-//! вызывается через обязательный `ServerRegionDecodeContext`; War и Country
-//! subtype decoder-ы входят в этот owner напрямую.
+//! setup/param wire-order. NPC и monster создаются собственными factory/spawn
+//! methods региона; decode context предоставляет только реальные RNG/AI/
+//! message/property owners и пока не восстановленный hash traversal cache.
+//! War и Country subtype decoder-ы входят в этот owner напрямую.
 //! Concrete `AddNpc` уже создаёт `CNpc` через factory type `500`, назначает
 //! spawn-поля, проводит его через `AddObject/CArea` и сохраняет owned object.
 //! Low-level `AddMonster` аналогично владеет type `600` spawn и хранит
@@ -218,6 +219,8 @@ pub(crate) enum ServerRegionDecodeError<RuntimeError> {
     AreaGrid(AreaGridBlock),
     Setup(ServerRegionSetupDecodeError),
     Input(ServerRegionDecodeInputBlock),
+    Npc(ServerRegionNpcSpawnBlock),
+    Monster(ServerRegionMonsterRectBlock),
     Runtime(RuntimeError),
 }
 
@@ -288,19 +291,13 @@ pub(crate) struct ServerRegionVisibleNpc {
     pub(crate) tile_y: i32,
 }
 
-pub(crate) trait ServerRegionDecodeContext {
+pub(crate) trait ServerRegionDecodeContext:
+    ServerRegionNpcContext + ServerRegionMonsterContext
+{
     type RuntimeError;
 
     fn area_dimensions(&self) -> (i32, i32);
     fn now_millis(&mut self) -> u32;
-
-    /// Выполняет исходный `AddNpc(setup, true, false)`. Callback обязан сам
-    /// сохранить внутренние per-spawn failures/logs этого owner-а.
-    fn add_region_npc(
-        &mut self,
-        region_id: i32,
-        setup: &ServerRegionNpcSetup,
-    ) -> Result<(), Self::RuntimeError>;
 
     /// Возвращает traversal текущего `m_mNpcs` после всех `AddNpc`; decoder
     /// фильтрует его уже созданным owner-ом по исходному show-list признаку.
@@ -308,14 +305,6 @@ pub(crate) trait ServerRegionDecodeContext {
         &mut self,
         region_id: i32,
     ) -> Result<Vec<ServerRegionVisibleNpc>, Self::RuntimeError>;
-
-    /// Выполняет `AddMonsterRect(setup, setup.count, true, false)` после того,
-    /// как decoder назначил living-count и wrapping last-reset time.
-    fn add_region_monster_rect(
-        &mut self,
-        region_id: i32,
-        setup: &ServerRegionMonsterSetup,
-    ) -> Result<(), Self::RuntimeError>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -967,15 +956,10 @@ impl CServerRegion {
                 name,
                 script,
             };
-            self.npc_setups.push(setup);
-            context
-                .add_region_npc(
-                    self.id,
-                    self.npc_setups
-                        .last()
-                        .expect("NPC setup только что добавлен"),
-                )
-                .map_err(ServerRegionDecodeError::Runtime)?;
+            // Wire lTime принудительно равен нулю, поэтому AddNpc не читает
+            // clock; `now_ms` не участвует ни в одном NPC side effect.
+            self.add_npc(&setup, true, false, 0, area_width, area_height, context)
+                .map_err(ServerRegionDecodeError::Npc)?;
         }
 
         // Compatibility quirk: decoder сбрасывает count, но не очищает bytes
@@ -1026,6 +1010,7 @@ impl CServerRegion {
                 });
             }
             let start_time = read_server_region_i32_at(header, 0x1C);
+            let now_ms = context.now_millis();
             let setup = ServerRegionMonsterSetup {
                 index: read_server_region_i32_at(header, 0x00),
                 left: read_server_region_i32_at(header, 0x04),
@@ -1037,18 +1022,21 @@ impl CServerRegion {
                 start_time,
                 direction: read_server_region_i32_at(header, 0x20),
                 living_count: 0,
-                last_reset_time_ms: context.now_millis().wrapping_sub(start_time as u32),
+                last_reset_time_ms: now_ms.wrapping_sub(start_time as u32),
                 variants,
             };
-            self.monster_setups.push(setup);
-            context
-                .add_region_monster_rect(
-                    self.id,
-                    self.monster_setups
-                        .last()
-                        .expect("monster setup только что добавлен"),
-                )
-                .map_err(ServerRegionDecodeError::Runtime)?;
+            let amount = setup.count;
+            self.add_monster_rect(
+                &setup,
+                amount,
+                true,
+                false,
+                now_ms,
+                area_width,
+                area_height,
+                context,
+            )
+            .map_err(ServerRegionDecodeError::Monster)?;
         }
 
         self.weather_setup.clear();
