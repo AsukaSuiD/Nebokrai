@@ -20,6 +20,8 @@
 //! Silence-timeout, как и оригинал, проверяется лениво при query по
 //! инъецируемому wrapping `timeGetTime`-значению; отдельный scheduler для него
 //! не требуется.
+//! Текущие HP/MP имеют собственные setter-и с clamp к текущим max-свойствам;
+//! изменение самих max не выполняет этот clamp без конкретного caller-а.
 //! Поэтому `from_send_state` остаётся явной assembly-границей уже
 //! восстановленного runtime. Figure передаётся как доказанный derived virtual
 //! fact; владение spatial state остаётся у `CMoveShape`.
@@ -36,6 +38,8 @@ const CONTRIBUTION_MAXIMUM: i32 = 2_000_000_000;
 pub(crate) struct PlayerBaseProperties {
     pub(crate) pk_count: u16,
     pub(crate) experience: u32,
+    pub(crate) health: u32,
+    pub(crate) mana: u32,
     pub(crate) fetch_power: u32,
     pub(crate) battle_fairy_recall: bool,
     pub(crate) battle_fairy_died: bool,
@@ -167,12 +171,38 @@ impl CPlayer {
         self.base_properties.experience = value;
     }
 
+    pub(crate) const fn health(&self) -> u32 {
+        self.base_properties.health
+    }
+
+    pub(crate) const fn mana(&self) -> u32 {
+        self.base_properties.mana
+    }
+
     pub(crate) const fn set_maximum_hp(&mut self, value: u32) {
         self.combat_properties.maximum_hp = clamp_combat_scalar(value);
     }
 
     pub(crate) const fn set_maximum_mp(&mut self, value: u32) {
         self.combat_properties.maximum_mp = clamp_combat_scalar(value);
+    }
+
+    /// Exact `SetHP` сначала записывает вход, затем перечитывает виртуальный
+    /// `GetMaxHP`; в typed owner-е это текущее combat поле.
+    pub(crate) const fn set_health(&mut self, value: u32) {
+        self.base_properties.health = if self.combat_properties.maximum_hp < value {
+            self.combat_properties.maximum_hp
+        } else {
+            value
+        };
+    }
+
+    pub(crate) const fn set_mana(&mut self, value: u32) {
+        self.base_properties.mana = if self.combat_properties.maximum_mp < value {
+            self.combat_properties.maximum_mp
+        } else {
+            value
+        };
     }
 
     pub(crate) const fn set_strength(&mut self, value: u32) {
