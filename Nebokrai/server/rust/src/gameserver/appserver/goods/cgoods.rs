@@ -177,6 +177,22 @@ impl CGoods {
             .any(|property| property.property_type == property_type)
     }
 
+    /// Exact `HasAddonPropertyValues` смотрит только catalog addon-values и
+    /// не проверяет instance storage.
+    pub(crate) fn has_addon_property_values(
+        &self,
+        factory: &CGoodsFactory,
+        property_type: i32,
+    ) -> bool {
+        factory
+            .query_goods_base_properties(self.base_properties_index)
+            .is_some_and(|properties| {
+                !properties
+                    .get_addon_property_values(property_type)
+                    .is_empty()
+            })
+    }
+
     /// Exact `CanUpgraded` проверяет catalog type, но сам upgrade marker ищет
     /// только среди instance-addon-ов. Registry fallback здесь не применяется.
     pub(crate) fn can_upgraded(&self, factory: &CGoodsFactory) -> bool {

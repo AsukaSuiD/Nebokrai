@@ -16,9 +16,10 @@
 //! это безопасная замена legacy pointer lifetime/`GarbageCollect`.
 //!
 //! Add/remove/swap сохраняют player facts как явный runtime-вход, partial
-//! timed/AI/package effects и rollback loss. Конкретные player message/skill
-//! callbacks, fairy/battle-fairy и codec ниже остаются RAW до materialization
-//! связанных owners; достигнутое ядро не выдаётся за весь контейнер.
+//! timed/AI/package effects, typed skill/property/message callbacks и rollback
+//! loss. Интеграция этих effects с player dispatcher-ом, fairy/battle-fairy и
+//! codec ниже остаётся RAW до materialization связанных owners; достигнутое
+//! ядро не выдаётся за весь контейнер.
 
 use std::collections::BTreeMap;
 
@@ -30,13 +31,14 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     EQUIP_PLACE_HAND, EQUIP_PLACE_HEAD, EQUIP_PLACE_HEADGEAR, EQUIP_PLACE_JEWELRY,
     EQUIP_PLACE_LING_BAO, EQUIP_PLACE_MANTEAU, EQUIP_PLACE_MEDAL, EQUIP_PLACE_ORNAMENTS,
     EQUIP_PLACE_POSTERIOR, EQUIP_PLACE_TALISMAN, EQUIP_PLACE_WING, GAP_BF_BFEQUIPEMENT,
-    GAP_GOODS_PACKAGE_EXTENTION, GOODS_TYPE_EQUIPMENT,
+    GAP_BF_LEVEL, GAP_GOODS_PACKAGE_EXTENTION, GAP_WEAPON_LEVEL, GOODS_TYPE_EQUIPMENT,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
 
 pub(crate) const EQUIPMENT_COLUMN_LIMIT: u32 = 17;
+pub(crate) const EQUIPMENT_AROUND_UPDATE_MESSAGE_TYPE: u32 = 0x0b_f720;
 const PLAYER_OWNER_TYPE: i32 = 400;
 
 #[repr(u32)]
@@ -154,6 +156,33 @@ pub(crate) struct EquipmentAddRuntimeFacts {
     pub(crate) now: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentAroundUpdate {
+    pub(crate) owner_id: i32,
+    pub(crate) column: EquipmentColumn,
+    pub(crate) added: bool,
+    pub(crate) base_properties_index: u32,
+    pub(crate) weapon_level: u32,
+    /// Add исключает owner-а из around-send, Remove передаёт null exclusion.
+    pub(crate) exclude_owner: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentPlayerAddedEffects {
+    pub(crate) add_war_soul_skill: bool,
+    pub(crate) recompute_properties: bool,
+    pub(crate) around_update: EquipmentAroundUpdate,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentPlayerRemovedEffects {
+    pub(crate) clear_war_soul_status: bool,
+    pub(crate) delete_war_soul_skill: bool,
+    pub(crate) recompute_without_removed_slot: bool,
+    pub(crate) clamp_hp_and_mp: bool,
+    pub(crate) around_update: EquipmentAroundUpdate,
+}
+
 #[must_use = "report содержит обязательные internal/player/listener эффекты"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct EquipmentAddedReport {
@@ -164,7 +193,7 @@ pub(crate) struct EquipmentAddedReport {
     pub(crate) base_properties_index: u32,
     pub(crate) amount: u32,
     pub(crate) partial_effects: EquipmentAddPartialEffects,
-    pub(crate) requires_player_callback: bool,
+    pub(crate) player_effects: Option<EquipmentPlayerAddedEffects>,
     pub(crate) package_extension_delta: u32,
     pub(crate) listeners: Vec<ContainerListenerHandle>,
 }
@@ -207,7 +236,7 @@ pub(crate) struct EquipmentRemovedEvent {
     pub(crate) owner_id: i32,
     pub(crate) column: EquipmentColumn,
     pub(crate) partial_effects: EquipmentRemovePartialEffects,
-    pub(crate) requires_player_callback: bool,
+    pub(crate) player_effects: Option<EquipmentPlayerRemovedEffects>,
     pub(crate) listeners: Vec<ContainerListenerHandle>,
 }
 
@@ -492,9 +521,21 @@ impl CEquipmentContainer {
         let amount = goods.amount();
         let owner_type = self.base.owner_type();
         let owner_id = self.base.owner_id();
-        let requires_player_callback =
-            owner_type == PLAYER_OWNER_TYPE && runtime.owner_player.is_some();
-        let package_extension_delta = if requires_player_callback
+        let player_effects = (owner_type == PLAYER_OWNER_TYPE && runtime.owner_player.is_some())
+            .then(|| EquipmentPlayerAddedEffects {
+                add_war_soul_skill: column == EquipmentColumn::Headgear
+                    && goods.has_addon_property_values(factory, GAP_BF_LEVEL),
+                recompute_properties: true,
+                around_update: EquipmentAroundUpdate {
+                    owner_id,
+                    column,
+                    added: true,
+                    base_properties_index,
+                    weapon_level: goods.addon_property_value(factory, GAP_WEAPON_LEVEL, 1) as u32,
+                    exclude_owner: true,
+                },
+            });
+        let package_extension_delta = if player_effects.is_some()
             && runtime.pack_add_enabled
             && goods.query_attribute(GAP_GOODS_PACKAGE_EXTENTION)
             && goods.addon_property_value(factory, GAP_GOODS_PACKAGE_EXTENTION, 1) == 2
@@ -518,7 +559,7 @@ impl CEquipmentContainer {
             base_properties_index,
             amount,
             partial_effects,
-            requires_player_callback,
+            player_effects,
             package_extension_delta,
             listeners: self.base.base().listeners().to_vec(),
         })
@@ -644,6 +685,7 @@ impl CEquipmentContainer {
     pub(crate) fn remove(
         &mut self,
         goods_id: CGuid,
+        factory: &CGoodsFactory,
         runtime: EquipmentRemoveRuntimeFacts,
     ) -> EquipmentRemoveOutcome {
         let mut partial_effects = EquipmentRemovePartialEffects::default();
@@ -669,17 +711,38 @@ impl CEquipmentContainer {
             .equipment
             .remove(&column)
             .expect("column разрешена непосредственно перед erase");
+        let owner_type = self.base.owner_type();
+        let owner_id = self.base.owner_id();
+        let player_effects = (owner_type == PLAYER_OWNER_TYPE && runtime.owner_player_present)
+            .then(|| {
+                let changes_war_soul = column == EquipmentColumn::Headgear
+                    && goods.has_addon_property_values(factory, GAP_BF_LEVEL);
+                EquipmentPlayerRemovedEffects {
+                    clear_war_soul_status: changes_war_soul,
+                    delete_war_soul_skill: changes_war_soul,
+                    recompute_without_removed_slot: true,
+                    clamp_hp_and_mp: true,
+                    around_update: EquipmentAroundUpdate {
+                        owner_id,
+                        column,
+                        added: false,
+                        base_properties_index: goods.base_properties_index(),
+                        weapon_level: goods.addon_property_value(factory, GAP_WEAPON_LEVEL, 1)
+                            as u32,
+                        exclude_owner: false,
+                    },
+                }
+            });
         EquipmentRemoveOutcome::Removed(EquipmentRemovedReport {
-            goods,
             event: EquipmentRemovedEvent {
-                owner_type: self.base.owner_type(),
-                owner_id: self.base.owner_id(),
+                owner_type,
+                owner_id,
                 column,
                 partial_effects,
-                requires_player_callback: self.base.owner_type() == PLAYER_OWNER_TYPE
-                    && runtime.owner_player_present,
+                player_effects,
                 listeners: self.base.base().listeners().to_vec(),
             },
+            goods,
         })
     }
 
@@ -738,7 +801,7 @@ impl CEquipmentContainer {
         }
 
         let old_goods_id = old_goods.identity().ex_id;
-        let removed_report = match self.remove(old_goods_id, runtime.remove) {
+        let removed_report = match self.remove(old_goods_id, factory, runtime.remove) {
             EquipmentRemoveOutcome::Removed(report) => report,
             failed => return EquipmentSwapOutcome::RemovalFailed(failed),
         };

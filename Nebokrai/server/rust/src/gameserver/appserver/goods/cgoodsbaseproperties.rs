@@ -23,6 +23,7 @@ pub(crate) const GAP_WEAPON_LEVEL: i32 = 0x30;
 pub(crate) const GAP_GEM_TYPE: i32 = 79;
 pub(crate) const GAP_BAOSHI_COLOR: i32 = 139;
 pub(crate) const GAP_DAKONG_1: i32 = 140;
+pub(crate) const GAP_BF_LEVEL: i32 = 150;
 pub(crate) const GAP_BF_GEM: i32 = 177;
 pub(crate) const GAP_BF_BFEQUIPEMENT: i32 = 226;
 pub(crate) const GAP_GOODS_LIFE_TYPE: i32 = 229;
