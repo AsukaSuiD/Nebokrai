@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use parking_lot::RwLock;
-use chrono::Datelike;
+use chrono::{Datelike, Timelike};
 
 use crate::dbaccess::worlddb::dbgoods::TiberiusDbGoods;
 use crate::dbaccess::worlddb::dbcountry::TiberiusDbCountry;
@@ -37,7 +37,12 @@ use crate::dbaccess::worlddb::writelogqueue::WorldWriteLogQueue;
 
 use crate::public::clientresource::DefaultClientResourceOwner;
 use crate::public::dakongxiangqian::CDaKongXiangQian;
+use crate::public::auctionlog::CAuctionLog;
+use crate::public::date::TagTime;
+use crate::public::timer::CTimer;
 use crate::setup::timetoreturn::TimeToReturnCallbacks;
+use crate::setup::timetoreturn::TimeToReturn;
+use crate::setup::godsbattleconf::CGodsBattleConf;
 use crate::setup::cbattlefairyexpconfig::CBattleFairyExpConfig;
 use crate::setup::changebody::CChangeBodyConf;
 use crate::setup::fairyexpconf::CFairyExpConf;
@@ -61,16 +66,35 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
 };
 use crate::worldserver::appworld::player::{CPlayer, PlayerPropertyCoefficients};
 use crate::worldserver::appworld::country::countrywarsys::CountryWarCallbacks;
+use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
+use crate::worldserver::appworld::country::countryparam::CCountryParam;
+use crate::worldserver::appworld::country::countrywarsys::CountryWarSys;
+use crate::worldserver::appworld::goodswarmember::CGoodsWarMember;
+use crate::worldserver::appworld::incrementlog::incrementlog::CIncrementLog;
+use crate::worldserver::appworld::jjcsystem::CJJcSystem;
 use crate::worldserver::appworld::organizingsystem::attackcitysys::AttackCityCallbacks;
+use crate::worldserver::appworld::organizingsystem::attackcitysys::CAttackCitySys;
+use crate::worldserver::appworld::organizingsystem::factionwarsys::CFactionWarSys;
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::FourNationWarCallbacks;
+use crate::worldserver::appworld::organizingsystem::fournationwarsys::CFourNationWarSys;
+use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
+use crate::worldserver::appworld::organizingsystem::organizingparam::COrganizingParam;
 use crate::worldserver::appworld::organizingsystem::villagewarsys::VillageWarCallbacks;
+use crate::worldserver::appworld::organizingsystem::villagewarsys::CVillageWarSys;
+use crate::worldserver::appworld::script::variablelist::CVariableList;
+use crate::worldserver::appworld::skills::skillfactory::CSkillFactory;
+use crate::worldserver::appworld::misc::CopyNumberTimerState;
 use crate::worldserver::appworld::worldregion::WorldRegionResourceContext;
 
 use super::game::{
     CGame, WorldGameDatabaseInitialization, WorldGameDatabaseOwner, WorldGameInitContext,
-    WorldGameInitOperatorNotice, WorldGameInitWorkerKind, WorldPlayerDataLoadOwner,
-    WorldPlayerLoadDataAdapter, WorldReloadContext,
+    WorldGameInitCallbacks, WorldGameInitOperatorNotice, WorldGameInitResult,
+    WorldGameInitWorkerKind, WorldPlayerDataLoadOwner, WorldPlayerLoadDataAdapter,
+    WorldReloadContext,
 };
+use super::honorranks::CHonorRanks;
+use super::playerranks::CPlayerRanks;
+use super::worldserver::{WorldLogLocalTime, WorldLogTextOwner};
 use crate::worldserver::appworld::message::writelogmessage::WorldWriteLogCommand;
 
 /// Стабильные typed-ключи всех callback-ов единственного World timer-owner-а.
@@ -174,6 +198,136 @@ impl WorldTimerCallbacks {
                 end_info: WorldTimerCallback::CountryWarEndInfo,
             },
         }
+    }
+}
+
+/// Долгоживущие domain owners единственного World process.
+///
+/// Они создаются один раз до `CGame::Init`, затем те же экземпляры проходят
+/// MainLoop и Release. Это заменяет process-global singleton pointers, не
+/// создавая второй module graph или копии игровых типов.
+pub(crate) struct WorldProcessDomainOwners {
+    pub(crate) callbacks: WorldTimerCallbacks,
+    pub(crate) jjc: CJJcSystem,
+    pub(crate) gods_battle: CGodsBattleConf,
+    pub(crate) skills: CSkillFactory,
+    pub(crate) time_to_return: TimeToReturn,
+    pub(crate) general_variables: Option<CVariableList>,
+    pub(crate) organizing_parameters: COrganizingParam,
+    pub(crate) attack_city: CAttackCitySys,
+    pub(crate) four_nation_war: CFourNationWarSys,
+    pub(crate) village_war: CVillageWarSys,
+    pub(crate) faction_war: CFactionWarSys,
+    pub(crate) player_ranks: CPlayerRanks,
+    pub(crate) timer: CTimer<WorldTimerCallback>,
+    pub(crate) copy_number_timer: CopyNumberTimerState,
+    pub(crate) organizing: COrganizingCtrl,
+    pub(crate) country_handler: CCountryHandler,
+    pub(crate) country_parameters: CCountryParam,
+    pub(crate) goods_war: CGoodsWarMember,
+    pub(crate) country_war: CountryWarSys,
+    pub(crate) honor_ranks: CHonorRanks,
+    pub(crate) increment_log: CIncrementLog,
+    pub(crate) auction_log: CAuctionLog,
+    pub(crate) log: WorldLogTextOwner,
+}
+
+impl WorldProcessDomainOwners {
+    pub(crate) fn new(start_tick_ms: u32) -> Self {
+        Self {
+            callbacks: WorldTimerCallbacks::new(),
+            jjc: CJJcSystem::new(),
+            gods_battle: Default::default(),
+            skills: Default::default(),
+            time_to_return: TimeToReturn::new(),
+            general_variables: None,
+            organizing_parameters: Default::default(),
+            attack_city: CAttackCitySys::new(),
+            four_nation_war: Default::default(),
+            village_war: CVillageWarSys::new(),
+            faction_war: CFactionWarSys::new(start_tick_ms),
+            player_ranks: Default::default(),
+            timer: CTimer::new(),
+            copy_number_timer: Default::default(),
+            organizing: COrganizingCtrl::with_reached_callback_state(),
+            country_handler: Default::default(),
+            country_parameters: CCountryParam::new(),
+            goods_war: CGoodsWarMember::with_reached_empty_state(),
+            country_war: Default::default(),
+            honor_ranks: Default::default(),
+            increment_log: CIncrementLog::new(),
+            auction_log: Default::default(),
+            log: Default::default(),
+        }
+    }
+
+    pub(crate) async fn initialize_game(
+        &mut self,
+        game: &mut CGame,
+        runtime_directory: &Path,
+        context: &mut WorldProcessInitContext,
+        resources: &mut WorldProcessResources,
+    ) -> WorldGameInitResult<Infallible> {
+        let started_at = context.started_at;
+        let mut get_tick = move || started_at.elapsed().as_millis() as u32;
+        let mut get_log_local_time = || {
+            let now = chrono::Local::now();
+            WorldLogLocalTime {
+                year: now.year() as u16,
+                month: now.month() as u16,
+                day: now.day() as u16,
+                hour: now.hour() as u16,
+                minute: now.minute() as u16,
+                second: now.second() as u16,
+            }
+        };
+        let mut get_timer_local_time = TagTime::local_now;
+        let mut put_log_info = |payload: &[u8]| {
+            eprintln!("WorldServer: {}", String::from_utf8_lossy(payload));
+        };
+        let mut callbacks = WorldGameInitCallbacks {
+            get_tick: &mut get_tick,
+            get_log_local_time: &mut get_log_local_time,
+            get_timer_local_time: &mut get_timer_local_time,
+            put_log_info: &mut put_log_info,
+        };
+        game.init(
+            runtime_directory,
+            context,
+            resources,
+            &mut self.jjc,
+            &mut self.gods_battle,
+            &mut self.skills,
+            &mut self.time_to_return,
+            self.callbacks.time_to_return,
+            &mut self.general_variables,
+            &mut self.organizing_parameters,
+            &mut self.attack_city,
+            self.callbacks.attack_city,
+            &mut self.four_nation_war,
+            self.callbacks.four_nation_war,
+            &mut self.village_war,
+            self.callbacks.village_war,
+            &mut self.faction_war,
+            &mut self.player_ranks,
+            &mut self.timer,
+            &mut self.copy_number_timer,
+            WorldTimerCallback::CopyNumberReset,
+            WorldTimerCallback::OrganizingTax,
+            WorldTimerCallback::PlayerRanks,
+            &mut self.organizing,
+            &mut self.country_handler,
+            &mut self.country_parameters,
+            &mut self.goods_war,
+            &mut self.country_war,
+            self.callbacks.country_war,
+            &mut self.honor_ranks,
+            &mut self.increment_log,
+            &mut self.auction_log,
+            &mut self.log,
+            &mut callbacks,
+        )
+        .await
     }
 }
 
