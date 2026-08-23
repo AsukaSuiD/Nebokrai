@@ -1901,14 +1901,15 @@ pub(crate) enum TiberiusDbMiscRuntimeEvent<'a> {
 /// DB owner не хранит ссылок на `CGame` либо reloadable setup. Поэтому caller
 /// каждый проход передаёт актуальные routing/config owners и не создаёт
 /// расходящуюся копию состояния после reload.
-pub(crate) struct TiberiusDbMiscCallbacks<'a> {
-    pub(crate) transfer_money_interval_ms: &'a mut dyn FnMut() -> i32,
-    pub(crate) current_tick_ms: &'a mut dyn FnMut() -> u32,
-    pub(crate) report_reconnect: &'a mut dyn FnMut(),
-    pub(crate) report_runtime_event: &'a mut dyn FnMut(TiberiusDbMiscRuntimeEvent<'_>),
-    pub(crate) seller_money_after_fee: &'a mut dyn FnMut(&CGoodsNode) -> Option<i32>,
-    pub(crate) gold_coin_index: &'a mut dyn FnMut() -> u32,
-    pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
+pub(crate) struct TiberiusDbMiscCallbacks {
+    pub(crate) transfer_money_interval_ms: Box<dyn FnMut() -> i32>,
+    pub(crate) current_tick_ms: Box<dyn FnMut() -> u32>,
+    pub(crate) report_reconnect: Box<dyn FnMut()>,
+    pub(crate) report_runtime_event:
+        Box<dyn for<'event> FnMut(TiberiusDbMiscRuntimeEvent<'event>)>,
+    pub(crate) seller_money_after_fee: Box<dyn FnMut(&CGoodsNode) -> Option<i32>>,
+    pub(crate) gold_coin_index: Box<dyn FnMut() -> u32>,
+    pub(crate) random: Box<dyn FnMut(i32) -> i32>,
 }
 
 /// Concrete synchronous owner-contract поверх асинхронного Tiberius.
@@ -1917,21 +1918,21 @@ pub(crate) struct TiberiusDbMiscCallbacks<'a> {
 /// multi-thread Tokio runtime `block_in_place + Handle::block_on` сохраняет
 /// этот caller-visible порядок, но отдаёт TDS I/O асинхронному драйверу и не
 /// создаёт второй module graph либо отдельную копию World owners.
-pub(crate) struct TiberiusDbMiscContext<'a> {
+pub(crate) struct TiberiusDbMiscContext {
     runtime: tokio::runtime::Handle,
-    database: &'a mut TiberiusDbMiscDatabase,
-    registry: &'a GoodsBasePropertiesRegistry,
+    database: TiberiusDbMiscDatabase,
+    registry: GoodsBasePropertiesRegistry,
     output: DbMiscOutputPublisher,
-    callbacks: TiberiusDbMiscCallbacks<'a>,
+    callbacks: TiberiusDbMiscCallbacks,
 }
 
-impl<'a> TiberiusDbMiscContext<'a> {
+impl TiberiusDbMiscContext {
     pub(crate) fn new(
         runtime: tokio::runtime::Handle,
-        database: &'a mut TiberiusDbMiscDatabase,
-        registry: &'a GoodsBasePropertiesRegistry,
+        database: TiberiusDbMiscDatabase,
+        registry: GoodsBasePropertiesRegistry,
         output: DbMiscOutputPublisher,
-        callbacks: TiberiusDbMiscCallbacks<'a>,
+        callbacks: TiberiusDbMiscCallbacks,
     ) -> Self {
         Self {
             runtime,
@@ -1963,7 +1964,7 @@ impl<'a> TiberiusDbMiscContext<'a> {
     }
 }
 
-impl DbMiscContext for TiberiusDbMiscContext<'_> {
+impl DbMiscContext for TiberiusDbMiscContext {
     fn transfer_money_interval_ms(&mut self) -> i32 {
         (self.callbacks.transfer_money_interval_ms)()
     }
@@ -2015,7 +2016,7 @@ impl DbMiscContext for TiberiusDbMiscContext<'_> {
         };
         let runtime = self.runtime.clone();
         let writer = &self.database.writer;
-        let registry = self.registry;
+        let registry = &self.registry;
         let outcome = tokio::task::block_in_place(|| {
             runtime.block_on(writer.insert_item_to_db(connection, goods, registry))
         });
@@ -2117,7 +2118,7 @@ impl DbMiscContext for TiberiusDbMiscContext<'_> {
     fn load_owner_auction_goods(&mut self, owner_id: i32, state: i32, limit: i32) -> i32 {
         let runtime = self.runtime.clone();
         let reader = &self.database.reader;
-        let registry = self.registry;
+        let registry = &self.registry;
         let outcome = tokio::task::block_in_place(|| {
             runtime.block_on(reader.load_goods_by_owner_id(
                 owner_id,
@@ -2144,7 +2145,7 @@ impl DbMiscContext for TiberiusDbMiscContext<'_> {
     fn load_owner_auction_money(&mut self, owner_id: i32, money_limit: i32) {
         let runtime = self.runtime.clone();
         let reader = &self.database.reader;
-        let registry = self.registry;
+        let registry = &self.registry;
         let gold_coin_index = (self.callbacks.gold_coin_index)();
         let random = &mut self.callbacks.random;
         let outcome = tokio::task::block_in_place(|| {
@@ -2153,7 +2154,7 @@ impl DbMiscContext for TiberiusDbMiscContext<'_> {
                 money_limit,
                 gold_coin_index,
                 registry,
-                *random,
+                random,
             ))
         });
         match outcome {
