@@ -36,9 +36,9 @@
 //! сохраняет немедленный World request. Tokio/socket types заменяют ненаблюдаемые
 //! `CBaseMessage::Initial` и `CMySocket::MySocketInit`; следующий незакрытый
 //! шаг — resource/runtime owners после завершённого `Init`.
-//! QuestSystem, CountryParam, CountryHandler и CEmotion process singletons
-//! хранятся owned-полями `CGame`, сохраняя exact startup wire и runtime
-//! lookup-контракты без отдельных global allocations.
+//! QuestSystem, CountryParam, CountryHandler, CountryWarSys и CEmotion process
+//! singletons хранятся owned-полями `CGame`, сохраняя exact startup wire и
+//! runtime lookup-контракты без отдельных global allocations.
 //! `with_send_state/register_*/attach_*` являются явной assembly-границей
 //! baseline и не снимают их псевдокод. Network setup передаётся отдельной
 //! post-`LoadSetup*` проекцией. Windows thread handles заменены owned Tokio
@@ -61,6 +61,7 @@ use rustix::system::uname;
 
 use crate::gameserver::appserver::country::countryhandler::CCountryHandler;
 use crate::gameserver::appserver::country::countryparam::CCountryParam;
+use crate::gameserver::appserver::country::countrywarsys::CountryWarSys;
 use crate::gameserver::appserver::goods::cbattlefairyproperty::CBattleFairyProperty;
 use crate::gameserver::appserver::goodswarmember::CGoodsWarMember;
 use crate::gameserver::appserver::message::sequencestring::{
@@ -739,6 +740,7 @@ pub(crate) struct CGame {
     quest_system: CQuestSystem,
     country_param: CCountryParam,
     country_handler: CCountryHandler,
+    country_war_sys: CountryWarSys,
     emotion: CEmotion,
     region_setup: CRegionSetup,
     hit_level_setup: CHitLevelSetup,
@@ -800,6 +802,7 @@ impl CGame {
             quest_system: CQuestSystem::default(),
             country_param: CCountryParam::default(),
             country_handler: CCountryHandler::default(),
+            country_war_sys: CountryWarSys::default(),
             emotion: CEmotion::default(),
             region_setup: CRegionSetup::default(),
             hit_level_setup: CHitLevelSetup::default(),
@@ -1122,6 +1125,14 @@ impl CGame {
 
     pub(crate) const fn country_handler_mut(&mut self) -> &mut CCountryHandler {
         &mut self.country_handler
+    }
+
+    pub(crate) const fn country_war_sys(&self) -> &CountryWarSys {
+        &self.country_war_sys
+    }
+
+    pub(crate) const fn country_war_sys_mut(&mut self) -> &mut CountryWarSys {
+        &mut self.country_war_sys
     }
 
     pub(crate) const fn emotion(&self) -> &CEmotion {

@@ -1,9 +1,7 @@
 //! GameServer-владелец country-war side state `CountryWarSys`.
 //!
-//! Constructor `0x000EBF60`, snapshot decoder `0x000EBD60`, side queries
-//! `0x000EB700..0x000EB870`, region lookup/init `0x000EBE10/0x000EC010` и
-//! writer `update_apply_war` `0x000EC0B0` и phase chain
-//! `0x000EC120..0x000EC770` имеют статус `IMPLEMENTED`; исходник
+//! Восстановлены constructor, snapshot decoder, side queries, region
+//! lookup/init, `update_apply_war`, phase и victory chains; исходник
 //! `country/countrywarsys.cpp`, точная пара
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`. Layout
 //! `CountryWarRegion { defend:i32, attack:i32, clear:bool+padding }`, map-order,
@@ -24,16 +22,16 @@
 //! сбрасывает три global-флага и стороны каждой записи, clear вызывает готовый
 //! region owner для всех записей. Timeout после callback читает low byte обеих
 //! сторон именно из region и обнуляет соответствующие country results.
-//! Vtable slots `+0x138..+0x150`, включая совпадающие `OnTimeOut/OnEnd` RVA,
+//! Vtable slots `+0x138..+0x150`, включая общий callback `OnTimeOut/OnEnd`,
 //! подтверждены точным EXE.
 //!
-//! Victory chain `on_flag_destroy` RVA `0x000EBE60` сначала ищет war-region по
+//! Victory chain `on_flag_destroy` сначала ищет war-region по
 //! входной стране и без найденного non-null region не делает ничего. Затем
 //! region callback гасит war-state, входная страна получает result `2`, а
 //! найденная через `GetOtherCountry` — result `1`; обе country-map keys
 //! усекаются до low byte. Потерянные декомпилятором stack-присваивания и точный
-//! порядок двух writes подтверждены дизассемблированием. Singleton allocation
-//! остаётся сырой технической поверхностью.
+//! порядок двух writes подтверждены дизассемблированием. Process singleton
+//! allocation заменён owned-полем `CGame`.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -94,6 +92,13 @@ pub(crate) trait CountryWarRegionContext {
 
     /// Вызывает virtual `CServerRegion::UpdateContendPlayer()` slot `+0x104`.
     fn update_contend_player(&mut self, region: Self::Region);
+}
+
+pub(crate) trait CountryWarStartupContext {
+    type Region: Copy;
+
+    /// Ищет только non-null entry в `CGame::s_mapRegion`, без proxy fallback.
+    fn find_country_region(&mut self, region_id: i32) -> Option<Self::Region>;
 }
 
 pub(crate) trait CountryWarPhaseContext {
@@ -216,13 +221,13 @@ impl CountryWarSys {
             .unwrap_or(-1)
     }
 
-    pub(crate) fn init_country_region_state<Context: CountryWarRegionContext>(
+    pub(crate) fn init_country_region_state<Context: CountryWarStartupContext>(
         &self,
         context: &mut Context,
     ) {
         for &region_id in self.war_regions.keys() {
-            // VERIFIED_DISASSEMBLY RVA 0x000EC010: успешный `find` сопровождает
-            // `operator[]`, но result отбрасывается и region не мутируется.
+            // Успешный `find` сопровождает `operator[]`, но result
+            // отбрасывается и region не мутируется.
             let _ = context.find_country_region(region_id);
         }
     }
@@ -347,8 +352,8 @@ impl CountryWarSys {
             state.defend_country = 0;
             state.attack_country = 0;
             if let Some(region) = context.find_country_region(region_id) {
-                // VERIFIED_DISASSEMBLY: vtable slots `+0x14C` и `+0x150`
-                // у ServerCountryRegion оба указывают на RVA `0x001CAC60`.
+                // Vtable slots `+0x14C` и `+0x150` у ServerCountryRegion
+                // указывают на один callback.
                 context.on_war_end(region, region_id);
             }
         }
@@ -374,8 +379,8 @@ impl CountryWarSys {
 
         context.on_flag_destroy(region, region_id, country);
         let other_country = self.get_other_country(country);
-        // VERIFIED_DISASSEMBLY RVA 0x000EBE60: сначала low byte входного
-        // country получает `2`, затем low byte GetOtherCountry получает `1`.
+        // Сначала low byte входного country получает `2`, затем low byte
+        // GetOtherCountry получает `1`.
         context.set_country_war_result(country as u8, 2);
         context.set_country_war_result(other_country as u8, 1);
     }
@@ -491,230 +496,5 @@ fn read_country_war_array<const N: usize>(
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: CountryWarSys::get_war_region
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:316
-// RVA: 0x000EB700
-//
-// Реализовано выше в связной country battle-side цепочке.
-//
-// ============================================================================
-// FUNCTION: CountryWarSys::is_already_declar
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:216
-// RVA: 0x000EB770
-//
-// Реализовано выше в связной country battle-side цепочке.
-//
-// ============================================================================
-// FUNCTION: CountryWarSys::get_war_region
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:345
-// RVA: 0x000EB7C0
-//
-// Реализовано выше в связной country battle-side цепочке.
-//
-// ============================================================================
-// FUNCTION: CountryWarSys::GetOtherCountry
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:356
-// RVA: 0x000EB810
-//
-// Реализовано выше в связной country battle-side цепочке.
-//
-// ============================================================================
-// FUNCTION: CountryWarSys::get_war_camp
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:372
-// RVA: 0x000EB870
-//
-// Реализовано выше в связной country battle-side цепочке.
-//
-// ============================================================================
-// FUNCTION: CountryWarSys::DecordFromByteArray
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:41
-// RVA: 0x000EBD60
-//
-// Реализовано выше в связной country battle-side цепочке.
-//
-// ============================================================================
-// FUNCTION: CountryWarSys::get_region
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:339
-// RVA: 0x000EBE10
-//
-// Реализовано выше в связной country battle-side цепочке.
-//
-// ============================================================================
-// FUNCTION: CountryWarSys::on_flag_destroy
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:388
-// RVA: 0x000EBE60
-//
-// Реализовано выше в связной country victory chain; потерянные stack-locals
-// и порядок result writes имеют статус VERIFIED_DISASSEMBLY.
-//
-
-// ============================================================================
-// FUNCTION: CountryWarSys::CountryWarSys
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:20
-// RVA: 0x000EBF60
-//
-// Реализовано выше в связной country battle-side цепочке.
-//
-// ============================================================================
-// FUNCTION: CountryWarSys::get_instance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:30
-// RVA: 0x000EBFA0
-// ADDRESS: 004ebfa0
-// PROTOTYPE: CountryWarSys * __cdecl get_instance(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CountryWarSys::init_country_region_state
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:58
-// RVA: 0x000EC010
-//
-// Реализовано выше в связной country battle-side цепочке.
-//
-// ============================================================================
-// FUNCTION: CountryWarSys::update_apply_war
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:71
-// RVA: 0x000EC0B0
-//
-// Реализовано выше в связной country battle-side цепочке.
-//
-// ============================================================================
-// FUNCTION: CountryWarSys::on_war_start
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:94
-// RVA: 0x000EC120
-//
-// Реализовано выше в связной country phase chain.
-//
-// ============================================================================
-// FUNCTION: CountryWarSys::on_war_timeout
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:108
-// RVA: 0x000EC1E0
-//
-// Реализовано выше в связной country phase chain.
-//
-// ============================================================================
-// FUNCTION: CountryWarSys::on_war_end
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:129
-// RVA: 0x000EC350
-//
-// Реализовано выше в связной country phase chain.
-//
-// ============================================================================
-// FUNCTION: CountryWarSys::on_war_clear
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:144
-// RVA: 0x000EC410
-//
-// Реализовано выше в связной country phase chain.
-//
-// ============================================================================
-// FUNCTION: CountryWarSys::on_declare_begin
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:157
-// RVA: 0x000EC4D0
-//
-// Реализовано выше в связной country phase chain.
-//
-// ============================================================================
-// FUNCTION: CountryWarSys::on_declare_end
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:175
-// RVA: 0x000EC5F0
-//
-// Реализовано выше в связной country phase chain.
-//
-// ============================================================================
-// FUNCTION: CountryWarSys::on_prepare_begin
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:189
-// RVA: 0x000EC6B0
-//
-// Реализовано выше в связной country phase chain.
-//
-// ============================================================================
-// FUNCTION: CountryWarSys::on_prepare_end
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:201
-// RVA: 0x000EC770
-//
-// Реализовано выше в связной country phase chain.
-//
-// ============================================================================
-// FUNCTION: get_country_war_sys
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\countrywarsys.cpp:404
-// RVA: 0x000EC830
-// ADDRESS: 004ec830
-// PROTOTYPE: CountryWarSys * __cdecl get_country_war_sys(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

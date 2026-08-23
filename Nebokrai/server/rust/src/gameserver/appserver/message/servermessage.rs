@@ -54,6 +54,9 @@ use crate::gameserver::appserver::country::countryhandler::{
 use crate::gameserver::appserver::country::countryparam::{
     CountryParamDecodeReport, CountryParamInputBlock,
 };
+use crate::gameserver::appserver::country::countrywarsys::{
+    CountryWarDecodeError, CountryWarStartupContext, CountryWarSys,
+};
 use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyComposeDecodeError;
 use crate::gameserver::gameserver::game::{CGame, GameNetworkInitializationError};
 use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
@@ -959,6 +962,9 @@ pub(crate) trait WarScheduleSetupContext {
 
     fn set_region_country(&mut self, region: Self::Region, country: u8);
 
+    /// Ищет только non-null country region без proxy fallback.
+    fn find_country_region(&mut self, region_id: i32) -> Option<Self::Region>;
+
     fn add_log_text(&mut self, text: &'static str);
 }
 
@@ -966,6 +972,7 @@ pub(crate) trait WarScheduleSetupContext {
 pub(crate) enum WarScheduleSetupError {
     AttackCity(AttackCityDecodeError),
     Village(VillageWarDecodeError),
+    Country(CountryWarDecodeError),
 }
 
 impl fmt::Display for WarScheduleSetupError {
@@ -973,6 +980,7 @@ impl fmt::Display for WarScheduleSetupError {
         match self {
             Self::AttackCity(error) => write!(formatter, "AttackCity snapshot: {error}"),
             Self::Village(error) => write!(formatter, "Village snapshot: {error}"),
+            Self::Country(error) => write!(formatter, "CountryWar snapshot: {error}"),
         }
     }
 }
@@ -982,17 +990,19 @@ impl Error for WarScheduleSetupError {
         match self {
             Self::AttackCity(error) => Some(error),
             Self::Village(error) => Some(error),
+            Self::Country(error) => Some(error),
         }
     }
 }
 
-/// Обрабатывает только доказанные schedule selectors `0x1B/0x1C`.
-pub(crate) fn dispatch_war_schedule_setup<Context: WarScheduleSetupContext>(
+/// Обрабатывает доказанные war startup selectors `0x1B/0x1C/0x1F`.
+pub(crate) fn dispatch_war_startup_setup<Context: WarScheduleSetupContext>(
     selector: i32,
     payload: &[u8],
     cursor: &mut usize,
     attack_city_sys: &mut CAttackCitySys,
     village_war_sys: &mut CVillageWarSys,
+    country_war_sys: &mut CountryWarSys,
     context: &mut Context,
 ) -> Result<bool, WarScheduleSetupError> {
     match selector {
@@ -1016,6 +1026,17 @@ pub(crate) fn dispatch_war_schedule_setup<Context: WarScheduleSetupContext>(
                 village_war_sys.init_village_region_state(&mut adapter);
             }
             context.add_log_text("Initial SI_VILLAGEWARSYS_SETUP...OK!");
+            Ok(true)
+        }
+        0x1f => {
+            country_war_sys
+                .decord_from_byte_array(payload, cursor)
+                .map_err(WarScheduleSetupError::Country)?;
+            {
+                let mut adapter = CountryWarContextAdapter(context);
+                country_war_sys.init_country_region_state(&mut adapter);
+            }
+            context.add_log_text("Initial SI_COUNTRYWAR...OK!");
             Ok(true)
         }
         _ => Ok(false),
@@ -1059,6 +1080,18 @@ impl<Context: WarScheduleSetupContext> VillageWarRegionContext
 
     fn set_region_country(&mut self, region: Self::Region, country: u8) {
         self.0.set_region_country(region, country);
+    }
+}
+
+struct CountryWarContextAdapter<'a, Context>(&'a mut Context);
+
+impl<Context: WarScheduleSetupContext> CountryWarStartupContext
+    for CountryWarContextAdapter<'_, Context>
+{
+    type Region = Context::Region;
+
+    fn find_country_region(&mut self, region_id: i32) -> Option<Self::Region> {
+        self.0.find_country_region(region_id)
     }
 }
 
