@@ -61,6 +61,11 @@
 //! Equipment add/remove проведены через canonical player registry до war-soul
 //! state/skills, property callbacks, remove vitals clamp и typed around
 //! `0xBF720`; полный virtual property owner остаётся caller adapter-ом.
+//! Один `MainLoop` turn сохраняет static DWORD clocks как owned process state,
+//! exact Script→AI→Message→Session→NetSession→Auction order, optional profile
+//! reads, refresh/watch gates и wrapping pacing. Ещё не материализованные
+//! concrete owner-ы подключаются через обязательный runtime trait; message
+//! dispatch уже исполняется живым `CGame`.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
@@ -811,6 +816,90 @@ pub(crate) enum ServerRegionOwner {
     GodsBattle(CServerGodsBattleRegion),
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GameMainLoopProfile {
+    pub(crate) script_ms: u32,
+    pub(crate) ai_ms: u32,
+    pub(crate) message_ms: u32,
+    pub(crate) session_ms: u32,
+    pub(crate) net_session_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameMainLoopRuntimeLog {
+    Compact {
+        elapsed_ms: u32,
+        ai_calls: i32,
+    },
+    Profiled {
+        elapsed_ms: u32,
+        ai_calls: i32,
+        profile: GameMainLoopProfile,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameMainLoopStage {
+    RefreshInfo,
+    RuntimeLog,
+    Script,
+    Ai,
+    Message,
+    Session,
+    NetSession,
+    Auction,
+    Wait { duration_ms: u32 },
+    LagWarning { resync_tick_ms: u32 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameMainLoopOutcome {
+    Continue,
+    ExitRequested,
+}
+
+#[must_use = "MainLoop report сохраняет ordering, pacing и legacy return"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameMainLoopReport {
+    pub(crate) outcome: GameMainLoopOutcome,
+    pub(crate) return_value: i32,
+    pub(crate) sampled_tick_ms: u32,
+    pub(crate) ai_tick: i32,
+    pub(crate) stages: Vec<GameMainLoopStage>,
+    pub(crate) next_deadline_ms: Option<u32>,
+    pub(crate) signed_lag_ms: Option<i32>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct GameMainLoopState {
+    initialized: bool,
+    current_tick_ms: u32,
+    runtime_log_tick_ms: u32,
+    refresh_info_tick_ms: u32,
+    calls_since_runtime_log: i32,
+    ai_tick: i32,
+    profile: GameMainLoopProfile,
+    pacing_initialized: bool,
+    pacing_deadline_ms: u32,
+}
+
+/// Concrete Script/AI/session/net/auction owners подключаются сюда по мере их
+/// материализации; message routing уже исполняется самим `CGame`.
+pub(crate) trait GameMainLoopRuntime: GameMessageHandlers {
+    fn exit_requested(&self) -> bool;
+    fn tick_interval_ms(&self) -> u32;
+    fn get_tick_ms(&mut self) -> u32;
+    fn refresh_info_text(&mut self, game: &CGame);
+    fn add_runtime_log(&mut self, log: GameMainLoopRuntimeLog);
+    fn script_loop(&mut self, game: &mut CGame);
+    fn ai(&mut self, game: &mut CGame);
+    fn session_factory_ai(&mut self, game: &mut CGame);
+    fn run_net_sessions(&mut self, game: &mut CGame);
+    fn run_auction(&mut self, game: &mut CGame);
+    fn wait(&mut self, duration_ms: u32);
+    fn output_debug(&mut self, message: &'static str);
+}
+
 impl ServerRegionOwner {
     pub(crate) const fn base(&self) -> &CServerRegion {
         match self {
@@ -919,6 +1008,7 @@ pub(crate) struct CGame {
     initial_total_monsters: i32,
     initial_total_npcs: i32,
     team_session_ids: BTreeMap<u32, i32>,
+    main_loop_state: GameMainLoopState,
 }
 
 impl CGame {
@@ -997,6 +1087,7 @@ impl CGame {
             initial_total_monsters: 0,
             initial_total_npcs: 0,
             team_session_ids: BTreeMap::new(),
+            main_loop_state: GameMainLoopState::default(),
         }
     }
 
@@ -2351,6 +2442,165 @@ impl CGame {
             .map(|player| player.refresh_battle_fairy_death(factory))
     }
 
+    /// Один exact `CGame::MainLoop` turn. Wrapping DWORD clocks, strict
+    /// interval comparisons, profiling reads и pacing deadline сохраняют
+    /// наблюдаемый Win32 порядок; wait заменён platform callback-ом.
+    pub(crate) fn main_loop<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        runtime: &mut Runtime,
+    ) -> GameMainLoopReport {
+        let mut state = self.main_loop_state;
+        if !state.initialized {
+            state.current_tick_ms = runtime.get_tick_ms();
+            state.runtime_log_tick_ms = state.current_tick_ms;
+            state.refresh_info_tick_ms = state.current_tick_ms;
+            state.initialized = true;
+        }
+
+        state.current_tick_ms = runtime.get_tick_ms();
+        state.calls_since_runtime_log = state.calls_since_runtime_log.wrapping_add(1);
+        let mut stages = Vec::new();
+
+        let refresh_elapsed = state
+            .current_tick_ms
+            .wrapping_sub(state.refresh_info_tick_ms);
+        if self.setup.refresh_info_time_ms < refresh_elapsed {
+            state.refresh_info_tick_ms = state.current_tick_ms;
+            runtime.refresh_info_text(self);
+            stages.push(GameMainLoopStage::RefreshInfo);
+        }
+
+        let runtime_elapsed = state
+            .current_tick_ms
+            .wrapping_sub(state.runtime_log_tick_ms);
+        if self.setup.watch_runtime_time_ms < runtime_elapsed {
+            let log = if self.setup.watch_runtime_info {
+                let profile = state.profile;
+                state.profile = GameMainLoopProfile::default();
+                GameMainLoopRuntimeLog::Profiled {
+                    elapsed_ms: runtime_elapsed,
+                    ai_calls: state.calls_since_runtime_log,
+                    profile,
+                }
+            } else {
+                GameMainLoopRuntimeLog::Compact {
+                    elapsed_ms: runtime_elapsed,
+                    ai_calls: state.calls_since_runtime_log,
+                }
+            };
+            runtime.add_runtime_log(log);
+            stages.push(GameMainLoopStage::RuntimeLog);
+            state.calls_since_runtime_log = 0;
+            state.runtime_log_tick_ms = state.current_tick_ms;
+        }
+
+        if runtime.exit_requested() {
+            self.main_loop_state = state;
+            return GameMainLoopReport {
+                outcome: GameMainLoopOutcome::ExitRequested,
+                return_value: 0,
+                sampled_tick_ms: state.current_tick_ms,
+                ai_tick: state.ai_tick,
+                stages,
+                next_deadline_ms: state.pacing_initialized.then_some(state.pacing_deadline_ms),
+                signed_lag_ms: None,
+            };
+        }
+
+        state.ai_tick = state.ai_tick.wrapping_add(1);
+        if self.setup.watch_runtime_info {
+            let started = runtime.get_tick_ms();
+            runtime.script_loop(self);
+            state.profile.script_ms = state
+                .profile
+                .script_ms
+                .wrapping_add(runtime.get_tick_ms().wrapping_sub(started));
+            stages.push(GameMainLoopStage::Script);
+
+            let started = runtime.get_tick_ms();
+            runtime.ai(self);
+            state.profile.ai_ms = state
+                .profile
+                .ai_ms
+                .wrapping_add(runtime.get_tick_ms().wrapping_sub(started));
+            stages.push(GameMainLoopStage::Ai);
+
+            let started = runtime.get_tick_ms();
+            let _legacy_result = self.process_messages(runtime);
+            state.profile.message_ms = state
+                .profile
+                .message_ms
+                .wrapping_add(runtime.get_tick_ms().wrapping_sub(started));
+            stages.push(GameMainLoopStage::Message);
+
+            let started = runtime.get_tick_ms();
+            runtime.session_factory_ai(self);
+            state.profile.session_ms = state
+                .profile
+                .session_ms
+                .wrapping_add(runtime.get_tick_ms().wrapping_sub(started));
+            stages.push(GameMainLoopStage::Session);
+
+            let started = runtime.get_tick_ms();
+            runtime.run_net_sessions(self);
+            state.profile.net_session_ms = state
+                .profile
+                .net_session_ms
+                .wrapping_add(runtime.get_tick_ms().wrapping_sub(started));
+            stages.push(GameMainLoopStage::NetSession);
+        } else {
+            runtime.script_loop(self);
+            stages.push(GameMainLoopStage::Script);
+            runtime.ai(self);
+            stages.push(GameMainLoopStage::Ai);
+            let _legacy_result = self.process_messages(runtime);
+            stages.push(GameMainLoopStage::Message);
+            runtime.session_factory_ai(self);
+            stages.push(GameMainLoopStage::Session);
+            runtime.run_net_sessions(self);
+            stages.push(GameMainLoopStage::NetSession);
+        }
+
+        runtime.run_auction(self);
+        stages.push(GameMainLoopStage::Auction);
+
+        if !state.pacing_initialized {
+            state.pacing_deadline_ms = runtime.get_tick_ms();
+            state.pacing_initialized = true;
+        }
+        let pacing_tick_ms = runtime.get_tick_ms();
+        state.current_tick_ms = pacing_tick_ms;
+        let interval_ms = runtime.tick_interval_ms();
+        if pacing_tick_ms.wrapping_sub(state.pacing_deadline_ms) < interval_ms {
+            let duration_ms = state
+                .pacing_deadline_ms
+                .wrapping_sub(pacing_tick_ms)
+                .wrapping_add(interval_ms);
+            runtime.wait(duration_ms);
+            stages.push(GameMainLoopStage::Wait { duration_ms });
+        }
+
+        state.pacing_deadline_ms = state.pacing_deadline_ms.wrapping_add(interval_ms);
+        let signed_lag_ms = pacing_tick_ms.wrapping_sub(state.pacing_deadline_ms) as i32;
+        if 1_000 < signed_lag_ms {
+            runtime.output_debug("warning!!! 1 second not call AI()\n");
+            let resync_tick_ms = runtime.get_tick_ms();
+            state.pacing_deadline_ms = resync_tick_ms;
+            stages.push(GameMainLoopStage::LagWarning { resync_tick_ms });
+        }
+
+        self.main_loop_state = state;
+        GameMainLoopReport {
+            outcome: GameMainLoopOutcome::Continue,
+            return_value: 1,
+            sampled_tick_ms: pacing_tick_ms,
+            ai_tick: state.ai_tick,
+            stages,
+            next_deadline_ms: Some(state.pacing_deadline_ms),
+            signed_lag_ms: Some(signed_lag_ms),
+        }
+    }
+
     /// Исполняет один исходный snapshot входящих FIFO в порядке WS, BS, GS.
     pub(crate) fn process_messages(&mut self, handlers: &mut dyn GameMessageHandlers) -> i32 {
         if let Some(client) = &self.world_client {
@@ -3199,20 +3449,6 @@ impl ShapeResolver for CGame {
 // IMPLEMENTED: `CreateConnectWorldThread` RVA `0x0000BDA0` и
 // `CreateConnectBillingThread` RVA `0x0000BE10` материализованы выше как owned
 // Tokio tasks; начальный stop/join обеих задач из `Release` также перенесён.
-
-// ============================================================================
-// FUNCTION: CGame::MainLoop
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:827
-// RVA: 0x0000BE80
-// ADDRESS: 0040be80
-// PROTOTYPE: int __thiscall MainLoop(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: GameThreadFunc
