@@ -2,8 +2,8 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/gmmessage.cpp` подтверждают
-//! ветви `0x7FC0B/0x7FC0C/0x7FC0D/0x7FC0E/0x7FC0F`: requester ID читается до
-//! switch,
+//! ветви `0x7FC0B/0x7FC0C/0x7FC0D/0x7FC0E/0x7FC0F/0x7FC13`: requester ID
+//! читается до switch,
 //! silence duration нормализуется к минимуму `1`, player map
 //! обходится дважды в signed ID-order, а ответы `0x5FF0D/0x5FF10`
 //! уходят WorldServer. Адресный `0x7FC0F` сохраняет length guards,
@@ -15,6 +15,8 @@
 //! подтверждённые EXE-вызовом и shipped read-only language resource аргументы
 //! `%s/%d/%s`. Safe `Vec` заменяет raw `char[512]`; неизвестный format
 //! specifier не воспроизводит vararg/buffer UB, а остаётся typed boundary.
+//! Country broadcast `0x7FC13` сохраняет unsigned-long/byte compare,
+//! signed player ID-order и отдельный `SendToPlayer` для каждого адресата.
 //! Эти цепочки имеют статус `IMPLEMENTED`.
 //! `Vec` заменяет raw allocation; поле declared capacity сохраняет
 //! исходные `sum(name_len + 2) + 0x40`, включая возможное
@@ -29,6 +31,7 @@ const GM_REQUESTER_FEEDBACK_MESSAGE: i32 = 0x0007_FC0C;
 const GM_BROADCAST_MESSAGE: i32 = 0x0007_FC0D;
 const GM_QUERY_SILENCE_MESSAGE: i32 = 0x0007_FC0E;
 const GM_PRIVATE_NOTICE_MESSAGE: i32 = 0x0007_FC0F;
+const GM_COUNTRY_BROADCAST_MESSAGE: i32 = 0x0007_FC13;
 const GM_SET_SILENCE_RESPONSE: i32 = 0x0005_FF0D;
 const GM_QUERY_SILENCE_RESPONSE: i32 = 0x0005_FF10;
 const PLAYER_SYSTEM_MESSAGE: i32 = 0x000B_F806;
@@ -51,6 +54,10 @@ pub(crate) enum GmMessageError {
     MissingFeedbackOutcome,
     MissingFeedbackText,
     UnsupportedFeedbackFormat,
+    MissingCountryBroadcastText,
+    MissingCountry,
+    MissingCountryBroadcastFirstField,
+    MissingCountryBroadcastSecondField,
     MissingBroadcastText,
     MissingBroadcastFirstField,
     MissingBroadcastSecondField,
@@ -110,6 +117,14 @@ pub(crate) enum GmMessageReport {
         formatted_text: Vec<u8>,
         delivery: i32,
     },
+    CountryBroadcast {
+        requester_id: i32,
+        country: u32,
+        first_field: i32,
+        second_field: i32,
+        text: Vec<u8>,
+        deliveries: Vec<(i32, i32)>,
+    },
 }
 
 /// Материализует связанные silence, broadcast и direct-notice ветви `OnGMMessage`.
@@ -127,6 +142,7 @@ pub(crate) fn dispatch_gm_message(
             | GM_BROADCAST_MESSAGE
             | GM_QUERY_SILENCE_MESSAGE
             | GM_PRIVATE_NOTICE_MESSAGE
+            | GM_COUNTRY_BROADCAST_MESSAGE
     ) {
         return None;
     }
@@ -207,6 +223,43 @@ pub(crate) fn dispatch_gm_message(
             string_id,
             formatted_text,
             delivery,
+        }));
+    }
+
+    if message_type == GM_COUNTRY_BROADCAST_MESSAGE {
+        let Some(text) = message.base_mut().get_str_bytes(GM_LEGACY_TEXT_LIMIT) else {
+            return Some(Err(GmMessageError::MissingCountryBroadcastText));
+        };
+        let Some(country) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingCountry));
+        };
+        let Some(first_field) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingCountryBroadcastFirstField));
+        };
+        let Some(second_field) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingCountryBroadcastSecondField));
+        };
+        let mut response = CMessage::new(PLAYER_SYSTEM_MESSAGE);
+        response.add_long(first_field);
+        response.add_long(second_field);
+        add_legacy_c_string(&mut response, &text);
+        let deliveries = game
+            .player_ids_in_country(country as u32)
+            .into_iter()
+            .map(|player_id| {
+                (
+                    player_id,
+                    response.send_to_player(game.net_server(), player_id),
+                )
+            })
+            .collect();
+        return Some(Ok(GmMessageReport::CountryBroadcast {
+            requester_id,
+            country: country as u32,
+            first_field,
+            second_field,
+            text,
+            deliveries,
         }));
     }
 

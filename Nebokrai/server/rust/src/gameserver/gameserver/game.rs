@@ -87,6 +87,8 @@
 //! выбирает один из двух player wire и публикует его через `SendAll`.
 //! Requester-localized `0x7FC0C` безопасно сохраняет подтверждённый
 //! `GS0033/GS0034` `%s/%d/%s` contract и адресный `0xBF806` результат.
+//! Country-filtered `0x7FC13` обходит ту же canonical player map в signed
+//! ID-order и адресно публикует `0xBF806` каждому совпавшему country byte.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
@@ -2496,6 +2498,17 @@ impl CGame {
 
     pub(crate) fn find_player(&self, player_id: i32) -> Option<&CPlayer> {
         self.players.get(&player_id)
+    }
+
+    /// Exact recipient pass `OnGMMessage 0x7FC13`: unsigned `long` country
+    /// сравнивается с promoted player byte, обход сохраняет signed ID-order.
+    pub(crate) fn player_ids_in_country(&self, country: u32) -> Vec<i32> {
+        self.players
+            .iter()
+            .filter_map(|(player_id, player)| {
+                (u32::from(player.country()) == country).then_some(*player_id)
+            })
+            .collect()
     }
 
     /// Exact `FindPlayer(char const*)`: обходит canonical player map по
