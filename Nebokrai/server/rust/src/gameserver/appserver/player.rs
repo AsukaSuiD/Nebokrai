@@ -71,6 +71,10 @@
 //! recall/died флаги нулевой по HP equipped fairy, затем вызывает
 //! `PropertiesChanged`. Оригинал в этой ветви не чистит stale area-map entry и
 //! не посылает status broadcast; оба отсутствующих side effect сохранены.
+//! `CEquipmentContainer::OnObjectRemoved` player-tail связывает снятие
+//! headgear с exact `SetWarSoulStaus(0)`, девятью skill detach, пересчётом
+//! свойств при уже отсутствующем slot-е, HP/MP clamp и `0xBF720`. Полный
+//! virtual property owner остаётся injected callback-границей.
 
 use super::area::WarSoulPoint;
 use super::container::cbattlefairycontainer::{
@@ -78,7 +82,10 @@ use super::container::cbattlefairycontainer::{
     BattleFairyContainerAddOutcome, BattleFairyDefaultGoodsUpdate, BattleFairyDefaultSkill,
     BattleFairyPropertyAddEffect, BattleFairyUpgradeConsumedGem, CBattleFairyContainer,
 };
-use super::container::cequipmentcontainer::CEquipmentContainer;
+use super::container::cequipmentcontainer::{
+    CEquipmentContainer, EquipmentAroundUpdate, EquipmentColumn, EquipmentRemoveOutcome,
+    EquipmentRemoveRuntimeFacts,
+};
 use super::container::cvolumelimitgoodscontainer::{
     CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome,
 };
@@ -307,6 +314,45 @@ pub(crate) struct BattleFairyDeathReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: BattleFairyDeathOutcome,
     pub(crate) effects: Vec<BattleFairyDeathEffect>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerEquipmentRemoveRuntimeFacts {
+    pub(crate) pack_add_enabled: bool,
+    pub(crate) player_goods_package_extension: Option<u32>,
+    pub(crate) active_war_soul_blocks_headgear: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerEquipmentRemoveEffect {
+    WarSoulStatusAround {
+        message_type: u32,
+        player_id: i32,
+        values: [i32; 2],
+    },
+    WarSoulSkillDetached {
+        skill_id: u32,
+    },
+    SkillRemoved(BattleFairySkillRemoved),
+    PropertiesChangedWithoutRemovedSlot {
+        column: EquipmentColumn,
+        combat_properties: PlayerCombatProperties,
+    },
+    VitalsClamped {
+        previous_health: u32,
+        current_health: u32,
+        previous_mana: u32,
+        current_mana: u32,
+    },
+    AroundUpdate(EquipmentAroundUpdate),
+}
+
+#[must_use = "equipment remove report сохраняет container ownership и player/network tail"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerEquipmentRemoveReport {
+    pub(crate) player_id: i32,
+    pub(crate) outcome: EquipmentRemoveOutcome,
+    pub(crate) effects: Vec<PlayerEquipmentRemoveEffect>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -883,6 +929,20 @@ impl CPlayer {
         self.battle_fairy_summoned
     }
 
+    /// Exact `SetWarSoulStaus`: around status публикуется по прежнему state,
+    /// затем любое значение кроме единицы нормализуется к нулю.
+    pub(crate) const fn set_war_soul_status(&mut self, value: u32) -> bool {
+        let broadcast_previous = self.war_soul_state == 1;
+        if value == 1 {
+            self.battle_fairy_summoned = true;
+            self.war_soul_state = 1;
+        } else {
+            self.battle_fairy_summoned = false;
+            self.war_soul_state = 0;
+        }
+        broadcast_previous
+    }
+
     /// Исполняет player-часть `CBattleFairyContainer::SummonBF`. Spatial map
     /// принадлежит `CServerRegion`, поэтому действие возвращается явным
     /// tail-ом для `CGame`; ordered notify/broadcast/property effects не
@@ -969,6 +1029,7 @@ impl CPlayer {
                 });
                 // `SetWarSoulStaus(1)` наблюдает уже записанный state `1` и
                 // поэтому публикует exact `0xbf930 {400, player_id}`.
+                let _broadcast_previous = self.set_war_soul_status(1);
                 report.effects.push(BattleFairySummonEffect::AroundMessage {
                     message_type: BATTLE_FAIRY_STATUS_MESSAGE_TYPE,
                     player_id,
@@ -1004,6 +1065,87 @@ impl CPlayer {
             .effects
             .push(BattleFairySummonEffect::PropertiesChanged { player_id });
         report
+    }
+
+    /// Полный player-tail успешного `CEquipmentContainer::Remove`: container
+    /// mutation предшествует callback-ам, поэтому removed slot уже отсутствует
+    /// во время injected результата virtual `PropertiesChanged`.
+    pub(crate) fn remove_equipment_goods(
+        &mut self,
+        ex_id: CGuid,
+        factory: &CGoodsFactory,
+        skill_factory: &CSkillFactory,
+        runtime: PlayerEquipmentRemoveRuntimeFacts,
+        recompute_properties: &mut dyn FnMut(&CPlayer) -> PlayerCombatProperties,
+    ) -> PlayerEquipmentRemoveReport {
+        let player_id = self.player_id();
+        let outcome = self.equipment.remove(
+            ex_id,
+            factory,
+            EquipmentRemoveRuntimeFacts {
+                owner_player_present: true,
+                pack_add_enabled: runtime.pack_add_enabled,
+                player_goods_package_extension: runtime.player_goods_package_extension,
+                active_war_soul_blocks_headgear: runtime.active_war_soul_blocks_headgear,
+            },
+        );
+        let mut effects = Vec::new();
+        if let EquipmentRemoveOutcome::Removed(removed) = &outcome
+            && let Some(player_effects) = removed.event.player_effects
+        {
+            if player_effects.clear_war_soul_status && self.set_war_soul_status(0) {
+                effects.push(PlayerEquipmentRemoveEffect::WarSoulStatusAround {
+                    message_type: BATTLE_FAIRY_STATUS_MESSAGE_TYPE,
+                    player_id,
+                    values: [400, player_id],
+                });
+            }
+            if player_effects.delete_war_soul_skill {
+                for (skill_id, _) in war_soul_skill_entries_from_goods(&removed.goods, factory) {
+                    let _deleted = self.move_shape.delete_skill(skill_id, skill_factory);
+                    effects.push(PlayerEquipmentRemoveEffect::WarSoulSkillDetached { skill_id });
+                    if let Some(skill) = self.move_shape.skill(skill_id) {
+                        effects.push(PlayerEquipmentRemoveEffect::SkillRemoved(
+                            BattleFairySkillRemoved {
+                                message_type: BATTLE_FAIRY_SKILL_REMOVED_MESSAGE_TYPE,
+                                player_id,
+                                skill_id,
+                                skill_name: skill.name().to_vec(),
+                            },
+                        ));
+                    }
+                }
+            }
+            if player_effects.recompute_without_removed_slot {
+                self.combat_properties = recompute_properties(self);
+                effects.push(
+                    PlayerEquipmentRemoveEffect::PropertiesChangedWithoutRemovedSlot {
+                        column: removed.event.column,
+                        combat_properties: self.combat_properties,
+                    },
+                );
+            }
+            if player_effects.clamp_hp_and_mp {
+                let previous_health = self.health();
+                let previous_mana = self.mana();
+                self.set_health(previous_health);
+                self.set_mana(previous_mana);
+                effects.push(PlayerEquipmentRemoveEffect::VitalsClamped {
+                    previous_health,
+                    current_health: self.health(),
+                    previous_mana,
+                    current_mana: self.mana(),
+                });
+            }
+            effects.push(PlayerEquipmentRemoveEffect::AroundUpdate(
+                player_effects.around_update,
+            ));
+        }
+        PlayerEquipmentRemoveReport {
+            player_id,
+            outcome,
+            effects,
+        }
     }
 
     /// Завершает CGame-owned area tail. Recall всегда копирует player point
@@ -2254,26 +2396,7 @@ impl CPlayer {
         let Some(goods) = self.equipment.get_goods(10) else {
             return [(0, 0); 9];
         };
-        let entry = |property| {
-            (
-                goods.addon_property_value(factory, property, 2) as u32,
-                goods.addon_property_value(factory, property, 1),
-            )
-        };
-        let mut entries = [
-            entry(GAP_BF_SKY),
-            entry(GAP_BF_EARTH),
-            entry(GAP_BF_MAN),
-            entry(GAP_BF_SKY_SKILL),
-            entry(GAP_BF_EARTH_SKILL),
-            entry(GAP_BF_MAN_SKILL),
-            entry(GAP_BF_ALL_SKILL),
-            entry(GAP_BF_HUOXIESHU_SKILL),
-            entry(GAP_BF_LINGZHISHU_SKILL),
-        ];
-        entries[7].1 = 1;
-        entries[8].1 = 1;
-        entries
+        war_soul_skill_entries_from_goods(goods, factory)
     }
 
     /// Полный player-side `skillmessage` opcode `0x90005` после успешного
@@ -2850,6 +2973,29 @@ fn battle_fairy_skill_snapshot(player_id: i32, skill: &MoveShapeSkill) -> Battle
         skill_type: skill.skill_type(),
         skill_name: skill.name().to_vec(),
     }
+}
+
+fn war_soul_skill_entries_from_goods(goods: &CGoods, factory: &CGoodsFactory) -> [(u32, i32); 9] {
+    let entry = |property| {
+        (
+            goods.addon_property_value(factory, property, 2) as u32,
+            goods.addon_property_value(factory, property, 1),
+        )
+    };
+    let mut entries = [
+        entry(GAP_BF_SKY),
+        entry(GAP_BF_EARTH),
+        entry(GAP_BF_MAN),
+        entry(GAP_BF_SKY_SKILL),
+        entry(GAP_BF_EARTH_SKILL),
+        entry(GAP_BF_MAN_SKILL),
+        entry(GAP_BF_ALL_SKILL),
+        entry(GAP_BF_HUOXIESHU_SKILL),
+        entry(GAP_BF_LINGZHISHU_SKILL),
+    ];
+    entries[7].1 = 1;
+    entries[8].1 = 1;
+    entries
 }
 
 fn check_battle_fairy_skill(
@@ -4132,20 +4278,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x0002E0A0
 // ADDRESS: 0042e0a0
 // PROTOTYPE: void __thiscall DelWarSoul(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SetWarSoulStaus
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13135
-// RVA: 0x0002E190
-// ADDRESS: 0042e190
-// PROTOTYPE: void __thiscall SetWarSoulStaus(ulong param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

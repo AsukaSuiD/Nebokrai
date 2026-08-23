@@ -58,6 +58,9 @@
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные
 //! effects, потому что transport encoder этого семейства ещё отдельный owner.
+//! Equipment remove проведён через canonical player registry до war-soul
+//! state/skills, post-remove property callback, vitals clamp и typed around
+//! `0xBF720`; полный virtual property owner остаётся caller adapter-ом.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
@@ -105,7 +108,8 @@ use crate::gameserver::appserver::player::{
     BattleFairyCombineReport, BattleFairyDeathReport, BattleFairyEquipmentMutationReport,
     BattleFairyFollowReport, BattleFairySkillRequest, BattleFairySkillRequestFacts,
     BattleFairySkillRequestReport, BattleFairySkillResetReport, BattleFairySummonReport,
-    BattleFairyWarSoulAction, CPlayer,
+    BattleFairyWarSoulAction, CPlayer, PlayerCombatProperties, PlayerEquipmentRemoveReport,
+    PlayerEquipmentRemoveRuntimeFacts,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::servercityregion::CServerCityRegion;
@@ -2115,6 +2119,29 @@ impl CGame {
                 coefficients,
                 owner_progress_allows,
                 encode_old_client,
+            )
+        })
+    }
+
+    /// Полный player-owned tail `CEquipmentContainer::Remove`: callback
+    /// materializes reached результат ещё отдельного virtual
+    /// `PropertiesChanged`, наблюдая player уже без removed slot-а.
+    pub(crate) fn remove_player_equipment(
+        &mut self,
+        player_id: i32,
+        ex_id: CGuid,
+        runtime: PlayerEquipmentRemoveRuntimeFacts,
+        recompute_properties: &mut dyn FnMut(&CPlayer) -> PlayerCombatProperties,
+    ) -> Option<PlayerEquipmentRemoveReport> {
+        let (players, goods_factory, skill_factory) =
+            (&mut self.players, &self.goods_factory, &self.skill_factory);
+        players.get_mut(&player_id).map(|player| {
+            player.remove_equipment_goods(
+                ex_id,
+                goods_factory,
+                skill_factory,
+                runtime,
+                recompute_properties,
             )
         })
     }
