@@ -168,7 +168,20 @@ pub(crate) struct DbMiscGameServer {
     pub(crate) index: u32,
 }
 
-/// Технические и соседние owner-границы полного `CDbMisc` queue-dispatch.
+/// Живые World-owner-ы, необходимые только при доставке готового DB-результата.
+///
+/// Эта граница намеренно отделена от TDS-контекста: `DoneOutList` должен видеть
+/// актуальные player/GameServer registries того же `CGame`, но DB-owner не
+/// должен удерживать ссылку на game в течение всего `MainLoop`.
+pub(crate) trait DbMiscDeliveryContext {
+    fn player_game_server(&mut self, player_id: u32) -> Option<DbMiscGameServer>;
+    fn online_player_id(&mut self, player_id: u32) -> Option<i32>;
+    fn send_to_map_id(&mut self, message: &CMessage, map_id: u32);
+    fn log_player_not_online_drop_goods(&mut self);
+    fn gold_coin_index(&mut self) -> u32;
+}
+
+/// Технические и DB-owner-границы полного `CDbMisc` queue-dispatch.
 pub(crate) trait DbMiscContext {
     /// Исходный `CGlobeSetup::m_stSetup.lTransferMoneyTime`.
     fn transfer_money_interval_ms(&mut self) -> i32;
@@ -184,10 +197,6 @@ pub(crate) trait DbMiscContext {
     fn delete_item_from_db(&mut self, guid: CGuid);
     fn delete_money_from_db(&mut self, player_id: i32, money: i32);
 
-    fn player_game_server(&mut self, player_id: u32) -> Option<DbMiscGameServer>;
-    fn online_player_id(&mut self, player_id: u32) -> Option<i32>;
-    fn send_to_map_id(&mut self, message: &CMessage, map_id: u32);
-    fn log_player_not_online_drop_goods(&mut self);
     fn gold_coin_index(&mut self) -> u32;
 
     /// Заполняет destination в SQL recordset-order из
@@ -421,7 +430,7 @@ impl CDbMisc {
     /// Снимает максимум восемь output notes и исполняет полный World dispatch.
     pub(crate) fn done_out_list(
         &self,
-        context: &mut impl DbMiscContext,
+        context: &mut impl DbMiscDeliveryContext,
     ) -> Result<DbMiscDoneOutReport, DbMiscDoneOutBlock> {
         let mut notes = self.pop_item_from_list_out(OUTPUT_BATCH_LIMIT);
         let mut report = DbMiscDoneOutReport::default();
@@ -1886,11 +1895,6 @@ pub(crate) struct TiberiusDbMiscCallbacks<'a> {
     pub(crate) report_reconnect: &'a mut dyn FnMut(),
     pub(crate) report_runtime_event: &'a mut dyn FnMut(TiberiusDbMiscRuntimeEvent<'_>),
     pub(crate) seller_money_after_fee: &'a mut dyn FnMut(&CGoodsNode) -> Option<i32>,
-    pub(crate) player_game_server:
-        &'a mut dyn FnMut(u32) -> Option<DbMiscGameServer>,
-    pub(crate) online_player_id: &'a mut dyn FnMut(u32) -> Option<i32>,
-    pub(crate) send_to_map_id: &'a mut dyn FnMut(&CMessage, u32),
-    pub(crate) report_offline_drop: &'a mut dyn FnMut(),
     pub(crate) gold_coin_index: &'a mut dyn FnMut() -> u32,
     pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
 }
@@ -2073,22 +2077,6 @@ impl DbMiscContext for TiberiusDbMiscContext<'_> {
             runtime.block_on(writer.delete_money_from_db(connection, player_id, money))
         });
         self.report_write(outcome);
-    }
-
-    fn player_game_server(&mut self, player_id: u32) -> Option<DbMiscGameServer> {
-        (self.callbacks.player_game_server)(player_id)
-    }
-
-    fn online_player_id(&mut self, player_id: u32) -> Option<i32> {
-        (self.callbacks.online_player_id)(player_id)
-    }
-
-    fn send_to_map_id(&mut self, message: &CMessage, map_id: u32) {
-        (self.callbacks.send_to_map_id)(message, map_id);
-    }
-
-    fn log_player_not_online_drop_goods(&mut self) {
-        (self.callbacks.report_offline_drop)();
     }
 
     fn gold_coin_index(&mut self) -> u32 {

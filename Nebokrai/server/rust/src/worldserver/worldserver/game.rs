@@ -1212,8 +1212,8 @@ use walkdir::WalkDir;
 use crate::dbaccess::worlddb::dbcountry::{CountrySaveSnapshot, DbCountryOwner};
 use crate::dbaccess::worlddb::dbgoods::DbGoodsOwner;
 use crate::dbaccess::worlddb::dbmisc::{
-    CDbMisc, DbMiscContext, DbMiscDoneInReport, DbMiscDoneOutBlock, DbMiscDoneOutReport,
-    DbMiscLoadAuctionReport,
+    CDbMisc, DbMiscContext, DbMiscDeliveryContext, DbMiscDoneInReport, DbMiscDoneOutBlock,
+    DbMiscDoneOutReport, DbMiscGameServer, DbMiscLoadAuctionReport,
 };
 use crate::dbaccess::worlddb::largess::{
     CostDatabaseSettings, CostDatabaseSettingsParts, LargessOwner, LoadLargessBlock,
@@ -4878,6 +4878,43 @@ pub(crate) struct WorldMainLoopDbMiscStageReport {
     pub(crate) next_stage_started_at_ms: u32,
 }
 
+/// Краткоживущий доступ `DoneOutList` к актуальным World registries.
+///
+/// TDS-контекст не хранит ссылку на `CGame`; этот адаптер создаётся только на
+/// время output batch после завершения всех предшествующих MainLoop-мутаций.
+struct WorldDbMiscDeliveryContext<'a> {
+    game: &'a CGame,
+    gold_coin_index: u32,
+    offline_drops: usize,
+}
+
+impl DbMiscDeliveryContext for WorldDbMiscDeliveryContext<'_> {
+    fn player_game_server(&mut self, player_id: u32) -> Option<DbMiscGameServer> {
+        self.game
+            .player_game_server(player_id as i32)
+            .map(|server| DbMiscGameServer {
+                connected: server.connected,
+                index: server.index,
+            })
+    }
+
+    fn online_player_id(&mut self, player_id: u32) -> Option<i32> {
+        self.game.online_player_by_id(player_id).map(CPlayer::get_id)
+    }
+
+    fn send_to_map_id(&mut self, message: &CMessage, map_id: u32) {
+        let _ = self.game.send_msg_to_game_server(map_id as i32, message);
+    }
+
+    fn log_player_not_online_drop_goods(&mut self) {
+        self.offline_drops = self.offline_drops.saturating_add(1);
+    }
+
+    fn gold_coin_index(&mut self) -> u32 {
+        self.gold_coin_index
+    }
+}
+
 /// Полный `CNetSessionManager::Run` и accumulator `DAT_0056e518`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldMainLoopNetSessionStageReport {
@@ -5024,6 +5061,7 @@ pub(crate) struct WorldMainLoopConfiguration {
     pub(crate) use_appellation_function: bool,
     pub(crate) country_limits: CountryKingSaveLimits,
     pub(crate) jjc: JjcRunConfig,
+    pub(crate) gold_coin_index: u32,
 }
 
 /// Platform/log дополнение для concrete weekly JJC DB worker-а.
@@ -14864,18 +14902,19 @@ impl CGame {
     /// Между `CLeiTing::Run` и этими тремя owners исходный MainLoop не снимал
     /// tick. Единственный clock-call после `LoadAuction` назначает shared start
     /// следующей пока сырой стадии `CNetSessionManager::Run`.
-    pub(crate) fn run_main_loop_db_misc_stage<Context, GetTick>(
-        &self,
+    pub(crate) fn run_main_loop_db_misc_stage<Context, Delivery, GetTick>(
         db_misc: &mut CDbMisc,
         context: &mut Context,
+        delivery: &mut Delivery,
         clocks: &mut WorldMainLoopClockState,
         mut get_tick: GetTick,
     ) -> Result<WorldMainLoopDbMiscStageReport, DbMiscDoneOutBlock>
     where
         Context: DbMiscContext,
+        Delivery: DbMiscDeliveryContext,
         GetTick: FnMut() -> u32,
     {
-        let output = db_misc.done_out_list(context)?;
+        let output = db_misc.done_out_list(delivery)?;
         let input_notes = db_misc.pop_item_from_list_in(context, 0);
         let input = db_misc.done_list_in(context, input_notes);
         let auction = db_misc.load_auction(context);
@@ -15852,14 +15891,33 @@ impl CGame {
                 &mut *callbacks.get_lei_ting_local_time,
             )
             .map_err(|block| Box::new(WorldMainLoopBlock::LeiTing(block)))?;
-        let db_misc = self
-            .run_main_loop_db_misc_stage(
+        let db_misc = {
+            let save_info_time_ms = self.setup.save_info_time_ms;
+            let mut delivery = WorldDbMiscDeliveryContext {
+                game: self,
+                gold_coin_index: configuration.gold_coin_index,
+                offline_drops: 0,
+            };
+            let result = Self::run_main_loop_db_misc_stage(
                 owners.db_misc,
                 owners.db_misc_context,
+                &mut delivery,
                 state.clocks,
                 &mut *callbacks.get_tick,
-            )
-            .map_err(|block| Box::new(WorldMainLoopBlock::DbMisc(block)))?;
+            );
+            let offline_drops = delivery.offline_drops;
+            drop(delivery);
+            for _ in 0..offline_drops {
+                let _ = owners.log.add_log_text(
+                    b"player not online, drop goods",
+                    save_info_time_ms,
+                    &mut *callbacks.get_tick,
+                    &mut *callbacks.get_log_local_time,
+                    &mut *callbacks.put_log_info,
+                );
+            }
+            result.map_err(|block| Box::new(WorldMainLoopBlock::DbMisc(block)))?
+        };
         let mut union_application_callbacks = WorldUnionApplicationEffectCallbacks {
             random: &mut *callbacks.random,
             world_string: &mut *callbacks.world_string_by_id,
