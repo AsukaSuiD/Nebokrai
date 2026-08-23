@@ -1,5 +1,7 @@
-//! Country contribution `CContributeSetup` из WorldServer, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Country contribution `CContributeSetup` из WorldServer/GameServer.
+//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходный owner
+//! `setup/contributesetup.cpp`.
 //!
 //! Loader очищает только items; одиннадцать scalars при ошибке открытия
 //! сохраняются и обновляются позиционно. Malformed value оставляет уже
@@ -101,6 +103,37 @@ impl CContributeSetup {
         }
         Ok(())
     }
+
+    /// Очищает items до первого scalar, но перезаписывает одиннадцать
+    /// parameters позиционно: при обрыве suffix сохраняет старые values.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<usize, ContributeSetupDecodeError> {
+        self.items.clear();
+        for parameter in &mut self.parameters {
+            *parameter = read_wire_i32(source, cursor)?;
+        }
+        let count = read_wire_i32(source, cursor)?;
+        for _ in 0..count.max(0) {
+            let low_value = read_wire_u32(source, cursor)?;
+            let high_value = read_wire_u32(source, cursor)?;
+            let item_count = read_wire_u32(source, cursor)?;
+            let name = read_wire_c_string(source, cursor)?;
+            self.items.push(ContributeItem {
+                low_value,
+                high_value,
+                count: item_count,
+                name,
+            });
+        }
+        Ok(self.items.len())
+    }
+
+    pub(crate) fn items(&self) -> &[ContributeItem] {
+        &self.items
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -170,6 +203,39 @@ impl fmt::Display for ContributeSetupSerializeError {
 
 impl Error for ContributeSetupSerializeError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ContributeSetupDecodeError {
+    UnexpectedEnd {
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    MissingStringTerminator {
+        offset: usize,
+    },
+}
+
+impl fmt::Display for ContributeSetupDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd {
+                offset,
+                needed,
+                available,
+            } => write!(
+                formatter,
+                "ContributeSetup snapshot обрывается на {offset}: нужно {needed}, доступно {available}"
+            ),
+            Self::MissingStringTerminator { offset } => write!(
+                formatter,
+                "ContributeSetup item name с {offset} не завершено нулём"
+            ),
+        }
+    }
+}
+
+impl Error for ContributeSetupDecodeError {}
+
 fn next_token<'source>(
     tokens: &mut impl Iterator<Item = &'source [u8]>,
     field: &'static str,
@@ -221,4 +287,48 @@ fn invalid_long(field: &'static str, token: &[u8]) -> ContributeSetupFormatError
     }
 }
 
-// оставшихся call-site деталей, а не как Rust-реализация.
+fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, ContributeSetupDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, ContributeSetupDecodeError> {
+    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], ContributeSetupDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(ContributeSetupDecodeError::UnexpectedEnd {
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("размер ContributeSetup scalar уже проверен"))
+}
+
+fn read_wire_c_string(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<Vec<u8>, ContributeSetupDecodeError> {
+    let offset = *cursor;
+    let remaining = source
+        .get(offset..)
+        .ok_or(ContributeSetupDecodeError::UnexpectedEnd {
+            offset,
+            needed: 1,
+            available: 0,
+        })?;
+    let Some(length) = remaining.iter().position(|byte| *byte == 0) else {
+        return Err(ContributeSetupDecodeError::MissingStringTerminator { offset });
+    };
+    *cursor += length + 1;
+    Ok(remaining[..length].to_vec())
+}

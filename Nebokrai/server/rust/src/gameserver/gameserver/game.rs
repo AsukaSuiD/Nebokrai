@@ -74,8 +74,13 @@ use crate::nets::netserver::mynetserver::{
     CMyNetServer, GameServerEvent, GameServerEventPublisher,
 };
 use crate::nets::servers::ServerHostError;
+use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
+use crate::setup::contributesetup::CContributeSetup;
+use crate::setup::gmlist::CGMList;
+use crate::setup::incrementshoplist::CIncrementShopList;
 use crate::setup::leitingsetup::CThingSetup;
+use crate::setup::logsystem::CLogSystem;
 use crate::setup::playerlist::CPlayerList;
 use crate::setup::tradelist::CTradeList;
 use crate::transport::bind_tcp_ipv4;
@@ -692,6 +697,11 @@ pub(crate) struct CGame {
     player_list: CPlayerList,
     trade_list: CTradeList,
     thing_setup: CThingSetup,
+    increment_shop_list: CIncrementShopList,
+    contribute_setup: CContributeSetup,
+    log_system: CLogSystem,
+    gm_list: CGMList,
+    da_kong_xiang_qian: CDaKongXiangQian,
     dupli_region_setup: Option<CDupliRegionSetup>,
     move_check_cells: MoveCheckCellRegistry,
     player_ranks: Option<CPlayerRanks>,
@@ -720,6 +730,11 @@ impl CGame {
             player_list: CPlayerList::default(),
             trade_list: CTradeList::default(),
             thing_setup: CThingSetup::default(),
+            increment_shop_list: CIncrementShopList::default(),
+            contribute_setup: CContributeSetup::default(),
+            log_system: CLogSystem::default(),
+            gm_list: CGMList::default(),
+            da_kong_xiang_qian: CDaKongXiangQian::default(),
             dupli_region_setup: None,
             move_check_cells: MoveCheckCellRegistry::new(),
             player_ranks: None,
@@ -941,6 +956,26 @@ impl CGame {
 
     pub(crate) const fn thing_setup_mut(&mut self) -> &mut CThingSetup {
         &mut self.thing_setup
+    }
+
+    pub(crate) const fn increment_shop_list_mut(&mut self) -> &mut CIncrementShopList {
+        &mut self.increment_shop_list
+    }
+
+    pub(crate) const fn contribute_setup_mut(&mut self) -> &mut CContributeSetup {
+        &mut self.contribute_setup
+    }
+
+    pub(crate) const fn log_system_mut(&mut self) -> &mut CLogSystem {
+        &mut self.log_system
+    }
+
+    pub(crate) const fn gm_list_mut(&mut self) -> &mut CGMList {
+        &mut self.gm_list
+    }
+
+    pub(crate) const fn da_kong_xiang_qian_mut(&mut self) -> &mut CDaKongXiangQian {
+        &mut self.da_kong_xiang_qian
     }
 
     pub(crate) const fn dupli_region_setup(&self) -> Option<&CDupliRegionSetup> {

@@ -362,5 +362,3 @@ fn read_wire_c_string(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, Trad
     *cursor += length + 1;
     Ok(remaining[..length].to_vec())
 }
-
-// оставшихся call-site деталей, а не как Rust-реализация.

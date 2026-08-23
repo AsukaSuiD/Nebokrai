@@ -1,16 +1,19 @@
-//! Настройки `CLogSystem` из WorldServer, подтверждённые
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Настройки `CLogSystem` из WorldServer/GameServer.
+//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходный owner `setup/logsystem.cpp`.
 //!
 //! Wire — raw 64-байтный `tagLogSystem`, signed count и ordered item IDs.
 //! Парный decoder использует ABI offsets, поэтому snapshot остаётся fixed
 //! bytes с нулевым static default. `BTreeSet<i32>` сохраняет signed order и
-//! уникальность; неподтверждённые offsets не получают выдуманных имён.
+//! уникальность; подтверждённый byte 56 немедленно передаётся
+//! `CDaKongXiangQian::SetLogKey`, остальные неподтверждённые offsets не именуются.
 
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 
 pub(crate) const LOG_SETTINGS_LENGTH: usize = 0x40;
+const DA_KONG_LOG_OFFSET: usize = 56;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CLogSystem {
@@ -111,9 +114,9 @@ impl CLogSystem {
         self.setting(49)
     }
 
- /// Читает 64 positional boolean-а и последующий `* original-name` список.
- /// Goods lookup выполняется тем же factory-owner-ом, который обслуживает
- /// runtime и initial configuration.
+    /// Читает 64 positional boolean-а и последующий `* original-name` список.
+    /// Goods lookup выполняется тем же factory-owner-ом, который обслуживает
+    /// runtime и initial configuration.
     pub(crate) fn load_from_bytes(
         &mut self,
         source: &[u8],
@@ -173,6 +176,31 @@ impl CLogSystem {
         }
         Ok(())
     }
+
+    /// Заменяет settings только после полного 64-byte read, затем
+    /// очищает items и сохраняет полностью decoded prefix при обрыве.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<LogSystemDecodeReport, LogSystemDecodeError> {
+        self.settings = read_wire_array(source, cursor)?;
+        self.items.clear();
+        let count = read_wire_i32(source, cursor)?;
+        for _ in 0..count.max(0) {
+            self.items.insert(read_wire_i32(source, cursor)?);
+        }
+        Ok(LogSystemDecodeReport {
+            items: self.items.len(),
+            da_kong_log: self.setting(DA_KONG_LOG_OFFSET),
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct LogSystemDecodeReport {
+    pub(crate) items: usize,
+    pub(crate) da_kong_log: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -194,6 +222,25 @@ impl fmt::Display for LogSystemSerializeError {
 impl Error for LogSystemSerializeError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct LogSystemDecodeError {
+    pub(crate) offset: usize,
+    pub(crate) needed: usize,
+    pub(crate) available: usize,
+}
+
+impl fmt::Display for LogSystemDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "LogSystem snapshot обрывается на {}: нужно {}, доступно {}",
+            self.offset, self.needed, self.available
+        )
+    }
+}
+
+impl Error for LogSystemDecodeError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LogSystemLoadReport {
     pub(crate) settings: usize,
     pub(crate) items: usize,
@@ -213,7 +260,10 @@ impl fmt::Display for LogSystemLoadError {
                 "LogSystem содержит {actual} positional boolean-настроек вместо 64"
             ),
             Self::MissingGoodsName { line } => {
-                write!(formatter, "LogSystem, строка {line}: после '*' отсутствует имя предмета")
+                write!(
+                    formatter,
+                    "LogSystem, строка {line}: после '*' отсутствует имя предмета"
+                )
             }
         }
     }
@@ -221,4 +271,25 @@ impl fmt::Display for LogSystemLoadError {
 
 impl Error for LogSystemLoadError {}
 
-// Game decoder side effects, а не как Rust-реализация.
+fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, LogSystemDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], LogSystemDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(LogSystemDecodeError {
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("размер LogSystem scalar уже проверен"))
+}

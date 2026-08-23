@@ -1,5 +1,6 @@
-//! Операторы `CGMList` из WorldServer, подтверждённые
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Операторы `CGMList` из WorldServer/GameServer.
+//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходный owner `setup/gmlist.cpp`.
 //!
 //! Wire пишет два ordered map: signed count и `name\0 + i32 level`, затем god
 //! passport. Keys задают byte-лексикографический порядок и отдельно не идут.
@@ -61,8 +62,8 @@ impl CGMList {
         self.god_passport = god_passport;
     }
 
- /// Загружает один из двух оригинал whitespace-списков World GM.
- /// Неизвестные role-имена, как и в EXE, не создают map-entry.
+    /// Загружает один из двух оригинал whitespace-списков World GM.
+    /// Неизвестные role-имена, как и в EXE, не создают map-entry.
     pub(crate) fn load_from_bytes(
         &mut self,
         source: &[u8],
@@ -130,6 +131,32 @@ impl CGMList {
         destination.extend_from_slice(&payload);
         Ok(())
     }
+
+    /// Очищает каждую map только прямо перед её count; поэтому
+    /// обрыв в GM block ещё не меняет player-GM map и passport.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<GmListDecodeReport, GmListDecodeError> {
+        self.gm_info.clear();
+        decode_gm_map(source, cursor, &mut self.gm_info)?;
+
+        self.player_gm_info.clear();
+        decode_gm_map(source, cursor, &mut self.player_gm_info)?;
+
+        self.god_passport = read_wire_c_string(source, cursor)?;
+        Ok(GmListDecodeReport {
+            gm: self.gm_info.len(),
+            player_gm: self.player_gm_info.len(),
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GmListDecodeReport {
+    pub(crate) gm: usize,
+    pub(crate) player_gm: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -178,6 +205,38 @@ impl fmt::Display for GmListSerializationBlock {
 
 impl Error for GmListSerializationBlock {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GmListDecodeError {
+    UnexpectedEnd {
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    MissingStringTerminator {
+        offset: usize,
+    },
+}
+
+impl fmt::Display for GmListDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd {
+                offset,
+                needed,
+                available,
+            } => write!(
+                formatter,
+                "GMList snapshot обрывается на {offset}: нужно {needed}, доступно {available}"
+            ),
+            Self::MissingStringTerminator { offset } => {
+                write!(formatter, "GMList string с {offset} не завершена нулём")
+            }
+        }
+    }
+}
+
+impl Error for GmListDecodeError {}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GmListLoadError {
     MissingRole { name: Vec<u8> },
@@ -202,12 +261,11 @@ fn write_gm_map(
     collection: GmListCollection,
     entries: &BTreeMap<Vec<u8>, GmInfo>,
 ) -> Result<(), GmListSerializationBlock> {
-    let count = i32::try_from(entries.len()).map_err(|_| {
-        GmListSerializationBlock::CountOutOfRange {
+    let count =
+        i32::try_from(entries.len()).map_err(|_| GmListSerializationBlock::CountOutOfRange {
             collection,
             count: entries.len(),
-        }
-    })?;
+        })?;
     destination.extend_from_slice(&count.to_le_bytes());
     for (entry_index, info) in entries.values().enumerate() {
         write_gm_string(
@@ -237,4 +295,55 @@ fn write_gm_string(
     destination.extend_from_slice(value);
     destination.push(0);
     Ok(())
+}
+
+fn decode_gm_map(
+    source: &[u8],
+    cursor: &mut usize,
+    destination: &mut BTreeMap<Vec<u8>, GmInfo>,
+) -> Result<(), GmListDecodeError> {
+    let count = read_wire_i32(source, cursor)?;
+    for _ in 0..count.max(0) {
+        let name = read_wire_c_string(source, cursor)?;
+        let level = read_wire_i32(source, cursor)?;
+        destination.insert(name.clone(), GmInfo { name, level });
+    }
+    Ok(())
+}
+
+fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, GmListDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], GmListDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(GmListDecodeError::UnexpectedEnd {
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes.try_into().expect("размер GMList scalar уже проверен"))
+}
+
+fn read_wire_c_string(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, GmListDecodeError> {
+    let offset = *cursor;
+    let remaining = source
+        .get(offset..)
+        .ok_or(GmListDecodeError::UnexpectedEnd {
+            offset,
+            needed: 1,
+            available: 0,
+        })?;
+    let Some(length) = remaining.iter().position(|byte| *byte == 0) else {
+        return Err(GmListDecodeError::MissingStringTerminator { offset });
+    };
+    *cursor += length + 1;
+    Ok(remaining[..length].to_vec())
 }

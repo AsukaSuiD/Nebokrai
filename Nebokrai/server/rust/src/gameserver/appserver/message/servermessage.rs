@@ -1,7 +1,8 @@
 //! Владелец входного GameServer dispatcher-а `OnServerMessage`.
 //!
 //! Весь dispatcher RVA `0x0009D300` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме цепочек
-//! сообщения `0x7F801` для Player/Trade/Thing, PlayerRanks/DupliRegion,
+//! сообщения `0x7F801` для Player/Trade/Thing, economy/admin setup,
+//! PlayerRanks/DupliRegion,
 //! AttackCity/Village и terminal selector `0x3B`, а также полной typed Billing
 //! reconnect ветви `0x6F904`; они имеют статус `IMPLEMENTED`. Точная пара
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходник
@@ -37,7 +38,11 @@ use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::nets::netserver::mynetclient::CMyNetClient;
 use crate::public::dupliregionsetup::DupliRegionDecodeError;
+use crate::setup::contributesetup::ContributeSetupDecodeError;
+use crate::setup::gmlist::{GmListDecodeError, GmListDecodeReport};
+use crate::setup::incrementshoplist::IncrementShopDecodeError;
 use crate::setup::leitingsetup::ThingSetupCodecError;
+use crate::setup::logsystem::LogSystemDecodeError;
 use crate::setup::playerlist::{PlayerListDecodeError, PlayerListDecodeReport};
 use crate::setup::tradelist::TradeListDecodeError;
 
@@ -45,6 +50,10 @@ const BILLING_REGISTRATION: i32 = 0x000E_F101;
 const CLIENT_SERVER_START_SELECTOR: i32 = 0x3b;
 const PLAYER_LIST_SELECTOR: i32 = 0x01;
 const TRADE_LIST_SELECTOR: i32 = 0x03;
+const INCREMENT_SHOP_SELECTOR: i32 = 0x04;
+const CONTRIBUTE_SETUP_SELECTOR: i32 = 0x05;
+const LOG_SYSTEM_SELECTOR: i32 = 0x08;
+const GM_LIST_SELECTOR: i32 = 0x09;
 const PLAYER_RANKS_SELECTOR: i32 = 0x17;
 const DUPLI_REGION_SELECTOR: i32 = 0x1a;
 const THING_SETUP_SELECTOR: i32 = 0x36;
@@ -122,6 +131,10 @@ fn read_start_long(
 pub(crate) enum GameOwnedStartupSnapshotReport {
     PlayerList(PlayerListDecodeReport),
     TradeList { entries: usize },
+    IncrementShop { entries: usize },
+    ContributeSetup { entries: usize },
+    LogSystem { entries: usize, da_kong_log: bool },
+    GmList(GmListDecodeReport),
     PlayerRanks { entries: usize },
     DupliRegions { entries: usize },
     ThingSetup { entries: usize },
@@ -132,6 +145,10 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     OwnerUnavailable { selector: i32 },
     PlayerList(PlayerListDecodeError),
     TradeList(TradeListDecodeError),
+    IncrementShop(IncrementShopDecodeError),
+    ContributeSetup(ContributeSetupDecodeError),
+    LogSystem(LogSystemDecodeError),
+    GmList(GmListDecodeError),
     PlayerRanks(PlayerRanksDecodeError),
     DupliRegions(DupliRegionDecodeError),
     ThingSetup(ThingSetupCodecError),
@@ -148,6 +165,10 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             }
             Self::PlayerList(error) => error.fmt(formatter),
             Self::TradeList(error) => error.fmt(formatter),
+            Self::IncrementShop(error) => error.fmt(formatter),
+            Self::ContributeSetup(error) => error.fmt(formatter),
+            Self::LogSystem(error) => error.fmt(formatter),
+            Self::GmList(error) => error.fmt(formatter),
             Self::PlayerRanks(error) => error.fmt(formatter),
             Self::DupliRegions(error) => error.fmt(formatter),
             Self::ThingSetup(error) => error.fmt(formatter),
@@ -161,6 +182,10 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::OwnerUnavailable { .. } => None,
             Self::PlayerList(error) => Some(error),
             Self::TradeList(error) => Some(error),
+            Self::IncrementShop(error) => Some(error),
+            Self::ContributeSetup(error) => Some(error),
+            Self::LogSystem(error) => Some(error),
+            Self::GmList(error) => Some(error),
             Self::PlayerRanks(error) => Some(error),
             Self::DupliRegions(error) => Some(error),
             Self::ThingSetup(error) => Some(error),
@@ -195,6 +220,56 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             };
             add_log_text("Initial SI_TRADELIST...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::TradeList { entries }))
+        }
+        INCREMENT_SHOP_SELECTOR => {
+            let entries = match game
+                .increment_shop_list_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(entries) => entries,
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::IncrementShop(error)));
+                }
+            };
+            add_log_text("Initial SI_INCREMENTSHOPLIST...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::IncrementShop {
+                entries,
+            }))
+        }
+        CONTRIBUTE_SETUP_SELECTOR => {
+            let entries = match game
+                .contribute_setup_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(entries) => entries,
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::ContributeSetup(error)));
+                }
+            };
+            add_log_text("Initial SI_CONTRIBUTEITEM...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::ContributeSetup {
+                entries,
+            }))
+        }
+        LOG_SYSTEM_SELECTOR => {
+            let report = match game.log_system_mut().decord_from_byte_array(source, cursor) {
+                Ok(report) => report,
+                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::LogSystem(error))),
+            };
+            game.da_kong_xiang_qian_mut().set_key(report.da_kong_log);
+            add_log_text("Initial SI_LOGSYSTEM...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::LogSystem {
+                entries: report.items,
+                da_kong_log: report.da_kong_log,
+            }))
+        }
+        GM_LIST_SELECTOR => {
+            let report = match game.gm_list_mut().decord_from_byte_array(source, cursor) {
+                Ok(report) => report,
+                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::GmList(error))),
+            };
+            add_log_text("Initial SI_GMLIST...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::GmList(report)))
         }
         PLAYER_RANKS_SELECTOR => {
             let Some(ranks) = game.player_ranks_mut() else {

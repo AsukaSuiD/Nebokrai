@@ -1,5 +1,7 @@
-//! Increment shop `CIncrementShopList` из WorldServer, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Increment shop `CIncrementShopList` из WorldServer/GameServer.
+//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходный owner
+//! `setup/incrementshoplist.cpp`.
 //!
 //! Wire пишет signed count, page key, 24-байтный item prefix, description,
 //! localized goods key и общую affiche C-строку. Равные page keys сохраняют
@@ -75,7 +77,9 @@ impl IncrementShopLoadError {
                 payload.extend_from_slice(b" Sub Sort INVALID, Ignore This Setup.");
                 payload
             }
-            Self::GoodsNotFound(token) => with_suffix(token, b" Goods Not Found, Ignore This Setup."),
+            Self::GoodsNotFound(token) => {
+                with_suffix(token, b" Goods Not Found, Ignore This Setup.")
+            }
             Self::DiKouGoodsNotFound(token) => {
                 with_suffix(token, b" DiKouGoods Not Found, Ignore This Setup.")
             }
@@ -104,11 +108,11 @@ impl CIncrementShopList {
         self.items.clear();
     }
 
- /// Загружает точный formatted stream `incrementshoplist.ini`.
- ///
- /// Две ветви lookup принадлежат уже загруженному `CGoodsFactory`. Result
- /// передаёт исходный bool и отложенные `AddLogText`, не скрывая уже
- /// применённую часть state.
+    /// Загружает точный formatted stream `incrementshoplist.ini`.
+    ///
+    /// Две ветви lookup принадлежат уже загруженному `CGoodsFactory`. Result
+    /// передаёт исходный bool и отложенные `AddLogText`, не скрывая уже
+    /// применённую часть state.
     pub(crate) fn load_from_bytes<ResolveGoods>(
         &mut self,
         source: &[u8],
@@ -145,7 +149,7 @@ impl CIncrementShopList {
             if overlapped_amount < 1 {
                 let mut message = overlapped_amount.to_string().into_bytes();
                 message.extend_from_slice(b" Overlapped Num INVALID, set 1 compulsively.");
- // Loader пишет это предупреждение, но продолжает с единицей.
+                // Loader пишет это предупреждение, но продолжает с единицей.
                 warnings.push(message);
                 overlapped_amount = 1;
             }
@@ -155,7 +159,9 @@ impl CIncrementShopList {
             };
             let goods_id = query_goods_id(resolve_goods, goods_original_name);
             if goods_id == 0 {
-                return Err(IncrementShopLoadError::GoodsNotFound(goods_original_name.to_vec()));
+                return Err(IncrementShopLoadError::GoodsNotFound(
+                    goods_original_name.to_vec(),
+                ));
             }
 
             let Some(yuan_bao_price) = read_signed_long(&mut tokens) else {
@@ -183,7 +189,9 @@ impl CIncrementShopList {
                 ));
             }
             let Some(key) = query_goods_name(resolve_goods, goods_id) else {
-                return Err(IncrementShopLoadError::ItemNameNotFound(description.to_vec()));
+                return Err(IncrementShopLoadError::ItemNameNotFound(
+                    description.to_vec(),
+                ));
             };
 
             self.insert(
@@ -269,6 +277,42 @@ impl CIncrementShopList {
         destination.push(0);
         Ok(())
     }
+
+    /// Очищает owner до count; incomplete item не публикуется,
+    /// но ранее полностью decoded items остаются.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<usize, IncrementShopDecodeError> {
+        self.release();
+        let count = read_wire_i32(source, cursor)?;
+        for _ in 0..count.max(0) {
+            let page = read_wire_array::<1>(source, cursor)?[0];
+            let prefix = read_wire_array::<ITEM_WIRE_LENGTH>(source, cursor)?;
+            let description = read_wire_c_string(source, cursor)?;
+            let key = read_wire_c_string(source, cursor)?;
+            self.insert(
+                page,
+                IncrementShopItem {
+                    category: wire_u16_at(&prefix, 0),
+                    overlapped_amount: wire_u32_at(&prefix, 4),
+                    goods_id: wire_u32_at(&prefix, 8),
+                    yuan_bao_price: wire_u32_at(&prefix, 12),
+                    deduction_goods_id: wire_u32_at(&prefix, 16),
+                    icon_id: prefix[20],
+                    description,
+                    key,
+                },
+            );
+        }
+        self.affiche = read_wire_c_string(source, cursor)?;
+        Ok(self.item_count())
+    }
+
+    pub(crate) fn item_count(&self) -> usize {
+        self.items.values().map(Vec::len).sum()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -308,6 +352,39 @@ impl fmt::Display for IncrementShopSerializeError {
 
 impl Error for IncrementShopSerializeError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum IncrementShopDecodeError {
+    UnexpectedEnd {
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    MissingStringTerminator {
+        offset: usize,
+    },
+}
+
+impl fmt::Display for IncrementShopDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd {
+                offset,
+                needed,
+                available,
+            } => write!(
+                formatter,
+                "IncrementShop snapshot обрывается на {offset}: нужно {needed}, доступно {available}"
+            ),
+            Self::MissingStringTerminator { offset } => write!(
+                formatter,
+                "IncrementShop string с {offset} не завершена нулём"
+            ),
+        }
+    }
+}
+
+impl Error for IncrementShopDecodeError {}
+
 fn ensure_c_string(
     value: &[u8],
     field: IncrementShopStringField,
@@ -331,7 +408,9 @@ fn read_signed_long<'a>(tokens: &mut impl Iterator<Item = &'a [u8]>) -> Option<i
 }
 
 fn query_goods_id(
-    resolve_goods: &mut impl for<'name> FnMut(IncrementShopGoodsQuery<'name>) -> IncrementShopGoodsResult,
+    resolve_goods: &mut impl for<'name> FnMut(
+        IncrementShopGoodsQuery<'name>,
+    ) -> IncrementShopGoodsResult,
     original_name: &[u8],
 ) -> u32 {
     match resolve_goods(IncrementShopGoodsQuery::OriginalName(original_name)) {
@@ -341,7 +420,9 @@ fn query_goods_id(
 }
 
 fn query_goods_name(
-    resolve_goods: &mut impl for<'name> FnMut(IncrementShopGoodsQuery<'name>) -> IncrementShopGoodsResult,
+    resolve_goods: &mut impl for<'name> FnMut(
+        IncrementShopGoodsQuery<'name>,
+    ) -> IncrementShopGoodsResult,
     goods_id: u32,
 ) -> Option<Vec<u8>> {
     match resolve_goods(IncrementShopGoodsQuery::DisplayName(goods_id)) {
@@ -356,4 +437,60 @@ fn with_suffix(value: &[u8], suffix: &[u8]) -> Vec<u8> {
     payload
 }
 
-// Game decoder-а, а не как Rust-реализация.
+fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, IncrementShopDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], IncrementShopDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(IncrementShopDecodeError::UnexpectedEnd {
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("размер IncrementShop scalar уже проверен"))
+}
+
+fn read_wire_c_string(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<Vec<u8>, IncrementShopDecodeError> {
+    let offset = *cursor;
+    let remaining = source
+        .get(offset..)
+        .ok_or(IncrementShopDecodeError::UnexpectedEnd {
+            offset,
+            needed: 1,
+            available: 0,
+        })?;
+    let Some(length) = remaining.iter().position(|byte| *byte == 0) else {
+        return Err(IncrementShopDecodeError::MissingStringTerminator { offset });
+    };
+    *cursor += length + 1;
+    Ok(remaining[..length].to_vec())
+}
+
+fn wire_u32_at(source: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(
+        source[offset..offset + 4]
+            .try_into()
+            .expect("фиксированный IncrementShop u32 входит в prefix"),
+    )
+}
+
+fn wire_u16_at(source: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(
+        source[offset..offset + 2]
+            .try_into()
+            .expect("фиксированный IncrementShop u16 входит в prefix"),
+    )
+}
