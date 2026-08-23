@@ -54,6 +54,9 @@
 //! subtype decoder-ы входят в этот owner напрямую.
 //! Concrete `AddNpc` уже создаёт `CNpc` через factory type `500`, назначает
 //! spawn-поля, проводит его через `AddObject/CArea` и сохраняет owned object.
+//! Low-level `AddMonster` аналогично владеет type `600` spawn и хранит
+//! original-name key вместо висячего указателя в reloadable MonsterList;
+//! skills/AI Init и around serialization остаются concrete context callbacks.
 //! `BTreeMap` используется только для identity lookup: observable обход
 //! старого MSVC `stdext::hash_map` для startup name-cache пока остаётся у
 //! `ServerRegionDecodeContext`, а не подменяется сортировкой Rust-map.
@@ -82,6 +85,7 @@ use encoding_rs::WINDOWS_1251;
 use super::area::CArea;
 use super::baseobject::CBaseObject;
 use super::country::countryparam::CCountryParam;
+use super::monster::CMonster;
 use super::moveshape::{
     MoveShapePositionBlock, MoveShapePositionDispatch, MoveShapePositionFacts, MoveShapeResolver,
 };
@@ -96,6 +100,7 @@ use super::shape::{
     ShapeRuntimeFacts, ShapeView,
 };
 use crate::public::guid::CGuid;
+use crate::setup::monsterlist::MonsterProperties;
 
 const PLAYER_TYPE: i32 = 400;
 const NPC_TYPE: i32 = 500;
@@ -373,6 +378,16 @@ pub(crate) trait ServerRegionNpcContext: ServerRegionMembershipContext {
     fn send_npc_entered_around(&mut self, npc: &CNpc);
 }
 
+pub(crate) trait ServerRegionMonsterContext: ServerRegionMembershipContext {
+    /// Выполняет `CMonster::Init -> InitSkills/InitAI` у concrete owners.
+    fn initialize_monster(&mut self, monster: &mut CMonster, property: &MonsterProperties);
+
+    fn send_monster_entered_around(&mut self, monster: &CMonster);
+
+    /// Exact low-level AddMonster увеличивает global total после around-send.
+    fn monster_spawned(&mut self);
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ServerRegionNpcSpawnBlock {
     RandomPosition(RegionCellAccessBlock),
@@ -392,6 +407,23 @@ impl NextNpcId {
         let id = self.0;
         self.0 = self.0.wrapping_add(1);
         id
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NextMonsterId(i32);
+
+impl NextMonsterId {
+    fn take(&mut self) -> i32 {
+        let id = self.0;
+        self.0 = self.0.wrapping_add(1);
+        id
+    }
+}
+
+impl Default for NextMonsterId {
+    fn default() -> Self {
+        Self(1)
     }
 }
 
@@ -503,6 +535,8 @@ pub(crate) struct CServerRegion {
     area_y: i32,
     areas: Vec<CArea>,
     registry: ServerRegionRegistry,
+    owned_monsters: BTreeMap<i32, CMonster>,
+    next_monster_id: NextMonsterId,
     owned_npcs: BTreeMap<i32, CNpc>,
     next_npc_id: NextNpcId,
     change_area_shapes: Vec<ShapeIdentity>,
@@ -523,6 +557,71 @@ pub(crate) struct CServerRegion {
 }
 
 impl CServerRegion {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "literal AddMonster сохраняет исходные spawn flags и owner-границы"
+    )]
+    pub(crate) fn add_monster<Context: ServerRegionMonsterContext>(
+        &mut self,
+        property: &MonsterProperties,
+        tile_x: i32,
+        tile_y: i32,
+        direction: i32,
+        send_around: bool,
+        now_ms: u32,
+        area_width: i32,
+        area_height: i32,
+        context: &mut Context,
+    ) -> Result<i32, RegionMembershipBlock> {
+        let id = self.next_monster_id.take();
+        let mut monster = CBaseObject::create_monster(id);
+        monster.bind_spawn_property(property);
+        context.initialize_monster(&mut monster, property);
+        monster
+            .move_shape_mut()
+            .shape_mut()
+            .set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
+        monster.set_spawn_speed(property);
+        let direction = if (0..8).contains(&direction) {
+            direction
+        } else {
+            context.random_below(8)
+        };
+        monster
+            .move_shape_mut()
+            .shape_mut()
+            .set_direction(direction);
+
+        let facts = ShapeRuntimeFacts {
+            monster: Some(super::shape::MonsterAreaClass::Active),
+            is_move_shape: true,
+            figure: CMonster::figure(property),
+            ..ShapeRuntimeFacts::default()
+        };
+        self.add_object(
+            monster.move_shape_mut().shape_mut(),
+            facts,
+            area_width,
+            area_height,
+            now_ms,
+            context,
+        )?;
+        self.owned_monsters.insert(id, monster);
+        if send_around {
+            context.send_monster_entered_around(
+                self.owned_monsters
+                    .get(&id)
+                    .expect("monster опубликован непосредственно перед send"),
+            );
+        }
+        context.monster_spawned();
+        Ok(id)
+    }
+
+    pub(crate) fn find_monster_by_id(&self, id: i32) -> Option<&CMonster> {
+        self.owned_monsters.get(&id)
+    }
+
     pub(crate) fn add_npc<Context: ServerRegionNpcContext>(
         &mut self,
         setup: &ServerRegionNpcSetup,
@@ -2204,6 +2303,9 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 // ============================================================================
 // FUNCTION: CServerRegion::AddMonster
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
+// IMPLEMENTED_SUBCHAIN: low-level property/factory/spawn/membership/owned
+// lifecycle материализован выше; exact InitSkills/InitAI и message payload
+// остаются у обязательного `ServerRegionMonsterContext`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:842

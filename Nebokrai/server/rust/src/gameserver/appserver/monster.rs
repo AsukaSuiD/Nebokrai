@@ -1,6 +1,138 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Достигнутая constructor/property-часть `CMonster` GameServer.
+//!
+//! Exact `GameServer/gameserver.exe + GameServer/GameServer.pdb`, owner
+//! `server/gameserver/appserver/monster.h/.cpp`, подтверждают inheritance от
+//! `CMoveShape`, type `600`, HP `1`, live/refresh index `-1`, нулевые leader
+//! признаки и десять factor-ов `1.0`. `CBaseObject::CreateObject(600,id)`
+//! записывает ID после derived constructor-а.
+//!
+//! Старый `m_pBaseProperty` указывал внутрь process-global `CMonsterList` и
+//! перепривязывался после selector `0x02`. Rust хранит byte-exact original-name
+//! key и разрешает текущий `MonsterProperties` у `CGame`; это устраняет
+//! dangling pointer, сохраняя observable refresh semantics. Spawn snapshot
+//! (имя, graphics, HP, speed) остаётся в concrete object, как в `AddMonster`.
+//! `InitSkills/InitAI`, combat, serialization и AI остаются RAW ниже.
+
+use super::moveshape::CMoveShape;
+use super::shape::ShapeFigure;
+use crate::setup::monsterlist::MonsterProperties;
+
+const MONSTER_TYPE: i32 = 600;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CMonster {
+    move_shape: CMoveShape,
+    original_name: Vec<u8>,
+    base_property_key: Option<Vec<u8>>,
+    script_file: Vec<u8>,
+    hit_points: u32,
+    live_time: i32,
+    refresh_index: i32,
+    sign: u16,
+    leader_sign: u16,
+    leader_distance: u16,
+    leader_type: i32,
+    leader_id: i32,
+    died_remove: bool,
+    factors: [u32; 10],
+}
+
+impl CMonster {
+    pub(crate) fn with_constructor_defaults() -> Self {
+        let mut move_shape = CMoveShape::default();
+        move_shape
+            .shape_mut()
+            .base_object_mut()
+            .set_type(MONSTER_TYPE);
+        Self {
+            move_shape,
+            original_name: Vec::new(),
+            base_property_key: None,
+            script_file: Vec::new(),
+            hit_points: 1,
+            live_time: -1,
+            refresh_index: -1,
+            sign: 0,
+            leader_sign: 0,
+            leader_distance: 0,
+            leader_type: 0,
+            leader_id: 0,
+            died_remove: false,
+            factors: [1.0f32.to_bits(); 10],
+        }
+    }
+
+    pub(crate) const fn move_shape(&self) -> &CMoveShape {
+        &self.move_shape
+    }
+
+    pub(crate) const fn move_shape_mut(&mut self) -> &mut CMoveShape {
+        &mut self.move_shape
+    }
+
+    /// Назначает exact поля, которые `AddMonster` пишет до virtual `Init`.
+    pub(crate) fn bind_spawn_property(&mut self, property: &MonsterProperties) {
+        let shape = self.move_shape.shape_mut();
+        shape.base_object_mut().set_name(&property.name);
+        shape
+            .base_object_mut()
+            .set_graphics_id(property.picture_id as i32);
+        self.original_name = property.original_name.clone();
+        self.base_property_key = Some(property.original_name.clone());
+        self.hit_points = property.maximum_hp;
+    }
+
+    /// Скорость исходный spawn назначает только после `Init` и позиции.
+    pub(crate) fn set_spawn_speed(&mut self, property: &MonsterProperties) {
+        self.move_shape
+            .shape_mut()
+            .set_speed(property.move_speed as f32);
+    }
+
+    pub(crate) fn base_property_key(&self) -> Option<&[u8]> {
+        self.base_property_key.as_deref()
+    }
+
+    pub(crate) fn original_name(&self) -> &[u8] {
+        &self.original_name
+    }
+
+    pub(crate) const fn hit_points(&self) -> u32 {
+        self.hit_points
+    }
+
+    pub(crate) const fn set_hit_points(&mut self, hit_points: u32) {
+        self.hit_points = hit_points;
+    }
+
+    pub(crate) fn set_script_file(&mut self, script_file: &[u8]) {
+        let prefix_len = script_file
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(script_file.len());
+        self.script_file.clear();
+        self.script_file
+            .extend_from_slice(&script_file[..prefix_len]);
+    }
+
+    pub(crate) const fn set_refresh_data(
+        &mut self,
+        sign: u16,
+        leader_sign: u16,
+        leader_distance: u16,
+        refresh_index: i32,
+    ) {
+        self.sign = sign;
+        self.leader_sign = leader_sign;
+        self.leader_distance = leader_distance;
+        self.refresh_index = refresh_index;
+    }
+
+    pub(crate) fn figure(property: &MonsterProperties) -> ShapeFigure {
+        let figure = property.figure as u8;
+        ShapeFigure::from_directions([figure; 4])
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -1048,6 +1180,8 @@
 // ============================================================================
 // FUNCTION: CMonster::CMonster
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
+// IMPLEMENTED_SUBCHAIN: scalar/property defaults материализованы выше;
+// constructor-side `CMoveShape::InitSkills` остаётся у незакрытого skill owner.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:37
@@ -1142,26 +1276,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

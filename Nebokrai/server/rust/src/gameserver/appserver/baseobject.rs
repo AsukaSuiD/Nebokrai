@@ -29,6 +29,7 @@ use std::fmt;
 
 use crate::public::guid::CGuid;
 
+use super::monster::CMonster;
 use super::npc::CNpc;
 
 const LEGACY_NAME_CAPACITY: usize = 0x100;
@@ -148,6 +149,17 @@ impl CBaseObject {
             .base_object_mut()
             .set_id(id);
         npc
+    }
+
+    /// Материализует ветвь `CreateObject(600, id)` до derived skills/AI Init.
+    pub(crate) fn create_monster(id: i32) -> CMonster {
+        let mut monster = CMonster::with_constructor_defaults();
+        monster
+            .move_shape_mut()
+            .shape_mut()
+            .base_object_mut()
+            .set_id(id);
+        monster
     }
 
     pub(crate) fn add_to_byte_array(
@@ -291,8 +303,8 @@ fn read_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseObjectDec
 // ============================================================================
 // FUNCTION: CBaseObject::CreateObject
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
-// IMPLEMENTED_SUBCHAIN: ветвь type 500 материализована выше как `create_npc`;
-// остальные runtime variants и общий erased return остаются RAW.
+// IMPLEMENTED_SUBCHAIN: ветви type 500/600 материализованы выше как
+// `create_npc/create_monster`; остальные variants и erased return остаются RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\baseobject.cpp:178
