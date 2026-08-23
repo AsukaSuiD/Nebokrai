@@ -29,6 +29,8 @@ use std::fmt;
 
 use crate::public::guid::CGuid;
 
+use super::npc::CNpc;
+
 const LEGACY_NAME_CAPACITY: usize = 0x100;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -103,6 +105,14 @@ impl CBaseObject {
         self.ex_id = ex_id;
     }
 
+    pub(crate) const fn get_graphics_id(&self) -> i32 {
+        self.graphics_id
+    }
+
+    pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
+        self.graphics_id = graphics_id;
+    }
+
     pub(crate) const fn get_hash_value(object_type: i32, id: i32) -> i64 {
         let high = object_type | (id >> 31);
         ((high as u32 as u64) << 32 | id as u32 as u64) as i64
@@ -127,6 +137,17 @@ impl CBaseObject {
             .unwrap_or(name.len());
         self.name.clear();
         self.name.extend_from_slice(&name[..prefix_len]);
+    }
+
+    /// Материализует точную ветвь `CreateObject(500, id)`: сначала constructor
+    /// `CNpc`, затем общая factory-tail запись type/ID.
+    pub(crate) fn create_npc(id: i32) -> CNpc {
+        let mut npc = CNpc::with_constructor_defaults();
+        npc.move_shape_mut()
+            .shape_mut()
+            .base_object_mut()
+            .set_id(id);
+        npc
     }
 
     pub(crate) fn add_to_byte_array(
@@ -270,6 +291,8 @@ fn read_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseObjectDec
 // ============================================================================
 // FUNCTION: CBaseObject::CreateObject
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
+// IMPLEMENTED_SUBCHAIN: ветвь type 500 материализована выше как `create_npc`;
+// остальные runtime variants и общий erased return остаются RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\baseobject.cpp:178
@@ -340,10 +363,5 @@ fn read_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseObjectDec
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

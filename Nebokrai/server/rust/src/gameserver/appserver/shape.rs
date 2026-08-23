@@ -369,6 +369,14 @@ impl CShape {
         }
     }
 
+    pub(crate) const fn base_object(&self) -> &CBaseObject {
+        &self.base_object
+    }
+
+    pub(crate) const fn base_object_mut(&mut self) -> &mut CBaseObject {
+        &mut self.base_object
+    }
+
     pub(crate) const fn set_identity(&mut self, identity: ShapeIdentity) {
         self.base_object.set_type(identity.object_type);
         self.base_object.set_id(identity.id);

@@ -1,6 +1,111 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Достигнутая storage/lifetime-часть `CNpc` исторического GameServer.
+//!
+//! Constructor `CNpc::CNpc` и пустой decoder подтверждены точной парой
+//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходный owner —
+//! `server/gameserver/appserver/npc.h/.cpp`. Constructor создаёт `CMoveShape`,
+//! назначает type `500`, пустой byte-string script и `show-list = true`.
+//! Остальные scalar-поля constructor не записывает: safe Rust хранит live/born
+//! как `Option`, а region spawn обязан назначить live-time до публикации NPC.
+//! Это явно сохраняет неизвестность вместо выдуманного нулевого default-а.
+//!
+//! Специализированная ветвь `CBaseObject::CreateObject(500,id)` живёт у factory
+//! owner-а в `baseobject.rs`. `Vec<u8>` сохраняет legacy script без UTF-8.
+//! Полная shape serialization, around-message, deferred delete и Talk остаются
+//! RAW ниже до подключения соответствующих owner-цепочек.
+
+use super::moveshape::CMoveShape;
+
+const NPC_TYPE: i32 = 500;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CNpc {
+    move_shape: CMoveShape,
+    script_file: Vec<u8>,
+    show_list: bool,
+    live_time_ms: Option<u32>,
+    born_time_ms: Option<u32>,
+}
+
+impl CNpc {
+    pub(crate) fn with_constructor_defaults() -> Self {
+        let mut move_shape = CMoveShape::default();
+        move_shape.shape_mut().base_object_mut().set_type(NPC_TYPE);
+        Self {
+            move_shape,
+            script_file: Vec::new(),
+            show_list: true,
+            live_time_ms: None,
+            born_time_ms: None,
+        }
+    }
+
+    pub(crate) const fn move_shape(&self) -> &CMoveShape {
+        &self.move_shape
+    }
+
+    pub(crate) const fn move_shape_mut(&mut self) -> &mut CMoveShape {
+        &mut self.move_shape
+    }
+
+    pub(crate) fn set_script_file(&mut self, script_file: &[u8]) {
+        let prefix_len = script_file
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(script_file.len());
+        self.script_file.clear();
+        self.script_file
+            .extend_from_slice(&script_file[..prefix_len]);
+    }
+
+    pub(crate) fn script_file(&self) -> &[u8] {
+        &self.script_file
+    }
+
+    pub(crate) const fn set_show_list(&mut self, show_list: bool) {
+        self.show_list = show_list;
+    }
+
+    pub(crate) const fn show_list(&self) -> bool {
+        self.show_list
+    }
+
+    pub(crate) const fn set_live_time(&mut self, live_time_ms: u32) {
+        self.live_time_ms = Some(live_time_ms);
+    }
+
+    pub(crate) const fn live_time(&self) -> Option<u32> {
+        self.live_time_ms
+    }
+
+    pub(crate) const fn set_born_time(&mut self, born_time_ms: u32) {
+        self.born_time_ms = Some(born_time_ms);
+    }
+
+    pub(crate) const fn born_time(&self) -> Option<u32> {
+        self.born_time_ms
+    }
+
+    /// Сохраняет wrapping `GetTickCount` и строгое сравнение `live < elapsed`.
+    /// До region spawn live-time неинициализирован и predicate не применяется.
+    pub(crate) const fn lifetime_expired(&self, now_ms: u32) -> bool {
+        match (self.live_time_ms, self.born_time_ms) {
+            (Some(live_time), Some(born_time)) if live_time != 0 => {
+                live_time < now_ms.wrapping_sub(born_time)
+            }
+            _ => false,
+        }
+    }
+
+    /// Exact `CNpc::DecordFromByteArray` ничего не читает и возвращает true.
+    pub(crate) const fn decord_from_byte_array(
+        &mut self,
+        _source: &[u8],
+        _cursor: &mut usize,
+        _include_child: bool,
+    ) -> bool {
+        true
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -53,7 +158,7 @@
 
 // ============================================================================
 // FUNCTION: CNpc::CNpc
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\npc.cpp:17
@@ -61,9 +166,9 @@
 // ADDRESS: 005d3e90
 // PROTOTYPE: undefined __thiscall CNpc(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
+// /* public: __thiscall CNpc::CNpc(void) */
 //
-//
+// IMPLEMENTED выше; ABI/vtable и MSVC SSO заменены typed composition/`Vec`.
 
 // ============================================================================
 // FUNCTION: CNpc::LossHP
@@ -109,7 +214,7 @@
 
 // ============================================================================
 // FUNCTION: CNpc::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\npc.cpp:33
@@ -117,11 +222,8 @@
 // ADDRESS: 005e9840
 // PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2, bool param_3)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
+// /* public: virtual bool __thiscall CNpc::DecordFromByteArray(unsigned char *,long &,bool) */
 //
-//
-
-
-
+// IMPLEMENTED выше: source/cursor/include-child намеренно не читаются.
 
 // COMPONENT_VARIANT_END: GameServer

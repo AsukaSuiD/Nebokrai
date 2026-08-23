@@ -52,6 +52,11 @@
 //! setup/param wire-order. Создание NPC и monster принадлежит их factories и
 //! вызывается через обязательный `ServerRegionDecodeContext`; War и Country
 //! subtype decoder-ы входят в этот owner напрямую.
+//! Concrete `AddNpc` уже создаёт `CNpc` через factory type `500`, назначает
+//! spawn-поля, проводит его через `AddObject/CArea` и сохраняет owned object.
+//! `BTreeMap` используется только для identity lookup: observable обход
+//! старого MSVC `stdext::hash_map` для startup name-cache пока остаётся у
+//! `ServerRegionDecodeContext`, а не подменяется сортировкой Rust-map.
 //! Уже используемый crate dependency `encoding_rs` заменяет только ANSI
 //! преобразование имени в совместимый `String`-view; byte-exact имя остаётся
 //! у встроенного `CRegion`, поэтому wire не зависит от Unicode-конверсии.
@@ -70,23 +75,25 @@
 //! технической классификацией; domain lifecycle и callbacks не затрагивались.
 //! Остальная поверхность файла ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use encoding_rs::WINDOWS_1251;
 
 use super::area::CArea;
+use super::baseobject::CBaseObject;
 use super::country::countryparam::CCountryParam;
 use super::moveshape::{
     MoveShapePositionBlock, MoveShapePositionDispatch, MoveShapePositionFacts, MoveShapeResolver,
 };
+use super::npc::CNpc;
 use super::region::{
     CRegion, RegionCellAccessBlock, RegionDecodeError, RegionRandomContext, RegionResourceWrite,
     RegionReturnPoint, RegionStorageBlock,
 };
 use super::shape::{
     CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
-    ShapeCoordinateBlock, ShapeIdentity, ShapePositionDispatch, ShapeResolver, ShapeRuntimeFacts,
-    ShapeView,
+    ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapePositionDispatch, ShapeResolver,
+    ShapeRuntimeFacts, ShapeView,
 };
 use crate::public::guid::CGuid;
 
@@ -355,6 +362,45 @@ pub(crate) trait ServerRegionMembershipContext:
     fn notify_player_left_gods_region(&mut self, player_id: i32);
 }
 
+pub(crate) trait ServerRegionNpcContext: ServerRegionMembershipContext {
+    /// Сохраняет `GS0233` owner-side log при отсутствии свободной позиции.
+    fn log_npc_position_failure(&mut self, npc_name: &[u8]);
+
+    /// Счётчик увеличивается до `AddObject`, как `g_lTotalNpc` в exact EXE.
+    fn npc_spawned(&mut self);
+
+    /// Материализует optional `0xBF502`; startup вызывает AddNpc с false.
+    fn send_npc_entered_around(&mut self, npc: &CNpc);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ServerRegionNpcSpawnBlock {
+    RandomPosition(RegionCellAccessBlock),
+    Membership(RegionMembershipBlock),
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ServerRegionNpcSpawnReport {
+    pub(crate) created_ids: Vec<i32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NextNpcId(i32);
+
+impl NextNpcId {
+    fn take(&mut self) -> i32 {
+        let id = self.0;
+        self.0 = self.0.wrapping_add(1);
+        id
+    }
+}
+
+impl Default for NextNpcId {
+    fn default() -> Self {
+        Self(1)
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct ServerRegionRegistry {
     monsters: BTreeSet<i32>,
@@ -457,6 +503,8 @@ pub(crate) struct CServerRegion {
     area_y: i32,
     areas: Vec<CArea>,
     registry: ServerRegionRegistry,
+    owned_npcs: BTreeMap<i32, CNpc>,
+    next_npc_id: NextNpcId,
     change_area_shapes: Vec<ShapeIdentity>,
     pub(crate) param: RegionParamState,
     pub(crate) return_setup: Option<ServerReturnSetup>,
@@ -475,6 +523,93 @@ pub(crate) struct CServerRegion {
 }
 
 impl CServerRegion {
+    pub(crate) fn add_npc<Context: ServerRegionNpcContext>(
+        &mut self,
+        setup: &ServerRegionNpcSetup,
+        remember_setup: bool,
+        send_around: bool,
+        now_ms: u32,
+        area_width: i32,
+        area_height: i32,
+        context: &mut Context,
+    ) -> Result<ServerRegionNpcSpawnReport, ServerRegionNpcSpawnBlock> {
+        if remember_setup {
+            self.npc_setups.push(setup.clone());
+        }
+
+        let mut report = ServerRegionNpcSpawnReport::default();
+        let mut remaining = setup.count;
+        while remaining > 0 {
+            let position = self
+                .region
+                .get_random_pos_in_range(
+                    setup.left,
+                    setup.top,
+                    setup.right.wrapping_sub(setup.left),
+                    setup.bottom.wrapping_sub(setup.top),
+                    context,
+                )
+                .map_err(ServerRegionNpcSpawnBlock::RandomPosition)?;
+            if !position.found {
+                context.log_npc_position_failure(&setup.name);
+                remaining = remaining.wrapping_sub(1);
+                continue;
+            }
+
+            let id = self.next_npc_id.take();
+            let mut npc = CBaseObject::create_npc(id);
+            let shape = npc.move_shape_mut().shape_mut();
+            shape.base_object_mut().set_name(&setup.name);
+            shape.base_object_mut().set_graphics_id(setup.picture_id);
+            shape.set_pos_xy_move_order(position.x as f32 + 0.5, position.y as f32 + 0.5);
+            let direction = if (0..8).contains(&setup.direction) {
+                setup.direction
+            } else {
+                context.random_below(8)
+            };
+            shape.set_direction(direction);
+            npc.set_show_list(setup.show_list);
+            npc.set_script_file(&setup.script);
+            npc.set_live_time(setup.time as u32);
+            if setup.time != 0 {
+                npc.set_born_time(now_ms);
+            }
+
+            context.npc_spawned();
+            let facts = ShapeRuntimeFacts {
+                is_npc: true,
+                is_move_shape: true,
+                figure: ShapeFigure::default(),
+                ..ShapeRuntimeFacts::default()
+            };
+            self.add_object(
+                npc.move_shape_mut().shape_mut(),
+                facts,
+                area_width,
+                area_height,
+                now_ms,
+                context,
+            )
+            .map_err(ServerRegionNpcSpawnBlock::Membership)?;
+
+            self.owned_npcs.insert(id, npc);
+            report.created_ids.push(id);
+            if send_around {
+                context.send_npc_entered_around(
+                    self.owned_npcs
+                        .get(&id)
+                        .expect("NPC опубликован непосредственно перед send"),
+                );
+            }
+            remaining = remaining.wrapping_sub(1);
+        }
+        Ok(report)
+    }
+
+    pub(crate) fn find_npc_by_id(&self, id: i32) -> Option<&CNpc> {
+        self.owned_npcs.get(&id)
+    }
+
     /// Декодирует полный World -> Game region snapshot в исходном порядке:
     /// base region, area-grid, NPC, NPC-name cache, monster rectangles,
     /// weather, setup и `tagRegionParam`.
@@ -2173,6 +2308,9 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 // ============================================================================
 // FUNCTION: CServerRegion::AddNpc
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
+// IMPLEMENTED_SUBCHAIN: concrete factory/spawn/membership/owned lookup и
+// optional send dispatch материализованы выше как `add_npc`; здесь остаются
+// первичные свидетельства exact MSVC hash traversal, legacy return и message.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:1003
