@@ -2153,6 +2153,110 @@ struct WorldGameInitEnemyMutationEffects<'a> {
     enemy_name: Vec<u8>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldMainLoopFactionWarBlock {
+    NullUnion { map_key: i32 },
+    MissingFaction { faction_id: i32 },
+    EnemyMutation {
+        faction_id: i32,
+        enemy_id: i32,
+        source: FactionEnemyMutationBlock,
+    },
+}
+
+struct WorldMainLoopFactionWarEffects<'a> {
+    game: &'a CGame,
+    organizing: &'a mut COrganizingCtrl,
+    players_to_update: Vec<i32>,
+}
+
+impl FactionWarStopContext for WorldMainLoopFactionWarEffects<'_> {
+    type Block = WorldMainLoopFactionWarBlock;
+
+    fn faction_exists(&self, faction_id: i32) -> bool {
+        self.organizing.faction_by_id(faction_id).is_some()
+    }
+
+    fn faction_side(&self, root_faction_id: i32) -> Result<Vec<i32>, Self::Block> {
+        match self.organizing.is_free_faction(root_faction_id) {
+            FreeFactionLookup::NoUnion => Ok(vec![root_faction_id]),
+            FreeFactionLookup::BlockedNullConfederation { map_key } => {
+                Err(WorldMainLoopFactionWarBlock::NullUnion { map_key })
+            }
+            FreeFactionLookup::Union(union_id) => Ok(self
+                .organizing
+                .confederation_by_id(union_id)
+                .map(|union| union.member_ids_snapshot())
+                .unwrap_or_default()),
+        }
+    }
+
+    fn del_enemy_organizing(
+        &mut self,
+        faction_id: i32,
+        enemy_id: i32,
+    ) -> Result<(), Self::Block> {
+        let enemy_name = self
+            .organizing
+            .faction_by_id(enemy_id)
+            .map(|faction| legacy_c_string_prefix(faction.name()).to_vec())
+            .ok_or(WorldMainLoopFactionWarBlock::MissingFaction {
+                faction_id: enemy_id,
+            })?;
+        let faction = self
+            .organizing
+            .faction_by_id_mut(faction_id)
+            .ok_or(WorldMainLoopFactionWarBlock::MissingFaction { faction_id })?;
+        let mut effects = WorldGameInitEnemyMutationEffects {
+            game: self.game,
+            enemy_id,
+            enemy_name,
+        };
+        faction
+            .del_enemy_organizing(enemy_id, &mut effects)
+            .map(|_| ())
+            .map_err(|source| WorldMainLoopFactionWarBlock::EnemyMutation {
+                faction_id,
+                enemy_id,
+                source,
+            })
+    }
+
+    fn update_enemy_faction(&mut self, faction_id: i32) -> Result<(), Self::Block> {
+        let faction = self
+            .organizing
+            .faction_by_id_mut(faction_id)
+            .ok_or(WorldMainLoopFactionWarBlock::MissingFaction { faction_id })?;
+        let _ = faction.update_enemy_faction(self.game, &mut |player_id| {
+            self.players_to_update.push(player_id)
+        });
+        Ok(())
+    }
+
+    fn organizing_name(&self, faction_id: i32) -> Result<Vec<u8>, Self::Block> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(|faction| legacy_c_string_prefix(faction.name()).to_vec())
+            .ok_or(WorldMainLoopFactionWarBlock::MissingFaction { faction_id })
+    }
+
+    fn format_world_string(&mut self, string_id: &[u8], arguments: &[&[u8]]) -> Vec<u8> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| UnionFormatArgument::Text(argument))
+            .collect::<Vec<_>>();
+        format_union_world_string(self.game.get_string_by_id(string_id), &arguments)
+    }
+
+    fn send_orga_info_to_all(&mut self, info: &[u8], kind: u32, color: u32) {
+        let _ = COrganizingCtrl::send_organizing_info_to_all(self.game, info, kind, color);
+    }
+
+    fn put_war_log(&mut self, info: &[u8]) {
+        put_string_to_file("war", info);
+    }
+}
+
 impl FactionEnemyMutationContext for WorldGameInitEnemyMutationEffects<'_> {
     fn organizing_name(&self, organizing_id: i32) -> Option<Vec<u8>> {
         (organizing_id == self.enemy_id).then(|| self.enemy_name.clone())
@@ -4521,7 +4625,6 @@ pub(crate) struct WorldMainLoopStateOwners<'a> {
 pub(crate) struct WorldMainLoopOwners<
     'a,
     TimerCallback,
-    FactionContext,
     LeiTingContextOwner,
     DbMiscContextOwner,
     JjcContext,
@@ -4573,7 +4676,6 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) union_application_runtime: &'a WorldUnionApplicationRuntimeOwner,
     pub(crate) jjc: &'a mut CJJcSystem,
     pub(crate) jjc_week_clear_worker: &'a WorldJjcWeekClearWorker,
-    pub(crate) faction_context: &'a mut FactionContext,
     pub(crate) lei_ting_context: &'a mut LeiTingContextOwner,
     pub(crate) db_misc_context: &'a mut DbMiscContextOwner,
     pub(crate) jjc_context: &'a mut JjcContext,
@@ -4659,7 +4761,7 @@ pub(crate) struct WorldMainLoopCallbacks<'a, TimerCallback> {
 }
 
 /// Первый недоказанный/невозвращающийся участок полного MainLoop.
-pub(crate) enum WorldMainLoopBlock<FactionContextBlock, LeiTingContextBlock> {
+pub(crate) enum WorldMainLoopBlock<LeiTingContextBlock> {
     Largess(WorldMainLoopLargessGateReport),
     Refresh(WorldMainLoopRefreshStageReport),
     Reload(WorldReloadProfilesReport),
@@ -4674,7 +4776,7 @@ pub(crate) enum WorldMainLoopBlock<FactionContextBlock, LeiTingContextBlock> {
     ProcessMessage(WorldProcessMessageStageReport),
     PlayerDataQueue(WorldMainLoopPlayerDataQueueStageReport),
     Timer(WorldMainLoopTimerStageBlock),
-    FactionWar(FactionWarStopBlock<FactionContextBlock>),
+    FactionWar(FactionWarStopBlock<WorldMainLoopFactionWarBlock>),
     LeiTing(LeiTingBlock<LeiTingContextBlock>),
     DbMisc(DbMiscDoneOutBlock),
     Ping(WorldMainLoopPingError),
@@ -4683,8 +4785,8 @@ pub(crate) enum WorldMainLoopBlock<FactionContextBlock, LeiTingContextBlock> {
     Tail(WorldMainLoopPacingReport),
 }
 
-pub(crate) type WorldMainLoopResult<FactionContextBlock, LeiTingContextBlock> =
-    Result<WorldMainLoopReport, Box<WorldMainLoopBlock<FactionContextBlock, LeiTingContextBlock>>>;
+pub(crate) type WorldMainLoopResult<LeiTingContextBlock> =
+    Result<WorldMainLoopReport, Box<WorldMainLoopBlock<LeiTingContextBlock>>>;
 
 /// Один полностью возвращённый `CGame::MainLoop`, включая все ordered stages.
 #[derive(Debug)]
@@ -14121,19 +14223,32 @@ impl CGame {
     /// Raw MainLoop не назначает новый shared start перед следующим
     /// `CLeiTing::Run`, поэтому этот call-site делает только один end tick и
     /// оставляет `clocks.stage_started_at_ms` без изменения.
-    pub(crate) fn run_main_loop_faction_war_stage<Context, GetTick>(
-        &self,
+    pub(crate) fn run_main_loop_faction_war_stage<GetTick>(
+        &mut self,
         faction_war_sys: &mut CFactionWarSys,
-        context: &mut Context,
+        organizing: &mut COrganizingCtrl,
         clocks: &WorldMainLoopClockState,
         profile_state: &mut WorldMainLoopProfileState,
         mut get_tick: GetTick,
-    ) -> Result<WorldMainLoopFactionWarStageReport, FactionWarStopBlock<Context::Block>>
+    ) -> Result<
+        WorldMainLoopFactionWarStageReport,
+        FactionWarStopBlock<WorldMainLoopFactionWarBlock>,
+    >
     where
-        Context: FactionWarStopContext,
         GetTick: FnMut() -> u32,
     {
-        let faction_war = faction_war_sys.run(context, &mut get_tick)?;
+        let (faction_war, players_to_update) = {
+            let mut context = WorldMainLoopFactionWarEffects {
+                game: self,
+                organizing,
+                players_to_update: Vec::new(),
+            };
+            let report = faction_war_sys.run(&mut context, &mut get_tick)?;
+            (report, context.players_to_update)
+        };
+        for player_id in players_to_update {
+            let _ = self.update_player_faction_info(organizing, player_id);
+        }
         let finished_at_ms = get_tick();
         let elapsed_ms = finished_at_ms.wrapping_sub(clocks.stage_started_at_ms);
         profile_state.faction_war_time_ms =
@@ -14772,7 +14887,6 @@ impl CGame {
     )]
     pub(crate) async fn main_loop<
         TimerCallback,
-        FactionContext,
         LeiTingContextOwner,
         DbMiscContextOwner,
         JjcContext,
@@ -14783,16 +14897,14 @@ impl CGame {
         owners: &mut WorldMainLoopOwners<
             '_,
             TimerCallback,
-            FactionContext,
             LeiTingContextOwner,
             DbMiscContextOwner,
             JjcContext,
         >,
         callbacks: &mut WorldMainLoopCallbacks<'_, TimerCallback>,
-    ) -> WorldMainLoopResult<FactionContext::Block, LeiTingContextOwner::Block>
+    ) -> WorldMainLoopResult<LeiTingContextOwner::Block>
     where
         TimerCallback: Copy + PartialEq,
-        FactionContext: FactionWarStopContext,
         LeiTingContextOwner: WorldLeiTingRuntimeContext,
         DbMiscContextOwner: DbMiscContext,
         JjcContext: WorldJjcRuntimeContext,
@@ -15154,7 +15266,7 @@ impl CGame {
         let faction_war = self
             .run_main_loop_faction_war_stage(
                 owners.faction_war,
-                owners.faction_context,
+                owners.organizing,
                 state.clocks,
                 state.profile,
                 &mut *callbacks.get_tick,

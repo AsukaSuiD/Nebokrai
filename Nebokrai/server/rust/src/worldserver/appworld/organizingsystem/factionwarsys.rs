@@ -298,13 +298,17 @@ pub(crate) trait FactionWarStopContext {
     fn faction_side(&self, root_faction_id: i32) -> Result<Vec<i32>, Self::Block>;
 
     /// Выполняет virtual `CFaction::DelEnemyOrganizing`, включая `WS0159` log.
-    fn del_enemy_organizing(&mut self, faction_id: i32, enemy_id: i32);
+    fn del_enemy_organizing(
+        &mut self,
+        faction_id: i32,
+        enemy_id: i32,
+    ) -> Result<(), Self::Block>;
 
     /// Выполняет virtual `CFaction::UpdateEnemyFaction` (`vftable +0x154`).
-    fn update_enemy_faction(&mut self, faction_id: i32);
+    fn update_enemy_faction(&mut self, faction_id: i32) -> Result<(), Self::Block>;
 
     /// Возвращает текущее byte-exact имя organizing после update-callback-а.
-    fn organizing_name(&self, faction_id: i32) -> &[u8];
+    fn organizing_name(&self, faction_id: i32) -> Result<Vec<u8>, Self::Block>;
 
     /// Повторяет `StringTable::getStringByID` + `_sprintf` для `WS0234`.
     fn format_world_string(&mut self, string_id: &[u8], arguments: &[&[u8]]) -> Vec<u8>;
@@ -687,21 +691,37 @@ impl CFactionWarSys {
         for &first_id in &first_side {
             for &second_id in &second_side {
                 self.clear_enemy_faction(first_id, second_id);
-                context.del_enemy_organizing(first_id, second_id);
-                context.del_enemy_organizing(second_id, first_id);
+                context
+                    .del_enemy_organizing(first_id, second_id)
+                    .map_err(FactionWarStopBlock::Context)?;
+                context
+                    .del_enemy_organizing(second_id, first_id)
+                    .map_err(FactionWarStopBlock::Context)?;
             }
         }
 
         let mut first_names = Vec::new();
         for &faction_id in &first_side {
-            context.update_enemy_faction(faction_id);
-            first_names.extend_from_slice(context.organizing_name(faction_id));
+            context
+                .update_enemy_faction(faction_id)
+                .map_err(FactionWarStopBlock::Context)?;
+            first_names.extend_from_slice(
+                &context
+                    .organizing_name(faction_id)
+                    .map_err(FactionWarStopBlock::Context)?,
+            );
             first_names.push(b',');
         }
         let mut second_names = Vec::new();
         for &faction_id in &second_side {
-            context.update_enemy_faction(faction_id);
-            second_names.extend_from_slice(context.organizing_name(faction_id));
+            context
+                .update_enemy_faction(faction_id)
+                .map_err(FactionWarStopBlock::Context)?;
+            second_names.extend_from_slice(
+                &context
+                    .organizing_name(faction_id)
+                    .map_err(FactionWarStopBlock::Context)?,
+            );
             second_names.push(b',');
         }
 
