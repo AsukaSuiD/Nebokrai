@@ -174,6 +174,13 @@ impl CGoodsShadowContainer {
         Ok(ShadowRecorded { record, replaced })
     }
 
+    /// Derived owners с собственным доказанным контрактом прямого `map[]`
+    /// используют этот primitive без player/extend/capacity нормализации.
+    pub(crate) fn insert_shadow_record(&mut self, record: GoodsShadow) -> ShadowRecorded {
+        let replaced = self.shadows.insert(record.goods_id, record);
+        ShadowRecorded { record, replaced }
+    }
+
     pub(crate) fn query_goods_position(&self, goods_id: CGuid) -> Option<u32> {
         self.shadows
             .keys()
