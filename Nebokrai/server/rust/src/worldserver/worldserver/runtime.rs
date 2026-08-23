@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::future::Future;
+use std::future::poll_fn;
 use std::convert::Infallible;
 use std::fmt;
 use std::io;
@@ -13,11 +14,13 @@ use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr as UnixSocketAddr, UnixListener};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::task::Poll;
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use parking_lot::{Mutex, RwLock};
 use chrono::{Datelike, Timelike};
+use tokio::task::{JoinHandle as TokioJoinHandle, JoinSet};
 
 use crate::dbaccess::worlddb::dbgoods::TiberiusDbGoods;
 use crate::dbaccess::worlddb::dbcountry::TiberiusDbCountry;
@@ -52,7 +55,12 @@ use crate::public::auctionlog::CAuctionLog;
 use crate::public::date::TagTime;
 use crate::public::timer::CTimer;
 use crate::nets::networld::message::CMessage;
-use crate::nets::servers::ServerCommandHandle;
+use crate::nets::networld::mynetclient::{WorldClientIoError, WorldClientIoStep};
+use crate::nets::networld::myserverclient::GameServerReceiveError;
+use crate::nets::servers::{
+    AcceptStart, AdmissionOutcome, ServerCommandHandle, ServerIoAction,
+    ServerIoCompletion, ServerSnapshotError,
+};
 use crate::setup::timetoreturn::TimeToReturnCallbacks;
 use crate::setup::timetoreturn::TimeToReturn;
 use crate::setup::godsbattleconf::CGodsBattleConf;
@@ -465,6 +473,186 @@ impl WorldProcessMainLoopState {
             save_thread_handle: &mut self.save_thread_handle,
         }
     }
+}
+
+/// Наблюдения одного неблокирующего прохода двух World transport-направлений.
+#[derive(Default)]
+pub(crate) struct WorldProcessNetworkTurn {
+    pub(crate) admissions: Vec<AdmissionOutcome>,
+    pub(crate) accept_errors: Vec<io::Error>,
+    pub(crate) io_completions: Vec<ServerIoCompletion>,
+    pub(crate) server_errors: Vec<ServerSnapshotError<GameServerReceiveError>>,
+    pub(crate) login: Option<Result<WorldClientIoStep, WorldClientIoError>>,
+}
+
+#[derive(Debug)]
+pub(crate) enum WorldProcessNetworkError {
+    Task(tokio::task::JoinError),
+}
+
+impl fmt::Display for WorldProcessNetworkError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Task(error) => write!(formatter, "World network-задача завершилась: {error}"),
+        }
+    }
+}
+
+impl Error for WorldProcessNetworkError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Task(error) => Some(error),
+        }
+    }
+}
+
+/// Managed accept/read/send tasks единственного World network-owner-а.
+pub(crate) struct WorldProcessNetworkRuntime {
+    accept_task: Option<TokioJoinHandle<io::Result<(tokio::net::TcpStream, std::net::SocketAddrV4)>>>,
+    io_tasks: JoinSet<ServerIoCompletion>,
+}
+
+impl WorldProcessNetworkRuntime {
+    pub(crate) fn new() -> Self {
+        Self {
+            accept_task: None,
+            io_tasks: JoinSet::new(),
+        }
+    }
+
+    pub(crate) async fn run_turn(
+        &mut self,
+        game: &mut CGame,
+    ) -> Result<WorldProcessNetworkTurn, WorldProcessNetworkError> {
+        let mut turn = WorldProcessNetworkTurn::default();
+        self.drain_completed(game, &mut turn).await?;
+        self.start_accept(game);
+
+        if let Some(server) = game.process_game_server_mut() {
+            let snapshot = server.process_network_snapshot(super::game::legacy_tick_ms());
+            let commands = server.command_handle();
+            let (actions, errors) = snapshot.into_parts();
+            turn.server_errors = errors;
+            self.spawn_io_actions(actions, commands);
+        }
+
+        if let Some(client) = game.process_login_client_mut() {
+            turn.login = poll_once(client.run_io_once(super::game::legacy_tick_ms)).await;
+        }
+        Ok(turn)
+    }
+
+    pub(crate) async fn release(
+        &mut self,
+        game: &mut CGame,
+    ) -> Result<(), WorldProcessNetworkError> {
+        if let Some(task) = self.accept_task.take() {
+            task.abort();
+            match task.await {
+                Ok(result) => drop(result),
+                Err(error) if error.is_cancelled() => {}
+                Err(error) => return Err(WorldProcessNetworkError::Task(error)),
+            }
+        }
+
+        if let Some(server) = game.process_game_server_mut() {
+            let _ = server.command_handle().quit_all();
+        }
+        while game
+            .process_game_server_mut()
+            .is_some_and(|server| server.has_clients())
+        {
+            if let Some(server) = game.process_game_server_mut() {
+                let snapshot = server.process_network_snapshot(super::game::legacy_tick_ms());
+                let commands = server.command_handle();
+                let (actions, _errors) = snapshot.into_parts();
+                self.spawn_io_actions(actions, commands);
+            }
+            self.drain_io_completions(None)?;
+            tokio::task::yield_now().await;
+        }
+        self.io_tasks.shutdown().await;
+        if let Some(client) = game.process_login_client_mut() {
+            let _ = client.close();
+        }
+        Ok(())
+    }
+
+    async fn drain_completed(
+        &mut self,
+        game: &mut CGame,
+        turn: &mut WorldProcessNetworkTurn,
+    ) -> Result<(), WorldProcessNetworkError> {
+        if self
+            .accept_task
+            .as_ref()
+            .is_some_and(TokioJoinHandle::is_finished)
+        {
+            let result = self
+                .accept_task
+                .take()
+                .expect("завершившаяся World accept-задача проверена")
+                .await
+                .map_err(WorldProcessNetworkError::Task)?;
+            match result {
+                Ok((stream, peer)) => {
+                    if let Some(server) = game.process_game_server_mut() {
+                        turn.admissions.push(server.queue_accepted(
+                            stream,
+                            peer,
+                            super::game::legacy_tick_ms(),
+                        ));
+                    }
+                }
+                Err(error) => turn.accept_errors.push(error),
+            }
+        }
+        self.drain_io_completions(Some(&mut turn.io_completions))
+    }
+
+    fn start_accept(&mut self, game: &mut CGame) {
+        if self.accept_task.is_some() {
+            return;
+        }
+        let Some(server) = game.process_game_server_mut() else {
+            return;
+        };
+        if let AcceptStart::Pending(accept) = server.begin_accept() {
+            self.accept_task = Some(tokio::spawn(async move { accept.accept().await }));
+        }
+    }
+
+    fn spawn_io_actions(&mut self, actions: Vec<ServerIoAction>, commands: ServerCommandHandle) {
+        for action in actions {
+            let commands = commands.clone();
+            self.io_tasks
+                .spawn(async move { action.run(commands).await });
+        }
+    }
+
+    fn drain_io_completions(
+        &mut self,
+        mut output: Option<&mut Vec<ServerIoCompletion>>,
+    ) -> Result<(), WorldProcessNetworkError> {
+        while let Some(completion) = self.io_tasks.try_join_next() {
+            let completion = completion.map_err(WorldProcessNetworkError::Task)?;
+            if let Some(output) = &mut output {
+                output.push(completion);
+            }
+        }
+        Ok(())
+    }
+}
+
+async fn poll_once<Output>(future: impl Future<Output = Output>) -> Option<Output> {
+    let mut future = Box::pin(future);
+    poll_fn(move |context| {
+        Poll::Ready(match future.as_mut().poll(context) {
+            Poll::Ready(output) => Some(output),
+            Poll::Pending => None,
+        })
+    })
+    .await
 }
 
 /// Результат одного завершившегося системного save-worker-а.

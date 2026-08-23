@@ -16894,6 +16894,16 @@ impl CGame {
         self.net_client.as_mut()
     }
 
+    /// Передаёт process network-owner-у единственный mutable Login transport.
+    pub(crate) fn process_login_client_mut(&mut self) -> Option<&mut CMyNetClient> {
+        self.net_client.as_mut()
+    }
+
+    /// Передаёт process network-owner-у единственный mutable GameServer listener.
+    pub(crate) fn process_game_server_mut(&mut self) -> Option<&mut CMyNetServer> {
+        self.net_server.as_mut()
+    }
+
     /// Воспроизводит свободный `SendErrLog`: `0x1FE08 + char + long + long + C-string`.
     ///
     /// Nullable text сохраняет исходный ранний return. Внутренние bytes после
