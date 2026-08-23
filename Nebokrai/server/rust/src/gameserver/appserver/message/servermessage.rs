@@ -39,6 +39,9 @@
 //! и лишь затем запускает refresh уже живых monster base-property ссылок.
 //! Skill list `0x06` очищает и заново публикует composite-key registry из
 //! парного WorldServer wire, затем пишет точный startup log.
+//! Goods/monster/skill registry family `0x00/0x02/0x06` входит в живой FIFO
+//! одним selector-pass; monster success после log обновляет lookup-связность
+//! уже опубликованных region monster owners, как исходный dispatcher.
 //! Proxy region `0x0F` создаёт отдельный owner, полностью декодирует короткий
 //! proxy wire и map-assignment-ом публикует его до точного startup log.
 //! Region selector `0x0E` маршрутизирует все шесть concrete subtype-ов через
@@ -297,12 +300,33 @@ pub(crate) struct GameBattleFairyStartupMessageReport {
     pub(crate) log_effects: Vec<Vec<u8>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameCombatRegistryStartupReport {
+    Goods(GoodsFactoryDecodeReport),
+    Monsters(MonsterListStartupReport),
+    Skills(SkillFactoryDecodeReport),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameCombatRegistryStartupError {
+    Goods(GoodsFactoryDecodeError),
+    Monsters(MonsterListDecodeError),
+    Skills(SkillFactoryDecodeError),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameCombatRegistryStartupMessageReport {
+    pub(crate) decoded: GameCombatRegistryStartupReport,
+    pub(crate) log_effects: Vec<Vec<u8>>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageReport {
     ClientServerStart(GameClientServerStartReport),
     StringTable(GameStringTableMessageReport),
     PlayerCount(GamePlayerCountResponseReport),
     BattleFairyStartup(GameBattleFairyStartupMessageReport),
+    CombatRegistryStartup(GameCombatRegistryStartupMessageReport),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -310,6 +334,7 @@ pub(crate) enum GameServerMessageError {
     StartupSelector(GameClientServerStartPayloadError),
     StringTable(MyStringTableDecodeError),
     BattleFairyStartup(GameBattleFairyStartupError),
+    CombatRegistryStartup(GameCombatRegistryStartupError),
 }
 
 /// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
@@ -392,6 +417,76 @@ pub(crate) fn dispatch_server_message(
                     log_effects,
                 },
             )))
+        }
+        GOODS_LIST_SELECTOR | MONSTER_LIST_SELECTOR | SKILL_LIST_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("combat-registry selector проверен без изменения cursor");
+            let mut log_effects = Vec::new();
+            let decoded = match {
+                let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                decode_combat_registry_startup(consumed_selector, wire, cursor, game, |text| {
+                    log_effects.push(text.to_vec())
+                })
+                .expect("combat-registry selector проверен outer dispatcher-ом")
+                .map_err(GameServerMessageError::CombatRegistryStartup)
+            } {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(Ok(GameServerMessageReport::CombatRegistryStartup(
+                GameCombatRegistryStartupMessageReport {
+                    decoded,
+                    log_effects,
+                },
+            )))
+        }
+        _ => None,
+    }
+}
+
+fn decode_combat_registry_startup(
+    selector: i32,
+    source: &[u8],
+    cursor: &mut usize,
+    game: &mut CGame,
+    mut add_log_text: impl FnMut(&[u8]),
+) -> Option<Result<GameCombatRegistryStartupReport, GameCombatRegistryStartupError>> {
+    match selector {
+        GOODS_LIST_SELECTOR => {
+            let report = game
+                .goods_factory_mut()
+                .unserialize(source, cursor)
+                .map_err(GameCombatRegistryStartupError::Goods);
+            if report.is_ok() {
+                add_log_text(b"Initial SI_GOODSLIST...OK!");
+            }
+            Some(report.map(GameCombatRegistryStartupReport::Goods))
+        }
+        MONSTER_LIST_SELECTOR => {
+            let decoded = match game
+                .decode_monster_list(source, cursor)
+                .map_err(GameCombatRegistryStartupError::Monsters)
+            {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(error)),
+            };
+            add_log_text(b"Initial SI_MONSTERLIST...OK!");
+            let refreshed = game.refresh_all_monster_base_property();
+            Some(Ok(GameCombatRegistryStartupReport::Monsters(
+                MonsterListStartupReport { decoded, refreshed },
+            )))
+        }
+        SKILL_LIST_SELECTOR => {
+            let report = game
+                .skill_factory_mut()
+                .rebuild(source, cursor)
+                .map_err(GameCombatRegistryStartupError::Skills);
+            if report.is_ok() {
+                add_log_text(b"Initial SI_SKILLLIST...OK!");
+            }
+            Some(report.map(GameCombatRegistryStartupReport::Skills))
         }
         _ => None,
     }
@@ -812,16 +907,15 @@ pub(crate) fn dispatch_monster_list_startup(
     }
 
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-    let report = match game.decode_monster_list(source, cursor) {
-        Ok(report) => report,
-        Err(error) => return Some(Err(error)),
-    };
-    add_log_text(b"Initial SI_MONSTERLIST...OK!");
-    let refreshed = game.refresh_all_monster_base_property();
-    Some(Ok(MonsterListStartupReport {
-        decoded: report,
-        refreshed,
-    }))
+    Some(
+        match decode_combat_registry_startup(selector, source, cursor, game, &mut add_log_text)
+            .expect("monster-list selector проверен dispatcher-ом")
+        {
+            Ok(GameCombatRegistryStartupReport::Monsters(report)) => Ok(report),
+            Err(GameCombatRegistryStartupError::Monsters(error)) => Err(error),
+            Ok(_) | Err(_) => unreachable!("selector 0x02 возвращает только monster-list variant"),
+        },
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1153,6 +1247,29 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
     mut put_string_to_file: impl FnMut(&str, &[u8]),
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    if matches!(selector, GOODS_LIST_SELECTOR | SKILL_LIST_SELECTOR)
+        && let Some(result) =
+            decode_combat_registry_startup(selector, source, cursor, game, &mut add_log_text)
+    {
+        return Some(match result {
+            Ok(GameCombatRegistryStartupReport::Goods(report)) => {
+                Ok(GameOwnedStartupSnapshotReport::GoodsList(report))
+            }
+            Ok(GameCombatRegistryStartupReport::Skills(report)) => {
+                Ok(GameOwnedStartupSnapshotReport::SkillList(report))
+            }
+            Err(GameCombatRegistryStartupError::Goods(error)) => {
+                Err(GameOwnedStartupSnapshotError::GoodsList(error))
+            }
+            Err(GameCombatRegistryStartupError::Skills(error)) => {
+                Err(GameOwnedStartupSnapshotError::SkillList(error))
+            }
+            Ok(GameCombatRegistryStartupReport::Monsters(_))
+            | Err(GameCombatRegistryStartupError::Monsters(_)) => {
+                unreachable!("selector 0x00/0x06 не возвращает monster-list variant")
+            }
+        });
+    }
     if let Some(result) =
         decode_battle_fairy_startup(selector, source, cursor, game, &mut add_log_text)
     {
@@ -1184,14 +1301,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
         });
     }
     match selector {
-        GOODS_LIST_SELECTOR => {
-            let report = match game.goods_factory_mut().unserialize(source, cursor) {
-                Ok(report) => report,
-                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::GoodsList(error))),
-            };
-            add_log_text(b"Initial SI_GOODSLIST...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::GoodsList(report)))
-        }
         PLAYER_LIST_SELECTOR => {
             let report = match game
                 .player_list_mut()
@@ -1240,14 +1349,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
             Some(Ok(GameOwnedStartupSnapshotReport::ContributeSetup {
                 entries,
             }))
-        }
-        SKILL_LIST_SELECTOR => {
-            let report = match game.skill_factory_mut().rebuild(source, cursor) {
-                Ok(report) => report,
-                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::SkillList(error))),
-            };
-            add_log_text(b"Initial SI_SKILLLIST...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::SkillList(report)))
         }
         GLOBE_SETUP_SELECTOR => {
             let decoded = {

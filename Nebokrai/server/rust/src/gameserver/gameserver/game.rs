@@ -54,6 +54,9 @@
 //! lookup-ы без process-global raw pointers.
 //! `CGoodsFactory` аналогично хранит startup selector `0x00`, включая оба
 //! byte-name index-а для последующего container/goods lifecycle.
+//! Goods, monster и skill registries `0x00/0x02/0x06` теперь публикуются из
+//! реального World FIFO; monster registry после точного log выполняет полный
+//! refresh lookup-связности уже живых region monster-ов.
 //! Battle-fairy combine теперь замыкает game player-map с GlobeSetup gate и
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные
