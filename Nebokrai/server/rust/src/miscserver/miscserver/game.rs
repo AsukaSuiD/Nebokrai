@@ -12,7 +12,7 @@
 //! только после постановки регистрационных сообщений сбрасывает
 //! `m_bClientClose`.
 //!
-//! Оба пути отправляют `0x5FA01 + byte(0) + word(port) + local_ip\0`, но port
+//! Оба пути отправляют `0x5FA01 + byte(0) + long(port) + local_ip\0`, но port
 //! различается буквально: initial использует setup listen-port, reconnect —
 //! константу `0x092F`. Только initial затем ставит пустой `0x15EB05`.
 //! Результаты исходных `Send` игнорировались; Rust сохраняет их в отчёте, не
@@ -821,7 +821,9 @@ impl CGame {
         };
         let mut registration = CMessage::new(INITIAL_REGISTRATION_TYPE);
         registration.base_mut().add_byte(0);
-        registration.base_mut().add_word(registration_port);
+        registration
+            .base_mut()
+            .add_long(i32::from(registration_port));
         add_legacy_c_string(registration.base_mut(), local_ip);
         let registration = registration.send(Some(&client), false);
         let initial_sync =
