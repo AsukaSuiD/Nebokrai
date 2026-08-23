@@ -1,9 +1,11 @@
-//! Gods Battle `CGodsBattleConf` из WorldServer, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Общий Gods Battle configuration owner, подтверждённый WorldServer и
+//! GameServer EXE/PDB.
 //!
 //! Wire последовательно содержит NPC, ordered base-money records, три vector-
 //! секции, два XYD и die-back records; все counts signed. Map key задаёт
-//! unsigned порядок и отдельно не передаётся.
+//! unsigned порядок и отдельно не передаётся. Game decoder очищает все
+//! коллекции, кроме `m_vFactionRule`: исходный owner при повторном snapshot-е
+//! дополняет именно эту vector-секцию.
 //!
 //! Loader читает шесть ресурсов по очереди и очищает секцию непосредственно
 //! перед её открытием. Ошибка позднего файла сохраняет обновлённые ранние
@@ -217,7 +219,348 @@ pub(crate) struct GodsBattleNpcFactionUpdate {
     pub(crate) current: i32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GodsBattleDecodeSection {
+    NpcNames,
+    BaseMoney,
+    ReviseMoney,
+    SzlLevels,
+    FactionRules,
+    FactionXyd,
+    DieBackPositions,
+}
+
+impl fmt::Display for GodsBattleDecodeSection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::NpcNames => "NPC-записи",
+            Self::BaseMoney => "base-money записи",
+            Self::ReviseMoney => "revise-money записи",
+            Self::SzlLevels => "SZL-level записи",
+            Self::FactionRules => "правила фракций",
+            Self::FactionXyd => "faction XYD",
+            Self::DieBackPositions => "точки возврата после смерти",
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GodsBattleNpcStringField {
+    Name,
+    Monsters,
+}
+
+impl fmt::Display for GodsBattleNpcStringField {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Name => "имя NPC",
+            Self::Monsters => "список монстров",
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GodsBattleDecodeError {
+    Truncated {
+        section: GodsBattleDecodeSection,
+        record_index: Option<usize>,
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    UnterminatedNpcString {
+        record_index: usize,
+        field: GodsBattleNpcStringField,
+        offset: usize,
+        available: usize,
+    },
+}
+
+impl fmt::Display for GodsBattleDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Truncated {
+                section,
+                record_index,
+                offset,
+                needed,
+                available,
+            } => {
+                if let Some(record_index) = record_index {
+                    write!(
+                        formatter,
+                        "GodsBattle {section} #{record_index} обрывается на {offset}: нужно {needed}, доступно {available}"
+                    )
+                } else {
+                    write!(
+                        formatter,
+                        "GodsBattle {section} обрывается на {offset}: нужно {needed}, доступно {available}"
+                    )
+                }
+            }
+            Self::UnterminatedNpcString {
+                record_index,
+                field,
+                offset,
+                available,
+            } => write!(
+                formatter,
+                "GodsBattle NPC #{record_index}: {field} с позиции {offset} не завершено NUL в доступных {available} байтах"
+            ),
+        }
+    }
+}
+
+impl Error for GodsBattleDecodeError {}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GodsBattleDecodeReport {
+    pub(crate) npc_names: usize,
+    pub(crate) base_money: usize,
+    pub(crate) revise_money: usize,
+    pub(crate) szl_levels: usize,
+    pub(crate) faction_rules: usize,
+    pub(crate) die_back_positions: usize,
+}
+
 impl CGodsBattleConf {
+    /// Воспроизводит `CGodsBattleMgr::DecordFromByteArray` GameServer RVA
+    /// `0x000AB260`. Callbacks остаются внутри decoder-а, потому что warning
+    /// следует сразу за revise-money, а die-back audit — только после полного
+    /// чтения последней секции.
+    pub(crate) fn decord_from_byte_array<ReviseMismatch, MissingDieBack>(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        mut revise_money_mismatch: ReviseMismatch,
+        mut missing_die_back_positions: MissingDieBack,
+    ) -> Result<GodsBattleDecodeReport, GodsBattleDecodeError>
+    where
+        ReviseMismatch: FnMut(),
+        MissingDieBack: FnMut(),
+    {
+        self.npc_names.clear();
+        let npc_count =
+            read_gods_battle_i32(source, cursor, GodsBattleDecodeSection::NpcNames, None)?;
+        for record_index in 0..npc_count.max(0) as usize {
+            let faction = read_gods_battle_i32(
+                source,
+                cursor,
+                GodsBattleDecodeSection::NpcNames,
+                Some(record_index),
+            )?;
+            let name = read_gods_battle_c_string(
+                source,
+                cursor,
+                record_index,
+                GodsBattleNpcStringField::Name,
+            )?;
+            let monsters = read_gods_battle_c_string(
+                source,
+                cursor,
+                record_index,
+                GodsBattleNpcStringField::Monsters,
+            )?;
+            self.npc_names.push(GodsBattleFactionNpcName {
+                faction,
+                name,
+                monsters,
+            });
+        }
+
+        self.base_money.clear();
+        let base_money_count =
+            read_gods_battle_i32(source, cursor, GodsBattleDecodeSection::BaseMoney, None)?;
+        for record_index in 0..base_money_count.max(0) as usize {
+            let money_level = read_gods_battle_u32(
+                source,
+                cursor,
+                GodsBattleDecodeSection::BaseMoney,
+                Some(record_index),
+            )?;
+            let add = read_gods_battle_u32(
+                source,
+                cursor,
+                GodsBattleDecodeSection::BaseMoney,
+                Some(record_index),
+            )?;
+            let subtract = read_gods_battle_u32(
+                source,
+                cursor,
+                GodsBattleDecodeSection::BaseMoney,
+                Some(record_index),
+            )?;
+            // `std::map::operator[]` заменяет значение duplicate key.
+            self.base_money.insert(
+                money_level,
+                GodsBattleBaseMoney {
+                    money_level,
+                    add,
+                    subtract,
+                },
+            );
+        }
+
+        self.revise_money.clear();
+        let revise_money_count =
+            read_gods_battle_i32(source, cursor, GodsBattleDecodeSection::ReviseMoney, None)?;
+        for record_index in 0..revise_money_count.max(0) as usize {
+            self.revise_money.push(GodsBattleReviseMoney {
+                level_gap_revise: read_gods_battle_u32(
+                    source,
+                    cursor,
+                    GodsBattleDecodeSection::ReviseMoney,
+                    Some(record_index),
+                )?,
+                money_level_gap_revise: read_gods_battle_u32(
+                    source,
+                    cursor,
+                    GodsBattleDecodeSection::ReviseMoney,
+                    Some(record_index),
+                )?,
+                revise_min: read_gods_battle_u32(
+                    source,
+                    cursor,
+                    GodsBattleDecodeSection::ReviseMoney,
+                    Some(record_index),
+                )?,
+                revise_max: read_gods_battle_u32(
+                    source,
+                    cursor,
+                    GodsBattleDecodeSection::ReviseMoney,
+                    Some(record_index),
+                )?,
+            });
+        }
+        if self.revise_money.len() != 1 {
+            revise_money_mismatch();
+        }
+
+        self.szl_levels.clear();
+        let szl_level_count =
+            read_gods_battle_i32(source, cursor, GodsBattleDecodeSection::SzlLevels, None)?;
+        for record_index in 0..szl_level_count.max(0) as usize {
+            self.szl_levels.push(GodsBattleSzlLevel {
+                level: read_gods_battle_u32(
+                    source,
+                    cursor,
+                    GodsBattleDecodeSection::SzlLevels,
+                    Some(record_index),
+                )?,
+                min_szl: read_gods_battle_u32(
+                    source,
+                    cursor,
+                    GodsBattleDecodeSection::SzlLevels,
+                    Some(record_index),
+                )?,
+                max_szl: read_gods_battle_u32(
+                    source,
+                    cursor,
+                    GodsBattleDecodeSection::SzlLevels,
+                    Some(record_index),
+                )?,
+            });
+        }
+
+        // В отличие от остальных vector-ов Game EXE не вызывает `_Tidy` для
+        // `m_vFactionRule`: повторный snapshot дополняет прежние правила.
+        let faction_rule_count =
+            read_gods_battle_i32(source, cursor, GodsBattleDecodeSection::FactionRules, None)?;
+        for record_index in 0..faction_rule_count.max(0) as usize {
+            self.faction_rules.push(GodsBattleFactionRule {
+                faction: read_gods_battle_u32(
+                    source,
+                    cursor,
+                    GodsBattleDecodeSection::FactionRules,
+                    Some(record_index),
+                )?,
+                country_a: read_gods_battle_u32(
+                    source,
+                    cursor,
+                    GodsBattleDecodeSection::FactionRules,
+                    Some(record_index),
+                )?,
+                country_b: read_gods_battle_u32(
+                    source,
+                    cursor,
+                    GodsBattleDecodeSection::FactionRules,
+                    Some(record_index),
+                )?,
+            });
+        }
+
+        self.xyd[1] =
+            read_gods_battle_u32(source, cursor, GodsBattleDecodeSection::FactionXyd, Some(1))?;
+        self.xyd[2] =
+            read_gods_battle_u32(source, cursor, GodsBattleDecodeSection::FactionXyd, Some(2))?;
+
+        self.die_back_positions.clear();
+        let die_back_count = read_gods_battle_i32(
+            source,
+            cursor,
+            GodsBattleDecodeSection::DieBackPositions,
+            None,
+        )?;
+        for record_index in 0..die_back_count.max(0) as usize {
+            self.die_back_positions.push(GodsBattleDieBackPosition {
+                region: read_gods_battle_i32(
+                    source,
+                    cursor,
+                    GodsBattleDecodeSection::DieBackPositions,
+                    Some(record_index),
+                )?,
+                destination_region: read_gods_battle_i32(
+                    source,
+                    cursor,
+                    GodsBattleDecodeSection::DieBackPositions,
+                    Some(record_index),
+                )?,
+                left: read_gods_battle_i32(
+                    source,
+                    cursor,
+                    GodsBattleDecodeSection::DieBackPositions,
+                    Some(record_index),
+                )?,
+                top: read_gods_battle_i32(
+                    source,
+                    cursor,
+                    GodsBattleDecodeSection::DieBackPositions,
+                    Some(record_index),
+                )?,
+                right: read_gods_battle_i32(
+                    source,
+                    cursor,
+                    GodsBattleDecodeSection::DieBackPositions,
+                    Some(record_index),
+                )?,
+                bottom: read_gods_battle_i32(
+                    source,
+                    cursor,
+                    GodsBattleDecodeSection::DieBackPositions,
+                    Some(record_index),
+                )?,
+                faction: read_gods_battle_u32(
+                    source,
+                    cursor,
+                    GodsBattleDecodeSection::DieBackPositions,
+                    Some(record_index),
+                )?,
+            });
+        }
+        if self.die_back_positions.is_empty() {
+            missing_die_back_positions();
+        }
+
+        Ok(GodsBattleDecodeReport {
+            npc_names: self.npc_names.len(),
+            base_money: self.base_money.len(),
+            revise_money: self.revise_money.len(),
+            szl_levels: self.szl_levels.len(),
+            faction_rules: self.faction_rules.len(),
+            die_back_positions: self.die_back_positions.len(),
+        })
+    }
+
  /// Повторяет `LoadFile`, извлекая resource-байты только при достижении
  /// соответствующей секции.
  ///
@@ -690,4 +1033,80 @@ fn write_gods_battle_string(
     Ok(())
 }
 
-// runtime accessors, а не как Rust-реализация.
+fn read_gods_battle_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+    section: GodsBattleDecodeSection,
+    record_index: Option<usize>,
+) -> Result<[u8; N], GodsBattleDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(GodsBattleDecodeError::Truncated {
+            section,
+            record_index,
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("GodsBattle wire slice имеет запрошенную длину"))
+}
+
+fn read_gods_battle_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    section: GodsBattleDecodeSection,
+    record_index: Option<usize>,
+) -> Result<i32, GodsBattleDecodeError> {
+    Ok(i32::from_le_bytes(read_gods_battle_array(
+        source,
+        cursor,
+        section,
+        record_index,
+    )?))
+}
+
+fn read_gods_battle_u32(
+    source: &[u8],
+    cursor: &mut usize,
+    section: GodsBattleDecodeSection,
+    record_index: Option<usize>,
+) -> Result<u32, GodsBattleDecodeError> {
+    Ok(u32::from_le_bytes(read_gods_battle_array(
+        source,
+        cursor,
+        section,
+        record_index,
+    )?))
+}
+
+fn read_gods_battle_c_string(
+    source: &[u8],
+    cursor: &mut usize,
+    record_index: usize,
+    field: GodsBattleNpcStringField,
+) -> Result<Vec<u8>, GodsBattleDecodeError> {
+    let offset = *cursor;
+    let Some(remaining) = source.get(offset..) else {
+        return Err(GodsBattleDecodeError::UnterminatedNpcString {
+            record_index,
+            field,
+            offset,
+            available: 0,
+        });
+    };
+    let Some(length) = remaining.iter().position(|&byte| byte == 0) else {
+        return Err(GodsBattleDecodeError::UnterminatedNpcString {
+            record_index,
+            field,
+            offset,
+            available: remaining.len(),
+        });
+    };
+    *cursor += length + 1;
+    Ok(remaining[..length].to_vec())
+}

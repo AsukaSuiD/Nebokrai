@@ -20,6 +20,8 @@
 //! HonorEliminate `0x26` отдельно сохраняет оба подтверждённых sink-а:
 //! `AddLogText` и `PutStringToFile("HonorCompositior", ...)`; payload проверен
 //! по exact EXE и runtime-логам.
+//! GodsBattle `0x39` перед финальным startup log сохраняет decoder-local GBK
+//! warning и `PutStringToFile("godsbattleLog", ...)` в их исходных позициях.
 //!
 //! Terminal selector сначала вызывает `InitNetServer`, затем читает login и
 //! world ID и присваивает их даже после ошибки Host. Rust сохраняет этот
@@ -52,6 +54,7 @@ use crate::setup::cbattlefairyexpconfig::{BattleFairyExpDecodeError, BattleFairy
 use crate::setup::changebody::ChangeBodyDecodeError;
 use crate::setup::contributesetup::ContributeSetupDecodeError;
 use crate::setup::gmlist::{GmListDecodeError, GmListDecodeReport};
+use crate::setup::godsbattleconf::{GodsBattleDecodeError, GodsBattleDecodeReport};
 use crate::setup::goodsdestructionconfig::{GoodsDestroyDecodeError, GoodsDestroyDecodeReport};
 use crate::setup::hitlevelsetup::HitLevelDecodeError;
 use crate::setup::honorelimilateconfig::HonorEliminateDecodeError;
@@ -96,6 +99,7 @@ const JJC_REGION_LEVEL_SELECTOR: i32 = 0x32;
 const TAO_ZHUANG_SELECTOR: i32 = 0x34;
 const CI_QING_LING_BAO_SELECTOR: i32 = 0x35;
 const THING_SETUP_SELECTOR: i32 = 0x36;
+const GODS_BATTLE_SELECTOR: i32 = 0x39;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GameServerIds {
@@ -235,6 +239,7 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     ThingSetup {
         entries: usize,
     },
+    GodsBattle(GodsBattleDecodeReport),
 }
 
 #[derive(Debug)]
@@ -270,6 +275,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     LingBao(LingBaoDecodeError),
     CiQingSerialize(CiQingSerializationBlock),
     ThingSetup(ThingSetupCodecError),
+    GodsBattle(GodsBattleDecodeError),
 }
 
 impl fmt::Display for GameOwnedStartupSnapshotError {
@@ -311,6 +317,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::LingBao(error) => error.fmt(formatter),
             Self::CiQingSerialize(error) => error.fmt(formatter),
             Self::ThingSetup(error) => error.fmt(formatter),
+            Self::GodsBattle(error) => error.fmt(formatter),
         }
     }
 }
@@ -349,6 +356,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::LingBao(error) => Some(error),
             Self::CiQingSerialize(error) => Some(error),
             Self::ThingSetup(error) => Some(error),
+            Self::GodsBattle(error) => Some(error),
         }
     }
 }
@@ -731,6 +739,21 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             add_log_text(decoded_line.as_bytes());
             add_log_text(b"Initial Strictest Enforcement...ok!");
             Some(Ok(GameOwnedStartupSnapshotReport::ThingSetup { entries }))
+        }
+        GODS_BATTLE_SELECTOR => {
+            let report = match game.gods_battle_mgr_mut().decord_from_byte_array(
+                source,
+                cursor,
+                &mut add_log_text,
+                &mut put_string_to_file,
+            ) {
+                Ok(report) => report,
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::GodsBattle(error)));
+                }
+            };
+            add_log_text(b"Initial SI_GODSBATTLE_SETUP...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::GodsBattle(report)))
         }
         _ => None,
     }

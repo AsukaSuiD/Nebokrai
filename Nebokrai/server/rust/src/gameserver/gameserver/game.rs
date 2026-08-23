@@ -31,8 +31,9 @@
 //! остаются RAW;
 //! `Init` связан через обязательный World client, общий MSVCRT RNG и sequence
 //! registry до необязательной Billing-попытки, затем создаёт DupliRegion,
-//! move-check, ranks и GoodsWar owners. GoodsWar constructor сохраняет
-//! немедленный World request. Tokio/socket types заменяют ненаблюдаемые
+//! move-check, ranks и GoodsWar owners. GodsBattle startup snapshot хранится
+//! отдельным `CGodsBattleMgr` historical owner-ом. GoodsWar constructor
+//! сохраняет немедленный World request. Tokio/socket types заменяют ненаблюдаемые
 //! `CBaseMessage::Initial` и `CMySocket::MySocketInit`; следующий незакрытый
 //! шаг — resource/runtime owners после завершённого `Init`.
 //! `with_send_state/register_*/attach_*` являются явной assembly-границей
@@ -62,6 +63,7 @@ use crate::gameserver::appserver::message::sequencestring::{
 };
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::player::CPlayer;
+use crate::gameserver::appserver::servergodsbattleregion::CGodsBattleMgr;
 use crate::gameserver::appserver::shape::{
     MoveCheckCellRegistry, ShapeIdentity, ShapeResolver, ShapeView,
 };
@@ -733,6 +735,7 @@ pub(crate) struct CGame {
     tao_zhuang_setup: CTaoZhuangSetup,
     ci_qing_setup: CCiQingSetup,
     ling_bao_setup: CLingBaoSetup,
+    gods_battle_mgr: CGodsBattleMgr,
     synthesis: CSynthesis,
     new_skill_monster_conf: NewSkillMonsterConf,
     goods_destroy_setup: GoodsDestroySetup,
@@ -784,6 +787,7 @@ impl CGame {
             tao_zhuang_setup: CTaoZhuangSetup::default(),
             ci_qing_setup: CCiQingSetup::default(),
             ling_bao_setup: CLingBaoSetup::default(),
+            gods_battle_mgr: CGodsBattleMgr::default(),
             synthesis: CSynthesis::default(),
             new_skill_monster_conf: NewSkillMonsterConf::default(),
             goods_destroy_setup: GoodsDestroySetup::default(),
@@ -1118,6 +1122,14 @@ impl CGame {
 
     pub(crate) const fn ling_bao_setup_mut(&mut self) -> &mut CLingBaoSetup {
         &mut self.ling_bao_setup
+    }
+
+    pub(crate) const fn gods_battle_mgr(&self) -> &CGodsBattleMgr {
+        &self.gods_battle_mgr
+    }
+
+    pub(crate) const fn gods_battle_mgr_mut(&mut self) -> &mut CGodsBattleMgr {
+        &mut self.gods_battle_mgr
     }
 
     pub(crate) const fn synthesis_mut(&mut self) -> &mut CSynthesis {

@@ -38,7 +38,7 @@ pub(crate) mod gmlist;
 pub(crate) mod globesetup;
 #[allow(
     dead_code,
-    reason = "GodsBattle serializer подключён к initial-config до loaders/runtime owner-а"
+    reason = "общий GodsBattle config связан с World loader/serializer и Game startup owner до полного runtime"
 )]
 pub(crate) mod godsbattleconf;
 pub(crate) mod hitlevelsetup;

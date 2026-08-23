@@ -1,6 +1,15 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
+//! Статус корпуса: MIXED (`CGodsBattleMgr` startup snapshot реализован,
+//! остальной owner сохранён как RAW pseudocode).
 //! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Сырой C++ ниже после typed owner-а является комментарием, а не
+//! Rust-реализацией.
+//!
+//! Реализованный RVA `0x000AB260` сохраняет exact wire, section-local clear,
+//! намеренное append-поведение faction rules и обе внутренние audit-записи.
+//! Безразмерный pointer и 256-байтный временный C-string buffer заменены
+//! bounded slice/cursor и owned bytes; обрыв возвращает typed error после уже
+//! завершённого prefix-а вместо неназначаемого legacy UB. Region/gameplay
+//! lifecycle и остальные методы manager-а пока остаются неизвестными здесь.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -8,6 +17,48 @@
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.h
+
+use crate::setup::godsbattleconf::{
+    CGodsBattleConf, GodsBattleDecodeError, GodsBattleDecodeReport,
+};
+
+// Точные GBK payload из GameServer .rdata VA `0x00651870` и `0x00651850`.
+const REVISE_MONEY_CONFIGURATION_ERROR: &[u8] =
+    b"\xC9\xF1\xD6\xAE\xC1\xA6\xD0\xDE\xD5\xFD\xD6\xB5\xC5\xE4\xD6\xC3\xB4\xED\xCE\xF3\xA3\xA1";
+const EMPTY_DIE_BACK_CONFIGURATION: &[u8] =
+    b"\xA1\xBE\xD6\xEE\xC9\xF1\xD6\xAE\xD5\xBD\xA1\xBF\xCB\xC0\xCD\xF6\xBB\xD8\xB3\xC7\xB5\xC4\xC5\xE4\xD6\xC3\xCE\xAA\xBF\xD5";
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CGodsBattleMgr {
+    configuration: CGodsBattleConf,
+}
+
+impl CGodsBattleMgr {
+    pub(crate) const fn configuration(&self) -> &CGodsBattleConf {
+        &self.configuration
+    }
+
+    /// Воспроизводит `CGodsBattleMgr::DecordFromByteArray` RVA `0x000AB260`,
+    /// включая оба внутренних audit side effect-а в исходных позициях.
+    pub(crate) fn decord_from_byte_array<AddLogText, PutStringToFile>(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        add_log_text: &mut AddLogText,
+        put_string_to_file: &mut PutStringToFile,
+    ) -> Result<GodsBattleDecodeReport, GodsBattleDecodeError>
+    where
+        AddLogText: FnMut(&[u8]),
+        PutStringToFile: FnMut(&str, &[u8]),
+    {
+        self.configuration.decord_from_byte_array(
+            source,
+            cursor,
+            || add_log_text(REVISE_MONEY_CONFIGURATION_ERROR),
+            || put_string_to_file("godsbattleLog", EMPTY_DIE_BACK_CONFIGURATION),
+        )
+    }
+}
 
 // ============================================================================
 // FUNCTION: CGodsBattleMgr::AddRegionSet
@@ -557,7 +608,7 @@
 
 // ============================================================================
 // FUNCTION: CGodsBattleMgr::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED выше; сохранённый pseudocode документирует машинный контракт
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:750
