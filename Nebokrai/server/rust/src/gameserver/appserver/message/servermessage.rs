@@ -80,6 +80,7 @@ const GOODS_DESTROY_SELECTOR: i32 = 0x23;
 const CHANGE_BODY_SELECTOR: i32 = 0x24;
 const HONOR_ELIMINATE_SELECTOR: i32 = 0x26;
 const DA_KONG_SELECTOR: i32 = 0x2b;
+const BATTLE_FAIRY_EXP_SELECTOR: i32 = 0x2c;
 const THING_SETUP_SELECTOR: i32 = 0x36;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -198,6 +199,7 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
         minimum_level: i32,
     },
     DaKong(DaKongDecodeReport),
+    BattleFairyExp(BattleFairyExpDecodeReport),
     ThingSetup {
         entries: usize,
     },
@@ -225,6 +227,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     ChangeBody(ChangeBodyDecodeError),
     HonorEliminate(HonorEliminateDecodeError),
     DaKong(DaKongDecodeError),
+    BattleFairyExp(BattleFairyExpDecodeError),
     ThingSetup(ThingSetupCodecError),
 }
 
@@ -256,6 +259,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::ChangeBody(error) => error.fmt(formatter),
             Self::HonorEliminate(error) => error.fmt(formatter),
             Self::DaKong(error) => error.fmt(formatter),
+            Self::BattleFairyExp(error) => error.fmt(formatter),
             Self::ThingSetup(error) => error.fmt(formatter),
         }
     }
@@ -284,6 +288,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::ChangeBody(error) => Some(error),
             Self::HonorEliminate(error) => Some(error),
             Self::DaKong(error) => Some(error),
+            Self::BattleFairyExp(error) => Some(error),
             Self::ThingSetup(error) => Some(error),
         }
     }
@@ -294,7 +299,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
     selector: i32,
     message: &mut CMessage,
     game: &mut CGame,
-    mut add_log_text: impl FnMut(&str),
+    mut add_log_text: impl FnMut(&[u8]),
     mut put_string_to_file: impl FnMut(&str, &[u8]),
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
@@ -307,7 +312,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                 Ok(report) => report,
                 Err(error) => return Some(Err(GameOwnedStartupSnapshotError::PlayerList(error))),
             };
-            add_log_text("Initial SI_PLAYERLIST...OK!");
+            add_log_text(b"Initial SI_PLAYERLIST...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::PlayerList(report)))
         }
         TRADE_LIST_SELECTOR => {
@@ -315,7 +320,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                 Ok(entries) => entries,
                 Err(error) => return Some(Err(GameOwnedStartupSnapshotError::TradeList(error))),
             };
-            add_log_text("Initial SI_TRADELIST...OK!");
+            add_log_text(b"Initial SI_TRADELIST...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::TradeList { entries }))
         }
         INCREMENT_SHOP_SELECTOR => {
@@ -328,7 +333,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                     return Some(Err(GameOwnedStartupSnapshotError::IncrementShop(error)));
                 }
             };
-            add_log_text("Initial SI_INCREMENTSHOPLIST...OK!");
+            add_log_text(b"Initial SI_INCREMENTSHOPLIST...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::IncrementShop {
                 entries,
             }))
@@ -343,7 +348,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                     return Some(Err(GameOwnedStartupSnapshotError::ContributeSetup(error)));
                 }
             };
-            add_log_text("Initial SI_CONTRIBUTEITEM...OK!");
+            add_log_text(b"Initial SI_CONTRIBUTEITEM...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::ContributeSetup {
                 entries,
             }))
@@ -354,7 +359,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                 Err(error) => return Some(Err(GameOwnedStartupSnapshotError::LogSystem(error))),
             };
             game.da_kong_xiang_qian_mut().set_key(report.da_kong_log);
-            add_log_text("Initial SI_LOGSYSTEM...OK!");
+            add_log_text(b"Initial SI_LOGSYSTEM...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::LogSystem {
                 entries: report.items,
                 da_kong_log: report.da_kong_log,
@@ -365,7 +370,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                 Ok(report) => report,
                 Err(error) => return Some(Err(GameOwnedStartupSnapshotError::GmList(error))),
             };
-            add_log_text("Initial SI_GMLIST...OK!");
+            add_log_text(b"Initial SI_GMLIST...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::GmList(report)))
         }
         REGION_SETUP_SELECTOR => {
@@ -376,7 +381,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                 Ok(entries) => entries,
                 Err(error) => return Some(Err(GameOwnedStartupSnapshotError::RegionSetup(error))),
             };
-            add_log_text("Initial SI_REGIONLEVELSETUP...OK!");
+            add_log_text(b"Initial SI_REGIONLEVELSETUP...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::RegionSetup { entries }))
         }
         HIT_LEVEL_SELECTOR => {
@@ -387,7 +392,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                 Ok(entries) => entries,
                 Err(error) => return Some(Err(GameOwnedStartupSnapshotError::HitLevel(error))),
             };
-            add_log_text("Initial SI_HITLEVEL...OK!");
+            add_log_text(b"Initial SI_HITLEVEL...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::HitLevel { entries }))
         }
         PLAYER_RANKS_SELECTOR => {
@@ -413,7 +418,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                 return Some(Err(GameOwnedStartupSnapshotError::DupliRegions(error)));
             }
             let entries = setup.entries().len();
-            add_log_text("Initial SI_DUPLIREGIONSETUP...OK!");
+            add_log_text(b"Initial SI_DUPLIREGIONSETUP...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::DupliRegions { entries }))
         }
         PRISON_CONF_SELECTOR => {
@@ -424,7 +429,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                 Ok(entries) => entries,
                 Err(error) => return Some(Err(GameOwnedStartupSnapshotError::PrisonConf(error))),
             };
-            add_log_text("Initial SI_PRISON_CONF...OK!");
+            add_log_text(b"Initial SI_PRISON_CONF...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::PrisonConf { entries }))
         }
         PRECIOUS_BOX_CONF_SELECTOR => {
@@ -437,7 +442,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                     return Some(Err(GameOwnedStartupSnapshotError::PreciousBoxConf(error)));
                 }
             };
-            add_log_text("Initial SI_PRECIOUSBOX_CONF...OK!");
+            add_log_text(b"Initial SI_PRECIOUSBOX_CONF...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::PreciousBoxConf {
                 entries,
             }))
@@ -450,7 +455,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                 Ok(report) => report,
                 Err(error) => return Some(Err(GameOwnedStartupSnapshotError::FairyExp(error))),
             };
-            add_log_text("Initial SI_FAIRY_EXP...ok!");
+            add_log_text(b"Initial SI_FAIRY_EXP...ok!");
             Some(Ok(GameOwnedStartupSnapshotReport::FairyExp(report)))
         }
         SYNTHESIS_SELECTOR => {
@@ -458,7 +463,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                 Ok(report) => report,
                 Err(error) => return Some(Err(GameOwnedStartupSnapshotError::Synthesis(error))),
             };
-            add_log_text("Initial SI_SYNTHESIS...OK!");
+            add_log_text(b"Initial SI_SYNTHESIS...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::Synthesis(report)))
         }
         NEW_SKILL_MONSTER_SELECTOR => {
@@ -471,7 +476,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                     return Some(Err(GameOwnedStartupSnapshotError::NewSkillMonster(error)));
                 }
             };
-            add_log_text("Initial SI_NEWSKILL_MONSTER_CONF...OK!");
+            add_log_text(b"Initial SI_NEWSKILL_MONSTER_CONF...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::NewSkillMonster(report)))
         }
         GOODS_DESTROY_SELECTOR => {
@@ -482,7 +487,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                 Ok(report) => report,
                 Err(error) => return Some(Err(GameOwnedStartupSnapshotError::GoodsDestroy(error))),
             };
-            add_log_text("Initial SI_GOODS_DESTROY_CONF...OK!");
+            add_log_text(b"Initial SI_GOODS_DESTROY_CONF...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::GoodsDestroy(report)))
         }
         CHANGE_BODY_SELECTOR => {
@@ -493,7 +498,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                 Ok(entries) => entries,
                 Err(error) => return Some(Err(GameOwnedStartupSnapshotError::ChangeBody(error))),
             };
-            add_log_text("Initial SI_CHANGE_BODY...OK!");
+            add_log_text(b"Initial SI_CHANGE_BODY...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::ChangeBody { entries }))
         }
         HONOR_ELIMINATE_SELECTOR => {
@@ -503,7 +508,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             }
             let level_difference = config.level_difference;
             let minimum_level = config.minimum_level;
-            add_log_text("Inital SI_HONOR_ELIMILATE_CONF...ok!");
+            add_log_text(b"Inital SI_HONOR_ELIMILATE_CONF...ok!");
             put_string_to_file(
                 "HonorCompositior",
                 b"Inital SI_HONOR_ELIMILATE_CONF...ok\xA3\xA1",
@@ -523,6 +528,19 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             };
             Some(Ok(GameOwnedStartupSnapshotReport::DaKong(report)))
         }
+        BATTLE_FAIRY_EXP_SELECTOR => {
+            let report = match game
+                .battle_fairy_exp_config_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(report) => report,
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::BattleFairyExp(error)));
+                }
+            };
+            add_log_text(b"Initial SI_BATLLE_FAIRY_CONF...ok\xA3\xA1");
+            Some(Ok(GameOwnedStartupSnapshotReport::BattleFairyExp(report)))
+        }
         THING_SETUP_SELECTOR => {
             if let Err(error) = game
                 .thing_setup_mut()
@@ -531,8 +549,9 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                 return Some(Err(GameOwnedStartupSnapshotError::ThingSetup(error)));
             }
             let entries = game.thing_setup().all_things().len();
-            add_log_text(&format!("GS Leiting Decord:line {entries}"));
-            add_log_text("Initial Strictest Enforcement...ok!");
+            let decoded_line = format!("GS Leiting Decord:line {entries}");
+            add_log_text(decoded_line.as_bytes());
+            add_log_text(b"Initial Strictest Enforcement...ok!");
             Some(Ok(GameOwnedStartupSnapshotReport::ThingSetup { entries }))
         }
         _ => None,

@@ -76,6 +76,7 @@ use crate::nets::netserver::mynetserver::{
 use crate::nets::servers::ServerHostError;
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
+use crate::setup::cbattlefairyexpconfig::CBattleFairyExpConfig;
 use crate::setup::changebody::CChangeBodyConf;
 use crate::setup::contributesetup::CContributeSetup;
 use crate::setup::fairyexpconf::CFairyExpConf;
@@ -717,6 +718,7 @@ pub(crate) struct CGame {
     prison_conf: PrisonConf,
     precious_box_conf: PreciousBoxConf,
     fairy_exp_conf: CFairyExpConf,
+    battle_fairy_exp_config: CBattleFairyExpConfig,
     synthesis: CSynthesis,
     new_skill_monster_conf: NewSkillMonsterConf,
     goods_destroy_setup: GoodsDestroySetup,
@@ -760,6 +762,7 @@ impl CGame {
             prison_conf: PrisonConf::default(),
             precious_box_conf: PreciousBoxConf::default(),
             fairy_exp_conf: CFairyExpConf::default(),
+            battle_fairy_exp_config: CBattleFairyExpConfig::default(),
             synthesis: CSynthesis::default(),
             new_skill_monster_conf: NewSkillMonsterConf::default(),
             goods_destroy_setup: GoodsDestroySetup::default(),
@@ -1026,6 +1029,10 @@ impl CGame {
 
     pub(crate) const fn fairy_exp_conf_mut(&mut self) -> &mut CFairyExpConf {
         &mut self.fairy_exp_conf
+    }
+
+    pub(crate) const fn battle_fairy_exp_config_mut(&mut self) -> &mut CBattleFairyExpConfig {
+        &mut self.battle_fairy_exp_config
     }
 
     pub(crate) const fn synthesis_mut(&mut self) -> &mut CSynthesis {
