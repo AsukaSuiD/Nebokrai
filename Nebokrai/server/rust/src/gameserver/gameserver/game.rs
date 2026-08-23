@@ -47,6 +47,8 @@
 //! `length + 1` NUL-padding заменён bounded `Vec` и C-string prefix adapter-ом.
 //! `MyStringTable` также принадлежит `CGame`: reload сначала очищает map,
 //! публикует decoded prefix и сохраняет пустой fallback `GetStringByID`.
+//! `CHonorRanks` хранит четыре rank-type × четыре country snapshots; поля
+//! полного игрока для total-reset остаются отдельной assembly-границей.
 //! `with_send_state/register_*/attach_*` являются явной assembly-границей
 //! baseline и не снимают их псевдокод. Network setup передаётся отдельной
 //! post-`LoadSetup*` проекцией. Windows thread handles заменены owned Tokio
@@ -82,6 +84,7 @@ use crate::gameserver::appserver::servergodsbattleregion::CGodsBattleMgr;
 use crate::gameserver::appserver::shape::{
     MoveCheckCellRegistry, ShapeIdentity, ShapeResolver, ShapeView,
 };
+use crate::gameserver::gameserver::honorranks::CHonorRanks;
 use crate::gameserver::gameserver::playerranks::CPlayerRanks;
 use crate::nets::clients::ClientConnectError;
 use crate::nets::mysocket::legacy_ipv4_word;
@@ -796,6 +799,7 @@ pub(crate) struct CGame {
     dupli_region_setup: Option<CDupliRegionSetup>,
     move_check_cells: MoveCheckCellRegistry,
     player_ranks: Option<CPlayerRanks>,
+    honor_ranks: CHonorRanks,
     goods_war: Option<CGoodsWarMember>,
     id_index: u8,
     team_id_counter: u32,
@@ -865,6 +869,7 @@ impl CGame {
             dupli_region_setup: None,
             move_check_cells: MoveCheckCellRegistry::new(),
             player_ranks: None,
+            honor_ranks: CHonorRanks::default(),
             goods_war: None,
             id_index: 0,
             team_id_counter: 1,
@@ -1432,6 +1437,14 @@ impl CGame {
 
     pub(crate) const fn player_ranks_mut(&mut self) -> Option<&mut CPlayerRanks> {
         self.player_ranks.as_mut()
+    }
+
+    pub(crate) const fn honor_ranks(&self) -> &CHonorRanks {
+        &self.honor_ranks
+    }
+
+    pub(crate) const fn honor_ranks_mut(&mut self) -> &mut CHonorRanks {
+        &mut self.honor_ranks
     }
 
     pub(crate) const fn goods_war(&self) -> Option<&CGoodsWarMember> {

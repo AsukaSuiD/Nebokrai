@@ -40,6 +40,8 @@
 //! Game ID selector `0x12` сохраняет raw byte для старшего байта team ID.
 //! Language table selector `0x2F` и runtime refresh `0x7F807` используют один
 //! clear/decode/log/cursor контракт `CGame::CreateStringTable`.
+//! Honor ranks `0x27..0x2A` декодируют четыре country-list, а total branch
+//! перед финальным log передаёт точную player-reset семантику context-owner-у.
 //!
 //! Terminal selector сначала вызывает `InitNetServer`, затем читает login и
 //! world ID и присваивает их даже после ошибки Host. Rust сохраняет этот
@@ -71,6 +73,7 @@ use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyCompos
 use crate::gameserver::gameserver::game::{
     CGame, GameNetworkInitializationError, GameScriptResourceContext, GameSingleFilePublication,
 };
+use crate::gameserver::gameserver::honorranks::{HonorRanksDecodeError, HonorRanksDecodeReport};
 use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::nets::netserver::mynetclient::CMyNetClient;
@@ -136,6 +139,10 @@ const NEW_SKILL_MONSTER_SELECTOR: i32 = 0x22;
 const GOODS_DESTROY_SELECTOR: i32 = 0x23;
 const CHANGE_BODY_SELECTOR: i32 = 0x24;
 const HONOR_ELIMINATE_SELECTOR: i32 = 0x26;
+const DAYS_HONOR_RANK_SELECTOR: i32 = 0x27;
+const WEEKS_HONOR_RANK_SELECTOR: i32 = 0x28;
+const MONTHS_HONOR_RANK_SELECTOR: i32 = 0x29;
+const TOTAL_HONOR_RANK_SELECTOR: i32 = 0x2a;
 const DA_KONG_SELECTOR: i32 = 0x2b;
 const BATTLE_FAIRY_EXP_SELECTOR: i32 = 0x2c;
 const BATTLE_FAIRY_COMBINE_SELECTOR: i32 = 0x2d;
@@ -1115,6 +1122,123 @@ pub(crate) fn dispatch_string_table_refresh(
 
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
     Some(game.create_string_table(source, cursor, &mut add_log_text))
+}
+
+pub(crate) trait HonorRankPlayerResetContext {
+    /// Идёт по ordered `CGame::s_mapPlayer`: nullable pointer пишет diagnostic;
+    /// для живого игрока всегда обнуляет days, по mask `2/4` — weeks/months,
+    /// затем вызывает `AdjustHonorRank`, если rank-of-nobility ненулевой.
+    fn reset_total_honor_eliminate(
+        &mut self,
+        reset_mask: u32,
+        put_string_to_file: &mut dyn FnMut(&str, &[u8]),
+    );
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct HonorRankStartupReport {
+    pub(crate) decoded: HonorRanksDecodeReport,
+    pub(crate) reset_mask: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HonorRankStartupError {
+    MissingResetMask {
+        offset: usize,
+        available: usize,
+    },
+    Decode(HonorRanksDecodeError),
+}
+
+impl fmt::Display for HonorRankStartupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingResetMask { offset, available } => write!(
+                formatter,
+                "total honor reset mask обрывается в {offset}: нужно 4, доступно {available}"
+            ),
+            Self::Decode(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for HonorRankStartupError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::MissingResetMask { .. } => None,
+            Self::Decode(error) => Some(error),
+        }
+    }
+}
+
+/// Обрабатывает четыре honor-rank startup snapshots `0x27..0x2A`.
+pub(crate) fn dispatch_honor_rank_startup_setup<Context: HonorRankPlayerResetContext>(
+    selector: i32,
+    message: &mut CMessage,
+    game: &mut CGame,
+    context: &mut Context,
+    mut put_string_to_file: impl FnMut(&str, &[u8]),
+) -> Result<Option<HonorRankStartupReport>, HonorRankStartupError> {
+    let (rank_type, log_text, has_reset_mask) = match selector {
+        DAYS_HONOR_RANK_SELECTOR => (
+            0,
+            b"Initial SI_DAYS_HONOR_ELIMILATE_RANK ...ok!\xA3\xA1".as_slice(),
+            false,
+        ),
+        WEEKS_HONOR_RANK_SELECTOR => (
+            1,
+            b"Initial SI_WEEKS_HONOR_ELIMILATE_RANK...ok!\xA3\xA1".as_slice(),
+            false,
+        ),
+        MONTHS_HONOR_RANK_SELECTOR => (
+            2,
+            b"Initial SI_MOHTHS_HONOR_ELIMILATE_RANK...ok!\xA3\xA1".as_slice(),
+            false,
+        ),
+        TOTAL_HONOR_RANK_SELECTOR => (
+            3,
+            b"Initial SI_TOTAL_HONOR_ELIMILATE_RANK...ok!\xA3\xA1".as_slice(),
+            true,
+        ),
+        _ => return Ok(None),
+    };
+
+    let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    let reset_mask = if has_reset_mask {
+        Some(read_honor_reset_mask(source, cursor)?)
+    } else {
+        None
+    };
+    let decoded = game
+        .honor_ranks_mut()
+        .decord_from_byte_array(source, cursor, rank_type, -1)
+        .map_err(HonorRankStartupError::Decode)?;
+
+    if let Some(reset_mask) = reset_mask {
+        context.reset_total_honor_eliminate(reset_mask, &mut put_string_to_file);
+    }
+    put_string_to_file("HonorRanksLog", log_text);
+    Ok(Some(HonorRankStartupReport {
+        decoded,
+        reset_mask,
+    }))
+}
+
+fn read_honor_reset_mask(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<u32, HonorRankStartupError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(4)) else {
+        return Err(HonorRankStartupError::MissingResetMask { offset, available });
+    };
+    *cursor += 4;
+    Ok(u32::from_le_bytes(
+        bytes
+            .try_into()
+            .expect("total honor reset mask содержит четыре байта"),
+    ))
 }
 
 /// Наблюдаемый итог reconnect-ветви Billing `0x6F904`.

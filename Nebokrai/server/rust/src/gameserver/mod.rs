@@ -52,5 +52,6 @@ pub(crate) mod appserver {
 )]
 pub(crate) mod gameserver {
     pub(crate) mod game;
+    pub(crate) mod honorranks;
     pub(crate) mod playerranks;
 }
