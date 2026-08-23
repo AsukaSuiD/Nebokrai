@@ -36,8 +36,9 @@
 //! сохраняет немедленный World request. Tokio/socket types заменяют ненаблюдаемые
 //! `CBaseMessage::Initial` и `CMySocket::MySocketInit`; следующий незакрытый
 //! шаг — resource/runtime owners после завершённого `Init`.
-//! QuestSystem process singleton хранится owned-полем `CGame`, сохраняя exact
-//! startup wire и runtime lookup-контракты без отдельного global allocation.
+//! QuestSystem и CountryParam process singletons хранятся owned-полями `CGame`,
+//! сохраняя exact startup wire и runtime lookup-контракты без отдельных global
+//! allocations.
 //! `with_send_state/register_*/attach_*` являются явной assembly-границей
 //! baseline и не снимают их псевдокод. Network setup передаётся отдельной
 //! post-`LoadSetup*` проекцией. Windows thread handles заменены owned Tokio
@@ -58,6 +59,7 @@ use std::time::Duration;
 
 use rustix::system::uname;
 
+use crate::gameserver::appserver::country::countryparam::CCountryParam;
 use crate::gameserver::appserver::goods::cbattlefairyproperty::CBattleFairyProperty;
 use crate::gameserver::appserver::goodswarmember::CGoodsWarMember;
 use crate::gameserver::appserver::message::sequencestring::{
@@ -733,6 +735,7 @@ pub(crate) struct CGame {
     area_height: i32,
     auction_now: bool,
     quest_system: CQuestSystem,
+    country_param: CCountryParam,
     region_setup: CRegionSetup,
     hit_level_setup: CHitLevelSetup,
     prison_conf: PrisonConf,
@@ -791,6 +794,7 @@ impl CGame {
             area_height: 15,
             auction_now: false,
             quest_system: CQuestSystem::default(),
+            country_param: CCountryParam::default(),
             region_setup: CRegionSetup::default(),
             hit_level_setup: CHitLevelSetup::default(),
             prison_conf: PrisonConf::default(),
@@ -1096,6 +1100,14 @@ impl CGame {
 
     pub(crate) const fn quest_system_mut(&mut self) -> &mut CQuestSystem {
         &mut self.quest_system
+    }
+
+    pub(crate) const fn country_param(&self) -> &CCountryParam {
+        &self.country_param
+    }
+
+    pub(crate) const fn country_param_mut(&mut self) -> &mut CCountryParam {
+        &mut self.country_param
     }
 
     pub(crate) const fn region_setup_mut(&mut self) -> &mut CRegionSetup {
