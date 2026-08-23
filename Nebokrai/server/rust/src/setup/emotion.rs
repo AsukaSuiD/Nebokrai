@@ -1,12 +1,16 @@
-//! Эмоции `CEmotion` из WorldServer, подтверждённые
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Общий owner эмоций `CEmotion`, подтверждённый точными
+//! `worldserver.exe + worldserver.pdb` и `gameserver.exe + GameServer.pdb`;
+//! исходный owner `server/setup/emotion.cpp`.
 //!
 //! Loader не очищает static map: каждая `*` запись заменяет только свой signed
 //! ID. Missing file не меняет state, открытый файл успешен даже без records;
 //! malformed tail сохраняет полный префикс.
 //!
 //! Wire — signed count и ordered пары signed ID/value. `BTreeMap` и стандартный
-//! файловый ввод заменяют MSVC map/CRFile без транзакционной подмены.
+//! файловый ввод заменяют MSVC map/CRFile без транзакционной подмены. Game
+//! decoder также не очищает map, применяет complete records немедленно и
+//! отклоняет отрицательный count, который в оригинале небезопасно декрементился
+//! до выхода за входной буфер.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -21,6 +25,31 @@ pub(crate) struct CEmotion {
 }
 
 impl CEmotion {
+    pub(crate) fn unserialize(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<EmotionDecodeReport, EmotionDecodeError> {
+        let declared = read_wire_i32(source, cursor, "emotion count")?;
+        if declared < 0 {
+            return Err(EmotionDecodeError::NegativeCount { declared });
+        }
+
+        let mut decoded = 0;
+        for _ in 0..declared as usize {
+            let emotion_id = read_wire_i32(source, cursor, "emotion ID")?;
+            let value = read_wire_i32(source, cursor, "emotion value")?;
+            self.emotions.insert(emotion_id, value);
+            decoded += 1;
+        }
+
+        Ok(EmotionDecodeReport {
+            declared,
+            decoded,
+            retained: self.emotions.len(),
+        })
+    }
+
     pub(crate) fn load_from_file(
         &mut self,
         path: impl AsRef<Path>,
@@ -36,8 +65,8 @@ impl CEmotion {
             .filter(|token| !token.is_empty());
         let mut applied = 0;
         while read_to(&mut tokens, b"*") {
-            let emotion_id = read_i32(&mut tokens, "emotion ID")?;
-            let value = read_i32(&mut tokens, "emotion value")?;
+            let emotion_id = read_text_i32(&mut tokens, "emotion ID")?;
+            let value = read_text_i32(&mut tokens, "emotion value")?;
             self.emotions.insert(emotion_id, value);
             applied += 1;
         }
@@ -60,6 +89,46 @@ impl CEmotion {
         Ok(())
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EmotionDecodeReport {
+    pub(crate) declared: i32,
+    pub(crate) decoded: usize,
+    pub(crate) retained: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EmotionDecodeError {
+    Field {
+        field: &'static str,
+        offset: usize,
+        available: usize,
+    },
+    NegativeCount {
+        declared: i32,
+    },
+}
+
+impl fmt::Display for EmotionDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Field {
+                field,
+                offset,
+                available,
+            } => write!(
+                formatter,
+                "emotion snapshot обрывается на {field} в {offset}: нужно 4, доступно {available}"
+            ),
+            Self::NegativeCount { declared } => write!(
+                formatter,
+                "emotion snapshot содержит отрицательный count {declared}"
+            ),
+        }
+    }
+}
+
+impl Error for EmotionDecodeError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum EmotionFormatError {
@@ -125,7 +194,7 @@ impl fmt::Display for EmotionSerializeError {
 
 impl Error for EmotionSerializeError {}
 
-fn read_i32<'a>(
+fn read_text_i32<'a>(
     tokens: &mut impl Iterator<Item = &'a [u8]>,
     field: &'static str,
 ) -> Result<i32, EmotionFormatError> {
@@ -141,4 +210,31 @@ fn read_i32<'a>(
             field,
             token: token.to_vec(),
         })
+}
+
+fn read_wire_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<i32, EmotionDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(end) = offset.checked_add(4) else {
+        return Err(EmotionDecodeError::Field {
+            field,
+            offset,
+            available,
+        });
+    };
+    let Some(bytes) = source.get(offset..end) else {
+        return Err(EmotionDecodeError::Field {
+            field,
+            offset,
+            available,
+        });
+    };
+    *cursor = end;
+    Ok(i32::from_le_bytes(
+        bytes.try_into().expect("emotion signed long уже проверен"),
+    ))
 }

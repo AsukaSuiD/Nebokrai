@@ -31,6 +31,8 @@
 //! technology wire-quirks до точного startup log.
 //! CountryHandler `0x19` заменяет прежние country owners, декодирует byte-count
 //! minister records и публикует ordered lookup до финального startup log.
+//! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
+//! публикует runtime repeated-emotion lookup до финального startup log.
 //!
 //! Terminal selector сначала вызывает `InitNetServer`, затем читает login и
 //! world ID и присваивает их даже после ошибки Host. Rust сохраняет этот
@@ -68,6 +70,7 @@ use crate::public::wordsfilter::{WordsFilterDecodeError, WordsFilterDecodeReport
 use crate::setup::cbattlefairyexpconfig::{BattleFairyExpDecodeError, BattleFairyExpDecodeReport};
 use crate::setup::changebody::ChangeBodyDecodeError;
 use crate::setup::contributesetup::ContributeSetupDecodeError;
+use crate::setup::emotion::{EmotionDecodeError, EmotionDecodeReport};
 use crate::setup::globesetup::{GlobeSetupDecodeError, GlobeSetupDecodeReport};
 use crate::setup::gmlist::{GmListDecodeError, GmListDecodeReport};
 use crate::setup::godsbattleconf::{GodsBattleDecodeError, GodsBattleDecodeReport};
@@ -98,6 +101,7 @@ const LOG_SYSTEM_SELECTOR: i32 = 0x08;
 const GM_LIST_SELECTOR: i32 = 0x09;
 const REGION_SETUP_SELECTOR: i32 = 0x11;
 const HIT_LEVEL_SELECTOR: i32 = 0x14;
+const EMOTION_SELECTOR: i32 = 0x15;
 const QUEST_SYSTEM_SELECTOR: i32 = 0x16;
 const PLAYER_RANKS_SELECTOR: i32 = 0x17;
 const COUNTRY_PARAM_SELECTOR: i32 = 0x18;
@@ -219,6 +223,7 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     HitLevel {
         entries: usize,
     },
+    Emotion(EmotionDecodeReport),
     QuestSystem(QuestSystemDecodeReport),
     PlayerRanks {
         entries: usize,
@@ -283,6 +288,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     GmList(GmListDecodeError),
     RegionSetup(RegionSetupDecodeError),
     HitLevel(HitLevelDecodeError),
+    Emotion(EmotionDecodeError),
     QuestSystem(QuestSystemDecodeError),
     PlayerRanks(PlayerRanksDecodeError),
     CountryParam(CountryParamInputBlock),
@@ -329,6 +335,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::GmList(error) => error.fmt(formatter),
             Self::RegionSetup(error) => error.fmt(formatter),
             Self::HitLevel(error) => error.fmt(formatter),
+            Self::Emotion(error) => error.fmt(formatter),
             Self::QuestSystem(error) => error.fmt(formatter),
             Self::PlayerRanks(error) => error.fmt(formatter),
             Self::CountryParam(error) => error.fmt(formatter),
@@ -372,6 +379,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::GmList(error) => Some(error),
             Self::RegionSetup(error) => Some(error),
             Self::HitLevel(error) => Some(error),
+            Self::Emotion(error) => Some(error),
             Self::QuestSystem(error) => Some(error),
             Self::PlayerRanks(error) => Some(error),
             Self::CountryParam(error) => Some(error),
@@ -530,6 +538,14 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             };
             add_log_text(b"Initial SI_HITLEVEL...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::HitLevel { entries }))
+        }
+        EMOTION_SELECTOR => {
+            let report = match game.emotion_mut().unserialize(source, cursor) {
+                Ok(report) => report,
+                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::Emotion(error))),
+            };
+            add_log_text(b"Initial SI_EMOTION...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::Emotion(report)))
         }
         QUEST_SYSTEM_SELECTOR => {
             let report = match game

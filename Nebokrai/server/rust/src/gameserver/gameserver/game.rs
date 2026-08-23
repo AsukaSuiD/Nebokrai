@@ -36,9 +36,9 @@
 //! сохраняет немедленный World request. Tokio/socket types заменяют ненаблюдаемые
 //! `CBaseMessage::Initial` и `CMySocket::MySocketInit`; следующий незакрытый
 //! шаг — resource/runtime owners после завершённого `Init`.
-//! QuestSystem, CountryParam и CountryHandler process singletons хранятся
-//! owned-полями `CGame`, сохраняя exact startup wire и runtime lookup-контракты
-//! без отдельных global allocations.
+//! QuestSystem, CountryParam, CountryHandler и CEmotion process singletons
+//! хранятся owned-полями `CGame`, сохраняя exact startup wire и runtime
+//! lookup-контракты без отдельных global allocations.
 //! `with_send_state/register_*/attach_*` являются явной assembly-границей
 //! baseline и не снимают их псевдокод. Network setup передаётся отдельной
 //! post-`LoadSetup*` проекцией. Windows thread handles заменены owned Tokio
@@ -92,6 +92,7 @@ use crate::public::wordsfilter::CWordsFilter;
 use crate::setup::cbattlefairyexpconfig::CBattleFairyExpConfig;
 use crate::setup::changebody::CChangeBodyConf;
 use crate::setup::contributesetup::CContributeSetup;
+use crate::setup::emotion::CEmotion;
 use crate::setup::fairyexpconf::CFairyExpConf;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::gmlist::CGMList;
@@ -738,6 +739,7 @@ pub(crate) struct CGame {
     quest_system: CQuestSystem,
     country_param: CCountryParam,
     country_handler: CCountryHandler,
+    emotion: CEmotion,
     region_setup: CRegionSetup,
     hit_level_setup: CHitLevelSetup,
     prison_conf: PrisonConf,
@@ -798,6 +800,7 @@ impl CGame {
             quest_system: CQuestSystem::default(),
             country_param: CCountryParam::default(),
             country_handler: CCountryHandler::default(),
+            emotion: CEmotion::default(),
             region_setup: CRegionSetup::default(),
             hit_level_setup: CHitLevelSetup::default(),
             prison_conf: PrisonConf::default(),
@@ -1119,6 +1122,14 @@ impl CGame {
 
     pub(crate) const fn country_handler_mut(&mut self) -> &mut CCountryHandler {
         &mut self.country_handler
+    }
+
+    pub(crate) const fn emotion(&self) -> &CEmotion {
+        &self.emotion
+    }
+
+    pub(crate) const fn emotion_mut(&mut self) -> &mut CEmotion {
+        &mut self.emotion
     }
 
     pub(crate) const fn region_setup_mut(&mut self) -> &mut CRegionSetup {
