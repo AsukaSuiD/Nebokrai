@@ -63,6 +63,9 @@
 //! GlobeSetup, LogSystem и GM-list `0x07/0x08/0x09` также достигаются из FIFO:
 //! router/DaKong/auction/area mutations, Goods-AI broadcast и permission
 //! registry публикуются в подтверждённом порядке до соответствующих logs.
+//! Game ID, hit-level, emotion и quest resources `0x12/0x14/0x15/0x16`
+//! проходят общий player-rule FIFO pass с точными partial/cursor/log
+//! контрактами; allocation-чувствительный player-ranks owner не маскируется.
 //! Battle-fairy combine теперь замыкает game player-map с GlobeSetup gate и
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные

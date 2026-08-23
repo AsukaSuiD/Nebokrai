@@ -29,6 +29,9 @@
 //! runtime-configuration pass, сохраняя state/network/log ordering всей группы.
 //! QuestSystem `0x16` сохраняет exact scalar/script/map mutation order и
 //! публикует runtime lookup-owner до финального startup log.
+//! Вместе с Game ID `0x12`, hit-level `0x14` и emotion `0x15` он входит в
+//! живую player-rule resource family; player ranks `0x17` остаётся отдельно
+//! из-за честной allocation-error границы owner-а.
 //! CountryParam `0x18` сохраняет scalar prefix, пять ordered maps и известные
 //! technology wire-quirks до точного startup log.
 //! CountryHandler `0x19` заменяет прежние country owners, декодирует byte-count
@@ -374,6 +377,28 @@ pub(crate) struct GameRuntimeConfigurationStartupMessageReport {
     pub(crate) log_effects: Vec<Vec<u8>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GamePlayerRuleStartupReport {
+    IdIndex { value: u8 },
+    HitLevel { entries: usize },
+    Emotion(EmotionDecodeReport),
+    QuestSystem(QuestSystemDecodeReport),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GamePlayerRuleStartupError {
+    IdIndex(GameIdIndexDecodeError),
+    HitLevel(HitLevelDecodeError),
+    Emotion(EmotionDecodeError),
+    QuestSystem(QuestSystemDecodeError),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerRuleStartupMessageReport {
+    pub(crate) decoded: GamePlayerRuleStartupReport,
+    pub(crate) log_effects: Vec<Vec<u8>>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageReport {
     ClientServerStart(GameClientServerStartReport),
@@ -383,6 +408,7 @@ pub(crate) enum GameServerMessageReport {
     CombatRegistryStartup(GameCombatRegistryStartupMessageReport),
     PlayerEconomyStartup(GamePlayerEconomyStartupMessageReport),
     RuntimeConfigurationStartup(GameRuntimeConfigurationStartupMessageReport),
+    PlayerRuleStartup(GamePlayerRuleStartupMessageReport),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -393,6 +419,7 @@ pub(crate) enum GameServerMessageError {
     CombatRegistryStartup(GameCombatRegistryStartupError),
     PlayerEconomyStartup(GamePlayerEconomyStartupError),
     RuntimeConfigurationStartup(GameRuntimeConfigurationStartupError),
+    PlayerRuleStartup(GamePlayerRuleStartupError),
 }
 
 /// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
@@ -554,6 +581,86 @@ pub(crate) fn dispatch_server_message(
                     log_effects,
                 },
             )))
+        }
+        ID_INDEX_SELECTOR | HIT_LEVEL_SELECTOR | EMOTION_SELECTOR | QUEST_SYSTEM_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("player-rule selector проверен без изменения cursor");
+            let mut log_effects = Vec::new();
+            let decoded = match {
+                let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                decode_player_rule_startup(consumed_selector, wire, cursor, game, |text| {
+                    log_effects.push(text.to_vec())
+                })
+                .expect("player-rule selector проверен outer dispatcher-ом")
+                .map_err(GameServerMessageError::PlayerRuleStartup)
+            } {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(Ok(GameServerMessageReport::PlayerRuleStartup(
+                GamePlayerRuleStartupMessageReport {
+                    decoded,
+                    log_effects,
+                },
+            )))
+        }
+        _ => None,
+    }
+}
+
+fn decode_player_rule_startup(
+    selector: i32,
+    source: &[u8],
+    cursor: &mut usize,
+    game: &mut CGame,
+    mut add_log_text: impl FnMut(&[u8]),
+) -> Option<Result<GamePlayerRuleStartupReport, GamePlayerRuleStartupError>> {
+    match selector {
+        ID_INDEX_SELECTOR => {
+            let offset = *cursor;
+            let Some(&value) = source.get(offset) else {
+                return Some(Err(GamePlayerRuleStartupError::IdIndex(
+                    GameIdIndexDecodeError {
+                        offset,
+                        available: source.len().saturating_sub(offset),
+                    },
+                )));
+            };
+            *cursor += 1;
+            game.set_id_index(value);
+            Some(Ok(GamePlayerRuleStartupReport::IdIndex { value }))
+        }
+        HIT_LEVEL_SELECTOR => {
+            let entries = game
+                .hit_level_setup_mut()
+                .decord_from_byte_array(source, cursor)
+                .map_err(GamePlayerRuleStartupError::HitLevel);
+            if entries.is_ok() {
+                add_log_text(b"Initial SI_HITLEVEL...OK!");
+            }
+            Some(entries.map(|entries| GamePlayerRuleStartupReport::HitLevel { entries }))
+        }
+        EMOTION_SELECTOR => {
+            let report = game
+                .emotion_mut()
+                .unserialize(source, cursor)
+                .map_err(GamePlayerRuleStartupError::Emotion);
+            if report.is_ok() {
+                add_log_text(b"Initial SI_EMOTION...OK!");
+            }
+            Some(report.map(GamePlayerRuleStartupReport::Emotion))
+        }
+        QUEST_SYSTEM_SELECTOR => {
+            let report = game
+                .quest_system_mut()
+                .decord_from_byte_array(source, cursor)
+                .map_err(GamePlayerRuleStartupError::QuestSystem);
+            if report.is_ok() {
+                add_log_text(b"Initial SI_QUEST...OK!");
+            }
+            Some(report.map(GamePlayerRuleStartupReport::QuestSystem))
         }
         _ => None,
     }
@@ -1466,6 +1573,36 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
     if let Some(result) =
+        decode_player_rule_startup(selector, source, cursor, game, &mut add_log_text)
+    {
+        return Some(match result {
+            Ok(GamePlayerRuleStartupReport::IdIndex { value }) => {
+                Ok(GameOwnedStartupSnapshotReport::IdIndex { value })
+            }
+            Ok(GamePlayerRuleStartupReport::HitLevel { entries }) => {
+                Ok(GameOwnedStartupSnapshotReport::HitLevel { entries })
+            }
+            Ok(GamePlayerRuleStartupReport::Emotion(report)) => {
+                Ok(GameOwnedStartupSnapshotReport::Emotion(report))
+            }
+            Ok(GamePlayerRuleStartupReport::QuestSystem(report)) => {
+                Ok(GameOwnedStartupSnapshotReport::QuestSystem(report))
+            }
+            Err(GamePlayerRuleStartupError::IdIndex(error)) => {
+                Err(GameOwnedStartupSnapshotError::IdIndex(error))
+            }
+            Err(GamePlayerRuleStartupError::HitLevel(error)) => {
+                Err(GameOwnedStartupSnapshotError::HitLevel(error))
+            }
+            Err(GamePlayerRuleStartupError::Emotion(error)) => {
+                Err(GameOwnedStartupSnapshotError::Emotion(error))
+            }
+            Err(GamePlayerRuleStartupError::QuestSystem(error)) => {
+                Err(GameOwnedStartupSnapshotError::QuestSystem(error))
+            }
+        });
+    }
+    if let Some(result) =
         decode_runtime_configuration_startup(selector, source, cursor, game, &mut add_log_text)
     {
         return Some(match result {
@@ -1693,52 +1830,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
             };
             add_log_text(b"Initial SI_REGIONLEVELSETUP...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::RegionSetup { entries }))
-        }
-        ID_INDEX_SELECTOR => {
-            let offset = *cursor;
-            let Some(&value) = source.get(offset) else {
-                return Some(Err(GameOwnedStartupSnapshotError::IdIndex(
-                    GameIdIndexDecodeError {
-                        offset,
-                        available: source.len().saturating_sub(offset),
-                    },
-                )));
-            };
-            *cursor += 1;
-            game.set_id_index(value);
-            Some(Ok(GameOwnedStartupSnapshotReport::IdIndex { value }))
-        }
-        HIT_LEVEL_SELECTOR => {
-            let entries = match game
-                .hit_level_setup_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                Ok(entries) => entries,
-                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::HitLevel(error))),
-            };
-            add_log_text(b"Initial SI_HITLEVEL...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::HitLevel { entries }))
-        }
-        EMOTION_SELECTOR => {
-            let report = match game.emotion_mut().unserialize(source, cursor) {
-                Ok(report) => report,
-                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::Emotion(error))),
-            };
-            add_log_text(b"Initial SI_EMOTION...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::Emotion(report)))
-        }
-        QUEST_SYSTEM_SELECTOR => {
-            let report = match game
-                .quest_system_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                Ok(report) => report,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::QuestSystem(error)));
-                }
-            };
-            add_log_text(b"Initial SI_QUEST...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::QuestSystem(report)))
         }
         PLAYER_RANKS_SELECTOR => {
             let Some(ranks) = game.player_ranks_mut() else {
