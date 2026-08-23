@@ -57,6 +57,9 @@
 //! Goods, monster и skill registries `0x00/0x02/0x06` теперь публикуются из
 //! реального World FIFO; monster registry после точного log выполняет полный
 //! refresh lookup-связности уже живых region monster-ов.
+//! Player templates, trade list, increment shop и contribution setup
+//! `0x01/0x03/0x04/0x05` входят туда же одной resource-группой с исходными
+//! partial publication, cursor и success-log границами.
 //! Battle-fairy combine теперь замыкает game player-map с GlobeSetup gate и
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные

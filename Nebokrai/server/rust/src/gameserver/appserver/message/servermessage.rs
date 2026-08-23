@@ -42,6 +42,9 @@
 //! Goods/monster/skill registry family `0x00/0x02/0x06` входит в живой FIFO
 //! одним selector-pass; monster success после log обновляет lookup-связность
 //! уже опубликованных region monster owners, как исходный dispatcher.
+//! Player/economy catalogs `0x01/0x03/0x04/0x05` тем же путём публикуют
+//! player templates, trade, increment-shop и contribution owners; каждый
+//! сохраняет собственный clear/partial-decode и exact success-log контракт.
 //! Proxy region `0x0F` создаёт отдельный owner, полностью декодирует короткий
 //! proxy wire и map-assignment-ом публикует его до точного startup log.
 //! Region selector `0x0E` маршрутизирует все шесть concrete subtype-ов через
@@ -320,6 +323,28 @@ pub(crate) struct GameCombatRegistryStartupMessageReport {
     pub(crate) log_effects: Vec<Vec<u8>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GamePlayerEconomyStartupReport {
+    PlayerTemplates(PlayerListDecodeReport),
+    TradeList { entries: usize },
+    IncrementShop { entries: usize },
+    ContributionItems { entries: usize },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GamePlayerEconomyStartupError {
+    PlayerTemplates(PlayerListDecodeError),
+    TradeList(TradeListDecodeError),
+    IncrementShop(IncrementShopDecodeError),
+    ContributionItems(ContributeSetupDecodeError),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerEconomyStartupMessageReport {
+    pub(crate) decoded: GamePlayerEconomyStartupReport,
+    pub(crate) log_effects: Vec<Vec<u8>>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageReport {
     ClientServerStart(GameClientServerStartReport),
@@ -327,6 +352,7 @@ pub(crate) enum GameServerMessageReport {
     PlayerCount(GamePlayerCountResponseReport),
     BattleFairyStartup(GameBattleFairyStartupMessageReport),
     CombatRegistryStartup(GameCombatRegistryStartupMessageReport),
+    PlayerEconomyStartup(GamePlayerEconomyStartupMessageReport),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -335,6 +361,7 @@ pub(crate) enum GameServerMessageError {
     StringTable(MyStringTableDecodeError),
     BattleFairyStartup(GameBattleFairyStartupError),
     CombatRegistryStartup(GameCombatRegistryStartupError),
+    PlayerEconomyStartup(GamePlayerEconomyStartupError),
 }
 
 /// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
@@ -442,8 +469,78 @@ pub(crate) fn dispatch_server_message(
                 },
             )))
         }
+        PLAYER_LIST_SELECTOR
+        | TRADE_LIST_SELECTOR
+        | INCREMENT_SHOP_SELECTOR
+        | CONTRIBUTE_SETUP_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("player/economy selector проверен без изменения cursor");
+            let mut log_effects = Vec::new();
+            let decoded = match {
+                let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                decode_player_economy_startup(consumed_selector, wire, cursor, game, |text| {
+                    log_effects.push(text.to_vec())
+                })
+                .expect("player/economy selector проверен outer dispatcher-ом")
+                .map_err(GameServerMessageError::PlayerEconomyStartup)
+            } {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(Ok(GameServerMessageReport::PlayerEconomyStartup(
+                GamePlayerEconomyStartupMessageReport {
+                    decoded,
+                    log_effects,
+                },
+            )))
+        }
         _ => None,
     }
+}
+
+fn decode_player_economy_startup(
+    selector: i32,
+    source: &[u8],
+    cursor: &mut usize,
+    game: &mut CGame,
+    mut add_log_text: impl FnMut(&[u8]),
+) -> Option<Result<GamePlayerEconomyStartupReport, GamePlayerEconomyStartupError>> {
+    let result = match selector {
+        PLAYER_LIST_SELECTOR => game
+            .player_list_mut()
+            .decord_from_byte_array(source, cursor)
+            .map(GamePlayerEconomyStartupReport::PlayerTemplates)
+            .map_err(GamePlayerEconomyStartupError::PlayerTemplates),
+        TRADE_LIST_SELECTOR => game
+            .trade_list_mut()
+            .decord_from_byte_array(source, cursor)
+            .map(|entries| GamePlayerEconomyStartupReport::TradeList { entries })
+            .map_err(GamePlayerEconomyStartupError::TradeList),
+        INCREMENT_SHOP_SELECTOR => game
+            .increment_shop_list_mut()
+            .decord_from_byte_array(source, cursor)
+            .map(|entries| GamePlayerEconomyStartupReport::IncrementShop { entries })
+            .map_err(GamePlayerEconomyStartupError::IncrementShop),
+        CONTRIBUTE_SETUP_SELECTOR => game
+            .contribute_setup_mut()
+            .decord_from_byte_array(source, cursor)
+            .map(|entries| GamePlayerEconomyStartupReport::ContributionItems { entries })
+            .map_err(GamePlayerEconomyStartupError::ContributionItems),
+        _ => return None,
+    };
+    if result.is_ok() {
+        let log = match selector {
+            PLAYER_LIST_SELECTOR => b"Initial SI_PLAYERLIST...OK!".as_slice(),
+            TRADE_LIST_SELECTOR => b"Initial SI_TRADELIST...OK!".as_slice(),
+            INCREMENT_SHOP_SELECTOR => b"Initial SI_INCREMENTSHOPLIST...OK!".as_slice(),
+            CONTRIBUTE_SETUP_SELECTOR => b"Initial SI_CONTRIBUTEITEM...OK!".as_slice(),
+            _ => unreachable!("selector отфильтрован перед log lookup"),
+        };
+        add_log_text(log);
+    }
+    Some(result)
 }
 
 fn decode_combat_registry_startup(
@@ -1247,6 +1344,36 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
     mut put_string_to_file: impl FnMut(&str, &[u8]),
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    if let Some(result) =
+        decode_player_economy_startup(selector, source, cursor, game, &mut add_log_text)
+    {
+        return Some(match result {
+            Ok(GamePlayerEconomyStartupReport::PlayerTemplates(report)) => {
+                Ok(GameOwnedStartupSnapshotReport::PlayerList(report))
+            }
+            Ok(GamePlayerEconomyStartupReport::TradeList { entries }) => {
+                Ok(GameOwnedStartupSnapshotReport::TradeList { entries })
+            }
+            Ok(GamePlayerEconomyStartupReport::IncrementShop { entries }) => {
+                Ok(GameOwnedStartupSnapshotReport::IncrementShop { entries })
+            }
+            Ok(GamePlayerEconomyStartupReport::ContributionItems { entries }) => {
+                Ok(GameOwnedStartupSnapshotReport::ContributeSetup { entries })
+            }
+            Err(GamePlayerEconomyStartupError::PlayerTemplates(error)) => {
+                Err(GameOwnedStartupSnapshotError::PlayerList(error))
+            }
+            Err(GamePlayerEconomyStartupError::TradeList(error)) => {
+                Err(GameOwnedStartupSnapshotError::TradeList(error))
+            }
+            Err(GamePlayerEconomyStartupError::IncrementShop(error)) => {
+                Err(GameOwnedStartupSnapshotError::IncrementShop(error))
+            }
+            Err(GamePlayerEconomyStartupError::ContributionItems(error)) => {
+                Err(GameOwnedStartupSnapshotError::ContributeSetup(error))
+            }
+        });
+    }
     if matches!(selector, GOODS_LIST_SELECTOR | SKILL_LIST_SELECTOR)
         && let Some(result) =
             decode_combat_registry_startup(selector, source, cursor, game, &mut add_log_text)
@@ -1301,55 +1428,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
         });
     }
     match selector {
-        PLAYER_LIST_SELECTOR => {
-            let report = match game
-                .player_list_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                Ok(report) => report,
-                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::PlayerList(error))),
-            };
-            add_log_text(b"Initial SI_PLAYERLIST...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::PlayerList(report)))
-        }
-        TRADE_LIST_SELECTOR => {
-            let entries = match game.trade_list_mut().decord_from_byte_array(source, cursor) {
-                Ok(entries) => entries,
-                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::TradeList(error))),
-            };
-            add_log_text(b"Initial SI_TRADELIST...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::TradeList { entries }))
-        }
-        INCREMENT_SHOP_SELECTOR => {
-            let entries = match game
-                .increment_shop_list_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                Ok(entries) => entries,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::IncrementShop(error)));
-                }
-            };
-            add_log_text(b"Initial SI_INCREMENTSHOPLIST...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::IncrementShop {
-                entries,
-            }))
-        }
-        CONTRIBUTE_SETUP_SELECTOR => {
-            let entries = match game
-                .contribute_setup_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                Ok(entries) => entries,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::ContributeSetup(error)));
-                }
-            };
-            add_log_text(b"Initial SI_CONTRIBUTEITEM...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::ContributeSetup {
-                entries,
-            }))
-        }
         GLOBE_SETUP_SELECTOR => {
             let decoded = {
                 let (globe_setup, region_router) = game.globe_setup_and_region_router_mut();
