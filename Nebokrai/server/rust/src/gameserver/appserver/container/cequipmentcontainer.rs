@@ -15,9 +15,10 @@
 //! владением товарами, а `Release` в test-mode возвращает detached товары;
 //! это безопасная замена legacy pointer lifetime/`GarbageCollect`.
 //!
-//! Player policy, timed-add prefix, package-extension callbacks, swap,
-//! fairy/battle-fairy и codec ниже остаются RAW до materialization связанных
-//! owners; достигнутое storage-ядро не выдаётся за весь контейнер.
+//! Add/remove/swap сохраняют player facts как явный runtime-вход, partial
+//! timed/AI/package effects и rollback loss. Конкретные player message/skill
+//! callbacks, fairy/battle-fairy и codec ниже остаются RAW до materialization
+//! связанных owners; достигнутое ядро не выдаётся за весь контейнер.
 
 use std::collections::BTreeMap;
 
@@ -170,12 +171,16 @@ pub(crate) struct EquipmentAddedReport {
 
 #[must_use = "blocked add может уже содержать timed/AI partial effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentAddBlockedReport {
+    pub(crate) reason: EquipmentAddBlock,
+    pub(crate) partial_effects: EquipmentAddPartialEffects,
+}
+
+#[must_use = "blocked add может уже содержать timed/AI partial effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum EquipmentAddOutcome {
     Added(EquipmentAddedReport),
-    Blocked {
-        reason: EquipmentAddBlock,
-        partial_effects: EquipmentAddPartialEffects,
-    },
+    Blocked(EquipmentAddBlockedReport),
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -197,14 +202,20 @@ pub(crate) struct EquipmentRemoveRuntimeFacts {
 
 #[must_use = "report сохраняет removed ownership и callback ordering"]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EquipmentRemovedReport {
+pub(crate) struct EquipmentRemovedEvent {
     pub(crate) owner_type: i32,
     pub(crate) owner_id: i32,
     pub(crate) column: EquipmentColumn,
-    pub(crate) goods: CGoods,
     pub(crate) partial_effects: EquipmentRemovePartialEffects,
     pub(crate) requires_player_callback: bool,
     pub(crate) listeners: Vec<ContainerListenerHandle>,
+}
+
+#[must_use = "report сохраняет removed ownership и callback ordering"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentRemovedReport {
+    pub(crate) event: EquipmentRemovedEvent,
+    pub(crate) goods: CGoods,
 }
 
 #[must_use = "missing/blocked remove может уже изменить package-extension счётчик"]
@@ -217,6 +228,62 @@ pub(crate) enum EquipmentRemoveOutcome {
     BlockedByActiveWarSoul {
         column: EquipmentColumn,
         partial_effects: EquipmentRemovePartialEffects,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentSwapRuntimeFacts {
+    pub(crate) pack_add_enabled: bool,
+    /// `None` означает отсутствие player-а для pre-remove capacity guard.
+    pub(crate) active_unused_package_slots: Option<u32>,
+    pub(crate) remove: EquipmentRemoveRuntimeFacts,
+    pub(crate) incoming_add: EquipmentAddRuntimeFacts,
+    /// Новый clock/player snapshot для legacy rollback `Add(old)`.
+    pub(crate) rollback_add: EquipmentAddRuntimeFacts,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentSwapBlock {
+    MissingIncoming,
+    MissingBaseProperties {
+        index: u32,
+    },
+    NotEquipment {
+        goods_type: i32,
+    },
+    EquipPlaceMismatch {
+        column: EquipmentColumn,
+        equip_place: i32,
+    },
+    Empty {
+        column: EquipmentColumn,
+    },
+    InsufficientPackageCapacity {
+        required: u32,
+        available: u32,
+    },
+}
+
+#[must_use = "swap outcome содержит все remove/add/rollback partial effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentSwapOutcome {
+    Blocked(EquipmentSwapBlock),
+    RemovalFailed(EquipmentRemoveOutcome),
+    Swapped {
+        outgoing: CGoods,
+        removed: EquipmentRemovedEvent,
+        added: EquipmentAddedReport,
+    },
+    IncomingRejectedAndRestored {
+        removed: EquipmentRemovedEvent,
+        incoming: EquipmentAddBlockedReport,
+        restored: EquipmentAddedReport,
+    },
+    IncomingRejectedAndOldGoodsCollected {
+        removed: EquipmentRemovedEvent,
+        incoming: EquipmentAddBlockedReport,
+        rollback: EquipmentAddBlockedReport,
+        garbage_collected: ShapeIdentity,
     },
 }
 
@@ -509,10 +576,10 @@ impl CEquipmentContainer {
         reason: EquipmentAddBlock,
         partial_effects: EquipmentAddPartialEffects,
     ) -> EquipmentAddOutcome {
-        EquipmentAddOutcome::Blocked {
+        EquipmentAddOutcome::Blocked(EquipmentAddBlockedReport {
             reason,
             partial_effects,
-        }
+        })
     }
 
     fn preferred_column(&self, equip_place: i32) -> Option<EquipmentColumn> {
@@ -603,15 +670,126 @@ impl CEquipmentContainer {
             .remove(&column)
             .expect("column разрешена непосредственно перед erase");
         EquipmentRemoveOutcome::Removed(EquipmentRemovedReport {
-            owner_type: self.base.owner_type(),
-            owner_id: self.base.owner_id(),
-            column,
             goods,
-            partial_effects,
-            requires_player_callback: self.base.owner_type() == PLAYER_OWNER_TYPE
-                && runtime.owner_player_present,
-            listeners: self.base.base().listeners().to_vec(),
+            event: EquipmentRemovedEvent {
+                owner_type: self.base.owner_type(),
+                owner_id: self.base.owner_id(),
+                column,
+                partial_effects,
+                requires_player_callback: self.base.owner_type() == PLAYER_OWNER_TYPE
+                    && runtime.owner_player_present,
+                listeners: self.base.base().listeners().to_vec(),
+            },
         })
+    }
+
+    /// Exact `Swap` использует public `Remove`/`Add`, поэтому их callbacks,
+    /// wrapping package-counter и late timed/AI effects наблюдаемы также на
+    /// неуспехе. Старый товар garbage-collect-ится только если rollback Add
+    /// тоже отказал.
+    pub(crate) fn swap(
+        &mut self,
+        column: EquipmentColumn,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        runtime: EquipmentSwapRuntimeFacts,
+        register_with_goods_ai: &mut dyn FnMut(&CGoods),
+    ) -> EquipmentSwapOutcome {
+        let Some(incoming_goods) = incoming.as_ref() else {
+            return EquipmentSwapOutcome::Blocked(EquipmentSwapBlock::MissingIncoming);
+        };
+        let base_properties_index = incoming_goods.base_properties_index();
+        let Some(properties) = factory.query_goods_base_properties(base_properties_index) else {
+            return EquipmentSwapOutcome::Blocked(EquipmentSwapBlock::MissingBaseProperties {
+                index: base_properties_index,
+            });
+        };
+        if properties.goods_type() != GOODS_TYPE_EQUIPMENT {
+            return EquipmentSwapOutcome::Blocked(EquipmentSwapBlock::NotEquipment {
+                goods_type: properties.goods_type(),
+            });
+        }
+        let equip_place = properties.equip_place();
+        if !Self::does_equip_place_fit(column, equip_place) {
+            return EquipmentSwapOutcome::Blocked(EquipmentSwapBlock::EquipPlaceMismatch {
+                column,
+                equip_place,
+            });
+        }
+
+        let Some(old_goods) = self.equipment.get(&column) else {
+            return EquipmentSwapOutcome::Blocked(EquipmentSwapBlock::Empty { column });
+        };
+        if runtime.pack_add_enabled
+            && let Some(available) = runtime.active_unused_package_slots
+            && old_goods.query_attribute(GAP_GOODS_PACKAGE_EXTENTION)
+            && old_goods.addon_property_value(factory, GAP_GOODS_PACKAGE_EXTENTION, 1) == 2
+        {
+            let required =
+                old_goods.addon_property_value(factory, GAP_GOODS_PACKAGE_EXTENTION, 2) as u32;
+            if available < required {
+                return EquipmentSwapOutcome::Blocked(
+                    EquipmentSwapBlock::InsufficientPackageCapacity {
+                        required,
+                        available,
+                    },
+                );
+            }
+        }
+
+        let old_goods_id = old_goods.identity().ex_id;
+        let removed_report = match self.remove(old_goods_id, runtime.remove) {
+            EquipmentRemoveOutcome::Removed(report) => report,
+            failed => return EquipmentSwapOutcome::RemovalFailed(failed),
+        };
+        let EquipmentRemovedReport {
+            event: removed,
+            goods: old_goods,
+        } = removed_report;
+
+        match self.add_at(
+            column.position(),
+            incoming,
+            factory,
+            runtime.incoming_add,
+            register_with_goods_ai,
+        ) {
+            EquipmentAddOutcome::Added(added) => EquipmentSwapOutcome::Swapped {
+                outgoing: old_goods,
+                removed,
+                added,
+            },
+            EquipmentAddOutcome::Blocked(incoming_block) => {
+                let mut rollback_goods = Some(old_goods);
+                match self.add_at(
+                    column.position(),
+                    &mut rollback_goods,
+                    factory,
+                    runtime.rollback_add,
+                    register_with_goods_ai,
+                ) {
+                    EquipmentAddOutcome::Added(restored) => {
+                        EquipmentSwapOutcome::IncomingRejectedAndRestored {
+                            removed,
+                            incoming: incoming_block,
+                            restored,
+                        }
+                    }
+                    EquipmentAddOutcome::Blocked(rollback) => {
+                        let garbage_collected = rollback_goods
+                            .take()
+                            .expect("failed rollback Add сохраняет old goods")
+                            .identity();
+                        EquipmentSwapOutcome::IncomingRejectedAndOldGoodsCollected {
+                            removed,
+                            incoming: incoming_block,
+                            rollback,
+                            garbage_collected,
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Internal self-callback должен быть применён dispatcher-ом перед
