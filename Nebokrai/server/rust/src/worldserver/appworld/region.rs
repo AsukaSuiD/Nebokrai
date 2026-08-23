@@ -62,6 +62,7 @@
 //! локальной типизированной ошибкой. CRT/STL allocation и cleanup-noise выражены
 //! владением Rust и отдельно не восстанавливаются.
 
+use std::cell::Cell;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -127,7 +128,7 @@ pub(crate) struct CRegion {
     exp_scale: f32,
     width: i32,
     height: i32,
-    country: Option<u8>,
+    country: Cell<Option<u8>>,
     notify: Option<i32>,
     cells: Vec<[u8; REGION_CELL_SIZE]>,
     switches: Vec<[u8; REGION_SWITCH_SIZE]>,
@@ -146,7 +147,7 @@ impl CRegion {
             exp_scale: 1.0,
             width: 0,
             height: 0,
-            country: None,
+            country: Cell::new(None),
             notify: None,
             cells: Vec::new(),
             switches: Vec::new(),
@@ -184,13 +185,13 @@ impl CRegion {
     }
 
     /// Возвращает reached country byte без подстановки constructor-неизвестного значения.
-    pub(crate) const fn country(&self) -> Option<u8> {
-        self.country
+    pub(crate) fn country(&self) -> Option<u8> {
+        self.country.get()
     }
 
     /// Присваивает достигнутый country byte унаследованного `CRegion`.
-    pub(crate) const fn set_country(&mut self, country: u8) {
-        self.country = Some(country);
+    pub(crate) fn set_country(&self, country: u8) {
+        self.country.set(Some(country));
     }
 
     /// Дописывает только унаследованный `CBaseObject` для отдельного proxy-wire.
@@ -210,7 +211,7 @@ impl CRegion {
     }
 
     /// Применяет четыре поля, которые `LoadRegionList` назначает перед virtual `Load`.
-    pub(crate) const fn set_region_list_fields(
+    pub(crate) fn set_region_list_fields(
         &mut self,
         resource_id: u32,
         exp_scale: f32,
@@ -219,7 +220,7 @@ impl CRegion {
     ) {
         self.resource_id = resource_id as i32;
         self.exp_scale = exp_scale;
-        self.country = Some(country);
+        self.country.set(Some(country));
         self.notify = Some(notify);
     }
 
@@ -315,6 +316,7 @@ impl CRegion {
     ) -> Result<bool, RegionSerializationBlock> {
         let country = self
             .country
+            .get()
             .ok_or(RegionSerializationBlock::UninitializedField {
                 field: "m_btCountry",
             })?;
@@ -366,10 +368,10 @@ impl CRegion {
             .map_err(RegionDecodeError::Region)?;
         self.height = read_region_i32(source, cursor, "m_lHeight")
             .map_err(RegionDecodeError::Region)?;
-        self.country = Some(
+        self.country.set(Some(
             read_region_bytes(source, cursor, 1, "m_btCountry")
                 .map_err(RegionDecodeError::Region)?[0],
-        );
+        ));
         self.notify = Some(
             read_region_i32(source, cursor, "m_lNotify").map_err(RegionDecodeError::Region)?,
         );

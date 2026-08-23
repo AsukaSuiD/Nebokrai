@@ -473,7 +473,7 @@ pub(crate) trait UnionFactionJoinContext:
     fn faction_refresh_owned_city_info(
         &self,
         faction_id: i32,
-        refresh_owned_city: &mut dyn FnMut(i32, i32, i32),
+        refresh_owned_city: &mut dyn FnMut(i32, i32, i32, Option<u8>),
     ) -> Result<Option<FactionOwnedCityRefreshReport>, FactionOwnedCityRefreshBlock>;
 }
 
@@ -495,7 +495,13 @@ pub(crate) trait UnionAddFactionEffects {
 
     fn put_war_log(&mut self, text: &[u8]);
 
-    fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32);
+    fn refresh_owned_city(
+        &mut self,
+        region_id: i32,
+        faction_id: i32,
+        union_id: i32,
+        country_id: Option<u8>,
+    );
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>);
 }
@@ -589,7 +595,13 @@ pub(crate) trait UnionFireOutEffects {
 
     fn put_war_log(&mut self, text: &[u8]);
 
-    fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32);
+    fn refresh_owned_city(
+        &mut self,
+        region_id: i32,
+        faction_id: i32,
+        union_id: i32,
+        country_id: Option<u8>,
+    );
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -2206,8 +2218,13 @@ impl CUnion {
                 member_inserted: true,
                 source,
             })?;
-        let mut refresh_owned_city = |region_id, owner_faction_id, owner_union_id| {
-            effects.refresh_owned_city(region_id, owner_faction_id, owner_union_id);
+        let mut refresh_owned_city = |region_id, owner_faction_id, owner_union_id, country_id| {
+            effects.refresh_owned_city(
+                region_id,
+                owner_faction_id,
+                owner_union_id,
+                country_id,
+            );
         };
         let owned_city_refresh = context
             .faction_refresh_owned_city_info(faction_id, &mut refresh_owned_city)

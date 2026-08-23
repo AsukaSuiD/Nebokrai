@@ -3254,7 +3254,7 @@ impl CFaction {
         mut refresh_owned_city: F,
     ) -> Result<FactionOwnedCityRefreshReport, FactionOwnedCityRefreshBlock>
     where
-        F: FnMut(i32, i32, i32),
+        F: FnMut(i32, i32, i32, Option<u8>),
     {
         if self.owned_cities.is_empty() {
             return Ok(FactionOwnedCityRefreshReport {
@@ -3266,9 +3266,14 @@ impl CFaction {
             .as_ref()
             .ok_or(FactionOwnedCityRefreshBlock::MissingBaseProperty)?
             .union_id();
+        let country_id = self
+            .base_property
+            .as_ref()
+            .expect("base property проверен перед country lookup")
+            .country();
         let mut refreshed_region_ids = Vec::with_capacity(self.owned_cities.len());
         for &region_id in &self.owned_cities {
-            refresh_owned_city(region_id, self.faction_id, union_id);
+            refresh_owned_city(region_id, self.faction_id, union_id, Some(country_id));
             refreshed_region_ids.push(region_id);
         }
         Ok(FactionOwnedCityRefreshReport {

@@ -5292,7 +5292,8 @@ pub(crate) struct WorldMainLoopCallbacks<'a> {
     pub(crate) write_log_queue: WorldWriteLogQueue,
     pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
     pub(crate) get_timer_local_time: &'a mut dyn FnMut() -> TagTime,
-    pub(crate) refresh_union_owned_city: &'a mut dyn FnMut(i32, i32, i32),
+    pub(crate) refresh_union_owned_city:
+        &'a mut dyn FnMut(&CGame, i32, i32, i32, Option<u8>),
     pub(crate) update_union_player: &'a mut dyn FnMut(i32),
     /// Внешние feature-gates exact `CLogSystem::bFactionChat/bPrivateChat`.
     pub(crate) faction_chat_log_enabled: bool,
@@ -15201,7 +15202,7 @@ impl CGame {
         goods_war: &mut CGoodsWarMember,
         globe_setup: &GlobeSetupSnapshot,
         mut get_tick: GetTick,
-        refresh_owned_city: &mut dyn FnMut(i32, i32, i32),
+        refresh_owned_city: &mut dyn FnMut(&CGame, i32, i32, i32, Option<u8>),
         update_player: &mut dyn FnMut(i32),
         faction_master_log_enabled: bool,
         write_faction_master_log:
@@ -18381,31 +18382,41 @@ impl CGame {
 
     /// Обновляет владельца города и рассылает exact `0x7FE27` всем GameServer.
     pub(crate) fn refresh_owned_city_org(
-        &mut self,
+        &self,
         organizing: &COrganizingCtrl,
         region_id: i32,
         faction_id: i32,
         union_id: i32,
     ) -> Result<WorldOwnedCityRefreshOutcome, FactionInitialPropertyBlock> {
-        let Some(assignment) = self.regions.get(&region_id) else {
-            return Ok(WorldOwnedCityRefreshOutcome::RegionNotFound);
-        };
-        if assignment.region.is_none() {
-            return Ok(WorldOwnedCityRefreshOutcome::NullRegionPointer);
-        }
+        let country_id = organizing.country_by_faction(faction_id)?;
+        Ok(self.refresh_owned_city_org_with_country(
+            region_id,
+            faction_id,
+            union_id,
+            country_id,
+        ))
+    }
 
-        let country_id = organizing.country_by_faction(faction_id)?.unwrap_or(0);
-        let region = self
-            .regions
-            .get_mut(&region_id)
-            .and_then(|assignment| assignment.region.as_mut())
-            .expect("materialized region owner проверен до country lookup");
+    /// Применяет уже разрешённую organizing-проекцию без повторного заимствования
+    /// controller-а из синхронного доменного callback-а.
+    pub(crate) fn refresh_owned_city_org_with_country(
+        &self,
+        region_id: i32,
+        faction_id: i32,
+        union_id: i32,
+        country_id: Option<u8>,
+    ) -> WorldOwnedCityRefreshOutcome {
+        let Some(assignment) = self.regions.get(&region_id) else {
+            return WorldOwnedCityRefreshOutcome::RegionNotFound;
+        };
+        let Some(region) = assignment.region.as_ref() else {
+            return WorldOwnedCityRefreshOutcome::NullRegionPointer;
+        };
+        let country_id = country_id.unwrap_or(0);
+        region.base().set_owned_city_org(faction_id, union_id);
         region
-            .base_mut()
-            .set_owned_city_org(faction_id, union_id);
-        region
-            .base_mut()
-            .region_base_mut()
+            .base()
+            .region_base()
             .set_country(country_id);
 
         let mut message = CMessage::new(0x0007_FE27);
@@ -18414,7 +18425,7 @@ impl CGame {
         message.base_mut().add_long(union_id);
         message.base_mut().add_byte(country_id);
         let delivery = message.send_all(self.current_game_server_sender().as_ref());
-        Ok(WorldOwnedCityRefreshOutcome::Refreshed(
+        WorldOwnedCityRefreshOutcome::Refreshed(
             WorldOwnedCityRefreshReport {
                 region_id,
                 faction_id,
@@ -18422,7 +18433,7 @@ impl CGame {
                 country_id,
                 delivery,
             },
-        ))
+        )
     }
 
     /// Возвращает только живой concrete `CRegion` create-role ветки.
@@ -19124,7 +19135,7 @@ struct WorldCountryDemiseEffects<'a> {
     organizing_parameters: &'a COrganizingParam,
     attack_city: &'a CAttackCitySys,
     goods_war: &'a CGoodsWarMember,
-    refresh_owned_city: &'a mut dyn FnMut(i32, i32, i32),
+    refresh_owned_city: &'a mut dyn FnMut(&CGame, i32, i32, i32, Option<u8>),
     update_player: &'a mut dyn FnMut(i32),
     faction_master_log_enabled: bool,
     write_faction_master_log:
@@ -19679,8 +19690,20 @@ impl CountryExileResultContext for WorldCountryDemiseEffects<'_> {
             .map_err(|_| CountryGovernanceContextBlock::OwnedCityMutation)
     }
 
-    fn refresh_owned_city(&mut self, city_id: i32, faction_id: i32, union_id: i32) {
-        (self.refresh_owned_city)(city_id, faction_id, union_id);
+    fn refresh_owned_city(
+        &mut self,
+        city_id: i32,
+        faction_id: i32,
+        union_id: i32,
+        country_id: Option<u8>,
+    ) {
+        (self.refresh_owned_city)(
+            self.base.game,
+            city_id,
+            faction_id,
+            union_id,
+            country_id,
+        );
     }
 
     fn demise_faction(

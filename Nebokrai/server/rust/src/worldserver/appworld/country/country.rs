@@ -593,7 +593,14 @@ pub(crate) trait CountryExileResultContext {
     ) -> Result<(), CountryGovernanceContextBlock> {
         Err(CountryGovernanceContextBlock::OwnedCityMutation)
     }
-    fn refresh_owned_city(&mut self, _city_id: i32, _faction_id: i32, _union_id: i32) {}
+    fn refresh_owned_city(
+        &mut self,
+        _city_id: i32,
+        _faction_id: i32,
+        _union_id: i32,
+        _country_id: Option<u8>,
+    ) {
+    }
     fn demise_faction(
         &mut self,
         _faction_id: i32,
@@ -2193,7 +2200,7 @@ impl CCountry {
                     };
                 }
             };
-            context.refresh_owned_city(city_id, faction_id, new_union_id);
+            context.refresh_owned_city(city_id, faction_id, new_union_id, Some(self.country_id));
             let mut city_message = CMessage::new(0x0007_FE27);
             city_message.base_mut().add_long(city_id);
             city_message.base_mut().add_long(faction_id);

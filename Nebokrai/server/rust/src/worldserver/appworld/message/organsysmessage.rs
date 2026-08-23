@@ -417,7 +417,7 @@ use crate::worldserver::appworld::goodswarmember::{
     GoodsWarRefreshReport,
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
-    FactionApplyForJoinEffects, FactionApplyForJoinOutcome, FactionContributorContext,
+    CFaction, FactionApplyForJoinEffects, FactionApplyForJoinOutcome, FactionContributorContext,
     FactionDemiseBlock, FactionDemiseContext, FactionDemiseOutcome, FactionDisbandContext,
     FactionDoJoinEffects,
     FactionDubBlock, FactionDubContext, FactionDubFormatArgument, FactionDubOutcome,
@@ -962,7 +962,8 @@ impl CityTransferSessionRuntime for WorldCityTransferEndpointRuntime {
 /// Живые callback-и универсальной инфраструктуры, не принадлежащие union state.
 pub(crate) struct WorldUnionApplicationEffectCallbacks<'a> {
     pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
-    pub(crate) refresh_owned_city: &'a mut dyn FnMut(i32, i32, i32),
+    pub(crate) refresh_owned_city:
+        &'a mut dyn FnMut(&CGame, i32, i32, i32, Option<u8>),
     pub(crate) faction_level_log_enabled: bool,
     pub(crate) write_faction_level_log:
         &'a mut dyn FnMut(i32, &[u8], i32, i32, &[u8]),
@@ -1070,8 +1071,20 @@ impl UnionAddFactionEffects for WorldUnionApplicationEffects<'_> {
         put_string_to_file("war", text);
     }
 
-    fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32) {
-        (self.callbacks.refresh_owned_city)(region_id, faction_id, union_id);
+    fn refresh_owned_city(
+        &mut self,
+        region_id: i32,
+        faction_id: i32,
+        union_id: i32,
+        country_id: Option<u8>,
+    ) {
+        (self.callbacks.refresh_owned_city)(
+            self.game,
+            region_id,
+            faction_id,
+            union_id,
+            country_id,
+        );
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -1182,8 +1195,20 @@ impl UnionFireOutEffects for WorldUnionFireOutEffects<'_, '_, '_> {
         put_string_to_file("war", text);
     }
 
-    fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32) {
-        (self.callbacks.refresh_owned_city)(region_id, faction_id, union_id);
+    fn refresh_owned_city(
+        &mut self,
+        region_id: i32,
+        faction_id: i32,
+        union_id: i32,
+        country_id: Option<u8>,
+    ) {
+        (self.callbacks.refresh_owned_city)(
+            self.game,
+            region_id,
+            faction_id,
+            union_id,
+            country_id,
+        );
     }
 }
 
@@ -1355,8 +1380,20 @@ impl CityTransferEffects for WorldUnionApplicationEffects<'_> {
         format_union_world_string(self.game.get_string_by_id(string_id), arguments)
     }
 
-    fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32) {
-        (self.callbacks.refresh_owned_city)(region_id, faction_id, union_id);
+    fn refresh_owned_city(
+        &mut self,
+        region_id: i32,
+        faction_id: i32,
+        union_id: i32,
+        country_id: Option<u8>,
+    ) {
+        (self.callbacks.refresh_owned_city)(
+            self.game,
+            region_id,
+            faction_id,
+            union_id,
+            country_id,
+        );
     }
 
     fn broadcast_city_transfer(&mut self, text: &[u8]) -> Result<i32, SendMessageError> {
@@ -1378,8 +1415,20 @@ impl AttackCityEndEffects for WorldUnionApplicationEffects<'_> {
         format_union_world_string(self.game.get_string_by_id(string_id), arguments)
     }
 
-    fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32) {
-        (self.callbacks.refresh_owned_city)(region_id, faction_id, union_id);
+    fn refresh_owned_city(
+        &mut self,
+        region_id: i32,
+        faction_id: i32,
+        union_id: i32,
+        country_id: Option<u8>,
+    ) {
+        (self.callbacks.refresh_owned_city)(
+            self.game,
+            region_id,
+            faction_id,
+            union_id,
+            country_id,
+        );
     }
 
     fn broadcast_city_war_result(&mut self, text: &[u8]) -> Result<i32, SendMessageError> {
@@ -6235,7 +6284,17 @@ impl AttackCityWarResultContext
         faction_id: i32,
         union_id: i32,
     ) -> Result<(), Self::Block> {
-        (self.callbacks.refresh_owned_city)(region_id, faction_id, union_id);
+        let country_id = self
+            .organizing
+            .faction_by_id(faction_id)
+            .and_then(CFaction::country);
+        (self.callbacks.refresh_owned_city)(
+            self.game,
+            region_id,
+            faction_id,
+            union_id,
+            country_id,
+        );
         Ok(())
     }
 
@@ -7079,7 +7138,17 @@ impl VillageWarResultContext for WorldVillageWarResultContext<'_, '_, '_, '_, '_
         faction_id: i32,
         union_id: i32,
     ) -> Result<(), Self::Block> {
-        (self.callbacks.refresh_owned_city)(region_id, faction_id, union_id);
+        let country_id = self
+            .organizing
+            .faction_by_id(faction_id)
+            .and_then(CFaction::country);
+        (self.callbacks.refresh_owned_city)(
+            self.game,
+            region_id,
+            faction_id,
+            union_id,
+            country_id,
+        );
         Ok(())
     }
 

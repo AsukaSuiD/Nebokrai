@@ -2598,7 +2598,13 @@ pub(crate) trait CityTransferEffects {
         string_id: &'static [u8],
         arguments: &[UnionFormatArgument<'_>],
     ) -> Vec<u8>;
-    fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32);
+    fn refresh_owned_city(
+        &mut self,
+        region_id: i32,
+        faction_id: i32,
+        union_id: i32,
+        country_id: Option<u8>,
+    );
     fn broadcast_city_transfer(&mut self, text: &[u8]) -> Result<i32, SendMessageError>;
 }
 
@@ -2800,7 +2806,13 @@ pub(crate) trait AttackCityEndEffects {
         arguments: &[UnionFormatArgument<'_>],
     ) -> Vec<u8>;
 
-    fn refresh_owned_city(&mut self, region_id: i32, faction_id: i32, union_id: i32);
+    fn refresh_owned_city(
+        &mut self,
+        region_id: i32,
+        faction_id: i32,
+        union_id: i32,
+        country_id: Option<u8>,
+    );
 
     fn broadcast_city_war_result(&mut self, text: &[u8]) -> Result<i32, SendMessageError>;
 }
@@ -5411,8 +5423,9 @@ impl COrganizingCtrl {
         let mut owned_city_refreshes = Vec::new();
         if let Some(master_faction) = self.faction_by_id(union.master_id()) {
             let master_faction_id = master_faction.faction_id();
+            let country_id = master_faction.country();
             for &region_id in master_faction.owned_cities() {
-                effects.refresh_owned_city(region_id, master_faction_id, 0);
+                effects.refresh_owned_city(region_id, master_faction_id, 0, country_id);
                 owned_city_refreshes.push((region_id, master_faction_id, 0));
             }
         }
@@ -6224,7 +6237,15 @@ impl COrganizingCtrl {
                 }
             };
             report.attacker_city_addition = Some(addition);
-            effects.refresh_owned_city(region_id, attacker_faction_id, attacker_union_id);
+            let country_id = self
+                .faction_by_id(attacker_faction_id)
+                .and_then(CFaction::country);
+            effects.refresh_owned_city(
+                region_id,
+                attacker_faction_id,
+                attacker_union_id,
+                country_id,
+            );
             report.refreshed_owner = Some((region_id, attacker_faction_id, attacker_union_id));
         } else if result == 0 {
             let Some(defender_owner) = defender_owner else {
@@ -6894,8 +6915,8 @@ impl COrganizingCtrl {
         report.first_owned_city_refresh = Some(match self
             .faction_by_id(first_faction_id)
             .expect("обе faction проверены перед созданием union")
-            .refresh_owned_city_info(|region_id, faction_id, union_id| {
-                effects.refresh_owned_city(region_id, faction_id, union_id);
+            .refresh_owned_city_info(|region_id, faction_id, union_id, country_id| {
+                effects.refresh_owned_city(region_id, faction_id, union_id, country_id);
             })
         {
             Ok(refresh) => refresh,
@@ -6916,8 +6937,8 @@ impl COrganizingCtrl {
         report.second_owned_city_refresh = Some(match self
             .faction_by_id(second_faction_id)
             .expect("обе faction проверены перед созданием union")
-            .refresh_owned_city_info(|region_id, faction_id, union_id| {
-                effects.refresh_owned_city(region_id, faction_id, union_id);
+            .refresh_owned_city_info(|region_id, faction_id, union_id, country_id| {
+                effects.refresh_owned_city(region_id, faction_id, union_id, country_id);
             })
         {
             Ok(refresh) => refresh,
@@ -6988,8 +7009,16 @@ impl COrganizingCtrl {
             .expect("обе faction проверены перед созданием union")
             .owned_cities()
             .clone();
+        let first_country_id = self
+            .faction_by_id(first_faction_id)
+            .and_then(CFaction::country);
         for region_id in first_owned_cities {
-            effects.refresh_owned_city(region_id, first_faction_id, union_id);
+            effects.refresh_owned_city(
+                region_id,
+                first_faction_id,
+                union_id,
+                first_country_id,
+            );
             report.repeated_first_city_refreshes.push(region_id);
         }
 
@@ -7319,7 +7348,15 @@ impl COrganizingCtrl {
             }
         };
         report.target_union_id = Some(target_union_id);
-        effects.refresh_owned_city(region_id, target_faction_id, target_union_id);
+        let target_country_id = self
+            .faction_by_id(target_faction_id)
+            .and_then(CFaction::country);
+        effects.refresh_owned_city(
+            region_id,
+            target_faction_id,
+            target_union_id,
+            target_country_id,
+        );
         let source_name = legacy_c_string_prefix(&source_name);
         let region_name = legacy_c_string_prefix(region_name);
         let target_name = legacy_c_string_prefix(&target_name);
@@ -8268,7 +8305,7 @@ impl UnionFactionJoinContext for COrganizingCtrl {
     fn faction_refresh_owned_city_info(
         &self,
         faction_id: i32,
-        refresh_owned_city: &mut dyn FnMut(i32, i32, i32),
+        refresh_owned_city: &mut dyn FnMut(i32, i32, i32, Option<u8>),
     ) -> Result<Option<FactionOwnedCityRefreshReport>, FactionOwnedCityRefreshBlock> {
         self.faction_by_id(faction_id)
             .map(|faction| faction.refresh_owned_city_info(refresh_owned_city))

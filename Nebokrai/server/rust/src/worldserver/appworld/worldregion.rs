@@ -133,6 +133,7 @@ use super::player::CPlayer;
 use super::region::{
     CRegion, RegionLoadError, RegionRandomPositionBlock, RegionSerializationBlock,
 };
+use std::cell::Cell;
 use crate::dbaccess::worlddb::rsregion::RegionSaveSnapshot;
 use crate::public::clientresource::DefaultClientResourceOwner;
 use crate::worldserver::worldserver::game::CGame;
@@ -453,6 +454,10 @@ pub(crate) struct CWorldRegion {
     npcs: Vec<WorldRegionNpc>,
     weather: Vec<WorldRegionWeatherTime>,
     param: RegionParamState,
+    /// Organizing callbacks меняют только эту owner relation; `Cell`
+    /// позволяет выполнить их немедленно через shared game-view, не создавая
+    /// второго mutable alias всего `CGame`.
+    owned_city_organizing: Cell<(i32, i32)>,
     setup: RegionSetupState,
     forbidden_make_goods: Vec<Vec<u8>>,
 }
@@ -469,6 +474,7 @@ impl CWorldRegion {
             npcs: Vec::new(),
             weather: Vec::new(),
             param: RegionParamState::zeroed(),
+            owned_city_organizing: Cell::new((0, 0)),
             setup: RegionSetupState::uninitialized(),
             forbidden_make_goods: Vec::new(),
         }
@@ -485,8 +491,14 @@ impl CWorldRegion {
     }
 
     /// Копирует все девять полей `m_Param` в отдельный DB snapshot.
-    pub(crate) const fn generate_save_data(&self) -> RegionSaveSnapshot {
-        self.param.save_snapshot()
+    pub(crate) fn generate_save_data(&self) -> RegionSaveSnapshot {
+        self.effective_param().save_snapshot()
+    }
+
+    fn effective_param(&self) -> RegionParamState {
+        let mut param = self.param;
+        (param.owned_faction_id, param.owned_union_id) = self.owned_city_organizing.get();
+        param
     }
 
     /// Возвращает унаследованный signed region ID, используемый именами файлов.
@@ -950,7 +962,7 @@ impl CWorldRegion {
             .add_base_object_to_byte_array(destination, include_child);
         destination.push(country);
         destination.extend_from_slice(&self.war_region_type.to_le_bytes());
-        append_region_param(destination, self.param);
+        append_region_param(destination, self.effective_param());
         Ok(true)
     }
 
@@ -984,12 +996,16 @@ impl CWorldRegion {
         self.param.current_tax_rate = read_param_i32(param, 0x08);
         self.param.total_tax = read_param_u32(param, 0x0C);
         self.param.today_total_tax = read_param_u32(param, 0x10);
-        self.param.owned_faction_id = read_param_i32(param, 0x1C);
+        let owned_faction_id = read_param_i32(param, 0x1C);
+        self.param.owned_faction_id = owned_faction_id;
+        let (_, owned_union_id) = self.owned_city_organizing.get();
+        self.owned_city_organizing
+            .set((owned_faction_id, owned_union_id));
         Ok(true)
     }
 
     /// Применяет пять DB-полей; tax rate ограничивается старым signed maximum.
-    pub(crate) const fn set_param_from_db(
+    pub(crate) fn set_param_from_db(
         &mut self,
         owned_faction_id: i32,
         owned_union_id: i32,
@@ -999,6 +1015,8 @@ impl CWorldRegion {
     ) {
         self.param.owned_faction_id = owned_faction_id;
         self.param.owned_union_id = owned_union_id;
+        self.owned_city_organizing
+            .set((owned_faction_id, owned_union_id));
         self.param.current_tax_rate = if current_tax_rate < self.param.max_tax_rate {
             current_tax_rate
         } else {
@@ -1020,17 +1038,17 @@ impl CWorldRegion {
         self.param.total_tax = total_tax;
     }
 
-    pub(crate) const fn set_owned_city_org(&mut self, owned_faction_id: i32, owned_union_id: i32) {
-        self.param.owned_faction_id = owned_faction_id;
-        self.param.owned_union_id = owned_union_id;
+    pub(crate) fn set_owned_city_org(&self, owned_faction_id: i32, owned_union_id: i32) {
+        self.owned_city_organizing
+            .set((owned_faction_id, owned_union_id));
     }
 
-    pub(crate) const fn get_owned_city_faction(&self) -> i32 {
-        self.param.owned_faction_id
+    pub(crate) fn get_owned_city_faction(&self) -> i32 {
+        self.owned_city_organizing.get().0
     }
 
-    pub(crate) const fn get_owned_city_union(&self) -> i32 {
-        self.param.owned_union_id
+    pub(crate) fn get_owned_city_union(&self) -> i32 {
+        self.owned_city_organizing.get().1
     }
 
     /// Восстанавливает faction/union/country relation после DB-load.
@@ -1040,7 +1058,7 @@ impl CWorldRegion {
         game: &CGame,
         update_player: &mut dyn FnMut(i32),
     ) -> Result<WorldRegionOwnerRelationReport, WorldRegionOwnerRelationBlock> {
-        let initial_faction_id = self.param.owned_faction_id;
+        let initial_faction_id = self.get_owned_city_faction();
         let mut report = WorldRegionOwnerRelationReport {
             initial_faction_id,
             faction_cleared: false,
@@ -1053,16 +1071,17 @@ impl CWorldRegion {
         }
 
         if organizing.faction_by_id(initial_faction_id).is_none() {
-            self.param.owned_faction_id = 0;
-            self.param.owned_union_id = 0;
+            self.owned_city_organizing.set((0, 0));
             report.faction_cleared = true;
         }
+        let union_id = self.get_owned_city_union();
         if organizing
-            .confederation_by_id(self.param.owned_union_id)
+            .confederation_by_id(union_id)
             .is_none()
         {
-            report.union_cleared = self.param.owned_union_id != 0;
-            self.param.owned_union_id = 0;
+            report.union_cleared = union_id != 0;
+            self.owned_city_organizing
+                .set((self.get_owned_city_faction(), 0));
         }
 
         let faction_id = self.get_owned_city_faction();
@@ -1164,7 +1183,7 @@ impl CWorldRegion {
                 .add_setup_to_byte_array()
                 .map_err(WorldRegionSerializationBlock::Setup)?,
         );
-        append_region_param(destination, self.param);
+        append_region_param(destination, self.effective_param());
         Ok(true)
     }
 
