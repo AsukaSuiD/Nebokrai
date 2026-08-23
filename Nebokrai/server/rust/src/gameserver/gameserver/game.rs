@@ -914,12 +914,20 @@ impl CGame {
         self.dupli_region_setup.as_ref()
     }
 
+    pub(crate) const fn dupli_region_setup_mut(&mut self) -> Option<&mut CDupliRegionSetup> {
+        self.dupli_region_setup.as_mut()
+    }
+
     pub(crate) const fn move_check_cells(&self) -> &MoveCheckCellRegistry {
         &self.move_check_cells
     }
 
     pub(crate) const fn player_ranks(&self) -> Option<&CPlayerRanks> {
         self.player_ranks.as_ref()
+    }
+
+    pub(crate) const fn player_ranks_mut(&mut self) -> Option<&mut CPlayerRanks> {
+        self.player_ranks.as_mut()
     }
 
     pub(crate) const fn goods_war(&self) -> Option<&CGoodsWarMember> {

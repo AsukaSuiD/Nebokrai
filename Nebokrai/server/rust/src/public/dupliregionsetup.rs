@@ -1,9 +1,8 @@
 //! Список дублирующих регионов исторического Miracle.
 //!
-//! World `CDupliRegionSetup::Load/AddToByteArray/GetRandomRegion`
-//! —; Game decoder ниже
-//! остаётся. Точная пара:
-//! Исходный owner PDB:
+//! World `CDupliRegionSetup::Load/AddToByteArray/GetRandomRegion` и Game
+//! `DecordFromByteArray` подтверждены точными EXE/PDB обоих компонентов;
+//! исходный owner `public/dupliregionsetup.cpp`.
 //!
 //! Оригинал World/Game serializers подтверждают wire: signed 32-битный count и
 //! insertion-order records по восемь little-endian bytes (`region_id`,
@@ -20,6 +19,7 @@
 //! файла. Rust сохраняет success и уже прочитанный prefix, но не переносит
 //! uninitialized-memory defect и не добавляет неполную запись.
 
+use std::collections::TryReserveError;
 use std::error::Error;
 use std::fmt;
 
@@ -39,7 +39,7 @@ pub(crate) struct CDupliRegionSetup {
 }
 
 impl CDupliRegionSetup {
- /// Перечитывает оригинал `setup/DupliRegionsSetup.ini` token-формат.
+    /// Перечитывает оригинал `setup/DupliRegionsSetup.ini` token-формат.
     pub(crate) fn load(&mut self, source: Option<&[u8]>) -> bool {
         self.entries.clear();
         let Some(source) = source else {
@@ -63,6 +63,32 @@ impl CDupliRegionSetup {
         true
     }
 
+    /// Декодирует Game startup snapshot: немедленно очищает прежний list,
+    /// затем сохраняет каждый полный восьмибайтовый record в wire-order.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<(), DupliRegionDecodeError> {
+        self.entries.clear();
+        let count = read_wire_i32(source, cursor)?;
+        if count <= 0 {
+            return Ok(());
+        }
+        self.entries
+            .try_reserve(count as usize)
+            .map_err(DupliRegionDecodeError::Allocation)?;
+        for _ in 0..count {
+            let region_id = read_wire_i32(source, cursor)?;
+            let duplicate_region_id = read_wire_i32(source, cursor)?;
+            self.entries.push(DupliRegionEntry {
+                region_id,
+                duplicate_region_id,
+            });
+        }
+        Ok(())
+    }
+
     pub(crate) fn push(&mut self, entry: DupliRegionEntry) {
         self.entries.push(entry);
     }
@@ -71,7 +97,7 @@ impl CDupliRegionSetup {
         &self.entries
     }
 
- /// Выбирает исходный region либо один из его duplicate в точном list-order.
+    /// Выбирает исходный region либо один из его duplicate в точном list-order.
     pub(crate) fn get_random_region(
         &self,
         region_id: i32,
@@ -92,7 +118,7 @@ impl CDupliRegionSetup {
             .expect("legacy random(count) возвращает неотрицательный индекс")]
     }
 
- /// Дописывает оригинал `count + insertion-order 8-byte records`.
+    /// Дописывает оригинал `count + insertion-order 8-byte records`.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -130,3 +156,56 @@ impl fmt::Display for DupliRegionSerializeError {
 }
 
 impl Error for DupliRegionSerializeError {}
+
+#[derive(Debug)]
+pub(crate) enum DupliRegionDecodeError {
+    UnexpectedEnd {
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    Allocation(TryReserveError),
+}
+
+impl fmt::Display for DupliRegionDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd {
+                offset,
+                needed,
+                available,
+            } => write!(
+                formatter,
+                "DupliRegion snapshot обрывается на {offset}: нужно {needed}, доступно {available}"
+            ),
+            Self::Allocation(_) => formatter.write_str("не удалось выделить DupliRegion snapshot"),
+        }
+    }
+}
+
+impl Error for DupliRegionDecodeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Allocation(source) => Some(source),
+            _ => None,
+        }
+    }
+}
+
+fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, DupliRegionDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(4)) else {
+        return Err(DupliRegionDecodeError::UnexpectedEnd {
+            offset,
+            needed: 4,
+            available,
+        });
+    };
+    *cursor += 4;
+    Ok(i32::from_le_bytes(
+        bytes
+            .try_into()
+            .expect("DupliRegion scalar содержит 4 байта"),
+    ))
+}

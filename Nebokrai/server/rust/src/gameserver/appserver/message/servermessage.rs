@@ -1,9 +1,9 @@
 //! Владелец входного GameServer dispatcher-а `OnServerMessage`.
 //!
 //! Весь dispatcher RVA `0x0009D300` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме цепочек
-//! сообщения `0x7F801` для AttackCity/Village и terminal selector `0x3B`, а
-//! также полной typed Billing reconnect ветви `0x6F904`; они имеют статус
-//! `IMPLEMENTED`. Точная пара
+//! сообщения `0x7F801` для PlayerRanks/DupliRegion, AttackCity/Village и
+//! terminal selector `0x3B`, а также полной typed Billing reconnect ветви
+//! `0x6F904`; они имеют статус `IMPLEMENTED`. Точная пара
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходник
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\servermessage.cpp`.
 //!
@@ -33,11 +33,15 @@ use super::super::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarDecodeError, VillageWarRegionContext,
 };
 use crate::gameserver::gameserver::game::{CGame, GameNetworkInitializationError};
+use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::nets::netserver::mynetclient::CMyNetClient;
+use crate::public::dupliregionsetup::DupliRegionDecodeError;
 
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
 const CLIENT_SERVER_START_SELECTOR: i32 = 0x3b;
+const PLAYER_RANKS_SELECTOR: i32 = 0x17;
+const DUPLI_REGION_SELECTOR: i32 = 0x1a;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GameServerIds {
@@ -106,6 +110,83 @@ fn read_start_long(
     Ok(i32::from_le_bytes(
         bytes.try_into().expect("server ID содержит четыре байта"),
     ))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameOwnedStartupSnapshotReport {
+    PlayerRanks { entries: usize },
+    DupliRegions { entries: usize },
+}
+
+#[derive(Debug)]
+pub(crate) enum GameOwnedStartupSnapshotError {
+    OwnerUnavailable { selector: i32 },
+    PlayerRanks(PlayerRanksDecodeError),
+    DupliRegions(DupliRegionDecodeError),
+}
+
+impl fmt::Display for GameOwnedStartupSnapshotError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OwnerUnavailable { selector } => {
+                write!(
+                    formatter,
+                    "startup owner selector {selector:#x} ещё не создан CGame::Init"
+                )
+            }
+            Self::PlayerRanks(error) => error.fmt(formatter),
+            Self::DupliRegions(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for GameOwnedStartupSnapshotError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::OwnerUnavailable { .. } => None,
+            Self::PlayerRanks(error) => Some(error),
+            Self::DupliRegions(error) => Some(error),
+        }
+    }
+}
+
+/// Декодирует startup snapshots, чьи state owners уже принадлежат `CGame`.
+pub(crate) fn dispatch_game_owned_startup_snapshot(
+    selector: i32,
+    message: &mut CMessage,
+    game: &mut CGame,
+    mut add_log_text: impl FnMut(&'static str),
+) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
+    let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    match selector {
+        PLAYER_RANKS_SELECTOR => {
+            let Some(ranks) = game.player_ranks_mut() else {
+                return Some(Err(GameOwnedStartupSnapshotError::OwnerUnavailable {
+                    selector,
+                }));
+            };
+            if let Err(error) = ranks.decord_from_byte_array(source, cursor) {
+                return Some(Err(GameOwnedStartupSnapshotError::PlayerRanks(error)));
+            }
+            Some(Ok(GameOwnedStartupSnapshotReport::PlayerRanks {
+                entries: ranks.ranks().len(),
+            }))
+        }
+        DUPLI_REGION_SELECTOR => {
+            let Some(setup) = game.dupli_region_setup_mut() else {
+                return Some(Err(GameOwnedStartupSnapshotError::OwnerUnavailable {
+                    selector,
+                }));
+            };
+            if let Err(error) = setup.decord_from_byte_array(source, cursor) {
+                return Some(Err(GameOwnedStartupSnapshotError::DupliRegions(error)));
+            }
+            let entries = setup.entries().len();
+            add_log_text("Initial SI_DUPLIREGIONSETUP...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::DupliRegions { entries }))
+        }
+        _ => None,
+    }
 }
 
 /// Наблюдаемый итог reconnect-ветви Billing `0x6F904`.
