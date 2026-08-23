@@ -7980,15 +7980,13 @@ impl fmt::Display for WorldCreationPlayerAppendLog {
     }
 }
 
-/// Тонкий concrete adapter organizing/region/transport owner-ов
-/// `CPlayer::UpdateFactionInfo`.
-struct WorldPlayerFactionInfoContext<'a> {
-    game: &'a CGame,
+/// Тонкий concrete adapter organizing/region owner-ов сериализации игрока.
+struct WorldPlayerOrganizingContext<'a> {
     organizing: &'a COrganizingCtrl,
     region_types: &'a BTreeMap<i32, Option<u16>>,
 }
 
-impl PlayerOrganizingUpdater for WorldPlayerFactionInfoContext<'_> {
+impl PlayerOrganizingUpdater for WorldPlayerOrganizingContext<'_> {
     fn set_player_organizing(
         &mut self,
         player_id: i32,
@@ -7999,16 +7997,37 @@ impl PlayerOrganizingUpdater for WorldPlayerFactionInfoContext<'_> {
     }
 }
 
+/// Concrete transport adapter `CPlayer::UpdateFactionInfo`.
+///
+/// Маршрут фиксируется до временного извлечения player owner-а из map: исходный
+/// lookup выполнялся до вызова send, а повторный поиск через Rust map в этот
+/// момент уже не может увидеть заимствованного игрока.
+struct WorldPlayerFactionInfoContext<'a> {
+    organizing: WorldPlayerOrganizingContext<'a>,
+    game_server_id: i32,
+    sender: Option<ServerCommandHandle>,
+}
+
+impl PlayerOrganizingUpdater for WorldPlayerFactionInfoContext<'_> {
+    fn set_player_organizing(
+        &mut self,
+        player_id: i32,
+        organizing: &mut PlayerOrganizingState,
+    ) -> Result<(), PlayerOrganizingUpdateError> {
+        self.organizing
+            .set_player_organizing(player_id, organizing)
+    }
+}
+
 impl PlayerFactionInfoContext for WorldPlayerFactionInfoContext<'_> {
     fn send_player_faction_info(
         &mut self,
-        player_id: i32,
+        _player_id: i32,
         message: &CMessage,
     ) -> PlayerFactionInfoDelivery {
-        let game_server_id = self.game.game_server_number_by_player_id(player_id);
         PlayerFactionInfoDelivery {
-            game_server_id,
-            result: self.game.send_msg_to_game_server(game_server_id, message),
+            game_server_id: self.game_server_id,
+            result: message.send_to_map_id(self.sender.as_ref(), self.game_server_id),
         }
     }
 }
@@ -17279,15 +17298,20 @@ impl CGame {
         player_id: i32,
     ) -> Result<Option<PlayerFactionInfoUpdateReport>, PlayerFactionInfoUpdateBlock> {
         let region_types = self.player_organizing_region_types();
+        let game_server_id = self.game_server_number_by_player_id(player_id);
+        let sender = self.current_game_server_sender();
         let player_key = player_id as u32;
         let Some(mut player) = self.players.remove(&player_key) else {
             return Ok(None);
         };
         let outcome = {
             let mut context = WorldPlayerFactionInfoContext {
-                game: self,
-                organizing,
-                region_types: &region_types,
+                organizing: WorldPlayerOrganizingContext {
+                    organizing,
+                    region_types: &region_types,
+                },
+                game_server_id,
+                sender,
             };
             player.update_faction_info(&mut context)
         };
@@ -17841,8 +17865,7 @@ impl CGame {
         let region_types = self.player_organizing_region_types();
         let mut payload = Vec::new();
         let encoded = {
-            let mut updater = WorldPlayerFactionInfoContext {
-                game: self,
+            let mut updater = WorldPlayerOrganizingContext {
                 organizing,
                 region_types: &region_types,
             };
