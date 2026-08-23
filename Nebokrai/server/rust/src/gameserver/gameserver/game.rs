@@ -102,8 +102,8 @@ use crate::gameserver::appserver::message::sequencestring::{
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::organizingsystem::fournationwarsys::CFourNationWarSys;
 use crate::gameserver::appserver::player::{
-    BattleFairyCombineReport, BattleFairyEquipmentMutationReport, BattleFairySummonReport,
-    BattleFairyWarSoulAction, CPlayer,
+    BattleFairyCombineReport, BattleFairyEquipmentMutationReport, BattleFairySkillResetReport,
+    BattleFairySummonReport, BattleFairyWarSoulAction, CPlayer,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::servercityregion::CServerCityRegion;
@@ -2196,6 +2196,36 @@ impl CGame {
         self.players.get_mut(&player_id).map(|player| {
             player.reset_battle_fairy_potential(enabled, &self.goods_factory, encode_old_client)
         })
+    }
+
+    /// Runtime entry point `CBattleFairyContainer::ResetSkill`, общий для
+    /// script-functions распределения обычного/special skill и прямого caller-а
+    /// с расходом reset item. RNG принадлежит одному `CGame` sequence.
+    pub(crate) fn reset_battle_fairy_skill(
+        &mut self,
+        player_id: i32,
+        position: i32,
+        consume_item: bool,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> Option<BattleFairySkillResetReport> {
+        let enabled = self.globe_setup.battle_fairy_enabled();
+        let (players, random_state, goods_factory, skill_factory) = (
+            &mut self.players,
+            &mut self.random_state,
+            &self.goods_factory,
+            &self.skill_factory,
+        );
+        let player = players.get_mut(&player_id)?;
+        let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
+        Some(player.reset_battle_fairy_skill(
+            enabled,
+            position,
+            consume_item,
+            goods_factory,
+            skill_factory,
+            &mut random,
+            encode_old_client,
+        ))
     }
 
     /// Исполняет один исходный snapshot входящих FIFO в порядке WS, BS, GS.

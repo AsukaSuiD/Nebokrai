@@ -56,6 +56,9 @@
 //! `ResetPotential` использует owned packet `CVolumeLimitGoodsContainer` 8×12:
 //! первый `ZHQLS01` расходуется до addon/player mutation, семь tracked-вкладов
 //! возвращаются в общий potential и публикуется один итоговый `0xBF918`.
+//! `ResetSkill` соединяет equipment headgear, optional packet-reset item,
+//! общий Game RNG, exact несовместимые пары, полный detach/attach девяти
+//! war-soul skills и подтверждения `0xBF71D/0xBF918`.
 
 use super::area::WarSoulPoint;
 use super::container::cbattlefairycontainer::{
@@ -71,16 +74,18 @@ use super::goods::cbattlefairyproperty::BattleFairyCompose;
 use super::goods::cgoods::CGoods;
 use super::goods::cgoodsbaseproperties::{
     GAP_BF_ABRAVE_ADDON, GAP_BF_AGILITY, GAP_BF_AGILITY_ADDON, GAP_BF_AGILITY_POTENTIAL,
-    GAP_BF_ATTACK, GAP_BF_ATTACK_ADDON, GAP_BF_ATTACK_POTENTIAL, GAP_BF_BATTLE_FAIRY, GAP_BF_BLAST,
-    GAP_BF_BLAST_ADDON, GAP_BF_BLAST_POTENTIAL, GAP_BF_BRAVE, GAP_BF_BRAVE_POTENTIAL,
-    GAP_BF_CUT_HURT_ADDON, GAP_BF_CUT_HURT_SCALE, GAP_BF_HP, GAP_BF_LIFE_ADDON, GAP_BF_MAX_HP,
-    GAP_BF_MAX_MP, GAP_BF_MP, GAP_BF_MP_ADDON, GAP_BF_POTENTIAL, GAP_BF_SPRITE,
+    GAP_BF_ALL_SKILL, GAP_BF_ATTACK, GAP_BF_ATTACK_ADDON, GAP_BF_ATTACK_POTENTIAL,
+    GAP_BF_BATTLE_FAIRY, GAP_BF_BLAST, GAP_BF_BLAST_ADDON, GAP_BF_BLAST_POTENTIAL, GAP_BF_BRAVE,
+    GAP_BF_BRAVE_POTENTIAL, GAP_BF_CUT_HURT_ADDON, GAP_BF_CUT_HURT_SCALE, GAP_BF_EARTH,
+    GAP_BF_EARTH_SKILL, GAP_BF_HP, GAP_BF_HUOXIESHU_SKILL, GAP_BF_LIFE_ADDON,
+    GAP_BF_LINGZHISHU_SKILL, GAP_BF_MAN, GAP_BF_MAN_SKILL, GAP_BF_MAX_HP, GAP_BF_MAX_MP, GAP_BF_MP,
+    GAP_BF_MP_ADDON, GAP_BF_POTENTIAL, GAP_BF_SKY, GAP_BF_SKY_SKILL, GAP_BF_SPRITE,
     GAP_BF_SPRITE_ADDON, GAP_BF_SPRITE_POTENTIAL, GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISM,
     GAP_BF_SPRITUALISM_POTENTIAL, GAP_BF_STRENGH, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_POTENTIAL,
     GAP_BF_WEAPON_LEVEL, GAP_GEM_LEVEL,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
-use super::moveshape::CMoveShape;
+use super::moveshape::{CMoveShape, MoveShapeSkill};
 use super::shape::{CShape, ShapeCoordinateBlock, ShapeFigure, ShapeView};
 use super::skills::skillfactory::CSkillFactory;
 use crate::public::guid::CGuid;
@@ -98,6 +103,10 @@ const MONSTER_TAMING_SKILL_ID: u32 = 0xd4;
 const BATTLE_FAIRY_MOVE_MESSAGE_TYPE: u32 = 0x0b_f605;
 const BATTLE_FAIRY_STATUS_MESSAGE_TYPE: u32 = 0x0b_f930;
 const BATTLE_FAIRY_SUMMON_MESSAGE_TYPE: u32 = 0x0b_f92e;
+const BATTLE_FAIRY_SKILL_REMOVED_MESSAGE_TYPE: u32 = 0x0b_f71e;
+const BATTLE_FAIRY_SKILL_RESET_ITEM_MISSING: &str = "ZHGS0022";
+const SKILL_POJIA: u32 = 530;
+const SKILL_LEIMING: u32 = 543;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BattleFairyObjectMoveOperation {
@@ -385,6 +394,59 @@ pub(crate) struct BattleFairyPotentialResetReport {
     pub(crate) outcome: BattleFairyPotentialResetOutcome,
     pub(crate) recovered_potential: i32,
     pub(crate) effects: Vec<BattleFairyPotentialResetEffect>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairySkillResetOutcome {
+    FeatureDisabled,
+    MissingHeadgear,
+    InvalidHeadgear,
+    MissingResetItem,
+    InvalidPosition,
+    SelectedSkillUnavailable,
+    Reset,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairySkillRemoved {
+    pub(crate) message_type: u32,
+    pub(crate) player_id: i32,
+    pub(crate) skill_id: u32,
+    pub(crate) skill_name: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairySkillResetEffect {
+    Notification {
+        player_id: i32,
+        string_id: &'static str,
+        color: u32,
+    },
+    PacketItemConsumed {
+        player_id: i32,
+        goods: super::shape::ShapeIdentity,
+        previous_amount: u32,
+        remaining_amount: u32,
+        consumed: bool,
+        removal: Option<VolumeGoodsRemoveOutcome>,
+    },
+    SkillRemoved(BattleFairySkillRemoved),
+    SkillAdded(BattleFairySkillAdded),
+    SelectedSkillLearned(BattleFairySkillAdded),
+    GoodsUpdated(BattleFairyDefaultGoodsUpdate),
+}
+
+#[must_use = "skill reset report содержит packet, skill-state и network effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairySkillResetReport {
+    pub(crate) player_id: i32,
+    pub(crate) position: i32,
+    pub(crate) outcome: BattleFairySkillResetOutcome,
+    pub(crate) previous_skill: Option<u32>,
+    pub(crate) selected_skill: Option<u32>,
+    pub(crate) detached_skill_ids: Vec<u32>,
+    pub(crate) attached_skill_ids: Vec<u32>,
+    pub(crate) effects: Vec<BattleFairySkillResetEffect>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1636,6 +1698,270 @@ impl CPlayer {
         report
     }
 
+    /// Полный player-side `CBattleFairyContainer::ResetSkill`. `consume_item`
+    /// соответствует третьему native аргументу: script allocation передаёт
+    /// ноль, прямой gameplay caller может потребовать `ZHJNS01/02`.
+    pub(crate) fn reset_battle_fairy_skill(
+        &mut self,
+        battle_fairy_enabled: bool,
+        position: i32,
+        consume_item: bool,
+        factory: &CGoodsFactory,
+        skill_factory: &CSkillFactory,
+        random: &mut dyn FnMut(i32) -> i32,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> BattleFairySkillResetReport {
+        let player_id = self.player_id();
+        let mut report = BattleFairySkillResetReport {
+            player_id,
+            position,
+            outcome: BattleFairySkillResetOutcome::MissingHeadgear,
+            previous_skill: None,
+            selected_skill: None,
+            detached_skill_ids: Vec::new(),
+            attached_skill_ids: Vec::new(),
+            effects: Vec::new(),
+        };
+        if !battle_fairy_enabled {
+            report.outcome = BattleFairySkillResetOutcome::FeatureDisabled;
+            report
+                .effects
+                .push(BattleFairySkillResetEffect::Notification {
+                    player_id,
+                    string_id: "ZHGS0008",
+                    color: 0xffff_0000,
+                });
+            return report;
+        }
+        let Some(headgear) = self.equipment.get_goods(10) else {
+            return report;
+        };
+        if headgear.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
+            report.outcome = BattleFairySkillResetOutcome::InvalidHeadgear;
+            return report;
+        }
+
+        if consume_item {
+            let reset_name = match position {
+                3..=5 => Some(b"ZHJNS01".as_slice()),
+                6 => Some(b"ZHJNS02".as_slice()),
+                _ => None,
+            };
+            if let Some(reset_name) = reset_name {
+                let reset_index = factory.query_goods_id_by_original_name(Some(reset_name));
+                let reset_item = self
+                    .packet
+                    .base()
+                    .traversing_goods()
+                    .find(|goods| goods.base_properties_index() == reset_index)
+                    .map(|goods| (goods.identity(), goods.amount()));
+                let Some((reset_identity, reset_amount)) = reset_item else {
+                    report.outcome = BattleFairySkillResetOutcome::MissingResetItem;
+                    report
+                        .effects
+                        .push(BattleFairySkillResetEffect::Notification {
+                            player_id,
+                            string_id: BATTLE_FAIRY_SKILL_RESET_ITEM_MISSING,
+                            color: 0xffff_ffff,
+                        });
+                    return report;
+                };
+                let reset_position = self.packet.query_goods_position(reset_identity.ex_id);
+                let (remaining_amount, consumed, removal) = if reset_amount == 0 {
+                    (0, false, None)
+                } else if reset_amount == 1 {
+                    let removal = self.packet.remove_goods(reset_identity.ex_id);
+                    (
+                        if removal.is_some() { 0 } else { reset_amount },
+                        removal.is_some(),
+                        removal,
+                    )
+                } else {
+                    let remaining = reset_amount.wrapping_sub(1);
+                    let mut consumed = false;
+                    if let Some(reset_position) = reset_position
+                        && let Some(goods) = self.packet.get_goods_mut(reset_position)
+                    {
+                        goods.set_amount(remaining);
+                        consumed = true;
+                    }
+                    (
+                        if consumed { remaining } else { reset_amount },
+                        consumed,
+                        None,
+                    )
+                };
+                report
+                    .effects
+                    .push(BattleFairySkillResetEffect::PacketItemConsumed {
+                        player_id,
+                        goods: reset_identity,
+                        previous_amount: reset_amount,
+                        remaining_amount,
+                        consumed,
+                        removal,
+                    });
+            }
+        }
+
+        let (current_skills, current_all_skill) = {
+            let goods = self
+                .equipment
+                .get_goods(10)
+                .expect("headgear остаётся equipped после reset-item consumption");
+            (
+                [
+                    goods.addon_property_value(factory, GAP_BF_SKY_SKILL, 2) as u32,
+                    goods.addon_property_value(factory, GAP_BF_EARTH_SKILL, 2) as u32,
+                    goods.addon_property_value(factory, GAP_BF_MAN_SKILL, 2) as u32,
+                ],
+                goods.addon_property_value(factory, GAP_BF_ALL_SKILL, 2) as u32,
+            )
+        };
+        let (property, previous_skill, replaced) = match position {
+            3..=5 => {
+                let replaced = (position - 3) as usize;
+                (
+                    GAP_BF_SKY_SKILL + replaced as i32,
+                    current_skills[replaced],
+                    Some(replaced),
+                )
+            }
+            6 => (GAP_BF_ALL_SKILL, current_all_skill, None),
+            _ => {
+                report.outcome = BattleFairySkillResetOutcome::InvalidPosition;
+                return report;
+            }
+        };
+        report.previous_skill = Some(previous_skill);
+
+        // В каждом native switch-case полный detach расположен перед первым
+        // random(), а не только перед addon mutation.
+        let old_entries = self.war_soul_skill_entries(factory);
+        for (skill_id, _) in old_entries {
+            if skill_id == 0 {
+                continue;
+            }
+            let _deleted = self.move_shape.delete_skill(skill_id, skill_factory);
+            report.detached_skill_ids.push(skill_id);
+            // Native `DelWarSoulSkillInPlayer` вызывает TellClient после
+            // DelSkill. Поэтому packet удаления существует лишь если skill
+            // пережил отказ category lookup.
+            if let Some(skill) = self.move_shape.skill(skill_id) {
+                report
+                    .effects
+                    .push(BattleFairySkillResetEffect::SkillRemoved(
+                        BattleFairySkillRemoved {
+                            message_type: BATTLE_FAIRY_SKILL_REMOVED_MESSAGE_TYPE,
+                            player_id,
+                            skill_id,
+                            skill_name: skill.name().to_vec(),
+                        },
+                    ));
+            }
+        }
+
+        let selected_skill = match replaced {
+            Some(replaced) => loop {
+                let candidate = SKILL_POJIA.wrapping_add(random(13) as u32);
+                if current_skills.contains(&candidate) {
+                    continue;
+                }
+                let conflicts = unpaired_battle_fairy_skill(candidate).is_some_and(|paired| {
+                    current_skills
+                        .iter()
+                        .enumerate()
+                        .any(|(index, &skill)| index != replaced && skill == paired)
+                });
+                if !conflicts {
+                    break candidate;
+                }
+            },
+            None => loop {
+                let candidate = SKILL_LEIMING.wrapping_add(random(3) as u32);
+                if candidate != current_all_skill {
+                    break candidate;
+                }
+            },
+        };
+        report.selected_skill = Some(selected_skill);
+
+        {
+            let goods = self
+                .equipment
+                .get_goods_mut(10)
+                .expect("skill detach не отделяет equipped headgear");
+            let _level_cleared = goods.set_addon_property_value_core(property, 1, 0);
+            let _skill_cleared = goods.set_addon_property_value_core(property, 2, 0);
+            let _level_stored = goods.set_addon_property_value_core(property, 1, 1);
+            let _skill_stored =
+                goods.set_addon_property_value_core(property, 2, selected_skill as i32);
+        }
+
+        let new_entries = self.war_soul_skill_entries(factory);
+        for (skill_id, level) in new_entries {
+            let _added = self.move_shape.add_skill(skill_id, level, skill_factory);
+            if let Some(skill) = self.move_shape.skill(skill_id) {
+                report.attached_skill_ids.push(skill_id);
+                report.effects.push(BattleFairySkillResetEffect::SkillAdded(
+                    battle_fairy_skill_snapshot(player_id, skill),
+                ));
+            }
+        }
+
+        let Some(selected) = self.move_shape.skill(selected_skill) else {
+            report.outcome = BattleFairySkillResetOutcome::SelectedSkillUnavailable;
+            return report;
+        };
+        report
+            .effects
+            .push(BattleFairySkillResetEffect::SelectedSkillLearned(
+                battle_fairy_skill_snapshot(player_id, selected),
+            ));
+        let headgear = self
+            .equipment
+            .get_goods(10)
+            .expect("ResetSkill не отделяет equipped headgear");
+        report
+            .effects
+            .push(BattleFairySkillResetEffect::GoodsUpdated(
+                BattleFairyDefaultGoodsUpdate {
+                    message_type: 0x0b_f918,
+                    player_id,
+                    goods: headgear.identity(),
+                    old_client_payload: encode_old_client(headgear),
+                },
+            ));
+        report.outcome = BattleFairySkillResetOutcome::Reset;
+        report
+    }
+
+    fn war_soul_skill_entries(&self, factory: &CGoodsFactory) -> [(u32, i32); 9] {
+        let Some(goods) = self.equipment.get_goods(10) else {
+            return [(0, 0); 9];
+        };
+        let entry = |property| {
+            (
+                goods.addon_property_value(factory, property, 2) as u32,
+                goods.addon_property_value(factory, property, 1),
+            )
+        };
+        let mut entries = [
+            entry(GAP_BF_SKY),
+            entry(GAP_BF_EARTH),
+            entry(GAP_BF_MAN),
+            entry(GAP_BF_SKY_SKILL),
+            entry(GAP_BF_EARTH_SKILL),
+            entry(GAP_BF_MAN_SKILL),
+            entry(GAP_BF_ALL_SKILL),
+            entry(GAP_BF_HUOXIESHU_SKILL),
+            entry(GAP_BF_LINGZHISHU_SKILL),
+        ];
+        entries[7].1 = 1;
+        entries[8].1 = 1;
+        entries
+    }
+
     /// Достигнутая часть exact `RefreshContainerOwners`: owner ID должен быть
     /// перепривязан после создания player identity или его восстановления.
     pub(crate) const fn refresh_reached_container_owners(&mut self, player_id: i32) {
@@ -2078,6 +2404,33 @@ fn push_battle_fairy_upgrade_notification(
         color: 0xffff_ffff,
         format_value,
     });
+}
+
+fn battle_fairy_skill_snapshot(player_id: i32, skill: &MoveShapeSkill) -> BattleFairySkillAdded {
+    BattleFairySkillAdded {
+        message_type: BATTLE_FAIRY_SKILL_ADDED_MESSAGE_TYPE,
+        player_id,
+        skill_id: skill.id(),
+        skill_level: skill.level(),
+        skill_type: skill.skill_type(),
+        skill_name: skill.name().to_vec(),
+    }
+}
+
+/// Exact constructor map `m_UnPairSkills`, подтверждённый immediate-ами
+/// `gameserver.exe` по адресу `0x00504052..0x00504149`.
+const fn unpaired_battle_fairy_skill(skill_id: u32) -> Option<u32> {
+    Some(match skill_id {
+        530 => 534,
+        531 => 535,
+        532 => 536,
+        533 => 537,
+        534 => 530,
+        535 => 531,
+        536 => 532,
+        537 => 533,
+        _ => return None,
+    })
 }
 
 const fn is_battle_fairy_property_cell(cell: BattleFairyCell) -> bool {
@@ -3883,34 +4236,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x00030430
 // ADDRESS: 00430430
 // PROTOTYPE: void __thiscall WriteGoodsDelLog(CGoods * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::DelWarSoulSkillInPlayer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13157
-// RVA: 0x00030610
-// ADDRESS: 00430610
-// PROTOTYPE: void __thiscall DelWarSoulSkillInPlayer(CGoods * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::AddWarSoulSkillToPalyer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13209
-// RVA: 0x00030760
-// ADDRESS: 00430760
-// PROTOTYPE: void __thiscall AddWarSoulSkillToPalyer(CGoods * param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

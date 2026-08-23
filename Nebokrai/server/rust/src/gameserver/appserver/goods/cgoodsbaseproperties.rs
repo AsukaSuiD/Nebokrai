@@ -83,6 +83,7 @@ pub(crate) const GAP_BF_MAN: i32 = 180;
 pub(crate) const GAP_BF_SKY_SKILL: i32 = 181;
 pub(crate) const GAP_BF_EARTH_SKILL: i32 = 182;
 pub(crate) const GAP_BF_MAN_SKILL: i32 = 183;
+pub(crate) const GAP_BF_ALL_SKILL: i32 = 184;
 pub(crate) const GAP_BF_MAX_HP: i32 = 185;
 pub(crate) const GAP_BF_MAX_MP: i32 = 186;
 pub(crate) const GAP_BF_ATTACK_POTENTIAL: i32 = 187;

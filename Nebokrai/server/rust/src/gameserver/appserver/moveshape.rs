@@ -26,12 +26,13 @@
 //! concrete derived AI lookup и realtime clock.
 //!
 //! Combat, pets, общий AI tick и остальные поля/методы ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Для battle-fairy combine материализован `AddSkill` common
-//! state: factory подтверждает level/type/name, а `BTreeMap` хранит identity
-//! вместо четырёх raw pointer-vector-ов. Concrete skill execution, его virtual
-//! параметры и char-name overload остаются у отдельных skill owners. Derived
-//! HP/figure передаются как факты, а не копируются из ещё сырых player/monster
-//! owners.
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Для battle-fairy combine/reset материализованы `AddSkill`
+//! и ID-overload `DelSkill`: factory подтверждает level/type/name, а `BTreeMap`
+//! хранит identity вместо четырёх raw pointer-vector-ов. При удалении current
+//! skill ID очищается до category lookup, как в EXE. Concrete skill execution,
+//! его virtual параметры и char-name overload остаются у отдельных skill
+//! owners. Derived HP/figure передаются как факты, а не копируются из ещё сырых
+//! player/monster owners.
 //! `GetCurrentSkill` получил только безопасный ID-view для caller-а
 //! `SummonBF`; virtual lifecycle skill остаётся у будущего skill owner-а.
 
@@ -189,6 +190,30 @@ impl CMoveShape {
                 name: properties.skill_name().to_vec(),
             },
         );
+        true
+    }
+
+    /// Exact reached state-transition `DelSkill(tagSkillID)`. Исходник всегда
+    /// завершает текущий skill до category lookup, даже когда удаляется другой
+    /// ID или искомой записи нет. Concrete `End/Delete` не имеют отдельного
+    /// наблюдаемого state в достигнутой common-проекции.
+    pub(crate) fn delete_skill(&mut self, skill_id: u32, factory: &CSkillFactory) -> bool {
+        if skill_id == 0 {
+            return false;
+        }
+        if self
+            .current_skill_id
+            .is_some_and(|current| self.skills.contains_key(&current))
+        {
+            self.current_skill_id = None;
+        }
+        if !matches!(
+            factory.query_skill_type(skill_id, 1),
+            SKILL_TYPE_ATTACK | SKILL_TYPE_DEFENSE | SKILL_TYPE_STATE | SKILL_TYPE_SUMMON
+        ) {
+            return false;
+        }
+        self.skills.remove(&skill_id);
         true
     }
 
@@ -1224,20 +1249,6 @@ fn clamp_force_y(destination: i32, width: i32, height: i32) -> i32 {
 // RVA: 0x000CF090
 // ADDRESS: 004cf090
 // PROTOTYPE: void __thiscall ClearAllStates(bool param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMoveShape::DelSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:2574
-// RVA: 0x000CF320
-// ADDRESS: 004cf320
-// PROTOTYPE: int __thiscall DelSkill(tagSkillID param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

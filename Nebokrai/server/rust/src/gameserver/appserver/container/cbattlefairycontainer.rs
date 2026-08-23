@@ -23,11 +23,14 @@
 //! сохраняет positional queries, stack decrement и полный remove ownership.
 //! Ошибочный повторный native pointer guard в optional-gem tail заменён
 //! независимой безопасной обработкой ячеек `13..=16`; порядок не меняется.
+//! `ResetSkill` перенесён в `CPlayer/CGame`, где одновременно доступны
+//! equipment, packet, skill storage, общий RNG и ordered network effects;
+//! восемь constructor-owned incompatible pairs подтверждены EXE immediate-ами.
 //!
 //! Автоматический overload читает неинициализированный `m_eBFEquipPlace` у
 //! catalog owner-а. Rust выражает этот UB как typed block, а не выбирает
-//! логичную ячейку из позднего C++-донора. Skill reset и
-//! остальные ещё не подключённые player-integrated методы ниже остаются RAW.
+//! логичную ячейку из позднего C++-донора. Остальные ещё не подключённые
+//! player-integrated методы ниже остаются RAW.
 
 use super::camountlimitgoodscontainer::{
     AmountLimitGoodsCleared, AmountLimitGoodsRelease, AmountLimitGoodsTaken,
@@ -901,20 +904,6 @@ fn x87_fistp_truncating(value: f32) -> i32 {
 // RVA: 0x000FECB0
 // ADDRESS: 004fecb0
 // PROTOTYPE: bool __thiscall DeleteGoods(eBattleFairy_Place_Cell param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyContainer::ResetSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:1851
-// RVA: 0x00101530
-// ADDRESS: 00501530
-// PROTOTYPE: void __thiscall ResetSkill(int param_1, int param_2, int param_3)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
