@@ -27,7 +27,7 @@
 //! материализован с исходными defaults, частичной мутацией и игнорированием
 //! labels. Открытие listener-а заменяет поздней проверкой bind старый
 //! `FindWindow` single-instance guard; недоказанный default billing bind-port
-//! остаётся typed-границей. `Release`, resource loaders и прочие maps ниже
+//! остаётся typed-границей. `Release` и остальные resource/runtime owners ниже
 //! остаются RAW;
 //! `Init` связан через обязательный World client, общий MSVCRT RNG и sequence
 //! registry до необязательной Billing-попытки, затем создаёт DupliRegion,
@@ -40,6 +40,10 @@
 //! CFourNationWarSys и CEmotion process singletons хранятся owned-полями
 //! `CGame`, сохраняя exact startup wire и runtime lookup-контракты без
 //! отдельных global allocations.
+//! Function/variable/script file buffers принадлежат `CGame`; script parser
+//! globals остаются явной context-границей. Повторный function/variable setter
+//! безопасно материализует исходный freed-owner контракт как `None`; старый
+//! `length + 1` NUL-padding заменён bounded `Vec` и C-string prefix adapter-ом.
 //! `with_send_state/register_*/attach_*` являются явной assembly-границей
 //! baseline и не снимают их псевдокод. Network setup передаётся отдельной
 //! post-`LoadSetup*` проекцией. Windows thread handles заменены owned Tokio
@@ -721,6 +725,21 @@ impl std::error::Error for GameInitializationThroughBillingError {
     }
 }
 
+pub(crate) trait GameScriptResourceContext {
+    /// Выполняет исходный `CScript::LoadFunction(nullptr, data)`.
+    fn load_function_list(&mut self, data: &[u8]);
+
+    /// Создаёт новый global `CVariableList` и декодирует его с локальной копией
+    /// cursor, не меняя внешний message cursor.
+    fn load_general_variables(&mut self, source: &[u8], cursor: usize);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameSingleFilePublication {
+    Published,
+    RepeatedOwnerFreed,
+}
+
 pub(crate) struct CGame {
     setup: GameSetup,
     setup_ex: GameSetupEx,
@@ -739,6 +758,9 @@ pub(crate) struct CGame {
     area_width: i32,
     area_height: i32,
     auction_now: bool,
+    function_list_file_data: Option<Vec<u8>>,
+    variable_list_file_data: Option<Vec<u8>>,
+    script_file_data: BTreeMap<Vec<u8>, Vec<u8>>,
     quest_system: CQuestSystem,
     country_param: CCountryParam,
     country_handler: CCountryHandler,
@@ -802,6 +824,9 @@ impl CGame {
             area_width: 15,
             area_height: 15,
             auction_now: false,
+            function_list_file_data: None,
+            variable_list_file_data: None,
+            script_file_data: BTreeMap::new(),
             quest_system: CQuestSystem::default(),
             country_param: CCountryParam::default(),
             country_handler: CCountryHandler::default(),
@@ -1105,6 +1130,62 @@ impl CGame {
     /// с обновлением wall-clock остаётся у ещё не связанного auction owner-а.
     pub(crate) const fn force_auction_disabled(&mut self) {
         self.auction_now = false;
+    }
+
+    pub(crate) fn set_function_file_data<Context: GameScriptResourceContext>(
+        &mut self,
+        data: Vec<u8>,
+        context: &mut Context,
+    ) -> GameSingleFilePublication {
+        if self.function_list_file_data.is_some() {
+            self.function_list_file_data.take();
+            return GameSingleFilePublication::RepeatedOwnerFreed;
+        }
+        self.function_list_file_data = Some(data);
+        let published = self
+            .function_list_file_data
+            .as_deref()
+            .expect("function list только что опубликован");
+        context.load_function_list(legacy_c_string_prefix(published));
+        GameSingleFilePublication::Published
+    }
+
+    pub(crate) fn set_variable_file_data(&mut self, data: Vec<u8>) -> GameSingleFilePublication {
+        if self.variable_list_file_data.is_some() {
+            self.variable_list_file_data.take();
+            return GameSingleFilePublication::RepeatedOwnerFreed;
+        }
+        self.variable_list_file_data = Some(data);
+        GameSingleFilePublication::Published
+    }
+
+    pub(crate) fn set_general_variable_file_data<Context: GameScriptResourceContext>(
+        &mut self,
+        source: &[u8],
+        cursor: usize,
+        context: &mut Context,
+    ) {
+        context.load_general_variables(source, cursor);
+    }
+
+    pub(crate) fn set_script_file_data(&mut self, path: Vec<u8>, data: Vec<u8>) -> bool {
+        self.script_file_data
+            .insert(legacy_c_string_prefix(&path).to_vec(), data)
+            .is_some()
+    }
+
+    pub(crate) fn function_file_data(&self) -> Option<&[u8]> {
+        self.function_list_file_data.as_deref()
+    }
+
+    pub(crate) fn variable_file_data(&self) -> Option<&[u8]> {
+        self.variable_list_file_data.as_deref()
+    }
+
+    pub(crate) fn script_file_data(&self, path: &[u8]) -> Option<&[u8]> {
+        self.script_file_data
+            .get(legacy_c_string_prefix(path))
+            .map(Vec::as_slice)
     }
 
     pub(crate) const fn quest_system(&self) -> &CQuestSystem {
@@ -1998,47 +2079,8 @@ impl ShapeResolver for CGame {
 //
 //
 
-// ============================================================================
-// FUNCTION: CGame::SetFunctionFileData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:1017
-// RVA: 0x00002310
-// ADDRESS: 00402310
-// PROTOTYPE: void __thiscall SetFunctionFileData(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::SetVariableFileData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:1025
-// RVA: 0x00002340
-// ADDRESS: 00402340
-// PROTOTYPE: void __thiscall SetVariableFileData(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::SetGeneralVariableFileData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:1033
-// RVA: 0x00002370
-// ADDRESS: 00402370
-// PROTOTYPE: void __thiscall SetGeneralVariableFileData(uchar * param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// `SetFunctionFileData`, `SetVariableFileData` и `SetGeneralVariableFileData`
+// материализованы выше с подтверждённой семантикой владения и повторной публикации.
 
 // ============================================================================
 // FUNCTION: CGame::SetAuctionState
@@ -2550,19 +2592,8 @@ impl ShapeResolver for CGame {
 //
 //
 
-// ============================================================================
-// FUNCTION: CGame::SetScriptFileData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:1038
-// RVA: 0x0000B4B0
-// ADDRESS: 0040b4b0
-// PROTOTYPE: void __thiscall SetScriptFileData(char * param_1, char * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// `SetScriptFileData` материализован выше: ключ ограничен первой NUL,
+// повторная публикация заменяет прежний owned buffer.
 
 // ============================================================================
 // FUNCTION: GetGame
@@ -2644,19 +2675,7 @@ impl ShapeResolver for CGame {
 //
 //
 
-// ============================================================================
-// FUNCTION: CGame::GetScriptFileData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.h:107
-// RVA: 0x00028C00
-// ADDRESS: 00428c00
-// PROTOTYPE: char * __thiscall GetScriptFileData(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// `GetScriptFileData` материализован выше как lookup без вставки отсутствующего ключа.
 
 // ============================================================================
 // FUNCTION: CGame::FindRegion

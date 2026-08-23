@@ -35,6 +35,8 @@
 //! публикует runtime repeated-emotion lookup до финального startup log.
 //! FourNationWar `0x25` декодирует exact 196-byte setup records и пять rects,
 //! затем проецирует war state и relive rectangles в доступные nation regions.
+//! Script resources `0x0A..0x0D` сохраняют signed lengths, bounded path,
+//! function/general parser callbacks и разные duplicate-owner контракты.
 //!
 //! Terminal selector сначала вызывает `InitNetServer`, затем читает login и
 //! world ID и присваивает их даже после ошибки Host. Rust сохраняет этот
@@ -63,7 +65,9 @@ use crate::gameserver::appserver::country::countrywarsys::{
     CountryWarDecodeError, CountryWarStartupContext, CountryWarSys,
 };
 use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyComposeDecodeError;
-use crate::gameserver::gameserver::game::{CGame, GameNetworkInitializationError};
+use crate::gameserver::gameserver::game::{
+    CGame, GameNetworkInitializationError, GameScriptResourceContext, GameSingleFilePublication,
+};
 use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::nets::netserver::mynetclient::CMyNetClient;
@@ -107,6 +111,10 @@ const CONTRIBUTE_SETUP_SELECTOR: i32 = 0x05;
 const GLOBE_SETUP_SELECTOR: i32 = 0x07;
 const LOG_SYSTEM_SELECTOR: i32 = 0x08;
 const GM_LIST_SELECTOR: i32 = 0x09;
+const FUNCTION_LIST_SELECTOR: i32 = 0x0a;
+const VARIABLE_LIST_SELECTOR: i32 = 0x0b;
+const GENERAL_VARIABLE_SELECTOR: i32 = 0x0c;
+const SCRIPT_FILE_SELECTOR: i32 = 0x0d;
 const REGION_SETUP_SELECTOR: i32 = 0x11;
 const HIT_LEVEL_SELECTOR: i32 = 0x14;
 const EMOTION_SELECTOR: i32 = 0x15;
@@ -204,6 +212,42 @@ fn read_start_long(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameScriptResourceDecodeError {
+    UnexpectedEnd {
+        field: &'static str,
+        offset: usize,
+        required: usize,
+        available: usize,
+    },
+    NegativeLength {
+        resource: &'static str,
+        declared: i32,
+    },
+}
+
+impl fmt::Display for GameScriptResourceDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd {
+                field,
+                offset,
+                required,
+                available,
+            } => write!(
+                formatter,
+                "script resource обрывается на {field} в {offset}: нужно {required}, доступно {available}"
+            ),
+            Self::NegativeLength { resource, declared } => write!(
+                formatter,
+                "script resource {resource} содержит отрицательную длину {declared}"
+            ),
+        }
+    }
+}
+
+impl Error for GameScriptResourceDecodeError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameOwnedStartupSnapshotReport {
     PlayerList(PlayerListDecodeReport),
     TradeList {
@@ -225,6 +269,22 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
         da_kong_log: bool,
     },
     GmList(GmListDecodeReport),
+    FunctionList {
+        declared_length: i32,
+        publication: GameSingleFilePublication,
+    },
+    VariableList {
+        declared_length: i32,
+        publication: GameSingleFilePublication,
+    },
+    GeneralVariable {
+        start_offset: usize,
+    },
+    ScriptFile {
+        path_bytes: usize,
+        declared_length: i32,
+        replaced: bool,
+    },
     RegionSetup {
         entries: usize,
     },
@@ -294,6 +354,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     GlobeSetup(GlobeSetupDecodeError),
     LogSystem(LogSystemDecodeError),
     GmList(GmListDecodeError),
+    ScriptResource(GameScriptResourceDecodeError),
     RegionSetup(RegionSetupDecodeError),
     HitLevel(HitLevelDecodeError),
     Emotion(EmotionDecodeError),
@@ -341,6 +402,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::GlobeSetup(error) => error.fmt(formatter),
             Self::LogSystem(error) => error.fmt(formatter),
             Self::GmList(error) => error.fmt(formatter),
+            Self::ScriptResource(error) => error.fmt(formatter),
             Self::RegionSetup(error) => error.fmt(formatter),
             Self::HitLevel(error) => error.fmt(formatter),
             Self::Emotion(error) => error.fmt(formatter),
@@ -385,6 +447,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::GlobeSetup(error) => Some(error),
             Self::LogSystem(error) => Some(error),
             Self::GmList(error) => Some(error),
+            Self::ScriptResource(error) => Some(error),
             Self::RegionSetup(error) => Some(error),
             Self::HitLevel(error) => Some(error),
             Self::Emotion(error) => Some(error),
@@ -419,10 +482,11 @@ impl Error for GameOwnedStartupSnapshotError {
 }
 
 /// Декодирует startup snapshots, чьи state owners уже принадлежат `CGame`.
-pub(crate) fn dispatch_game_owned_startup_snapshot(
+pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceContext>(
     selector: i32,
     message: &mut CMessage,
     game: &mut CGame,
+    script_context: &mut Context,
     mut add_log_text: impl FnMut(&[u8]),
     mut put_string_to_file: impl FnMut(&str, &[u8]),
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
@@ -524,6 +588,93 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             };
             add_log_text(b"Initial SI_GMLIST...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::GmList(report)))
+        }
+        FUNCTION_LIST_SELECTOR => {
+            let declared_length = match read_script_resource_length(source, cursor, "FunctionList")
+            {
+                Ok(length) => length,
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::ScriptResource(error)));
+                }
+            };
+            let data = match take_script_resource_bytes(
+                source,
+                cursor,
+                declared_length as usize,
+                "FunctionList data",
+            ) {
+                Ok(data) => data.to_vec(),
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::ScriptResource(error)));
+                }
+            };
+            let publication = game.set_function_file_data(data, script_context);
+            add_log_text(b"FunctionList...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::FunctionList {
+                declared_length,
+                publication,
+            }))
+        }
+        VARIABLE_LIST_SELECTOR => {
+            let declared_length = match read_script_resource_length(source, cursor, "VariableList")
+            {
+                Ok(length) => length,
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::ScriptResource(error)));
+                }
+            };
+            let data = match take_script_resource_bytes(
+                source,
+                cursor,
+                declared_length as usize,
+                "VariableList data",
+            ) {
+                Ok(data) => data.to_vec(),
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::ScriptResource(error)));
+                }
+            };
+            let publication = game.set_variable_file_data(data);
+            add_log_text(b"VariableList...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::VariableList {
+                declared_length,
+                publication,
+            }))
+        }
+        GENERAL_VARIABLE_SELECTOR => {
+            let start_offset = *cursor;
+            game.set_general_variable_file_data(source, start_offset, script_context);
+            add_log_text(b"GeneralVariableList...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::GeneralVariable {
+                start_offset,
+            }))
+        }
+        SCRIPT_FILE_SELECTOR => {
+            let path = read_script_resource_path(source, cursor, 0x104);
+            let declared_length = match read_script_resource_length(source, cursor, "ScriptFile") {
+                Ok(length) => length,
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::ScriptResource(error)));
+                }
+            };
+            let data = match take_script_resource_bytes(
+                source,
+                cursor,
+                declared_length as usize,
+                "ScriptFile data",
+            ) {
+                Ok(data) => data.to_vec(),
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::ScriptResource(error)));
+                }
+            };
+            let path_bytes = path.len();
+            let replaced = game.set_script_file_data(path, data);
+            Some(Ok(GameOwnedStartupSnapshotReport::ScriptFile {
+                path_bytes,
+                declared_length,
+                replaced,
+            }))
         }
         REGION_SETUP_SELECTOR => {
             let entries = match game
@@ -936,6 +1087,69 @@ fn read_jjc_level_i32(source: &[u8], cursor: &mut usize) -> Result<i32, JjcRegio
             .try_into()
             .expect("размер JJC region-level scalar уже проверен"),
     ))
+}
+
+fn read_script_resource_length(
+    source: &[u8],
+    cursor: &mut usize,
+    resource: &'static str,
+) -> Result<i32, GameScriptResourceDecodeError> {
+    let bytes = take_script_resource_bytes(source, cursor, 4, "resource length")?;
+    let declared = i32::from_le_bytes(
+        bytes
+            .try_into()
+            .expect("длина script resource содержит ровно четыре байта"),
+    );
+    if declared < 0 {
+        return Err(GameScriptResourceDecodeError::NegativeLength {
+            resource,
+            declared,
+        });
+    }
+    Ok(declared)
+}
+
+fn take_script_resource_bytes<'a>(
+    source: &'a [u8],
+    cursor: &mut usize,
+    required: usize,
+    field: &'static str,
+) -> Result<&'a [u8], GameScriptResourceDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(end) = offset.checked_add(required) else {
+        return Err(GameScriptResourceDecodeError::UnexpectedEnd {
+            field,
+            offset,
+            required,
+            available,
+        });
+    };
+    let Some(bytes) = source.get(offset..end) else {
+        return Err(GameScriptResourceDecodeError::UnexpectedEnd {
+            field,
+            offset,
+            required,
+            available,
+        });
+    };
+    *cursor = end;
+    Ok(bytes)
+}
+
+fn read_script_resource_path(source: &[u8], cursor: &mut usize, maximum: usize) -> Vec<u8> {
+    let mut path = Vec::new();
+    for _ in 0..maximum {
+        let Some(&byte) = source.get(*cursor) else {
+            return path;
+        };
+        *cursor += 1;
+        if byte == 0 {
+            return path;
+        }
+        path.push(byte);
+    }
+    Vec::new()
 }
 
 /// Выполняет полную самодостаточную ветвь Billing reconnect handoff.
