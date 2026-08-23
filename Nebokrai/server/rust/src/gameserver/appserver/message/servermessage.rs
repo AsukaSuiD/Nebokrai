@@ -29,6 +29,8 @@
 //! публикует runtime lookup-owner до финального startup log.
 //! CountryParam `0x18` сохраняет scalar prefix, пять ordered maps и известные
 //! technology wire-quirks до точного startup log.
+//! CountryHandler `0x19` заменяет прежние country owners, декодирует byte-count
+//! minister records и публикует ordered lookup до финального startup log.
 //!
 //! Terminal selector сначала вызывает `InitNetServer`, затем читает login и
 //! world ID и присваивает их даже после ошибки Host. Rust сохраняет этот
@@ -43,6 +45,9 @@ use super::super::organizingsystem::attackcitysys::{
 };
 use super::super::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarDecodeError, VillageWarRegionContext,
+};
+use crate::gameserver::appserver::country::countryhandler::{
+    CountryHandlerDecodeError, CountryHandlerDecodeReport,
 };
 use crate::gameserver::appserver::country::countryparam::{
     CountryParamDecodeReport, CountryParamInputBlock,
@@ -96,6 +101,7 @@ const HIT_LEVEL_SELECTOR: i32 = 0x14;
 const QUEST_SYSTEM_SELECTOR: i32 = 0x16;
 const PLAYER_RANKS_SELECTOR: i32 = 0x17;
 const COUNTRY_PARAM_SELECTOR: i32 = 0x18;
+const COUNTRY_HANDLER_SELECTOR: i32 = 0x19;
 const DUPLI_REGION_SELECTOR: i32 = 0x1a;
 const PRISON_CONF_SELECTOR: i32 = 0x1d;
 const PRECIOUS_BOX_CONF_SELECTOR: i32 = 0x1e;
@@ -218,6 +224,7 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
         entries: usize,
     },
     CountryParam(CountryParamDecodeReport),
+    CountryHandler(CountryHandlerDecodeReport),
     DupliRegions {
         entries: usize,
     },
@@ -279,6 +286,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     QuestSystem(QuestSystemDecodeError),
     PlayerRanks(PlayerRanksDecodeError),
     CountryParam(CountryParamInputBlock),
+    CountryHandler(CountryHandlerDecodeError),
     DupliRegions(DupliRegionDecodeError),
     PrisonConf(PrisonConfDecodeError),
     PreciousBoxConf(PreciousBoxDecodeError),
@@ -324,6 +332,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::QuestSystem(error) => error.fmt(formatter),
             Self::PlayerRanks(error) => error.fmt(formatter),
             Self::CountryParam(error) => error.fmt(formatter),
+            Self::CountryHandler(error) => error.fmt(formatter),
             Self::DupliRegions(error) => error.fmt(formatter),
             Self::PrisonConf(error) => error.fmt(formatter),
             Self::PreciousBoxConf(error) => error.fmt(formatter),
@@ -366,6 +375,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::QuestSystem(error) => Some(error),
             Self::PlayerRanks(error) => Some(error),
             Self::CountryParam(error) => Some(error),
+            Self::CountryHandler(error) => Some(error),
             Self::DupliRegions(error) => Some(error),
             Self::PrisonConf(error) => Some(error),
             Self::PreciousBoxConf(error) => Some(error),
@@ -559,6 +569,21 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             };
             add_log_text(b"Initial SI_COUNTRYPARAM...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::CountryParam(report)))
+        }
+        COUNTRY_HANDLER_SELECTOR => {
+            let report = match game
+                .country_handler_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(report) => report,
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::CountryHandler(
+                        error,
+                    )));
+                }
+            };
+            add_log_text(b"Initial SI_COUNTRY...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::CountryHandler(report)))
         }
         DUPLI_REGION_SELECTOR => {
             let Some(setup) = game.dupli_region_setup_mut() else {

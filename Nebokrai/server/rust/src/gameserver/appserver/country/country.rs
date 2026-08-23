@@ -2,26 +2,183 @@
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 
+//! Runtime-state государства `CCountry` GameServer.
+//!
+//! Startup wire подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходные owners
+//! `worldserver/appworld/country/country.cpp` и
+//! `gameserver/appserver/country/country.cpp/.h`. World пишет один byte
+//! minister count, затем ordered `(job:u8, player_id:i32)`; Game не очищает
+//! country-information map, заменяет king slot `1`, обнуляет slots `2..7` и
+//! накладывает переданные записи с last-wins семантикой.
+//!
+//! Остальные governance, exile, quest и message методы владельца ниже ещё
+//! сохраняют RAW. `BTreeMap` и owned state заменяют STL nodes/raw pointers.
+
+use std::collections::BTreeMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CCountry {
+    country_id: u8,
+    pub(crate) treasury: i32,
+    pub(crate) power: i32,
+    pub(crate) tech_current_exp: i32,
+    pub(crate) tech_level: i32,
+    pub(crate) control_point: i32,
+    pub(crate) material_point: i32,
+    pub(crate) war_point: i32,
+    pub(crate) country_war_result: i32,
+    country_information: BTreeMap<u8, i32>,
+    quest_switches: BTreeMap<u8, bool>,
+    king_id: i32,
+    exile_started_at_ms: BTreeMap<i32, i32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryDecodeReport {
+    pub(crate) country_id: u8,
+    pub(crate) declared_ministers: u8,
+    pub(crate) country_information_entries: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryDecodeError {
+    pub(crate) field: &'static str,
+    pub(crate) offset: usize,
+    pub(crate) required: usize,
+    pub(crate) available: usize,
+}
+
+impl fmt::Display for CountryDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "country snapshot обрывается на {} в {}: нужно {}, доступно {}",
+            self.field, self.offset, self.required, self.available
+        )
+    }
+}
+
+impl Error for CountryDecodeError {}
+
+impl CCountry {
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<CountryDecodeReport, CountryDecodeError> {
+        self.country_id = read_country_u8(source, cursor, "country ID")?;
+        self.treasury = read_country_i32(source, cursor, "treasury")?;
+        self.power = read_country_i32(source, cursor, "power")?;
+        self.tech_current_exp = read_country_i32(source, cursor, "technology experience")?;
+        self.tech_level = read_country_i32(source, cursor, "technology level")?;
+        self.control_point = read_country_i32(source, cursor, "king control point")?;
+        self.material_point = read_country_i32(source, cursor, "king material point")?;
+        self.war_point = read_country_i32(source, cursor, "king war point")?;
+        let king_id = read_country_i32(source, cursor, "king ID")?;
+        self.country_information.insert(1, king_id);
+        self.country_war_result = read_country_i32(source, cursor, "country war result")?;
+
+        for job in 2..8 {
+            self.country_information.insert(job, 0);
+        }
+        let declared_ministers = read_country_u8(source, cursor, "minister count")?;
+        for _ in 0..declared_ministers {
+            let job = read_country_u8(source, cursor, "minister job")?;
+            let player_id = read_country_i32(source, cursor, "minister player ID")?;
+            self.country_information.insert(job, player_id);
+        }
+
+        Ok(CountryDecodeReport {
+            country_id: self.country_id,
+            declared_ministers,
+            country_information_entries: self.country_information.len(),
+        })
+    }
+
+    pub(crate) const fn country_id(&self) -> u8 {
+        self.country_id
+    }
+
+    pub(crate) fn country_information(&mut self, job: u8) -> i32 {
+        *self.country_information.entry(job).or_insert(0)
+    }
+
+    pub(crate) fn set_country_information(&mut self, job: u8, player_id: i32, active: u8) -> bool {
+        if active == 1 {
+            self.country_information.insert(job, player_id);
+            self.king_id = 0;
+        } else {
+            self.country_information.insert(job, 0);
+        }
+        true
+    }
+
+    pub(crate) fn quest_switches(&self) -> &BTreeMap<u8, bool> {
+        &self.quest_switches
+    }
+
+    pub(crate) fn exile_started_at_ms(&self) -> &BTreeMap<i32, i32> {
+        &self.exile_started_at_ms
+    }
+}
+
+fn read_country_u8(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<u8, CountryDecodeError> {
+    Ok(take_country_bytes(source, cursor, 1, field)?[0])
+}
+
+fn read_country_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<i32, CountryDecodeError> {
+    Ok(i32::from_le_bytes(
+        take_country_bytes(source, cursor, 4, field)?
+            .try_into()
+            .expect("country signed long уже проверен"),
+    ))
+}
+
+fn take_country_bytes<'a>(
+    source: &'a [u8],
+    cursor: &mut usize,
+    required: usize,
+    field: &'static str,
+) -> Result<&'a [u8], CountryDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(end) = offset.checked_add(required) else {
+        return Err(CountryDecodeError {
+            field,
+            offset,
+            required,
+            available,
+        });
+    };
+    let Some(bytes) = source.get(offset..end) else {
+        return Err(CountryDecodeError {
+            field,
+            offset,
+            required,
+            available,
+        });
+    };
+    *cursor = end;
+    Ok(bytes)
+}
+
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.h
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp
-
-// ============================================================================
-// FUNCTION: CCountry::GetCI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.h:135
-// RVA: 0x00040B40
-// ADDRESS: 00440b40
-// PROTOTYPE: long __thiscall GetCI(uchar param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CCountry::ChangeAttributeToWS
@@ -190,62 +347,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: CCountry::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp:37
-// RVA: 0x000AD050
-// ADDRESS: 004ad050
-// PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCountry::SetCI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp:81
-// RVA: 0x000AD1A0
-// ADDRESS: 004ad1a0
-// PROTOTYPE: bool __thiscall SetCI(uchar param_1, long param_2, uchar param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCountry::~CCountry
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp:26
-// RVA: 0x000AD210
-// ADDRESS: 004ad210
-// PROTOTYPE: void __thiscall ~CCountry(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCountry::CCountry
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp:22
-// RVA: 0x000AD2E0
-// ADDRESS: 004ad2e0
-// PROTOTYPE: undefined __thiscall CCountry(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 
 // COMPONENT_VARIANT_END: GameServer

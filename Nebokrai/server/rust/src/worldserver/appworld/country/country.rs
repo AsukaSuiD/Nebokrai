@@ -18,8 +18,9 @@
 //! короля.
 //!
 //! Initial-config и save snapshots сохраняют различный состав полей и порядок
-//! министров. `BTreeMap`, owned-строки и ограниченное форматирование заменяют
-//! STL, сырые указатели и переполнение внутренних буферов, не меняя wire и БД.
+//! министров; initial-config передаёт minister count одним byte. `BTreeMap`,
+//! owned-строки и ограниченное форматирование заменяют STL, сырые указатели и
+//! переполнение внутренних буферов, не меняя wire и БД.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -3685,7 +3686,7 @@ impl CCountry {
         let mut minister_jobs = self.ministers.keys().copied().collect::<BTreeSet<_>>();
         minister_jobs.extend(self.null_minister_slots.iter().copied());
         let minister_count = minister_jobs.len();
-        let minister_count_i32 = i32::try_from(minister_count)
+        let minister_count_u8 = u8::try_from(minister_count)
             .map_err(|_| CountrySerializeError::MinisterCountOutOfRange { minister_count })?;
 
         destination.push(self.country_id);
@@ -3698,7 +3699,7 @@ impl CCountry {
         destination.extend_from_slice(&self.king.war_point.to_le_bytes());
         destination.extend_from_slice(&self.king.id.to_le_bytes());
         destination.extend_from_slice(&self.country_war_result.to_le_bytes());
-        destination.extend_from_slice(&minister_count_i32.to_le_bytes());
+        destination.push(minister_count_u8);
         for job in minister_jobs {
             destination.push(job);
             let player_id = self
@@ -3758,7 +3759,7 @@ impl fmt::Display for CountrySerializeError {
         match self {
             Self::MinisterCountOutOfRange { minister_count } => write!(
                 formatter,
-                "CCountry содержит {minister_count} министров вне signed 32-битного диапазона"
+                "CCountry содержит {minister_count} министров вне byte-диапазона"
             ),
         }
     }
