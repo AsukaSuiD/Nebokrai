@@ -21,6 +21,7 @@ pub(crate) mod appserver {
     pub(crate) mod goodswarmember;
     pub(crate) mod goods {
         pub(crate) mod cbattlefairyproperty;
+        pub(crate) mod cgoods;
         pub(crate) mod cgoodsbaseproperties;
         pub(crate) mod cgoodsfactory;
     }

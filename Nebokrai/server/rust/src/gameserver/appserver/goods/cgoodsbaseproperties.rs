@@ -16,6 +16,9 @@ use std::fmt;
 
 pub(crate) const GOODS_TYPE_USELESS: i32 = 0;
 pub(crate) const GOODS_TYPE_CONSUMABLE: i32 = 1;
+pub(crate) const GAP_PARTICULAR_ATTRIBUTE: i32 = 0x0d;
+pub(crate) const GAP_GOODS_STACKING_LIMIT: i32 = 0x26;
+pub(crate) const ICON_TYPE_GROUND: i32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GoodsBasePropertiesDecodeError {

@@ -1,6 +1,228 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Достигнутый object/addon core `CGoods` исторического GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`; исходные owners
+//! `server/gameserver/appserver/goods/cgoods.h/.cpp`. Материализованы shape
+//! identity, base-properties index, amount/price/add-ticket/description,
+//! ordered addon storage, first-match lookup с fallback в registry, stack
+//! classification/limit и wrapping weight. `Vec` и owned bytes заменяют MSVC
+//! storage, не меняя порядка и signed 32-bit arithmetic.
+//! Единственный legacy null-deref в `CanStacked` при потерянном registry key
+//! выражен typed block-ом, а не тихим `false`.
+//!
+//! Constructor/release, fairy/battle-fairy, durability/time, полный codec и
+//! mutation gameplay ниже остаются RAW: достигнутый core не выдаётся за весь
+//! 0xCC-byte legacy object. `CGoodsFactory` передаётся явно вместо исходного
+//! process-global registry.
+
+use super::cgoodsbaseproperties::{
+    CGoodsBaseProperties, GAP_GOODS_STACKING_LIMIT, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_USELESS,
+};
+use super::cgoodsfactory::CGoodsFactory;
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
+use crate::public::guid::CGuid;
+
+const GOODS_OBJECT_TYPE: i32 = 700;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GoodsBasePropertyBlock {
+    pub(crate) index: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GoodsAddonPropertyValue {
+    pub(crate) id: u32,
+    pub(crate) base_value: i32,
+    pub(crate) modifier: i32,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GoodsAddonProperty {
+    pub(crate) property_type: i32,
+    pub(crate) is_enabled: i32,
+    pub(crate) is_implicit_attribute: i32,
+    pub(crate) values: Vec<GoodsAddonPropertyValue>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CGoods {
+    shape: CShape,
+    base_properties_index: u32,
+    amount: u32,
+    price: u32,
+    price_type: u32,
+    add_ticket: u32,
+    description: Vec<u8>,
+    addon_properties: Vec<GoodsAddonProperty>,
+}
+
+impl Default for CGoods {
+    fn default() -> Self {
+        Self::with_reached_constructor_defaults()
+    }
+}
+
+impl CGoods {
+    /// Достигнутый scalar/storage prefix constructor-а RVA `0x000CC3A0`.
+    pub(crate) const fn with_reached_constructor_defaults() -> Self {
+        let mut shape = CShape::with_constructor_defaults();
+        shape.base_object_mut().set_type(GOODS_OBJECT_TYPE);
+        Self {
+            shape,
+            base_properties_index: 0,
+            amount: 1,
+            price: 0,
+            price_type: 0,
+            add_ticket: 0,
+            description: Vec::new(),
+            addon_properties: Vec::new(),
+        }
+    }
+
+    pub(crate) const fn identity(&self) -> ShapeIdentity {
+        self.shape.identity()
+    }
+
+    pub(crate) const fn set_ex_id(&mut self, ex_id: CGuid) {
+        self.shape.base_object_mut().set_ex_id(ex_id);
+    }
+
+    pub(crate) const fn set_base_properties_index(&mut self, index: u32) {
+        self.base_properties_index = index;
+    }
+
+    pub(crate) const fn base_properties_index(&self) -> u32 {
+        self.base_properties_index
+    }
+
+    pub(crate) const fn set_amount(&mut self, amount: u32) {
+        self.amount = amount;
+    }
+
+    pub(crate) const fn amount(&self) -> u32 {
+        self.amount
+    }
+
+    pub(crate) const fn set_price(&mut self, price: u32) {
+        self.price = price;
+    }
+
+    pub(crate) const fn price(&self) -> u32 {
+        self.price
+    }
+
+    pub(crate) const fn price_type(&self) -> u32 {
+        self.price_type
+    }
+
+    pub(crate) const fn add_ticket(&self) -> u32 {
+        self.add_ticket
+    }
+
+    pub(crate) fn set_add_ticket(&mut self, add_ticket: u32) {
+        if !self.query_attribute(GAP_GOODS_STACKING_LIMIT) {
+            self.add_ticket = add_ticket;
+        }
+    }
+
+    pub(crate) fn set_description(&mut self, description: &[u8]) {
+        let visible = description
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(description.len());
+        self.description.clear();
+        self.description.extend_from_slice(&description[..visible]);
+    }
+
+    pub(crate) fn description(&self) -> &[u8] {
+        &self.description
+    }
+
+    pub(crate) fn clear_addon_properties(&mut self) {
+        self.addon_properties.clear();
+    }
+
+    pub(crate) fn addon_properties(&self) -> &[GoodsAddonProperty] {
+        &self.addon_properties
+    }
+
+    pub(crate) fn addon_properties_mut(&mut self) -> &mut Vec<GoodsAddonProperty> {
+        &mut self.addon_properties
+    }
+
+    pub(crate) fn query_attribute(&self, property_type: i32) -> bool {
+        self.addon_properties
+            .iter()
+            .any(|property| property.property_type == property_type)
+    }
+
+    pub(crate) fn addon_property_value(
+        &self,
+        factory: &CGoodsFactory,
+        property_type: i32,
+        value_id: u32,
+    ) -> i32 {
+        if let Some(value) = self
+            .addon_properties
+            .iter()
+            .find(|property| property.property_type == property_type)
+            .and_then(|property| property.values.iter().find(|value| value.id == value_id))
+        {
+            return value.base_value.wrapping_add(value.modifier);
+        }
+        factory
+            .query_goods_base_properties(self.base_properties_index)
+            .and_then(|properties| {
+                properties
+                    .get_addon_property_values(property_type)
+                    .iter()
+                    .find(|value| value.id == value_id)
+            })
+            .map_or(0, |value| value.base_value)
+    }
+
+    pub(crate) fn can_stack(
+        &self,
+        factory: &CGoodsFactory,
+    ) -> Result<bool, GoodsBasePropertyBlock> {
+        factory
+            .query_goods_base_properties(self.base_properties_index)
+            .ok_or(GoodsBasePropertyBlock {
+                index: self.base_properties_index,
+            })
+            .map(|properties| {
+                matches!(
+                    properties.goods_type(),
+                    GOODS_TYPE_CONSUMABLE | GOODS_TYPE_USELESS
+                ) && properties.has_addon_property(GAP_GOODS_STACKING_LIMIT)
+            })
+    }
+
+    pub(crate) fn max_stack_number(&self, factory: &CGoodsFactory) -> u32 {
+        let Some(properties) = factory.query_goods_base_properties(self.base_properties_index)
+        else {
+            return 1;
+        };
+        if !matches!(
+            properties.goods_type(),
+            GOODS_TYPE_CONSUMABLE | GOODS_TYPE_USELESS
+        ) {
+            return 1;
+        }
+        properties
+            .get_addon_property_values(GAP_GOODS_STACKING_LIMIT)
+            .iter()
+            .find(|value| value.id == 1)
+            .map_or(1, |value| value.base_value as u32)
+    }
+
+    pub(crate) fn weight(&self, factory: &CGoodsFactory) -> u32 {
+        factory
+            .query_goods_base_properties(self.base_properties_index)
+            .map_or(0, |properties: &CGoodsBaseProperties| {
+                properties.weight().wrapping_mul(self.amount)
+            })
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -8,20 +230,6 @@
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.h
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp
-
-// ============================================================================
-// FUNCTION: CGoods::SetExID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.h:117
-// RVA: 0x0002ACA0
-// ADDRESS: 0042aca0
-// PROTOTYPE: void __thiscall SetExID(CGUID * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CGoods::IsFairy
@@ -32,76 +240,6 @@
 // RVA: 0x000AEB20
 // ADDRESS: 004aeb20
 // PROTOTYPE: bool __thiscall IsFairy(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::ClearAddonProperty
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.h:342
-// RVA: 0x000AF1D0
-// ADDRESS: 004af1d0
-// PROTOTYPE: void __thiscall ClearAddonProperty(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::GetBasePropertiesIndex
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:55
-// RVA: 0x000C96C0
-// ADDRESS: 004c96c0
-// PROTOTYPE: ulong __thiscall GetBasePropertiesIndex(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::SetAmount
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:63
-// RVA: 0x000C96D0
-// ADDRESS: 004c96d0
-// PROTOTYPE: void __thiscall SetAmount(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::GetAmount
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:75
-// RVA: 0x000C96E0
-// ADDRESS: 004c96e0
-// PROTOTYPE: ulong __thiscall GetAmount(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::CanStacked
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:151
-// RVA: 0x000C96F0
-// ADDRESS: 004c96f0
-// PROTOTYPE: int __thiscall CanStacked(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -130,90 +268,6 @@
 // RVA: 0x000C9750
 // ADDRESS: 004c9750
 // PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2, bool param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::SetBasePropertiesIndex
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:644
-// RVA: 0x000C9770
-// ADDRESS: 004c9770
-// PROTOTYPE: void __thiscall SetBasePropertiesIndex(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::tagAddonPropertyValue::tagAddonPropertyValue
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:652
-// RVA: 0x000C9780
-// ADDRESS: 004c9780
-// PROTOTYPE: undefined __thiscall tagAddonPropertyValue(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::SetPrice
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:797
-// RVA: 0x000C9790
-// ADDRESS: 004c9790
-// PROTOTYPE: void __thiscall SetPrice(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::GetPrice
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:805
-// RVA: 0x000C97A0
-// ADDRESS: 004c97a0
-// PROTOTYPE: ulong __thiscall GetPrice(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::GetAllAddonProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:1789
-// RVA: 0x000C97B0
-// ADDRESS: 004c97b0
-// PROTOTYPE: vector<CGoods::tagAddonProperty,std::allocator<CGoods::tagAddonProperty>_> * __thiscall GetAllAddonProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::GetAddTicket
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:1801
-// RVA: 0x000C97C0
-// ADDRESS: 004c97c0
-// PROTOTYPE: ulong __thiscall GetAddTicket(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -276,20 +330,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CGoods::QueryAttrbute
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:1292
-// RVA: 0x000C99C0
-// ADDRESS: 004c99c0
-// PROTOTYPE: bool __thiscall QueryAttrbute(GOODS_ADDON_PROPERTIES param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CGoods::CanBFEquipeUpgrade
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -298,20 +338,6 @@
 // RVA: 0x000C9A10
 // ADDRESS: 004c9a10
 // PROTOTYPE: int __thiscall CanBFEquipeUpgrade(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::SetAddTicket
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:1793
-// RVA: 0x000C9A90
-// ADDRESS: 004c9a90
-// PROTOTYPE: void __thiscall SetAddTicket(ulong param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -340,20 +366,6 @@
 // RVA: 0x000C9B80
 // ADDRESS: 004c9b80
 // PROTOTYPE: int __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, int param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::GetWeight
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:770
-// RVA: 0x000C9C40
-// ADDRESS: 004c9c40
-// PROTOTYPE: ulong __thiscall GetWeight(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -514,20 +526,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CGoods::SetGoodsDescribe
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:848
-// RVA: 0x000CAA20
-// ADDRESS: 004caa20
-// PROTOTYPE: void __thiscall SetGoodsDescribe(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CBaseObject::SetName
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -550,34 +548,6 @@
 // RVA: 0x000CB030
 // ADDRESS: 004cb030
 // PROTOTYPE: void __thiscall Clear(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::GetMaxStackNumber
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:83
-// RVA: 0x000CB0B0
-// ADDRESS: 004cb0b0
-// PROTOTYPE: ulong __thiscall GetMaxStackNumber(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::GetAddonPropertyValues
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:288
-// RVA: 0x000CB1E0
-// ADDRESS: 004cb1e0
-// PROTOTYPE: long __thiscall GetAddonPropertyValues(GOODS_ADDON_PROPERTIES param_1, ulong param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -1114,16 +1084,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer
