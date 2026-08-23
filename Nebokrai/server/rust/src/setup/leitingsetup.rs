@@ -1,5 +1,6 @@
-//! Ежедневные действия `CThingSetup` из WorldServer, подтверждённые
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Ежедневные действия `CThingSetup` из WorldServer/GameServer.
+//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходный owner `setup/leitingsetup.cpp`.
 //!
 //! Wire — signed count и шестибайтные `TID/max/point` records. Daily projection
 //! считает постоянными TID `> 1999`, недельными — строго `1000 < TID < 2000`;
@@ -137,7 +138,10 @@ impl fmt::Display for ThingSetupFileLoadError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(source) => {
-                write!(formatter, "не удалось прочитать LeitingAction.ini: {source}")
+                write!(
+                    formatter,
+                    "не удалось прочитать LeitingAction.ini: {source}"
+                )
             }
             Self::Empty(source) => source.fmt(formatter),
         }
@@ -171,8 +175,8 @@ impl CThingSetup {
         local_time.second = 59;
     }
 
- /// Стандартная filesystem-граница для standalone owner-а. World resource
- /// lifecycle передаёт уже прочитанные байты в `load_all_thing_list`.
+    /// Стандартная filesystem-граница для standalone owner-а. World resource
+    /// lifecycle передаёт уже прочитанные байты в `load_all_thing_list`.
     pub(crate) fn load_all_thing_list_from_file(
         &mut self,
         path: impl AsRef<Path>,
@@ -190,9 +194,9 @@ impl CThingSetup {
         self.all_things.clear();
     }
 
- /// Повторяет byte-token loader и его логи. Невалидное поле безопасно
- /// оставляет ноль/прочитанный prefix в уже добавляемой записи и завершает
- /// дальнейший scan, как fail-state исходного `istream`.
+    /// Повторяет byte-token loader и его логи. Невалидное поле безопасно
+    /// оставляет ноль/прочитанный prefix в уже добавляемой записи и завершает
+    /// дальнейший scan, как fail-state исходного `istream`.
     pub(crate) fn load_all_thing_list(
         &mut self,
         source: &[u8],
@@ -210,10 +214,7 @@ impl CThingSetup {
             let mut thing = LeiTingThingNode::default();
             for (field, destination) in [
                 (ThingSetupTextField::ThingId, &mut thing.thing_id),
-                (
-                    ThingSetupTextField::MaximumCount,
-                    &mut thing.max_count,
-                ),
+                (ThingSetupTextField::MaximumCount, &mut thing.max_count),
                 (ThingSetupTextField::Point, &mut thing.point),
             ] {
                 if let Err(reason) = read_formatted_u16(&mut tokens, destination) {
@@ -258,9 +259,8 @@ impl CThingSetup {
         &self,
         destination: &mut Vec<u8>,
     ) -> Result<(), ThingSetupCodecError> {
-        let count = i32::try_from(self.all_things.len()).map_err(|_| {
-            ThingSetupCodecError::CountOutsideLegacyRange(self.all_things.len())
-        })?;
+        let count = i32::try_from(self.all_things.len())
+            .map_err(|_| ThingSetupCodecError::CountOutsideLegacyRange(self.all_things.len()))?;
         destination.extend_from_slice(&count.to_le_bytes());
         for thing in &self.all_things {
             destination.extend_from_slice(&thing.thing_id.to_le_bytes());
@@ -270,8 +270,8 @@ impl CThingSetup {
         Ok(())
     }
 
- /// Декодирует GameServer initial-config projection, сохраняя prefix при
- /// безопасной ошибке вместо исходного безразмерного overread.
+    /// Декодирует GameServer initial-config projection, сохраняя prefix при
+    /// безопасной ошибке вместо исходного безразмерного overread.
     pub(crate) fn decord_from_byte_array(
         &mut self,
         source: &[u8],
@@ -292,8 +292,12 @@ impl CThingSetup {
         Ok(())
     }
 
- /// Собирает оригинал daily list; `get_week_day` вызывается отдельно для
- /// каждого недельного TID, как старый `GetLocalTime` внутри цикла.
+    pub(crate) fn all_things(&self) -> &VecDeque<LeiTingThingNode> {
+        &self.all_things
+    }
+
+    /// Собирает оригинал daily list; `get_week_day` вызывается отдельно для
+    /// каждого недельного TID, как старый `GetLocalTime` внутри цикла.
     pub(crate) fn get_daily_thing_list(
         &self,
         mut get_week_day: impl FnMut() -> u16,
@@ -303,9 +307,7 @@ impl CThingSetup {
         for node in &self.all_things {
             let thing_id = node.thing_id;
             let selected = thing_id > 1999
-                || (thing_id > 1000
-                    && thing_id < 2000
-                    && get_week_day() == (thing_id % 1000) % 7);
+                || (thing_id > 1000 && thing_id < 2000 && get_week_day() == (thing_id % 1000) % 7);
             if selected {
                 daily.push_back(LeiTingDailyThing {
                     thing_id,

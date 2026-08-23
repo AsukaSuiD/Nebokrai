@@ -1,9 +1,9 @@
 //! Владелец входного GameServer dispatcher-а `OnServerMessage`.
 //!
 //! Весь dispatcher RVA `0x0009D300` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме цепочек
-//! сообщения `0x7F801` для PlayerRanks/DupliRegion, AttackCity/Village и
-//! terminal selector `0x3B`, а также полной typed Billing reconnect ветви
-//! `0x6F904`; они имеют статус `IMPLEMENTED`. Точная пара
+//! сообщения `0x7F801` для Player/Trade/Thing, PlayerRanks/DupliRegion,
+//! AttackCity/Village и terminal selector `0x3B`, а также полной typed Billing
+//! reconnect ветви `0x6F904`; они имеют статус `IMPLEMENTED`. Точная пара
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходник
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\servermessage.cpp`.
 //!
@@ -37,11 +37,17 @@ use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::nets::netserver::mynetclient::CMyNetClient;
 use crate::public::dupliregionsetup::DupliRegionDecodeError;
+use crate::setup::leitingsetup::ThingSetupCodecError;
+use crate::setup::playerlist::{PlayerListDecodeError, PlayerListDecodeReport};
+use crate::setup::tradelist::TradeListDecodeError;
 
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
 const CLIENT_SERVER_START_SELECTOR: i32 = 0x3b;
+const PLAYER_LIST_SELECTOR: i32 = 0x01;
+const TRADE_LIST_SELECTOR: i32 = 0x03;
 const PLAYER_RANKS_SELECTOR: i32 = 0x17;
 const DUPLI_REGION_SELECTOR: i32 = 0x1a;
+const THING_SETUP_SELECTOR: i32 = 0x36;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GameServerIds {
@@ -114,15 +120,21 @@ fn read_start_long(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameOwnedStartupSnapshotReport {
+    PlayerList(PlayerListDecodeReport),
+    TradeList { entries: usize },
     PlayerRanks { entries: usize },
     DupliRegions { entries: usize },
+    ThingSetup { entries: usize },
 }
 
 #[derive(Debug)]
 pub(crate) enum GameOwnedStartupSnapshotError {
     OwnerUnavailable { selector: i32 },
+    PlayerList(PlayerListDecodeError),
+    TradeList(TradeListDecodeError),
     PlayerRanks(PlayerRanksDecodeError),
     DupliRegions(DupliRegionDecodeError),
+    ThingSetup(ThingSetupCodecError),
 }
 
 impl fmt::Display for GameOwnedStartupSnapshotError {
@@ -134,8 +146,11 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
                     "startup owner selector {selector:#x} ещё не создан CGame::Init"
                 )
             }
+            Self::PlayerList(error) => error.fmt(formatter),
+            Self::TradeList(error) => error.fmt(formatter),
             Self::PlayerRanks(error) => error.fmt(formatter),
             Self::DupliRegions(error) => error.fmt(formatter),
+            Self::ThingSetup(error) => error.fmt(formatter),
         }
     }
 }
@@ -144,8 +159,11 @@ impl Error for GameOwnedStartupSnapshotError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::OwnerUnavailable { .. } => None,
+            Self::PlayerList(error) => Some(error),
+            Self::TradeList(error) => Some(error),
             Self::PlayerRanks(error) => Some(error),
             Self::DupliRegions(error) => Some(error),
+            Self::ThingSetup(error) => Some(error),
         }
     }
 }
@@ -155,10 +173,29 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
     selector: i32,
     message: &mut CMessage,
     game: &mut CGame,
-    mut add_log_text: impl FnMut(&'static str),
+    mut add_log_text: impl FnMut(&str),
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
     match selector {
+        PLAYER_LIST_SELECTOR => {
+            let report = match game
+                .player_list_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(report) => report,
+                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::PlayerList(error))),
+            };
+            add_log_text("Initial SI_PLAYERLIST...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::PlayerList(report)))
+        }
+        TRADE_LIST_SELECTOR => {
+            let entries = match game.trade_list_mut().decord_from_byte_array(source, cursor) {
+                Ok(entries) => entries,
+                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::TradeList(error))),
+            };
+            add_log_text("Initial SI_TRADELIST...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::TradeList { entries }))
+        }
         PLAYER_RANKS_SELECTOR => {
             let Some(ranks) = game.player_ranks_mut() else {
                 return Some(Err(GameOwnedStartupSnapshotError::OwnerUnavailable {
@@ -184,6 +221,18 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             let entries = setup.entries().len();
             add_log_text("Initial SI_DUPLIREGIONSETUP...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::DupliRegions { entries }))
+        }
+        THING_SETUP_SELECTOR => {
+            if let Err(error) = game
+                .thing_setup_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                return Some(Err(GameOwnedStartupSnapshotError::ThingSetup(error)));
+            }
+            let entries = game.thing_setup().all_things().len();
+            add_log_text(&format!("GS Leiting Decord:line {entries}"));
+            add_log_text("Initial Strictest Enforcement...ok!");
+            Some(Ok(GameOwnedStartupSnapshotReport::ThingSetup { entries }))
         }
         _ => None,
     }

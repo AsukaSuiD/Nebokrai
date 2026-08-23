@@ -1,12 +1,15 @@
-//! Торговые списки `CTradeList` из WorldServer, подтверждённые
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Торговые списки `CTradeList` из WorldServer/GameServer.
+//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходный owner `setup/tradelist.cpp`.
 //!
 //! Loader очищает map, читает `*` NPC и следующие `#` goods records. StringTable
 //! miss даёт пустое имя, unknown goods — нулевой ID; duplicate NPC заменяет
 //! список. Числовые page/x/y/amount сужаются до byte.
 //!
 //! Wire пишет ordered NPC C-строки, signed counts и восьмибайтные goods records.
-//! `BTreeMap<Vec<u8>, _>` сохраняет byte-лексикографический порядок.
+//! `BTreeMap<Vec<u8>, _>` сохраняет byte-лексикографический порядок. Game decoder
+//! очищает map до count и публикует NPC только после полного goods-list;
+//! safe truncation поэтому сохраняет лишь завершённый prefix.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -144,6 +147,41 @@ impl CTradeList {
         }
         Ok(())
     }
+
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<usize, TradeListDecodeError> {
+        self.trades.clear();
+        let trade_count = read_wire_i32(source, cursor)?;
+        if trade_count <= 0 {
+            return Ok(0);
+        }
+
+        for _ in 0..trade_count {
+            let npc_name = read_wire_c_string(source, cursor)?;
+            let goods_count = read_wire_i32(source, cursor)?;
+            let mut goods = Vec::new();
+            for _ in 0..goods_count.max(0) {
+                let compact = read_wire_array::<4>(source, cursor)?;
+                goods.push(TradeGoods {
+                    page: compact[0],
+                    position_x: compact[1],
+                    position_y: compact[2],
+                    amount: compact[3],
+                    goods_id: read_wire_u32(source, cursor)?,
+                });
+            }
+            self.trades
+                .insert(npc_name.clone(), Trade { npc_name, goods });
+        }
+        Ok(self.trades.len())
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.trades.len()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -217,6 +255,39 @@ impl fmt::Display for TradeListSerializeError {
 
 impl Error for TradeListSerializeError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TradeListDecodeError {
+    UnexpectedEnd {
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    MissingStringTerminator {
+        offset: usize,
+    },
+}
+
+impl fmt::Display for TradeListDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd {
+                offset,
+                needed,
+                available,
+            } => write!(
+                formatter,
+                "TradeList snapshot обрывается на {offset}: нужно {needed}, доступно {available}"
+            ),
+            Self::MissingStringTerminator { offset } => write!(
+                formatter,
+                "TradeList NPC name с {offset} не завершено нулём"
+            ),
+        }
+    }
+}
+
+impl Error for TradeListDecodeError {}
+
 fn next_token<'source>(
     tokens: &mut impl Iterator<Item = &'source [u8]>,
     field: &'static str,
@@ -247,6 +318,49 @@ fn truncate_at_nul(value: &[u8]) -> &[u8] {
         .iter()
         .position(|byte| *byte == 0)
         .unwrap_or(value.len())]
+}
+
+fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, TradeListDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, TradeListDecodeError> {
+    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], TradeListDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(TradeListDecodeError::UnexpectedEnd {
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("размер TradeList scalar уже проверен"))
+}
+
+fn read_wire_c_string(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, TradeListDecodeError> {
+    let offset = *cursor;
+    let remaining = source
+        .get(offset..)
+        .ok_or(TradeListDecodeError::UnexpectedEnd {
+            offset,
+            needed: 1,
+            available: 0,
+        })?;
+    let Some(length) = remaining.iter().position(|byte| *byte == 0) else {
+        return Err(TradeListDecodeError::MissingStringTerminator { offset });
+    };
+    *cursor += length + 1;
+    Ok(remaining[..length].to_vec())
 }
 
 // оставшихся call-site деталей, а не как Rust-реализация.

@@ -75,6 +75,9 @@ use crate::nets::netserver::mynetserver::{
 };
 use crate::nets::servers::ServerHostError;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
+use crate::setup::leitingsetup::CThingSetup;
+use crate::setup::playerlist::CPlayerList;
+use crate::setup::tradelist::CTradeList;
 use crate::transport::bind_tcp_ipv4;
 
 const PLAYER_TYPE: i32 = 400;
@@ -686,6 +689,9 @@ pub(crate) struct CGame {
     setup_ex: GameSetupEx,
     random_state: u32,
     sequence_registry: CSequenceRegistry,
+    player_list: CPlayerList,
+    trade_list: CTradeList,
+    thing_setup: CThingSetup,
     dupli_region_setup: Option<CDupliRegionSetup>,
     move_check_cells: MoveCheckCellRegistry,
     player_ranks: Option<CPlayerRanks>,
@@ -711,6 +717,9 @@ impl CGame {
             setup_ex: GameSetupEx::default(),
             random_state: 1,
             sequence_registry: CSequenceRegistry::default(),
+            player_list: CPlayerList::default(),
+            trade_list: CTradeList::default(),
+            thing_setup: CThingSetup::default(),
             dupli_region_setup: None,
             move_check_cells: MoveCheckCellRegistry::new(),
             player_ranks: None,
@@ -908,6 +917,30 @@ impl CGame {
 
     pub(crate) const fn sequence_registry(&self) -> &CSequenceRegistry {
         &self.sequence_registry
+    }
+
+    pub(crate) const fn player_list(&self) -> &CPlayerList {
+        &self.player_list
+    }
+
+    pub(crate) const fn player_list_mut(&mut self) -> &mut CPlayerList {
+        &mut self.player_list
+    }
+
+    pub(crate) const fn trade_list(&self) -> &CTradeList {
+        &self.trade_list
+    }
+
+    pub(crate) const fn trade_list_mut(&mut self) -> &mut CTradeList {
+        &mut self.trade_list
+    }
+
+    pub(crate) const fn thing_setup(&self) -> &CThingSetup {
+        &self.thing_setup
+    }
+
+    pub(crate) const fn thing_setup_mut(&mut self) -> &mut CThingSetup {
+        &mut self.thing_setup
     }
 
     pub(crate) const fn dupli_region_setup(&self) -> Option<&CDupliRegionSetup> {

@@ -1,10 +1,13 @@
-//! Player properties и progression `CPlayerList` из WorldServer,
-//! подтверждённые `worldserver.exe` и `worldserver.pdb`.
+//! Player properties и progression `CPlayerList` из WorldServer/GameServer.
+//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходный owner `setup/playerlist.cpp`.
 //!
 //! Wire состоит из player map, level-exp и трёх upgrade maps для Fighter,
 //! Hunter и Taoist. Player record сохраняет 0x58-байтный значимый layout, но
 //! неопределённый padding обнулён; upgrade record пишет level и scalars перед
-//! NUL notification.
+//! NUL notification. Game decoder очищает player-map и experience до
+//! чтения, но не очищает upgrade-map: отсутствующие в новом snapshot
+//! старые levels остаются, как в exact Game EXE.
 //!
 //! Create-role equipment хранит occupation, slot и byte-name в list order.
 //! Отсутствующий `sex + occupation*2` по-прежнему вставляет нулевую запись.
@@ -237,7 +240,8 @@ impl CPlayerList {
         origin_equipment_path: impl AsRef<Path>,
     ) -> Result<PlayerListLoadReport, PlayerListFileLoadError> {
         self.clear_player_properties();
-        let player_list_source = std::fs::read(player_list_path).map_err(PlayerListFileLoadError::Io)?;
+        let player_list_source =
+            std::fs::read(player_list_path).map_err(PlayerListFileLoadError::Io)?;
         let player_properties = self
             .load_player_properties_from_bytes(&player_list_source)
             .map_err(PlayerListFileLoadError::Format)?;
@@ -277,11 +281,11 @@ impl CPlayerList {
             .map_err(PlayerListFileLoadError::Format)
     }
 
- /// Выполняет три последовательных блока `LoadPlayerProperitiesUpgrade`.
- ///
- /// `StringTable::getStringByID` в EXE подменял отсутствующий key пустой
- /// строкой. Closure получает byte-оригинал key и возвращает локализованный
- /// текст либо `None` для того же результата.
+    /// Выполняет три последовательных блока `LoadPlayerProperitiesUpgrade`.
+    ///
+    /// `StringTable::getStringByID` в EXE подменял отсутствующий key пустой
+    /// строкой. Closure получает byte-оригинал key и возвращает локализованный
+    /// текст либо `None` для того же результата.
     pub(crate) fn load_properties_upgrades_from_bytes<ResolveNotification>(
         &mut self,
         source: &[u8],
@@ -292,9 +296,15 @@ impl CPlayerList {
     {
         self.clear_properties_upgrades();
         let mut tokens = tokens(source);
-        let fighter = load_upgrade_block(&mut tokens, &mut self.fighter_upgrades, resolve_notification)?;
-        let hunter = load_upgrade_block(&mut tokens, &mut self.hunter_upgrades, resolve_notification)?;
-        let taoist = load_upgrade_block(&mut tokens, &mut self.taoist_upgrades, resolve_notification)?;
+        let fighter = load_upgrade_block(
+            &mut tokens,
+            &mut self.fighter_upgrades,
+            resolve_notification,
+        )?;
+        let hunter =
+            load_upgrade_block(&mut tokens, &mut self.hunter_upgrades, resolve_notification)?;
+        let taoist =
+            load_upgrade_block(&mut tokens, &mut self.taoist_upgrades, resolve_notification)?;
         Ok(PlayerPropertiesUpgradeLoadReport {
             fighter,
             hunter,
@@ -372,6 +382,55 @@ impl CPlayerList {
         append_upgrade_map(destination, "taoist upgrade map", &self.taoist_upgrades)?;
         Ok(())
     }
+
+    /// Декодирует World startup snapshot с partial mutation exact Game owner-а.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<PlayerListDecodeReport, PlayerListDecodeError> {
+        self.player_properties.clear();
+        self.player_experience.clear();
+
+        let property_count = read_wire_u32(source, cursor)?;
+        if (property_count as i32) > 0 {
+            for _ in 0..property_count {
+                let record = read_wire_array::<0x58>(source, cursor)?;
+                let properties = decode_player_properties(record);
+                let key = u32::from(properties.sex)
+                    .wrapping_add(u32::from(properties.occupation).wrapping_mul(2));
+                self.player_properties.insert(key, properties);
+            }
+        }
+
+        let experience_count = read_wire_u32(source, cursor)?;
+        if (experience_count as i32) > 0 {
+            for _ in 0..experience_count {
+                self.player_experience.push(read_wire_u32(source, cursor)?);
+            }
+        }
+
+        decode_upgrade_map(source, cursor, &mut self.fighter_upgrades)?;
+        decode_upgrade_map(source, cursor, &mut self.hunter_upgrades)?;
+        decode_upgrade_map(source, cursor, &mut self.taoist_upgrades)?;
+
+        Ok(PlayerListDecodeReport {
+            player_properties: self.player_properties.len(),
+            player_experience: self.player_experience.len(),
+            fighter_upgrades: self.fighter_upgrades.len(),
+            hunter_upgrades: self.hunter_upgrades.len(),
+            taoist_upgrades: self.taoist_upgrades.len(),
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerListDecodeReport {
+    pub(crate) player_properties: usize,
+    pub(crate) player_experience: usize,
+    pub(crate) fighter_upgrades: usize,
+    pub(crate) hunter_upgrades: usize,
+    pub(crate) taoist_upgrades: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -455,7 +514,9 @@ where
     ResolveNotification: FnMut(&[u8]) -> Option<Vec<u8>>,
 {
     if !read_to(tokens, b"*") {
-        return Err(PlayerListFormatError::MissingUpgradeBlock { block: "properties" });
+        return Err(PlayerListFormatError::MissingUpgradeBlock {
+            block: "properties",
+        });
     }
     let count = read_u32(tokens, "upgrade count")?;
     let mut applied = 0;
@@ -492,10 +553,11 @@ fn read_i32<'source>(
     field: &'static str,
 ) -> Result<i32, PlayerListFormatError> {
     let token = next_token(tokens, field)?;
-    let text = std::str::from_utf8(token).map_err(|_| PlayerListFormatError::InvalidUnsignedLong {
-        field,
-        token: token.to_vec(),
-    })?;
+    let text =
+        std::str::from_utf8(token).map_err(|_| PlayerListFormatError::InvalidUnsignedLong {
+            field,
+            token: token.to_vec(),
+        })?;
     text.parse::<i32>()
         .map_err(|_| PlayerListFormatError::InvalidUnsignedLong {
             field,
@@ -508,10 +570,11 @@ fn read_u32<'source>(
     field: &'static str,
 ) -> Result<u32, PlayerListFormatError> {
     let token = next_token(tokens, field)?;
-    let text = std::str::from_utf8(token).map_err(|_| PlayerListFormatError::InvalidUnsignedLong {
-        field,
-        token: token.to_vec(),
-    })?;
+    let text =
+        std::str::from_utf8(token).map_err(|_| PlayerListFormatError::InvalidUnsignedLong {
+            field,
+            token: token.to_vec(),
+        })?;
     text.parse::<u32>()
         .map_err(|_| PlayerListFormatError::InvalidUnsignedLong {
             field,
@@ -532,10 +595,11 @@ fn read_u16<'source>(
 }
 
 fn parse_u32(token: &[u8], field: &'static str) -> Result<u32, PlayerListFormatError> {
-    let text = std::str::from_utf8(token).map_err(|_| PlayerListFormatError::InvalidUnsignedLong {
-        field,
-        token: token.to_vec(),
-    })?;
+    let text =
+        std::str::from_utf8(token).map_err(|_| PlayerListFormatError::InvalidUnsignedLong {
+            field,
+            token: token.to_vec(),
+        })?;
     text.parse::<u32>()
         .map_err(|_| PlayerListFormatError::InvalidUnsignedLong {
             field,
@@ -560,6 +624,39 @@ impl fmt::Display for PlayerListSerializeError {
 }
 
 impl Error for PlayerListSerializeError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerListDecodeError {
+    UnexpectedEnd {
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    MissingStringTerminator {
+        offset: usize,
+    },
+}
+
+impl fmt::Display for PlayerListDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd {
+                offset,
+                needed,
+                available,
+            } => write!(
+                formatter,
+                "PlayerList snapshot обрывается на {offset}: нужно {needed}, доступно {available}"
+            ),
+            Self::MissingStringTerminator { offset } => write!(
+                formatter,
+                "PlayerList notification с {offset} не завершена нулём"
+            ),
+        }
+    }
+}
+
+impl Error for PlayerListDecodeError {}
 
 fn append_player_properties(destination: &mut Vec<u8>, value: &PlayerBaseProperties) {
     destination.extend_from_slice(&[value.occupation, value.sex, 0, 0]);
@@ -635,4 +732,120 @@ fn append_count(
 fn append_legacy_string(destination: &mut Vec<u8>, value: &[u8]) {
     destination.extend_from_slice(value.split(|byte| *byte == 0).next().unwrap_or_default());
     destination.push(0);
+}
+
+fn decode_player_properties(record: [u8; 0x58]) -> PlayerBaseProperties {
+    PlayerBaseProperties {
+        occupation: record[0],
+        sex: record[1],
+        hot_hit: wire_u32_at(&record, 4),
+        remain_point: wire_u16_at(&record, 8),
+        yp: wire_u16_at(&record, 10),
+        hp: wire_u32_at(&record, 12),
+        mp: wire_u32_at(&record, 16),
+        rp: wire_u16_at(&record, 20),
+        base_maximum_hp: wire_u32_at(&record, 24),
+        base_maximum_mp: wire_u32_at(&record, 28),
+        base_maximum_yp: wire_u16_at(&record, 32),
+        base_maximum_rp: wire_u16_at(&record, 34),
+        base_strength: wire_u32_at(&record, 36),
+        base_dexterity: wire_u32_at(&record, 40),
+        base_constitution: wire_u32_at(&record, 44),
+        base_intelligence: wire_u32_at(&record, 48),
+        base_minimum_attack: wire_u32_at(&record, 52),
+        base_maximum_attack: wire_u32_at(&record, 56),
+        base_hit: wire_u16_at(&record, 60),
+        base_burden: wire_u16_at(&record, 62),
+        base_cch: wire_u16_at(&record, 64),
+        base_defence: wire_u32_at(&record, 68),
+        base_dodge: wire_u16_at(&record, 72),
+        base_attack_speed: wire_u16_at(&record, 74),
+        base_element_resistant: wire_u32_at(&record, 76),
+        base_hp_recover_speed: wire_u16_at(&record, 80),
+        base_mp_recover_speed: wire_u16_at(&record, 82),
+        constitution_to_maximum_hp: wire_u16_at(&record, 84),
+        intelligence_to_maximum_mp: wire_u16_at(&record, 86),
+    }
+}
+
+fn decode_upgrade_map(
+    source: &[u8],
+    cursor: &mut usize,
+    upgrades: &mut PlayerPropertiesUpgradeMap,
+) -> Result<(), PlayerListDecodeError> {
+    let count = read_wire_u32(source, cursor)?;
+    for _ in 0..count {
+        let level = read_wire_u32(source, cursor)?;
+        let properties = PlayerPropertiesUpgrade {
+            base_maximum_hp: read_wire_u32(source, cursor)?,
+            base_maximum_mp: read_wire_u32(source, cursor)?,
+            base_strength: read_wire_u32(source, cursor)?,
+            base_dexterity: read_wire_u32(source, cursor)?,
+            base_constitution: read_wire_u32(source, cursor)?,
+            base_intelligence: read_wire_u32(source, cursor)?,
+            base_burden: read_wire_u16(source, cursor)?,
+            notification: read_wire_c_string(source, cursor)?,
+        };
+        upgrades.insert(level, properties);
+    }
+    Ok(())
+}
+
+fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, PlayerListDecodeError> {
+    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_u16(source: &[u8], cursor: &mut usize) -> Result<u16, PlayerListDecodeError> {
+    Ok(u16::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], PlayerListDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(PlayerListDecodeError::UnexpectedEnd {
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("размер PlayerList scalar уже проверен"))
+}
+
+fn read_wire_c_string(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, PlayerListDecodeError> {
+    let offset = *cursor;
+    let remaining = source
+        .get(offset..)
+        .ok_or(PlayerListDecodeError::UnexpectedEnd {
+            offset,
+            needed: 1,
+            available: 0,
+        })?;
+    let Some(length) = remaining.iter().position(|byte| *byte == 0) else {
+        return Err(PlayerListDecodeError::MissingStringTerminator { offset });
+    };
+    *cursor += length + 1;
+    Ok(remaining[..length].to_vec())
+}
+
+fn wire_u32_at(source: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(
+        source[offset..offset + 4]
+            .try_into()
+            .expect("фиксированный PlayerList u32 входит в record"),
+    )
+}
+
+fn wire_u16_at(source: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(
+        source[offset..offset + 2]
+            .try_into()
+            .expect("фиксированный PlayerList u16 входит в record"),
+    )
 }
