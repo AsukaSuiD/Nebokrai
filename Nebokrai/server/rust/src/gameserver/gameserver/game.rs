@@ -5,7 +5,8 @@
 //! `s_mapPlayer +0x14` типа `long -> CPlayer*` и ordered
 //! `m_JJcLevelData` типа `long -> long` в startup dispatcher-е и
 //! `m_mTeamSessionID +0x188` типа `unsigned long -> long`. `FindPlayer` RVA
-//! `0x00014930`, `GetTeamSessionID` RVA `0x00013690` и достигнутые
+//! `0x00014930`, `GetTeamSessionID` RVA `0x00013690`, `GetTeamID` RVA
+//! `0x0008BEB0` и достигнутые
 //! `CMessage` sends `0x00013910..0x00014923` имеют статус `IMPLEMENTED,
 //! VERIFIED_DISASSEMBLY`; точная пара
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`, исходники
@@ -790,6 +791,8 @@ pub(crate) struct CGame {
     move_check_cells: MoveCheckCellRegistry,
     player_ranks: Option<CPlayerRanks>,
     goods_war: Option<CGoodsWarMember>,
+    id_index: u8,
+    team_id_counter: u32,
     login_server_id: i32,
     world_server_id: i32,
     network_setup: Option<GameNetworkSetup>,
@@ -856,6 +859,8 @@ impl CGame {
             move_check_cells: MoveCheckCellRegistry::new(),
             player_ranks: None,
             goods_war: None,
+            id_index: 0,
+            team_id_counter: 1,
             login_server_id: 0,
             world_server_id: 0,
             network_setup: None,
@@ -1049,6 +1054,29 @@ impl CGame {
 
     pub(crate) const fn server_ids(&self) -> (i32, i32) {
         (self.login_server_id, self.world_server_id)
+    }
+
+    pub(crate) const fn set_id_index(&mut self, id_index: u8) {
+        self.id_index = id_index;
+    }
+
+    pub(crate) const fn id_index(&self) -> u8 {
+        self.id_index
+    }
+
+    /// Выдаёт исходный 24-bit team counter с Game index в старшем байте.
+    /// Process-static C++ counter хранится здесь, поскольку `CGame` — singleton.
+    pub(crate) fn get_team_id(&mut self, session_id: i32) -> u32 {
+        if session_id == 0 {
+            return 0;
+        }
+
+        let result = self.team_id_counter | (u32::from(self.id_index) << 24);
+        self.team_id_counter += 1;
+        if self.team_id_counter >= 0x00ff_ffff {
+            self.team_id_counter = 1;
+        }
+        result
     }
 
     pub(crate) const fn sequence_registry(&self) -> &CSequenceRegistry {
@@ -2691,20 +2719,7 @@ impl ShapeResolver for CGame {
 //
 //
 
-// ============================================================================
-// FUNCTION: CGame::GetTeamID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.h:284
-// RVA: 0x0008BEB0
-// ADDRESS: 0048beb0
-// PROTOTYPE: ulong __thiscall GetTeamID(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
+// `GetTeamID` материализован выше с exact 24-bit wrap и Game index.
 // ============================================================================
 // FUNCTION: $L82323
 // STATUS: UNKNOWN (сохранены только метаданные исследования)

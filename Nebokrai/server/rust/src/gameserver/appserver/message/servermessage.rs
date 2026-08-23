@@ -37,6 +37,7 @@
 //! затем проецирует war state и relive rectangles в доступные nation regions.
 //! Script resources `0x0A..0x0D` сохраняют signed lengths, bounded path,
 //! function/general parser callbacks и разные duplicate-owner контракты.
+//! Game ID selector `0x12` сохраняет raw byte для старшего байта team ID.
 //!
 //! Terminal selector сначала вызывает `InitNetServer`, затем читает login и
 //! world ID и присваивает их даже после ошибки Host. Rust сохраняет этот
@@ -116,6 +117,7 @@ const VARIABLE_LIST_SELECTOR: i32 = 0x0b;
 const GENERAL_VARIABLE_SELECTOR: i32 = 0x0c;
 const SCRIPT_FILE_SELECTOR: i32 = 0x0d;
 const REGION_SETUP_SELECTOR: i32 = 0x11;
+const ID_INDEX_SELECTOR: i32 = 0x12;
 const HIT_LEVEL_SELECTOR: i32 = 0x14;
 const EMOTION_SELECTOR: i32 = 0x15;
 const QUEST_SYSTEM_SELECTOR: i32 = 0x16;
@@ -248,6 +250,24 @@ impl fmt::Display for GameScriptResourceDecodeError {
 impl Error for GameScriptResourceDecodeError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GameIdIndexDecodeError {
+    pub(crate) offset: usize,
+    pub(crate) available: usize,
+}
+
+impl fmt::Display for GameIdIndexDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "Game ID index отсутствует в {0}: нужно 1, доступно {1}",
+            self.offset, self.available
+        )
+    }
+}
+
+impl Error for GameIdIndexDecodeError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameOwnedStartupSnapshotReport {
     PlayerList(PlayerListDecodeReport),
     TradeList {
@@ -287,6 +307,9 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     },
     RegionSetup {
         entries: usize,
+    },
+    IdIndex {
+        value: u8,
     },
     HitLevel {
         entries: usize,
@@ -356,6 +379,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     GmList(GmListDecodeError),
     ScriptResource(GameScriptResourceDecodeError),
     RegionSetup(RegionSetupDecodeError),
+    IdIndex(GameIdIndexDecodeError),
     HitLevel(HitLevelDecodeError),
     Emotion(EmotionDecodeError),
     QuestSystem(QuestSystemDecodeError),
@@ -404,6 +428,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::GmList(error) => error.fmt(formatter),
             Self::ScriptResource(error) => error.fmt(formatter),
             Self::RegionSetup(error) => error.fmt(formatter),
+            Self::IdIndex(error) => error.fmt(formatter),
             Self::HitLevel(error) => error.fmt(formatter),
             Self::Emotion(error) => error.fmt(formatter),
             Self::QuestSystem(error) => error.fmt(formatter),
@@ -449,6 +474,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::GmList(error) => Some(error),
             Self::ScriptResource(error) => Some(error),
             Self::RegionSetup(error) => Some(error),
+            Self::IdIndex(error) => Some(error),
             Self::HitLevel(error) => Some(error),
             Self::Emotion(error) => Some(error),
             Self::QuestSystem(error) => Some(error),
@@ -686,6 +712,20 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
             };
             add_log_text(b"Initial SI_REGIONLEVELSETUP...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::RegionSetup { entries }))
+        }
+        ID_INDEX_SELECTOR => {
+            let offset = *cursor;
+            let Some(&value) = source.get(offset) else {
+                return Some(Err(GameOwnedStartupSnapshotError::IdIndex(
+                    GameIdIndexDecodeError {
+                        offset,
+                        available: source.len().saturating_sub(offset),
+                    },
+                )));
+            };
+            *cursor += 1;
+            game.set_id_index(value);
+            Some(Ok(GameOwnedStartupSnapshotReport::IdIndex { value }))
         }
         HIT_LEVEL_SELECTOR => {
             let entries = match game
