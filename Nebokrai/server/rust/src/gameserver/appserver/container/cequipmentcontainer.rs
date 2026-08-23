@@ -178,6 +178,48 @@ pub(crate) enum EquipmentAddOutcome {
     },
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct EquipmentRemovePartialEffects {
+    /// Значение уже вычтено из `expanded_package_num` с wrapping semantics.
+    pub(crate) package_extension_subtracted: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentRemoveRuntimeFacts {
+    /// Lookup игрока по owner id для derived remove-callback-а.
+    pub(crate) owner_player_present: bool,
+    pub(crate) pack_add_enabled: bool,
+    /// Результат player-wide `GetGoodsById` после QueryAttribute/value1==2.
+    pub(crate) player_goods_package_extension: Option<u32>,
+    /// Уже вычисленный exact skill gate `battle fairy && Can...()==0`.
+    pub(crate) active_war_soul_blocks_headgear: bool,
+}
+
+#[must_use = "report сохраняет removed ownership и callback ordering"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentRemovedReport {
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) column: EquipmentColumn,
+    pub(crate) goods: CGoods,
+    pub(crate) partial_effects: EquipmentRemovePartialEffects,
+    pub(crate) requires_player_callback: bool,
+    pub(crate) listeners: Vec<ContainerListenerHandle>,
+}
+
+#[must_use = "missing/blocked remove может уже изменить package-extension счётчик"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentRemoveOutcome {
+    Removed(EquipmentRemovedReport),
+    Missing {
+        partial_effects: EquipmentRemovePartialEffects,
+    },
+    BlockedByActiveWarSoul {
+        column: EquipmentColumn,
+        partial_effects: EquipmentRemovePartialEffects,
+    },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CEquipmentContainer {
     base: CGoodsContainer,
@@ -526,6 +568,50 @@ impl CEquipmentContainer {
             EQUIP_PLACE_LING_BAO => column == EquipmentColumn::LingBao,
             _ => false,
         }
+    }
+
+    /// Exact `Remove(CGUID)` сначала применяет player-wide package-extension
+    /// decrement, затем вычисляет позицию и только после этого может отказать
+    /// headgear из-за активной war-soul skill. Поэтому даже missing/blocked
+    /// исходы несут уже применённый partial effect.
+    pub(crate) fn remove(
+        &mut self,
+        goods_id: CGuid,
+        runtime: EquipmentRemoveRuntimeFacts,
+    ) -> EquipmentRemoveOutcome {
+        let mut partial_effects = EquipmentRemovePartialEffects::default();
+        if runtime.pack_add_enabled
+            && runtime.owner_player_present
+            && let Some(extension) = runtime.player_goods_package_extension
+        {
+            self.expanded_package_num = self.expanded_package_num.wrapping_sub(extension);
+            partial_effects.package_extension_subtracted = extension;
+        }
+
+        let Some(column) = self.query_goods_position_by_id(goods_id) else {
+            return EquipmentRemoveOutcome::Missing { partial_effects };
+        };
+        if column == EquipmentColumn::Headgear && runtime.active_war_soul_blocks_headgear {
+            return EquipmentRemoveOutcome::BlockedByActiveWarSoul {
+                column,
+                partial_effects,
+            };
+        }
+
+        let goods = self
+            .equipment
+            .remove(&column)
+            .expect("column разрешена непосредственно перед erase");
+        EquipmentRemoveOutcome::Removed(EquipmentRemovedReport {
+            owner_type: self.base.owner_type(),
+            owner_id: self.base.owner_id(),
+            column,
+            goods,
+            partial_effects,
+            requires_player_callback: self.base.owner_type() == PLAYER_OWNER_TYPE
+                && runtime.owner_player_present,
+            listeners: self.base.base().listeners().to_vec(),
+        })
     }
 
     /// Internal self-callback должен быть применён dispatcher-ом перед
