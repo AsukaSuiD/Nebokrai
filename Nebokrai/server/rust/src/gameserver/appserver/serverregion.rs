@@ -57,6 +57,8 @@
 //! Low-level `AddMonster` аналогично владеет type `600` spawn и хранит
 //! original-name key вместо висячего указателя в reloadable MonsterList;
 //! skills/AI Init и around serialization остаются concrete context callbacks.
+//! Exact EXE подтверждает legacy quirk: его пятый bool не читается, enter
+//! message отправляется всегда, а шестой bool подавляет ранний guard-hook.
 //! `BTreeMap` используется только для identity lookup: observable обход
 //! старого MSVC `stdext::hash_map` для startup name-cache пока остаётся у
 //! `ServerRegionDecodeContext`, а не подменяется сортировкой Rust-map.
@@ -379,13 +381,39 @@ pub(crate) trait ServerRegionNpcContext: ServerRegionMembershipContext {
 }
 
 pub(crate) trait ServerRegionMonsterContext: ServerRegionMembershipContext {
+    /// Возвращает snapshot текущего reloadable `CMonsterList` по original name.
+    fn monster_property(&mut self, origin_name: &[u8]) -> Option<MonsterProperties>;
+
     /// Выполняет `CMonster::Init -> InitSkills/InitAI` у concrete owners.
     fn initialize_monster(&mut self, monster: &mut CMonster, property: &MonsterProperties);
+
+    /// Virtual `+0x9C(monsterID)` до speed/direction/AddObject для AI 10/11.
+    fn initialize_guard_monster(&mut self, monster_id: i32);
 
     fn send_monster_entered_around(&mut self, monster: &CMonster);
 
     /// Exact low-level AddMonster увеличивает global total после around-send.
     fn monster_spawned(&mut self);
+
+    fn log_monster_variant_failure(&mut self, region_id: i32, refresh_index: i32);
+
+    fn log_monster_position_failure(&mut self, origin_name: &[u8]);
+
+    /// Virtual `OnRefreshRegion(refreshIndex)` для guard AI 10/11.
+    fn refresh_guard_region(&mut self, refresh_index: i32);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ServerRegionMonsterRectBlock {
+    MissingRefreshSetup { index: i32 },
+    RandomPosition(RegionCellAccessBlock),
+    Membership(RegionMembershipBlock),
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ServerRegionMonsterRectReport {
+    pub(crate) created_ids: Vec<i32>,
+    pub(crate) missing_properties: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -557,6 +585,106 @@ pub(crate) struct CServerRegion {
 }
 
 impl CServerRegion {
+    pub(crate) fn add_monster_rect<Context: ServerRegionMonsterContext>(
+        &mut self,
+        setup: &ServerRegionMonsterSetup,
+        amount: i32,
+        remember_setup: bool,
+        suppress_immediate_guard_ai: bool,
+        now_ms: u32,
+        area_width: i32,
+        area_height: i32,
+        context: &mut Context,
+    ) -> Result<ServerRegionMonsterRectReport, ServerRegionMonsterRectBlock> {
+        if remember_setup {
+            self.monster_setups.push(setup.clone());
+        }
+        let Some(setup_index) = self
+            .monster_setups
+            .iter()
+            .position(|candidate| candidate.index == setup.index)
+        else {
+            return Err(ServerRegionMonsterRectBlock::MissingRefreshSetup { index: setup.index });
+        };
+
+        let mut report = ServerRegionMonsterRectReport::default();
+        let mut remaining = amount;
+        while remaining > 0 {
+            let random_odds = context.random_below(100);
+            let selected = self.monster_setups[setup_index]
+                .variants
+                .iter()
+                .find(|variant| random_odds < i32::from(variant.cumulative_odds))
+                .cloned();
+            let Some(selected) = selected else {
+                let refresh_index = self.monster_setups[setup_index].index;
+                context.log_monster_variant_failure(self.id, refresh_index);
+                remaining = remaining.wrapping_sub(1);
+                continue;
+            };
+
+            let refresh = &self.monster_setups[setup_index];
+            let position = self
+                .region
+                .get_random_pos_in_range(
+                    refresh.left,
+                    refresh.top,
+                    refresh.right.wrapping_sub(refresh.left),
+                    refresh.bottom.wrapping_sub(refresh.top),
+                    context,
+                )
+                .map_err(ServerRegionMonsterRectBlock::RandomPosition)?;
+            if !position.found {
+                context.log_monster_position_failure(&selected.name);
+            }
+
+            let Some(property) = context.monster_property(&selected.name) else {
+                report.missing_properties = report.missing_properties.wrapping_add(1);
+                remaining = remaining.wrapping_sub(1);
+                continue;
+            };
+            let direction = self.monster_setups[setup_index].direction;
+            let id = self
+                .add_monster(
+                    &property,
+                    position.x,
+                    position.y,
+                    direction,
+                    remember_setup,
+                    suppress_immediate_guard_ai,
+                    now_ms,
+                    area_width,
+                    area_height,
+                    context,
+                )
+                .map_err(ServerRegionMonsterRectBlock::Membership)?;
+
+            let refresh_index = self.monster_setups[setup_index].index;
+            self.monster_setups[setup_index].living_count = self.monster_setups[setup_index]
+                .living_count
+                .wrapping_add(1);
+            let monster = self
+                .owned_monsters
+                .get_mut(&id)
+                .expect("успешный AddMonster публикует owned monster");
+            monster.set_refresh_data(
+                selected.sign,
+                selected.leader_sign,
+                selected.leader_distance,
+                refresh_index,
+            );
+            if !selected.script.is_empty() && selected.script != b"0" {
+                monster.set_script_file(&selected.script);
+            }
+            report.created_ids.push(id);
+            if matches!(property.ai, 10 | 11) && !suppress_immediate_guard_ai {
+                context.refresh_guard_region(refresh_index);
+            }
+            remaining = remaining.wrapping_sub(1);
+        }
+        Ok(report)
+    }
+
     #[allow(
         clippy::too_many_arguments,
         reason = "literal AddMonster сохраняет исходные spawn flags и owner-границы"
@@ -567,7 +695,8 @@ impl CServerRegion {
         tile_x: i32,
         tile_y: i32,
         direction: i32,
-        send_around: bool,
+        _unused_legacy_flag: bool,
+        suppress_immediate_guard_ai: bool,
         now_ms: u32,
         area_width: i32,
         area_height: i32,
@@ -581,6 +710,9 @@ impl CServerRegion {
             .move_shape_mut()
             .shape_mut()
             .set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
+        if matches!(property.ai, 10 | 11) && !suppress_immediate_guard_ai {
+            context.initialize_guard_monster(id);
+        }
         monster.set_spawn_speed(property);
         let direction = if (0..8).contains(&direction) {
             direction
@@ -607,19 +739,23 @@ impl CServerRegion {
             context,
         )?;
         self.owned_monsters.insert(id, monster);
-        if send_around {
-            context.send_monster_entered_around(
-                self.owned_monsters
-                    .get(&id)
-                    .expect("monster опубликован непосредственно перед send"),
-            );
-        }
+        // Compatibility quirk exact EXE 0x0047EC50: пятый bool не читается,
+        // а enter message отправляется безусловно.
+        context.send_monster_entered_around(
+            self.owned_monsters
+                .get(&id)
+                .expect("monster опубликован непосредственно перед send"),
+        );
         context.monster_spawned();
         Ok(id)
     }
 
     pub(crate) fn find_monster_by_id(&self, id: i32) -> Option<&CMonster> {
         self.owned_monsters.get(&id)
+    }
+
+    pub(crate) fn find_monster_by_id_mut(&mut self, id: i32) -> Option<&mut CMonster> {
+        self.owned_monsters.get_mut(&id)
     }
 
     pub(crate) fn add_npc<Context: ServerRegionNpcContext>(
@@ -2626,6 +2762,9 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 // ============================================================================
 // FUNCTION: CServerRegion::AddMonsterRect
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
+// IMPLEMENTED_SUBCHAIN: cumulative selection, fallback position, low-level
+// spawn, living-count, refresh metadata/script и guard refresh реализованы
+// выше; RAW сохраняет ещё не закрытые refresh scheduler/AI caller details.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:672
