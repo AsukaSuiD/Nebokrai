@@ -33,7 +33,7 @@ pub(crate) mod goodsdestructionconfig;
 pub(crate) mod gmlist;
 #[allow(
     dead_code,
-    reason = "globe snapshot подключён к initial-config до typed loaders/accessors"
+    reason = "общий globe snapshot связан с World loaders/serializer и Game decoder до полного gameplay access"
 )]
 pub(crate) mod globesetup;
 #[allow(

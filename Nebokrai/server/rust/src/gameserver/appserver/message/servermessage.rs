@@ -22,6 +22,9 @@
 //! по exact EXE и runtime-логам.
 //! GodsBattle `0x39` перед финальным startup log сохраняет decoder-local GBK
 //! warning и `PutStringToFile("godsbattleLog", ...)` в их исходных позициях.
+//! GlobeSetup `0x07` сохраняет вложенный router decode, DaKong key, byte
+//! broadcast `0xBF736`, conditional auction disable и только затем глобальные
+//! area dimensions с финальным startup log.
 //!
 //! Terminal selector сначала вызывает `InitNetServer`, затем читает login и
 //! world ID и присваивает их даже после ошибки Host. Rust сохраняет этот
@@ -53,6 +56,7 @@ use crate::public::wordsfilter::{WordsFilterDecodeError, WordsFilterDecodeReport
 use crate::setup::cbattlefairyexpconfig::{BattleFairyExpDecodeError, BattleFairyExpDecodeReport};
 use crate::setup::changebody::ChangeBodyDecodeError;
 use crate::setup::contributesetup::ContributeSetupDecodeError;
+use crate::setup::globesetup::{GlobeSetupDecodeError, GlobeSetupDecodeReport};
 use crate::setup::gmlist::{GmListDecodeError, GmListDecodeReport};
 use crate::setup::godsbattleconf::{GodsBattleDecodeError, GodsBattleDecodeReport};
 use crate::setup::goodsdestructionconfig::{GoodsDestroyDecodeError, GoodsDestroyDecodeReport};
@@ -76,6 +80,7 @@ const PLAYER_LIST_SELECTOR: i32 = 0x01;
 const TRADE_LIST_SELECTOR: i32 = 0x03;
 const INCREMENT_SHOP_SELECTOR: i32 = 0x04;
 const CONTRIBUTE_SETUP_SELECTOR: i32 = 0x05;
+const GLOBE_SETUP_SELECTOR: i32 = 0x07;
 const LOG_SYSTEM_SELECTOR: i32 = 0x08;
 const GM_LIST_SELECTOR: i32 = 0x09;
 const REGION_SETUP_SELECTOR: i32 = 0x11;
@@ -182,6 +187,11 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     ContributeSetup {
         entries: usize,
     },
+    GlobeSetup {
+        decoded: GlobeSetupDecodeReport,
+        goods_ai_broadcast: Result<i32, SendMessageError>,
+        auction_forced_disabled: bool,
+    },
     LogSystem {
         entries: usize,
         da_kong_log: bool,
@@ -249,6 +259,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     TradeList(TradeListDecodeError),
     IncrementShop(IncrementShopDecodeError),
     ContributeSetup(ContributeSetupDecodeError),
+    GlobeSetup(GlobeSetupDecodeError),
     LogSystem(LogSystemDecodeError),
     GmList(GmListDecodeError),
     RegionSetup(RegionSetupDecodeError),
@@ -291,6 +302,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::TradeList(error) => error.fmt(formatter),
             Self::IncrementShop(error) => error.fmt(formatter),
             Self::ContributeSetup(error) => error.fmt(formatter),
+            Self::GlobeSetup(error) => error.fmt(formatter),
             Self::LogSystem(error) => error.fmt(formatter),
             Self::GmList(error) => error.fmt(formatter),
             Self::RegionSetup(error) => error.fmt(formatter),
@@ -330,6 +342,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::TradeList(error) => Some(error),
             Self::IncrementShop(error) => Some(error),
             Self::ContributeSetup(error) => Some(error),
+            Self::GlobeSetup(error) => Some(error),
             Self::LogSystem(error) => Some(error),
             Self::GmList(error) => Some(error),
             Self::RegionSetup(error) => Some(error),
@@ -418,6 +431,34 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             add_log_text(b"Initial SI_CONTRIBUTEITEM...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::ContributeSetup {
                 entries,
+            }))
+        }
+        GLOBE_SETUP_SELECTOR => {
+            let decoded = {
+                let (globe_setup, region_router) = game.globe_setup_and_region_router_mut();
+                match globe_setup.decord_from_byte_array(region_router, source, cursor) {
+                    Ok(report) => report,
+                    Err(error) => {
+                        return Some(Err(GameOwnedStartupSnapshotError::GlobeSetup(error)));
+                    }
+                }
+            };
+
+            game.da_kong_xiang_qian_mut().set_key(decoded.da_kong_key);
+            let mut notice = CMessage::new(0x000B_F736);
+            notice.add_byte(u8::from(decoded.goods_ai_enabled));
+            let goods_ai_broadcast = notice.send_all(game.current_net_server());
+
+            let auction_forced_disabled = !decoded.auction_enabled;
+            if auction_forced_disabled {
+                game.force_auction_disabled();
+            }
+            game.set_area_dimensions(decoded.area_width, decoded.area_height);
+            add_log_text(b"Initial SI_GLOBESETUP...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::GlobeSetup {
+                decoded,
+                goods_ai_broadcast,
+                auction_forced_disabled,
             }))
         }
         LOG_SYSTEM_SELECTOR => {

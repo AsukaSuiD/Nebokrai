@@ -1,9 +1,10 @@
-//! Глобальный setup `CGlobeSetup` из WorldServer, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Общий глобальный setup `CGlobeSetup`, подтверждённый WorldServer и
+//! GameServer EXE/PDB.
 //!
 //! Основной wire — raw 0x1114-байтный `tagSetup`, затем полный
-//! `CRegionRouter`. Парный decoder копирует тот же snapshot, поэтому фиксированный
-//! byte-array сохраняет ABI-формат; static storage и padding обнулены.
+//! `CRegionRouter`. Парный Game decoder копирует тот же snapshot, затем очищает
+//! и восстанавливает router; фиксированный byte-array сохраняет ABI-формат,
+//! static storage и padding обнулены.
 //!
 //! Typed loaders/accessors накладываются только на подтверждённые offsets:
 //! create-role limit остаётся signed `i16`, country names/identities и special
@@ -11,7 +12,9 @@
 //! `GetBaseMaxRp` сохраняет пороги только occupation 0, а auction formulas —
 //! исходные `fSxfJinMax/fSxfJinMin/fAuctionFactorC`.
 
-use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
+use crate::setup::regionrouter::{
+    RegionRouter, RegionRouterDecodeError, RegionRouterDecodeReport, RegionRouterSerializeError,
+};
 
 use std::error::Error;
 use std::fmt;
@@ -45,6 +48,10 @@ const JJC_MAX_REGIONS_IN_USE_OFFSET: usize = 0xCE0;
 const JJC_PK_TIMEOUT_OFFSET: usize = 0xCE8;
 const JJC_RANK_INTERVAL_OFFSET: usize = 0xCF0;
 const TRANSFER_MONEY_INTERVAL_OFFSET: usize = 0x110C;
+const GOODS_AI_OFFSET: usize = 0xC4C;
+const DA_KONG_KEY_OFFSET: usize = 0xC85;
+const AREA_WIDTH_OFFSET: usize = 0x514;
+const AREA_HEIGHT_OFFSET: usize = 0x518;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -64,6 +71,51 @@ pub(crate) struct GlobePlayerPropertyCoefficients {
     pub(crate) int_to_element: [f32; 3],
     pub(crate) int_to_max_mp: [f32; 3],
     pub(crate) int_to_resistant: [f32; 3],
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GlobeSetupDecodeReport {
+    pub(crate) router: RegionRouterDecodeReport,
+    pub(crate) area_width: i32,
+    pub(crate) area_height: i32,
+    pub(crate) da_kong_key: bool,
+    pub(crate) goods_ai_enabled: bool,
+    pub(crate) auction_enabled: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GlobeSetupDecodeError {
+    Snapshot {
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    RegionRouter(RegionRouterDecodeError),
+}
+
+impl fmt::Display for GlobeSetupDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Snapshot {
+                offset,
+                needed,
+                available,
+            } => write!(
+                formatter,
+                "GlobeSetup snapshot обрывается на {offset}: нужно {needed}, доступно {available}"
+            ),
+            Self::RegionRouter(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for GlobeSetupDecodeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Snapshot { .. } => None,
+            Self::RegionRouter(error) => Some(error),
+        }
+    }
 }
 
 impl Default for GlobeSetupSnapshot {
@@ -87,6 +139,40 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn bytes_mut(&mut self) -> &mut [u8; GLOBE_SETUP_BLOB_LENGTH] {
         &mut self.bytes
+    }
+
+    /// Восстанавливает Game-side wire projection. Полный blob публикуется до
+    /// начала router decode; при обрыве router сохраняет уже прочитанный prefix.
+    /// Последующие DaKong/message/auction effects выполняет `CGame` caller.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        router: &mut RegionRouter,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<GlobeSetupDecodeReport, GlobeSetupDecodeError> {
+        let offset = *cursor;
+        let available = source.len().saturating_sub(offset);
+        let Some(bytes) = source.get(offset..offset.saturating_add(GLOBE_SETUP_BLOB_LENGTH)) else {
+            return Err(GlobeSetupDecodeError::Snapshot {
+                offset,
+                needed: GLOBE_SETUP_BLOB_LENGTH,
+                available,
+            });
+        };
+        self.bytes.copy_from_slice(bytes);
+        *cursor += GLOBE_SETUP_BLOB_LENGTH;
+
+        let router = router
+            .decord_from_byte_array(source, cursor)
+            .map_err(GlobeSetupDecodeError::RegionRouter)?;
+        Ok(GlobeSetupDecodeReport {
+            router,
+            area_width: self.area_width(),
+            area_height: self.area_height(),
+            da_kong_key: self.da_kong_key(),
+            goods_ai_enabled: self.goods_ai_enabled(),
+            auction_enabled: self.auction_enabled(),
+        })
     }
 
  /// Читает positional `setup/globesetup.ini` в точные PDB-offsets.
@@ -226,6 +312,22 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn player_speed(&self) -> f32 {
         self.read_f32(PLAYER_SPEED_OFFSET)
+    }
+
+    pub(crate) fn area_width(&self) -> i32 {
+        self.read_i32(AREA_WIDTH_OFFSET)
+    }
+
+    pub(crate) fn area_height(&self) -> i32 {
+        self.read_i32(AREA_HEIGHT_OFFSET)
+    }
+
+    pub(crate) const fn da_kong_key(&self) -> bool {
+        self.bytes[DA_KONG_KEY_OFFSET] != 0
+    }
+
+    pub(crate) const fn goods_ai_enabled(&self) -> bool {
+        self.bytes[GOODS_AI_OFFSET] != 0
     }
 
     pub(crate) fn monster_number_scale(&self) -> f32 {

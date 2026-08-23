@@ -1,5 +1,5 @@
-//! Маршрутизация `CRegionRouter` из WorldServer, подтверждённая
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Общая маршрутизация `CRegionRouter`, подтверждённая WorldServer и
+//! GameServer EXE/PDB.
 //!
 //! Wire пишет ordered regions, их entry/exit/range и ordered next-region точки;
 //! map key задаёт порядок, но в payload идёт ID из value. `sendSelf` не читается.
@@ -11,6 +11,8 @@
 //! Loader очищает owner до открытия и читает позиционный whitespace-формат.
 //! Duplicate keys сохраняют первое значение. Ошибка оставляет разобранный
 //! префикс; `BinaryHeap` и `BTreeMap` заменяют линейный MSVC tree search.
+//! Game decoder также очищает owner первым, читает unsigned region count и
+//! signed transition counts и сохраняет first-wins обоих `std::map::insert`.
 
 use std::cmp::Reverse;
 use std::collections::btree_map::Entry;
@@ -72,6 +74,77 @@ pub(crate) struct RegionRouterLoadReport {
     pub(crate) trailing_tokens: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RegionRouterDecodeReport {
+    pub(crate) declared_regions: u32,
+    pub(crate) regions: usize,
+    pub(crate) transitions: usize,
+    pub(crate) duplicate_regions: usize,
+    pub(crate) duplicate_transitions: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RegionRouterDecodeField {
+    RegionCount,
+    RegionId,
+    EntryX,
+    EntryY,
+    ExitX,
+    ExitY,
+    ExitRange,
+    TransitionCount,
+    NextRegionId,
+    TransitionX,
+    TransitionY,
+}
+
+impl fmt::Display for RegionRouterDecodeField {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::RegionCount => "число регионов",
+            Self::RegionId => "ID региона",
+            Self::EntryX => "entry X",
+            Self::EntryY => "entry Y",
+            Self::ExitX => "exit X",
+            Self::ExitY => "exit Y",
+            Self::ExitRange => "exit range",
+            Self::TransitionCount => "число переходов",
+            Self::NextRegionId => "ID следующего региона",
+            Self::TransitionX => "transition X",
+            Self::TransitionY => "transition Y",
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RegionRouterDecodeError {
+    pub(crate) field: RegionRouterDecodeField,
+    pub(crate) region_index: Option<u32>,
+    pub(crate) transition_index: Option<usize>,
+    pub(crate) offset: usize,
+    pub(crate) needed: usize,
+    pub(crate) available: usize,
+}
+
+impl fmt::Display for RegionRouterDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "RegionRouter поле {}", self.field)?;
+        if let Some(region_index) = self.region_index {
+            write!(formatter, " региона #{region_index}")?;
+        }
+        if let Some(transition_index) = self.transition_index {
+            write!(formatter, " перехода #{transition_index}")?;
+        }
+        write!(
+            formatter,
+            " обрывается на {}: нужно {}, доступно {}",
+            self.offset, self.needed, self.available
+        )
+    }
+}
+
+impl Error for RegionRouterDecodeError {}
+
 #[derive(Debug)]
 pub(crate) enum RegionRouterLoadError {
     Io(io::Error),
@@ -117,6 +190,137 @@ impl RegionRouter {
 
     pub(crate) fn clear(&mut self) {
         self.nodes.clear();
+    }
+
+    /// Декодирует GameServer snapshot. Оба исходных `std::map::insert`
+    /// сохраняют первое значение duplicate key; текущий router очищается до
+    /// чтения count, а незавершённый node не публикуется.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<RegionRouterDecodeReport, RegionRouterDecodeError> {
+        self.clear();
+        let declared_regions = read_router_u32(
+            source,
+            cursor,
+            RegionRouterDecodeField::RegionCount,
+            None,
+            None,
+        )?;
+        let mut duplicate_regions = 0usize;
+        let mut duplicate_transitions = 0usize;
+
+        for region_index in 0..declared_regions {
+            let region_id = read_router_i32(
+                source,
+                cursor,
+                RegionRouterDecodeField::RegionId,
+                Some(region_index),
+                None,
+            )?;
+            let entry = RegionRoutePoint {
+                x: read_router_i32(
+                    source,
+                    cursor,
+                    RegionRouterDecodeField::EntryX,
+                    Some(region_index),
+                    None,
+                )?,
+                y: read_router_i32(
+                    source,
+                    cursor,
+                    RegionRouterDecodeField::EntryY,
+                    Some(region_index),
+                    None,
+                )?,
+            };
+            let exit = RegionRoutePoint {
+                x: read_router_i32(
+                    source,
+                    cursor,
+                    RegionRouterDecodeField::ExitX,
+                    Some(region_index),
+                    None,
+                )?,
+                y: read_router_i32(
+                    source,
+                    cursor,
+                    RegionRouterDecodeField::ExitY,
+                    Some(region_index),
+                    None,
+                )?,
+            };
+            let exit_range = read_router_i32(
+                source,
+                cursor,
+                RegionRouterDecodeField::ExitRange,
+                Some(region_index),
+                None,
+            )?;
+            let transition_count = read_router_i32(
+                source,
+                cursor,
+                RegionRouterDecodeField::TransitionCount,
+                Some(region_index),
+                None,
+            )?;
+            let mut next = BTreeMap::new();
+            for transition_index in 0..transition_count.max(0) as usize {
+                let next_region_id = read_router_i32(
+                    source,
+                    cursor,
+                    RegionRouterDecodeField::NextRegionId,
+                    Some(region_index),
+                    Some(transition_index),
+                )?;
+                let transition = RegionNextNode {
+                    next_region_id,
+                    x: read_router_i32(
+                        source,
+                        cursor,
+                        RegionRouterDecodeField::TransitionX,
+                        Some(region_index),
+                        Some(transition_index),
+                    )?,
+                    y: read_router_i32(
+                        source,
+                        cursor,
+                        RegionRouterDecodeField::TransitionY,
+                        Some(region_index),
+                        Some(transition_index),
+                    )?,
+                };
+                match next.entry(next_region_id) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(transition);
+                    }
+                    Entry::Occupied(_) => duplicate_transitions += 1,
+                }
+            }
+
+            let node = RegionRouterNode {
+                region_id,
+                entry,
+                exit,
+                exit_range,
+                next,
+            };
+            match self.nodes.entry(region_id) {
+                Entry::Vacant(entry) => {
+                    entry.insert(node);
+                }
+                Entry::Occupied(_) => duplicate_regions += 1,
+            }
+        }
+
+        Ok(RegionRouterDecodeReport {
+            declared_regions,
+            regions: self.nodes.len(),
+            transitions: self.nodes.values().map(|node| node.next.len()).sum(),
+            duplicate_regions,
+            duplicate_transitions,
+        })
     }
 
     pub(crate) fn load_router_setup(
@@ -462,4 +666,59 @@ fn write_count(
     Ok(())
 }
 
-// World loader/route search, singleton-а и Game decoder-а.
+fn read_router_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+    field: RegionRouterDecodeField,
+    region_index: Option<u32>,
+    transition_index: Option<usize>,
+) -> Result<[u8; N], RegionRouterDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(RegionRouterDecodeError {
+            field,
+            region_index,
+            transition_index,
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("RegionRouter wire slice имеет запрошенную длину"))
+}
+
+fn read_router_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: RegionRouterDecodeField,
+    region_index: Option<u32>,
+    transition_index: Option<usize>,
+) -> Result<i32, RegionRouterDecodeError> {
+    Ok(i32::from_le_bytes(read_router_array(
+        source,
+        cursor,
+        field,
+        region_index,
+        transition_index,
+    )?))
+}
+
+fn read_router_u32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: RegionRouterDecodeField,
+    region_index: Option<u32>,
+    transition_index: Option<usize>,
+) -> Result<u32, RegionRouterDecodeError> {
+    Ok(u32::from_le_bytes(read_router_array(
+        source,
+        cursor,
+        field,
+        region_index,
+        transition_index,
+    )?))
+}

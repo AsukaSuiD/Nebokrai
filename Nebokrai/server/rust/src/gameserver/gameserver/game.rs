@@ -88,6 +88,7 @@ use crate::setup::cbattlefairyexpconfig::CBattleFairyExpConfig;
 use crate::setup::changebody::CChangeBodyConf;
 use crate::setup::contributesetup::CContributeSetup;
 use crate::setup::fairyexpconf::CFairyExpConf;
+use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::gmlist::CGMList;
 use crate::setup::goodsdestructionconfig::GoodsDestroySetup;
 use crate::setup::hitlevelsetup::CHitLevelSetup;
@@ -100,6 +101,7 @@ use crate::setup::newskillmonsterlist::NewSkillMonsterConf;
 use crate::setup::playerlist::CPlayerList;
 use crate::setup::preciousboxconf::PreciousBoxConf;
 use crate::setup::prisonconf::PrisonConf;
+use crate::setup::regionrouter::RegionRouter;
 use crate::setup::regionsetup::CRegionSetup;
 use crate::setup::synthesis::CSynthesis;
 use crate::setup::tradelist::CTradeList;
@@ -722,6 +724,11 @@ pub(crate) struct CGame {
     log_system: CLogSystem,
     gm_list: CGMList,
     da_kong_xiang_qian: CDaKongXiangQian,
+    globe_setup: GlobeSetupSnapshot,
+    region_router: RegionRouter,
+    area_width: i32,
+    area_height: i32,
+    auction_now: bool,
     region_setup: CRegionSetup,
     hit_level_setup: CHitLevelSetup,
     prison_conf: PrisonConf,
@@ -774,6 +781,11 @@ impl CGame {
             log_system: CLogSystem::default(),
             gm_list: CGMList::default(),
             da_kong_xiang_qian: CDaKongXiangQian::default(),
+            globe_setup: GlobeSetupSnapshot::default(),
+            region_router: RegionRouter::default(),
+            area_width: 15,
+            area_height: 15,
+            auction_now: false,
             region_setup: CRegionSetup::default(),
             hit_level_setup: CHitLevelSetup::default(),
             prison_conf: PrisonConf::default(),
@@ -1038,6 +1050,39 @@ impl CGame {
 
     pub(crate) const fn da_kong_xiang_qian_mut(&mut self) -> &mut CDaKongXiangQian {
         &mut self.da_kong_xiang_qian
+    }
+
+    pub(crate) const fn globe_setup(&self) -> &GlobeSetupSnapshot {
+        &self.globe_setup
+    }
+
+    pub(crate) const fn region_router(&self) -> &RegionRouter {
+        &self.region_router
+    }
+
+    pub(crate) const fn globe_setup_and_region_router_mut(
+        &mut self,
+    ) -> (&mut GlobeSetupSnapshot, &mut RegionRouter) {
+        (&mut self.globe_setup, &mut self.region_router)
+    }
+
+    pub(crate) const fn area_dimensions(&self) -> (i32, i32) {
+        (self.area_width, self.area_height)
+    }
+
+    pub(crate) const fn set_area_dimensions(&mut self, width: i32, height: i32) {
+        self.area_width = width;
+        self.area_height = height;
+    }
+
+    pub(crate) const fn auction_now(&self) -> bool {
+        self.auction_now
+    }
+
+    /// Точный false-only effect Globe decoder-а. Полный `SetAuctionState(true)`
+    /// с обновлением wall-clock остаётся у ещё не связанного auction owner-а.
+    pub(crate) const fn force_auction_disabled(&mut self) {
+        self.auction_now = false;
     }
 
     pub(crate) const fn region_setup_mut(&mut self) -> &mut CRegionSetup {
