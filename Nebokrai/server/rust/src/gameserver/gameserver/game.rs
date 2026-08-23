@@ -36,6 +36,8 @@
 //! сохраняет немедленный World request. Tokio/socket types заменяют ненаблюдаемые
 //! `CBaseMessage::Initial` и `CMySocket::MySocketInit`; следующий незакрытый
 //! шаг — resource/runtime owners после завершённого `Init`.
+//! QuestSystem process singleton хранится owned-полем `CGame`, сохраняя exact
+//! startup wire и runtime lookup-контракты без отдельного global allocation.
 //! `with_send_state/register_*/attach_*` являются явной assembly-границей
 //! baseline и не снимают их псевдокод. Network setup передаётся отдельной
 //! post-`LoadSetup*` проекцией. Windows thread handles заменены owned Tokio
@@ -101,6 +103,7 @@ use crate::setup::newskillmonsterlist::NewSkillMonsterConf;
 use crate::setup::playerlist::CPlayerList;
 use crate::setup::preciousboxconf::PreciousBoxConf;
 use crate::setup::prisonconf::PrisonConf;
+use crate::setup::questsystem::CQuestSystem;
 use crate::setup::regionrouter::RegionRouter;
 use crate::setup::regionsetup::CRegionSetup;
 use crate::setup::synthesis::CSynthesis;
@@ -729,6 +732,7 @@ pub(crate) struct CGame {
     area_width: i32,
     area_height: i32,
     auction_now: bool,
+    quest_system: CQuestSystem,
     region_setup: CRegionSetup,
     hit_level_setup: CHitLevelSetup,
     prison_conf: PrisonConf,
@@ -786,6 +790,7 @@ impl CGame {
             area_width: 15,
             area_height: 15,
             auction_now: false,
+            quest_system: CQuestSystem::default(),
             region_setup: CRegionSetup::default(),
             hit_level_setup: CHitLevelSetup::default(),
             prison_conf: PrisonConf::default(),
@@ -1083,6 +1088,14 @@ impl CGame {
     /// с обновлением wall-clock остаётся у ещё не связанного auction owner-а.
     pub(crate) const fn force_auction_disabled(&mut self) {
         self.auction_now = false;
+    }
+
+    pub(crate) const fn quest_system(&self) -> &CQuestSystem {
+        &self.quest_system
+    }
+
+    pub(crate) const fn quest_system_mut(&mut self) -> &mut CQuestSystem {
+        &mut self.quest_system
     }
 
     pub(crate) const fn region_setup_mut(&mut self) -> &mut CRegionSetup {

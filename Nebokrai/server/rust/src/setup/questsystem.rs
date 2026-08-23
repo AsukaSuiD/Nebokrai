@@ -1,5 +1,7 @@
-//! Конфигурация `CQuestSystem` из WorldServer, подтверждённая
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Конфигурация `CQuestSystem` из WorldServer и GameServer, подтверждённая
+//! точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходный owner
+//! `server/setup/questsystem.cpp/.h`.
 //!
 //! Wire содержит max count, level difference, три script C-строки и ordered
 //! quest records. Внутри record region/x/y идут до effect вопреки C++ layout;
@@ -9,6 +11,11 @@
 //! StringTable miss даёт пустую строку, script path проходит `ReplaceLine` и
 //! ASCII lowercase. Отсутствие второго ресурса сохраняет основной map и
 //! возвращает ошибку вместо прежнего null-dereference.
+//!
+//! Game decoder присваивает scalars и три script-строки до очистки map, затем
+//! публикует только полностью прочитанные records; duplicate ID заменяет
+//! прежний record. Process singleton технически хранится непосредственно в
+//! `CGame`, без изменения lookup- и wire-семантики.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -193,6 +200,81 @@ impl CQuestSystem {
         &self.quests
     }
 
+    pub(crate) fn quest_data_by_id(&self, quest_id: u16) -> Option<&QuestEntry> {
+        self.quests.get(&quest_id)
+    }
+
+    pub(crate) fn complete_script_by_id(&self, quest_id: u16) -> Option<&[u8]> {
+        self.quest_data_by_id(quest_id)
+            .map(|quest| quest.complete_script.as_slice())
+    }
+
+    pub(crate) fn disband_script_by_id(&self, quest_id: u16) -> Option<&[u8]> {
+        self.quest_data_by_id(quest_id)
+            .map(|quest| quest.abandon_script.as_slice())
+    }
+
+    /// Декодирует GameServer snapshot RVA `0x000627A0` с исходным порядком
+    /// частичных side effects.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<QuestSystemDecodeReport, QuestSystemDecodeError> {
+        self.max_quest_count = read_quest_i32(source, cursor, QuestWireField::MaxQuestCount)?;
+        self.level_difference = read_quest_u32(source, cursor, QuestWireField::LevelDifference)?;
+        self.player_login_script =
+            read_quest_c_string(source, cursor, QuestWireField::PlayerLoginScript)?;
+        self.player_level_up_script =
+            read_quest_c_string(source, cursor, QuestWireField::PlayerLevelUpScript)?;
+        self.player_died_script =
+            read_quest_c_string(source, cursor, QuestWireField::PlayerDiedScript)?;
+
+        self.quests.clear();
+        let count = read_quest_i32(source, cursor, QuestWireField::QuestCount)?;
+        let mut decoded = 0;
+        for _ in 0..count.max(0) {
+            let id = read_quest_u16(source, cursor, QuestWireField::QuestId)?;
+            let quest = QuestEntry {
+                id,
+                old: read_quest_u32(source, cursor, QuestWireField::QuestOld)?,
+                quest_type: read_quest_u32(source, cursor, QuestWireField::QuestType)?,
+                level: read_quest_u32(source, cursor, QuestWireField::QuestLevel)?,
+                difficulty: read_quest_u32(source, cursor, QuestWireField::QuestDifficulty)?,
+                track: read_quest_u32(source, cursor, QuestWireField::QuestTrack)?,
+                short_description: read_quest_c_string(
+                    source,
+                    cursor,
+                    QuestWireField::QuestShortDescription,
+                )?,
+                name: read_quest_c_string(source, cursor, QuestWireField::QuestName)?,
+                description: read_quest_c_string(source, cursor, QuestWireField::QuestDescription)?,
+                abandon_script: read_quest_c_string(
+                    source,
+                    cursor,
+                    QuestWireField::QuestAbandonScript,
+                )?,
+                complete_script: read_quest_c_string(
+                    source,
+                    cursor,
+                    QuestWireField::QuestCompleteScript,
+                )?,
+                region_id: read_quest_i32(source, cursor, QuestWireField::QuestRegionId)?,
+                tile_x: read_quest_i32(source, cursor, QuestWireField::QuestTileX)?,
+                tile_y: read_quest_i32(source, cursor, QuestWireField::QuestTileY)?,
+                effect_id: read_quest_i32(source, cursor, QuestWireField::QuestEffectId)?,
+                display: read_quest_u8(source, cursor, QuestWireField::QuestDisplay)? != 0,
+            };
+            self.quests.insert(id, quest);
+            decoded += 1;
+        }
+        Ok(QuestSystemDecodeReport {
+            declared: count,
+            decoded,
+            retained: self.quests.len(),
+        })
+    }
+
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -262,6 +344,160 @@ impl CQuestSystem {
         destination.extend_from_slice(&payload);
         Ok(())
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct QuestSystemDecodeReport {
+    pub(crate) declared: i32,
+    pub(crate) decoded: usize,
+    pub(crate) retained: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum QuestWireField {
+    MaxQuestCount,
+    LevelDifference,
+    PlayerLoginScript,
+    PlayerLevelUpScript,
+    PlayerDiedScript,
+    QuestCount,
+    QuestId,
+    QuestOld,
+    QuestType,
+    QuestLevel,
+    QuestDifficulty,
+    QuestTrack,
+    QuestShortDescription,
+    QuestName,
+    QuestDescription,
+    QuestAbandonScript,
+    QuestCompleteScript,
+    QuestRegionId,
+    QuestTileX,
+    QuestTileY,
+    QuestEffectId,
+    QuestDisplay,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum QuestSystemDecodeError {
+    UnexpectedEnd {
+        field: QuestWireField,
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    UnterminatedString {
+        field: QuestWireField,
+        offset: usize,
+    },
+}
+
+impl fmt::Display for QuestSystemDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd {
+                field,
+                offset,
+                needed,
+                available,
+            } => write!(
+                formatter,
+                "QuestSystem snapshot обрывается на {field:?} в {offset}: нужно {needed}, доступно {available}"
+            ),
+            Self::UnterminatedString { field, offset } => write!(
+                formatter,
+                "QuestSystem snapshot содержит незавершённую строку {field:?} в {offset}"
+            ),
+        }
+    }
+}
+
+impl Error for QuestSystemDecodeError {}
+
+fn read_quest_bytes<'a>(
+    source: &'a [u8],
+    cursor: &mut usize,
+    size: usize,
+    field: QuestWireField,
+) -> Result<&'a [u8], QuestSystemDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(size)) else {
+        return Err(QuestSystemDecodeError::UnexpectedEnd {
+            field,
+            offset,
+            needed: size,
+            available,
+        });
+    };
+    *cursor += size;
+    Ok(bytes)
+}
+
+fn read_quest_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: QuestWireField,
+) -> Result<i32, QuestSystemDecodeError> {
+    Ok(i32::from_le_bytes(
+        read_quest_bytes(source, cursor, 4, field)?
+            .try_into()
+            .expect("quest signed long уже проверен"),
+    ))
+}
+
+fn read_quest_u32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: QuestWireField,
+) -> Result<u32, QuestSystemDecodeError> {
+    Ok(u32::from_le_bytes(
+        read_quest_bytes(source, cursor, 4, field)?
+            .try_into()
+            .expect("quest unsigned long уже проверен"),
+    ))
+}
+
+fn read_quest_u16(
+    source: &[u8],
+    cursor: &mut usize,
+    field: QuestWireField,
+) -> Result<u16, QuestSystemDecodeError> {
+    Ok(u16::from_le_bytes(
+        read_quest_bytes(source, cursor, 2, field)?
+            .try_into()
+            .expect("quest unsigned short уже проверен"),
+    ))
+}
+
+fn read_quest_u8(
+    source: &[u8],
+    cursor: &mut usize,
+    field: QuestWireField,
+) -> Result<u8, QuestSystemDecodeError> {
+    Ok(read_quest_bytes(source, cursor, 1, field)?[0])
+}
+
+fn read_quest_c_string(
+    source: &[u8],
+    cursor: &mut usize,
+    field: QuestWireField,
+) -> Result<Vec<u8>, QuestSystemDecodeError> {
+    let offset = *cursor;
+    let tail = source
+        .get(offset..)
+        .ok_or(QuestSystemDecodeError::UnexpectedEnd {
+            field,
+            offset,
+            needed: 1,
+            available: 0,
+        })?;
+    let Some(length) = tail.iter().position(|byte| *byte == 0) else {
+        return Err(QuestSystemDecodeError::UnterminatedString { field, offset });
+    };
+    *cursor += length + 1;
+    Ok(tail[..length].to_vec())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

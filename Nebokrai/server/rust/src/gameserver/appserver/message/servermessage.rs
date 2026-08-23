@@ -25,6 +25,8 @@
 //! GlobeSetup `0x07` сохраняет вложенный router decode, DaKong key, byte
 //! broadcast `0xBF736`, conditional auction disable и только затем глобальные
 //! area dimensions с финальным startup log.
+//! QuestSystem `0x16` сохраняет exact scalar/script/map mutation order и
+//! публикует runtime lookup-owner до финального startup log.
 //!
 //! Terminal selector сначала вызывает `InitNetServer`, затем читает login и
 //! world ID и присваивает их даже после ошибки Host. Rust сохраняет этот
@@ -70,6 +72,7 @@ use crate::setup::newskillmonsterlist::{NewSkillMonsterDecodeError, NewSkillMons
 use crate::setup::playerlist::{PlayerListDecodeError, PlayerListDecodeReport};
 use crate::setup::preciousboxconf::PreciousBoxDecodeError;
 use crate::setup::prisonconf::PrisonConfDecodeError;
+use crate::setup::questsystem::{QuestSystemDecodeError, QuestSystemDecodeReport};
 use crate::setup::regionsetup::RegionSetupDecodeError;
 use crate::setup::synthesis::{SynthesisDecodeError, SynthesisDecodeReport};
 use crate::setup::tradelist::TradeListDecodeError;
@@ -85,6 +88,7 @@ const LOG_SYSTEM_SELECTOR: i32 = 0x08;
 const GM_LIST_SELECTOR: i32 = 0x09;
 const REGION_SETUP_SELECTOR: i32 = 0x11;
 const HIT_LEVEL_SELECTOR: i32 = 0x14;
+const QUEST_SYSTEM_SELECTOR: i32 = 0x16;
 const PLAYER_RANKS_SELECTOR: i32 = 0x17;
 const DUPLI_REGION_SELECTOR: i32 = 0x1a;
 const PRISON_CONF_SELECTOR: i32 = 0x1d;
@@ -203,6 +207,7 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     HitLevel {
         entries: usize,
     },
+    QuestSystem(QuestSystemDecodeReport),
     PlayerRanks {
         entries: usize,
     },
@@ -264,6 +269,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     GmList(GmListDecodeError),
     RegionSetup(RegionSetupDecodeError),
     HitLevel(HitLevelDecodeError),
+    QuestSystem(QuestSystemDecodeError),
     PlayerRanks(PlayerRanksDecodeError),
     DupliRegions(DupliRegionDecodeError),
     PrisonConf(PrisonConfDecodeError),
@@ -307,6 +313,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::GmList(error) => error.fmt(formatter),
             Self::RegionSetup(error) => error.fmt(formatter),
             Self::HitLevel(error) => error.fmt(formatter),
+            Self::QuestSystem(error) => error.fmt(formatter),
             Self::PlayerRanks(error) => error.fmt(formatter),
             Self::DupliRegions(error) => error.fmt(formatter),
             Self::PrisonConf(error) => error.fmt(formatter),
@@ -347,6 +354,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::GmList(error) => Some(error),
             Self::RegionSetup(error) => Some(error),
             Self::HitLevel(error) => Some(error),
+            Self::QuestSystem(error) => Some(error),
             Self::PlayerRanks(error) => Some(error),
             Self::DupliRegions(error) => Some(error),
             Self::PrisonConf(error) => Some(error),
@@ -502,6 +510,19 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             };
             add_log_text(b"Initial SI_HITLEVEL...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::HitLevel { entries }))
+        }
+        QUEST_SYSTEM_SELECTOR => {
+            let report = match game
+                .quest_system_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(report) => report,
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::QuestSystem(error)));
+                }
+            };
+            add_log_text(b"Initial SI_QUEST...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::QuestSystem(report)))
         }
         PLAYER_RANKS_SELECTOR => {
             let Some(ranks) = game.player_ranks_mut() else {
