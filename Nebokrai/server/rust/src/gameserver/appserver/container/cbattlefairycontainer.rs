@@ -4,7 +4,9 @@
 //! `server/gameserver/appserver/container/cbattlefairycontainer.cpp`.
 //! Материализованы 17 фиксированных ячеек и exact positional add-фильтры по
 //! goods type/addon marker. Gear-слоты публикуют ранний `BFPropertyAdd(+1)`
-//! effect до base Add, поэтому отказ storage не отменяет этот effect.
+//! effect до base Add, поэтому отказ storage не отменяет этот effect. Gem
+//! success/fail/probability и upgrade-price queries сохраняют positional RNG,
+//! signed clamp и неинициализированный cached price как `Option`.
 //!
 //! Автоматический overload читает неинициализированный `m_eBFEquipPlace` у
 //! catalog owner-а. Rust выражает этот UB как typed block, а не выбирает
@@ -17,8 +19,9 @@ use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_BF_BATTLE_FAIRY, GAP_BF_BFEQUIPEMENT, GAP_BF_CLOTH, GAP_BF_FETCH_BODY, GAP_BF_FETCH_STONE,
     GAP_BF_GEM, GAP_BF_GLOVE, GAP_BF_HUXINJING, GAP_BF_JEWELLERY, GAP_BF_MATERIAL, GAP_BF_PIFENG,
-    GAP_BF_WEAPON, GAP_BF_XIEZI, GAP_BF_YAODAI, GAP_GEM_TYPE, GOODS_TYPE_CONSUMABLE,
-    GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
+    GAP_BF_WEAPON, GAP_BF_XIEZI, GAP_BF_YAODAI, GAP_GEM_PROBABILITY, GAP_GEM_TYPE,
+    GAP_GEM_UPGRADE_FAILED_RESULT, GAP_GEM_UPGRADE_SUCCEED_RESULT, GAP_GOODS_UPGRADE_PRICE,
+    GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 
@@ -102,6 +105,7 @@ pub(crate) enum BattleFairyContainerAddOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CBattleFairyContainer {
     base: CVolumeLimitGoodsContainer,
+    upgrade_price: Option<u32>,
 }
 
 impl Default for CBattleFairyContainer {
@@ -114,6 +118,7 @@ impl CBattleFairyContainer {
     pub(crate) fn new() -> Self {
         Self {
             base: CVolumeLimitGoodsContainer::new(),
+            upgrade_price: None,
         }
     }
 
@@ -234,6 +239,90 @@ impl CBattleFairyContainer {
                 .add_goods_at(cell.position(), incoming, factory, owner_progress_allows),
             property_effect,
         }
+    }
+
+    /// Gem-base (13) задаёт начальный result без roll-а; улучшения из `14..16`
+    /// рассматриваются только при строго большем result и делают отдельный
+    /// `random(100) <= threshold` вызов в positional order.
+    pub(crate) fn success_result(
+        &self,
+        factory: &CGoodsFactory,
+        random: &mut dyn FnMut(i32) -> i32,
+    ) -> u32 {
+        let mut result = self
+            .base
+            .get_goods(BattleFairyCell::GemBase.position())
+            .map_or(0, |goods| {
+                goods.addon_property_value(factory, GAP_GEM_UPGRADE_SUCCEED_RESULT, 1) as u32
+            });
+        for cell in [
+            BattleFairyCell::GemOne,
+            BattleFairyCell::GemTwo,
+            BattleFairyCell::GemThree,
+        ] {
+            let Some(goods) = self.base.get_goods(cell.position()) else {
+                continue;
+            };
+            let candidate =
+                goods.addon_property_value(factory, GAP_GEM_UPGRADE_SUCCEED_RESULT, 1) as u32;
+            if result < candidate
+                && random(100)
+                    <= goods.addon_property_value(factory, GAP_GEM_UPGRADE_SUCCEED_RESULT, 2)
+            {
+                result = candidate;
+            }
+        }
+        result
+    }
+
+    pub(crate) fn fail_result(&self, factory: &CGoodsFactory) -> u32 {
+        [
+            BattleFairyCell::GemBase,
+            BattleFairyCell::GemOne,
+            BattleFairyCell::GemTwo,
+            BattleFairyCell::GemThree,
+        ]
+        .into_iter()
+        .filter_map(|cell| self.base.get_goods(cell.position()))
+        .map(|goods| goods.addon_property_value(factory, GAP_GEM_UPGRADE_FAILED_RESULT, 1) as u32)
+        .filter(|result| *result != 0)
+        .fold(4, u32::min)
+    }
+
+    /// Сумма идёт `13,14,15,16,12` с wrapping u32. Отрицательный signed view
+    /// обнуляется до clamp-а `100`, как в exact owner-е.
+    pub(crate) fn probability(&self, factory: &CGoodsFactory) -> u32 {
+        let total = [
+            BattleFairyCell::GemBase,
+            BattleFairyCell::GemOne,
+            BattleFairyCell::GemTwo,
+            BattleFairyCell::GemThree,
+            BattleFairyCell::Equipment,
+        ]
+        .into_iter()
+        .filter_map(|cell| self.base.get_goods(cell.position()))
+        .fold(0u32, |total, goods| {
+            total.wrapping_add(goods.addon_property_value(factory, GAP_GEM_PROBABILITY, 1) as u32)
+        });
+        if (total as i32) < 0 {
+            0
+        } else {
+            total.min(100)
+        }
+    }
+
+    /// При пустой ячейке exact возвращает `0`, но не меняет сохранённое поле.
+    pub(crate) fn upgrade_price(&mut self, factory: &CGoodsFactory) -> u32 {
+        let Some(goods) = self.base.get_goods(BattleFairyCell::Equipment.position()) else {
+            return 0;
+        };
+        let price = goods.addon_property_value(factory, GAP_GOODS_UPGRADE_PRICE, 1) as u32;
+        self.upgrade_price = Some(price);
+        price
+    }
+
+    pub(crate) const fn stored_upgrade_price(&self) -> Option<u32> {
+        self.upgrade_price
     }
 }
 
