@@ -13,6 +13,8 @@ pub(crate) mod appserver {
         pub(crate) mod ccontainer;
         pub(crate) mod cgoodscontainer;
         pub(crate) mod cvolumelimitgoodscontainer;
+        pub(crate) mod cwallet;
+        pub(crate) mod cyuanbao;
     }
     pub(crate) mod country {
         pub(crate) mod country;

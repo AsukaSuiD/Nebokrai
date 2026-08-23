@@ -1,6 +1,24 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! YuanBao-вариант однослотового currency container GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
+//! `server/gameserver/appserver/container/cyuanbao.cpp`. Layout и порядок
+//! операций совпадают с `CWallet`, но допустимый catalog index берётся из
+//! `YUANBAO`. Общий storage/lifecycle реализован в `cwallet` marker-адаптером;
+//! собственные codec и `CS2CContainerObjectMove` границы ниже остаются RAW.
+
+use super::cwallet::{CSingleCurrencyContainer, CurrencyKind};
+use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct YuanBaoCurrency;
+
+impl CurrencyKind for YuanBaoCurrency {
+    fn goods_index(factory: &CGoodsFactory) -> u32 {
+        factory.get_yuan_bao_index()
+    }
+}
+
+pub(crate) type CYuanBao = CSingleCurrencyContainer<YuanBaoCurrency>;
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
