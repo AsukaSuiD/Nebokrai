@@ -92,6 +92,8 @@
 //! Mass-kick `0x7FC09` сохраняет requester, обходит остальные player ID в том
 //! же порядке и ставит exact `QuitClientByMapID`; legacy `KickPlayer` при этом
 //! всегда возвращает `false` независимо от queue result.
+//! Named kick `0x7FC06` использует byte-exact ordered `FindPlayer(char*)`,
+//! ставит тот же close side effect и только затем отвечает WorldServer.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
@@ -2533,6 +2535,12 @@ impl CGame {
             .filter(|player_id| *player_id != preserved_player_id)
             .map(|player_id| self.kick_player(player_id))
             .collect()
+    }
+
+    /// Exact name lookup + `KickPlayer` side effect для GM `0x7FC06`.
+    pub(crate) fn kick_player_by_name(&self, name: &[u8]) -> Option<GameKickPlayerReport> {
+        let player_id = self.find_player_by_name(name)?.player_id();
+        Some(self.kick_player(player_id))
     }
 
     /// Exact recipient pass `OnGMMessage 0x7FC13`: unsigned `long` country

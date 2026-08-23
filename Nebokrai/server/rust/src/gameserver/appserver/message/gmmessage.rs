@@ -2,7 +2,7 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/gmmessage.cpp` подтверждают
-//! ветви `0x7FC09/0x7FC0B/0x7FC0C/0x7FC0D/0x7FC0E/0x7FC0F/0x7FC13`:
+//! ветви `0x7FC06/0x7FC09/0x7FC0B/0x7FC0C/0x7FC0D/0x7FC0E/0x7FC0F/0x7FC13`:
 //! requester ID читается до switch,
 //! silence duration нормализуется к минимуму `1`, player map
 //! обходится дважды в signed ID-order, а ответы `0x5FF0D/0x5FF10`
@@ -19,6 +19,8 @@
 //! signed player ID-order и отдельный `SendToPlayer` для каждого адресата.
 //! Mass-kick `0x7FC09` оставляет requester и ставит `QuitClientByMapID` всем
 //! остальным canonical player ID в исходном ordered map-pass.
+//! Named kick `0x7FC06` сохраняет 24-byte GetStr boundary, выполняет kick до
+//! exact World `0x5FF09` response и возвращает исходное имя в обоих outcomes.
 //! Эти цепочки имеют статус `IMPLEMENTED`.
 //! `Vec` заменяет raw allocation; поле declared capacity сохраняет
 //! исходные `sum(name_len + 2) + 0x40`, включая возможное
@@ -28,6 +30,7 @@
 use crate::gameserver::gameserver::game::{CGame, GameKickPlayerReport};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
+const GM_KICK_BY_NAME_MESSAGE: i32 = 0x0007_FC06;
 const GM_KICK_OTHERS_MESSAGE: i32 = 0x0007_FC09;
 const GM_SET_SILENCE_MESSAGE: i32 = 0x0007_FC0B;
 const GM_REQUESTER_FEEDBACK_MESSAGE: i32 = 0x0007_FC0C;
@@ -37,9 +40,11 @@ const GM_PRIVATE_NOTICE_MESSAGE: i32 = 0x0007_FC0F;
 const GM_COUNTRY_BROADCAST_MESSAGE: i32 = 0x0007_FC13;
 const GM_SET_SILENCE_RESPONSE: i32 = 0x0005_FF0D;
 const GM_QUERY_SILENCE_RESPONSE: i32 = 0x0005_FF10;
+const GM_KICK_BY_NAME_RESPONSE: i32 = 0x0005_FF09;
 const PLAYER_SYSTEM_MESSAGE: i32 = 0x000B_F806;
 const PLAYER_ANNOUNCEMENT_MESSAGE: i32 = 0x000B_F804;
 const GM_LEGACY_TEXT_LIMIT: usize = 0x100;
+const GM_SHORT_NAME_LIMIT: usize = 0x18;
 const GM_EMPTY_SILENCE_RESPONSE_LENGTH: u32 = 0x18;
 const GM_SILENCE_RESPONSE_SLACK: usize = 0x40;
 const GM_SILENCE_NAME_SEPARATOR: [u8; 2] = [0xA3, 0xBB];
@@ -50,6 +55,7 @@ const GM_PRIVATE_NOTICE_SUFFIX: &[u8] = b" By Game Server ";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GmMessageError {
     MissingRequesterId,
+    MissingKickPlayerName,
     MissingPlayerName,
     MissingDuration,
     MissingFeedbackPlayerName,
@@ -132,6 +138,12 @@ pub(crate) enum GmMessageReport {
         requester_id: i32,
         kicks: Vec<GameKickPlayerReport>,
     },
+    KickByName {
+        requester_id: i32,
+        player_name: Vec<u8>,
+        kick: Option<GameKickPlayerReport>,
+        delivery: Result<i32, SendMessageError>,
+    },
 }
 
 /// Материализует связанные silence, broadcast и direct-notice ветви `OnGMMessage`.
@@ -144,7 +156,8 @@ pub(crate) fn dispatch_gm_message(
     let message_type = message.message_type();
     if !matches!(
         message_type,
-        GM_KICK_OTHERS_MESSAGE
+        GM_KICK_BY_NAME_MESSAGE
+            | GM_KICK_OTHERS_MESSAGE
             | GM_SET_SILENCE_MESSAGE
             | GM_REQUESTER_FEEDBACK_MESSAGE
             | GM_BROADCAST_MESSAGE
@@ -157,6 +170,24 @@ pub(crate) fn dispatch_gm_message(
     let Some(requester_id) = message.base_mut().get_long() else {
         return Some(Err(GmMessageError::MissingRequesterId));
     };
+
+    if message_type == GM_KICK_BY_NAME_MESSAGE {
+        let Some(player_name) = message.base_mut().get_str_bytes(GM_SHORT_NAME_LIMIT) else {
+            return Some(Err(GmMessageError::MissingKickPlayerName));
+        };
+        let kick = game.kick_player_by_name(&player_name);
+        let mut response = CMessage::new(GM_KICK_BY_NAME_RESPONSE);
+        response.add_long(requester_id);
+        response.add_byte(u8::from(kick.is_some()));
+        add_legacy_c_string(&mut response, &player_name);
+        let delivery = response.send(game, false);
+        return Some(Ok(GmMessageReport::KickByName {
+            requester_id,
+            player_name,
+            kick,
+            delivery,
+        }));
+    }
 
     if message_type == GM_KICK_OTHERS_MESSAGE {
         return Some(Ok(GmMessageReport::KickOthers {
