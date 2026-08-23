@@ -36,6 +36,8 @@
 //! technology wire-quirks до точного startup log.
 //! CountryHandler `0x19` заменяет прежние country owners, декодирует byte-count
 //! minister records и публикует ordered lookup до финального startup log.
+//! Оба country state selector-а `0x18/0x19` входят в один FIFO pass, чтобы
+//! параметры и canonical country owners сохраняли согласованный startup цикл.
 //! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
 //! публикует runtime repeated-emotion lookup до финального startup log.
 //! Goods list `0x00` заменяет ID/original-name/name registry из парного
@@ -399,6 +401,24 @@ pub(crate) struct GamePlayerRuleStartupMessageReport {
     pub(crate) log_effects: Vec<Vec<u8>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameCountryStateStartupReport {
+    Parameters(CountryParamDecodeReport),
+    Countries(CountryHandlerDecodeReport),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameCountryStateStartupError {
+    Parameters(CountryParamInputBlock),
+    Countries(CountryHandlerDecodeError),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameCountryStateStartupMessageReport {
+    pub(crate) decoded: GameCountryStateStartupReport,
+    pub(crate) log_effects: Vec<Vec<u8>>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageReport {
     ClientServerStart(GameClientServerStartReport),
@@ -409,6 +429,7 @@ pub(crate) enum GameServerMessageReport {
     PlayerEconomyStartup(GamePlayerEconomyStartupMessageReport),
     RuntimeConfigurationStartup(GameRuntimeConfigurationStartupMessageReport),
     PlayerRuleStartup(GamePlayerRuleStartupMessageReport),
+    CountryStateStartup(GameCountryStateStartupMessageReport),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -420,6 +441,7 @@ pub(crate) enum GameServerMessageError {
     PlayerEconomyStartup(GamePlayerEconomyStartupError),
     RuntimeConfigurationStartup(GameRuntimeConfigurationStartupError),
     PlayerRuleStartup(GamePlayerRuleStartupError),
+    CountryStateStartup(GameCountryStateStartupError),
 }
 
 /// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
@@ -606,8 +628,62 @@ pub(crate) fn dispatch_server_message(
                 },
             )))
         }
+        COUNTRY_PARAM_SELECTOR | COUNTRY_HANDLER_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("country-state selector проверен без изменения cursor");
+            let mut log_effects = Vec::new();
+            let decoded = match {
+                let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                decode_country_state_startup(consumed_selector, wire, cursor, game, |text| {
+                    log_effects.push(text.to_vec())
+                })
+                .expect("country-state selector проверен outer dispatcher-ом")
+                .map_err(GameServerMessageError::CountryStateStartup)
+            } {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(Ok(GameServerMessageReport::CountryStateStartup(
+                GameCountryStateStartupMessageReport {
+                    decoded,
+                    log_effects,
+                },
+            )))
+        }
         _ => None,
     }
+}
+
+fn decode_country_state_startup(
+    selector: i32,
+    source: &[u8],
+    cursor: &mut usize,
+    game: &mut CGame,
+    mut add_log_text: impl FnMut(&[u8]),
+) -> Option<Result<GameCountryStateStartupReport, GameCountryStateStartupError>> {
+    let result = match selector {
+        COUNTRY_PARAM_SELECTOR => game
+            .country_param_mut()
+            .decord_from_byte_array(source, cursor)
+            .map(GameCountryStateStartupReport::Parameters)
+            .map_err(GameCountryStateStartupError::Parameters),
+        COUNTRY_HANDLER_SELECTOR => game
+            .country_handler_mut()
+            .decord_from_byte_array(source, cursor)
+            .map(GameCountryStateStartupReport::Countries)
+            .map_err(GameCountryStateStartupError::Countries),
+        _ => return None,
+    };
+    if result.is_ok() {
+        add_log_text(match selector {
+            COUNTRY_PARAM_SELECTOR => b"Initial SI_COUNTRYPARAM...OK!".as_slice(),
+            COUNTRY_HANDLER_SELECTOR => b"Initial SI_COUNTRY...OK!".as_slice(),
+            _ => unreachable!("selector отфильтрован перед country log lookup"),
+        });
+    }
+    Some(result)
 }
 
 fn decode_player_rule_startup(
@@ -1573,6 +1649,24 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
     if let Some(result) =
+        decode_country_state_startup(selector, source, cursor, game, &mut add_log_text)
+    {
+        return Some(match result {
+            Ok(GameCountryStateStartupReport::Parameters(report)) => {
+                Ok(GameOwnedStartupSnapshotReport::CountryParam(report))
+            }
+            Ok(GameCountryStateStartupReport::Countries(report)) => {
+                Ok(GameOwnedStartupSnapshotReport::CountryHandler(report))
+            }
+            Err(GameCountryStateStartupError::Parameters(error)) => {
+                Err(GameOwnedStartupSnapshotError::CountryParam(error))
+            }
+            Err(GameCountryStateStartupError::Countries(error)) => {
+                Err(GameOwnedStartupSnapshotError::CountryHandler(error))
+            }
+        });
+    }
+    if let Some(result) =
         decode_player_rule_startup(selector, source, cursor, game, &mut add_log_text)
     {
         return Some(match result {
@@ -1843,32 +1937,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
             Some(Ok(GameOwnedStartupSnapshotReport::PlayerRanks {
                 entries: ranks.ranks().len(),
             }))
-        }
-        COUNTRY_PARAM_SELECTOR => {
-            let report = match game
-                .country_param_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                Ok(report) => report,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::CountryParam(error)));
-                }
-            };
-            add_log_text(b"Initial SI_COUNTRYPARAM...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::CountryParam(report)))
-        }
-        COUNTRY_HANDLER_SELECTOR => {
-            let report = match game
-                .country_handler_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                Ok(report) => report,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::CountryHandler(error)));
-                }
-            };
-            add_log_text(b"Initial SI_COUNTRY...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::CountryHandler(report)))
         }
         DUPLI_REGION_SELECTOR => {
             let Some(setup) = game.dupli_region_setup_mut() else {

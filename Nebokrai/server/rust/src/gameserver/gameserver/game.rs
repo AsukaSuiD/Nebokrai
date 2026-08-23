@@ -66,6 +66,8 @@
 //! Game ID, hit-level, emotion и quest resources `0x12/0x14/0x15/0x16`
 //! проходят общий player-rule FIFO pass с точными partial/cursor/log
 //! контрактами; allocation-чувствительный player-ranks owner не маскируется.
+//! CountryParam и CountryHandler `0x18/0x19` публикуются одним country-state
+//! FIFO pass, сохраняя scalar/map partial mutation, replacement и exact logs.
 //! Battle-fairy combine теперь замыкает game player-map с GlobeSetup gate и
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные
