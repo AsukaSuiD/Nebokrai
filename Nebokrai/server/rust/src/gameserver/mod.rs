@@ -18,6 +18,7 @@ pub(crate) mod appserver {
         pub(crate) mod cgoodsshadowcontainer;
         pub(crate) mod cjifen;
         pub(crate) mod cvolumelimitgoodscontainer;
+        pub(crate) mod cvolumelimitgoodsshadowcontainer;
         pub(crate) mod cwallet;
         pub(crate) mod cyuanbao;
     }
