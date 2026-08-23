@@ -37,7 +37,12 @@
 //! Поэтому `from_send_state` остаётся явной assembly-границей уже
 //! восстановленного runtime. Figure передаётся как доказанный derived virtual
 //! fact; владение spatial state остаётся у `CMoveShape`.
+//! `SummonBF` RVA `0x00101CB0` материализован единым Player→CGame→region
+//! проходом: guards, summon/recall state, ordered around effects и area-map
+//! action. Active pet пока count-derived fact; codec и goods-message decoder
+//! остаются явной границей и report не подменяет исторические packet bytes.
 
+use super::area::WarSoulPoint;
 use super::container::cbattlefairycontainer::{
     BattleFairyCombineCheck, BattleFairyCombineRemovedInput, BattleFairyContainerAddOutcome,
     BattleFairyDefaultGoodsUpdate, BattleFairyDefaultSkill, CBattleFairyContainer,
@@ -46,10 +51,10 @@ use super::container::cequipmentcontainer::CEquipmentContainer;
 use super::container::cvolumelimitgoodscontainer::VolumeGoodsAddOutcome;
 use super::goods::cbattlefairyproperty::BattleFairyCompose;
 use super::goods::cgoods::CGoods;
-use super::goods::cgoodsbaseproperties::GAP_BF_BATTLE_FAIRY;
+use super::goods::cgoodsbaseproperties::{GAP_BF_BATTLE_FAIRY, GAP_BF_HP};
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::moveshape::CMoveShape;
-use super::shape::{CShape, ShapeFigure, ShapeView};
+use super::shape::{CShape, ShapeCoordinateBlock, ShapeFigure, ShapeView};
 use super::skills::skillfactory::CSkillFactory;
 
 const PLAYER_TYPE: i32 = 400;
@@ -59,6 +64,10 @@ const CONTRIBUTION_MAXIMUM: i32 = 2_000_000_000;
 const BATTLE_FAIRY_SKILL_ADDED_MESSAGE_TYPE: u32 = 0x0b_f71d;
 const BATTLE_FAIRY_FETCH_POWER_MESSAGE_TYPE: u32 = 0x0b_f80c;
 const BATTLE_FAIRY_CONTAINER_EXTEND_ID: u32 = 0x0c;
+const MONSTER_TAMING_SKILL_ID: u32 = 0xd4;
+const BATTLE_FAIRY_MOVE_MESSAGE_TYPE: u32 = 0x0b_f605;
+const BATTLE_FAIRY_STATUS_MESSAGE_TYPE: u32 = 0x0b_f930;
+const BATTLE_FAIRY_SUMMON_MESSAGE_TYPE: u32 = 0x0b_f92e;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BattleFairyObjectMoveOperation {
@@ -133,6 +142,62 @@ pub(crate) struct BattleFairyCombineReport {
     pub(crate) effects: Vec<BattleFairyCombineEffect>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyWarSoulAction {
+    SetPosition {
+        previous: WarSoulPoint,
+        target: WarSoulPoint,
+    },
+    Delete {
+        previous: WarSoulPoint,
+        player_position: WarSoulPoint,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairySummonOutcome {
+    FeatureDisabled,
+    AlreadySummoned,
+    AlreadyRecalled,
+    MissingHeadgear,
+    InvalidHeadgear,
+    NoHitPoints,
+    ActivePet,
+    MonsterTamingActive,
+    CoordinateBlocked(ShapeCoordinateBlock),
+    Summoned,
+    Recalled,
+    IgnoredMode,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairySummonEffect {
+    Notification {
+        player_id: i32,
+        string_id: &'static str,
+        color: u32,
+    },
+    AroundMessage {
+        message_type: u32,
+        player_id: i32,
+        values: Vec<i32>,
+    },
+    PropertiesChanged {
+        player_id: i32,
+    },
+}
+
+#[must_use = "summon report хранит точный порядок адресных broadcast и property effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairySummonReport {
+    pub(crate) player_id: i32,
+    pub(crate) outcome: BattleFairySummonOutcome,
+    pub(crate) region_id: Option<i32>,
+    pub(crate) spatial_action: Option<BattleFairyWarSoulAction>,
+    pub(crate) spatial_applied: bool,
+    pub(crate) effects: Vec<BattleFairySummonEffect>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerBaseProperties {
     pub(crate) pk_count: u16,
@@ -182,6 +247,11 @@ pub(crate) struct CPlayer {
     team_id: i32,
     country: u8,
     server_region_id: Option<i32>,
+    war_soul_state: u32,
+    war_soul_point: WarSoulPoint,
+    war_soul_visual_point: WarSoulPoint,
+    battle_fairy_summoned: bool,
+    active_pet_count: u32,
     base_properties: PlayerBaseProperties,
     combat_properties: PlayerCombatProperties,
     ci_qing_open: bool,
@@ -213,6 +283,11 @@ impl CPlayer {
             team_id,
             country,
             server_region_id,
+            war_soul_state: 0,
+            war_soul_point: WarSoulPoint::default(),
+            war_soul_visual_point: WarSoulPoint::default(),
+            battle_fairy_summoned: false,
+            active_pet_count: 0,
             base_properties: PlayerBaseProperties::default(),
             combat_properties: PlayerCombatProperties::default(),
             ci_qing_open: false,
@@ -300,6 +375,177 @@ impl CPlayer {
         self.equipment
             .get_goods(10)
             .filter(|goods| goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) == 1)
+    }
+
+    /// Exact derived `bHasPet`: отдельный pet owner materializes list later;
+    /// этому caller-у нужен только подтверждённый факт её непустоты.
+    pub(crate) const fn set_active_pet_count(&mut self, count: u32) {
+        self.active_pet_count = count;
+    }
+
+    pub(crate) const fn has_pet(&self) -> bool {
+        self.active_pet_count != 0
+    }
+
+    /// Snapshot/skill caller передаёт только current ID, достаточный для
+    /// `SummonBF` запрета `SKILL_MONSTER_TAMING`; concrete skill execution не
+    /// становится частью player owner-а.
+    pub(crate) const fn set_current_skill_id(&mut self, skill_id: Option<u32>) {
+        self.move_shape.set_current_skill_id(skill_id);
+    }
+
+    pub(crate) const fn war_soul_state(&self) -> u32 {
+        self.war_soul_state
+    }
+
+    pub(crate) const fn war_soul_point(&self) -> WarSoulPoint {
+        self.war_soul_point
+    }
+
+    pub(crate) const fn battle_fairy_summoned(&self) -> bool {
+        self.battle_fairy_summoned
+    }
+
+    /// Исполняет player-часть `CBattleFairyContainer::SummonBF`. Spatial map
+    /// принадлежит `CServerRegion`, поэтому действие возвращается явным
+    /// tail-ом для `CGame`; ordered notify/broadcast/property effects не
+    /// сериализуются выдуманным transport-ом.
+    pub(crate) fn summon_battle_fairy(
+        &mut self,
+        battle_fairy_enabled: bool,
+        mode: i32,
+        factory: &CGoodsFactory,
+    ) -> BattleFairySummonReport {
+        let player_id = self.player_id();
+        let mut report = BattleFairySummonReport {
+            player_id,
+            outcome: BattleFairySummonOutcome::IgnoredMode,
+            region_id: self.server_region_id,
+            spatial_action: None,
+            spatial_applied: false,
+            effects: Vec::new(),
+        };
+        if !battle_fairy_enabled {
+            report.outcome = BattleFairySummonOutcome::FeatureDisabled;
+            push_battle_fairy_summon_notification(&mut report, "ZHGS0023", 0xffff_ffff);
+            return report;
+        }
+        if mode == 1 && self.war_soul_state == 1 {
+            report.outcome = BattleFairySummonOutcome::AlreadySummoned;
+            push_battle_fairy_summon_notification(&mut report, "ZHGS0024", 0xffff_ffff);
+            return report;
+        }
+        if mode == -1 && self.base_properties.battle_fairy_recall {
+            report.outcome = BattleFairySummonOutcome::AlreadyRecalled;
+            push_battle_fairy_summon_notification(&mut report, "ZHGS0025", 0xffff_ffff);
+            return report;
+        }
+        let Some(goods) = self.equipment.get_goods(10) else {
+            report.outcome = BattleFairySummonOutcome::MissingHeadgear;
+            return report;
+        };
+        if goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
+            report.outcome = BattleFairySummonOutcome::InvalidHeadgear;
+            push_battle_fairy_summon_notification(&mut report, "ZHGS0009", 0xffff_ffff);
+            return report;
+        }
+        if goods.addon_property_value(factory, GAP_BF_HP, 1) < 1 {
+            report.outcome = BattleFairySummonOutcome::NoHitPoints;
+            push_battle_fairy_summon_notification(&mut report, "ZHGS0026", 0xffff_0000);
+            return report;
+        }
+        if self.has_pet() {
+            report.outcome = BattleFairySummonOutcome::ActivePet;
+            push_battle_fairy_summon_notification(&mut report, "ZHGS0027", 0xffff_ffff);
+            return report;
+        }
+        if self.move_shape.current_skill_id() == Some(MONSTER_TAMING_SKILL_ID) {
+            report.outcome = BattleFairySummonOutcome::MonsterTamingActive;
+            push_battle_fairy_summon_notification(&mut report, "ZHGS0028", 0xffff_ffff);
+            return report;
+        }
+        let player_position = match (self.shape().get_tile_x(), self.shape().get_tile_y()) {
+            (Ok(x), Ok(y)) => WarSoulPoint { x, y },
+            (Err(error), _) | (_, Err(error)) => {
+                report.outcome = BattleFairySummonOutcome::CoordinateBlocked(error);
+                return report;
+            }
+        };
+
+        match mode {
+            1 => {
+                self.battle_fairy_summoned = true;
+                self.war_soul_state = 1;
+                self.base_properties.battle_fairy_recall = false;
+                self.base_properties.battle_fairy_died = false;
+                self.war_soul_visual_point = player_position;
+                report.outcome = BattleFairySummonOutcome::Summoned;
+                report.spatial_action = Some(BattleFairyWarSoulAction::SetPosition {
+                    previous: self.war_soul_point,
+                    target: player_position,
+                });
+                report.effects.push(BattleFairySummonEffect::AroundMessage {
+                    message_type: BATTLE_FAIRY_MOVE_MESSAGE_TYPE,
+                    player_id,
+                    values: vec![player_id, 700, player_position.x, player_position.y],
+                });
+                // `SetWarSoulStaus(1)` наблюдает уже записанный state `1` и
+                // поэтому публикует exact `0xbf930 {400, player_id}`.
+                report.effects.push(BattleFairySummonEffect::AroundMessage {
+                    message_type: BATTLE_FAIRY_STATUS_MESSAGE_TYPE,
+                    player_id,
+                    values: vec![400, player_id],
+                });
+                report.effects.push(BattleFairySummonEffect::AroundMessage {
+                    message_type: BATTLE_FAIRY_SUMMON_MESSAGE_TYPE,
+                    player_id,
+                    values: vec![400, 1],
+                });
+            }
+            -1 => {
+                self.battle_fairy_summoned = false;
+                self.war_soul_state = 0;
+                self.base_properties.battle_fairy_recall = true;
+                self.base_properties.battle_fairy_died = false;
+                self.war_soul_visual_point = WarSoulPoint { x: -1, y: -1 };
+                report.outcome = BattleFairySummonOutcome::Recalled;
+                report.spatial_action = Some(BattleFairyWarSoulAction::Delete {
+                    previous: self.war_soul_point,
+                    player_position,
+                });
+                report.effects.push(BattleFairySummonEffect::AroundMessage {
+                    message_type: BATTLE_FAIRY_STATUS_MESSAGE_TYPE,
+                    player_id,
+                    values: vec![400, -1],
+                });
+            }
+            _ => {}
+        }
+        report
+            .effects
+            .push(BattleFairySummonEffect::PropertiesChanged { player_id });
+        report
+    }
+
+    /// Завершает CGame-owned area tail. Recall всегда копирует player point
+    /// после попытки `DelWarSoul`, даже если old area отсутствовала; это
+    /// literal последняя запись `CPlayer::DelWarSoul`.
+    pub(crate) const fn apply_war_soul_action(
+        &mut self,
+        action: BattleFairyWarSoulAction,
+        spatial_applied: bool,
+    ) {
+        match action {
+            BattleFairyWarSoulAction::SetPosition { target, .. } if spatial_applied => {
+                self.war_soul_point = target;
+            }
+            BattleFairyWarSoulAction::Delete {
+                player_position, ..
+            } => {
+                self.war_soul_point = player_position;
+            }
+            BattleFairyWarSoulAction::SetPosition { .. } => {}
+        }
     }
 
     /// Достигнутая часть exact `RefreshContainerOwners`: owner ID должен быть
@@ -714,6 +960,18 @@ impl CPlayer {
             figure: self.figure,
         })
     }
+}
+
+fn push_battle_fairy_summon_notification(
+    report: &mut BattleFairySummonReport,
+    string_id: &'static str,
+    color: u32,
+) {
+    report.effects.push(BattleFairySummonEffect::Notification {
+        player_id: report.player_id,
+        string_id,
+        color,
+    });
 }
 
 const fn clamp_combat_scalar(value: u32) -> u32 {

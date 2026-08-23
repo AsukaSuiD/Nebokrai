@@ -35,6 +35,9 @@
 //! `CServerRegion::areas`, а будущие методы получают живой region-context без
 //! `unsafe`. Это сознательная смена формы API, но не identity/topology
 //! контракта.
+//! `AddWarSoul/DelWarSoul/FindWarSoul` RVA `0x00072F60/0x000710D0/0x00072EA0`
+//! теперь сохраняют exact ordered-map semantics: delete только помечает point
+//! `(-1,-1)`, а find не публикует такие записи и не перезаписывает output key.
 //! `RemoveObject` буквально не удаляет unknown-type hash из
 //! `m_vOtherShapes`; это подтверждённая странность оригинала, а не забытый
 //! Rust cleanup. Goods timestamp/protection удаляются только при успешном
@@ -85,9 +88,9 @@ pub(crate) enum AreaParentLink {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct AreaPoint {
-    x: i32,
-    y: i32,
+pub(crate) struct WarSoulPoint {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -113,7 +116,7 @@ pub(crate) struct CArea {
     other_shapes: Vec<i64>,
     removing_shapes: Vec<i64>,
     dropped_goods_timestamps: BTreeMap<CGuid, u32>,
-    war_souls: BTreeMap<u32, AreaPoint>,
+    war_souls: BTreeMap<u32, WarSoulPoint>,
     goods_protection: BTreeMap<CGuid, AreaGoodsProtection>,
 }
 
@@ -169,6 +172,43 @@ impl CArea {
 
     /// Сохраняет пустой контракт `CArea::OnRefreshMonster(long)` exact EXE.
     pub(crate) const fn on_refresh_monster(&mut self, _refresh_index: i32) {}
+
+    /// Exact `AddWarSoul`: ID `0` отклоняется, а existing map entry получает
+    /// новые координаты вместо создания второй записи.
+    pub(crate) fn add_war_soul(&mut self, player_id: u32, point: WarSoulPoint) -> bool {
+        if player_id == 0 {
+            return false;
+        }
+        let _guard = self.critical_section.lock();
+        self.war_souls.insert(player_id, point);
+        true
+    }
+
+    /// Exact `DelWarSoul` не erases map entry: совпавшая координата помечается
+    /// `(-1, -1)`, а неверный ID/point всё равно возвращает legacy success.
+    pub(crate) fn del_war_soul(&mut self, player_id: u32, point: WarSoulPoint) -> bool {
+        if player_id == 0 {
+            return false;
+        }
+        let _guard = self.critical_section.lock();
+        if self.war_souls.get(&player_id).copied() == Some(point) {
+            self.war_souls
+                .insert(player_id, WarSoulPoint { x: -1, y: -1 });
+        }
+        true
+    }
+
+    /// Exact `FindWarSoul` обходит ordered map и публикует только не
+    /// помеченные `(-1, -1)` записи; duplicate key уже существующего output
+    /// оставляет неизменным, как `std::map::insert` в исходнике.
+    pub(crate) fn find_war_souls(&self, destination: &mut BTreeMap<u32, WarSoulPoint>) {
+        let _guard = self.critical_section.lock();
+        for (&player_id, &point) in &self.war_souls {
+            if point.x != -1 && point.y != -1 {
+                destination.entry(player_id).or_insert(point);
+            }
+        }
+    }
 
     pub(crate) fn get_num_shapes(&self) -> u32 {
         [

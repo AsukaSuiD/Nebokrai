@@ -99,7 +99,9 @@ use crate::gameserver::appserver::message::sequencestring::{
 };
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::organizingsystem::fournationwarsys::CFourNationWarSys;
-use crate::gameserver::appserver::player::{BattleFairyCombineReport, CPlayer};
+use crate::gameserver::appserver::player::{
+    BattleFairyCombineReport, BattleFairySummonReport, BattleFairyWarSoulAction, CPlayer,
+};
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::servercityregion::CServerCityRegion;
 use crate::gameserver::appserver::servercountryregion::CServerCountryRegion;
@@ -2049,6 +2051,43 @@ impl CGame {
             &mut create_goods,
             encode_old_client,
         ))
+    }
+
+    /// Исполняемый entry point для `goodsmessage` opcode `0x8FC2C/0x8FC2D`.
+    /// Player сохраняет порядок guards и broadcast effects, а region map
+    /// меняется здесь, потому что `CGame` — первый живой owner обоих runtime
+    /// объектов. Transport остаётся explicit consumer ordered report-а.
+    pub(crate) fn summon_battle_fairy(
+        &mut self,
+        player_id: i32,
+        mode: i32,
+    ) -> Option<BattleFairySummonReport> {
+        let battle_fairy_enabled = self.globe_setup.battle_fairy_enabled();
+        let mut report = {
+            let player = self.players.get_mut(&player_id)?;
+            player.summon_battle_fairy(battle_fairy_enabled, mode, &self.goods_factory)
+        };
+        let Some(action) = report.spatial_action else {
+            return Some(report);
+        };
+        let spatial_applied = report.region_id.is_some_and(|region_id| {
+            let Some(region) = self.regions.get_mut(&region_id) else {
+                return false;
+            };
+            match action {
+                BattleFairyWarSoulAction::SetPosition { previous, target } => region
+                    .base_mut()
+                    .set_war_soul_position(player_id as u32, previous, target),
+                BattleFairyWarSoulAction::Delete { previous, .. } => region
+                    .base_mut()
+                    .delete_war_soul(player_id as u32, previous),
+            }
+        });
+        report.spatial_applied = spatial_applied;
+        if let Some(player) = self.players.get_mut(&player_id) {
+            player.apply_war_soul_action(action, spatial_applied);
+        }
+        Some(report)
     }
 
     /// Исполняет один исходный snapshot входящих FIFO в порядке WS, BS, GS.

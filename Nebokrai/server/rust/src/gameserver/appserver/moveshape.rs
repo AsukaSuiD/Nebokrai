@@ -32,6 +32,8 @@
 //! параметры и char-name overload остаются у отдельных skill owners. Derived
 //! HP/figure передаются как факты, а не копируются из ещё сырых player/monster
 //! owners.
+//! `GetCurrentSkill` получил только безопасный ID-view для caller-а
+//! `SummonBF`; virtual lifecycle skill остаётся у будущего skill owner-а.
 
 use std::collections::BTreeMap;
 
@@ -124,6 +126,7 @@ pub(crate) trait MoveShapeResolver: ShapeResolver {
 pub(crate) struct CMoveShape {
     shape: CShape,
     skills: BTreeMap<u32, MoveShapeSkill>,
+    current_skill_id: Option<u32>,
 }
 
 impl CMoveShape {
@@ -141,6 +144,20 @@ impl CMoveShape {
 
     pub(crate) fn skill(&self, skill_id: u32) -> Option<&MoveShapeSkill> {
         self.skills.get(&skill_id)
+    }
+
+    /// Достигнутый ID-view `GetCurrentSkill`: concrete `CSkill` execution и
+    /// его `End` остаются у ещё не перенесённого skill owner-а, но caller-ы
+    /// могут точно отличить запретный active skill `0xD4`.
+    pub(crate) const fn current_skill_id(&self) -> Option<u32> {
+        self.current_skill_id
+    }
+
+    /// Typed boundary для snapshot/skill caller-а. Полное semantic действие
+    /// `SetCurrentSkill` (завершение прежнего concrete skill) не подменяется
+    /// записью ID и остаётся у соответствующего owner-а.
+    pub(crate) const fn set_current_skill_id(&mut self, skill_id: Option<u32>) {
+        self.current_skill_id = skill_id;
     }
 
     /// Exact `AddSkill(tagSkillID, long)` для already decoded factory registry:

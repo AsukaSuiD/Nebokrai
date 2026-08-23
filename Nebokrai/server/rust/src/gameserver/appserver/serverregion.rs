@@ -87,7 +87,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use encoding_rs::WINDOWS_1251;
 
-use super::area::CArea;
+use super::area::{CArea, WarSoulPoint};
 use super::baseobject::CBaseObject;
 use super::country::countryparam::CCountryParam;
 use super::monster::CMonster;
@@ -111,6 +111,7 @@ const PLAYER_TYPE: i32 = 400;
 const NPC_TYPE: i32 = 500;
 const MONSTER_TYPE: i32 = 600;
 const GOODS_TYPE: i32 = 700;
+const WAR_SOUL_AREA_SPAN: i32 = 15;
 
 const NEIGHBOR_AREAS: [(i32, i32); 9] = [
     (0, 0),
@@ -1270,6 +1271,52 @@ impl CServerRegion {
         }
         let index = usize::try_from(self.area_x * y + x).expect("положительный grid index");
         self.areas.get(index)
+    }
+
+    /// Mutable counterpart точного coordinate-overload `GetArea`; нужен
+    /// только owner-у war-soul map, который уже владеет всем area-grid.
+    fn get_area_mut(&mut self, x: i32, y: i32) -> Option<&mut CArea> {
+        if x < 0 || x >= self.area_x || y < 0 || y >= self.area_y {
+            return None;
+        }
+        let index = usize::try_from(self.area_x * y + x).expect("положительный grid index");
+        self.areas.get_mut(index)
+    }
+
+    /// Материализует spatial tail `CPlayer::SetWarSoulXY`: target area должна
+    /// существовать; old entry очищается лишь если её area присутствует, после
+    /// чего точка добавляется в target map. Деление на `15` — literal `idiv
+    /// 0xF` из owner-а, а не общий размер region grid.
+    pub(crate) fn set_war_soul_position(
+        &mut self,
+        player_id: u32,
+        previous: WarSoulPoint,
+        target: WarSoulPoint,
+    ) -> bool {
+        let target_x = target.x / WAR_SOUL_AREA_SPAN;
+        let target_y = target.y / WAR_SOUL_AREA_SPAN;
+        if self.get_area(target_x, target_y).is_none() {
+            return false;
+        }
+
+        let previous_x = previous.x / WAR_SOUL_AREA_SPAN;
+        let previous_y = previous.y / WAR_SOUL_AREA_SPAN;
+        if let Some(area) = self.get_area_mut(previous_x, previous_y) {
+            let _legacy_result = area.del_war_soul(player_id, previous);
+        }
+        self.get_area_mut(target_x, target_y)
+            .expect("проверенная target area остаётся в том же grid")
+            .add_war_soul(player_id, target)
+    }
+
+    /// Материализует `CPlayer::DelWarSoul`: отсутствие текущей area не
+    /// препятствует caller-у сбросить собственную war-soul point к позиции
+    /// игрока, поэтому здесь возвращается только факт map-operation.
+    pub(crate) fn delete_war_soul(&mut self, player_id: u32, point: WarSoulPoint) -> bool {
+        let area_x = point.x / WAR_SOUL_AREA_SPAN;
+        let area_y = point.y / WAR_SOUL_AREA_SPAN;
+        self.get_area_mut(area_x, area_y)
+            .is_some_and(|area| area.del_war_soul(player_id, point))
     }
 
     /// Собирает player IDs одной area без чтения их координат: исходный
