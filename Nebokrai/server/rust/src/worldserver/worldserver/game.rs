@@ -4415,9 +4415,6 @@ struct WorldTimerHandler<'a, Callback> {
     log: &'a mut WorldLogTextOwner,
     get_log_local_time: &'a mut dyn FnMut() -> WorldLogLocalTime,
     put_log_info: &'a mut dyn FnMut(&[u8]),
-    world_string_by_id: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
-    format_world_string:
-        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
     copy_number_resets: Vec<CopyNumberResetReport>,
     refreshes: Vec<PlayerRanksTimerRefreshReport>,
     tax_refreshes: Vec<OrganizingTodayTaxRefreshReport>,
@@ -4758,8 +4755,6 @@ where
             game: self.game,
             country_handler: &mut *self.country_handler,
             globe_setup: self.globe_setup,
-            world_string: &mut *self.world_string_by_id,
-            format_world_string: &mut *self.format_world_string,
         };
         let report = match callback {
             CountryWarCallbackKind::Clear
@@ -4842,10 +4837,13 @@ where
         }
 
         if let Some(prepared) = self.pending_tax_registration.take() {
+            let mut world_string = |string_id: &[u8]| {
+                self.game.get_string_by_id(string_id).to_vec()
+            };
             let report = self.organizing_parameters.finish_today_tax_refresh(
                 prepared,
                 event_id,
-                self.world_string_by_id,
+                &mut world_string,
             );
             self.tax_refreshes.push(report);
             return;
@@ -14731,9 +14729,6 @@ impl CGame {
         get_timer_local_time: &mut GetTimerLocalTime,
         get_log_local_time: &mut dyn FnMut() -> WorldLogLocalTime,
         put_log_info: &mut dyn FnMut(&[u8]),
-        world_string_by_id: &mut dyn FnMut(&[u8]) -> Vec<u8>,
-        format_world_string:
-            &mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
     ) -> Result<WorldMainLoopTimerStageReport, WorldMainLoopTimerStageBlock>
     where
         Callback: Copy + PartialEq,
@@ -14763,8 +14758,6 @@ impl CGame {
             log,
             get_log_local_time,
             put_log_info,
-            world_string_by_id,
-            format_world_string,
             copy_number_resets: Vec::new(),
             refreshes: Vec::new(),
             tax_refreshes: Vec::new(),
@@ -15867,8 +15860,6 @@ impl CGame {
                 &mut *callbacks.get_timer_local_time,
                 &mut *callbacks.get_log_local_time,
                 &mut *callbacks.put_log_info,
-                &mut *callbacks.world_string_by_id,
-                &mut *callbacks.format_union_world_string,
             )
             .await
             .map_err(|block| Box::new(WorldMainLoopBlock::Timer(block)))?;
@@ -18750,9 +18741,6 @@ struct WorldCountryWarEffects<'a> {
     game: &'a CGame,
     country_handler: &'a mut CCountryHandler,
     globe_setup: &'a GlobeSetupSnapshot,
-    world_string: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
-    format_world_string:
-        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
 }
 
 struct WorldCountryExileResultEffects<'a> {
@@ -19525,8 +19513,8 @@ impl CountryWarDeclarationContext for WorldCountryWarEffects<'_> {
         if is_king {
             return CountryWarDeclarationAuthority::Authorized;
         }
-        let king_log = (self.format_world_string)(
-            b"WS0034",
+        let king_log = format_union_world_string(
+            self.game.get_string_by_id(b"WS0034"),
             &[UnionFormatArgument::Text(&country_name)],
         );
         let king_log = legacy_c_string_prefix(&king_log);
@@ -19539,8 +19527,8 @@ impl CountryWarDeclarationContext for WorldCountryWarEffects<'_> {
             .globe_setup
             .country_identity_name(5)
             .unwrap_or_default();
-        let minister_log = (self.format_world_string)(
-            b"WS0037",
+        let minister_log = format_union_world_string(
+            self.game.get_string_by_id(b"WS0037"),
             &[
                 UnionFormatArgument::Text(&country_name),
                 UnionFormatArgument::Text(identity_name),
@@ -19565,7 +19553,7 @@ impl CountryWarDeclarationContext for WorldCountryWarEffects<'_> {
     }
 
     fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8> {
-        (self.world_string)(string_id)
+        self.game.get_string_by_id(string_id).to_vec()
     }
 
     fn format_declaration_notice(
@@ -19582,8 +19570,8 @@ impl CountryWarDeclarationContext for WorldCountryWarEffects<'_> {
             .ok()
             .and_then(|country| self.globe_setup.country_name(country))
             .unwrap_or_default();
-        let notice = (self.format_world_string)(
-            b"WS0104",
+        let notice = format_union_world_string(
+            self.game.get_string_by_id(b"WS0104"),
             &[
                 UnionFormatArgument::Text(attack_name),
                 UnionFormatArgument::Text(defend_name),
@@ -19688,8 +19676,8 @@ impl CountryWarVictoryContext for WorldCountryWarEffects<'_> {
             .ok()
             .and_then(|country| self.globe_setup.country_name(country))
             .unwrap_or_default();
-        let formatted = (self.format_world_string)(
-            string_id,
+        let formatted = format_union_world_string(
+            self.game.get_string_by_id(string_id),
             &[
                 UnionFormatArgument::Text(attack_name),
                 UnionFormatArgument::Text(defend_name),
@@ -19736,7 +19724,7 @@ impl CountryWarPhaseContext for WorldCountryWarEffects<'_> {
         &mut self,
         string_id: &'static [u8],
     ) -> Result<Vec<u8>, Self::Block> {
-        let formatted = (self.format_world_string)(string_id, &[]);
+        let formatted = format_union_world_string(self.game.get_string_by_id(string_id), &[]);
         let visible = legacy_c_string_prefix(&formatted);
         Ok(visible[..visible.len().min(0xff)].to_vec())
     }
@@ -19763,7 +19751,7 @@ impl CountryWarTopInfoContext for WorldCountryWarEffects<'_> {
         &mut self,
         string_id: &'static [u8],
     ) -> Result<Vec<u8>, Self::Block> {
-        let formatted = (self.format_world_string)(string_id, &[]);
+        let formatted = format_union_world_string(self.game.get_string_by_id(string_id), &[]);
         let visible = legacy_c_string_prefix(&formatted);
         Ok(visible[..visible.len().min(0xff)].to_vec())
     }
@@ -20558,8 +20546,6 @@ where
                 game,
                 country_handler,
                 globe_setup,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
             };
             dispatch_country_war_declaration_message(&mut message, country_war, &mut effects)
         };
@@ -20575,8 +20561,6 @@ where
                 game,
                 country_handler,
                 globe_setup,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
             };
             dispatch_country_war_victory_message(&mut message, country_war, &mut effects)
         };
