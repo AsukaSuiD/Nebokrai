@@ -61,6 +61,70 @@ impl CLogSystem {
         self.items.clear();
     }
 
+    fn setting(&self, offset: usize) -> bool {
+        self.settings[offset] != 0
+    }
+
+    pub(crate) fn delete_log_enabled(&self) -> bool {
+        self.setting(26)
+    }
+
+    pub(crate) fn faction_create_enabled(&self) -> bool {
+        self.setting(32)
+    }
+
+    pub(crate) fn faction_disband_enabled(&self) -> bool {
+        self.setting(33)
+    }
+
+    pub(crate) fn faction_apply_enabled(&self) -> bool {
+        self.setting(34)
+    }
+
+    pub(crate) fn faction_quit_enabled(&self) -> bool {
+        self.setting(35)
+    }
+
+    pub(crate) fn faction_join_enabled(&self) -> bool {
+        self.setting(36)
+    }
+
+    pub(crate) fn faction_fire_out_enabled(&self) -> bool {
+        self.setting(37)
+    }
+
+    pub(crate) fn faction_title_enabled(&self) -> bool {
+        self.setting(38)
+    }
+
+    pub(crate) fn faction_purview_add_enabled(&self) -> bool {
+        self.setting(39)
+    }
+
+    pub(crate) fn faction_purview_revoke_enabled(&self) -> bool {
+        self.setting(40)
+    }
+
+    pub(crate) fn faction_master_changed_enabled(&self) -> bool {
+        self.setting(41)
+    }
+
+    pub(crate) fn faction_experience_enabled(&self) -> bool {
+        self.setting(42)
+    }
+
+    pub(crate) fn faction_level_enabled(&self) -> bool {
+        self.setting(43)
+    }
+
+    pub(crate) fn faction_chat_enabled(&self) -> bool {
+        self.setting(46)
+    }
+
+    pub(crate) fn private_chat_enabled(&self) -> bool {
+        self.setting(49)
+    }
+
     /// Читает 64 positional boolean-а и последующий `* original-name` список.
     /// Goods lookup выполняется тем же factory-owner-ом, который обслуживает
     /// runtime и initial configuration.
