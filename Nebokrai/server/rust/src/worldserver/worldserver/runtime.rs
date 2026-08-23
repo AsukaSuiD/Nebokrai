@@ -17,11 +17,13 @@ use parking_lot::RwLock;
 use chrono::Datelike;
 
 use crate::dbaccess::worlddb::dbgoods::TiberiusDbGoods;
+use crate::dbaccess::worlddb::dbcountry::TiberiusDbCountry;
 use crate::dbaccess::worlddb::dbmisc::TiberiusDbMiscDatabase;
 use crate::dbaccess::worlddb::largess::TiberiusLargess;
 use crate::dbaccess::worlddb::rsenemyfactions::TiberiusRsEnemyFactions;
 use crate::dbaccess::worlddb::rsfaction::TiberiusRsFaction;
 use crate::dbaccess::worlddb::rsgenvar::TiberiusRsGenVar;
+use crate::dbaccess::worlddb::rsgodsbattle::TiberiusRsGodsBattle;
 use crate::dbaccess::worlddb::rsjjcsys::TiberiusRsJjcSys;
 use crate::dbaccess::worlddb::rsplayer::{TiberiusPlayerLoadData, TiberiusRsPlayer};
 use crate::dbaccess::worlddb::rsregion::{
@@ -277,7 +279,9 @@ pub(crate) struct WorldProcessInitContext {
     union: Option<TiberiusRsUnion>,
     enemy_factions: Option<TiberiusRsEnemyFactions>,
     region: Option<TiberiusRsRegion>,
+    country: Option<TiberiusDbCountry>,
     db_misc: Option<TiberiusDbMiscDatabase>,
+    gods_battle: Option<TiberiusRsGodsBattle>,
     log_connection: Option<WorldTdsClient>,
     largess: Option<Arc<TiberiusLargess>>,
     player_load_snapshot: Arc<RwLock<WorldPlayerLoadSnapshot>>,
@@ -303,7 +307,9 @@ impl WorldProcessInitContext {
             union: None,
             enemy_factions: None,
             region: None,
+            country: None,
             db_misc: None,
+            gods_battle: None,
             log_connection: None,
             largess: None,
             player_load_snapshot,
@@ -312,6 +318,20 @@ impl WorldProcessInitContext {
 
     pub(crate) fn db_misc(&mut self) -> Option<&mut TiberiusDbMiscDatabase> {
         self.db_misc.as_mut()
+    }
+
+    pub(crate) fn country_database(&mut self) -> Option<&mut TiberiusDbCountry> {
+        self.country.as_mut()
+    }
+
+    pub(crate) fn gods_battle_database(&mut self) -> Option<&mut TiberiusRsGodsBattle> {
+        self.gods_battle.as_mut()
+    }
+
+    pub(crate) fn player_database_parts(
+        &mut self,
+    ) -> (Option<&mut TiberiusRsPlayer>, Option<&mut WorldTdsClient>) {
+        (self.player.as_mut(), self.player_connection.as_mut())
     }
 
     pub(crate) fn largess(&self) -> Option<Arc<TiberiusLargess>> {
@@ -431,11 +451,15 @@ impl WorldGameInitContext for WorldProcessInitContext {
             WorldGameDatabaseOwner::DbMisc => {
                 self.db_misc = Some(TiberiusDbMiscDatabase::new(&settings));
             }
+            WorldGameDatabaseOwner::DbCountry => {
+                self.country = Some(TiberiusDbCountry::default());
+            }
+            WorldGameDatabaseOwner::RsGodsBattle => {
+                self.gods_battle = Some(TiberiusRsGodsBattle::new(&settings));
+            }
             WorldGameDatabaseOwner::RsVillageWar
             | WorldGameDatabaseOwner::RsCityWar
-            | WorldGameDatabaseOwner::DbCountry
-            | WorldGameDatabaseOwner::GoodsWarMember
-            | WorldGameDatabaseOwner::RsGodsBattle => {}
+            | WorldGameDatabaseOwner::GoodsWarMember => {}
         }
         Ok(())
     }
