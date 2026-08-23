@@ -2,8 +2,8 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/gmmessage.cpp` подтверждают
-//! ветви `0x7FC06`, `0x7FC08`, `0x7FC09`, `0x7FC0B..0x7FC0F` и `0x7FC13`:
-//! requester ID читается до switch,
+//! ветви `0x5FF15`, `0x7FC06`, `0x7FC08`, `0x7FC09`, `0x7FC0B..0x7FC0F` и
+//! `0x7FC13`: requester ID читается до switch,
 //! silence duration нормализуется к минимуму `1`, player map
 //! обходится дважды в signed ID-order, а ответы `0x5FF0D/0x5FF10`
 //! уходят WorldServer. Адресный `0x7FC0F` сохраняет length guards,
@@ -23,6 +23,8 @@
 //! exact World `0x5FF09` response и возвращает исходное имя в обоих outcomes.
 //! Presence feedback `0x7FC08` использует signed-char branch, `GS0025/GS0026`
 //! с подтверждённым `%s` и адресный `0xBF806(-1,0,text)`.
+//! Входящий list response `0x5FF15` сохраняет target-player cursor gate и
+//! публикует каждую полученную строку отдельным адресным `0xBF806`.
 //! Эти цепочки имеют статус `IMPLEMENTED`.
 //! `Vec` заменяет raw allocation; поле declared capacity сохраняет
 //! исходные `sum(name_len + 2) + 0x40`, включая возможное
@@ -32,6 +34,7 @@
 use crate::gameserver::gameserver::game::{CGame, GameKickPlayerReport};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
+const GM_LIST_RESPONSE_MESSAGE: i32 = 0x0005_FF15;
 const GM_KICK_BY_NAME_MESSAGE: i32 = 0x0007_FC06;
 const GM_PRESENCE_FEEDBACK_MESSAGE: i32 = 0x0007_FC08;
 const GM_KICK_OTHERS_MESSAGE: i32 = 0x0007_FC09;
@@ -58,6 +61,9 @@ const GM_PRIVATE_NOTICE_SUFFIX: &[u8] = b" By Game Server ";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GmMessageError {
     MissingRequesterId,
+    MissingListTargetPlayerId,
+    MissingListReservedField,
+    MissingListCount,
     MissingKickPlayerName,
     MissingPresenceOutcome,
     MissingPresencePlayerName,
@@ -157,6 +163,15 @@ pub(crate) enum GmMessageReport {
         formatted_text: Vec<u8>,
         delivery: i32,
     },
+    ListResponse {
+        requester_id: i32,
+        target_player_id: i32,
+        target_found: bool,
+        reserved_field: Option<i32>,
+        declared_count: Option<i32>,
+        published_texts: Vec<Vec<u8>>,
+        deliveries: Vec<i32>,
+    },
 }
 
 /// Материализует связанные silence, broadcast и direct-notice ветви `OnGMMessage`.
@@ -169,7 +184,8 @@ pub(crate) fn dispatch_gm_message(
     let message_type = message.message_type();
     if !matches!(
         message_type,
-        GM_KICK_BY_NAME_MESSAGE
+        GM_LIST_RESPONSE_MESSAGE
+            | GM_KICK_BY_NAME_MESSAGE
             | GM_PRESENCE_FEEDBACK_MESSAGE
             | GM_KICK_OTHERS_MESSAGE
             | GM_SET_SILENCE_MESSAGE
@@ -184,6 +200,52 @@ pub(crate) fn dispatch_gm_message(
     let Some(requester_id) = message.base_mut().get_long() else {
         return Some(Err(GmMessageError::MissingRequesterId));
     };
+
+    if message_type == GM_LIST_RESPONSE_MESSAGE {
+        let Some(target_player_id) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingListTargetPlayerId));
+        };
+        if game.find_player(target_player_id).is_none() {
+            return Some(Ok(GmMessageReport::ListResponse {
+                requester_id,
+                target_player_id,
+                target_found: false,
+                reserved_field: None,
+                declared_count: None,
+                published_texts: Vec::new(),
+                deliveries: Vec::new(),
+            }));
+        }
+        let Some(reserved_field) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingListReservedField));
+        };
+        let Some(declared_count) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingListCount));
+        };
+        let mut published_texts = Vec::new();
+        let mut deliveries = Vec::new();
+        for _ in 0..declared_count.max(0) {
+            let text = message
+                .base_mut()
+                .get_str_bytes(GM_LEGACY_TEXT_LIMIT)
+                .expect("ненулевой GM list text limit");
+            let mut response = CMessage::new(PLAYER_SYSTEM_MESSAGE);
+            response.add_long(-1);
+            response.add_long(0);
+            add_legacy_c_string(&mut response, &text);
+            deliveries.push(response.send_to_player(game.net_server(), target_player_id));
+            published_texts.push(text);
+        }
+        return Some(Ok(GmMessageReport::ListResponse {
+            requester_id,
+            target_player_id,
+            target_found: true,
+            reserved_field: Some(reserved_field),
+            declared_count: Some(declared_count),
+            published_texts,
+            deliveries,
+        }));
+    }
 
     if message_type == GM_KICK_BY_NAME_MESSAGE {
         let Some(player_name) = message.base_mut().get_str_bytes(GM_SHORT_NAME_LIMIT) else {
