@@ -33,6 +33,8 @@
 //! minister records и публикует ordered lookup до финального startup log.
 //! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
 //! публикует runtime repeated-emotion lookup до финального startup log.
+//! Goods list `0x00` заменяет ID/original-name/name registry из парного
+//! WorldServer wire и только после полного decode пишет точный startup log.
 //! Skill list `0x06` очищает и заново публикует composite-key registry из
 //! парного WorldServer wire, затем пишет точный startup log.
 //! FourNationWar `0x25` декодирует exact 196-byte setup records и пять rects,
@@ -72,6 +74,9 @@ use crate::gameserver::appserver::country::countrywarsys::{
     CountryWarDecodeError, CountryWarStartupContext, CountryWarSys,
 };
 use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyComposeDecodeError;
+use crate::gameserver::appserver::goods::cgoodsfactory::{
+    GoodsFactoryDecodeError, GoodsFactoryDecodeReport,
+};
 use crate::gameserver::appserver::skills::skillfactory::{
     SkillFactoryDecodeError, SkillFactoryDecodeReport,
 };
@@ -116,6 +121,7 @@ use crate::setup::tradelist::TradeListDecodeError;
 
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
 const CLIENT_SERVER_START_SELECTOR: i32 = 0x3b;
+const GOODS_LIST_SELECTOR: i32 = 0x00;
 const PLAYER_LIST_SELECTOR: i32 = 0x01;
 const TRADE_LIST_SELECTOR: i32 = 0x03;
 const INCREMENT_SHOP_SELECTOR: i32 = 0x04;
@@ -287,6 +293,7 @@ impl Error for GameIdIndexDecodeError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameOwnedStartupSnapshotReport {
+    GoodsList(GoodsFactoryDecodeReport),
     PlayerList(PlayerListDecodeReport),
     TradeList {
         entries: usize,
@@ -390,6 +397,7 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
 #[derive(Debug)]
 pub(crate) enum GameOwnedStartupSnapshotError {
     OwnerUnavailable { selector: i32 },
+    GoodsList(GoodsFactoryDecodeError),
     PlayerList(PlayerListDecodeError),
     TradeList(TradeListDecodeError),
     IncrementShop(IncrementShopDecodeError),
@@ -441,6 +449,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
                     "startup owner selector {selector:#x} ещё не создан CGame::Init"
                 )
             }
+            Self::GoodsList(error) => error.fmt(formatter),
             Self::PlayerList(error) => error.fmt(formatter),
             Self::TradeList(error) => error.fmt(formatter),
             Self::IncrementShop(error) => error.fmt(formatter),
@@ -489,6 +498,7 @@ impl Error for GameOwnedStartupSnapshotError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::OwnerUnavailable { .. } => None,
+            Self::GoodsList(error) => Some(error),
             Self::PlayerList(error) => Some(error),
             Self::TradeList(error) => Some(error),
             Self::IncrementShop(error) => Some(error),
@@ -544,6 +554,14 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
     match selector {
+        GOODS_LIST_SELECTOR => {
+            let report = match game.goods_factory_mut().unserialize(source, cursor) {
+                Ok(report) => report,
+                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::GoodsList(error))),
+            };
+            add_log_text(b"Initial SI_GOODSLIST...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::GoodsList(report)))
+        }
         PLAYER_LIST_SELECTOR => {
             let report = match game
                 .player_list_mut()

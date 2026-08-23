@@ -52,6 +52,8 @@
 //! `CSkillFactory` принадлежит `CGame`: startup selector `0x06` заменяет весь
 //! composite-key registry, а будущие skill/state owners получают те же runtime
 //! lookup-ы без process-global raw pointers.
+//! `CGoodsFactory` аналогично хранит startup selector `0x00`, включая оба
+//! byte-name index-а для последующего container/goods lifecycle.
 //! `with_send_state/register_*/attach_*` являются явной assembly-границей
 //! baseline и не снимают их псевдокод. Network setup передаётся отдельной
 //! post-`LoadSetup*` проекцией. Windows thread handles заменены owned Tokio
@@ -76,6 +78,7 @@ use crate::gameserver::appserver::country::countryhandler::CCountryHandler;
 use crate::gameserver::appserver::country::countryparam::CCountryParam;
 use crate::gameserver::appserver::country::countrywarsys::CountryWarSys;
 use crate::gameserver::appserver::goods::cbattlefairyproperty::CBattleFairyProperty;
+use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::goodswarmember::CGoodsWarMember;
 use crate::gameserver::appserver::message::sequencestring::{
     CSequenceRegistry, SequenceRegistryInitializationError,
@@ -760,6 +763,7 @@ pub(crate) struct CGame {
     sequence_registry: CSequenceRegistry,
     player_list: CPlayerList,
     trade_list: CTradeList,
+    goods_factory: CGoodsFactory,
     skill_factory: CSkillFactory,
     thing_setup: CThingSetup,
     increment_shop_list: CIncrementShopList,
@@ -831,6 +835,7 @@ impl CGame {
             sequence_registry: CSequenceRegistry::default(),
             player_list: CPlayerList::default(),
             trade_list: CTradeList::default(),
+            goods_factory: CGoodsFactory::default(),
             skill_factory: CSkillFactory::default(),
             thing_setup: CThingSetup::default(),
             increment_shop_list: CIncrementShopList::default(),
@@ -1115,6 +1120,14 @@ impl CGame {
 
     pub(crate) const fn trade_list_mut(&mut self) -> &mut CTradeList {
         &mut self.trade_list
+    }
+
+    pub(crate) const fn goods_factory(&self) -> &CGoodsFactory {
+        &self.goods_factory
+    }
+
+    pub(crate) const fn goods_factory_mut(&mut self) -> &mut CGoodsFactory {
+        &mut self.goods_factory
     }
 
     pub(crate) const fn skill_factory(&self) -> &CSkillFactory {

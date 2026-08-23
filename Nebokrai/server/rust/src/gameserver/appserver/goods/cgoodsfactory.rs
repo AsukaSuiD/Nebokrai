@@ -1,6 +1,193 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Startup registry и lookup-часть `CGoodsFactory` GameServer.
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
+//! `server/gameserver/appserver/goods/cgoodsfactory.cpp`. Selector `0x00`
+//! сначала освобождает три прежних map, затем читает `u32 count` и ordered
+//! records `goods_id + CGoodsBaseProperties`; ID и оба byte-string index-а
+//! используют last-write-wins. Lookup miss и null name возвращают ноль/`None`.
+//!
+//! Парный WorldServer serializer подтверждает wire. `BTreeMap` и owned values
+//! заменяют MSVC tree/raw pointers без изменения порядка. Создание предметов,
+//! upgrade и addon mutation ниже остаются RAW до materialization `CGoods` и
+//! container lifecycle; startup registry и его runtime lookup-ы уже исполняемы.
+
+use std::collections::BTreeMap;
+use std::error::Error;
+use std::fmt;
+
+use super::cgoodsbaseproperties::{CGoodsBaseProperties, GoodsBasePropertiesDecodeError};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GoodsFactoryDecodeReport {
+    pub(crate) declared_records: usize,
+    pub(crate) unique_goods: usize,
+    pub(crate) unique_original_names: usize,
+    pub(crate) unique_names: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GoodsFactoryDecodeError {
+    UnexpectedEnd {
+        field: &'static str,
+        offset: usize,
+        available: usize,
+    },
+    BaseProperties(GoodsBasePropertiesDecodeError),
+}
+
+impl fmt::Display for GoodsFactoryDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd {
+                field,
+                offset,
+                available,
+            } => write!(
+                formatter,
+                "goods registry обрывается на {field} в {offset}: нужно 4, доступно {available}"
+            ),
+            Self::BaseProperties(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for GoodsFactoryDecodeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::UnexpectedEnd { .. } => None,
+            Self::BaseProperties(error) => Some(error),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CGoodsFactory {
+    goods: BTreeMap<u32, CGoodsBaseProperties>,
+    original_name_index: BTreeMap<Vec<u8>, u32>,
+    name_index: BTreeMap<Vec<u8>, u32>,
+}
+
+impl CGoodsFactory {
+    pub(crate) fn release(&mut self) {
+        self.goods.clear();
+        self.original_name_index.clear();
+        self.name_index.clear();
+    }
+
+    pub(crate) fn unserialize(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<GoodsFactoryDecodeReport, GoodsFactoryDecodeError> {
+        self.release();
+        let count = read_factory_u32(source, cursor, "goods count")?;
+        for _ in 0..count {
+            let goods_id = read_factory_u32(source, cursor, "goods id")?;
+            let mut properties = CGoodsBaseProperties::default();
+            properties
+                .unserialize(source, cursor)
+                .map_err(GoodsFactoryDecodeError::BaseProperties)?;
+            self.original_name_index
+                .insert(properties.original_name().to_vec(), goods_id);
+            self.name_index.insert(properties.name().to_vec(), goods_id);
+            self.goods.insert(goods_id, properties);
+        }
+        Ok(GoodsFactoryDecodeReport {
+            declared_records: count as usize,
+            unique_goods: self.goods.len(),
+            unique_original_names: self.original_name_index.len(),
+            unique_names: self.name_index.len(),
+        })
+    }
+
+    pub(crate) const fn goods(&self) -> &BTreeMap<u32, CGoodsBaseProperties> {
+        &self.goods
+    }
+
+    pub(crate) fn query_goods_base_properties(
+        &self,
+        goods_id: u32,
+    ) -> Option<&CGoodsBaseProperties> {
+        self.goods.get(&goods_id)
+    }
+
+    pub(crate) fn query_goods_original_name(&self, goods_id: u32) -> Option<&[u8]> {
+        self.query_goods_base_properties(goods_id)
+            .map(CGoodsBaseProperties::original_name)
+    }
+
+    pub(crate) fn query_goods_name(&self, goods_id: u32) -> Option<&[u8]> {
+        self.query_goods_base_properties(goods_id)
+            .map(CGoodsBaseProperties::name)
+    }
+
+    pub(crate) fn query_goods_id_by_original_name(&self, name: Option<&[u8]>) -> u32 {
+        name.map(visible_c_string)
+            .and_then(|name| self.original_name_index.get(name).copied())
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn query_goods_id_by_name(&self, name: Option<&[u8]>) -> u32 {
+        name.map(visible_c_string)
+            .and_then(|name| self.name_index.get(name).copied())
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn query_goods_base_properties_by_original_name(
+        &self,
+        name: Option<&[u8]>,
+    ) -> Option<&CGoodsBaseProperties> {
+        self.query_goods_base_properties(self.query_goods_id_by_original_name(name))
+    }
+
+    pub(crate) fn query_goods_base_properties_by_name(
+        &self,
+        name: Option<&[u8]>,
+    ) -> Option<&CGoodsBaseProperties> {
+        self.query_goods_base_properties(self.query_goods_id_by_name(name))
+    }
+
+    pub(crate) fn get_gold_coin_index(&self) -> u32 {
+        self.query_goods_id_by_original_name(Some(b"MONEY"))
+    }
+
+    pub(crate) fn get_yuan_bao_index(&self) -> u32 {
+        self.query_goods_id_by_original_name(Some(b"YUANBAO"))
+    }
+
+    pub(crate) fn get_ji_fen_index(&self) -> u32 {
+        self.query_goods_id_by_original_name(Some(b"JIFEN"))
+    }
+}
+
+fn visible_c_string(bytes: &[u8]) -> &[u8] {
+    bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .map_or(bytes, |end| &bytes[..end])
+}
+
+fn read_factory_u32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<u32, GoodsFactoryDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(4)) else {
+        return Err(GoodsFactoryDecodeError::UnexpectedEnd {
+            field,
+            offset,
+            available,
+        });
+    };
+    *cursor += 4;
+    Ok(u32::from_le_bytes(
+        bytes
+            .try_into()
+            .expect("goods scalar содержит четыре байта"),
+    ))
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -79,48 +266,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CGoodsFactory::QueryGoodsBaseProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:40
-// RVA: 0x00063FF0
-// ADDRESS: 00463ff0
-// PROTOTYPE: CGoodsBaseProperties * __cdecl QueryGoodsBaseProperties(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsFactory::QueryGoodsOriginalName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:66
-// RVA: 0x00064020
-// ADDRESS: 00464020
-// PROTOTYPE: char * __cdecl QueryGoodsOriginalName(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsFactory::QueryGoodsName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:78
-// RVA: 0x00064060
-// ADDRESS: 00464060
-// PROTOTYPE: char * __cdecl QueryGoodsName(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CGoodsFactory::UnserializeGoods
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -191,118 +336,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CGoodsFactory::QueryGoodsIDByOriginalName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:90
-// RVA: 0x00064E80
-// ADDRESS: 00464e80
-// PROTOTYPE: ulong __cdecl QueryGoodsIDByOriginalName(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsFactory::QueryGoodsIDByName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:107
-// RVA: 0x00064FA0
-// ADDRESS: 00464fa0
-// PROTOTYPE: ulong __cdecl QueryGoodsIDByName(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsFactory::GetGoldCoinIndex
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:416
-// RVA: 0x000650C0
-// ADDRESS: 004650c0
-// PROTOTYPE: ulong __cdecl GetGoldCoinIndex(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsFactory::GetYuanBaoIndex
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:425
-// RVA: 0x000650D0
-// ADDRESS: 004650d0
-// PROTOTYPE: ulong __cdecl GetYuanBaoIndex(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsFactory::GetJiFenIndex
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:434
-// RVA: 0x000650E0
-// ADDRESS: 004650e0
-// PROTOTYPE: ulong __cdecl GetJiFenIndex(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsFactory::QueryGoodsBasePropertiesByOriginalName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:52
-// RVA: 0x00065EC0
-// ADDRESS: 00465ec0
-// PROTOTYPE: CGoodsBaseProperties * __cdecl QueryGoodsBasePropertiesByOriginalName(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsFactory::QueryGoodsBasePropertiesByName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:59
-// RVA: 0x00065F00
-// ADDRESS: 00465f00
-// PROTOTYPE: CGoodsBaseProperties * __cdecl QueryGoodsBasePropertiesByName(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsFactory::Release
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:352
-// RVA: 0x00066E00
-// ADDRESS: 00466e00
-// PROTOTYPE: void __cdecl Release(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CGoodsFactory::QueryGoodsMaxStackNumber
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -325,20 +358,6 @@
 // RVA: 0x000670D0
 // ADDRESS: 004670d0
 // PROTOTYPE: long __cdecl QueryGoodsBasePropertiesValue(ulong param_1, GOODS_ADDON_PROPERTIES param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsFactory::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:139
-// RVA: 0x000678B0
-// ADDRESS: 004678b0
-// PROTOTYPE: int __cdecl Unserialize(uchar * param_1, long * param_2, int param_3)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -497,6 +516,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // COMPONENT_VARIANT_END: GameServer
