@@ -2,12 +2,14 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/gmmessage.cpp` подтверждают
-//! ветви `0x7FC0B/0x7FC0E/0x7FC0F`: requester ID читается до switch,
+//! ветви `0x7FC0B/0x7FC0D/0x7FC0E/0x7FC0F`: requester ID читается до switch,
 //! silence duration нормализуется к минимуму `1`, player map
 //! обходится дважды в signed ID-order, а ответы `0x5FF0D/0x5FF10`
 //! уходят WorldServer. Адресный `0x7FC0F` сохраняет length guards,
 //! дописывает исходный ` By Game Server {local IP}` и посылает player-у
 //! `0xBF806`; recoverable allocation failure возвращает `GS0029`.
+//! Broadcast `0x7FC0D` сохраняет mode guard и публикует исходный
+//! `0xBF806` либо `0xBF804` через общий `SendAll`.
 //! Эти цепочки имеют статус `IMPLEMENTED`.
 //! `Vec` заменяет raw allocation; поле declared capacity сохраняет
 //! исходные `sum(name_len + 2) + 0x40`, включая возможное
@@ -18,12 +20,14 @@ use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const GM_SET_SILENCE_MESSAGE: i32 = 0x0007_FC0B;
+const GM_BROADCAST_MESSAGE: i32 = 0x0007_FC0D;
 const GM_QUERY_SILENCE_MESSAGE: i32 = 0x0007_FC0E;
 const GM_PRIVATE_NOTICE_MESSAGE: i32 = 0x0007_FC0F;
 const GM_SET_SILENCE_RESPONSE: i32 = 0x0005_FF0D;
 const GM_QUERY_SILENCE_RESPONSE: i32 = 0x0005_FF10;
 const PLAYER_SYSTEM_MESSAGE: i32 = 0x000B_F806;
-const GM_SILENCE_NAME_LIMIT: usize = 0x100;
+const PLAYER_ANNOUNCEMENT_MESSAGE: i32 = 0x000B_F804;
+const GM_LEGACY_TEXT_LIMIT: usize = 0x100;
 const GM_EMPTY_SILENCE_RESPONSE_LENGTH: u32 = 0x18;
 const GM_SILENCE_RESPONSE_SLACK: usize = 0x40;
 const GM_SILENCE_NAME_SEPARATOR: [u8; 2] = [0xA3, 0xBB];
@@ -36,6 +40,10 @@ pub(crate) enum GmMessageError {
     MissingRequesterId,
     MissingPlayerName,
     MissingDuration,
+    MissingBroadcastText,
+    MissingBroadcastFirstField,
+    MissingBroadcastSecondField,
+    MissingBroadcastMode,
     MissingPrivateNoticeLength,
     ZeroPrivateNoticeBufferContractUnknown { declared_length: i32 },
     DeclaredLengthOutsideLegacyRange { required: usize },
@@ -68,9 +76,22 @@ pub(crate) enum GmMessageReport {
         allocation_failed: bool,
         delivery: i32,
     },
+    BroadcastIgnored {
+        requester_id: i32,
+        mode: i32,
+    },
+    Broadcast {
+        requester_id: i32,
+        text: Vec<u8>,
+        first_field: i32,
+        second_field: i32,
+        mode: i32,
+        response_type: i32,
+        delivery: Result<i32, SendMessageError>,
+    },
 }
 
-/// Материализует связанные silence и direct-notice ветви `OnGMMessage`.
+/// Материализует связанные silence, broadcast и direct-notice ветви `OnGMMessage`.
 /// `None` оставляет прочие selectors их ещё RAW owner-у.
 pub(crate) fn dispatch_gm_message(
     message: &mut CMessage,
@@ -80,7 +101,10 @@ pub(crate) fn dispatch_gm_message(
     let message_type = message.message_type();
     if !matches!(
         message_type,
-        GM_SET_SILENCE_MESSAGE | GM_QUERY_SILENCE_MESSAGE | GM_PRIVATE_NOTICE_MESSAGE
+        GM_SET_SILENCE_MESSAGE
+            | GM_BROADCAST_MESSAGE
+            | GM_QUERY_SILENCE_MESSAGE
+            | GM_PRIVATE_NOTICE_MESSAGE
     ) {
         return None;
     }
@@ -89,7 +113,7 @@ pub(crate) fn dispatch_gm_message(
     };
 
     if message_type == GM_SET_SILENCE_MESSAGE {
-        let Some(player_name) = message.base_mut().get_str_bytes(GM_SILENCE_NAME_LIMIT) else {
+        let Some(player_name) = message.base_mut().get_str_bytes(GM_LEGACY_TEXT_LIMIT) else {
             return Some(Err(GmMessageError::MissingPlayerName));
         };
         let Some(minutes) = message.base_mut().get_long() else {
@@ -159,6 +183,52 @@ pub(crate) fn dispatch_gm_message(
             declared_length,
             published_text,
             allocation_failed,
+            delivery,
+        }));
+    }
+
+    if message_type == GM_BROADCAST_MESSAGE {
+        let Some(text) = message.base_mut().get_str_bytes(GM_LEGACY_TEXT_LIMIT) else {
+            return Some(Err(GmMessageError::MissingBroadcastText));
+        };
+        let Some(first_field) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingBroadcastFirstField));
+        };
+        let Some(second_field) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingBroadcastSecondField));
+        };
+        let Some(mode) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingBroadcastMode));
+        };
+        let mut response = match mode {
+            0 => {
+                let mut response = CMessage::new(PLAYER_SYSTEM_MESSAGE);
+                response.add_long(first_field);
+                response.add_long(second_field);
+                response
+            }
+            1 => {
+                let mut response = CMessage::new(PLAYER_ANNOUNCEMENT_MESSAGE);
+                response.add_long(0);
+                response.add_long(-1);
+                response.add_long(1);
+                response.add_long(1);
+                response
+            }
+            _ => {
+                return Some(Ok(GmMessageReport::BroadcastIgnored { requester_id, mode }));
+            }
+        };
+        add_legacy_c_string(&mut response, &text);
+        let response_type = response.message_type();
+        let delivery = response.send_all(game.current_net_server());
+        return Some(Ok(GmMessageReport::Broadcast {
+            requester_id,
+            text,
+            first_field,
+            second_field,
+            mode,
+            response_type,
             delivery,
         }));
     }

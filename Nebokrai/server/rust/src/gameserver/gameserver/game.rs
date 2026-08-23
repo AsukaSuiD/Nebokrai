@@ -83,7 +83,8 @@
 //! GM silence `0x7FC0B/0x7FC0E` достигает canonical player map из
 //! `ProcessMessage`: byte-name lookup, lazy expiry и оба World response-а
 //! исполняются до оставшегося внешним GM route owner-а. Адресный `0x7FC0F`
-//! там же формирует player system message с local listener IP.
+//! там же формирует player system message с local listener IP, а `0x7FC0D`
+//! выбирает один из двух player wire и публикует его через `SendAll`.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
