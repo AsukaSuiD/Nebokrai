@@ -19,10 +19,14 @@
 //! только после успешного отделения goods. Сам контейнер публикует typed
 //! storage/result state; GlobeSetup-формулы и client update принадлежат
 //! player/game owner-ам.
+//! Upgrade target/gems также проходят через player/game owner: container
+//! сохраняет positional queries, stack decrement и полный remove ownership.
+//! Ошибочный повторный native pointer guard в optional-gem tail заменён
+//! независимой безопасной обработкой ячеек `13..=16`; порядок не меняется.
 //!
 //! Автоматический overload читает неинициализированный `m_eBFEquipPlace` у
 //! catalog owner-а. Rust выражает этот UB как typed block, а не выбирает
-//! логичную ячейку из позднего C++-донора. Upgrade, potential reset/skill reset и
+//! логичную ячейку из позднего C++-донора. Potential reset/skill reset и
 //! остальные ещё не подключённые player-integrated методы ниже остаются RAW.
 
 use super::camountlimitgoodscontainer::{
@@ -101,6 +105,16 @@ impl BattleFairyCell {
 pub(crate) struct BattleFairyPropertyAddEffect {
     pub(crate) cell: BattleFairyCell,
     pub(crate) delta: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyUpgradeConsumedGem {
+    pub(crate) cell: BattleFairyCell,
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) previous_amount: u32,
+    pub(crate) remaining_amount: u32,
+    pub(crate) removed: bool,
+    pub(crate) removal: Option<VolumeGoodsRemoveOutcome>,
 }
 
 pub(crate) const BATTLE_FAIRY_COMBINE_MESSAGE_TYPE: u32 = 0x0b_f92c;
@@ -478,6 +492,59 @@ impl CBattleFairyContainer {
         self.upgrade_price
     }
 
+    pub(crate) fn delete_upgrade_target(
+        &mut self,
+    ) -> Option<(ShapeIdentity, VolumeGoodsRemoveOutcome)> {
+        let goods = self.base.get_goods(BattleFairyCell::Equipment.position())?;
+        let identity = goods.identity();
+        let removal = self.base.remove_goods(identity.ex_id)?;
+        Some((identity, removal))
+    }
+
+    /// Расходует одну единицу gem в exact positional tail upgrade-а. Stack
+    /// остаётся тем же object-ом; amount `1` отделяет ownership всей ячейки.
+    pub(crate) fn consume_upgrade_gem(
+        &mut self,
+        cell: BattleFairyCell,
+    ) -> Option<BattleFairyUpgradeConsumedGem> {
+        if !matches!(
+            cell,
+            BattleFairyCell::GemBase
+                | BattleFairyCell::GemOne
+                | BattleFairyCell::GemTwo
+                | BattleFairyCell::GemThree
+        ) {
+            return None;
+        }
+        let position = cell.position();
+        let goods = self.base.get_goods(position)?;
+        let identity = goods.identity();
+        let previous_amount = goods.amount();
+        if previous_amount < 2 {
+            let removal = self.base.remove_goods(identity.ex_id)?;
+            return Some(BattleFairyUpgradeConsumedGem {
+                cell,
+                goods: identity,
+                previous_amount,
+                remaining_amount: 0,
+                removed: true,
+                removal: Some(removal),
+            });
+        }
+        self.base
+            .get_goods_mut(position)
+            .expect("gem identity получен из той же positional ячейки")
+            .set_amount(previous_amount.wrapping_sub(1));
+        Some(BattleFairyUpgradeConsumedGem {
+            cell,
+            goods: identity,
+            previous_amount,
+            remaining_amount: previous_amount.wrapping_sub(1),
+            removed: false,
+            removal: None,
+        })
+    }
+
     /// Exact `LoadBFDefualtProperty` меняет только товар принадлежащего
     /// существующему player-а. Базовые HP/MP копируются в current и maximum,
     /// затем выставляются три стартовых skill ID и три talent ID.
@@ -826,62 +893,6 @@ fn x87_fistp_truncating(value: f32) -> i32 {
 //
 
 // ============================================================================
-// FUNCTION: CBattleFairyContainer::GetSuccessResult
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:1148
-// RVA: 0x000FD840
-// ADDRESS: 004fd840
-// PROTOTYPE: ulong __thiscall GetSuccessResult(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyContainer::GetFailResult
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:1216
-// RVA: 0x000FD9A0
-// ADDRESS: 004fd9a0
-// PROTOTYPE: ulong __thiscall GetFailResult(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyContainer::GetProbability
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:1269
-// RVA: 0x000FDAB0
-// ADDRESS: 004fdab0
-// PROTOTYPE: ulong __thiscall GetProbability(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyContainer::GetUpgradePrice
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:1316
-// RVA: 0x000FDBF0
-// ADDRESS: 004fdbf0
-// PROTOTYPE: ulong __thiscall GetUpgradePrice(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CBattleFairyContainer::DeleteGoods
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -904,34 +915,6 @@ fn x87_fistp_truncating(value: f32) -> i32 {
 // RVA: 0x000FEE20
 // ADDRESS: 004fee20
 // PROTOTYPE: void __thiscall ResetPotential(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyContainer::IsValidateUpgrade
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:1327
-// RVA: 0x00100030
-// ADDRESS: 00500030
-// PROTOTYPE: bool __thiscall IsValidateUpgrade(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyContainer::Upgrade
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:1394
-// RVA: 0x001002E0
-// ADDRESS: 005002e0
-// PROTOTYPE: bool __thiscall Upgrade(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -5,7 +5,8 @@
 //! Wire — raw 64-байтный `tagLogSystem`, signed count и ordered item IDs.
 //! Парный decoder использует ABI offsets, поэтому snapshot остаётся fixed
 //! bytes с нулевым static default. `BTreeSet<i32>` сохраняет signed order и
-//! уникальность; подтверждённый byte 56 немедленно передаётся
+//! уникальность. Upgrade bytes `7/17/18` доступны battle-fairy audit caller-у;
+//! подтверждённый byte 56 немедленно передаётся
 //! `CDaKongXiangQian::SetLogKey`, остальные неподтверждённые offsets не именуются.
 
 use std::collections::BTreeSet;
@@ -56,6 +57,18 @@ impl CLogSystem {
 
     pub(crate) fn delete_log_enabled(&self) -> bool {
         self.setting(26)
+    }
+
+    pub(crate) fn goods_lost_by_upgrade_enabled(&self) -> bool {
+        self.setting(7)
+    }
+
+    pub(crate) fn goods_upgrade_success_enabled(&self) -> bool {
+        self.setting(17)
+    }
+
+    pub(crate) fn goods_upgrade_failure_enabled(&self) -> bool {
+        self.setting(18)
     }
 
     pub(crate) fn faction_create_enabled(&self) -> bool {

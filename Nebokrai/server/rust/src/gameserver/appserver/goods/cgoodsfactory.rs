@@ -9,8 +9,9 @@
 //! Парный WorldServer serializer подтверждает wire. `BTreeMap` и owned values
 //! заменяют MSVC tree/raw pointers без изменения порядка. Одиночное создание
 //! предмета замкнуто вместе с обязательной загрузкой ordinary/battle-fairy
-//! свойств; массовое создание, upgrade и прочая addon mutation ниже остаются
-//! RAW до materialization связанного gameplay.
+//! свойств. Пошаговый `UpgradeBFEquipment` меняет instance level и восемь
+//! growth-зависимых addon-ов в исходном порядке каждого level step; прочая
+//! массовая и ordinary upgrade mutation ниже остаётся RAW.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -18,7 +19,11 @@ use std::fmt;
 
 use super::cgoods::{CGoods, GoodsAddonProperty, GoodsAddonPropertyValue};
 use super::cgoodsbaseproperties::{
-    CGoodsBaseProperties, GoodsBasePropertiesDecodeError, ICON_TYPE_GROUND,
+    CGoodsBaseProperties, GAP_BF_ABRAVE_ADDON, GAP_BF_ABRAVE_GROW, GAP_BF_AGILITY_ADDON,
+    GAP_BF_AGILITY_GROW, GAP_BF_ATTACK_ADDON, GAP_BF_ATTACK_GROW, GAP_BF_LIFE_ADDON,
+    GAP_BF_LIFE_GROW, GAP_BF_MP_ADDON, GAP_BF_MP_GROW, GAP_BF_SPRITE_ADDON, GAP_BF_SPRITE_GROW,
+    GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISE_GROW, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_GROW,
+    GAP_BF_WEAPON_LEVEL, GoodsBasePropertiesDecodeError, ICON_TYPE_GROUND,
 };
 use crate::public::guid::CGuid;
 
@@ -73,6 +78,61 @@ pub(crate) struct CGoodsFactory {
 }
 
 impl CGoodsFactory {
+    /// Переходит к target level по одному шагу. На каждом шаге growth-addon-ы
+    /// применяются в instance insertion order, а level меняется через modifier
+    /// value-id 1; отсутствие такого value завершает уже применённый prefix.
+    pub(crate) fn upgrade_battle_fairy_equipment(
+        &self,
+        goods: &mut CGoods,
+        target_level: i32,
+    ) -> bool {
+        if !goods.can_battle_fairy_equipment_upgrade(self) {
+            return false;
+        }
+        let initial_level = goods.addon_property_value(self, GAP_BF_WEAPON_LEVEL, 1);
+        if initial_level < 0 {
+            return false;
+        }
+        if initial_level == target_level {
+            return true;
+        }
+        let step = if initial_level <= target_level { 1 } else { -1 };
+        loop {
+            let property_types = goods
+                .addon_properties()
+                .iter()
+                .map(|property| property.property_type)
+                .collect::<Vec<_>>();
+            let mut level_stepped = false;
+            for (property_index, property_type) in property_types.into_iter().enumerate() {
+                if property_type == GAP_BF_WEAPON_LEVEL {
+                    if let Some(value) = goods.addon_properties_mut()[property_index]
+                        .values
+                        .iter_mut()
+                        .find(|value| value.id == 1)
+                    {
+                        value.modifier = value.modifier.wrapping_add(step);
+                        level_stepped = true;
+                    }
+                    continue;
+                }
+                let Some((addon, grow)) = battle_fairy_growth_pair(property_type) else {
+                    continue;
+                };
+                let next = goods
+                    .addon_property_value(self, addon, 1)
+                    .wrapping_add(goods.addon_property_value(self, grow, 1).wrapping_mul(step));
+                let _stored = goods.set_addon_property_value_core(addon, 1, next);
+            }
+            if !level_stepped {
+                return false;
+            }
+            if goods.addon_property_value(self, GAP_BF_WEAPON_LEVEL, 1) == target_level {
+                return true;
+            }
+        }
+    }
+
     /// Достигнутый object/addon prefix `CreateGoods` RVA `0x000682E0`.
     /// Fairy/BattleFairy loaders остаются отдельной незамкнутой suffix-веткой.
     pub(crate) fn create_goods_core<Random, Guid>(
@@ -254,6 +314,20 @@ impl CGoodsFactory {
     }
 }
 
+const fn battle_fairy_growth_pair(property_type: i32) -> Option<(i32, i32)> {
+    Some(match property_type {
+        GAP_BF_LIFE_ADDON => (GAP_BF_LIFE_ADDON, GAP_BF_LIFE_GROW),
+        GAP_BF_MP_ADDON => (GAP_BF_MP_ADDON, GAP_BF_MP_GROW),
+        GAP_BF_ATTACK_ADDON => (GAP_BF_ATTACK_ADDON, GAP_BF_ATTACK_GROW),
+        GAP_BF_SPRITE_ADDON => (GAP_BF_SPRITE_ADDON, GAP_BF_SPRITE_GROW),
+        GAP_BF_ABRAVE_ADDON => (GAP_BF_ABRAVE_ADDON, GAP_BF_ABRAVE_GROW),
+        GAP_BF_AGILITY_ADDON => (GAP_BF_AGILITY_ADDON, GAP_BF_AGILITY_GROW),
+        GAP_BF_SPRITUALISE_ADDON => (GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISE_GROW),
+        GAP_BF_STRENGH_ADDON => (GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_GROW),
+        _ => return None,
+    })
+}
+
 fn visible_c_string(bytes: &[u8]) -> &[u8] {
     bytes
         .iter()
@@ -396,20 +470,6 @@ fn read_factory_u32(
 // RVA: 0x000642E0
 // ADDRESS: 004642e0
 // PROTOTYPE: int __cdecl Upgrade(CGoods * param_1, GOODS_ADDON_PROPERTIES param_2, GOODS_ADDON_PROPERTIES param_3, int param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsFactory::UpgradeBFEquipment
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:1215
-// RVA: 0x00064410
-// ADDRESS: 00464410
-// PROTOTYPE: int __cdecl UpgradeBFEquipment(CGoods * param_1, long param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

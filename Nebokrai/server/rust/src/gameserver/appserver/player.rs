@@ -49,12 +49,16 @@
 //! aggregate guard остаётся в клиентских единицах, отдельные allocation
 //! умножаются на `10000`, одинаковые property keys имеют `std::map` first-win,
 //! а каждый вызов и outer caller публикуют собственный `0xBF918`.
+//! Upgrade `0x8FC28` замыкает validation, wallet snapshot, общий RNG,
+//! factory level/growth mutation, target failure outcome, positional расход
+//! gem-ов и ordered client/audit effects. Конкретный wallet-object codec и
+//! полная audit-wire упаковка остаются transport boundary returned report-а.
 
 use super::area::WarSoulPoint;
 use super::container::cbattlefairycontainer::{
     BattleFairyCell, BattleFairyCombineCheck, BattleFairyCombineRemovedInput,
     BattleFairyContainerAddOutcome, BattleFairyDefaultGoodsUpdate, BattleFairyDefaultSkill,
-    BattleFairyPropertyAddEffect, CBattleFairyContainer,
+    BattleFairyPropertyAddEffect, BattleFairyUpgradeConsumedGem, CBattleFairyContainer,
 };
 use super::container::cequipmentcontainer::CEquipmentContainer;
 use super::container::cvolumelimitgoodscontainer::{
@@ -70,6 +74,7 @@ use super::goods::cgoodsbaseproperties::{
     GAP_BF_MAX_MP, GAP_BF_MP, GAP_BF_MP_ADDON, GAP_BF_POTENTIAL, GAP_BF_SPRITE,
     GAP_BF_SPRITE_ADDON, GAP_BF_SPRITE_POTENTIAL, GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISM,
     GAP_BF_SPRITUALISM_POTENTIAL, GAP_BF_STRENGH, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_POTENTIAL,
+    GAP_BF_WEAPON_LEVEL, GAP_GEM_LEVEL,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::moveshape::CMoveShape;
@@ -276,6 +281,71 @@ pub(crate) struct BattleFairyPotentialAllocationReport {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct BattleFairyUpgradeLogGates {
+    pub(crate) success: bool,
+    pub(crate) failure: bool,
+    pub(crate) lost_target: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyUpgradeOutcome {
+    MissingRegion,
+    InsufficientMoney,
+    InvalidEquipment,
+    MissingBaseGem,
+    GemLevelMismatch,
+    MaximumLevel,
+    Succeeded,
+    FailedKept,
+    FailedDowngraded,
+    FailedReset,
+    FailedDestroyed,
+    ConsumptionStopped,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyUpgradeEffect {
+    Notification {
+        player_id: i32,
+        string_id: &'static str,
+        color: u32,
+        format_value: Option<u32>,
+    },
+    MoneyChanged {
+        player_id: i32,
+        previous: u32,
+        current: u32,
+    },
+    GoodsUpdated(BattleFairyDefaultGoodsUpdate),
+    GemConsumed(BattleFairyUpgradeConsumedGem),
+    TargetDeleted {
+        player_id: i32,
+        goods: super::shape::ShapeIdentity,
+        removal: VolumeGoodsRemoveOutcome,
+    },
+    Audit {
+        message_type: u32,
+        event: u8,
+        player_id: i32,
+        target: super::shape::ShapeIdentity,
+        gems: [Option<super::shape::ShapeIdentity>; 4],
+    },
+}
+
+#[must_use = "upgrade report содержит wallet, ownership и network effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyUpgradeReport {
+    pub(crate) player_id: i32,
+    pub(crate) outcome: BattleFairyUpgradeOutcome,
+    pub(crate) price: u32,
+    pub(crate) probability: u32,
+    pub(crate) previous_level: Option<i32>,
+    pub(crate) resulting_level: Option<i32>,
+    pub(crate) consumed_gems: Vec<BattleFairyUpgradeConsumedGem>,
+    pub(crate) effects: Vec<BattleFairyUpgradeEffect>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct BattleFairyGearAddons {
     attack: i32,
     sprite: i32,
@@ -371,6 +441,7 @@ pub(crate) struct CPlayer {
     contribution: i32,
     silence_minutes: i32,
     silence_timestamp_minutes: u32,
+    money: u32,
     account: Vec<u8>,
     equipment: CEquipmentContainer,
     battle_fairy_container: CBattleFairyContainer,
@@ -407,6 +478,7 @@ impl CPlayer {
             contribution: 0,
             silence_minutes: 0,
             silence_timestamp_minutes: 0,
+            money: 0,
             account: Vec::new(),
             equipment: CEquipmentContainer::new(),
             battle_fairy_container: CBattleFairyContainer::new(),
@@ -449,6 +521,14 @@ impl CPlayer {
 
     pub(crate) const fn contribution(&self) -> i32 {
         self.contribution
+    }
+
+    pub(crate) const fn money(&self) -> u32 {
+        self.money
+    }
+
+    pub(crate) const fn set_money_snapshot(&mut self, money: u32) {
+        self.money = money;
     }
 
     pub(crate) const fn silence_minutes(&self) -> i32 {
@@ -1088,6 +1168,250 @@ impl CPlayer {
         }
     }
 
+    pub(crate) fn upgrade_battle_fairy_equipment(
+        &mut self,
+        factory: &CGoodsFactory,
+        log_gates: BattleFairyUpgradeLogGates,
+        random: &mut dyn FnMut(i32) -> i32,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> BattleFairyUpgradeReport {
+        let player_id = self.player_id();
+        let price = self.battle_fairy_container.upgrade_price(factory);
+        let mut report = BattleFairyUpgradeReport {
+            player_id,
+            outcome: BattleFairyUpgradeOutcome::MissingRegion,
+            price,
+            probability: 0,
+            previous_level: None,
+            resulting_level: None,
+            consumed_gems: Vec::new(),
+            effects: Vec::new(),
+        };
+        if self.server_region_id.is_none() {
+            return report;
+        }
+        if self.money < price {
+            report.outcome = BattleFairyUpgradeOutcome::InsufficientMoney;
+            push_battle_fairy_upgrade_notification(&mut report, "ZHGS0015", Some(price));
+            return report;
+        }
+        let Some(equipment) = self
+            .battle_fairy_container
+            .base()
+            .get_goods(BattleFairyCell::Equipment.position())
+        else {
+            report.outcome = BattleFairyUpgradeOutcome::InvalidEquipment;
+            push_battle_fairy_upgrade_notification(&mut report, "ZHGS0014", None);
+            return report;
+        };
+        if !equipment.can_battle_fairy_equipment_upgrade(factory) {
+            report.outcome = BattleFairyUpgradeOutcome::InvalidEquipment;
+            push_battle_fairy_upgrade_notification(&mut report, "ZHGS0014", None);
+            return report;
+        }
+        let current_level = equipment.addon_property_value(factory, GAP_BF_WEAPON_LEVEL, 1);
+        report.previous_level = Some(current_level);
+        let target_identity = equipment.identity();
+        let Some(base_gem) = self
+            .battle_fairy_container
+            .base()
+            .get_goods(BattleFairyCell::GemBase.position())
+        else {
+            report.outcome = BattleFairyUpgradeOutcome::MissingBaseGem;
+            push_battle_fairy_upgrade_notification(&mut report, "ZHGS0013", None);
+            return report;
+        };
+        let minimum = base_gem.addon_property_value(factory, GAP_GEM_LEVEL, 1);
+        let maximum = base_gem
+            .addon_property_value(factory, GAP_GEM_LEVEL, 2)
+            .max(minimum);
+        if current_level < minimum || maximum < current_level {
+            report.outcome = BattleFairyUpgradeOutcome::GemLevelMismatch;
+            push_battle_fairy_upgrade_notification(&mut report, "ZHGS0012", None);
+            return report;
+        }
+        if 98 < current_level as u32 {
+            report.outcome = BattleFairyUpgradeOutcome::MaximumLevel;
+            push_battle_fairy_upgrade_notification(&mut report, "ZHGS0021", None);
+            return report;
+        }
+        report.probability = self.battle_fairy_container.probability(factory);
+        if self.money < price {
+            report.outcome = BattleFairyUpgradeOutcome::InsufficientMoney;
+            push_battle_fairy_upgrade_notification(&mut report, "ZHGS0020", None);
+            return report;
+        }
+        let gem_identities = [
+            BattleFairyCell::GemBase,
+            BattleFairyCell::GemOne,
+            BattleFairyCell::GemTwo,
+            BattleFairyCell::GemThree,
+        ]
+        .map(|cell| {
+            self.battle_fairy_container
+                .base()
+                .get_goods(cell.position())
+                .map(CGoods::identity)
+        });
+        let previous_money = self.money;
+        self.money = self.money.wrapping_sub(price);
+        report.effects.push(BattleFairyUpgradeEffect::MoneyChanged {
+            player_id,
+            previous: previous_money,
+            current: self.money,
+        });
+
+        let success = (random(100) as u32).wrapping_add(1) <= report.probability;
+        let mut target_present = true;
+        if success {
+            let increase = self.battle_fairy_container.success_result(factory, random);
+            let target_level = (current_level as u32).wrapping_add(increase).min(99) as i32;
+            if let Some(goods) = self
+                .battle_fairy_container
+                .base_mut()
+                .get_goods_mut(BattleFairyCell::Equipment.position())
+            {
+                let _upgraded = factory.upgrade_battle_fairy_equipment(goods, target_level);
+            }
+            report.outcome = BattleFairyUpgradeOutcome::Succeeded;
+            push_battle_fairy_upgrade_notification(&mut report, "ZHGS0002", None);
+            if log_gates.success {
+                report.effects.push(BattleFairyUpgradeEffect::Audit {
+                    message_type: 0x0006_0203,
+                    event: 1,
+                    player_id,
+                    target: target_identity,
+                    gems: gem_identities,
+                });
+            }
+        } else {
+            if log_gates.failure {
+                report.effects.push(BattleFairyUpgradeEffect::Audit {
+                    message_type: 0x0006_0203,
+                    event: 2,
+                    player_id,
+                    target: target_identity,
+                    gems: gem_identities,
+                });
+            }
+            match self.battle_fairy_container.fail_result(factory) {
+                1 => {
+                    report.outcome = BattleFairyUpgradeOutcome::FailedKept;
+                    push_battle_fairy_upgrade_notification(&mut report, "ZHGS0016", None);
+                }
+                2 => {
+                    report.outcome = BattleFairyUpgradeOutcome::FailedDowngraded;
+                    push_battle_fairy_upgrade_notification(&mut report, "ZHGS0017", None);
+                    if current_level != 0
+                        && let Some(goods) = self
+                            .battle_fairy_container
+                            .base_mut()
+                            .get_goods_mut(BattleFairyCell::Equipment.position())
+                    {
+                        let _upgraded = factory
+                            .upgrade_battle_fairy_equipment(goods, current_level.wrapping_sub(1));
+                    }
+                }
+                3 => {
+                    report.outcome = BattleFairyUpgradeOutcome::FailedReset;
+                    push_battle_fairy_upgrade_notification(&mut report, "ZHGS0018", None);
+                    if let Some(goods) = self
+                        .battle_fairy_container
+                        .base_mut()
+                        .get_goods_mut(BattleFairyCell::Equipment.position())
+                    {
+                        let _upgraded = factory.upgrade_battle_fairy_equipment(goods, 0);
+                    }
+                }
+                4 => {
+                    report.outcome = BattleFairyUpgradeOutcome::FailedDestroyed;
+                    push_battle_fairy_upgrade_notification(&mut report, "ZHGS0019", None);
+                    if log_gates.lost_target {
+                        report.effects.push(BattleFairyUpgradeEffect::Audit {
+                            message_type: 0x0006_0202,
+                            event: 5,
+                            player_id,
+                            target: target_identity,
+                            gems: gem_identities,
+                        });
+                    }
+                    if let Some((goods, removal)) =
+                        self.battle_fairy_container.delete_upgrade_target()
+                    {
+                        target_present = false;
+                        report
+                            .effects
+                            .push(BattleFairyUpgradeEffect::TargetDeleted {
+                                player_id,
+                                goods,
+                                removal,
+                            });
+                    }
+                }
+                _ => {
+                    report.outcome = BattleFairyUpgradeOutcome::FailedKept;
+                }
+            }
+        }
+        if target_present
+            && let Some(goods) = self
+                .battle_fairy_container
+                .base()
+                .get_goods(BattleFairyCell::Equipment.position())
+        {
+            report.resulting_level =
+                Some(goods.addon_property_value(factory, GAP_BF_WEAPON_LEVEL, 1));
+            report.effects.push(BattleFairyUpgradeEffect::GoodsUpdated(
+                BattleFairyDefaultGoodsUpdate {
+                    message_type: 0x0b_f918,
+                    player_id,
+                    goods: goods.identity(),
+                    old_client_payload: encode_old_client(goods),
+                },
+            ));
+        }
+
+        for cell in [
+            BattleFairyCell::GemBase,
+            BattleFairyCell::GemOne,
+            BattleFairyCell::GemTwo,
+            BattleFairyCell::GemThree,
+        ] {
+            let was_present = self
+                .battle_fairy_container
+                .base()
+                .get_goods(cell.position())
+                .is_some();
+            let Some(consumed) = self.battle_fairy_container.consume_upgrade_gem(cell) else {
+                if was_present || cell == BattleFairyCell::GemBase {
+                    report.outcome = BattleFairyUpgradeOutcome::ConsumptionStopped;
+                    break;
+                }
+                continue;
+            };
+            report.consumed_gems.push(consumed.clone());
+            report
+                .effects
+                .push(BattleFairyUpgradeEffect::GemConsumed(consumed.clone()));
+            if !consumed.removed
+                && let Some(goods) = self
+                    .battle_fairy_container
+                    .base()
+                    .get_goods(cell.position())
+            {
+                report.effects.push(BattleFairyUpgradeEffect::GoodsUpdated(
+                    BattleFairyDefaultGoodsUpdate {
+                        message_type: 0x0b_f918,
+                        player_id,
+                        goods: goods.identity(),
+                        old_client_payload: encode_old_client(goods),
+                    },
+                ));
+            }
+        }
+        report
+    }
+
     /// Достигнутая часть exact `RefreshContainerOwners`: owner ID должен быть
     /// перепривязан после создания player identity или его восстановления.
     pub(crate) const fn refresh_reached_container_owners(&mut self, player_id: i32) {
@@ -1515,6 +1839,19 @@ fn push_battle_fairy_summon_notification(
         player_id: report.player_id,
         string_id,
         color,
+    });
+}
+
+fn push_battle_fairy_upgrade_notification(
+    report: &mut BattleFairyUpgradeReport,
+    string_id: &'static str,
+    format_value: Option<u32>,
+) {
+    report.effects.push(BattleFairyUpgradeEffect::Notification {
+        player_id: report.player_id,
+        string_id,
+        color: 0xffff_ffff,
+        format_value,
     });
 }
 

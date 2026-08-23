@@ -2157,6 +2157,34 @@ impl CGame {
         })
     }
 
+    /// Полный runtime entry point goods-message `0x8FC28`: общий Game RNG,
+    /// live log gates, factory, player wallet и positional BF-container
+    /// исполняются в одном mutable snapshot-е.
+    pub(crate) fn upgrade_battle_fairy_equipment(
+        &mut self,
+        player_id: i32,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> Option<crate::gameserver::appserver::player::BattleFairyUpgradeReport> {
+        let log_gates = crate::gameserver::appserver::player::BattleFairyUpgradeLogGates {
+            success: self.log_system.goods_upgrade_success_enabled(),
+            failure: self.log_system.goods_upgrade_failure_enabled(),
+            lost_target: self.log_system.goods_lost_by_upgrade_enabled(),
+        };
+        let (players, random_state, goods_factory) = (
+            &mut self.players,
+            &mut self.random_state,
+            &self.goods_factory,
+        );
+        let player = players.get_mut(&player_id)?;
+        let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
+        Some(player.upgrade_battle_fairy_equipment(
+            goods_factory,
+            log_gates,
+            &mut random,
+            encode_old_client,
+        ))
+    }
+
     /// Исполняет один исходный snapshot входящих FIFO в порядке WS, BS, GS.
     pub(crate) fn process_messages(&mut self, handlers: &mut dyn GameMessageHandlers) -> i32 {
         if let Some(client) = &self.world_client {

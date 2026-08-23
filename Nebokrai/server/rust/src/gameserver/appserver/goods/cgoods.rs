@@ -6,7 +6,8 @@
 //! ordered addon storage, first-match lookup с fallback в registry, exact
 //! instance-addon mutation, stack classification/limit, equipment-upgrade
 //! eligibility, timed equipment start-point, wrapping weight и адаптеры
-//! ordinary/battle-fairy свойств к addon storage.
+//! ordinary/battle-fairy свойств к addon storage. BF-upgrade eligibility
+//! проверяет catalog equipment type и instance-only level marker.
 //! `Vec` и owned bytes заменяют MSVC storage, не меняя порядка и signed 32-bit
 //! arithmetic.
 //! Единственный legacy null-deref в `CanStacked` при потерянном registry key
@@ -538,6 +539,17 @@ impl CGoods {
             })
     }
 
+    /// Exact `CanBFEquipeUpgrade`: catalog type обязан быть equipment, marker
+    /// уровня ищется только среди instance-addon-ов, без registry fallback.
+    pub(crate) fn can_battle_fairy_equipment_upgrade(&self, factory: &CGoodsFactory) -> bool {
+        factory
+            .query_goods_base_properties(self.base_properties_index)
+            .is_some_and(|properties| {
+                properties.goods_type() == GOODS_TYPE_EQUIPMENT
+                    && self.query_attribute(super::cgoodsbaseproperties::GAP_BF_WEAPON_LEVEL)
+            })
+    }
+
     /// Exact `QueryDaKongCount` считает только непрерывный prefix семи
     /// instance/base addon-слотов со значением value-id 1 в диапазоне 2..=8.
     pub(crate) fn da_kong_count(&self, factory: &CGoodsFactory) -> u32 {
@@ -823,20 +835,6 @@ impl CGoods {
 // RVA: 0x000C9930
 // ADDRESS: 004c9930
 // PROTOTYPE: int __thiscall CanUpgraded(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::CanBFEquipeUpgrade
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:1769
-// RVA: 0x000C9A10
-// ADDRESS: 004c9a10
-// PROTOTYPE: int __thiscall CanBFEquipeUpgrade(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
