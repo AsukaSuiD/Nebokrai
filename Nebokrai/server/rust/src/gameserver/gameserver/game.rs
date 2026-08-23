@@ -80,6 +80,9 @@
 //! Game-variant `CNetSessionManager` также принадлежит `CGame`: `MainLoop`
 //! напрямую выполняет ordered timeout/callback pass, а `Release` очищает
 //! его после socket cleanup в исходной lifecycle-позиции.
+//! GM silence `0x7FC0B/0x7FC0E` достигает canonical player map из
+//! `ProcessMessage`: byte-name lookup, lazy expiry и оба World response-а
+//! исполняются до оставшегося внешним GM route owner-а.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
@@ -118,6 +121,9 @@ use crate::gameserver::appserver::goods::cbattlefairyproperty::CBattleFairyPrope
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::goodswarmember::CGoodsWarMember;
+use crate::gameserver::appserver::message::gmmessage::{
+    GmSilenceMessageError, GmSilenceMessageReport, dispatch_gm_silence_message,
+};
 use crate::gameserver::appserver::message::onmsg_w2s_auction::{
     WorldAuctionStateMessageError, WorldAuctionStateMessageReport, dispatch_world_auction_state,
 };
@@ -916,12 +922,13 @@ pub(crate) struct GameAuctionRunReport {
     pub(crate) state_request: Option<Result<i32, SendMessageError>>,
 }
 
-#[must_use = "ProcessMessage report сохраняет достигнутые auction-state effects"]
+#[must_use = "ProcessMessage report сохраняет auction и GM silence effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameProcessMessagesReport {
     pub(crate) legacy_return: i32,
     pub(crate) auction_states:
         Vec<Result<WorldAuctionStateMessageReport, WorldAuctionStateMessageError>>,
+    pub(crate) gm_silence: Vec<Result<GmSilenceMessageReport, GmSilenceMessageError>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -2487,6 +2494,55 @@ impl CGame {
         self.players.get(&player_id)
     }
 
+    /// Exact `FindPlayer(char const*)`: обходит canonical player map по
+    /// signed ID-order и сравнивает byte-exact C-string имя.
+    pub(crate) fn find_player_by_name(&self, name: &[u8]) -> Option<&CPlayer> {
+        let name = legacy_c_string_prefix(name);
+        self.players
+            .values()
+            .find(|player| legacy_c_string_prefix(player.shape().base_object().get_name()) == name)
+    }
+
+    /// Замыкает GM silence mutation от ordered name lookup до exact
+    /// `SetSilence` timestamp. Отсутствующий player не создаёт state.
+    pub(crate) fn silence_player_by_name(
+        &mut self,
+        name: &[u8],
+        minutes: i32,
+        now_milliseconds: impl FnOnce() -> u32,
+    ) -> Option<i32> {
+        let player_id = self.find_player_by_name(name)?.player_id();
+        self.players
+            .get_mut(&player_id)
+            .expect("FindPlayer name lookup вернул canonical player")
+            .set_silence(minutes, now_milliseconds());
+        Some(player_id)
+    }
+
+    /// Один ordered pass исходного GM silence query. Clock читается
+    /// только для player-а с ненулевым silence, как в `IsInSilence`.
+    /// Caller выполняет два pass-а: сначала capacity, затем payload.
+    pub(crate) fn silenced_player_names_pass(
+        &mut self,
+        mut now_milliseconds: impl FnMut() -> u32,
+    ) -> Vec<Vec<u8>> {
+        let player_ids: Vec<i32> = self.players.keys().copied().collect();
+        let mut names = Vec::new();
+        for player_id in player_ids {
+            let player = self
+                .players
+                .get_mut(&player_id)
+                .expect("snapshot ID принадлежит canonical player map");
+            if player.silence_minutes() == 0 {
+                continue;
+            }
+            if player.is_in_silence(now_milliseconds()) {
+                names.push(player.shape().base_object().get_name().to_vec());
+            }
+        }
+        names
+    }
+
     /// Замыкает caller `goodsmessage` с runtime player-map и рецептом,
     /// опубликованным WorldServer selector-ом `SI_BATLLE_FAIRY_COMBINE`.
     /// Отсутствующий player не создаёт уведомления или пакет, как outer
@@ -3080,13 +3136,14 @@ impl CGame {
         runtime: &mut Runtime,
     ) -> GameProcessMessagesReport {
         let mut auction_states = Vec::new();
+        let mut gm_silence = Vec::new();
         let world_messages = self
             .world_client
             .as_ref()
             .map(CMyNetClient::take_all_messages)
             .unwrap_or_default();
         for mut message in world_messages {
-            self.run_incoming_message(&mut message, runtime, &mut auction_states);
+            self.run_incoming_message(&mut message, runtime, &mut auction_states, &mut gm_silence);
         }
         let billing_messages = self
             .billing_client
@@ -3094,7 +3151,7 @@ impl CGame {
             .map(CMyNetClient::take_all_messages)
             .unwrap_or_default();
         for mut message in billing_messages {
-            self.run_incoming_message(&mut message, runtime, &mut auction_states);
+            self.run_incoming_message(&mut message, runtime, &mut auction_states, &mut gm_silence);
         }
         let server_events = self
             .net_server
@@ -3104,7 +3161,12 @@ impl CGame {
         for event in server_events {
             match event {
                 GameServerEvent::Message(mut message) => {
-                    self.run_incoming_message(&mut message, runtime, &mut auction_states);
+                    self.run_incoming_message(
+                        &mut message,
+                        runtime,
+                        &mut auction_states,
+                        &mut gm_silence,
+                    );
                 }
                 GameServerEvent::WorldClientReconnected(client) => {
                     runtime.handle_world_client_reconnected(self, client);
@@ -3117,6 +3179,7 @@ impl CGame {
         GameProcessMessagesReport {
             legacy_return: 1,
             auction_states,
+            gm_silence,
         }
     }
 
@@ -3127,11 +3190,16 @@ impl CGame {
         auction_states: &mut Vec<
             Result<WorldAuctionStateMessageReport, WorldAuctionStateMessageError>,
         >,
+        gm_silence: &mut Vec<Result<GmSilenceMessageReport, GmSilenceMessageError>>,
     ) {
         if let Some(report) =
             dispatch_world_auction_state(message, self, || runtime.wall_time_seconds())
         {
             auction_states.push(report);
+        } else if let Some(report) =
+            dispatch_gm_silence_message(message, self, || runtime.get_tick_ms())
+        {
+            gm_silence.push(report);
         } else {
             message.run(self, runtime);
         }
@@ -3530,20 +3598,8 @@ impl ShapeResolver for CGame {
 
 // `CreateStringTable` материализован выше с clear/decode/log/cursor порядком.
 
-// ============================================================================
-// FUNCTION: CGame::FindPlayer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:948
-// RVA: 0x00003A60
-// ADDRESS: 00403a60
-// PROTOTYPE: CPlayer * __thiscall FindPlayer(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
+// IMPLEMENTED, VERIFIED_DISASSEMBLY: `FindPlayer(char const*)` RVA `0x00003A60`
+// материализован выше как ordered byte-name lookup; покрытый raw удалён.
 // ============================================================================
 // FUNCTION: CGame::FindPlayerByAccount
 // STATUS: UNKNOWN (сохранены только метаданные исследования)

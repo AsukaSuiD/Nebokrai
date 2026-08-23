@@ -18,8 +18,9 @@
 //! player state для будущих equipment/battle-fairy side effects, но не замена
 //! полного constructor-а, property recalc или runtime player lifecycle.
 //! Silence-timeout, как и оригинал, проверяется лениво при query по
-//! инъецируемому wrapping `timeGetTime`-значению; отдельный scheduler для него
-//! не требуется.
+//! инъецируемому wrapping `timeGetTime`-значению; GM `0x7FC0B/0x7FC0E`
+//! замыкают name lookup, mutation, двухпроходный ordered query и World
+//! responses, поэтому отдельный scheduler не требуется.
 //! Текущие HP/MP имеют собственные setter-и с clamp к текущим max-свойствам;
 //! изменение самих max не выполняет этот clamp без конкретного caller-а.
 //! Как в связном `RefreshContainerOwners`, достигнутые equipment и
@@ -3711,34 +3712,9 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::SetSilence
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:9266
-// RVA: 0x0002C8A0
-// ADDRESS: 0042c8a0
-// PROTOTYPE: void __thiscall SetSilence(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::IsInSilence
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:9296
-// RVA: 0x0002C8F0
-// ADDRESS: 0042c8f0
-// PROTOTYPE: bool __thiscall IsInSilence(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
+// IMPLEMENTED, VERIFIED_DISASSEMBLY: `SetSilence/IsInSilence`
+// RVA `0x0002C8A0/0x0002C8F0` материализованы выше и достигнуты GM
+// `0x7FC0B/0x7FC0E`; покрытый raw удалён.
 // ============================================================================
 // FUNCTION: CPlayer::UpdateCurrentState
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
