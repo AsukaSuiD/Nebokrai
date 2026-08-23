@@ -102,7 +102,8 @@ use crate::gameserver::appserver::message::sequencestring::{
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::organizingsystem::fournationwarsys::CFourNationWarSys;
 use crate::gameserver::appserver::player::{
-    BattleFairyCombineReport, BattleFairyEquipmentMutationReport, BattleFairySkillResetReport,
+    BattleFairyCombineReport, BattleFairyEquipmentMutationReport, BattleFairySkillRequest,
+    BattleFairySkillRequestFacts, BattleFairySkillRequestReport, BattleFairySkillResetReport,
     BattleFairySummonReport, BattleFairyWarSoulAction, CPlayer,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
@@ -2226,6 +2227,28 @@ impl CGame {
             &mut random,
             encode_old_client,
         ))
+    }
+
+    /// Runtime entry point уже декодированного `skillmessage 0x90005`.
+    /// Facts оставляют explicit boundaries для ещё сырого `CPlayerAI`,
+    /// `SymbolIsAttackAble` и monster registry, не выдавая player-only resolver
+    /// текущего `CGame` за полный region lookup.
+    pub(crate) fn request_battle_fairy_skill(
+        &self,
+        player_id: i32,
+        request: BattleFairySkillRequest,
+        facts: BattleFairySkillRequestFacts,
+    ) -> Option<BattleFairySkillRequestReport> {
+        let enabled = self.globe_setup.battle_fairy_enabled();
+        self.players.get(&player_id).map(|player| {
+            player.request_battle_fairy_skill(
+                enabled,
+                request,
+                facts,
+                &self.goods_factory,
+                &self.skill_factory,
+            )
+        })
     }
 
     /// Исполняет один исходный snapshot входящих FIFO в порядке WS, BS, GS.
