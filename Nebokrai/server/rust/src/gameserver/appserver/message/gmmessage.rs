@@ -2,10 +2,13 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/gmmessage.cpp` подтверждают
-//! ветви `0x7FC0B/0x7FC0E`: requester ID читается до switch,
+//! ветви `0x7FC0B/0x7FC0E/0x7FC0F`: requester ID читается до switch,
 //! silence duration нормализуется к минимуму `1`, player map
 //! обходится дважды в signed ID-order, а ответы `0x5FF0D/0x5FF10`
-//! уходят WorldServer. Эта цепочка имеет статус `IMPLEMENTED`.
+//! уходят WorldServer. Адресный `0x7FC0F` сохраняет length guards,
+//! дописывает исходный ` By Game Server {local IP}` и посылает player-у
+//! `0xBF806`; recoverable allocation failure возвращает `GS0029`.
+//! Эти цепочки имеют статус `IMPLEMENTED`.
 //! `Vec` заменяет raw allocation; поле declared capacity сохраняет
 //! исходные `sum(name_len + 2) + 0x40`, включая возможное
 //! расхождение между двумя time-sensitive pass-ами. Непокрытые GM
@@ -16,23 +19,30 @@ use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const GM_SET_SILENCE_MESSAGE: i32 = 0x0007_FC0B;
 const GM_QUERY_SILENCE_MESSAGE: i32 = 0x0007_FC0E;
+const GM_PRIVATE_NOTICE_MESSAGE: i32 = 0x0007_FC0F;
 const GM_SET_SILENCE_RESPONSE: i32 = 0x0005_FF0D;
 const GM_QUERY_SILENCE_RESPONSE: i32 = 0x0005_FF10;
+const PLAYER_SYSTEM_MESSAGE: i32 = 0x000B_F806;
 const GM_SILENCE_NAME_LIMIT: usize = 0x100;
 const GM_EMPTY_SILENCE_RESPONSE_LENGTH: u32 = 0x18;
 const GM_SILENCE_RESPONSE_SLACK: usize = 0x40;
 const GM_SILENCE_NAME_SEPARATOR: [u8; 2] = [0xA3, 0xBB];
+const GM_PRIVATE_NOTICE_INVALID_LENGTH: i32 = 0x09FF_FFF9;
+const GM_PRIVATE_NOTICE_SLACK: u32 = 0x40;
+const GM_PRIVATE_NOTICE_SUFFIX: &[u8] = b" By Game Server ";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GmSilenceMessageError {
+pub(crate) enum GmMessageError {
     MissingRequesterId,
     MissingPlayerName,
     MissingDuration,
+    MissingPrivateNoticeLength,
+    ZeroPrivateNoticeBufferContractUnknown { declared_length: i32 },
     DeclaredLengthOutsideLegacyRange { required: usize },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GmSilenceMessageReport {
+pub(crate) enum GmMessageReport {
     Set {
         requester_id: i32,
         player_name: Vec<u8>,
@@ -47,32 +57,43 @@ pub(crate) enum GmSilenceMessageReport {
         declared_capacity: u32,
         delivery: Result<i32, SendMessageError>,
     },
+    PrivateNoticeIgnored {
+        requester_id: i32,
+        declared_length: i32,
+    },
+    PrivateNotice {
+        requester_id: i32,
+        declared_length: i32,
+        published_text: Vec<u8>,
+        allocation_failed: bool,
+        delivery: i32,
+    },
 }
 
-/// Материализует две связанные silence-ветви `OnGMMessage`.
+/// Материализует связанные silence и direct-notice ветви `OnGMMessage`.
 /// `None` оставляет прочие selectors их ещё RAW owner-у.
-pub(crate) fn dispatch_gm_silence_message(
+pub(crate) fn dispatch_gm_message(
     message: &mut CMessage,
     game: &mut CGame,
     mut now_milliseconds: impl FnMut() -> u32,
-) -> Option<Result<GmSilenceMessageReport, GmSilenceMessageError>> {
+) -> Option<Result<GmMessageReport, GmMessageError>> {
     let message_type = message.message_type();
     if !matches!(
         message_type,
-        GM_SET_SILENCE_MESSAGE | GM_QUERY_SILENCE_MESSAGE
+        GM_SET_SILENCE_MESSAGE | GM_QUERY_SILENCE_MESSAGE | GM_PRIVATE_NOTICE_MESSAGE
     ) {
         return None;
     }
     let Some(requester_id) = message.base_mut().get_long() else {
-        return Some(Err(GmSilenceMessageError::MissingRequesterId));
+        return Some(Err(GmMessageError::MissingRequesterId));
     };
 
     if message_type == GM_SET_SILENCE_MESSAGE {
         let Some(player_name) = message.base_mut().get_str_bytes(GM_SILENCE_NAME_LIMIT) else {
-            return Some(Err(GmSilenceMessageError::MissingPlayerName));
+            return Some(Err(GmMessageError::MissingPlayerName));
         };
         let Some(minutes) = message.base_mut().get_long() else {
-            return Some(Err(GmSilenceMessageError::MissingDuration));
+            return Some(Err(GmMessageError::MissingDuration));
         };
         let minutes = minutes.max(1);
         let mut response = CMessage::new(GM_SET_SILENCE_RESPONSE);
@@ -89,11 +110,55 @@ pub(crate) fn dispatch_gm_silence_message(
         response.add_byte(success);
         add_legacy_c_string(&mut response, &localized);
         let delivery = response.send(game, false);
-        return Some(Ok(GmSilenceMessageReport::Set {
+        return Some(Ok(GmMessageReport::Set {
             requester_id,
             player_name,
             minutes,
             player_id,
+            delivery,
+        }));
+    }
+
+    if message_type == GM_PRIVATE_NOTICE_MESSAGE {
+        let Some(declared_length) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingPrivateNoticeLength));
+        };
+        if matches!(declared_length, 0 | GM_PRIVATE_NOTICE_INVALID_LENGTH) {
+            return Some(Ok(GmMessageReport::PrivateNoticeIgnored {
+                requester_id,
+                declared_length,
+            }));
+        }
+        let buffer_length = (declared_length as u32).wrapping_add(GM_PRIVATE_NOTICE_SLACK) as usize;
+        if buffer_length == 0 {
+            return Some(Err(
+                GmMessageError::ZeroPrivateNoticeBufferContractUnknown { declared_length },
+            ));
+        }
+        let mut published_text = Vec::new();
+        let allocation_failed = published_text.try_reserve_exact(buffer_length).is_err();
+        if allocation_failed {
+            published_text.extend_from_slice(game.get_string_by_id(b"GS0029"));
+        } else {
+            published_text.extend_from_slice(
+                &message
+                    .base_mut()
+                    .get_str_bytes(buffer_length)
+                    .expect("ненулевой GM notice buffer"),
+            );
+            published_text.extend_from_slice(GM_PRIVATE_NOTICE_SUFFIX);
+            published_text.extend_from_slice(game.net_server().local_ip());
+        }
+        let mut response = CMessage::new(PLAYER_SYSTEM_MESSAGE);
+        response.add_long(-1);
+        response.add_long(0);
+        add_legacy_c_string(&mut response, &published_text);
+        let delivery = response.send_to_player(game.net_server(), requester_id);
+        return Some(Ok(GmMessageReport::PrivateNotice {
+            requester_id,
+            declared_length,
+            published_text,
+            allocation_failed,
             delivery,
         }));
     }
@@ -106,7 +171,7 @@ pub(crate) fn dispatch_gm_silence_message(
         response.add_ulong(GM_EMPTY_SILENCE_RESPONSE_LENGTH);
         add_legacy_c_string(&mut response, &localized);
         let delivery = response.send(game, false);
-        return Some(Ok(GmSilenceMessageReport::Query {
+        return Some(Ok(GmMessageReport::Query {
             requester_id,
             first_pass_count: 0,
             published_names: Vec::new(),
@@ -122,16 +187,14 @@ pub(crate) fn dispatch_gm_silence_message(
     });
     let Some(required) = required.and_then(|length| length.checked_add(GM_SILENCE_RESPONSE_SLACK))
     else {
-        return Some(Err(
-            GmSilenceMessageError::DeclaredLengthOutsideLegacyRange {
-                required: usize::MAX,
-            },
-        ));
+        return Some(Err(GmMessageError::DeclaredLengthOutsideLegacyRange {
+            required: usize::MAX,
+        }));
     };
     let Ok(declared_capacity) = u32::try_from(required) else {
-        return Some(Err(
-            GmSilenceMessageError::DeclaredLengthOutsideLegacyRange { required },
-        ));
+        return Some(Err(GmMessageError::DeclaredLengthOutsideLegacyRange {
+            required,
+        }));
     };
 
     let published_names = game.silenced_player_names_pass(&mut now_milliseconds);
@@ -145,7 +208,7 @@ pub(crate) fn dispatch_gm_silence_message(
     response.add_ulong(declared_capacity);
     add_legacy_c_string(&mut response, &names);
     let delivery = response.send(game, false);
-    Some(Ok(GmSilenceMessageReport::Query {
+    Some(Ok(GmMessageReport::Query {
         requester_id,
         first_pass_count: first_pass.len(),
         published_names,

@@ -17,7 +17,9 @@
 //! `0x00018EB0`, `OnMapIDError` RVA `0x00018F10`, client callback-chain и
 //! concrete FIFO имеют статус `IMPLEMENTED`; та же FIFO типизированно заменяет
 //! внутрипроцессные reconnect pointer-сообщения. Linux transport выполняет
-//! общий owner, а доменные сообщения здесь не исполняются.
+//! общий owner, а доменные сообщения здесь не исполняются. Достигнутый
+//! `OnGMMessage 0x7FC0F` читает inherited local-IP bytes через тонкий getter,
+//! не перенося доменную сборку ответа в network owner.
 //!
 //! Oversized `SendAll` до отправки печатал inherited
 //! `CMySocket::m_lIndexID +0x34`. Exact `CMySocket` constructor RVA
@@ -150,6 +152,12 @@ impl CMyNetServer {
     /// Сохраняет dotted IPv4 и его исходное `unsigned long` представление.
     pub(crate) fn set_local_identity(&mut self, ip: &[u8], ipv4_word: u32) {
         self.base.set_local_identity(ip, ipv4_word);
+    }
+
+    /// Возвращает inherited `CMySocket::m_strLocalIP`, нужный точному
+    /// GameServer suffix в адресном GM-ответе.
+    pub(crate) fn local_ip(&self) -> &[u8] {
+        self.base.local_ip()
     }
 
     pub(crate) fn begin_accept(&self) -> AcceptStart {

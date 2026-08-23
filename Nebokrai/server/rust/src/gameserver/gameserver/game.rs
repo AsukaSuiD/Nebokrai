@@ -82,7 +82,8 @@
 //! его после socket cleanup в исходной lifecycle-позиции.
 //! GM silence `0x7FC0B/0x7FC0E` достигает canonical player map из
 //! `ProcessMessage`: byte-name lookup, lazy expiry и оба World response-а
-//! исполняются до оставшегося внешним GM route owner-а.
+//! исполняются до оставшегося внешним GM route owner-а. Адресный `0x7FC0F`
+//! там же формирует player system message с local listener IP.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
@@ -122,7 +123,7 @@ use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::goodswarmember::CGoodsWarMember;
 use crate::gameserver::appserver::message::gmmessage::{
-    GmSilenceMessageError, GmSilenceMessageReport, dispatch_gm_silence_message,
+    GmMessageError, GmMessageReport, dispatch_gm_message,
 };
 use crate::gameserver::appserver::message::onmsg_w2s_auction::{
     WorldAuctionStateMessageError, WorldAuctionStateMessageReport, dispatch_world_auction_state,
@@ -922,13 +923,13 @@ pub(crate) struct GameAuctionRunReport {
     pub(crate) state_request: Option<Result<i32, SendMessageError>>,
 }
 
-#[must_use = "ProcessMessage report сохраняет auction и GM silence effects"]
+#[must_use = "ProcessMessage report сохраняет auction и GM effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameProcessMessagesReport {
     pub(crate) legacy_return: i32,
     pub(crate) auction_states:
         Vec<Result<WorldAuctionStateMessageReport, WorldAuctionStateMessageError>>,
-    pub(crate) gm_silence: Vec<Result<GmSilenceMessageReport, GmSilenceMessageError>>,
+    pub(crate) gm_messages: Vec<Result<GmMessageReport, GmMessageError>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -3136,14 +3137,14 @@ impl CGame {
         runtime: &mut Runtime,
     ) -> GameProcessMessagesReport {
         let mut auction_states = Vec::new();
-        let mut gm_silence = Vec::new();
+        let mut gm_messages = Vec::new();
         let world_messages = self
             .world_client
             .as_ref()
             .map(CMyNetClient::take_all_messages)
             .unwrap_or_default();
         for mut message in world_messages {
-            self.run_incoming_message(&mut message, runtime, &mut auction_states, &mut gm_silence);
+            self.run_incoming_message(&mut message, runtime, &mut auction_states, &mut gm_messages);
         }
         let billing_messages = self
             .billing_client
@@ -3151,7 +3152,7 @@ impl CGame {
             .map(CMyNetClient::take_all_messages)
             .unwrap_or_default();
         for mut message in billing_messages {
-            self.run_incoming_message(&mut message, runtime, &mut auction_states, &mut gm_silence);
+            self.run_incoming_message(&mut message, runtime, &mut auction_states, &mut gm_messages);
         }
         let server_events = self
             .net_server
@@ -3165,7 +3166,7 @@ impl CGame {
                         &mut message,
                         runtime,
                         &mut auction_states,
-                        &mut gm_silence,
+                        &mut gm_messages,
                     );
                 }
                 GameServerEvent::WorldClientReconnected(client) => {
@@ -3179,7 +3180,7 @@ impl CGame {
         GameProcessMessagesReport {
             legacy_return: 1,
             auction_states,
-            gm_silence,
+            gm_messages,
         }
     }
 
@@ -3190,16 +3191,14 @@ impl CGame {
         auction_states: &mut Vec<
             Result<WorldAuctionStateMessageReport, WorldAuctionStateMessageError>,
         >,
-        gm_silence: &mut Vec<Result<GmSilenceMessageReport, GmSilenceMessageError>>,
+        gm_messages: &mut Vec<Result<GmMessageReport, GmMessageError>>,
     ) {
         if let Some(report) =
             dispatch_world_auction_state(message, self, || runtime.wall_time_seconds())
         {
             auction_states.push(report);
-        } else if let Some(report) =
-            dispatch_gm_silence_message(message, self, || runtime.get_tick_ms())
-        {
-            gm_silence.push(report);
+        } else if let Some(report) = dispatch_gm_message(message, self, || runtime.get_tick_ms()) {
+            gm_messages.push(report);
         } else {
             message.run(self, runtime);
         }
