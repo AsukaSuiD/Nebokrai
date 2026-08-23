@@ -94,6 +94,8 @@
 //! всегда возвращает `false` независимо от queue result.
 //! Named kick `0x7FC06` использует byte-exact ordered `FindPlayer(char*)`,
 //! ставит тот же close side effect и только затем отвечает WorldServer.
+//! Presence feedback `0x7FC08` сохраняет signed-char outcome, локализует
+//! `GS0025/GS0026` с одним byte-string аргументом и отвечает requester-у.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`

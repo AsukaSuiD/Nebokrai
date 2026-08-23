@@ -2,7 +2,7 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/gmmessage.cpp` подтверждают
-//! ветви `0x7FC06/0x7FC09/0x7FC0B/0x7FC0C/0x7FC0D/0x7FC0E/0x7FC0F/0x7FC13`:
+//! ветви `0x7FC06`, `0x7FC08`, `0x7FC09`, `0x7FC0B..0x7FC0F` и `0x7FC13`:
 //! requester ID читается до switch,
 //! silence duration нормализуется к минимуму `1`, player map
 //! обходится дважды в signed ID-order, а ответы `0x5FF0D/0x5FF10`
@@ -21,6 +21,8 @@
 //! остальным canonical player ID в исходном ordered map-pass.
 //! Named kick `0x7FC06` сохраняет 24-byte GetStr boundary, выполняет kick до
 //! exact World `0x5FF09` response и возвращает исходное имя в обоих outcomes.
+//! Presence feedback `0x7FC08` использует signed-char branch, `GS0025/GS0026`
+//! с подтверждённым `%s` и адресный `0xBF806(-1,0,text)`.
 //! Эти цепочки имеют статус `IMPLEMENTED`.
 //! `Vec` заменяет raw allocation; поле declared capacity сохраняет
 //! исходные `sum(name_len + 2) + 0x40`, включая возможное
@@ -31,6 +33,7 @@ use crate::gameserver::gameserver::game::{CGame, GameKickPlayerReport};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const GM_KICK_BY_NAME_MESSAGE: i32 = 0x0007_FC06;
+const GM_PRESENCE_FEEDBACK_MESSAGE: i32 = 0x0007_FC08;
 const GM_KICK_OTHERS_MESSAGE: i32 = 0x0007_FC09;
 const GM_SET_SILENCE_MESSAGE: i32 = 0x0007_FC0B;
 const GM_REQUESTER_FEEDBACK_MESSAGE: i32 = 0x0007_FC0C;
@@ -56,6 +59,8 @@ const GM_PRIVATE_NOTICE_SUFFIX: &[u8] = b" By Game Server ";
 pub(crate) enum GmMessageError {
     MissingRequesterId,
     MissingKickPlayerName,
+    MissingPresenceOutcome,
+    MissingPresencePlayerName,
     MissingPlayerName,
     MissingDuration,
     MissingFeedbackPlayerName,
@@ -144,6 +149,14 @@ pub(crate) enum GmMessageReport {
         kick: Option<GameKickPlayerReport>,
         delivery: Result<i32, SendMessageError>,
     },
+    PresenceFeedback {
+        requester_id: i32,
+        player_name: Vec<u8>,
+        outcome: i8,
+        string_id: &'static [u8],
+        formatted_text: Vec<u8>,
+        delivery: i32,
+    },
 }
 
 /// Материализует связанные silence, broadcast и direct-notice ветви `OnGMMessage`.
@@ -157,6 +170,7 @@ pub(crate) fn dispatch_gm_message(
     if !matches!(
         message_type,
         GM_KICK_BY_NAME_MESSAGE
+            | GM_PRESENCE_FEEDBACK_MESSAGE
             | GM_KICK_OTHERS_MESSAGE
             | GM_SET_SILENCE_MESSAGE
             | GM_REQUESTER_FEEDBACK_MESSAGE
@@ -185,6 +199,40 @@ pub(crate) fn dispatch_gm_message(
             requester_id,
             player_name,
             kick,
+            delivery,
+        }));
+    }
+
+    if message_type == GM_PRESENCE_FEEDBACK_MESSAGE {
+        let Some(outcome) = message.base_mut().get_char() else {
+            return Some(Err(GmMessageError::MissingPresenceOutcome));
+        };
+        let Some(player_name) = message.base_mut().get_str_bytes(GM_SHORT_NAME_LIMIT) else {
+            return Some(Err(GmMessageError::MissingPresencePlayerName));
+        };
+        let string_id = if outcome < 1 {
+            b"GS0026".as_slice()
+        } else {
+            b"GS0025".as_slice()
+        };
+        let formatted_text = match format_gm_template(
+            game.get_string_by_id(string_id),
+            &[GmFormatArgument::Text(&player_name)],
+        ) {
+            Ok(formatted) => formatted,
+            Err(()) => return Some(Err(GmMessageError::UnsupportedFeedbackFormat)),
+        };
+        let mut response = CMessage::new(PLAYER_SYSTEM_MESSAGE);
+        response.add_long(-1);
+        response.add_long(0);
+        add_legacy_c_string(&mut response, &formatted_text);
+        let delivery = response.send_to_player(game.net_server(), requester_id);
+        return Some(Ok(GmMessageReport::PresenceFeedback {
+            requester_id,
+            player_name,
+            outcome,
+            string_id,
+            formatted_text,
             delivery,
         }));
     }
@@ -464,16 +512,20 @@ fn format_gm_feedback(
     value: i32,
     detail: &[u8],
 ) -> Result<Vec<u8>, ()> {
-    enum Argument<'a> {
-        Text(&'a [u8]),
-        Signed(i32),
-    }
-
     let arguments = [
-        Argument::Text(player_name),
-        Argument::Signed(value),
-        Argument::Text(detail),
+        GmFormatArgument::Text(player_name),
+        GmFormatArgument::Signed(value),
+        GmFormatArgument::Text(detail),
     ];
+    format_gm_template(template, &arguments)
+}
+
+enum GmFormatArgument<'a> {
+    Text(&'a [u8]),
+    Signed(i32),
+}
+
+fn format_gm_template(template: &[u8], arguments: &[GmFormatArgument<'_>]) -> Result<Vec<u8>, ()> {
     let template = legacy_c_string_prefix(template);
     let mut output = Vec::with_capacity(template.len());
     let mut argument_index = 0usize;
@@ -496,13 +548,13 @@ fn format_gm_feedback(
             return Err(());
         };
         match (specifier, argument) {
-            (b's', Argument::Text(text)) => {
+            (b's', GmFormatArgument::Text(text)) => {
                 output.extend_from_slice(legacy_c_string_prefix(text));
             }
-            (b'd' | b'i', Argument::Signed(value)) => {
+            (b'd' | b'i', GmFormatArgument::Signed(value)) => {
                 output.extend_from_slice(value.to_string().as_bytes());
             }
-            (b'u', Argument::Signed(value)) => {
+            (b'u', GmFormatArgument::Signed(value)) => {
                 output.extend_from_slice((*value as u32).to_string().as_bytes());
             }
             _ => return Err(()),
