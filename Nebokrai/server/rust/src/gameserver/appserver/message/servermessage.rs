@@ -45,6 +45,7 @@ use crate::public::dupliregionsetup::DupliRegionDecodeError;
 use crate::public::equipmentcomposelist::{
     EquipmentComposeDecodeError, EquipmentComposeDecodeReport,
 };
+use crate::public::taozhuangsetup::{TaoZhuangDecodeError, TaoZhuangSerializationBlock};
 use crate::public::wordsfilter::{WordsFilterDecodeError, WordsFilterDecodeReport};
 use crate::setup::cbattlefairyexpconfig::{BattleFairyExpDecodeError, BattleFairyExpDecodeReport};
 use crate::setup::changebody::ChangeBodyDecodeError;
@@ -90,6 +91,7 @@ const BATTLE_FAIRY_COMBINE_SELECTOR: i32 = 0x2d;
 const EQUIPMENT_COMPOSE_SELECTOR: i32 = 0x30;
 const WORDS_FILTER_SELECTOR: i32 = 0x31;
 const JJC_REGION_LEVEL_SELECTOR: i32 = 0x32;
+const TAO_ZHUANG_SELECTOR: i32 = 0x34;
 const THING_SETUP_SELECTOR: i32 = 0x36;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -217,6 +219,11 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     JjcRegionLevel {
         entries: usize,
     },
+    TaoZhuang {
+        skill_ids: usize,
+        items: usize,
+        broadcast: Result<i32, SendMessageError>,
+    },
     ThingSetup {
         entries: usize,
     },
@@ -249,6 +256,8 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     EquipmentCompose(EquipmentComposeDecodeError),
     WordsFilter(WordsFilterDecodeError),
     JjcRegionLevel(JjcRegionLevelDecodeError),
+    TaoZhuang(TaoZhuangDecodeError),
+    TaoZhuangSerialize(TaoZhuangSerializationBlock),
     ThingSetup(ThingSetupCodecError),
 }
 
@@ -285,6 +294,8 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::EquipmentCompose(error) => error.fmt(formatter),
             Self::WordsFilter(error) => error.fmt(formatter),
             Self::JjcRegionLevel(error) => error.fmt(formatter),
+            Self::TaoZhuang(error) => error.fmt(formatter),
+            Self::TaoZhuangSerialize(error) => error.fmt(formatter),
             Self::ThingSetup(error) => error.fmt(formatter),
         }
     }
@@ -318,6 +329,8 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::EquipmentCompose(error) => Some(error),
             Self::WordsFilter(error) => Some(error),
             Self::JjcRegionLevel(error) => Some(error),
+            Self::TaoZhuang(error) => Some(error),
+            Self::TaoZhuangSerialize(error) => Some(error),
             Self::ThingSetup(error) => Some(error),
         }
     }
@@ -636,6 +649,30 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             add_log_text(b"Initial SI_JJCREGIONLEVELSETUP...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::JjcRegionLevel {
                 entries,
+            }))
+        }
+        TAO_ZHUANG_SELECTOR => {
+            let decoded = match game.tao_zhuang_setup_mut().decode_from_byte(source, cursor) {
+                Ok(decoded) => decoded,
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::TaoZhuang(error)));
+                }
+            };
+            add_log_text(b"Add TaoZhuangSetup....OK");
+
+            let mut payload = Vec::new();
+            if let Err(error) = game.tao_zhuang_setup().add_byte_to_array(&mut payload) {
+                return Some(Err(GameOwnedStartupSnapshotError::TaoZhuangSerialize(
+                    error,
+                )));
+            }
+            let mut notice = CMessage::new(0x000B_F81A);
+            notice.base_mut().add(&payload);
+            let broadcast = notice.send_all(game.current_net_server());
+            Some(Ok(GameOwnedStartupSnapshotReport::TaoZhuang {
+                skill_ids: decoded.skill_ids,
+                items: decoded.items,
+                broadcast,
             }))
         }
         THING_SETUP_SELECTOR => {

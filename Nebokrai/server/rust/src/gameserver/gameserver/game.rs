@@ -79,6 +79,7 @@ use crate::nets::servers::ServerHostError;
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::public::equipmentcomposelist::EquipmentComposeList;
+use crate::public::taozhuangsetup::CTaoZhuangSetup;
 use crate::public::wordsfilter::CWordsFilter;
 use crate::setup::cbattlefairyexpconfig::CBattleFairyExpConfig;
 use crate::setup::changebody::CChangeBodyConf;
@@ -727,6 +728,7 @@ pub(crate) struct CGame {
     equipment_compose_list: EquipmentComposeList,
     words_filter: CWordsFilter,
     jjc_level_data: BTreeMap<i32, i32>,
+    tao_zhuang_setup: CTaoZhuangSetup,
     synthesis: CSynthesis,
     new_skill_monster_conf: NewSkillMonsterConf,
     goods_destroy_setup: GoodsDestroySetup,
@@ -775,6 +777,7 @@ impl CGame {
             equipment_compose_list: EquipmentComposeList::default(),
             words_filter: CWordsFilter::default(),
             jjc_level_data: BTreeMap::new(),
+            tao_zhuang_setup: CTaoZhuangSetup::default(),
             synthesis: CSynthesis::default(),
             new_skill_monster_conf: NewSkillMonsterConf::default(),
             goods_destroy_setup: GoodsDestroySetup::default(),
@@ -914,6 +917,10 @@ impl CGame {
         self.net_server
             .as_ref()
             .expect("Game send-family достигается после InitNetServer")
+    }
+
+    pub(crate) const fn current_net_server(&self) -> Option<&CMyNetServer> {
+        self.net_server.as_ref()
     }
 
     /// Возвращает опубликованный listener-owner фактическому network runtime.
@@ -1081,6 +1088,14 @@ impl CGame {
         }
         self.jjc_level_data.insert(key, value);
         true
+    }
+
+    pub(crate) const fn tao_zhuang_setup(&self) -> &CTaoZhuangSetup {
+        &self.tao_zhuang_setup
+    }
+
+    pub(crate) const fn tao_zhuang_setup_mut(&mut self) -> &mut CTaoZhuangSetup {
+        &mut self.tao_zhuang_setup
     }
 
     pub(crate) const fn synthesis_mut(&mut self) -> &mut CSynthesis {

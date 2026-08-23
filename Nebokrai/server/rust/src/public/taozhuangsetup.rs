@@ -1,10 +1,11 @@
 //! Конфигурация комплектов TaoZhuang исторического Miracle.
 //!
-//! World `CTaoZhuangSetup::ReadFile/AddByteToArray`
-//! —; gameplay queries и Game runtime
-//! не входят в этот owner и остаются. Точные World/Game serializer и decoder
+//! World `CTaoZhuangSetup::ReadFile/AddByteToArray` подтверждены точной парой
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, Game
+//! `DeCodeFromByte` — парой `GameServer/gameserver.exe + GameServer/GameServer.pdb`.
 //! Исходный owner PDB:
-//! header.
+//! `e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp/.h`. Gameplay queries
+//! и применение результатов к player остаются отдельной реконструкцией.
 //!
 //! Wire сначала содержит ordered skill set, затем ordered item map. Item:
 //! четыре `u32`, три C-string, фактический equipment-name count и ordered
@@ -24,6 +25,11 @@
 //! проверяются и оставляют первую запись — это доказанная особенность
 //! не исправляемая как внутренний дефект. Rust
 //! отклоняет count больше размера source, не перенося конфигурационный DoS/OOM.
+//! Game decoder очищает оба owner-а до count, но duplicate records молча
+//! оставляет первыми через `insert`. Полный ранее декодированный item-prefix
+//! сохраняется на safe short-buffer границе; незавершённый local item не
+//! публикуется. Динамические byte strings заменяют старый 1028-byte stack
+//! buffer и не воспроизводят его overflow.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -303,6 +309,92 @@ impl CTaoZhuangSetup {
         destination.extend_from_slice(&payload);
         Ok(())
     }
+
+    /// Декодирует GameServer startup projection `DeCodeFromByte`.
+    pub(crate) fn decode_from_byte(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<TaoZhuangDecodeReport, TaoZhuangDecodeError> {
+        self.clear();
+
+        let skill_count = read_wire_i32(source, cursor, "skill count")?;
+        for _ in 0..skill_count.max(0) {
+            self.skill_ids
+                .insert(read_wire_u32(source, cursor, "skill ID")?);
+        }
+
+        let item_count = read_wire_i32(source, cursor, "item count")?;
+        for _ in 0..item_count.max(0) {
+            let id = read_wire_u32(source, cursor, "item ID")?;
+            let color = read_wire_u32(source, cursor, "item color")?;
+            let declared_item_count =
+                read_wire_u32(source, cursor, "declared addition count")?;
+            let declared_equipment_count =
+                read_wire_u32(source, cursor, "declared equipment count")?;
+            let name = read_wire_c_string(source, cursor, "item name")?;
+            let description = read_wire_c_string(source, cursor, "item description")?;
+            let script = read_wire_c_string(source, cursor, "item script")?;
+
+            let equipment_count = read_wire_i32(source, cursor, "equipment name count")?;
+            let mut equipment_names = BTreeSet::new();
+            for _ in 0..equipment_count.max(0) {
+                equipment_names.insert(read_wire_c_string(
+                    source,
+                    cursor,
+                    "equipment name",
+                )?);
+            }
+
+            let addition_count = read_wire_i32(source, cursor, "addition count")?;
+            let mut additions = BTreeMap::new();
+            for _ in 0..addition_count.max(0) {
+                let number = read_wire_u32(source, cursor, "addition number")?;
+                let declared_property_count =
+                    read_wire_u32(source, cursor, "addition property count")?;
+                let mut properties = BTreeMap::new();
+                for _ in 0..declared_property_count {
+                    let property_id = read_wire_u32(source, cursor, "property ID")?;
+                    let value = read_wire_u32(source, cursor, "property value")?;
+                    properties.entry(property_id).or_insert(value);
+                }
+
+                let declared_skill_count =
+                    read_wire_u32(source, cursor, "addition skill count")?;
+                let mut skills = BTreeMap::new();
+                for _ in 0..declared_skill_count {
+                    let skill_id = read_wire_u32(source, cursor, "added skill ID")?;
+                    let value = read_wire_u32(source, cursor, "added skill value")?;
+                    skills.entry(skill_id).or_insert(value);
+                }
+
+                additions.entry(number).or_insert(TaoZhuangAddItem {
+                    number,
+                    declared_property_count,
+                    properties,
+                    declared_skill_count,
+                    skills,
+                });
+            }
+
+            self.items.entry(id).or_insert(TaoZhuangItem {
+                id,
+                color,
+                declared_item_count,
+                declared_equipment_count,
+                name,
+                description,
+                script,
+                equipment_names,
+                additions,
+            });
+        }
+
+        Ok(TaoZhuangDecodeReport {
+            skill_ids: self.skill_ids.len(),
+            items: self.items.len(),
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -354,6 +446,96 @@ impl fmt::Display for TaoZhuangSerializationBlock {
 }
 
 impl Error for TaoZhuangSerializationBlock {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TaoZhuangDecodeReport {
+    pub(crate) skill_ids: usize,
+    pub(crate) items: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TaoZhuangDecodeError {
+    pub(crate) field: &'static str,
+    pub(crate) offset: usize,
+    pub(crate) needed: usize,
+    pub(crate) available: usize,
+}
+
+impl fmt::Display for TaoZhuangDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "TaoZhuang snapshot, поле {} на {}: нужно {}, доступно {}",
+            self.field, self.offset, self.needed, self.available
+        )
+    }
+}
+
+impl Error for TaoZhuangDecodeError {}
+
+fn read_wire_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<i32, TaoZhuangDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(
+        source, cursor, field,
+    )?))
+}
+
+fn read_wire_u32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<u32, TaoZhuangDecodeError> {
+    Ok(u32::from_le_bytes(read_wire_array(
+        source, cursor, field,
+    )?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<[u8; N], TaoZhuangDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(TaoZhuangDecodeError {
+            field,
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("размер TaoZhuang scalar уже проверен"))
+}
+
+fn read_wire_c_string(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<Vec<u8>, TaoZhuangDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(relative_end) = source
+        .get(offset..)
+        .and_then(|tail| tail.iter().position(|byte| *byte == 0))
+    else {
+        return Err(TaoZhuangDecodeError {
+            field,
+            offset,
+            needed: available.saturating_add(1),
+            available,
+        });
+    };
+    let end = offset + relative_end;
+    *cursor = end + 1;
+    Ok(source[offset..end].to_vec())
+}
 
 fn write_tao_zhuang_count(
     destination: &mut Vec<u8>,
