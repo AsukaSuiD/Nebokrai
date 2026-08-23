@@ -5,23 +5,35 @@
 //! identity, base-properties index, amount/price/add-ticket/description,
 //! ordered addon storage, first-match lookup с fallback в registry, exact
 //! instance-addon mutation, stack classification/limit, equipment-upgrade
-//! eligibility, timed equipment start-point и wrapping weight.
+//! eligibility, timed equipment start-point, wrapping weight и адаптеры
+//! ordinary/battle-fairy свойств к addon storage.
 //! `Vec` и owned bytes заменяют MSVC storage, не меняя порядка и signed 32-bit
 //! arithmetic.
 //! Единственный legacy null-deref в `CanStacked` при потерянном registry key
 //! выражен typed block-ом, а не тихим `false`.
 //!
-//! Constructor/release, fairy/battle-fairy, остальная durability/time, полный
-//! codec и mutation gameplay ниже остаются RAW: достигнутый core не выдаётся
-//! за весь 0xCC-byte legacy object. `CGoodsFactory` передаётся явно вместо
-//! исходного process-global registry.
+//! Constructor/release, остальная durability/time, полный codec и mutation
+//! gameplay ниже остаются RAW: достигнутый core не выдаётся за весь 0xCC-byte
+//! legacy object. `CGoodsFactory` передаётся явно вместо исходного
+//! process-global registry.
 
+use super::cbattlefairyproperty::CBattleFairyProperty;
 use super::cgoodsbaseproperties::{
-    CGoodsBaseProperties, GAP_DAKONG_1, GAP_GOODS_LIFE_TYPE, GAP_GOODS_STACKING_LIMIT,
-    GAP_GOODS_START_POINT, GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT,
-    GOODS_TYPE_USELESS,
+    CGoodsBaseProperties, EQUIP_PLACE_HEADGEAR, GAP_BF_AGILITY, GAP_BF_AGILITY_BASE, GAP_BF_BLAST,
+    GAP_BF_BRAVE, GAP_BF_BRAVE_BASE, GAP_BF_CURRENT_EXP, GAP_BF_CURRENT_MAX_EXP,
+    GAP_BF_CUT_HURT_SCALE, GAP_BF_HP, GAP_BF_LEVEL, GAP_BF_MODULE, GAP_BF_MP, GAP_BF_PULLULATERATE,
+    GAP_BF_SPRITE, GAP_BF_SPRITUALISM, GAP_BF_SPRITUALISM_BASE, GAP_BF_STRENGH,
+    GAP_BF_STRENGH_BASE, GAP_DAKONG_1, GAP_FAIRY_AGILITY, GAP_FAIRY_AGILITY_BASE_VALUE,
+    GAP_FAIRY_COMBINATED_TIMES, GAP_FAIRY_EGG_ID, GAP_FAIRY_EXP, GAP_FAIRY_GROWING_RATE,
+    GAP_FAIRY_HP, GAP_FAIRY_HP_BASE_VALUE, GAP_FAIRY_LEVEL, GAP_FAIRY_MAIN_ABILITY,
+    GAP_FAIRY_MAX_COMBINATED_TIMES, GAP_FAIRY_MAX_EXP, GAP_FAIRY_RIPE_ID, GAP_FAIRY_RIPE_MAX_LEVEL,
+    GAP_FAIRY_RIPE_MIN_LEVEL, GAP_FAIRY_STATE, GAP_FAIRY_STRENGTH, GAP_FAIRY_STRENGTH_BASE_VALUE,
+    GAP_FAIRY_WAKAN, GAP_FAIRY_WAKAN_BASE_VALUE, GAP_FAIRY_YOUNG_ID, GAP_GOODS_LIFE_TYPE,
+    GAP_GOODS_STACKING_LIMIT, GAP_GOODS_START_POINT, GAP_ROLE_MINIMUM_LEVEL_LIMIT,
+    GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
 use super::cgoodsfactory::CGoodsFactory;
+use super::fairyproperties::CFairyProperties;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::public::guid::CGuid;
 
@@ -57,6 +69,8 @@ pub(crate) struct CGoods {
     add_ticket: u32,
     description: Vec<u8>,
     addon_properties: Vec<GoodsAddonProperty>,
+    fairy_properties: Option<CFairyProperties>,
+    battle_fairy_property: Option<CBattleFairyProperty>,
 }
 
 impl Default for CGoods {
@@ -79,6 +93,8 @@ impl CGoods {
             add_ticket: 0,
             description: Vec::new(),
             addon_properties: Vec::new(),
+            fairy_properties: None,
+            battle_fairy_property: None,
         }
     }
 
@@ -167,6 +183,254 @@ impl CGoods {
 
     pub(crate) fn push_addon_property(&mut self, property: GoodsAddonProperty) {
         self.addon_properties.push(property);
+    }
+
+    pub(crate) const fn fairy_properties(&self) -> Option<&CFairyProperties> {
+        self.fairy_properties.as_ref()
+    }
+
+    pub(crate) const fn fairy_properties_mut(&mut self) -> Option<&mut CFairyProperties> {
+        self.fairy_properties.as_mut()
+    }
+
+    pub(crate) const fn battle_fairy_property(&self) -> Option<&CBattleFairyProperty> {
+        self.battle_fairy_property.as_ref()
+    }
+
+    pub(crate) const fn battle_fairy_property_mut(&mut self) -> Option<&mut CBattleFairyProperty> {
+        self.battle_fairy_property.as_mut()
+    }
+
+    /// Exact ordinary-fairy loader обрывает traversal на первом addon-е без
+    /// values и затем переписывает raw modifier `GAP_FAIRY_MAX_EXP` из config.
+    pub(crate) fn load_fairy_properties<Threshold>(
+        &mut self,
+        factory: &CGoodsFactory,
+        mut threshold_for_level: Threshold,
+    ) -> Result<bool, GoodsBasePropertyBlock>
+    where
+        Threshold: FnMut(u32, u32) -> u32,
+    {
+        let properties = factory
+            .query_goods_base_properties(self.base_properties_index)
+            .ok_or(GoodsBasePropertyBlock {
+                index: self.base_properties_index,
+            })?;
+        if properties.equip_place() != EQUIP_PLACE_HEADGEAR {
+            return Ok(false);
+        }
+
+        let fairy = self
+            .fairy_properties
+            .get_or_insert_with(CFairyProperties::new);
+        for addon in &self.addon_properties {
+            let Some(value) = addon.values.first() else {
+                return Ok(true);
+            };
+            let total = value.base_value.wrapping_add(value.modifier) as u32;
+            match addon.property_type {
+                GAP_ROLE_MINIMUM_LEVEL_LIMIT => fairy.equip_level = total,
+                GAP_FAIRY_STATE => fairy.fairy_state = total,
+                GAP_FAIRY_COMBINATED_TIMES => fairy.combinated_times = total,
+                GAP_FAIRY_MAX_COMBINATED_TIMES => fairy.max_combinated_times = total,
+                GAP_FAIRY_LEVEL => fairy.level = total,
+                GAP_FAIRY_RIPE_MIN_LEVEL => fairy.ripe_min_level = total,
+                GAP_FAIRY_RIPE_MAX_LEVEL => fairy.ripe_max_level = total,
+                GAP_FAIRY_EXP => fairy.link_experience(value.modifier),
+                GAP_FAIRY_MAIN_ABILITY => fairy.main_ability = total,
+                GAP_FAIRY_GROWING_RATE => fairy.growing_rate = total,
+                GAP_FAIRY_STRENGTH => fairy.strength = total,
+                GAP_FAIRY_AGILITY => fairy.agility = total,
+                GAP_FAIRY_WAKAN => fairy.wakan = total,
+                GAP_FAIRY_HP => fairy.hp = total,
+                GAP_FAIRY_STRENGTH_BASE_VALUE => fairy.base_strength = total,
+                GAP_FAIRY_AGILITY_BASE_VALUE => fairy.base_agility = total,
+                GAP_FAIRY_WAKAN_BASE_VALUE => fairy.base_wakan = total,
+                GAP_FAIRY_HP_BASE_VALUE => fairy.base_hp = total,
+                GAP_FAIRY_EGG_ID => fairy.egg_id = total,
+                GAP_FAIRY_YOUNG_ID => fairy.young_id = total,
+                GAP_FAIRY_RIPE_ID => fairy.ripe_id = total,
+                _ => {}
+            }
+        }
+
+        let equip_level = fairy.equip_level;
+        let level = fairy.level;
+        for addon in &mut self.addon_properties {
+            if addon.property_type != GAP_FAIRY_MAX_EXP {
+                continue;
+            }
+            let value = addon
+                .values
+                .first_mut()
+                .expect("пустой addon завершил первый exact traversal");
+            value.modifier = threshold_for_level(equip_level, level) as i32;
+            fairy.max_exp = value.base_value.wrapping_add(value.modifier) as u32;
+        }
+        Ok(true)
+    }
+
+    pub(crate) fn save_fairy_properties(
+        &mut self,
+        factory: &CGoodsFactory,
+    ) -> Result<bool, GoodsBasePropertyBlock> {
+        let properties = factory
+            .query_goods_base_properties(self.base_properties_index)
+            .ok_or(GoodsBasePropertyBlock {
+                index: self.base_properties_index,
+            })?;
+        if properties.equip_place() != EQUIP_PLACE_HEADGEAR {
+            return Ok(false);
+        }
+        let Some(fairy) = self.fairy_properties.as_ref() else {
+            return Ok(false);
+        };
+        for addon in &mut self.addon_properties {
+            let Some(value) = addon.values.first_mut() else {
+                continue;
+            };
+            if addon.property_type == GAP_FAIRY_EXP {
+                if let Some(experience) = fairy.experience() {
+                    value.modifier = experience;
+                }
+                continue;
+            }
+            let stored = match addon.property_type {
+                GAP_FAIRY_STATE => fairy.fairy_state,
+                GAP_FAIRY_COMBINATED_TIMES => fairy.combinated_times,
+                GAP_FAIRY_LEVEL => fairy.level,
+                GAP_FAIRY_MAX_EXP => fairy.max_exp,
+                GAP_FAIRY_GROWING_RATE => fairy.growing_rate,
+                GAP_FAIRY_STRENGTH => fairy.strength,
+                GAP_FAIRY_AGILITY => fairy.agility,
+                GAP_FAIRY_WAKAN => fairy.wakan,
+                GAP_FAIRY_HP => fairy.hp,
+                GAP_FAIRY_STRENGTH_BASE_VALUE => fairy.base_strength,
+                GAP_FAIRY_AGILITY_BASE_VALUE => fairy.base_agility,
+                GAP_FAIRY_WAKAN_BASE_VALUE => fairy.base_wakan,
+                GAP_FAIRY_HP_BASE_VALUE => fairy.base_hp,
+                _ => continue,
+            };
+            value.modifier = (stored as i32).wrapping_sub(value.base_value);
+        }
+        Ok(true)
+    }
+
+    pub(crate) fn load_battle_fairy_property<Threshold>(
+        &mut self,
+        factory: &CGoodsFactory,
+        mut threshold_for_level: Threshold,
+    ) -> Result<bool, GoodsBasePropertyBlock>
+    where
+        Threshold: FnMut(u32, u32) -> u32,
+    {
+        let properties = factory
+            .query_goods_base_properties(self.base_properties_index)
+            .ok_or(GoodsBasePropertyBlock {
+                index: self.base_properties_index,
+            })?;
+        if properties.equip_place() != EQUIP_PLACE_HEADGEAR {
+            return Ok(false);
+        }
+
+        let mut battle = self.battle_fairy_property.take().unwrap_or_default();
+        for addon in &self.addon_properties {
+            let Some(value) = addon.values.first() else {
+                self.battle_fairy_property = Some(battle);
+                return Ok(true);
+            };
+            let total = value.base_value.wrapping_add(value.modifier) as u32;
+            match addon.property_type {
+                GAP_ROLE_MINIMUM_LEVEL_LIMIT => battle.equip_level = total,
+                GAP_BF_LEVEL => battle.current_level = total,
+                GAP_BF_CURRENT_EXP => battle.set_current_experience_linked(true),
+                GAP_BF_BLAST => battle.blast = total,
+                GAP_BF_BRAVE | GAP_BF_BRAVE_BASE => battle.brave = total,
+                GAP_BF_AGILITY => battle.agility = total,
+                GAP_BF_SPRITUALISM => battle.spritualism = total,
+                GAP_BF_STRENGH => battle.strength = total,
+                GAP_BF_PULLULATERATE => battle.set_pullulate_rate(total as f32),
+                GAP_BF_MODULE => battle.module = Some(total),
+                GAP_BF_AGILITY_BASE => battle.agility_base = Some(total),
+                GAP_BF_SPRITUALISM_BASE => battle.spritualism_base = Some(total),
+                GAP_BF_STRENGH_BASE => battle.strength_base = Some(total),
+                GAP_BF_CUT_HURT_SCALE => battle.immunity = Some(total),
+                _ => {}
+            }
+        }
+
+        let equip_level = battle.equip_level;
+        let current_level = battle.current_level;
+        for addon in &mut self.addon_properties {
+            if addon.property_type != GAP_BF_CURRENT_MAX_EXP {
+                continue;
+            }
+            let value = addon
+                .values
+                .first_mut()
+                .expect("пустой addon завершил первый exact traversal");
+            value.modifier = threshold_for_level(equip_level, current_level) as i32;
+            battle.max_exp = value.base_value.wrapping_add(value.modifier) as u32;
+        }
+        self.battle_fairy_property = Some(battle);
+        Ok(true)
+    }
+
+    /// Exact SaveBF нормализует выбранные first values через собственный
+    /// `GetAddonPropertyValues`; property object служит только presence gate.
+    pub(crate) fn save_battle_fairy_property(
+        &mut self,
+        factory: &CGoodsFactory,
+    ) -> Result<bool, GoodsBasePropertyBlock> {
+        let properties = factory
+            .query_goods_base_properties(self.base_properties_index)
+            .ok_or(GoodsBasePropertyBlock {
+                index: self.base_properties_index,
+            })?;
+        if properties.equip_place() != EQUIP_PLACE_HEADGEAR || self.battle_fairy_property.is_none()
+        {
+            return Ok(false);
+        }
+        const SAVED_TYPES: [i32; 16] = [
+            GAP_BF_LEVEL,
+            GAP_BF_CURRENT_MAX_EXP,
+            GAP_BF_HP,
+            GAP_BF_MP,
+            GAP_BF_SPRITE,
+            GAP_BF_BLAST,
+            GAP_BF_BRAVE,
+            GAP_BF_AGILITY,
+            GAP_BF_SPRITUALISM,
+            GAP_BF_STRENGH,
+            GAP_BF_PULLULATERATE,
+            GAP_BF_BRAVE_BASE,
+            GAP_BF_AGILITY_BASE,
+            GAP_BF_SPRITUALISM_BASE,
+            GAP_BF_STRENGH_BASE,
+            GAP_BF_CUT_HURT_SCALE,
+        ];
+        let totals: Vec<_> = SAVED_TYPES
+            .iter()
+            .map(|property_type| {
+                (
+                    *property_type,
+                    self.addon_property_value(factory, *property_type, 1),
+                )
+            })
+            .collect();
+        for addon in &mut self.addon_properties {
+            let Some(value) = addon.values.first_mut() else {
+                continue;
+            };
+            let Some((_, total)) = totals
+                .iter()
+                .find(|(property_type, _)| *property_type == addon.property_type)
+            else {
+                continue;
+            };
+            value.modifier = total.wrapping_sub(value.base_value);
+        }
+        Ok(true)
     }
 
     /// Prefix `CopyAddonProperties`; fairy reload остаётся у незамкнутого

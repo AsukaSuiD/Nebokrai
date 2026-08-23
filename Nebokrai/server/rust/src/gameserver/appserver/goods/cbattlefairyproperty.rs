@@ -32,7 +32,7 @@ const LEGACY_STRING_SIZE: usize = 0x1c;
 const LEGACY_STRING_INLINE_CAPACITY: u32 = 15;
 pub(crate) const BATTLE_FAIRY_GOODS_UPDATE_MESSAGE_TYPE: u32 = 0x0b_f918;
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct BattleFairyCompose {
     pub(crate) fetch_stone: Vec<u8>,
     pub(crate) fetch_body: Vec<u8>,
@@ -43,7 +43,21 @@ pub(crate) struct BattleFairyCompose {
     pub(crate) index: u32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+impl PartialEq for BattleFairyCompose {
+    fn eq(&self, other: &Self) -> bool {
+        self.fetch_stone == other.fetch_stone
+            && self.fetch_body == other.fetch_body
+            && self.material == other.material
+            && self.deplete_fetch == other.deplete_fetch
+            && self.success_rate.to_bits() == other.success_rate.to_bits()
+            && self.battle_fairy == other.battle_fairy
+            && self.index == other.index
+    }
+}
+
+impl Eq for BattleFairyCompose {}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CBattleFairyProperty {
     compose: Vec<BattleFairyCompose>,
     up_level_related: Vec<()>,
@@ -66,7 +80,12 @@ pub(crate) struct CBattleFairyProperty {
     pub(crate) change_id: u32,
     pub(crate) potential: u32,
     pub(crate) status: i32,
-    pub(crate) pullulate_rate: f32,
+    pullulate_rate_bits: u32,
+    pub(crate) module: Option<u32>,
+    pub(crate) agility_base: Option<u32>,
+    pub(crate) spritualism_base: Option<u32>,
+    pub(crate) strength_base: Option<u32>,
+    pub(crate) immunity: Option<u32>,
     pub(crate) attack_potential: u32,
     pub(crate) blast_potential: u32,
     pub(crate) strength_potential: u32,
@@ -139,6 +158,18 @@ impl CBattleFairyProperty {
 
     pub(crate) const fn unlink_current_experience(&mut self) {
         self.current_exp_linked = false;
+    }
+
+    pub(crate) const fn set_current_experience_linked(&mut self, linked: bool) {
+        self.current_exp_linked = linked;
+    }
+
+    pub(crate) const fn pullulate_rate(&self) -> f32 {
+        f32::from_bits(self.pullulate_rate_bits)
+    }
+
+    pub(crate) const fn set_pullulate_rate(&mut self, rate: f32) {
+        self.pullulate_rate_bits = rate.to_bits();
     }
 
     pub(crate) fn exp_up<Threshold>(
@@ -264,7 +295,8 @@ impl CBattleFairyProperty {
         self.agility = goods.addon_property_value(factory, GAP_BF_AGILITY, 1) as u32;
         self.spritualism = goods.addon_property_value(factory, GAP_BF_SPRITUALISM, 1) as u32;
         self.strength = goods.addon_property_value(factory, GAP_BF_STRENGH, 1) as u32;
-        self.pullulate_rate = goods.addon_property_value(factory, GAP_BF_PULLULATERATE, 1) as f32;
+        self.pullulate_rate_bits =
+            (goods.addon_property_value(factory, GAP_BF_PULLULATERATE, 1) as f32).to_bits();
         BattleFairyExpUpResult::LevelUp
     }
 
