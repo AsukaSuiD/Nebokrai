@@ -1,48 +1,11 @@
-//! Одна асинхронная сетевая сессия `CNetSession` для GameServer и WorldServer.
+//! Асинхронная `CNetSession`, общая для GameServer и WorldServer.
+//! Источники контракта — точные пары обоих EXE/PDB.
 //!
-//! Статус владельца: `IMPLEMENTED` для constructor/destructor,
-//! `CheckCookie`, `SetCallbackHandle`, Game-only `OnDo`, общего `OnResult`,
-//! `OnTimeOut` и `Beging` с сохранением исходной опечатки имени.
-//!
-//! Точные пары и существенные RVA:
-//! - GameServer: `gameserver.exe + GameServer.pdb`, constructor `0x0010B190`,
-//!   destructor `0x0010B1C0`, `CheckCookie` `0x0010B1D0`, setter
-//!   `0x0010B1F0`, `OnDo` `0x0010B200`, `OnResult` `0x0010B230`,
-//!   `OnTimeOut` `0x0010B260`, `Beging` `0x0010B280`;
-//! - WorldServer: `Nworldserver.exe + WorldServer.pdb`, constructor
-//!   `0x000C16E0`, destructor `0x000C1710`, `CheckCookie` `0x000C1720`,
-//!   setter `0x000C1740`, `OnResult` `0x000C1750`, `OnTimeOut` `0x000C1780`,
-//!   `Beging` `0x000C17A0`.
-//!
-//! Исходный путь обеих PDB:
-//! `e:\svn\fengyun_russia_dev\public\netsession.cpp`.
-//!
-//! Варианты совпадают по layout и общей семантике; `OnDo` присутствует только
-//! в GameServer, потому что World call-chain его не достигает. Старый объект
-//! хранил signed 64-bit ID, два Windows `long` cookie, unsigned timeout и
-//! nullable `IAsyncCallback*`. Constructor ставил timeout `0` и callback
-//! `nullptr`. `Beging` сначала записывает timeout, затем через второй interface
-//! того же callback-owner-а вызывает `DoAsyncCall(id, cookie.second, args)`.
-//! Результаты callback имеют exact tags `0/1/2` для do/result/timeout;
-//! timeout не предоставляет payload, поскольку второй DWORD исходного
-//! `tagAsyncResult` оставался неинициализированным.
-//!
-//! Один transferred `Box<dyn NetSessionEndpoint>` безопасно выражает объект с
-//! двумя старыми interface-подобъектами. Внутри session он становится `Arc`
-//! только потому, что manager доказанно отпускает map lock перед result/do
-//! callback и затем может удалить session: временный clone сохраняет lifetime
-//! ровно до возврата callback. Сам endpoint выбирает подходящую синхронизацию
-//! своей доменной мутации. `&dyn Any` заменяет только безразмерный адрес
-//! varargs; конкретный caller по-прежнему обязан передать свой точный payload.
-//!
-//! Повторный `SetCallbackHandle` в исходнике терял прежний pointer без Release.
-//! Среди достигнутых call sites setter вызывается один раз. Rust не создаёт
-//! утечку: повторная установка возвращает incoming owner как
-//! `BLOCKED_MISSING_FACT`, не меняя session. `Beging` без callback в исходнике
-//! разыменовывал null caller после уже записанного timeout; Rust сохраняет
-//! запись и возвращает отдельный block. STL/map, vtable dispatch, deleting
-//! destructor, allocator и unwind-код удалены как технический механизм;
-//! callback-owner освобождается обычным `Drop` последнего `Arc`.
+//! Session хранит signed 64-bit ID, два cookie, unsigned timeout и nullable
+//! callback. `Beging` сначала назначает timeout, затем вызывает async endpoint;
+//! result/timeout сохраняют tags `0/1/2` и исходный порядок callback-ов.
+//! `Arc<dyn NetSessionEndpoint>` заменяет два interface-subobject и удерживает
+//! lifetime после снятия manager lock без изменения session semantics.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -68,12 +31,12 @@ pub(crate) struct NetSessionAsyncResult<'payload> {
     pub(crate) payload: Option<&'payload dyn Any>,
 }
 
-/// Совмещённые достигнутые контракты старых `IAsyncCaller/IAsyncCallback`.
+/// Совмещённые действующие контракты старых `IAsyncCaller/IAsyncCallback`.
 pub(crate) trait NetSessionEndpoint: Send + Sync {
-    /// Выполняет исходный `DoAsyncCall(id, cookie.second, args)`.
+ /// Выполняет исходный `DoAsyncCall(id, cookie.second, args)`.
     fn do_async_call(&self, session_id: i64, cookie_second: i32, payload: &dyn Any);
 
-    /// Получает один exact result-tag и его typed-erased payload.
+ /// Получает один оригинал result-tag и его typed-erased payload.
     fn on_async_callback(&self, result: NetSessionAsyncResult<'_>);
 }
 
@@ -96,7 +59,7 @@ pub(crate) struct NetSessionBeginDispatch {
 }
 
 impl NetSessionBeginDispatch {
-    /// Синхронно вызывает старый `IAsyncCaller::DoAsyncCall`.
+ /// Синхронно вызывает старый `IAsyncCaller::DoAsyncCall`.
     pub(crate) fn dispatch(self, payload: &dyn Any) {
         self.endpoint
             .do_async_call(self.session_id, self.cookie_second, payload);
@@ -112,7 +75,7 @@ pub(crate) struct CNetSession {
 }
 
 impl CNetSession {
-    /// Создаёт session с нулевым timeout и null callback.
+ /// Создаёт session с нулевым timeout и null callback.
     pub(crate) const fn new(id: i64, cookie: NetSessionCookie) -> Self {
         Self {
             id,
@@ -122,22 +85,22 @@ impl CNetSession {
         }
     }
 
-    /// Возвращает точный signed 64-bit ключ manager map.
+ /// Возвращает точный signed 64-bit ключ manager map.
     pub(crate) const fn id(&self) -> i64 {
         self.id
     }
 
-    /// Возвращает оба cookie без изменения 32-битных шаблонов.
+ /// Возвращает оба cookie без изменения 32-битных шаблонов.
     pub(crate) const fn cookie(&self) -> NetSessionCookie {
         self.cookie
     }
 
-    /// Проверяет оба cookie в исходном порядке.
+ /// Проверяет оба cookie в исходном порядке.
     pub(crate) const fn check_cookie(&self, first: i32, second: i32) -> bool {
         first == self.cookie.first && second == self.cookie.second
     }
 
-    /// Передаёт единственный callback/caller owner сессии.
+ /// Передаёт единственный callback/caller owner сессии.
     pub(crate) fn set_callback_handle(
         &mut self,
         endpoint: Box<dyn NetSessionEndpoint>,
@@ -149,7 +112,7 @@ impl CNetSession {
         Ok(())
     }
 
-    /// Ставит timeout и синхронно вызывает `DoAsyncCall`.
+ /// Ставит timeout и синхронно вызывает `DoAsyncCall`.
     pub(crate) fn beging(
         &mut self,
         timeout: u32,
@@ -159,7 +122,7 @@ impl CNetSession {
         Ok(())
     }
 
-    /// Записывает timeout и копирует endpoint для вызова вне manager lock.
+ /// Записывает timeout и копирует endpoint для вызова вне manager lock.
     pub(crate) fn prepare_beging(
         &mut self,
         timeout: u32,
@@ -175,22 +138,22 @@ impl CNetSession {
         })
     }
 
-    /// Доставляет GameServer-only tag `0` без изменения timeout.
+ /// Доставляет GameServer-only tag `0` без изменения timeout.
     pub(crate) fn on_do(&self, payload: &dyn Any) -> bool {
         self.deliver(NetSessionAsyncResultKind::Do, Some(payload))
     }
 
-    /// Доставляет terminal tag `1`; удаление session выполняет manager.
+ /// Доставляет terminal tag `1`; удаление session выполняет manager.
     pub(crate) fn on_result(&self, payload: &dyn Any) -> bool {
         self.deliver(NetSessionAsyncResultKind::Result, Some(payload))
     }
 
-    /// Доставляет tag `2` без чтения неинициализированного старого pointer-а.
+ /// Доставляет tag `2` без чтения неинициализированного старого pointer-а.
     pub(crate) fn on_time_out(&self) -> bool {
         self.deliver(NetSessionAsyncResultKind::TimeOut, None)
     }
 
-    /// Уменьшает только ненулевой unsigned timeout.
+ /// Уменьшает только ненулевой unsigned timeout.
     pub(crate) fn decrement_timeout(&mut self) -> bool {
         if self.timeout == 0 {
             return false;
@@ -199,12 +162,12 @@ impl CNetSession {
         true
     }
 
-    /// Проверяет достигнутое условие немедленного timeout.
+ /// Проверяет действующее условие немедленного timeout.
     pub(crate) const fn is_timed_out(&self) -> bool {
         self.timeout == 0
     }
 
-    /// Создаёт временный callback owner для вызова вне manager lock.
+ /// Создаёт временный callback owner для вызова вне manager lock.
     pub(crate) fn endpoint_handle(&self) -> Option<Arc<dyn NetSessionEndpoint>> {
         self.endpoint.clone()
     }

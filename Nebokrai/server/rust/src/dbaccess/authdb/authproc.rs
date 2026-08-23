@@ -24,8 +24,8 @@
 //! DATE без ручного platform-кода. Если connection или отдельный вызов падает,
 //! весь уже вынутый snapshot, включая ещё не записанный хвост, теряется как в
 //! оригинале; событие ошибки сохраняет эту странность явно.
-//! Неизменяемый `server/database/mssql-source/Account.bak` независимо
-//! подтверждает `dbo.PutOnlineLog`, тип `datetime`, четыре signed `int` и
+//! Схема `server/database/mssql-source/Account.bak` задаёт `dbo.PutOnlineLog`,
+//! тип `datetime`, четыре signed `int` и
 //! `INSERT INTO OnlineLog(LogTime,ls,ws,gs,Amount)` в том же порядке.
 //!
 //! `encoding_rs::WINDOWS_1251` заменяет преобразование ANSI `char*` в ADO BSTR

@@ -1,17 +1,16 @@
-//! DB-reader журнала increment-shop исторического WorldServer.
+//! DB-reader журнала increment-shop WorldServer.
 //!
-//! `CDbIncrementLog::LoadAll` RVA `0x00115410` восстановлен по точной паре
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner:
-//! `e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbincrementlog.cpp:13`.
+//! Источник контракта `CDbIncrementLog::LoadAll` —
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`.
 //! Запрос сохраняет `DATEDIFF(day, log_time, GETDATE()) <= days` и обязательный
 //! порядок `player_id, log_time`. Каждая уже прочитанная строка публиковалась в
 //! `CIncrementLog` до перехода к следующей, поэтому typed результат отдельно
-//! возвращает достигнутый prefix при ошибке следующей строки.
+//! возвращает действующий prefix при ошибке следующей строки.
 //!
 //! Tiberius, параметр `@P1`, owned строки и `chrono::NaiveDateTime` заменяют
 //! только ADO connection/recordset, BSTR/VARIANT и `VariantTimeToSystemTime`.
-//! Идентификатор DB-строки исходник не читал; дополнительные donor-валидации
-//! ID, календаря, длины описания и общих лимитов сюда не перенесены.
+//! Идентификатор DB-строки исходник не читал; ID, календарь, длина описания и
+//! общие лимиты дополнительно не проверяются.
 
 use std::error::Error;
 use std::fmt;

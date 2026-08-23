@@ -4407,7 +4407,7 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
  /// Возвращает script paths в порядке конкретного resource-owner-а.
  ///
  /// Пока package-resource ещё не материализован, default является безопасной
- /// host-filesystem заменой Win32 `FindScriptFile`. связанный resource owner
+ /// host-filesystem заменой Win32 `FindScriptFile`. Связанный resource owner
  /// может переопределить метод, не меняя script-loading контракт `CGame`.
     fn script_files(&mut self, pattern: &[u8], extension: &[u8]) -> Vec<Vec<u8>> {
         find_script_files(pattern, extension)

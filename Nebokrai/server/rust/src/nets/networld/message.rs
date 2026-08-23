@@ -1,65 +1,13 @@
-//! Сообщение направления Login/GameServer <-> WorldServer из
-//! `nets/networld/message.cpp`.
+//! Сообщение Login/GameServer ↔ WorldServer из `nets/networld/message.cpp`.
+//! Источник контракта — точная пара WorldServer EXE/PDB.
 //!
-//! Статус владельца: `IMPLEMENTED` для layout/runtime metadata, RLE и
-//! несжатого create-путей, четырёх server-envelope send-направлений и numeric
-//! selector `Run`.
-//!
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
-//! SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! SHA-256 PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходный путь PDB:
-//! `e:\svn\fengyun_russia_dev\nets\networld\message.cpp`.
-//!
-//! Существенные RVA: деструктор `0x00022D70`, конструктор `0x00022DA0`,
-//! `CreateMessage` `0x00022DD0`, `CreateMessageWithoutRLE` `0x00022F20`,
-//! `SendToSocket` `0x00022FF0`, `SendToMapID` `0x000230B0`, `SendAll`
-//! `0x00023170`, `Send` `0x00023220` и `Run` `0x000232E0`.
-//!
-//! Конструктор пишет полный signed `long MsgType` в header `+4` и обнуляет
-//! numeric map/socket ID, IPv4 и receive tick. Accepted GameServer получает
-//! map/socket/IP из соседнего `CMyServerClient::OnReceive`; сообщения от
-//! исходящего LoginServer client сохраняют нулевые metadata. Rust передаёт
-//! `timeGetTime`-совместимый tick create-функциям явно, чтобы будущий transport
-//! снял его в той же позиции после полного копирования сообщения.
-//!
-//! Оба create-пути копируют четыре слова входного header, затем нормализуют
-//! первое слово по реально добавленному payload. RLE-путь сохраняет порог
-//! `0x20001`, capacity `0x100000` либо `compressed_len * 8`. Исходная critical
-//! section покрывала декодирование в process-global scratch, создание объекта,
-//! копирование и освобождение временного буфера; локальный owned `Vec<u8>`
-//! устраняет общую память и не оставляет под этим create-lock внешнего эффекта.
-//! Ненулевой вход короче 16-байтового header и переполнение старого умножения
-//! безопасно отклоняются до чтения или выделения.
-//!
-//! Все четыре send-функции строят один envelope
-//! `[total_len, crc(total_len), crc(message), message]`. `SendToSocket`,
-//! `SendToMapID` и `SendAll` адресуют входящие GameServer через server-owner;
-//! `Send(bool)` ставит packet исходящему LoginServer client с исходным
-//! приоритетом и flags `0`. Старый nullable `g_pGame->s_pNet*` выражен
-//! `Option`: его отсутствие возвращает `0` до build, как EXE. Общий
-//! `m_CSTemptBuffer` lock охватывал не только scratch, но всю последовательность
-//! build/CRC/downstream-send во всех четырёх методах. Поэтому локальный buffer
-//! не отменяет наблюдаемую межпоточную сериализацию: один Rust mutex сохраняет
-//! её между направлениями. `ServerCommandHandle` и `ClientSendQueue`
-//! синхронно копируют bytes в owned-команду до возврата, так что lifetime
-//! локального envelope не меняет wire.
-//!
-//! `Run` обнуляет младший byte полного opcode и выбирает ровно тринадцать
-//! исторических handler-владельцев. Семейство `0x60200` вызывает
-//! `OnWriteLogMessage` только при `CGame::m_Setup.bUseLogSys`; остальные
-//! неизвестные семейства являются no-op. Исходный return всегда равен `1`, в
-//! том числе для `OnJJcSystemMessage` и неизвестного opcode. Узкий trait
-//! выражает только эти свободные функции и setup-проверку, не создавая общего
-//! protocol framework.
-//!
-//! `CBaseMessage`/`CMyNetClient` deleting destructor, SEH allocation cleanup,
-//! ручные new/delete и общий scratch классифицированы как compiler/library
-//! noise. Их эффект выражен `CBaseMessage`, локальными коллекциями и `Drop`;
-//! не относящийся к сообщению runtime client остаётся соседнему
-//! `nets/networld/mynetclient.rs`.
+//! Create-пути сохраняют 16-byte header, нормализацию payload length и RLE
+//! threshold/capacity. Все send-направления строят общий envelope
+//! `[total_len, crc(total_len), crc(message), message]`; mutex сериализует
+//! build и downstream send между направлениями. `Run` выбирает исходные
+//! message families и всегда возвращает `1`, включая неизвестный opcode.
+//! Owned buffers, `CBaseMessage` и готовые client/server queues заменяют
+//! общий scratch и ручной lifetime без изменения wire или порядка отправки.
 
 use parking_lot::Mutex;
 

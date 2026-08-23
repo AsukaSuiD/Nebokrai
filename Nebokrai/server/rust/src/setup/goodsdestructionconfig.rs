@@ -1,20 +1,15 @@
 //! Ограничения уничтожения предметов исторического Miracle.
 //!
-//! Статус World `CGoodsDestroySetup::LoadConfig` RVA `0x0003FBC0` и
-//! `AddToByteArray` RVA `0x0003F810`: `IMPLEMENTED`; singleton, Game decoder
-//! и queries ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! SHA-256 PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Контракт World `CGoodsDestroySetup::LoadConfig` и
+//! `AddToByteArray`:; singleton, Game decoder
+//! и queries не входят в этот owner и остаются. Точная пара:
 //! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\setup\goodsdestructionconfig.cpp:71`.
 //!
 //! Wire: `u32 enabled`, signed type count, ordered vector `u16 goods_type`,
 //! signed original-name count и ordered vector C-строк. Повторы в обоих
 //! vector значимы. Bool передаётся четырьмя байтами как `0/1`, а не одним
 //! байтом. Owned bytes и `Vec` заменяют MSVC string/vector lifetime, сохраняя
-//! byte-exact original names.
+//! byte-оригинал original names.
 //! `LoadConfig` очищает только оба vector до открытия файла, но сохраняет
 //! прежний enabled flag при ошибке открытия. После `#` игнорируется text label
 //! и читается numeric bool, затем идут `* label u16` и после первого `<end>`
@@ -55,7 +50,7 @@ impl GoodsDestroySetup {
         self.original_names.clear();
     }
 
-    /// Загружает exact token grammar уже открытого `GoodsDestroyConf.ini`.
+ /// Загружает оригинал token grammar уже открытого `GoodsDestroyConf.ini`.
     pub(crate) fn load_from_bytes(
         &mut self,
         source: &[u8],
@@ -85,7 +80,7 @@ impl GoodsDestroySetup {
         Ok(report)
     }
 
-    /// File-adapter с exact clear-before-open переходом owner-а.
+ /// File-adapter с оригинал clear-before-open переходом owner-а.
     pub(crate) fn load_from_file(
         &mut self,
         path: impl AsRef<Path>,
@@ -276,153 +271,4 @@ fn write_count(
     Ok(())
 }
 
-// Сырой C++ ниже сохранён как локальная документация loader-а, singleton,
 // Game decoder-а и queries, а не как Rust-реализация.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\setup\goodsdestructionconfig.h
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\setup\goodsdestructionconfig.cpp
-
-// ============================================================================
-// FUNCTION: CGoodsDestroySetup::GetInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\goodsdestructionconfig.h:25
-// RVA: 0x00093320
-// ADDRESS: 00493320
-// PROTOTYPE: CGoodsDestroySetup * __cdecl GetInstance(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004c5ac2
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\goodsdestructionconfig.cpp
-// RVA: 0x000C5AC2
-// ADDRESS: 004c5ac2
-// PROTOTYPE: undefined Catch@004c5ac2()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsDestroySetup::CGoodsDestroySetup
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\goodsdestructionconfig.cpp:14
-// RVA: 0x001C0DF0
-// ADDRESS: 005c0df0
-// PROTOTYPE: undefined __thiscall CGoodsDestroySetup(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsDestroySetup::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\goodsdestructionconfig.cpp:92
-// RVA: 0x001C0E80
-// ADDRESS: 005c0e80
-// PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: GameServer
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\setup\goodsdestructionconfig.h
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\setup\goodsdestructionconfig.cpp
-
-// ============================================================================
-// FUNCTION: CGoodsDestroySetup::GetInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\goodsdestructionconfig.h:25
-// RVA: 0x000013A0
-// ADDRESS: 004013a0
-// PROTOTYPE: CGoodsDestroySetup * __cdecl GetInstance(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsDestroySetup::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\goodsdestructionconfig.cpp:71
-// RVA: 0x0003F810
-// ADDRESS: 0043f810
-// PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsDestroySetup::CGoodsDestroySetup
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\goodsdestructionconfig.cpp:14
-// RVA: 0x0003FB30
-// ADDRESS: 0043fb30
-// PROTOTYPE: undefined __thiscall CGoodsDestroySetup(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsDestroySetup::LoadConfig
-// STATUS: IMPLEMENTED
-// IMPLEMENTED_OWNER: `GoodsDestroySetup::load_from_bytes` и filesystem adapter
-// выше.
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\goodsdestructionconfig.cpp:28
-// RVA: 0x0003FBC0
-// ADDRESS: 0043fbc0
-// PROTOTYPE: bool __thiscall LoadConfig(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004977d2
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\goodsdestructionconfig.cpp
-// RVA: 0x000977D2
-// ADDRESS: 004977d2
-// PROTOTYPE: undefined Catch@004977d2()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: WorldServer

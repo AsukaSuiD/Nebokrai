@@ -1,8 +1,7 @@
 //! Владелец `CVariableList` исторического WorldServer из `variablelist.cpp`.
 //!
-//! `SetVarValue`, `SaveVarData`
-//! `AddToByteArray` и `LoadVarData` —
-//! действует; посторонние copy/destructor
+//! `SetVarValue`, `SaveVarData`, `AddToByteArray` и `LoadVarData` входят в
+//! контракт owner-а; посторонние copy/destructor
 //! `CBattleFairyProperty::tagCompose` ниже также выражены живым owner-ом
 //! `goods::cbattlefairyproperty`, а оставшиеся блоки — compiler/STL cleanup.
 //!

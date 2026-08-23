@@ -1,46 +1,10 @@
-//! Производный владелец принятых GameServer-соединений WorldServer из
-//! `nets/networld/mynetserver.cpp`.
+//! Сервер принятых GameServer-соединений WorldServer из `mynetserver.cpp`.
+//! Источник контракта — точная пара WorldServer EXE/PDB.
 //!
-//! Статус владельца: `IMPLEMENTED` для constructor/destructor ownership,
-//! component defaults, virtual-фабрики `CMyServerClient`, общего command
-//! snapshot и выдачи конкретной World FIFO. Та же FIFO теперь хранит typed
-//! replacement-клиент старого `0x3FC03 + CMyNetClient*`, поэтому порядок
-//! обычных сообщений и reconnect handoff не разделяется. Долгоживущие Linux I/O actions
-//! возвращаются runtime через общий `CServer`; этот owner не исполняет
-//! доменные World-сообщения и не создаёт второй transport runtime.
-//!
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
-//! SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! SHA-256 PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходный путь PDB:
-//! `e:\svn\fengyun_russia_dev\nets\networld\mynetserver.cpp`.
-//! Существенные RVA: конструктор `0x00028250`, деструктор `0x00028280`,
-//! `CreateServerClient` `0x00028290`.
-//!
-//! Производный конструктор после общего `CServer` ставил максимум
-//! незавершённых send-операций `100` и per-client send-buffer limit
-//! `0x2000000`. Virtual-фабрика выделяла объект размером `200` bytes и
-//! вызывала точный `CMyServerClient`; Rust создаёт тот же component-state
-//! непосредственно в admission closure. `operator new`/null, лежавший рядом
-//! scalar deleting destructor `CMyServerClient` `0x0002BCE0`, SEH allocation
-//! cleanup и два unwind-funclet заменены обычным владением Rust и `Drop`.
-//!
-//! Receive-ошибка World parser не назначает дополнительный IP-ban либо
-//! `QUIT`; общий receive-rate guard остаётся независимым механизмом
-//! `CServer`. Close callback публикует доказанное `0x3FC02 + map ID` через
-//! эту FIFO. Производный файл не переопределял rate и missing-identity
-//! diagnostics, поэтому callbacks остаются no-op.
-//!
-//! `CGame::InitNetServer` позднее, уже после `Host`, записывает local IPv4 и
-//! восемь setup-полей общего сервера через `configure_after_host`. Offset
-//! `+0x118` является `m_dwMaxMsgLen`, а `+0x10D` — `m_bCheckMsgCon`: это
-//! подтверждает consumer `nets/netserver/CMyServerClient::OnReceive`. Точный
-//! World `networld` parser эти два поля не читает, поэтому записи сохраняются
-//! как состояние owner-а, но не создают нового World reject-path.
-//! Неименованное поле конструктора `+0x120 = 0` не связано с наблюдаемым
-//! состоянием и не получает фиктивного Rust-поля только ради старого layout.
+//! Owner задаёт World limits, создаёт `CMyServerClient` и хранит единственную
+//! FIFO обычных сообщений и reconnect handoff. Close публикует `0x3FC02` с
+//! map ID; parser error не добавляет ban или `QUIT`. Общий `CServer` владеет
+//! I/O/runtime, а этот слой сохраняет только World component state и callbacks.
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
@@ -288,6 +252,5 @@ impl Default for CMyNetServer {
     }
 }
 
-// BLOCKED_MISSING_FACT: поле World-конструктора `+0x120 = 0` ещё не связано
-// с именованным состоянием по PDB/call sites. Оно не получает пустого поля
-// Rust только ради совпадения layout.
+// Поле World-конструктора `+0x120 = 0` не связано с наблюдаемым состоянием и
+// не получает пустого Rust-поля только ради совпадения layout.

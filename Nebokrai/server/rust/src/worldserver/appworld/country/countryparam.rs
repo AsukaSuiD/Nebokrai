@@ -1,8 +1,7 @@
 //! Владелец параметров стран исторического `WorldServer`.
 //!
-//! Owner `CCountryParam`; constructor, `Load`,
-//! `Initialize` и `AddToByteArray` входят в контракт owner-а
-//! действует. Источник контракта — точная пара WorldServer EXE/PDB.
+//! Constructor, `Load`, `Initialize` и `AddToByteArray` входят в контракт
+//! owner-а `CCountryParam`. Источник контракта — WorldServer EXE/PDB.
 //!
 //! Старый размер класса `0xFC`: первые `0x9C` bytes — 39 signed параметров,
 //! которым constructor не назначал значения, затем восемь `std::map` по

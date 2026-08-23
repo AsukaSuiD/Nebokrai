@@ -1,21 +1,18 @@
-//! Владелец базового object-состояния исторического `WorldServer`.
+//! Владелец базового object-состояния `WorldServer`.
 //!
 //! `GetExID/SetExID`, `GetGraphicsID/SetGraphicsID`, `GetName`, public
 //! `m_bIncludeChild`,
 //! `CBaseObject::SetName`, действующих нулевых scalar-записей,
 //! `CBaseObject::AddToByteArray`, вызова `CGUID::CGUID` и
-//! `CBaseObject::DecordFromByteArray`, пустого имени внутри
-//! `CBaseObject::CBaseObject` — часть контракта owner-а. Контракт
-//! child-tree, destructor-а и передачи factory-результата внутри
-//! `CreateChildObject` действует по оригинал/PDB и точечно
-//! проверен в EXE. `CreateChildObject`, `AddObject`, `RemoveObject`, обе
+//! `CBaseObject::DecordFromByteArray` и пустое имя внутри constructor-а входят
+//! в контракт owner-а. `CreateChildObject`, `AddObject`, `RemoveObject`, обе
 //! перегрузки `FindChildObject`, обе `RecursiveFindObject` и обе
 //! `DeleteChildObject`, `DeleteAllChildObject`, `BoardCast`,
 //! `DgFindObjectsByTypes`, `AI`, constructor и destructor materialизованы
 //! безопасным child-tree owner-ом. Статический `CreateObject`
 //! materialизован отдельным tagged factory-result без erased
-//! pointer/vtable. Источник контракта — точная пара WorldServer EXE/PDB.
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
+//! pointer/vtable. Источник контракта — `WorldServer/Nworldserver.exe` и
+//! `WorldServer/WorldServer.pdb`.
 //!
 //! PDB задаёт размер старого `CBaseObject` `0x50` и три protected
 //! signed `long`: `m_lType` по offset `+0x4`, `m_lID` по `+0x8` и
@@ -47,24 +44,22 @@
 //! terminator. `Vec::extend_from_slice/push` заменяют их STL-вставки; входной
 //! `bool` исходное тело не читает, а результат всегда равен `true`.
 //! Обратный decoder читает те же поля в том же порядке и двигает caller-owned
-//! cursor на `12 + name.len() + 1`. World `_GetStringFromByteArray`
-//! подтверждает включение NUL в cursor. исходный listing смешал
-//! возвращаемый `bool` с `__security_check_cookie`; точечный разбор
-//! подтвердил `mov al, 1` по перед cookie-check, поэтому normal
-//! return равен `true` (). Входной `bool` снова не
-//! читается.
+//! cursor на `12 + name.len() + 1`: завершающий NUL входит в смещение.
+//! Нормальное завершение возвращает `true`; security-cookie epilogue не меняет
+//! это значение.
+//! Входной `bool` снова не читается.
 //! Старые pointer/`long&` заменены `&[u8]` и `&mut usize`. Безразмерный helper
 //! мог читать за источником, а локальный `char[256]` — переполняться; safe Rust
 //! возвращает типизированную ошибку только на этих границах, сохраняет
 //! уже выполненные scalar-присваивания и cursor, но не назначает старому UB
 //! fail-closed результат. Имя присваивается лишь после найденного NUL, как после
 //! завершения исходного временного buffer.
-//! Исторически public include-child хранится отдельным `pub(crate) bool` и
-//! получает доказанный default `true`; accessor не придуман, а оба wire-метода
+//! Public include-child хранится отдельным `pub(crate) bool` и получает default
+//! `true`; оба wire-метода
 //! поле не читают. Constructor-helper материализует только шесть действующих
 //! полей; father и child-list остаются в полном оригинал-конструкторе.
 //!
-//! оригинал child-tree задаёт ownership буквально. `AddObject` сначала записывает
+//! Child-tree задаёт ownership буквально. `AddObject` сначала записывает
 //! father, затем добавляет pointer в хвост без duplicate/null проверки.
 //! `RemoveObject` выполняет `std::list::remove`, то есть убирает все равные
 //! pointers, но не очищает father и не уничтожает объект. Pointer-вариант
@@ -78,10 +73,7 @@
 //!
 //! `CBaseObject::~CBaseObject` сначала ставит base-vtable,
 //! удаляет всех детей, освобождает list/string storage и завершает GUID-cleanup.
-//! Сырой хвост ошибочно подписал последний вызов как `AddPlayerList(unaff_ESI)`:
-//! показывает вызов с `this+0xC`, а по этому адресу
-//! находится единственный `ret`. Внешнего player-callback нет
-//! (, ).
+//! Внешнего player-callback в этой цепочке нет.
 //! `Drop` у tree-node сначала освобождает parent ownership children в list-order,
 //! затем Rust освобождает base object. Это сохраняет наблюдаемый lifecycle без
 //! base-vtable/CRT cleanup и без dangling child aliases original-а.
@@ -95,20 +87,16 @@
 //! до первого virtual-вызова самого child. Detached-ветви всё равно продолжают
 //! оставшуюся инициализацию и возвращают живой объект с нулевым father.
 //!
-//! Первый child-slot `+0x8` является `Load`. -vtable у `CRegion`
-//! содержит по этому slot, то есть именованный
-//! `CRegion::Load`; vtable `CPlayer/CNpc/CMonster/CGoods` соответственно
-//! /// содержит общий адрес
-//! чьё тело возвращает `1`. оригинал ошибочно приписал этот общий
-//! COMDAT `std::codecvt_base::do_max_length`, но topology slot-а и Region
-//! override определяют исходный virtual-контракт. Результат `Load` не
-//! проверяется. Перед вызовом восстанавливается сохранённый factory-ID, после
+//! Первый child-slot `+0x8` является `Load`: `CRegion` использует собственный
+//! `CRegion::Load`, а `CPlayer/CNpc/CMonster/CGoods` — общий вариант с
+//! возвратом `1`. Результат `Load` не проверяется. Перед вызовом
+//! восстанавливается сохранённый factory-ID, после
 //! него ID безусловно снова назначается входным значением: возможная мутация
 //! ID внутри `Load` отбрасывается. Входное имя доступно `Load` благодаря
 //! ранней копии, а ненулевой graphics ID назначается только после вызова;
 //! поздняя повторная копия имени отбрасывает его возможное изменение.
 //! `BaseObjectFactoryType` и `BaseObjectFactoryObject` materialизуют
-//! подтверждённое сопоставление пяти literal type и concrete factory class.
+//! сопоставление пяти literal type и concrete factory class.
 //! Tagged `Box` сохраняет heap-owner результата без erased `CBaseObject*`:
 //! разнородные `CRegion/CPlayer/CNpc/CMonster/CGoods` остаются собственными
 //! Rust owner-ами и не теряют derived-state либо virtual `Load`.
@@ -117,31 +105,6 @@
 //! сравнению без null-проверки. Достижимость и наблюдаемая реакция этого
 //! старого null-dereference не доказаны; safe Rust не
 //! получает придуманного detached/attached либо fail-closed исхода.
-//!
-//! Точечный xref-аудит не нашёл project-call-site
-//! `CreateChildObject`. В executable-секциях нет direct `call` к
-//!; адрес функции встречается только в 17 vtable-ячейках. Все 27
-//! косвенных candidate-инструкций `call [register + 0x28]` сопоставлены с оригинал и
-//! PDB: их receivers принадлежат CrashRpt/CRT, container traversal,
-//! `CTimer`, `COrganizing` либо ADO/DB wrappers, но не `CBaseObject`. В
-//! частности, единственный четырёхаргументный project-candidate по
-//! принадлежит `COrganizing` в `OnOrgasysMessage`; его собственная vtable
-//! начинается по, а не в одной из base-object таблиц.
-//! Аналогично точные адреса `RemoveObject` и обеих перегрузок
-//! `DeleteChildObject` не имеют внешних direct-call, а найденные одноимённые
-//! slot-offset-ы принадлежат другим vtable. Внутри самого owner-а остаётся
-//! только уже классифицированная цепочка: `CreateChildObject` virtual-вызывает
-//! `AddObject`, pointer-delete — `RemoveObject`, key-delete и
-//! `DeleteAllChildObject` — pointer-delete, destructor прямо вызывает
-//! `DeleteAllChildObject`. Поиск полей `m_listObject/m_pFather` и трёх PDB-
-//! inline accessor-ов в оригинал/PDB-корпусе также не дал использования вне этого
-//! файла.
-//!
-//! Следовательно, World-проект не сохраняет возвращённый pointer,
-//! detached player/goods и alias после `RemoveObject`: он вообще не достигает
-//! публичной child-tree границы. Это доказательство отсутствия текущего
-//! project-caller-а, а не доказательство желаемого Rust-владения и не
-//! разрешение удалить публичный исходный контракт.
 //!
 //! Rust child-tree хранится безопасным `BaseObjectTreeNode`: гетерогенный
 //! factory-owner остаётся tagged, parent владеет children в list-order, а
@@ -158,10 +121,6 @@
 //! attachment и `Load`. Короткое имя больше не читается за границей slice и
 //! просто не совпадает с `NoAdd\0`: это исправление внутреннего UB без
 //! доказанного внешнего legacy-эффекта.
-//! Заменённые
-//! оригинал-блоки `SetName`, `AddToByteArray` и `DecordFromByteArray` удалены;
-//! отдельных тел остальных inline-методов в компоненте нет, а
-//! их контракт полностью определён PDB.
 
 use std::cell::RefCell;
 use std::collections::HashSet;

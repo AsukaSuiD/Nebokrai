@@ -1,90 +1,11 @@
-//! Владелец `CLargess` исторического WorldServer из `largess.cpp`.
+//! DB-владелец и worker подарков `CLargess` WorldServer из `largess.cpp`.
+//! Источник контракта — точная пара WorldServer EXE/PDB.
 //!
-//! Статус `Init` RVA `0x000E6630`, `UnInit` RVA `0x000E6650`, двух перегрузок
-//! `SaveLoadDetails` RVA `0x000E8CA0` и
-//! `0x000E91B0`, `GetTime` RVA `0x000E6800`, `AddGoldCoin` RVA `0x000E6690`,
-//! `AddOneLargess` RVA `0x000E6A60`, `TransferLargessThread` RVA `0x000E7500`,
-//! `AppendLargessToMap` RVA `0x000E9D40`, `CycleLoadLargessThread` RVA
-//! `0x000E9FD0`, `WorkerThread` RVA `0x000EAC80` и `StartWorkerThread` RVA
-//! `0x000EACC0` — `IMPLEMENTED`; остальной
-//! корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
-//! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
-//! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
-//! исходный путь PDB:
-//! `e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp`.
-//!
-//! PDB задаёт `tagLargess` размером `0x4C`: пять последовательных 32-битных
-//! полей `lSendID`, `dwGoodsIndex`, `lSendNum`, `lObtainedNum`, `lGoodsLevel`,
-//! затем `std::string strSendedTime` по `+0x14` и `strFailedReason` по `+0x30`.
-//! Статическая `std::map<long, tagLargess>` поэтому представлена
-//! `BTreeMap<i32, LargessSnapshot>`, а `parking_lot::Mutex` заменяет только
-//! `CriticalSectionmapLargess` без poisoning. Обе перегрузки держали critical
-//! section от первого `equal_range` до последнего SQL, условного erase и
-//! cleanup; Rust намеренно держит тот же lock через все `await`. Он защищал не
-//! только память map, но и порядок конкурирующих save/load/mutation операций,
-//! поэтому локальная копия записи не является основанием снять lock раньше.
-//!
-//! При `dwLoadLargessTime == 0`, отсутствующем player-key либо пустом
-//! `strFailedReason` DB-вызова нет и исходный bool равен `true`. Для непустой
-//! причины owner сначала вставляет `LoadDetails` с полями `SendID`, signed
-//! player ID, `lObtainedNum`, C-string view `strSendedTime`, C-string view
-//! `strFailedReason` и текущим local time без leading zeroes. Затем он всегда
-//! пытается обновить `Largess`: для точного полного значения
-//! `"error goodsID!"` пишет `9999`, иначе `lObtainedNum`. Ошибка INSERT
-//! поглощается локальным catch и не пропускает UPDATE; ошибка UPDATE также
-//! поглощается, но сохраняет map-entry. После успешного UPDATE запись удаляется
-//! только когда `lSendNum == lObtainedNum` либо причина точно равна
-//! `"error goodsID!"`; иначе остаётся для следующей попытки.
-//!
-//! Exact EXE имеет статус `VERIFIED_DISASSEMBLY` только для потерянных raw-
-//! фактов. `0x004E8E1A..0x004E8E52` и `0x004E95F4..0x004E962C` подтвердили
-//! шесть аргументов INSERT в указанном порядке; `0x004E8F73..0x004E8FC5` и
-//! `0x004E974F..0x004E97A1` — special/обычный UPDATE. Выходы
-//! `0x004E8CF8`, `0x004E8D70`, `0x004E9169..0x004E9192` и
-//! `0x004E924E`, `0x004E9942..0x004E99DA` возвращают `true`, outer catch-и
-//! `0x004E914F`/`0x004E9968` — `false`. После этих ответов reverse прекращён.
-//!
-//! Перегрузка с caller-connection использует уже открытое Cost DB соединение и
-//! не начинает/завершает транзакцию. Даже null connection попадал в два
-//! локальных catch-а и обычно завершался `true`, поэтому `Option` не превращён
-//! в ранний fail-closed. Старая перегрузка под тем же lock самостоятельно
-//! открывает отдельное Cost DB соединение из пяти setup-строк, закрывает его до
-//! unlock и возвращает `false` при ошибке открытия. Tiberius/Tokio TCP заменяют
-//! ADO provider/COM/BSTR; provider сохраняется в setup snapshot, но Linux TDS
-//! не интерпретирует его. ANSI SQL декодируется как Windows-1251, выбранная для
-//! этой поставки, а literal SQL сознательно сохраняет исходный parser-эффект
-//! одинарных кавычек вместо параметризации.
-//!
-//! Оба INSERT собирались небезопасным `_sprintf` в `char[256]`; owned SQL
-//! buffer не переносит его переполнение. Текущий local time заведомо помещается
-//! в `char[32]`, а оба UPDATE — в `char[256]`. `Vec`, `BTreeMap`, Rust `Drop`
-//! и structured notices заменяют только `std::string`, MSVC tree, COM lifetime
-//! и log-механику; CD-key в `Debug` намеренно скрыт. `LargessWriteLog` хранит
-//! исходные одиннадцать значений, `CGame::publish_largess_load_log` ставит их
-//! в общий FIFO, а write-log worker выполняет параметризованный INSERT.
-//!
-//! Два leaf-а выдачи также восстановлены. `AddGoldCoin` вызывает bank-wallet
-//! на позиции `0`. `AddOneLargess` обходит весь inherited depot limit; только
-//! ячейки `96,109,122,135,148` требуют addon `GAP_GOODS_PACKAGE_EXTENTION/1`
-//! со значением `1`. Rejected `Box<CGoods>` освобождается Rust `Drop` вместо
-//! virtual deleting destructor; container codec-ошибка остаётся typed block.
-//! Exact `0x004E6AB0..0x004E6AE3` подтверждает gate и numeric type `0xEA`;
-//! `0x004E6B12` возвращает `AL=1` после вставки. Failure-tail читает в
-//! `0x004E6B7A` тот самый локальный byte, который `0x004E6A80` заранее
-//! обнулил, поэтому заполненный depot стабильно даёт `false`, а не мусор.
-//! `AppendLargessToMap` сначала линейно проверяет `lSendID` по всей карте и
-//! только затем делает unique insert по player ID; ни один из двух duplicate-
-//! случаев не заменяет старую запись. `BTreeMap::entry` сохраняет этот контракт.
-//! Cycle-load держит тот же map-lock от открытия Cost DB до EOF, выполняет
-//! literal query без ORDER BY и сразу публикует каждую строку через append-
-//! owner. Поэтому поздняя DB/row ошибка сохраняет уже вставленный prefix, а
-//! donor staging/swap не переносится. Прочитанный `Cdkey` и его `_strlwr`
-//! удалены как мёртвая локальная работа; exact вызов append передаёт
-//! `ObtainedNum=0` независимо от выбранной DB-строки, и этот quirk сохранён.
-//! Worker остаётся одним короткоживущим проходом: стандартный `JoinHandle`
-//! заменяет CRT handle, его живое состояние — `TryEnterCriticalSection`, а
-//! тело всегда вызывает transfer и затем cycle независимо от первого bool.
+//! Owner сохраняет lifecycle Init/UnInit, очереди transfer/cycle-load, порядок
+//! `AddOneLargess`, календарные поля и обе формы `SaveLoadDetails`. Worker
+//! переносит записи между очередями в исходном порядке; ошибка соединения или
+//! команды не получает выдуманного rollback. Mutex/threads, Tiberius и owned
+//! records заменяют Win32/ADO/STL, сохраняя locks, partial success и shutdown.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
@@ -117,7 +38,7 @@ const LARGESS_DEPOT_EXTENSION_FIRST_POSITION: u32 = 0x60;
 const LARGESS_DEPOT_EXTENSION_STRIDE: u32 = 0x0D;
 const LARGESS_DEPOT_EXTENSION_END: u32 = 0xA1;
 
-/// Exact bool и достигнутая позиция `CLargess::AddOneLargess`.
+/// Оригинал bool и действующая позиция `CLargess::AddOneLargess`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LargessDepotAddOutcome {
     Added { position: u32 },
@@ -331,7 +252,7 @@ pub(crate) struct CostDatabaseSettingsParts {
 }
 
 impl CostDatabaseSettings {
-    /// Сохраняет byte-exact `strCostDB*` поля старого `CSetup`.
+ /// Сохраняет byte-оригинал `strCostDB*` поля старого `CSetup`.
     pub(crate) fn from_parts(parts: CostDatabaseSettingsParts) -> Self {
         Self {
             _provider: parts.provider,
@@ -355,7 +276,7 @@ impl CostDatabaseSettings {
     }
 }
 
-/// Полный достигнутый value-layout одного `tagLargess` без MSVC ABI.
+/// Полный действующий value-layout одного `tagLargess` без MSVC ABI.
 #[derive(Clone)]
 pub(crate) struct LargessSnapshot {
     pub(crate) send_id: i32,
@@ -367,7 +288,7 @@ pub(crate) struct LargessSnapshot {
     pub(crate) failed_reason: Vec<u8>,
 }
 
-/// CD-key нужен будущему log-owner-у, но не раскрывается обычным `Debug`.
+/// CD-key нужен внешнему log-owner-у, но не раскрывается обычным `Debug`.
 #[derive(Clone)]
 pub(crate) struct SensitiveCdKey(Vec<u8>);
 
@@ -409,7 +330,7 @@ pub(crate) enum LargessNotice {
     SaveLoadDetails(LargessDatabaseError),
 }
 
-/// Ошибка достигнутой ADO/TDS-границы без SQL и credentials.
+/// Ошибка действующей ADO/TDS-границы без SQL и credentials.
 #[derive(Debug)]
 pub(crate) enum LargessDatabaseError {
     MissingConnection,
@@ -443,9 +364,9 @@ impl From<tiberius::error::Error> for LargessDatabaseError {
     }
 }
 
-/// Узкая граница двух достигнутых перегрузок `CLargess::SaveLoadDetails`.
+/// Узкая граница двух действующих перегрузок `CLargess::SaveLoadDetails`.
 pub(crate) trait LargessOwner {
-    /// Сохраняет одну map-запись на caller-owned Cost DB connection.
+ /// Сохраняет одну map-запись на caller-owned Cost DB connection.
     async fn save_load_details_with_connection(
         &mut self,
         cd_key: &[u8],
@@ -453,14 +374,14 @@ pub(crate) trait LargessOwner {
         connection: Option<&mut WorldTdsClient>,
     ) -> SaveLoadDetailsOutcome;
 
-    /// Открывает отдельное Cost DB connection и сохраняет одну map-запись.
+ /// Открывает отдельное Cost DB connection и сохраняет одну map-запись.
     async fn save_load_details(&mut self, cd_key: &[u8], player_id: i32) -> SaveLoadDetailsOutcome;
 
-    /// Забирает следующий исходный log-эквивалент.
+ /// Забирает следующий исходный log-эквивалент.
     fn pop_notice(&mut self) -> Option<LargessNotice>;
 }
 
-/// Linux/TDS-замена достигнутой части статического `CLargess`.
+/// Linux/TDS-замена действующей части статического `CLargess`.
 pub(crate) struct TiberiusLargess {
     load_largess_time: u32,
     incoming_cost_database: CostDatabaseSettings,
@@ -471,8 +392,8 @@ pub(crate) struct TiberiusLargess {
 }
 
 impl TiberiusLargess {
-    /// Принимает начальный map snapshot; дальнейшее наполнение выполняют
-    /// готовые `AppendLargessToMap` и `CycleLoadLargessThread` owners.
+ /// Принимает начальный map snapshot; дальнейшее наполнение выполняют
+ /// готовые `AppendLargessToMap` и `CycleLoadLargessThread` owners.
     pub(crate) fn new(
         load_largess_time: u32,
         incoming_cost_database: CostDatabaseSettings,
@@ -489,7 +410,7 @@ impl TiberiusLargess {
         }
     }
 
-    /// Даёт save-thread отдельный notice/worker owner над тем же live map.
+ /// Даёт save-thread отдельный notice/worker owner над тем же live map.
     pub(crate) fn clone_save_owner(&self) -> Self {
         Self {
             load_largess_time: self.load_largess_time,
@@ -501,13 +422,13 @@ impl TiberiusLargess {
         }
     }
 
-    /// Текущий размер той же общей map, которую читает `RefeashInfoText`.
+ /// Текущий размер той же общей map, которую читает `RefeashInfoText`.
     pub(crate) fn entry_count(&self) -> usize {
         self.entries.lock().len()
     }
 
-    /// Эквивалент `StartWorkerThread`: пропускает запуск при нулевом интервале
-    /// и пока предыдущий проход ещё владеет worker-slot.
+ /// Эквивалент `StartWorkerThread`: пропускает запуск при нулевом интервале
+ /// и пока предыдущий проход ещё владеет worker-slot.
     pub(crate) fn start_worker(&self, world_number: u32) -> LargessWorkerStartOutcome {
         if self.load_largess_time == 0 {
             return LargessWorkerStartOutcome::Disabled;
@@ -555,18 +476,18 @@ impl TiberiusLargess {
         }
     }
 
-    /// Эквивалент `UnInit`-ожидания единственного worker handle.
+ /// Эквивалент `UnInit`-ожидания единственного worker handle.
     pub(crate) fn wait_for_worker(&self) -> Option<LargessWorkerCompletion> {
         self.worker.lock().take().map(join_largess_worker)
     }
 
-    /// Переносит входящие назначения текущего World в рабочую Cost DB.
-    ///
-    /// Tiberius-параметры заменяют небезопасные `_sprintf` SQL-буферы, но
-    /// сохраняют исходный порядок: target BEGIN/INSERT, source IsProcessed=1,
-    /// затем target COMMIT. Поэтому доказанное окно потери при ошибке COMMIT
-    /// после успешного source UPDATE намеренно не маскируется новой общей
-    /// транзакцией между двумя базами.
+ /// Переносит входящие назначения текущего World в рабочую Cost DB.
+ ///
+ /// Tiberius-параметры заменяют небезопасные `_sprintf` SQL-буферы, но
+ /// сохраняют исходный порядок: target BEGIN/INSERT, source IsProcessed=1,
+ /// затем target COMMIT. Поэтому доказанное окно потери при ошибке COMMIT
+ /// после успешного source UPDATE намеренно не маскируется новой общей
+ /// транзакцией между двумя базами.
     pub(crate) async fn transfer_largess(&self, world_number: u32) -> TransferLargessOutcome {
         const SELECT_INCOMING_LARGESS: &str =
             "SELECT * FROM Largess WHERE WorldID=@P1 AND IsProcessed=0";
@@ -672,7 +593,7 @@ impl TiberiusLargess {
         TransferLargessOutcome::ReturnedTrue { row_count }
     }
 
-    /// Повторяет global SendID scan и последующий unique player-key insert.
+ /// Повторяет global SendID scan и последующий unique player-key insert.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn append_largess_to_map(
         &self,
@@ -695,7 +616,7 @@ impl TiberiusLargess {
         )
     }
 
-    /// Выполняет один exact Cost DB polling-проход без staging/swap карты.
+ /// Выполняет один оригинал Cost DB polling-проход без staging/swap карты.
     #[allow(
         clippy::await_holding_lock,
         reason = "exact CriticalSectionmapLargess охватывал connect, recordset и весь row-loop"
@@ -768,8 +689,8 @@ impl TiberiusLargess {
                 Err(source) => return CycleLoadLargessOutcome::ReturnedFalse(source),
             };
 
-            // Exact owner читал/lowercase-ил Cdkey, но значение не покидало
-            // локальный string и не участвовало ни в одном side effect.
+ // Оригинал owner читал/lowercase-ил Cdkey, но значение не покидало
+ // локальный string и не участвовало ни в одном side effect.
             match append_largess_entry(
                 &mut entries,
                 send_id,
@@ -805,7 +726,7 @@ impl TiberiusLargess {
             .map_err(LargessDatabaseError::Tds)
     }
 
-    /// Выполняет одну синхронную выдачу `CLargess::LoadLargess` под map-lock.
+ /// Выполняет одну синхронную выдачу `CLargess::LoadLargess` под map-lock.
     pub(crate) fn load_largess<Random, Upgrade>(
         &self,
         player: &mut CPlayer,
@@ -885,7 +806,7 @@ impl TiberiusLargess {
             if add_gold_coin(player, goods, gold_coin_limit)
                 .map_err(LoadLargessBlock::Player)?
             {
-                // Exact gold-ветка пишет literal `1`, а не количество монет.
+ // Оригинал gold-ветка пишет literal `1`, а не количество монет.
                 current_sent_num = 1;
                 entry.obtained_num = entry.send_num;
                 entry.failed_reason.clear();
@@ -1047,8 +968,8 @@ async fn mark_incoming_largess_processed(
     incoming: &mut WorldTdsClient,
     send_id: i32,
 ) -> Result<(), tiberius::error::Error> {
-    // LoginDB schema-аудит поздней Rust-ветки подтверждает identity/PK SendID;
-    // это безопасный эквивалент ADO Recordset::Fields[IsProcessed]=1; Update().
+ // LoginDB schema-аудит поздней Rust-ветки подтверждает identity/PK SendID;
+ // это безопасный эквивалент ADO Recordset::Fields[IsProcessed]=1; Update().
     let mut update = Query::new(
         "UPDATE Largess SET IsProcessed=1 WHERE SendID=@P1 AND IsProcessed=0",
     );
@@ -1431,217 +1352,3 @@ fn format_local_time() -> String {
         now.second()
     )
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp
-
-// ============================================================================
-// FUNCTION: CLargess::Init
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:30
-// RVA: 0x000E6630
-// ADDRESS: 004e6630
-// PROTOTYPE: bool __cdecl Init(void)
-//
-// IMPLEMENTED_OWNER: `TiberiusLargess::new`; `parking_lot::Mutex` и owned
-// `JoinHandle` не требуют ручной Win32-инициализации. Неиспользуемый больше
-// нигде `csConnectSatus` не перенесён.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLargess::UnInit
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:42
-// RVA: 0x000E6650
-// ADDRESS: 004e6650
-// PROTOTYPE: bool __cdecl UnInit(void)
-//
-// IMPLEMENTED_OWNER: `TiberiusLargess::wait_for_worker` сохраняет бесконечное
-// ожидание последнего worker-а; Rust RAII освобождает обе mutex после owner-а.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLargess::AddGoldCoin
-// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:79
-// RVA: 0x000E6690
-// ADDRESS: 004e6690
-// PROTOTYPE: bool __cdecl AddGoldCoin(CPlayer * param_1, CGoods * param_2)
-//
-// IMPLEMENTED_OWNER: `add_gold_coin` выше делегирует bank-wallet позиции `0`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLargess::AddOneLargess
-// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:92
-// RVA: 0x000E6A60
-// ADDRESS: 004e6a60
-// PROTOTYPE: bool __cdecl AddOneLargess(CPlayer * param_1, CGoods * param_2)
-//
-// IMPLEMENTED_OWNER: `add_one_largess` выше сохраняет полный positional scan.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLargess::LoadLargess
-// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:417
-// RVA: 0x000E6EC0
-// ADDRESS: 004e6ec0
-// PROTOTYPE: void __cdecl LoadLargess(CPlayer * param_1)
-//
-// IMPLEMENTED_OWNER: `TiberiusLargess::load_largess` выше; typed write-log
-// публикуется через `CGame::publish_largess_load_log` в общий World FIFO.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLargess::TransferLargessThread
-// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:715
-// RVA: 0x000E7500
-// ADDRESS: 004e7500
-// PROTOTYPE: bool __cdecl TransferLargessThread(void)
-//
-// IMPLEMENTED_OWNER: `TiberiusLargess::transfer_largess` выше сохраняет
-// двухбазовый BEGIN/INSERT/source-Update/COMMIT порядок; параметры Tiberius
-// заменяют небезопасные `_sprintf` SQL-буферы. EXE 0x004E7CE7..0x004E7CFF
-// подтвердил `%d = CSetup::dwNumber`, а 0x004E81D5..0x004E8208 — точный порядок
-// девяти INSERT-аргументов.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004e884b
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:796
-// RVA: 0x000E884B
-// ADDRESS: 004e884b
-// PROTOTYPE: undefined Catch@004e884b()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLargess::AppendLargessToMap
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:56
-// RVA: 0x000E9D40
-// ADDRESS: 004e9d40
-// PROTOTYPE: void __cdecl AppendLargessToMap(long param_1, ulong param_2, long param_3, long param_4, long param_5, long param_6)
-//
-// IMPLEMENTED_OWNER: `TiberiusLargess::append_largess_to_map` выше сохраняет
-// SendID scan и unique player-key insertion без замены существующего value.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLargess::CycleLoadLargessThread
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:809
-// RVA: 0x000E9FD0
-// ADDRESS: 004e9fd0
-// PROTOTYPE: bool __cdecl CycleLoadLargessThread(void)
-//
-// IMPLEMENTED_OWNER: `TiberiusLargess::cycle_load_largess` выше сохраняет
-// lock/connect/query/row-порядок, prefix mutations и literal ObtainedNum `0`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004eab52
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:864
-// RVA: 0x000EAB52
-// ADDRESS: 004eab52
-// PROTOTYPE: undefined Catch@004eab52()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_004eab91
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:871
-// RVA: 0x000EAB91
-// ADDRESS: 004eab91
-// PROTOTYPE: undefined FUN_004eab91()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLargess::WorkerThread
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:692
-// RVA: 0x000EAC80
-// ADDRESS: 004eac80
-// PROTOTYPE: uint __stdcall WorkerThread(void * param_1)
-//
-// IMPLEMENTED_OWNER: closure внутри `TiberiusLargess::start_worker` выполняет
-// `transfer_largess`, затем безусловно `cycle_load_largess`; runtime Handle
-// заменяет COM apartment только для async TDS-драйвера.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLargess::StartWorkerThread
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\largess.cpp:674
-// RVA: 0x000EACC0
-// ADDRESS: 004eacc0
-// PROTOTYPE: void __cdecl StartWorkerThread(void)
-//
-// сохраняет nonblocking TryEnter/skip, а `std::thread::Builder` заменяет
-// `_beginthreadex`. `CGame::main_loop` вызывает owner напрямую.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: WorldServer

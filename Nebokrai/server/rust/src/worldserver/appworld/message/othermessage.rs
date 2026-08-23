@@ -3,17 +3,14 @@
 //! transport leaves `0x5FD02`, `0x5FD06..0x5FD09`, goods-link publish/lookup
 //! `0x5FD03/0x5FD04`, increment-log page `0x5FD0A`, copy-number `0x5FD0B`,
 //! cursor-only `0x5FD0E`, chat relay `0x5FD01`, player rename `0x5FD05`,
-//! LeiTing update `0x5FD10`,
-//! honor-reset `0x5FD0C` и eliminate update `0x5FD0D` со статусом
-//! действует. Reset читает один Windows `long`, получает текущий `CGame`
+//! LeiTing update `0x5FD10`, honor-reset `0x5FD0C` и eliminate update
+//! `0x5FD0D` входят в контракт owner-а. Reset читает один Windows `long`,
+//! получает текущий `CGame`
 //! и вызывает `ResetHonorElimilateInfo`.
 //! Недостаточный payload сохраняет старое поведение numeric getter-а: значение
 //! становится нулём без сдвига cursor; отчёт отдельно фиксирует неполноту.
 //!
-//! исходный owner
-//! Linux C++ подтверждает практическую границу dispatcher-а, но добавленную там
-//! проверку synthetic owner-а и route-validation Rust не переносит:
-//! их не выполняет. Для `0x5FD0D` owner сначала читает player/eliminator,
+//! Для `0x5FD0D` owner сначала читает player/eliminator,
 //! проверяет online player и duplicate ledger, и только для новой пары читает
 //! четыре прежних счётчика, прибавляет к каждому единицу, обновляет ranks и
 //! отвечает `0x7FA16 + player + char(1)` в исходный socket. Дубликат прекращает
@@ -21,7 +18,7 @@
 //! `0x5FD02` читает target map, переписывает исходный type в `0x7FA05` и
 //! маршрутизует то же сообщение; `0x5FD06..09` только переписывают type и
 //! делают `SendAll`. `0x5FD0E` ровно один раз читает и отбрасывает signed long.
-//! Donor-added ownership/tail validation отсутствует в EXE и не перенесена.
+//! Ownership/tail validation отсутствует в EXE.
 //! Полный `switch` завершается общим epilogue после `0x5FD10`: любой
 //! иной opcode не читает payload, не отправляет ответ и не передаётся
 //! следующему owner-у. Rust materialизует это `NoOp`.
@@ -48,7 +45,7 @@
 //! добавляется до изменения текста. Rewrite удаляет девять байт от `change=`,
 //! заменяет участок с offset `+3` до `>` signed-десятичным индексом и продолжает
 //! после `</goodslink>`. Lookup возвращает `long(found)` и либо прежний goods,
-//! owner/tail/type/count проверки в отсутствуют и не перенесены.
+//! owner/tail/type/count проверки отсутствуют.
 //! Malformed goods и невозможные позиции `std::string` остаются typed safe-
 //! границами; уже добавленные prefix-ссылки при rewrite-ошибке не откатываются.
 //! Chat-ветка сохраняет условное чтение строк: faction name/content читаются

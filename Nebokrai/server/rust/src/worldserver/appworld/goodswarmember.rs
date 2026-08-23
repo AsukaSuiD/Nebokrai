@@ -10,7 +10,6 @@
 //! mutation/refresh/faction-win маршруты входят в контракт owner-а. COM/SEH cleanup
 //! исходного бинарника не образует самостоятельного игрового контракта.
 //!
-//! исходный owner:
 //! `m_member` является signed ordered map `player ID -> faction ID`, а
 //! `m_setGoodsWarFactionIdList` — signed ordered set. `BTreeMap/BTreeSet`
 //! заменяют только MSVC tree. Count-list сохраняет отдельный list-order:

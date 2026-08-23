@@ -57,8 +57,8 @@
 //! только defender/attacker, не трогая `state_clear`, и затем безусловно
 //! рассылает `0x7FF1D`. `reload` в map-order безусловно читает и передаёт в
 //! `KillTimeEvent` девять ID, затем вызывает `end_war -> initialize`.
-//! `Option<TimerId>` не пропускает отсутствующее поле как donor helper
-//! `KillEvent(0)`: typed block возвращается в точке первого недоказанного ID и
+//! `Option<TimerId>` не подменяет отсутствующее поле вызовом `KillEvent(0)`:
+//! typed block возвращается в точке первого недоказанного ID и
 //! сохраняет счётчики уже выполненных kill side effects. Return рассылки
 //! `0x7FF1D` оригинал не проверял; typed report хранит полный `Result`, не
 //! сворачивая ошибку очереди в придуманный signed код.
@@ -66,8 +66,7 @@
 //! Phase callbacks сохраняют точный side-effect порядок. `DeclareBegin`
 //! сначала обходит country IDs `1..=4`, назначая war-result `0` только живым
 //! странам, затем рассылает `0x7FF17` и публикует `WS0095`.
-//! подтверждает один и тот же stack-byte как ключ
-//! `find/operator[]`, исправляя ложное раздвоение переменных в оригинал. Остальные
+//! Один и тот же country byte служит ключом `find/operator[]`. Остальные
 //! пары: `DeclareEnd = 0x7FF18/WS0096`, `PrepareBegin = 0x7FF19/WS0097`,
 //! `PrepareEnd = 0x7FF1A/WS0098`; clear callback только рассылает `0x7FF1E`.
 //! Timer parameter во всех пяти функциях не читается. Lookup null превращается
@@ -85,17 +84,17 @@
 //! вызывается до concrete `SendTopInfoToClient` с возвращённым ID. wire
 //! `0x7FA04` теперь принадлежит `CCountryHandler`, а delivery сохранён в report.
 //!
-//! `on_war_start` подтверждён: сначала
+//! `on_war_start` сначала выполняет
 //! безусловный `0x7FF1B`, затем map-order обход записей с двумя ненулевыми
 //! сторонами. Для каждой такой записи clear-byte становится `1` до region
 //! lookup; отсутствующий/null region пропускает только `WS0092`, не откатывая
-//! state. использует один region ID и для
-//! `find`, и для `operator[]`, исправляя ложный stack-key оригинал. В `_sprintf`
+//! state. Один region ID используется и для `find`, и для `operator[]`. В
+//! `_sprintf`
 //! передавались именно `szCountryName[country][0x40]`, поэтому concrete
 //! adapter теперь форматирует именами стран, а не их числовыми ID. Старый
 //! 256-byte overflow безопасно ограничен 255 видимыми байтами.
 //!
-//! `on_war_end` подтверждён. После `0x7FF1C`
+//! `on_war_end` после `0x7FF1C`
 //! он обрабатывает только `state_clear && defend != 0 && attack != 0`: живой
 //! region получает `WS0093`, затем результаты существующих defender и attacker
 //! сбрасываются в этом порядке. Независимо от region lookup запись после этого

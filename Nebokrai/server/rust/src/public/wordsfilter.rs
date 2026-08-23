@@ -1,19 +1,11 @@
-//! Владелец запрещённых слов WorldServer.
+//! Фильтр запрещённых слов WorldServer из точной пары EXE/PDB.
 //!
-//! World `CWordsFilter::CWordsFilter/Initial/LoadFilter/ReloadFilter/IsValid`,
-//! двухаргументный `Check` и singleton lifetime — `IMPLEMENTED`;
-//! трёхаргументный replace-owner и `AddToByteArray` — `IMPLEMENTED`;
-//! GameServer-вариант ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально).
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//! исходный owner `e:\svn\fengyun_russia_dev\public\wordsfilter.cpp`.
-//!
-//! Запрещённые строки сохраняются byte-exact и проверяются как case-sensitive
-//! подстроки в исходном list-order. Двухаргументный overload не заменяет слова:
-//! он фиксирует первый match, всё равно вызывает `CharCodeFilter::check`, затем
-//! возвращает conjunction обоих результатов. `Vec` и owned `CWordsFilter` у
-//! `CGame` заменяют singleton/list/STL lifetime. Чтение ресурсов выполняет
-//! контекст WorldServer; parser сохраняет Windows text-mode CRLF, `fgets(1024)`
-//! и безусловное удаление последнего прочитанного byte каждой порции.
+//! Строки сохраняются byte-exact и проверяются case-sensitive в list-order.
+//! Двухаргументный `Check` фиксирует первый match, всё равно вызывает
+//! `CharCodeFilter::check` и возвращает conjunction результатов. Resource
+//! parser сохраняет text-mode CRLF, chunk `fgets(1024)` и удаление последнего
+//! byte каждой порции. `Vec` и owned owner заменяют singleton/STL lifetime
+//! без изменения replace/serialization semantics.
 
 use std::error::Error;
 use std::fmt;
@@ -79,7 +71,7 @@ impl CWordsFilter {
         words_valid && codes_valid
     }
 
-    /// Трёхаргументный overload с exact replace- и DBCS-поведением.
+ /// Трёхаргументный overload с оригинал replace- и DBCS-поведением.
     pub(crate) fn check_with_numeric_gate(
         &self,
         value: &mut Vec<u8>,
@@ -101,8 +93,8 @@ impl CWordsFilter {
                     && position >= 1
                     && value[position - 1] & 0x80 != 0
                 {
-                    // Exact owner считает совпадение вторым DBCS-byte и сразу
-                    // переходит к следующему filter, не ищет поздние вхождения.
+ // Оригинал owner считает совпадение вторым DBCS-byte и сразу
+ // переходит к следующему filter, не ищет поздние вхождения.
                     break;
                 }
                 if !replace {
@@ -121,7 +113,7 @@ impl CWordsFilter {
         true
     }
 
-    /// Дописывает ranges и запрещённые C-строки в exact World wire-order.
+ /// Дописывает ranges и запрещённые C-строки в оригинал World wire-order.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -243,342 +235,3 @@ fn append_fgets_lines(source: &[u8], destination: &mut Vec<Vec<u8>>) {
         }
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\public\wordsfilter.h
-
-// ============================================================================
-// FUNCTION: CWordsFilter::Check
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:148
-// RVA: 0x00029B20
-// ADDRESS: 00429b20
-// PROTOTYPE: bool __thiscall Check(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1, bool param_2, bool param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWordsFilter::~CWordsFilter
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.h:15
-// RVA: 0x0002A000
-// ADDRESS: 0042a000
-// PROTOTYPE: void __thiscall ~CWordsFilter(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWordsFilter::CWordsFilter
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:18
-// RVA: 0x0002A080
-// ADDRESS: 0042a080
-// PROTOTYPE: undefined __thiscall CWordsFilter(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWordsFilter::GetInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:85
-// RVA: 0x0002A100
-// ADDRESS: 0042a100
-// PROTOTYPE: CWordsFilter * __cdecl GetInstance(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWordsFilter::Release
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:93
-// RVA: 0x0002A170
-// ADDRESS: 0042a170
-// PROTOTYPE: void __cdecl Release(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWordsFilter::FromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:210
-// RVA: 0x0002A1A0
-// ADDRESS: 0042a1a0
-// PROTOTYPE: long __thiscall FromByteArray(uchar * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: GameServer
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\public\wordsfilter.h
-
-// ============================================================================
-// FUNCTION: Catch@0044f902
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp
-// RVA: 0x0004F902
-// ADDRESS: 0044f902
-// PROTOTYPE: undefined Catch@0044f902()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0044f98a
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp
-// RVA: 0x0004F98A
-// ADDRESS: 0044f98a
-// PROTOTYPE: undefined Catch@0044f98a()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: tagFileInfo::~tagFileInfo
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp
-// RVA: 0x000505B0
-// ADDRESS: 004505b0
-// PROTOTYPE: void __thiscall ~tagFileInfo(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWordsFilter::IsValid
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:258
-// RVA: 0x00050B10
-// ADDRESS: 00450b10
-// PROTOTYPE: bool __thiscall IsValid(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWordsFilter::Check
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:98
-// RVA: 0x00050BD0
-// ADDRESS: 00450bd0
-// PROTOTYPE: bool __thiscall Check(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1, bool param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWordsFilter::Check
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:148
-// RVA: 0x00050CF0
-// ADDRESS: 00450cf0
-// PROTOTYPE: bool __thiscall Check(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1, bool param_2, bool param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWordsFilter::AddToByteArray
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:187
-// RVA: 0x000511B0
-// ADDRESS: 004511b0
-// PROTOTYPE: void __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWordsFilter::~CWordsFilter
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.h:15
-// RVA: 0x00051260
-// ADDRESS: 00451260
-// PROTOTYPE: void __thiscall ~CWordsFilter(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWordsFilter::CWordsFilter
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:18
-// RVA: 0x000512E0
-// ADDRESS: 004512e0
-// PROTOTYPE: undefined __thiscall CWordsFilter(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWordsFilter::LoadFilter
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:29
-// RVA: 0x00051360
-// ADDRESS: 00451360
-// PROTOTYPE: bool __thiscall LoadFilter(char * param_1, char * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWordsFilter::ReloadFilter
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:50
-// RVA: 0x00051540
-// ADDRESS: 00451540
-// PROTOTYPE: bool __thiscall ReloadFilter(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWordsFilter::GetInstance
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:85
-// RVA: 0x000515B0
-// ADDRESS: 004515b0
-// PROTOTYPE: CWordsFilter * __cdecl GetInstance(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWordsFilter::Initial
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:23
-// RVA: 0x00051620
-// ADDRESS: 00451620
-// PROTOTYPE: bool __thiscall Initial(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1, char * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWordsFilter::Release
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp:93
-// RVA: 0x00051680
-// ADDRESS: 00451680
-// PROTOTYPE: void __cdecl Release(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@0052ebe0
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp
-// RVA: 0x0012EBE0
-// ADDRESS: 0052ebe0
-// PROTOTYPE: undefined Unwind@0052ebe0()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@0052ec00
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\wordsfilter.cpp
-// RVA: 0x0012EC00
-// ADDRESS: 0052ec00
-// PROTOTYPE: undefined Unwind@0052ec00()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: WorldServer

@@ -1,53 +1,12 @@
-//! Registry и lifecycle асинхронных `CNetSession` GameServer/WorldServer.
+//! Ordered registry `CNetSession` для GameServer и WorldServer.
+//! Источники контракта — точные пары обоих EXE/PDB.
 //!
-//! Статус владельца: `IMPLEMENTED` для constructor/destructor/getInstance
-//! replacement, `CreateSession`, Game-only `OnDo`, `OnSyncCallbackResult`,
-//! `Run`, `Release` и свободного `GetNetSessionManager` replacement.
-//!
-//! Точные пары и существенные RVA:
-//! - GameServer: `gameserver.exe + GameServer.pdb`, `Run` `0x00063210`,
-//!   destructor `0x00063670`, `getInstance` `0x000636B0`, `CreateSession`
-//!   `0x00063740`, `OnDo` `0x00063810`, `OnSyncCallbackResult` `0x000638B0`,
-//!   `GetNetSessionManager` `0x00063970`, `Release` `0x00063980`;
-//! - WorldServer: `Nworldserver.exe + WorldServer.pdb`, `Run` `0x00060530`,
-//!   destructor `0x00060990`, `getInstance` `0x000609D0`, `CreateSession`
-//!   `0x00060A60`, `OnSyncCallbackResult` `0x00060B30`,
-//!   `GetNetSessionManager` `0x00060BF0`, `Release` `0x00060C00`.
-//!
-//! Исходный путь обеих PDB:
-//! `e:\svn\fengyun_russia_dev\public\netsessionmanager.cpp`.
-//!
-//! Оба варианта используют один signed `std::map<__int64, CNetSession*>` под
-//! critical section. `CreateSession(first, requested_id)` при нуле увеличивает
-//! process-static signed `long`, строит ключ с low DWORD `id` и high DWORD
-//! `first | (id >> 31)`, а cookie `(first, random(30000))`; random остаётся
-//! caller-provided технической границей. `BTreeMap<i64, _>` сохраняет exact
-//! signed key-order, `Mutex` — область map critical section, `AtomicI32` —
-//! безопасную форму старого static counter без Windows API.
-//!
-//! `OnDo` и terminal result сначала получают session под lock, затем отпускают
-//! его до cookie/callback. Result после успешного callback снова берёт lock,
-//! удаляет key и освобождает session. `Run` держит lock весь ordered pass:
-//! нулевой timeout вызывает callback, удаляет owner и продолжает; ненулевой
-//! уменьшается ровно на один. Нарисованный raw ранний return опровергнут exact
-//! EXE: Game `0x004632FF..0x00463302` возвращается к `0x00463230`, World
-//! `0x0046061F..0x00460622` — к `0x00460550`. `Release` также проходит все
-//! записи: Game loop `0x00463990..0x004639F5`, World
-//! `0x00460C10..0x00460C75`. Обе детали имеют статус
-//! `VERIFIED_DISASSEMBLY`; после ответов reverse прекращён.
-//!
-//! Глобальный nullable singleton заменён caller-owned manager-ом: отдельные
-//! процессы и так имели независимые globals, а Rust lifecycle явно передаёт
-//! правильный component variant. `Release` очищает все session owners; сам
-//! manager освобождает обычный `Drop`. Старые tree nodes, iterator navigation,
-//! critical-section API, deleting destructors и exception cleanup удалены как
-//! STL/compiler/runtime noise.
-//!
-//! Старый `operator[]` при duplicate key терял прежний non-null pointer без
-//! destructor. Достигнутые generated IDs уникальны до signed wrap; реакция на
-//! collision не назначается: Rust возвращает `BLOCKED_MISSING_FACT` до map
-//! mutation. Временный `Arc` callback-а нужен только на доказанном участке вне
-//! lock; это не новая общая session-архитектура.
+//! `CreateSession` сохраняет signed key/cookie arithmetic. Result получает
+//! session под lock, отпускает lock на callback и только затем удаляет owner.
+//! `Run` держит lock весь проход, уменьшает ненулевой timeout на один, а при
+//! нуле вызывает callback и удаляет запись. `BTreeMap`, `Mutex` и `AtomicI32`
+//! заменяют MSVC map, critical section и static counter, сохраняя key-order,
+//! duplicate behavior и lifecycle.
 
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -106,7 +65,7 @@ pub(crate) struct CNetSessionManager {
 }
 
 impl CNetSessionManager {
-    /// Создаёт пустой manager конкретного подтверждённого процесса.
+ /// Создаёт пустой manager конкретного подтверждённого процесса.
     pub(crate) const fn new(variant: NetSessionManagerVariant) -> Self {
         Self {
             variant,
@@ -115,12 +74,12 @@ impl CNetSessionManager {
         }
     }
 
-    /// Возвращает выбранную компонентную поверхность без смешения процессов.
+ /// Возвращает выбранную компонентную поверхность без смешения процессов.
     pub(crate) const fn variant(&self) -> NetSessionManagerVariant {
         self.variant
     }
 
-    /// Создаёт session и вставляет её по exact signed 64-bit key.
+ /// Создаёт session и вставляет её по оригинал signed 64-bit key.
     pub(crate) fn create_session(
         &self,
         first: i32,
@@ -151,7 +110,7 @@ impl CNetSessionManager {
         Ok(CreatedNetSession { id, cookie })
     }
 
-    /// Передаёт callback-owner созданной session либо возвращает его caller-у.
+ /// Передаёт callback-owner созданной session либо возвращает его caller-у.
     pub(crate) fn set_callback_handle(
         &self,
         session_id: i64,
@@ -166,7 +125,7 @@ impl CNetSessionManager {
             .map_err(NetSessionSetCallbackBlock::AlreadyAssigned)
     }
 
-    /// Выполняет `Beging` для stable key под исходной map lifetime.
+ /// Выполняет `Beging` для stable key под исходной map lifetime.
     pub(crate) fn beging(
         &self,
         session_id: i64,
@@ -186,7 +145,7 @@ impl CNetSessionManager {
         Ok(())
     }
 
-    /// Доставляет GameServer-only nonterminal callback и сохраняет session.
+ /// Доставляет GameServer-only nonterminal callback и сохраняет session.
     pub(crate) fn on_do(
         &self,
         session_id: i64,
@@ -218,7 +177,7 @@ impl CNetSessionManager {
         NetSessionCallbackOutcome::Delivered
     }
 
-    /// Доставляет terminal result и только после callback удаляет map-owner.
+ /// Доставляет terminal result и только после callback удаляет map-owner.
     pub(crate) fn on_sync_callback_result(
         &self,
         session_id: i64,
@@ -252,7 +211,7 @@ impl CNetSessionManager {
         NetSessionCallbackOutcome::Delivered
     }
 
-    /// Обходит все sessions по signed key-order и удаляет каждый zero-timeout.
+ /// Обходит все sessions по signed key-order и удаляет каждый zero-timeout.
     pub(crate) fn run(&self) -> NetSessionRunReport {
         let mut sessions = self.sessions.lock();
         let keys: Vec<i64> = sessions.keys().copied().collect();
@@ -276,7 +235,7 @@ impl CNetSessionManager {
         report
     }
 
-    /// Освобождает все callbacks/sessions в map-order и оставляет manager пустым.
+ /// Освобождает все callbacks/sessions в map-order и оставляет manager пустым.
     pub(crate) fn release(&self) -> usize {
         let mut sessions = self.sessions.lock();
         let released = sessions.len();
@@ -286,7 +245,7 @@ impl CNetSessionManager {
         released
     }
 
-    /// Возвращает текущее число session records под map lock.
+ /// Возвращает текущее число session records под map lock.
     pub(crate) fn len(&self) -> usize {
         self.sessions.lock().len()
     }

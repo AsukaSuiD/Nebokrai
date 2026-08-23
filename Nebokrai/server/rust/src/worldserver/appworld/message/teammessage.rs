@@ -1,8 +1,7 @@
-//! Входящий Team-owner исторического WorldServer.
+//! Входящий Team-owner WorldServer.
 //!
-//! `OnTeamMessage` — часть контракта owner-а
-//! по точной паре `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`.
-//! Исходный owner:
+//! Источник контракта `OnTeamMessage` — `WorldServer/Nworldserver.exe` и
+//! `WorldServer/WorldServer.pdb`.
 //!
 //! Реализация сохраняет opcodes `0x60001..0x6000C`, условный порядок чтения
 //! payload и все действующие virtual side effects. После отсутствующего
@@ -10,8 +9,8 @@
 //! `long`; allocation scheme принимает любое signed значение `< 2`, включая
 //! отрицательное. Ответ `0x7FD08` буквально содержит virtual `Serialize`.
 //!
-//! разбор payload, duplicate-team gate и cleanup при ошибке `InsertPlug`
-//! отсутствуют в EXE и не перенесены. Единственные registry остаются внутри
+//! Полный tail-check, duplicate-team gate и cleanup при ошибке `InsertPlug`
+//! отсутствуют в EXE. Единственные registry остаются внутри
 //! `CSessionFactory`; конкретные `CTeam`/`CTeamate` и узкие trait-проекции
 //! выражают исходные RTTI/virtual границы. Недостаточный scalar payload даёт
 //! typed malformed до относящегося к нему эффекта.

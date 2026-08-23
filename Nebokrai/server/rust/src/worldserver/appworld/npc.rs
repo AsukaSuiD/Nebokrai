@@ -5,9 +5,9 @@
 //! Rust-owner-ом. Источник контракта — точная пара WorldServer EXE/PDB.
 //!
 //! Layout сохраняет размеры старых `CMoveShape/CNpc` `0x80/0x8C`. Конструктор
-//! по первым передаёт неизменённый `this` в
+//! сначала передаёт неизменённый `this` в
 //! `CMoveShape::CMoveShape`, создаёт собственный `m_listScript` с offset
-//! `+0x80`, а по выполняет `mov [esi+4], 0x1F4`. Последняя запись
+//! `+0x80`, а затем задаёт object type `500`. Последняя запись
 //! является object type `500` в унаследованном `CBaseObject::m_lType`, а не
 //! ошибочно подписанным `_padding_`. Destructor сначала
 //! очищает тот же список, затем вызывает `CMoveShape::~CMoveShape`.

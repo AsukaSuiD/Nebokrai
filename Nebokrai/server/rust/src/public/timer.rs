@@ -1,56 +1,11 @@
-//! Владелец `CTimer` WorldServer: IMPLEMENTED.
+//! Calendar и interval-owner `CTimer` WorldServer из `public/timer.cpp/.h`.
+//! Источник контракта — точная пара WorldServer EXE/PDB.
 //!
-//! Исходники: `public/timer.cpp` и соответствующий header из точной пары
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Существенные RVA: `KillTimeEvent` `0x000637F0`, `Run` `0x00063850`,
-//! `SetTimeEvent` `0x00063CD0`, constructor `0x00063DA0`, destructor
-//! `0x00063E40`, `getInstance` `0x00063EF0`, `GetTimer` `0x00063F60` и
-//! `Release` `0x00063F70`.
-//!
-//! PDB подтверждает размер `CTimer` `0x48`: два `MulTiThMap` по `0x24`.
-//! `tagTimer` имеет размер `0x20` и поля `uID/bOpen/bUseAITick/uElapseTime/
-//! uStartTime/uElapseAITick/uStartAITick/lparam/pCallBack` по смещениям
-//! `0/4/5/8/12/16/20/24/28`; `tagTimeEvent` имеет размер `0x1C` и поля
-//! `uID/Time/lparam/pCallBack` по `0/4/20/24`. Rust-структуры не объявляются
-//! x86 ABI: они сохраняют значения и порядок эффектов, а не padding MSVC.
-//!
-//! Оба `std::map` заменены ordered `BTreeMap`. Для real timer `Run` получает
-//! новый millisecond tick только у открытой real-записи, сравнивает interval с
-//! wrapping-разностью и обновляет start до callback-а. AI timer использует
-//! переданный `CGame::s_lAITick` с тем же unsigned сравнением и тем же порядком.
-//! Calendar registry вызывает `GetLocalTime` отдельно для каждой записи,
-//! сравнивает через точный `tagTime::operator>=`, вызывает callback до erase и
-//! продолжает с первым большим ID. Вставка большего ID из callback-а поэтому
-//! может быть достигнута в том же проходе, как в старом ordered tree.
-//!
-//! Старые function pointers заменены generic `Copy` callback-key и одним
-//! dispatcher-ом. На время вызова dispatcher получает `&mut CTimer`, поэтому
-//! доказанные callbacks `ClearCopyNum` и `CPlayerRanks::OnStatRanks` могут
-//! зарегистрировать следующее событие и сразу получить его ID. Возврат старого
-//! `long (__stdcall*)(long)` нигде не читался и в Rust-границу не переносится.
-//! Для достигнутого PlayerRanks DB-callback-а есть второй traversal adapter:
-//! он ждёт библиотечный async TDS вызов прямо в старой callback-позиции, затем
-//! регистрирует возвращённое calendar-событие до удаления текущего. Все прочие
-//! callbacks по-прежнему немедленно передаются обычному sync dispatcher-у.
-//! `u32` параметр/ID и `i32` lparam сохраняют точную signedness.
-//!
-//! `SetTimeEvent` копирует запись и использует общий wrapping ID, начинающийся
-//! с нуля. Atomic заменяет небезопасный function-static counter; единственная
-//! observable разница касается исходной data race при одновременной выдаче ID.
-//! `&mut self` либо внешний mutex сериализует tree-доступ вместо двух Win32
-//! critical sections. Сам старый `Run` registry не блокировал, поэтому
-//! конкурентная мутация во время обхода не имела безопасного C++ контракта.
-//!
-//! `getInstance/GetTimer` выражены явной передачей единственного owned
-//! `CTimer`, а `Release/destructor` — обычным `Drop`; это исключает nullable
-//! allocation и оставшийся dangling `instance` после `Release`. STL tree,
-//! critical-section, deleting/unwind и allocator-код удалён как
-//! library/compiler noise. Inline `SetTimer/KillTimer/OpenTimer/...` известны
-//! PDB, но их тела и достигнутые call-sites отсутствуют; этот owner не
-//! приписывает им угаданную семантику. Для уже восстановленной записи доступна
-//! узкая `insert_periodic_record` граница, не выдаваемая за эти inline API.
+//! Два ordered registry сохраняют wrapping tick arithmetic, callback-before-
+//! erase и возможность увидеть добавленный callback-ом больший ID в том же
+//! проходе. Calendar сравнивает исходный `TagTime`, real/AI timers используют
+//! разные tick sources. `BTreeMap`, typed IDs и dispatcher заменяют MSVC map,
+//! function pointers и singleton lifetime без изменения порядка эффектов.
 
 use std::collections::BTreeMap;
 use std::ops::Bound::{Excluded, Unbounded};
@@ -60,7 +15,7 @@ use crate::public::date::TagTime;
 
 static NEXT_TIMER_ID: AtomicU32 = AtomicU32::new(0);
 
-/// Exact unsigned identity, которую старый owner выдавал всем типам timers.
+/// Оригинал unsigned identity, которую старый owner выдавал всем типам timers.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct TimerId(u32);
 
@@ -119,7 +74,7 @@ pub(crate) struct CalendarTimerRegistration<Callback> {
     pub(crate) parameter: i32,
 }
 
-/// Решение async handler-а для одного уже достигнутого callback-а.
+/// Решение async handler-а для одного уже действующего callback-а.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum AsyncTimerCallbackDisposition<Callback> {
     PassThrough,
@@ -178,7 +133,7 @@ impl<Callback> Default for CTimer<Callback> {
 }
 
 impl<Callback> CTimer<Callback> {
-    /// Создаёт оба пустых ordered registry старого constructor-а.
+ /// Создаёт оба пустых ordered registry старого constructor-а.
     pub(crate) const fn new() -> Self {
         Self {
             periodic_timers: BTreeMap::new(),
@@ -186,7 +141,7 @@ impl<Callback> CTimer<Callback> {
         }
     }
 
-    /// Вставляет уже доказанную PDB-запись, не моделируя недостигнутый inline `SetTimer`.
+ /// Вставляет уже доказанную PDB-запись, не моделируя не относящийся к контракту inline `SetTimer`.
     pub(crate) fn insert_periodic_record(
         &mut self,
         timer: PeriodicTimer<Callback>,
@@ -194,7 +149,7 @@ impl<Callback> CTimer<Callback> {
         self.periodic_timers.insert(timer.id, timer)
     }
 
-    /// Повторяет копирование `SetTimeEvent` и возвращает wrapping process ID.
+ /// Повторяет копирование `SetTimeEvent` и возвращает wrapping process ID.
     pub(crate) fn set_time_event(
         &mut self,
         time: TagTime,
@@ -214,14 +169,14 @@ impl<Callback> CTimer<Callback> {
         id
     }
 
-    /// Удаляет calendar event и возвращает исходный found/not-found результат.
+ /// Удаляет calendar event и возвращает исходный found/not-found результат.
     pub(crate) fn kill_time_event(&mut self, id: TimerId) -> bool {
         self.time_events.remove(&id).is_some()
     }
 }
 
 impl<Callback: Copy> CTimer<Callback> {
-    /// Выполняет оба registry в точном исходном порядке и синхронно вызывает dispatcher.
+ /// Выполняет оба registry в точном исходном порядке и синхронно вызывает dispatcher.
     pub(crate) fn run<GetTick, GetLocalTime, Dispatch>(
         &mut self,
         ai_tick: u32,
@@ -311,8 +266,8 @@ impl<Callback: Copy> CTimer<Callback> {
         report
     }
 
-    /// Сохраняет ordered traversal `Run`, но разрешает одному domain adapter-у
-    /// дождаться библиотечной async DB-операции внутри исходной callback-позиции.
+ /// Сохраняет ordered traversal `Run`, но разрешает одному domain adapter-у
+ /// дождаться библиотечной async DB-операции внутри исходной callback-позиции.
     pub(crate) async fn run_with_async_handler<GetTick, GetLocalTime, Handler, Dispatch>(
         &mut self,
         ai_tick: u32,

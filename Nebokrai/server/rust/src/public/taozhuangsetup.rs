@@ -1,13 +1,9 @@
 //! Конфигурация комплектов TaoZhuang исторического Miracle.
 //!
-//! World `CTaoZhuangSetup::ReadFile/AddByteToArray` RVA
-//! `0x00089AE0/0x00088340` — `IMPLEMENTED`; gameplay queries и Game runtime
-//! ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точные World/Game serializer и decoder
-//! имеют одинаковый контракт; World EXE SHA-256
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! World `CTaoZhuangSetup::ReadFile/AddByteToArray`
+//! —; gameplay queries и Game runtime
+//! не входят в этот owner и остаются. Точные World/Game serializer и decoder
 //! Исходный owner PDB:
-//! `e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp:170` и соседний
 //! header.
 //!
 //! Wire сначала содержит ordered skill set, затем ordered item map. Item:
@@ -22,11 +18,11 @@
 //!
 //! Text-loader читает `data/taozhuang.ini` как whitespace stream. Открытый
 //! ресурс сначала очищает оба owner-а; missing resource оставляет прежнее
-//! state и пишет exact GBK-log. Вложенные set/map используют `insert`: дубли
+//! state и пишет оригинал GBK-log. Вложенные set/map используют `insert`: дубли
 //! skill, equipment name, property, added skill и add-item прерывают загрузку
 //! с отдельным log, сохраняя уже построенное partial state. Дубли item ID не
 //! проверяются и оставляют первую запись — это доказанная особенность
-//! `0x00489AE0..0x0048A220`, не исправляемая как внутренний дефект. Rust
+//! не исправляемая как внутренний дефект. Rust
 //! отклоняет count больше размера source, не перенося конфигурационный DoS/OOM.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -75,7 +71,7 @@ pub(crate) struct CTaoZhuangSetup {
 }
 
 impl CTaoZhuangSetup {
-    /// Читает точный World text-format из уже выбранного resource backend-а.
+ /// Читает точный World text-format из уже выбранного resource backend-а.
     pub(crate) fn read_file(
         &mut self,
         source: Option<&[u8]>,
@@ -481,224 +477,3 @@ fn parse_legacy_u32(token: &[u8]) -> Option<u32> {
         u32::try_from(value).ok()
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp
-
-// ============================================================================
-// FUNCTION: Catch@0041d2ec
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp
-// RVA: 0x0001D2EC
-// ADDRESS: 0041d2ec
-// PROTOTYPE: undefined Catch@0041d2ec()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTaoZhuangSetup::AddResultToPlayer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp:356
-// RVA: 0x000E26B0
-// ADDRESS: 004e26b0
-// PROTOTYPE: void __thiscall AddResultToPlayer(ulong param_1, ulong param_2, CPlayer * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTaoZhuangSetup::AddByteToArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp:170
-// RVA: 0x000E2830
-// ADDRESS: 004e2830
-// PROTOTYPE: void __thiscall AddByteToArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTaoZhuangSetup::QueryTaoZhuangIdByName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp:322
-// RVA: 0x000E2B80
-// ADDRESS: 004e2b80
-// PROTOTYPE: long __thiscall QueryTaoZhuangIdByName(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTaoZhuangSetup::IsCollectAll
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp:406
-// RVA: 0x000E2C80
-// ADDRESS: 004e2c80
-// PROTOTYPE: bool __thiscall IsCollectAll(ulong param_1, ulong param_2, basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTaoZhuangSetup::Clear
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp:29
-// RVA: 0x000E3FC0
-// ADDRESS: 004e3fc0
-// PROTOTYPE: void __thiscall Clear(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTaoZhuangSetup::DeCodeFromByte
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp:244
-// RVA: 0x000E4020
-// ADDRESS: 004e4020
-// PROTOTYPE: void __thiscall DeCodeFromByte(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTaoZhuangSetup::CTaoZhuangSetup
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp:7
-// RVA: 0x000E44D0
-// ADDRESS: 004e44d0
-// PROTOTYPE: undefined __thiscall CTaoZhuangSetup(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTaoZhuangSetup::GetSingleInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp:426
-// RVA: 0x000E4560
-// ADDRESS: 004e4560
-// PROTOTYPE: CTaoZhuangSetup * __cdecl GetSingleInstance(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: GameServer
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp
-
-// ============================================================================
-// FUNCTION: CTaoZhuangSetup::AddByteToArray
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp:170
-// RVA: 0x00088340
-// ADDRESS: 00488340
-// PROTOTYPE: void __thiscall AddByteToArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// IMPLEMENTED_OWNER: `CTaoZhuangSetup::add_byte_to_array` выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTaoZhuangSetup::Clear
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp:29
-// RVA: 0x00089A80
-// ADDRESS: 00489a80
-// PROTOTYPE: void __thiscall Clear(void)
-//
-// IMPLEMENTED_OWNER: `CTaoZhuangSetup::clear` выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTaoZhuangSetup::ReadFile
-// STATUS: IMPLEMENTED_OWNER / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp:35
-// RVA: 0x00089AE0
-// ADDRESS: 00489ae0
-// PROTOTYPE: bool __thiscall ReadFile(basic_string<char,std::char_traits<char>,std::allocator<char>_> param_1)
-//
-// IMPLEMENTED_OWNER: `CTaoZhuangSetup::read_file` выше. Exact entry/tail
-// `0x00489B11..0x00489B53` и `0x0048A1E9..0x0048A44E` подтверждают
-// clear-after-open, duplicate logs, success `1` и missing-file `0`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTaoZhuangSetup::CTaoZhuangSetup
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp:7
-// RVA: 0x0008A460
-// ADDRESS: 0048a460
-// PROTOTYPE: undefined __thiscall CTaoZhuangSetup(void)
-//
-// IMPLEMENTED_OWNER: `Default` создаёт безопасные пустые `BTreeSet/BTreeMap`
-// вместо process-global singleton lifetime.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTaoZhuangSetup::GetSingleInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp:426
-// RVA: 0x0008A4F0
-// ADDRESS: 0048a4f0
-// PROTOTYPE: CTaoZhuangSetup * __cdecl GetSingleInstance(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: WorldServer

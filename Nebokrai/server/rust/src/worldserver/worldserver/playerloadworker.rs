@@ -1,10 +1,8 @@
-//! Жизненный цикл пула `LoadPlayerDataFromDB` исторического WorldServer.
+//! Жизненный цикл пула `LoadPlayerDataFromDB` WorldServer.
 //!
-//! исходный owner
-//! проверяет сначала
-//! game-exit, затем player-load-exit и только после этого делает `Sleep(1)`.
-//! продолжает текущий FIFO-list, а
-//! возвращается к началу polling-loop.
+//! Owner сначала проверяет game-exit, затем player-load-exit и только после
+//! этого делает `Sleep(1)`. Наличие работы продолжает обработку текущего FIFO,
+//! а пустая очередь возвращает поток к началу polling-loop.
 //!
 //! `WorldPlayerLoadWorkerSpec` хранит cloneable пары load/data FIFO, поэтому
 //! системным потокам не передаётся mutable `CGame` и не нужен process-global

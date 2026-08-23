@@ -1,56 +1,10 @@
-//! DB-владелец `CDBCountry` исторического WorldServer из `dbcountry.cpp`.
+//! DB-владелец стран WorldServer из `dbcountry.cpp`.
+//! Источник контракта — точная пара WorldServer EXE/PDB.
 //!
-//! Статус `CDBCountry::Save` RVA `0x000F59A0` и `CDBCountry::Load` RVA
-//! `0x000F6770` — `IMPLEMENTED`; constructor, destructor и прочий корпус ниже
-//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
-//! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
-//! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
-//! исходный путь PDB:
-//! `e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbcountry.cpp`.
-//!
-//! Owner проверяет country pointer, затем caller-owned connection и выбирает
-//! `CSL_Countrys` по unsigned byte `_country_id`. Отсутствующая строка является
-//! успешным no-op. Для существующей строки единственный `Recordset::Update`
-//! сохраняет строго 12 country/king значений, затем по должностям `2..=7`
-//! четыре колонки `minister_%d_id/name/appoint/salary`. Null minister даёт
-//! `0, "", 0, 0`; обычный — signed ID, Windows-1251 C-string name и два
-//! bool-флага, расширенных до `VT_I4` `0/1`.
-//!
-//! Exact PDB задаёт `CCountry` поля `_country_id: unsigned char` по `+0x4`,
-//! signed `long` treasury/power/tech по `+0x8/+0xC/+0x10/+0x14`, `CKing` по
-//! `+0x24` и signed `m_lCountryWarRes` по `+0xA8`. `CKing` содержит inherited
-//! signed ID по `+0x4`, byte-exact name по `+0x8`, appointed/salary по
-//! `+0x26/+0x27` и signed control/material/war points по `+0x28/+0x2C/+0x30`.
-//! `CMinister` использует те же inherited ID/name и два флага по `+0x26/+0x27`.
-//! Rust snapshot хранит только этот read-view и не объявляет layout копией ABI.
-//!
-//! `VERIFIED_DISASSEMBLY`: `0x004F5A22..0x004F5A38` передаёт в select именно
-//! zero-extended country byte; `0x004F5AB8..0x004F5AC6` направляет EOF сразу
-//! в normal cleanup. `0x004F6181..0x004F61A9` задаёт цикл `2..7` и передаёт
-//! его текущий индекс каждому `minister_%d_*`. Normal/no-row выход ставит
-//! `AL=1` по `0x004F66F3`, а null country, missing connection и catch —
-//! `AL=0` по `0x004F6745`. После каждого конкретного ответа reverse прекращён.
-//!
-//! Tiberius `SELECT TOP 1` и параметризованный `UPDATE TOP (1)` заменяют только
-//! updateable ADO recordset, BSTR/VARIANT и COM lifetime. Число обновлённых
-//! строк исходник не проверял. `Vec`, fixed array и Rust `Drop` заменяют только
-//! MSVC string/map и compiler cleanup; метод использует уже активную caller-
-//! транзакцию и не выполняет begin/commit/rollback. Raw `Save`, его catch и
-//! служебный эпилог удалены; точная copy-paste строка catch `load Country`
-//! сохранена обязанностью structured notice без SQL и runtime значений.
-//!
-//! `Load` читает `SELECT * FROM CSL_Countrys` в cursor-order. Treasury/power
-//! сначала зажимаются снизу нулём, затем сверху соответствующим максимумом;
-//! technology exp ограничивается constructor-значением level-up exp до чтения
-//! `tech_lel`, а сам level зажимается только снизу. Эта странная очередность
-//! подтверждена RAW и сохраняется как DB-наблюдаемая compatibility quirk.
-//! Три king point ограничиваются только сверху. Для каждого row всегда
-//! создаются minister owner-ы jobs `2..=7`, после чего handler `Append`
-//! перезаписывает duplicate country ID; Rust освобождает прежний owner вместо
-//! исходной утечки. Tiberius cursor, `Vec` и Windows-1251 conversion заменяют
-//! ADO/BSTR/VARIANT и небезопасные 32-byte stack buffers, не ограничивая имена
-//! искусственной длиной.
+//! Save/load сохраняют byte country ID, ordered ministers, technology и exile
+//! records, исходные значения bool и порядок SQL-команд. Tiberius, `BTreeMap`
+//! и owned snapshots заменяют ADO/COM и MSVC containers; транзакция, rollback
+//! и нормализация provider-order поверх исходного контракта не добавляются.
 
 use std::collections::VecDeque;
 use std::error::Error;
@@ -103,11 +57,11 @@ pub(crate) struct CountrySaveSnapshot {
     pub(crate) tech_level: i32,
     pub(crate) king: CountryKingSaveSnapshot,
     pub(crate) country_war_result: i32,
-    /// Индексы `0..6` буквально соответствуют должностям `2..=7`.
+ /// Индексы `0..6` буквально соответствуют должностям `2..=7`.
     pub(crate) ministers: [Option<CountryMinisterSaveSnapshot>; 6],
 }
 
-/// Структурированная замена достигнутых log-ветвей `CDBCountry::Save`.
+/// Структурированная замена действующих log-ветвей `CDBCountry::Save`.
 #[derive(Debug)]
 pub(crate) enum DbCountryNotice {
     MissingConnection,
@@ -115,7 +69,7 @@ pub(crate) enum DbCountryNotice {
         row_index: Option<usize>,
         failure: DbCountryLoadFailure,
     },
-    /// Сохраняет исходную copy-paste категорию `load Country`.
+ /// Сохраняет исходную copy-paste категорию `load Country`.
     SaveFailed(DbCountryDatabaseError),
 }
 
@@ -128,7 +82,7 @@ pub(crate) enum DbCountryLoadFailure {
     ParameterUnavailable { field: &'static str },
 }
 
-/// Ошибка достигнутой ADO/TDS-границы без SQL и runtime country values.
+/// Ошибка действующей ADO/TDS-границы без SQL и runtime country values.
 #[derive(Debug)]
 pub(crate) struct DbCountryDatabaseError(tiberius::error::Error);
 
@@ -150,9 +104,9 @@ impl From<tiberius::error::Error> for DbCountryDatabaseError {
     }
 }
 
-/// Узкая объектная граница достигнутого `CDBCountry::Save`.
+/// Узкая объектная граница действующего `CDBCountry::Save`.
 pub(crate) trait DbCountryOwner {
-    /// Загружает все country rows в live handler, сохраняя cursor order.
+ /// Загружает все country rows в live handler, сохраняя cursor order.
     async fn load(
         &mut self,
         country_handler: &mut CCountryHandler,
@@ -160,18 +114,18 @@ pub(crate) trait DbCountryOwner {
         active_connection: Option<&mut WorldTdsClient>,
     ) -> bool;
 
-    /// Обновляет существующую country-строку внутри caller-транзакции.
+ /// Обновляет существующую country-строку внутри caller-транзакции.
     async fn save(
         &mut self,
         snapshot: Option<&CountrySaveSnapshot>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
-    /// Забирает следующий исходный log-эквивалент.
+ /// Забирает следующий исходный log-эквивалент.
     fn pop_notice(&mut self) -> Option<DbCountryNotice>;
 }
 
-/// Linux/TDS-замена достигнутой части исходного `CDBCountry`.
+/// Linux/TDS-замена действующей части исходного `CDBCountry`.
 #[derive(Default)]
 pub(crate) struct TiberiusDbCountry {
     notices: VecDeque<DbCountryNotice>,
@@ -508,128 +462,3 @@ fn read_ado_bool(
     }
     Err(first_error)
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbcountry.cpp
-
-
-
-// ============================================================================
-// FUNCTION: CDBCountry::Save
-// STATUS: IMPLEMENTED
-// Реализация и локальная спецификация находятся выше.
-
-// ============================================================================
-// FUNCTION: CDBCountry::Load
-// STATUS: IMPLEMENTED_SOURCE_REFERENCE
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbcountry.cpp:15
-// RVA: 0x000F6770
-// ADDRESS: 004f6770
-// PROTOTYPE: bool __thiscall Load(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004f7693
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbcountry.cpp:78
-// RVA: 0x000F7693
-// ADDRESS: 004f7693
-// PROTOTYPE: undefined Catch@004f7693()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_004f76f2
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbcountry.cpp:83
-// RVA: 0x000F76F2
-// ADDRESS: 004f76f2
-// PROTOTYPE: undefined FUN_004f76f2()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-// ============================================================================
-// FUNCTION: Unwind@0053aae8
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbcountry.cpp
-// RVA: 0x0013AAE8
-// ADDRESS: 0053aae8
-// PROTOTYPE: undefined Unwind@0053aae8()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-// ============================================================================
-// FUNCTION: Unwind@0053ab36
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbcountry.cpp
-// RVA: 0x0013AB36
-// ADDRESS: 0053ab36
-// PROTOTYPE: undefined Unwind@0053ab36()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// ============================================================================
-// FUNCTION: Unwind@0053ab75
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbcountry.cpp
-// RVA: 0x0013AB75
-// ADDRESS: 0053ab75
-// PROTOTYPE: undefined Unwind@0053ab75()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@0053ac67
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbcountry.cpp
-// RVA: 0x0013AC67
-// ADDRESS: 0053ac67
-// PROTOTYPE: undefined Unwind@0053ac67()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-// COMPONENT_VARIANT_END: WorldServer

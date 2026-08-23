@@ -1,21 +1,14 @@
-//! Таблица level/hit/experience исторического Miracle.
+//! Таблица level/hit/experience Miracle.
 //!
-//! Статус World `LoadHitLevelSetup` RVA `0x000979C0` и
-//! `AddToByteArray` RVA `0x00097550`: `IMPLEMENTED`; Game decoder ниже
-//! остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\setup\hitlevelsetup.cpp:22,51`.
+//! Источник контракта World `LoadHitLevelSetup` и `AddToByteArray` — EXE/PDB;
+//! Game decoder в этот owner не входит.
 //!
-//! Exact EXE `0x004979C0..0x00497B2A` подтвердил спорный return: отсутствие
+//! Отсутствие
 //! файла явно ставит `AL=0`, любой открытый файл после token-scan — `AL=1`,
 //! в том числе файл без единого `*`. Поэтому пустая таблица является успешным
-//! состоянием и не получает ограничения из более нового C++ reference.
-//! RAW также ошибочно показывал ранний return после освобождения прежнего
-//! vector: инструкции `0x004979F3..0x004979FE` сходятся на общей очистке трёх
-//! указателей и продолжают открытие. Value-owner сохраняет этот clear-first
+//! состоянием.
+//! Прежний vector полностью очищается до открытия файла. Value-owner сохраняет
+//! этот clear-first
 //! state transition и при ошибке файла остаётся пустым.
 //!
 //! Каждая запись — ровно три consecutive little-endian `u32`; wire состоит
@@ -47,17 +40,17 @@ pub(crate) struct CHitLevelSetup {
 }
 
 impl CHitLevelSetup {
-    /// Возвращает текущий ordered набор без раскрытия mutable global state.
+ /// Возвращает текущий ordered набор без раскрытия mutable global state.
     pub(crate) fn entries(&self) -> &[HitLevelEntry] {
         &self.entries
     }
 
-    /// Очищает owner на той же позиции, что и exact loader перед `rfOpen`.
+ /// Очищает owner на той же позиции, что и оригинал loader перед `rfOpen`.
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
     }
 
-    /// Очищает прежний owner, читает файл стандартной библиотекой и парсит его.
+ /// Очищает прежний owner, читает файл стандартной библиотекой и парсит его.
     pub(crate) fn load_from_file(
         &mut self,
         path: impl AsRef<Path>,
@@ -68,7 +61,7 @@ impl CHitLevelSetup {
             .map_err(HitLevelFileLoadError::Format)
     }
 
-    /// Повторяет `ReadTo("*")` и три formatted unsigned-long extraction-а.
+ /// Повторяет `ReadTo("*")` и три formatted unsigned-long extraction-а.
     pub(crate) fn load_from_bytes(&mut self, source: &[u8]) -> Result<usize, HitLevelFormatError> {
         self.clear();
         let mut tokens = source
@@ -87,7 +80,7 @@ impl CHitLevelSetup {
         Ok(self.entries.len())
     }
 
-    /// Дописывает exact `count + raw records` в существующий buffer.
+ /// Дописывает оригинал `count + raw records` в существующий buffer.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -129,7 +122,7 @@ impl fmt::Display for HitLevelFormatError {
 
 impl Error for HitLevelFormatError {}
 
-/// Ошибка технического file-owner-а с отдельным exact format-source.
+/// Ошибка технического file-owner-а с отдельным оригинал format-source.
 #[derive(Debug)]
 pub(crate) enum HitLevelFileLoadError {
     Io(std::io::Error),
@@ -190,67 +183,3 @@ fn read_u32<'a>(
             token: token.to_vec(),
         })
 }
-
-// Остальной сырой C++ ниже является комментарием, а не Rust-реализацией.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\setup\hitlevelsetup.cpp
-
-// ============================================================================
-// FUNCTION: CHitLevelSetup::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\hitlevelsetup.cpp:62
-// RVA: 0x000C5CB0
-// ADDRESS: 004c5cb0
-// PROTOTYPE: bool __cdecl DecordFromByteArray(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\setup\hitlevelsetup.cpp
-
-// ============================================================================
-// FUNCTION: CHitLevelSetup::AddToByteArray
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\hitlevelsetup.cpp:51
-// RVA: 0x00097550
-// ADDRESS: 00497550
-// PROTOTYPE: bool __cdecl AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// IMPLEMENTED_OWNER: `CHitLevelSetup::add_to_byte_array` выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CHitLevelSetup::LoadHitLevelSetup
-// STATUS: IMPLEMENTED_OWNER / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\hitlevelsetup.cpp:22
-// RVA: 0x000979C0
-// ADDRESS: 004979c0
-// PROTOTYPE: bool __cdecl LoadHitLevelSetup(char * param_1)
-//
-// IMPLEMENTED_OWNER: `load_from_bytes` вместе с owned `CGame` reload path.
-// Exact `0x004979E9..0x00497A25` очищает vector до `rfOpen`, а
-// `0x00497B17..0x00497B2A` возвращает false только для отсутствующего файла.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: WorldServer

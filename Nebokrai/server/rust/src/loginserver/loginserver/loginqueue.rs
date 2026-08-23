@@ -114,12 +114,8 @@
 //! его нефатальный результат возвращается только в operator-report `CGame`.
 //! `Drop` всех полей заменяет ручной destructor; его внутренний порядок
 //! удаления не воспроизводится, поскольку там нет внешнего callback либо
-//! иного наблюдаемого эффекта. После классификации удалён
-//! весь заменённый raw-корпус: 269 STL/iostream функций, 16 ADO/COM blocks,
-//! 36 их `Catch/FUN` continuations, 187 MSVC unwind-funclet `$L`, два
-//! process-global cleanup `$E`, deleting thunks и пять чужих `CGame` COMDAT.
-//! Их существенные эффекты выражены стандартными collections, mutex guards,
-//! Tiberius и `Drop`.
+//! иного наблюдаемого эффекта. Collections, mutex guards, Tiberius и `Drop`
+//! заменяют STL/iostream, ADO/COM и compiler cleanup.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;

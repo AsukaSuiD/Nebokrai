@@ -1,15 +1,11 @@
 //! DB-владелец `CRsEnemyFactions` исторического WorldServer из
 //! `rsenemyfactions.cpp`.
 //!
-//! Статус `LoadAllEnemyFactions` RVA `0x000F7800` и
-//! `SaveAllEnemyFactions` RVA `0x000F7C50` — `IMPLEMENTED`; constructor,
-//! destructor и прочий корпус ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Контракт `LoadAllEnemyFactions` и
+//! `SaveAllEnemyFactions` —; constructor,
+//! destructor и прочий корпус не входят в этот owner и остаются.
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//! SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
 //! исходный путь PDB:
-//! `e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsenemyfactions.cpp`.
 //!
 //! Загрузчик очищал live-list до открытия собственного независимого World DB
 //! connection, читал `SELECT * FROM CSL_FactionWar` в recordset-order и после
@@ -28,14 +24,14 @@
 //! Метод использовал caller-owned connection внутри уже начатой транзакции и
 //! сам не выполнял begin/commit/rollback.
 //!
-//! Exact PDB задаёт `tagEnemyFaction` размером `0x0C`: signed `long`
+//! Оригинал PDB задаёт `tagEnemyFaction` размером `0x0C`: signed `long`
 //! `lFactionID1` по `+0`, signed `long lFactionID2` по `+4` и unsigned `long`
-//! `dwDisandTime` по `+8`; локальный SQL-буфер имел размер `0x1F4`. Exact EXE
-//! имеет статус `VERIFIED_DISASSEMBLY`: call-site `0x004F7D1B..0x004F7D35`
+//! `dwDisandTime` по `+8`; локальный SQL-буфер имел размер `0x1F4`. Оригинал
+//! входит в контракт: call-site..
 //! передаёт третьим `%d` именно поле `+8`, поэтому Rust сохраняет исходную
-//! signed decimal-интерпретацию через `u32 as i32`. Выходы `0x004F7CF9`,
-//! `0x004F7DAD` и catch-путь `0x004F7E11` ставят `AL=0`, а полный успех
-//! `0x004F7E7B` — `AL=1`. После этих ответов reverse прекращён.
+//! signed decimal-интерпретацию через `u32 as i32`. Выходы,
+//! и catch-путь ставят `AL=0`, а полный успех
+//! — `AL=1`.
 //!
 //! `Option` сохраняет nullable connection и nullable элементы pointer-list.
 //! Для null-элемента EXE без проверки разыменовывал `node->_Myval` после уже
@@ -43,8 +39,8 @@
 //! эффект такого UB не доказаны, поэтому безопасная граница возвращает только
 //! индекс и не назначает исходнику `false`, skip либо commit. Ordered slice,
 //! Tiberius и Rust `Drop` заменяют копию `std::list`, ADO/COM и compiler
-//! cleanup; неиспользуемый null recordset и raw реализованного владельца,
-//! catch и служебный эпилог удалены.
+//! cleanup; null recordset, catch и служебный эпилог не имеют отдельной
+//! семантики.
 
 use std::collections::VecDeque;
 use std::error::Error;
@@ -68,7 +64,7 @@ pub(crate) struct EnemyFactionSaveSnapshot {
     pub(crate) disband_time: u32,
 }
 
-/// Три exact поля одной DB-строки, загруженной до faction-war registry.
+/// Три оригинал поля одной DB-строки, загруженной до faction-war registry.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct EnemyFactionLoadSnapshot {
     pub(crate) faction_id_1: i32,
@@ -97,7 +93,7 @@ pub(crate) enum EnemyFactionsSaveOutcome {
     BlockedMissingFact(EnemyFactionNullEntryBlock),
 }
 
-/// Структурированная замена достигнутых `PrintErr`-ветвей владельца.
+/// Структурированная замена действующих `PrintErr`-ветвей владельца.
 #[derive(Debug)]
 pub(crate) enum RsEnemyFactionsNotice {
     LoadSettingsMissing,
@@ -120,7 +116,7 @@ pub(crate) enum RsEnemyFactionsNotice {
     },
 }
 
-/// Ошибка достигнутой ADO/TDS-границы без runtime SQL и значений строк.
+/// Ошибка действующей ADO/TDS-границы без runtime SQL и значений строк.
 #[derive(Debug)]
 pub(crate) struct RsEnemyFactionsDatabaseError(tiberius::error::Error);
 
@@ -142,23 +138,23 @@ impl From<tiberius::error::Error> for RsEnemyFactionsDatabaseError {
     }
 }
 
-/// Узкая объектная граница достигнутого `CRsEnemyFactions` save-владельца.
+/// Узкая объектная граница действующего `CRsEnemyFactions` save-владельца.
 pub(crate) trait RsEnemyFactionsOwner {
-    /// Открывает самостоятельное connection и читает relation rows в DB-order.
+ /// Открывает самостоятельное connection и читает relation rows в DB-order.
     async fn load_all_enemy_factions(&mut self) -> EnemyFactionsLoadOutcome;
 
-    /// Полностью заменяет строки `CSL_FactionWar` внутри caller-транзакции.
+ /// Полностью заменяет строки `CSL_FactionWar` внутри caller-транзакции.
     async fn save_all_enemy_factions(
         &mut self,
         snapshot: &[Option<EnemyFactionSaveSnapshot>],
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> EnemyFactionsSaveOutcome;
 
-    /// Забирает следующий исходный log-эквивалент.
+ /// Забирает следующий исходный log-эквивалент.
     fn pop_notice(&mut self) -> Option<RsEnemyFactionsNotice>;
 }
 
-/// Linux/TDS-замена достигнутой части исходного `CRsEnemyFactions`.
+/// Linux/TDS-замена действующей части исходного `CRsEnemyFactions`.
 #[derive(Default)]
 pub(crate) struct TiberiusRsEnemyFactions {
     settings: Option<WorldDatabaseSettings>,
@@ -166,8 +162,8 @@ pub(crate) struct TiberiusRsEnemyFactions {
 }
 
 impl TiberiusRsEnemyFactions {
-    /// Создаёт DB-owner с тем же immutable World DB snapshot, из которого
-    /// оригинал открывал свой отдельный ADO connection.
+ /// Создаёт DB-owner с тем же immutable World DB snapshot, из которого
+ /// оригинал открывал свой отдельный ADO connection.
     pub(crate) fn new(settings: WorldDatabaseSettings) -> Self {
         Self {
             settings: Some(settings),
@@ -266,9 +262,9 @@ impl RsEnemyFactionsOwner for TiberiusRsEnemyFactions {
 
         for (row_index, row) in snapshot.iter().enumerate() {
             let Some(row) = row else {
-                // BLOCKED_MISSING_FACT: что наблюдалось после разыменования null
-                // в WorldServer RVA 0x000F7D1B? Минимум: `mov eax,[edi+8]`;
-                // `mov ecx,[eax+8]`. DELETE и предыдущие INSERT уже выполнены.
+ // typed boundary: что наблюдалось после разыменования null
+ // в WorldServer ? Минимум: `mov eax,[edi+8]`;
+ // `mov ecx,[eax+8]`. DELETE и предыдущие INSERT уже выполнены.
                 return EnemyFactionsSaveOutcome::BlockedMissingFact(EnemyFactionNullEntryBlock {
                     row_index,
                 });
@@ -315,94 +311,3 @@ async fn execute_batch(
     connection.simple_query(sql).await?.into_results().await?;
     Ok(())
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsenemyfactions.cpp
-
-
-
-// ============================================================================
-// FUNCTION: CRsEnemyFactions::LoadAllEnemyFactions
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsenemyfactions.cpp:21
-// RVA: 0x000F7800
-// ADDRESS: 004f7800
-// PROTOTYPE: bool __thiscall LoadAllEnemyFactions(void)
-//
-// IMPLEMENTED_OWNER: `RsEnemyFactionsOwner::load_all_enemy_factions` открывает
-// отдельный World DB connection, читает recordset-order `CSL_FactionWar` и
-// возвращает успешный prefix вместе с legacy bool. Caller применяет prefix к
-// `CFactionWarSys` после clear-before-open; Tiberius/owned Vec заменяют
-// ADO/recordset/STL, не меняя самостоятельную connection-границу.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004f7bd4
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsenemyfactions.cpp:46
-// RVA: 0x000F7BD4
-// ADDRESS: 004f7bd4
-// PROTOTYPE: undefined Catch@004f7bd4()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_004f7c33
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsenemyfactions.cpp:54
-// RVA: 0x000F7C33
-// ADDRESS: 004f7c33
-// PROTOTYPE: undefined FUN_004f7c33()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: WorldServer

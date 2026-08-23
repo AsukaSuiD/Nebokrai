@@ -51,11 +51,11 @@
 //! двух StringTable lookup-ов и построения трёх map-ов. Старые unchecked
 //! `CRFile::ReadData`, ручные `new[]` и утечки при duplicate-id заменены
 //! проверяемым reader-ом и Rust ownership. Для повреждённого/обрезанного файла
-//! возвращается typed-ошибка, а registry остаётся очищенным, как в безопасном
-//! donor-пути; валидный вход и его observable state не меняются.
+//! возвращается typed-ошибка, а registry остаётся очищенным; валидный вход и
+//! его observable state не меняются.
 //! `UpgradeEquipment` в matching EXE заблокирован всегда-нулевым
-//! `CGoods::CanUpgraded`; поэтому исправленное mutation-тело Linux-donor-а не
-//! является поведением этой версии. Private `Upgrade` материализован отдельным
+//! `CGoods::CanUpgraded`; поэтому mutation-тело не входит в доступное поведение
+//! этой версии. Private `Upgrade` материализован отдельным
 //! callback-adapter-ом, но публичный контур по-прежнему не достигает его.
 
 use std::collections::BTreeMap;

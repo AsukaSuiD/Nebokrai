@@ -1,29 +1,24 @@
-//! DB-владелец `CRsGenVar` исторического WorldServer из `rsgenvar.cpp`.
+//! DB-владелец `CRsGenVar` WorldServer из `rsgenvar.cpp`.
 //!
-//! Статусы `Load` RVA `0x000FF5A0` и `Save` `0x000FFE10` — `IMPLEMENTED`;
-//! constructor и destructor ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
-//! исходный путь PDB:
-//! `e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsgenvar.cpp`.
+//! Источник контрактов `Load` и `Save` — WorldServer EXE/PDB. Constructor и
+//! destructor в этот owner не входят.
 //!
-//! Exact `Load` открывает самостоятельные connection/recordset, выполняет
+//! Оригинал `Load` открывает самостоятельные connection/recordset, выполняет
 //! literal `SELECT * FROM CSL_GENVAR` и в recordset-order передаёт `VarName`,
 //! `SValue`, `CValue` в `CVariableList::LoadOneVar`. Любой ADO/field отказ
 //! возвращает `false`, оставляя уже применённый prefix; `LoadVarData` в
 //! `CGame::Init` игнорирует этот bool. `WorldDatabaseSettings`/Tiberius
 //! заменяют только ADO/COM lifetime, а ANSI-поля снова кодируются в CP1251.
 //!
-//! Exact EXE `0x004FFE10..0x005002C0` подтверждает цикл по всем переменным.
-//! Пустое имя пропускается. Для остальных строк выполняется буквальный
+//! `Save` проходит все переменные и пропускает пустое имя. Для остальных строк
+//! выполняется буквальный
 //! `SELECT * FROM CSL_GENVAR WHERE VarName = '%s'`: EOF ведёт к `INSERT` трёх
 //! `VarName/SValue/CValue`, существующая строка — к `UPDATE` только `CValue`.
-//! Нормальный эпилог `0x005002AF` возвращает `true`, null/create/query/insert
-//! failure и catch `0x005001AF` — `false` с `Save CSL_GENVAR ERROR`.
+//! Нормальный эпилог возвращает `true`, null/create/query/insert
+//! failure и catch — `false` с `Save CSL_GENVAR ERROR`.
 //!
 //! Существенная странность сохранена: результат `ExecuteCn` для INSERT
-//! проверялся, а для UPDATE по `0x00500177` игнорировался, после чего цикл
+//! проверялся, а для UPDATE игнорировался, после чего цикл
 //! продолжался и итог мог быть `true`. Typed notice фиксирует эту ошибку, но
 //! не меняет результат. SQL остаётся буквальным batch без escaping, поэтому
 //! апостроф в runtime-значении вызывает тот же SQL-синтаксис/эффект, а не
@@ -99,14 +94,14 @@ pub(crate) enum RsGenVarNotice {
         operation: GenVarDatabaseOperation,
         error: RsGenVarDatabaseError,
     },
-    /// `ExecuteCn` печатал ошибку, но caller сознательно игнорировал `false`.
+ /// `ExecuteCn` печатал ошибку, но caller сознательно игнорировал `false`.
     UpdateFailedIgnored {
         variable_index: usize,
         error: RsGenVarDatabaseError,
     },
 }
 
-/// Ошибка достигнутой ADO/TDS-границы без runtime SQL и variable values.
+/// Ошибка действующей ADO/TDS-границы без runtime SQL и variable values.
 #[derive(Debug)]
 pub(crate) struct RsGenVarDatabaseError(tiberius::error::Error);
 
@@ -132,24 +127,24 @@ impl From<tiberius::error::Error> for RsGenVarDatabaseError {
     }
 }
 
-/// Узкая объектная граница достигнутого `CRsGenVar::Save`.
+/// Узкая объектная граница действующего `CRsGenVar::Save`.
 pub(crate) trait RsGenVarOwner {
-    /// Открывает отдельное World DB connection и применяет recordset в его
-    /// исходном порядке к уже опубликованному списку.
+ /// Открывает отдельное World DB connection и применяет recordset в его
+ /// исходном порядке к уже опубликованному списку.
     async fn load_general_variables(&mut self, variables: &mut CVariableList) -> GenVarLoadOutcome;
 
-    /// Сохраняет список внутри уже начатой caller-транзакции.
+ /// Сохраняет список внутри уже начатой caller-транзакции.
     async fn save<S: VariableListSaveSource>(
         &mut self,
         variables: &S,
         active_transaction: &mut WorldTdsClient,
     ) -> GenVarSaveOutcome;
 
-    /// Забирает следующий исходный log-эквивалент.
+ /// Забирает следующий исходный log-эквивалент.
     fn pop_notice(&mut self) -> Option<RsGenVarNotice>;
 }
 
-/// Linux/TDS-замена достигнутой части исходного `CRsGenVar`.
+/// Linux/TDS-замена действующей части исходного `CRsGenVar`.
 #[derive(Default)]
 pub(crate) struct TiberiusRsGenVar {
     settings: Option<WorldDatabaseSettings>,
@@ -345,69 +340,3 @@ async fn execute_batch(
     connection.simple_query(sql).await?.into_results().await?;
     Ok(())
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsgenvar.cpp
-
-// ============================================================================
-// FUNCTION: Recordset15::AddNew
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsgenvar.cpp
-// RVA: 0x000ECCD0
-// ADDRESS: 004eccd0
-// PROTOTYPE: long __thiscall AddNew(_variant_t * param_1, _variant_t * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-// ============================================================================
-// FUNCTION: CRsGenVar::Load
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsgenvar.cpp:23
-// RVA: 0x000FF5A0
-// ADDRESS: 004ff5a0
-// PROTOTYPE: bool __thiscall Load(CVariableList * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004ffd93
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsgenvar.cpp:65
-// RVA: 0x000FFD93
-// ADDRESS: 004ffd93
-// PROTOTYPE: undefined Catch@004ffd93()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: WorldServer

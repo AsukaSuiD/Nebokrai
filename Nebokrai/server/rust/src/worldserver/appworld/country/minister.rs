@@ -1,8 +1,8 @@
 //! Номинальный minister owner исторического `WorldServer`.
 //!
-//! действует. Constructor создаёт country identity и обнуляет те же четыре
+//! Constructor создаёт country identity и обнуляет четыре
 //! officer bytes; destructor не добавляет наблюдаемого эффекта поверх
-//! `COfficer`. Источник контракта — точная пара WorldServer EXE/PDB.
+//! `COfficer`. Источник контракта — WorldServer EXE/PDB.
 //!
 //! Rust сохраняет отдельный nominal type и composition вместо C++ vtable.
 

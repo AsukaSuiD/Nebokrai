@@ -1,18 +1,16 @@
 //! WorldServer dispatcher-owner `OnPlayerMessage`.
 //!
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, функция
-//! исходный owner
-//! подтверждает четыре in-place relay branch:
+//! Источник контракта — `WorldServer/Nworldserver.exe` и
+//! `WorldServer/WorldServer.pdb`. Owner содержит четыре in-place relay branch:
 //! `0x5FC01 -> 0x7FA08`, `0x5FC02 -> 0x7FA09`, `0x5FC03 -> 0x7FA0A`,
 //! `0x5FC04 -> 0x7FA0B`. Только первая до broadcast дописывает signed
 //! `m_lMapID`; остальные сохраняют payload byte-for-byte. Все четыре вызывают
 //! общий `CMessage::SendAll`, не делают `Update`, не читают payload и не
-//! проверяют socket/map ownership или хвост. Эти дополнительные проверки и
-//! перенесены. Неизвестный opcode завершает owner без mutation/send и
+//! проверяют socket/map ownership или хвост. Неизвестный opcode завершает
+//! owner без mutation/send и
 //! без передачи следующему dispatcher-у; Rust представляет это `NoOp`.
 //!
-//! Compiler catch/unwind-записи не являются отдельными source-owner-ами;
-//! после сверки контракта они свёрнуты вместе с действующим оригинал.
+//! Compiler catch/unwind-записи не являются отдельными source-owner-ами.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::worldserver::game::CGame;

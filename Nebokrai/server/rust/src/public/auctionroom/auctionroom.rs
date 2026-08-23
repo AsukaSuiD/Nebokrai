@@ -1,19 +1,10 @@
 //! Параметры поиска `CAuctionRoom::stPlayerOptNode` из `auctionroom.h`.
+//! Источник контракта — точная пара MiscServer EXE/PDB.
 //!
-//! Статус владельца: `IMPLEMENTED`. Исходный владелец PDB:
-//! `h:\fengyun\fy_russia\src\public\auctionroom\auctionroom.h:56`; точная пара
-//! `MiscServer/miscserver.exe + MiscServer/miscserver.pdb`, конструктор RVA
-//! `0x00002F80`. Других компонентных вариантов в сыром корпусе нет.
-//!
-//! Конструктор обнуляет player/page и 256 байт имени, оставляет нижний уровень
-//! нулевым, включает поиск собственных предметов, выбирает money type `1`,
-//! задаёт верхний уровень `999` и wildcard weapon type `-1`. Case `0x14ED09`
-//! и точный PDB подтверждают физический порядок 71 DWORD: player, page,
-//! low/up/use-self/money/weapon и только затем имя. Фиксированный буфер
-//! сохраняется как `[u8; 256]`; byte-substring и первый NUL используются
-//! достигнутым `IsMatchCondition`, а case `0x14ED09` создаёт полное значение
-//! из wire-полей перед передачей `ModifyPlayerSeachCondition`.
-//! CRT/compiler noise отсутствует.
+//! Default обнуляет player/page/name и low level, включает own-items, задаёт
+//! money type `1`, upper level `999` и wildcard weapon type `-1`. Wire хранит
+//! 71 DWORD в порядке player, page, low/up/use-self/money/weapon, затем name.
+//! `[u8; 256]` сохраняет fixed-buffer и первый NUL без объявления старого ABI.
 
 /// Параметры поиска игрока в точных начальных значениях.
 #[derive(Clone, Eq, PartialEq)]
@@ -44,7 +35,7 @@ impl Default for PlayerOptNode {
 }
 
 impl PlayerOptNode {
-    /// Создаёт условие из полного набора полей сообщения и сбрасывает page.
+ /// Создаёт условие из полного набора полей сообщения и сбрасывает page.
     pub(crate) const fn from_search_request(
         player_id: u32,
         low_level: i32,
@@ -66,42 +57,42 @@ impl PlayerOptNode {
         }
     }
 
-    /// Возвращает unsigned ключ игрока для search-map.
+ /// Возвращает unsigned ключ игрока для search-map.
     pub(super) const fn player_id(&self) -> u32 {
         self.player_id
     }
 
-    /// Возвращает сохранённый zero-based номер страницы.
+ /// Возвращает сохранённый zero-based номер страницы.
     pub(super) const fn current_page(&self) -> u32 {
         self.current_page
     }
 
-    /// Перезаписывает только сохранённый номер страницы.
+ /// Перезаписывает только сохранённый номер страницы.
     pub(super) fn set_current_page(&mut self, current_page: u32) {
         self.current_page = current_page;
     }
 
-    /// Возвращает signed нижнюю границу уровня.
+ /// Возвращает signed нижнюю границу уровня.
     pub(super) const fn low_level(&self) -> i32 {
         self.low_level
     }
 
-    /// Возвращает signed верхнюю границу уровня.
+ /// Возвращает signed верхнюю границу уровня.
     pub(super) const fn up_level(&self) -> i32 {
         self.up_level
     }
 
-    /// Возвращает требуемый тип валюты.
+ /// Возвращает требуемый тип валюты.
     pub(super) const fn money_type(&self) -> i32 {
         self.money_type
     }
 
-    /// Возвращает требуемый тип товара либо wildcard `-1`.
+ /// Возвращает требуемый тип товара либо wildcard `-1`.
     pub(super) const fn weapon_type(&self) -> i32 {
         self.weapon_type
     }
 
-    /// Возвращает фиксированный byte-exact поисковый буфер имени.
+ /// Возвращает фиксированный byte-оригинал поисковый буфер имени.
     pub(super) const fn goods_name(&self) -> &[u8; 256] {
         &self.goods_name
     }

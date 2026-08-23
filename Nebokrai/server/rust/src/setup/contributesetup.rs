@@ -1,14 +1,9 @@
 //! Настройки country contribution исторического Miracle.
 //!
-//! Статус World `LoadContributeSetup` RVA `0x000937D0` и `AddToByteArray` RVA
-//! `0x00092EE0`: `IMPLEMENTED`; Game decoder ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Контракт World `LoadContributeSetup` и `AddToByteArray`
+//!:; Game decoder ниже остаётся.
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//! SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! SHA-256 PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
 //! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\setup\contributesetup.cpp:43,103`.
 //!
 //! Loader очищает только item-vector: одиннадцать process-global signed
 //! параметров сохраняются при ошибке открытия и обновляются позиционно по мере
@@ -49,12 +44,12 @@ pub(crate) struct CContributeSetup {
 }
 
 impl CContributeSetup {
-    /// Очищает только item-vector, сохраняя positional scalar prefix.
+ /// Очищает только item-vector, сохраняя positional scalar prefix.
     pub(crate) fn clear_items(&mut self) {
         self.items.clear();
     }
 
-    /// Очищает items до открытия, но не трогает scalar prefix.
+ /// Очищает items до открытия, но не трогает scalar prefix.
     pub(crate) fn load_from_file(
         &mut self,
         path: impl AsRef<Path>,
@@ -65,7 +60,7 @@ impl CContributeSetup {
             .map_err(ContributeSetupFileLoadError::Format)
     }
 
-    /// Применяет exact positional scalar updates и затем `#`-items.
+ /// Применяет оригинал positional scalar updates и затем `#`-items.
     pub(crate) fn load_from_bytes(
         &mut self,
         source: &[u8],
@@ -97,7 +92,7 @@ impl CContributeSetup {
         Ok(applied)
     }
 
-    /// Дописывает exact positional wire World owner-а.
+ /// Дописывает оригинал positional wire World owner-а.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -244,67 +239,4 @@ fn invalid_long(field: &'static str, token: &[u8]) -> ContributeSetupFormatError
     }
 }
 
-// Сырой C++ ниже сохранён как локальная документация Game decoder-а и
 // оставшихся call-site деталей, а не как Rust-реализация.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\setup\contributesetup.cpp
-
-// ============================================================================
-// FUNCTION: CContributeSetup::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\contributesetup.cpp:142
-// RVA: 0x000EB490
-// ADDRESS: 004eb490
-// PROTOTYPE: bool __cdecl DecordFromByteArray(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\setup\contributesetup.cpp
-
-// ============================================================================
-// FUNCTION: CContributeSetup::AddToByteArray
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\contributesetup.cpp:103
-// RVA: 0x00092EE0
-// ADDRESS: 00492ee0
-// PROTOTYPE: bool __cdecl AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// IMPLEMENTED_OWNER: `CContributeSetup::add_to_byte_array` выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CContributeSetup::LoadContributeSetup
-// STATUS: IMPLEMENTED_OWNER / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\contributesetup.cpp:43
-// RVA: 0x000937D0
-// ADDRESS: 004937d0
-// PROTOTYPE: int __cdecl LoadContributeSetup(char * param_1)
-//
-// IMPLEMENTED_OWNER: `load_from_bytes` вместе с owned `CGame` reload path.
-// Exact `0x004937F4..0x00493808` очищает только item-vector до `rfOpen`;
-// отсутствующий ресурс возвращает `0`, каждый открытый stream — `1`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: WorldServer

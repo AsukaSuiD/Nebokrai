@@ -13,16 +13,14 @@
 //! применения joined addon-строк `CDBGoods::LoadGoods` входят в контракт owner-а.
 //!
 //! Layout сохраняет размеры старых `CShape/CGoods` `0x6C/0xA4`. Constructor
-//! по передаёт неизменённый `this` в `CShape::CShape`, а по
-//! выполняет `mov [esi+4], 0x2BC`: object type `700` хранится в
-//! унаследованном `CBaseObject::m_lType`. Запись по повторно
-//! обнуляет inherited `m_lID +0x8`, а не собственное поле, как показывал оригинал.
+//! сначала передаёт неизменённый `this` в `CShape::CShape`, затем задаёт object
+//! type `700` в унаследованном `CBaseObject::m_lType` и повторно обнуляет
+//! inherited `m_lID +0x8`, а не собственное поле.
 //! Собственный `m_dwBasePropertiesIndex +0x6C` этот constructor не назначает,
 //! поэтому Rust хранит его как `Option<u32>` до setter/decode; amount получает
 //! `1`, price `0`, description и addon-vector пусты.
 //!
-//! оригинал destructor ошибочно показывал ранний возврат после освобождения
-//! heap-строки. сохраняет порядок
+//! Destructor сохраняет порядок
 //! `Release -> vector tidy -> string cleanup -> CShape::~CShape` для обеих
 //! форм строки. Rust-композиция материализует только единственный действующий
 //! `CShape` base-подобъект и type-default. Helper не называется `new`,
@@ -35,8 +33,7 @@
 //! тройки `u32/i32/i32`. `Vec` заменяет только последовательный STL storage.
 //! `Unserialize` сначала выполняет точный `Release`: index/amount становятся
 //! нулями, description/addons очищаются, price сохраняется до последующей
-//! записи из wire. подтвердил normal return `1`
-//! перед security-cookie epilogue.
+//! записи из wire и при нормальном завершении возвращает `1`.
 //!
 //! Description читался без length в stack buffer `0x404`. Safe slice/cursor
 //! принимает только NUL в этой границе; overflow/overread возвращает локальную
@@ -48,18 +45,16 @@
 //! 32-битное сложение `lBaseValue + lModifier`. Max-stack запрашивает
 //! base-properties index, допускает только `GT_USELESS/GT_CONSUMABLE`, берёт
 //! `lBaseValue` первого stacking-value с `dwId == 1` и иначе возвращает `1`.
-//! PDB исправляет ошибочное имя folded-вызова `CShape::GetDir` на
-//! `CGoodsBaseProperties::GetGoodsType`;
-//! подтверждает возврат именно signed DWORD по `tagAddonPropertyValue +4`,
-//! побитово наблюдаемого как исходный `unsigned long`. После этих двух ответов
-//! точечный проверка прекращён.
+//! Folded-вызов использует `CGoodsBaseProperties::GetGoodsType`, а значение
+//! свойства возвращается как signed DWORD из `tagAddonPropertyValue +4`,
+//! побитово совместимый с исходным `unsigned long`.
 //! Weight запрашивает те же base-properties, возвращает `0` при отсутствии и
 //! умножает unsigned вес одной единицы на amount с точным 32-битным wrapping;
 //! использует `IMUL EAX, ESI`.
 //! `CanUpgraded` в matching EXE после всех lookup/allocation путей безусловно
 //! выполняет `xor eax,eax` по: результат всегда `0`. Rust удаляет
 //! только ненаблюдаемые map lookup и временный vector, но сохраняет этот
-//! внешний запрет upgrade буквально; исправленное donor-тело сюда не входит.
+//! внешний запрет upgrade буквально; недостижимая мутация сюда не входит.
 
 use std::collections::BTreeSet;
 use std::error::Error;

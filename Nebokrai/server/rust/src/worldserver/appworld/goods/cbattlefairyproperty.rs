@@ -1,8 +1,7 @@
 //! Владелец конфигурации объединения боевых фей исторического `WorldServer`.
 //!
-//! `bLoadCombineConfig` и `AddToByteArray_Combine`
-//! —
-//! действует; оставшиеся блоки ниже являются compiler/STL cleanup. Точная
+//! `bLoadCombineConfig` и `AddToByteArray_Combine` входят в контракт owner-а;
+//! оставшиеся блоки являются compiler/STL cleanup.
 //!
 //! Singleton с process-lifetime leak заменён caller-owned registry, как и в
 //! очищенном C++ reference. loader возвращает false только при ошибке

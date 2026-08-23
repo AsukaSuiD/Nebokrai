@@ -1,14 +1,9 @@
 //! Таблица опыта боевых духов исторического Miracle.
 //!
-//! Статус World `CBattleFairyExpConfig::bLoadSetup` RVA `0x0003F200` и
-//! `AddToByteArray` RVA `0x00049120`: `IMPLEMENTED`; singleton plumbing и
-//! Game decoder/query ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! SHA-256 PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Контракт World `CBattleFairyExpConfig::bLoadSetup` и
+//! `AddToByteArray`:; singleton plumbing и
+//! Game decoder/query не входят в этот owner и остаются. Точная пара:
 //! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\setup\cbattlefairyexpconfig.cpp:175`.
 //!
 //! `CFairyExpConf` наследует этот owner и заполняет тот же protected map своим
 //! XML loader-ом. Поэтому reconnect call-site получает `CFairyExpConf`
@@ -41,7 +36,7 @@ pub(crate) struct CBattleFairyExpConfig {
 }
 
 impl CBattleFairyExpConfig {
-    /// Явная граница для последующего точного XML loader-а производного owner-а.
+ /// Явная граница для последующего точного XML loader-а производного owner-а.
     pub(crate) fn insert_exp_list(
         &mut self,
         owner_level: u32,
@@ -50,17 +45,17 @@ impl CBattleFairyExpConfig {
         self.exp_lists.insert(owner_level, values)
     }
 
-    /// Проверка duplicate owner-level до mutation derived `CFairyExpConf`.
+ /// Проверка duplicate owner-level до mutation derived `CFairyExpConf`.
     pub(crate) fn contains_exp_list(&self, owner_level: u32) -> bool {
         self.exp_lists.contains_key(&owner_level)
     }
 
-    /// Очищает map на exact позиции до resource-open.
+ /// Очищает map на оригинал позиции до resource-open.
     pub(crate) fn clear(&mut self) {
         self.exp_lists.clear();
     }
 
-    /// Загружает точный XML state `bLoadSetup` после успешного resource-open.
+ /// Загружает точный XML state `bLoadSetup` после успешного resource-open.
     pub(crate) fn load_from_bytes(
         &mut self,
         source: &[u8],
@@ -205,7 +200,7 @@ impl CBattleFairyExpConfig {
         Ok(report)
     }
 
-    /// File-adapter exact clear-before-open state transition.
+ /// File-adapter оригинал clear-before-open state transition.
     pub(crate) fn load_from_file(
         &mut self,
         path: impl AsRef<Path>,
@@ -216,7 +211,7 @@ impl CBattleFairyExpConfig {
             .map_err(BattleFairyExpFileLoadError::Format)
     }
 
-    /// Дописывает exact ordered map/vector wire.
+ /// Дописывает оригинал ordered map/vector wire.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -262,7 +257,7 @@ pub(crate) enum BattleFairyExpLoadError {
 }
 
 impl BattleFairyExpLoadError {
-    /// StringTable ID exact loader diagnostic-а до общего reload failure-log.
+ /// StringTable ID оригинал loader diagnostic-а до общего reload failure-log.
     pub(crate) const fn string_id(&self) -> &'static [u8] {
         match self {
             Self::MissingRoot | Self::ZhanHunOutsideGroup | Self::Xml(_) => b"ZHGS0031",
@@ -354,7 +349,7 @@ fn ensure_minimum_exp_values(
     Ok(())
 }
 
-/// Exact signed `_atol` decimal-prefix behaviour without its overflow UB.
+/// Оригинал signed `_atol` decimal-prefix behaviour without its overflow UB.
 fn legacy_atol(value: &[u8]) -> i32 {
     let mut bytes = value.iter().copied().skip_while(u8::is_ascii_whitespace).peekable();
     let negative = matches!(bytes.peek(), Some(b'-'));
@@ -417,122 +412,4 @@ fn write_count(
     Ok(())
 }
 
-// Сырой C++ ниже сохранён как локальная документация loaders, singleton и
 // Game decoder/query, а не как Rust-реализация.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\setup\cbattlefairyexpconfig.h
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\setup\cbattlefairyexpconfig.cpp
-
-// ============================================================================
-// FUNCTION: CBattleFairyExpConfig::GetInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\cbattlefairyexpconfig.h:36
-// RVA: 0x0009CD20
-// ADDRESS: 0049cd20
-// PROTOTYPE: CBattleFairyExpConfig * __cdecl GetInstance(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyExpConfig::dwExpUp
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\cbattlefairyexpconfig.cpp:218
-// RVA: 0x001C77A0
-// ADDRESS: 005c77a0
-// PROTOTYPE: ulong __thiscall dwExpUp(ulong param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyExpConfig::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\cbattlefairyexpconfig.cpp:193
-// RVA: 0x001C7800
-// ADDRESS: 005c7800
-// PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\setup\cbattlefairyexpconfig.h
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\setup\cbattlefairyexpconfig.cpp
-
-// ============================================================================
-// FUNCTION: CBattleFairyExpConfig::GetInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\cbattlefairyexpconfig.h:36
-// RVA: 0x00001330
-// ADDRESS: 00401330
-// PROTOTYPE: CBattleFairyExpConfig * __cdecl GetInstance(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyExpConfig::CBattleFairyExpConfig
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\cbattlefairyexpconfig.cpp:25
-// RVA: 0x0003EFA0
-// ADDRESS: 0043efa0
-// PROTOTYPE: undefined __thiscall CBattleFairyExpConfig(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyExpConfig::bLoadSetup
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\cbattlefairyexpconfig.cpp:38
-// RVA: 0x0003F200
-// ADDRESS: 0043f200
-// PROTOTYPE: bool __thiscall bLoadSetup(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyExpConfig::AddToByteArray
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\cbattlefairyexpconfig.cpp:175
-// RVA: 0x00049120
-// ADDRESS: 00449120
-// PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: WorldServer

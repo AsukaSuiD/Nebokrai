@@ -1,504 +1,16 @@
-//! DB-владелец `CRsPlayer` исторического WorldServer из `rsplayer.cpp`.
+//! DB-владелец `CRsPlayer` WorldServer из `rsplayer.cpp`.
+//! Источник контракта — точная пара WorldServer EXE/PDB.
 //!
-//! Статус `CreatePlayerBase` RVA `0x00102350`, `SavePlayerBase` RVA
-//! `0x00102700`, `SavePlayerAbilities` RVA `0x00109B00`, `SaveHotKeyField` RVA
-//! `0x00103B50`, `SaveScriptFlag` RVA `0x00104240`, `SaveSkillField` RVA
-//! `0x00104BE0`, `SaveFriendField` RVA `0x00104E20` и `SaveStateField` RVA
-//! `0x00105C10`, `SaveThingField` RVA `0x00105700` и `SaveCiQingField` RVA
-//! `0x00106A60`, обратные `LoadHotKeyField/LoadStateField/LoadScriptFlag`
-//! RVA `0x00103D40/0x00103FC0/0x00104470`, `LoadQuestData` RVA `0x00104790`,
-//! `LoadCiQingField/LoadSkillField/LoadThingField/LoadFriendField` RVA
-//! `0x0010EFF0/0x0010F8E0/0x00110260/0x00111050`, `SaveQuestData` RVA
-//! `0x00106270`, полный query-owner `LoadQuestData` RVA `0x00104790`,
-//! `CreatePlayerAbilities` RVA `0x00106CE0`, внешний
-//! `CreatePlayer` RVA `0x0010ED40`, внешний `SavePlayer` RVA `0x0010EE70`,
-//! `GetPlayerID` RVA `0x00102080`, `GetCDKey` RVA `0x0010EA20`,
-//! `GetPlayerCountInDBbyCdkey` RVA `0x00100C40`, `GetPlayerDeletionDate` RVA
-//! `0x00100EA0`, `OpenPlayerBaseInDB` RVA `0x0010D2D0`,
-//! `GetPlayerCountryByID` RVA `0x00101E30`, `GetPlayerNameByID` RVA
-//! `0x00105980`, `ValidatePlayerIDInCdkey` RVA `0x00101350`,
-//! `GetPlayerData` RVA `0x00114EA0`,
-//! caller-connection путь `LoadPlayer` RVA `0x001117F0`,
-//! `OpenPlayerBaseInMem` RVA `0x0010F280`, внешний `OpenPlayerBase` RVA
-//! `0x0010F750`,
-//! `RestorePlayer` RVA `0x00101260` и
-//! `DeletePlayer` RVA `0x00101A60`, а также `LoadHonorRanksByType` RVA
-//! `0x0010FB90`, внешний `LoadHonorRanks` RVA `0x001113B0`, `InsertHonorRanks`
-//! RVA `0x00101680`, `SaveHonorRanksByType` RVA `0x00105080` и внешний
-//! `SaveHonorRanks` RVA `0x00105E20`, `StatRanks` RVA `0x00109570`,
-//! `DbLetTingUpdate` RVA `0x00110520` и `ResetAllLeitingInDB` RVA
-//! `0x00110F70` — `IMPLEMENTED`; `LoadPlayer` имеет статус
-//! `IMPLEMENTED_PARTIAL/VERIFIED_DISASSEMBLY`; constructor, destructor
-//! и остальные функции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
-//! исходный путь PDB:
-//! `e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp`.
+//! Owner охватывает create/open/load/save игрока, отдельные field codecs,
+//! honor ranks, JJC/LeiTing maintenance и lookup-операции account/name/country.
+//! Equipment snapshot сохраняет порядок HELM, BODY, GLOV, BOOT, WEAPON, BACK,
+//! HEADGEAR, FROCK, WING, MANTEAU, FAIRY и исходную 32-битную арифметику.
 //!
-//! PDB задаёт `CPlayer` размером `0x9B8`, `m_BaseProperty` по `+0x598` и
-//! `m_btCountry: unsigned char` по `+0x844`; `tagBaseProperty` имеет размер
-//! `0x1CC`, а `lLevel/lHeadPic/lOccupation/lSex` являются `unsigned char`.
-//! Signed player ID, byte-exact name и signed region принадлежат base-owner-ам
-//! уже достигнутого `CPlayer`. `CGame::GetPlayerEquipID` отдаёт одиннадцать
-//! `unsigned long` ID и одиннадцать `unsigned char` уровней в SQL-порядке
-//! `HELM, BODY, GLOV, BOOT, WEAPON, BACK, HEADGEAR, FROCK, WING, MANTEAU,
-//! FAIRY`. Rust получает один caller-owned snapshot вместо чтения частично
-//! материализованного `CPlayer` и singleton `CGame` внутри DB-owner-а.
-//! `OpenPlayerBase` отдельно сохраняет два исходных SQL-прохода: byte-count
-//! через `SELECT ID`, затем ordered `SELECT *`; при необходимости для каждой
-//! DB-строки выполняется прежний `SELECT DelDate`. Parameter binding устраняет
-//! только injection/stack-buffer дефект. Row wire и live/save/creation merge
-//! принадлежат достигнутому caller-у `OnLogMessage`, поэтому DB-owner отдаёт
-//! typed scalar rows без второго протокольного builder-а.
-//! Exact `GetPlayerDeletionDate` `0x0050116B..0x00501238` нормализует
-//! `_mktime == -1` в `0`, но catch возвращает signed `-1`; null `DelDate`, EOF
-//! и нулевой player ID возвращают `0`. Эти различающиеся значения сохранены,
-//! потому что caller считает `-1` ненулевым deletion timestamp.
-//! `GetPlayerCountryByID` и `GetPlayerNameByID` выполняют отдельные exact
-//! `SELECT Country/Name ... WHERE id=%d`; EOF/exception оставляют заранее
-//! обнулённый output. Rust использует параметризованный TDS-запрос на
-//! переданном синхронном connection и возвращает соответственно `0`/пустой
-//! ANSI-вектор. Это заменяет отдельный ADO connection и небезопасные
-//! `_sprintf/lstrcpyA`, сохраняя DB-порядок caller-а и значения отказа.
-//!
-//! Exact `0x005023BE..0x005026A8` исправляет потерянный raw vararg-хвост:
-//! после одиннадцатого equipment level последним `%d` передаётся signed
-//! `Region`; все 32 аргумента соответствуют literal SQL по `0x0054DA60`.
-//! Успешный `ExecuteCn` выставляет `AL=1` по `0x005026A8`; null player/null
-//! connection и catch `0x005026AC` сходятся к `AL=0` по `0x005026D6`.
-//! Rust-ссылки исключают null, DB-ошибка возвращает `Failed`, число затронутых
-//! строк исходно не проверяется.
-//!
-//! SQL сохраняется byte-exact, включая `N'%s'` только для имени, обычный
-//! `'%s'` для account, табуляцию и отсутствие escaping. `unsigned long`
-//! equipment ID форматируется как исходный `%d`, то есть через тот же signed
-//! 32-битный шаблон. `_sprintf` писал в `char[1024]`: до 1023 output-байт batch
-//! воспроизводится, а больший вывод остаётся локальным `BLOCKED_MISSING_FACT`,
-//! потому что поведение старого buffer overflow не доказано. Windows-1251,
-//! `tiberius`, stream consumption и Rust Drop заменяют только ANSI/ADO/COM и
-//! compiler cleanup.
-//!
-//! `CreatePlayerAbilities` сначала создаёт updatable row, заполняет 84 scalar
-//! поля, затем до единственного `Recordset::Update` последовательно вызывает
-//! семь binary helper-ов. `SaveHotKeyField` точечно замыкается обратным
-//! `LoadHotKeyField`: PDB-массив `dwHotKey` занимает `0x60` байт, save пишет 24
-//! `unsigned long`, а load принимает field-size только `0x60` и читает 24
-//! слова. Следующий `SaveSkillField` сохраняет list-order `m_listNewSkillID`:
-//! PDB задаёт `CPlayer::tagSkill` размером четыре байта, `wID: unsigned short`
-//! по `+0` и `wLevel: unsigned short` по `+2`; `LoadSkillField` делит byte-size
-//! `ListSkill` на четыре и добавляет элементы в исходном порядке.
-//! `SaveScriptFlag` пишет в `VariableList` signed `m_lVariableNum: long`, затем
-//! ровно `m_lVariableDataLength: long` непрозрачных байт из
-//! `m_pVariableData`; PDB располагает эти поля по `+0x838`, `+0x840` и
-//! `+0x83C`. Обратный `LoadScriptFlag` принимает только blob длиннее трёх байт,
-//! читает первое слово как signed `long`, а остаток сохраняет без разбора.
-//! `SaveStateField` аналогично не интерпретирует состояние: PDB задаёт
-//! `CMoveShape::m_vExStates` как `vector<unsigned char>` по `+0x6C`, его
-//! `_Myfirst/_Mylast` лежат по `+0x70/+0x74`, а `LoadStateField` передаёт весь
-//! `ListState` владельцу `CMoveShape::SetExStates`.
-//! Для `SaveFriendField` PDB задаёт `m_listFriend` по `CPlayer +0x82C` и
-//! `tagFriend` размером `0x20`: `strName` по `+0`, `bOnline` по `+0x1C`.
-//! `ListFriendName` содержит только list-order имена с NUL после каждого;
-//! обратный load выставляет `bOnline=false`, поэтому runtime-флаг не является
-//! частью DB blob.
-//! PDB задаёт `m_setCiQingList` по `CPlayer +0x84C` как
-//! `std::set<unsigned long>`; save обходит его в unsigned ascending-порядке и
-//! пишет в lowercase-колонку `ciqing` по четыре little-endian байта на ID, без
-//! count. Load делит длину blob на четыре и вставляет каждое слово обратно в
-//! set; соседние `AddByteCiQing/DeByteCiQing` подтверждают тот же порядок ID,
-//! но в общем player-stream отдельно добавляют count.
-//! PDB задаёт `m_listThing` по `CPlayer +0x9A4` и `tagThing` размером восемь
-//! байт: `wTID/wCnt/wMaxCnt/wPoint: unsigned short` по `+0/+2/+4/+6`.
-//! `ListThing` содержит элементы в логическом deque-order без count; load делит
-//! размер на восемь. Его отдельный empty-field путь с `GetDailyThingList`
-//! зависит от load-параметра и не является частью save-кодека.
-//! Все восемь load-кодеков теперь также `IMPLEMENTED`: integer records
-//! читаются little-endian, а неполный хвост skill/ciqing/thing/quest намеренно
-//! игнорируется, как исходное целочисленное деление длины. `HotKey` по-прежнему
-//! требует ровно `0x60` байт, пустые state/script сохраняют прежнее состояние,
-//! friends добавляются с `online=false`, а Thing empty/fyEnergy ветвь остаётся
-//! у `CPlayer`, где доступен `CThingSetup`. Единственный unchecked `strlen`
-//! без NUL до конца friend-blob заменён typed malformed-границей; чтение за
-//! SAFEARRAY и use-after-unaccess не воспроизводятся.
-//! Scalar ability-row теперь также достигнута как typed Tiberius-проекция:
-//! exact `SELECT * ... WHERE id=@P1 ORDER BY id`, ADO-compatible integer/bit/
-//! real/text conversions, nullable-only `dwLT60Stamp=0`, все реально читаемые
-//! поля и семь load-only silence/honor значений. `ID`, `Account` и
-//! `BaseMaxRp` намеренно не читаются: exact `LoadPlayer` сохраняет уже
-//! назначенные identity/account, а `CPlayer::LoadData` сразу вычисляет RP.
-//! DB/EOF остаются доказанным `false`, malformed range/blob — отдельной typed
-//! границей. Неявное создание connection пока принадлежит полному wrapper-у.
-//!
-//! Текущий raw задаёт byte-exact имена и порядок всех 84 обращений
-//! `Fields::Item`; PDB полностью закрывает source-типы `tagBaseProperty` и
-//! прямых `CPlayer::m_strDepotPassword/m_btCountry/m_lContribute/
-//! m_dwMurdererTime`. Четыре строки проходят старый ANSI C-string путь в
-//! `BSTR`, координаты — `VT_R4`, а integer-поля сохраняют исходное различие
-//! `VT_I4/VT_UI4/VT_UI2/VT_UI1/VT_INT`. Семь логических полей записывались как
-//! `VT_BOOL`; `bIsCharged` отдельно расширялся до `VT_I4`, а `bQuest` — до
-//! `VT_INT`. `dwExploit` и `dwKudos` являются PDB `DWORD`, но ADO получал их
-//! как signed `VT_I4`; Rust сохраняет тот же 32-битный шаблон через `as i32`.
-//! `PlayerAbilityScalarSnapshot` представляет только caller-owned read-view,
-//! а фиксированный массив assignments задаёт все значения нового DB row.
-//!
-//! Исходные `CreateRs + OpenRs("CSL_PLAYER_ABILITY") + AddNew`, ordered
-//! `PutCollect/AppendChunk` и единственный `Recordset::Update` заменены одним
-//! параметризованным `INSERT` из тех же 84 scalar и семи binary колонок. ADO
-//! до Update только накапливал значения в новой строке; TDS также не создаёт
-//! частичную строку до единственного execute. `Query` передаёт BSTR-значения
-//! как декодированный Windows-1251 Unicode, `VT_UI4` как неотрицательный
-//! `i64`, `VT_UI2` как `i32`, `VT_UI1` как `u8`, `VT_BOOL` как `bit`, signed
-//! значения и floats без изменения. SQL Server выполняет окончательное
-//! приведение к типам доказанной исходной таблицы; число затронутых строк, как
-//! и у старого Update, не проверяется.
-//!
-//! `DbLetTingUpdate` проверен по exact `0x00510520`: worker сначала снимает
-//! текущий `GetDailyThingList`, кодирует каждый `tagThing` как восемь байт
-//! `u16` в deque-order, после чего открывает отдельное соединение и проходит
-//! все строки updatable recordset без транзакции. Kind `1` очищает только
-//! младшие четыре бита `baseblfyenergy`; kind `2` дополнительно обнуляет
-//! `LTUp60Cnt` и всё `baseblfyenergy`. В обоих случаях `ListThing`, signed
-//! `dwLT60Stamp`, `basefyEnergy=0` и `wRemainJLDanCnt` обновляются до
-//! единственного `Recordset::Update` текущей строки. TDS-замена добавляет
-//! `ID` лишь как ключ текущей ADO-строки и сохраняет отдельный statement на
-//! строку, исходный natural order, partial commit и отсутствие retry/rollback.
-//! `ResetAllLeitingInDB` передаёт два DWORD в ровно один `_beginthreadex`;
-//! Rust worker владеет payload и immutable setup через `Arc` и освобождает системный
-//! thread resource по `JoinHandle::drop`, устраняя внутреннюю утечку HANDLE
-//! без изменения fire-and-forget DB-семантики.
-//!
-//! После успешного INSERT исходный owner вызывал `CRsJJcSys::SaveJJcData`.
-//! Точная сигнатура действительно передавала текущий connection по значению,
-//! но JJc-owner немедленно освобождал локальную копию через `CreateCn` и
-//! открывал новое соединение. Поэтому procedure не входит в caller-транзакцию:
-//! её успех может сохраниться, даже если внешний `CreatePlayer` позднее
-//! откатит base/ability/goods. Rust вызывает отдельный `RsJjcSysOwner` после
-//! INSERT и при его `false` ставит второй outer notice
-//! `Create Charactor Property Info ERROR.`. Ссылки исключают старые null player
-//! и null connection; raw функции, catch и COM/compiler cleanup удалены.
-//!
-//! Старый helper создавал странный `SAFEARRAY(VT_UI4, cElements=0x60)`, но
-//! помещал его в `VARIANT` с tag `VT_ARRAY|VT_UI1`; `AppendChunk` поэтому
-//! сохранял первые 96 байт, где находятся ровно 24 little-endian `u32`, а не
-//! 96 четырёхбайтных элементов. Rust кодирует наблюдаемый blob явно и передаёт
-//! его синхронному typed sink. `SaveSkillField` создавал обычный
-//! `SAFEARRAY(VT_UI1)` длиной `list.size() * 4`; exact
-//! `0x00504C84..0x00504DCA` подтверждает, что проверка временного указателя
-//! относится только к `operator delete`, после чего и пустой, и непустой blob
-//! всегда передаётся в `ListSkill`. Sink обязан скопировать bytes до возврата;
-//! `SaveScriptFlag` использует тот же контракт для `VariableList`. Exact
-//! `0x00504414..0x0050445E` подтверждает `true` после `AppendChunk`, общий
-//! cleanup временного буфера/SAFEARRAY и `false` из catch. Rust-срез выражает
-//! только доказанный valid-state: неотрицательную длину и читаемый payload;
-//! реакция старого кода на отрицательный `long` или невалидный указатель не
-//! назначена и остаётся `BLOCKED_MISSING_FACT` у будущей границы материализации
-//! `CPlayer`. `Result` заменяет COM exception/catch, а null player и recordset
-//! исключены ссылками. Exact `0x00505C3C..0x00505DC9` подтверждает, что
-//! `SaveStateField` синхронно копирует `[first,last)` и записывает также пустой
-//! blob. `SaveFriendField` считает allocation по `string::size()`, но копирует
-//! имя по C-string до первого NUL. Rust-тип допускает только доказанный обычный
-//! путь без embedded NUL; содержимое оставшегося SAFEARRAY-хвоста для странного
-//! имени остаётся `BLOCKED_MISSING_FACT`. Исходный catch ошибочно логировал
-//! `save goods ERROR`; это наблюдаемое имя сохраняется для будущего logger-а.
-//! Exact `0x00506B4A..0x00506C8D` исправляет потерянную raw-ветку: временный
-//! массив удаляется при non-null, затем `ciqing` всегда получает chunk, включая
-//! пустой set. `BTreeSet<u32>` сохраняет unique unsigned ordering без ручной
-//! реализации дерева. Exact `0x005057E3..0x00505929` аналогично подтверждает
-//! conditional delete временного Thing-буфера и обязательный `ListThing`
-//! chunk, включая пустой deque. Все семь binary fields и общий row-owner
-//! закрыты.
-//!
-//! `SavePlayerAbilities(CPlayer*, connection)` обновляет существующую строку
-//! `CSL_PLAYER_ABILITY`. До единственного `Recordset::Update` он присваивает
-//! 92 scalar-поля и вызывает те же семь binary helper-ов. Базовые 84 значения
-//! переиспользуют доказанный create-snapshot, но save-порядок отдельно вставляет
-//! `SaveTime`, signed `silence`, четыре honor-eliminate DWORD и два honor ID;
-//! кроме того, `BattleFairyEnabled` стоит перед `Mode`, а не на create-позиции.
-//! Точный PDB подтверждает `m_lSilienceTime: long` по `CPlayer+0x858` и шесть
-//! `unsigned long` honor-полей по `tagBaseProperty+0x140..+0x154`.
-//!
-//! Exact `0x00509B9B..0x00509BE1` имеет статус `VERIFIED_DISASSEMBLY` для
-//! потерянных аргументов времени: один `GetLocalTime` форматируется как
-//! `year-month-day hour:minute:second` без ведущих нулей. Хвост
-//! `0x0050D1C5..0x0050D2BE` подтверждает отдельный `SaveJJcData` только после
-//! успешного row-update, `AL=1` после его успеха и `AL=0` из catch
-//! `0x0050D223`; после этих ответов reverse прекращён.
-//!
-//! Параметризованный `IF EXISTS + UPDATE TOP (1) + @@ROWCOUNT` заменяет только
-//! updateable ADO-recordset и сохраняет `false` при отсутствии текущей строки.
-//! Scalar `VARIANT`-формы, Windows-1251 C-string и семь byte-exact blob
-//! остаются теми же, что у create-owner-а. Один local wall-clock снимается до
-//! DB-update. JJc-owner затем по собственному доказанному контракту открывает
-//! отдельное соединение, поэтому его эффект не входит в caller-транзакцию.
-//! Null player тихо возвращает `false`, null connection и общий catch дают
-//! typed save-notice; raw owner, catch и compiler cleanup удалены.
-//!
-//! `SaveQuestData(CPlayer*, connection)` сериализует mapped values из
-//! упорядоченной `m_PlayerQuests` в `QuestData`: для каждого элемента в
-//! unsigned key-order идут little-endian `tagPlayerQuest::wQuestID` и один
-//! byte `byComplete`, без count. Сам map-key в blob не копируется. Точный PDB
-//! задаёт layout mapped value как
-//! `unsigned short` по `+0` и `unsigned char` по `+2`, а map располагает по
-//! `CPlayer+0x8F0`; обратный `LoadQuestData` делит длину поля на три и передаёт
-//! каждую пару в `CPlayer::AddQuestFromDB`.
-//!
-//! Exact `0x005062C5..0x005063CC` имеет статус `VERIFIED_DISASSEMBLY`: размер
-//! равен `map.size() * 3`, обход читает mapped value, а освобождение
-//! временного heap-buffer при non-null не является ранним return. Диапазон
-//! `0x005063CC..0x00506962` подтверждает signed inherited player ID по `+0x8`,
-//! update только `QuestData` существующей первой строки и создание новой пары
-//! `PlayerID/QuestData` при EOF. Normal tail `0x005069AD` возвращает `true`,
-//! catch `0x005069B4..0x00506A35` и null player — `false`; после этих ответов
-//! reverse прекращён.
-//!
-//! Параметризованный `IF EXISTS + UPDATE TOP (1) ELSE INSERT` заменяет только
-//! ADO updateable recordset, SAFEARRAY и `AppendChunk`; binary bytes, первая
-//! строка и caller-транзакция сохраняются. `BTreeMap<u16, _>` заменяет MSVC
-//! tree и ограничивает число уникальных key значениями исходного
-//! `unsigned short`, поэтому старое `size * 3` не переполняется. Null player
-//! остаётся тихим `false`, DB/null-connection ошибка — typed notice. Исходный catch перед
-//! основным error-log писал длинную строку через `__snprintf(..., 4, ...)` и
-//! мог оставить четыре байта без NUL; точные прочитанные logger-ом bytes
-//! остаются локальным `BLOCKED_MISSING_FACT`, но доказанный `false` и DB-эффект
-//! не меняются. Raw owner, catch и compiler cleanup удалены.
-//!
-//! PDB задаёт `SavePlayer` как public `bool`-метод с параметрами
-//! `CPlayer *pPlayer` и connection `cn`, RVA `0x0010EE70`, длина `0x17C`.
-//! Согласованный raw из `rsplayer.cpp:1627` полностью задаёт wrapper: null
-//! player проверяется раньше null connection, затем на одном underlying
-//! caller-connection строго выполняются `SavePlayerBase`,
-//! `SavePlayerAbilities`, `SaveQuestData` и `CDBGoods::SaveGoodsFiled`.
-//! Первый доказанный `false` немедленно завершает цепочку; только успех goods-
-//! стадии возвращает `true`. Неоднозначности для машинного кода не осталось,
-//! поэтому дополнительный reverse не выполнялся.
-//!
-//! Wrapper не начинает, не фиксирует и не откатывает транзакцию, не имеет
-//! общего catch и не пишет собственного лога. Уже выполненные base/ability/
-//! quest DB-эффекты остаются в caller-транзакции до решения внешнего owner-а;
-//! отдельный JJc-вызов второй стадии может сохраниться и после более позднего
-//! отказа. Передача COM connection по значению заменена последовательными
-//! mutable reborrow-ами. Полный snapshot сохраняет обязанность получить все
-//! четыре проекции из одного `CPlayer`, не добавляя отсутствующих в оригинале
-//! сравнений ID. Вложенный goods `BLOCKED_MISSING_FACT` передаётся наружу, а не
-//! превращается в выбранный Rust-результат. Raw wrapper и COM/compiler cleanup
-//! удалены.
-//!
-//! PDB задаёт для `CreatePlayer`, `CreatePlayerBase` и
-//! `CreatePlayerAbilities` один member-function type `0x2F0B`: bool и два
-//! одинаковых параметра `CPlayer*`/connection smart pointer. Согласованный raw
-//! `CreatePlayer` сначала проверяет только connection, затем на одном и том же
-//! underlying caller-connection строго вызывает base, abilities и
-//! `CDBGoods::SaveGoodsFiled`; первый `false` немедленно завершает цепочку.
-//! AddRef/Release каждой переданной по значению COM-копии заменены
-//! последовательными mutable reborrow-ами, а не отдельными соединениями.
-//!
-//! Null player отдельно не проверяется внешним owner-ом: он доходит до
-//! `CreatePlayerBase`, где возвращает `false` до DB-эффекта. Rust `Option`
-//! сохраняет этот API-путь без raw pointer. Null connection возвращает `false`
-//! раньше player и получает единственный внешний `MissingConnection` notice.
-//! Никакого общего catch или дополнительного лога после bool-отказа трёх
-//! стадий у `CreatePlayer` нет; каждый вложенный owner сохраняет собственные
-//! notices.
-//!
-//! JJc procedure остаётся побочным эффектом второй стадии на отдельном
-//! соединении и может пережить последующий goods-отказ. Ещё важнее,
-//! `SaveGoodsFiled` доказанно возвращает `true` после traversal, даже если
-//! отдельный listener/`SaveGoods` вернул `false`; внешний `CreatePlayer` также
-//! считает такую goods-стадию успешной. Rust не «исправляет» эту ветку.
-//! Rust не переносит переполнение base SQL stack-buffer; вложенная безопасная
-//! граница goods listener-а передаётся наружу отдельно. Полный snapshot сохраняет обязанность
-//! получить base/ability/goods ID из одного `CPlayer`, не объявляя его Rust-
-//! layout завершённым.
-//!
-//! `SavePlayerBase(CPlayer*, connection)` обновляет уже существующую строку
-//! `CSL_PLAYER_BASE`. После null-проверок он открывает updateable recordset по
-//! signed player ID и до единственного `Recordset::Update` присваивает ровно
-//! 29 полей: `Name`, пять byte-полей base-состояния, одиннадцать equipment ID,
-//! одиннадцать signed `GAP_WEAPON_LEVEL` и `Region`. Equipment идёт буквально
-//! в порядке `HELM, BODY, GLOV, BOOT, WEAPON, BACK, HEADGEAR, FROCK, WING,
-//! MANTEAU, FAIRY`; отсутствующий goods даёт ноль и для ID, и для уровня.
-//!
-//! Exact `0x00503A92..0x00503B45` имеет статус `VERIFIED_DISASSEMBLY`: после
-//! успешных Update/Close/Release нормальный эпилог выставляет `AL=1`, а catch
-//! `0x00503AA9` после исходных `PutLogInfo`/`PrintErr` сходится к `AL=0`.
-//! Null player возвращает тихий `false`; null connection печатал отдельную
-//! ошибку и тоже возвращал `false`. После этих ответов reverse прекращён.
-//!
-//! Параметризованный `UPDATE TOP (1)` заменяет только updateable ADO-recordset.
-//! Предварительный `IF EXISTS` и возвращаемый `@@ROWCOUNT` сохраняют ошибку
-//! исходного PutCollect/Update при отсутствии текущей строки вместо ложного
-//! успеха обычного SQL UPDATE с нулём затронутых строк. ANSI C-string имени
-//! декодируется как Windows-1251; `VT_UI4` equipment ID передаются как
-//! неотрицательные `i64`, byte/signed поля — без изменения, а SQL Server
-//! выполняет окончательное приведение к исходной схеме. Caller-транзакция не
-//! начинается и не завершается внутри owner-а. Rust-срез, `Option`, Tiberius и
-//! Drop заменяют только C++ string layout, null pointer, ADO/COM и cleanup;
-//! сырой псевдокод и compiler continuation удалены.
-//!
-//! PDB задаёт `RestorePlayer(unsigned int, connection) -> bool`. Raw показывает
-//! один batch `UPDATE csl_player_base SET DelDate = NULL WHERE ID=%d` в
-//! `char[128]`. Exact `0x00501260..0x0050134A` возвращает потерянный vararg и
-//! `AL`: в `_sprintf` передаётся тот же `u32` ID, который `%d` интерпретирует
-//! как signed 32-битный шаблон; успешный `ExecuteCn` даёт `AL=1`, null
-//! connection и catch — `AL=0`. Число затронутых строк не проверяется.
-//!
-//! Даже крайнее signed представление ID оставляет batch вместе с NUL короче
-//! 128 байт, поэтому отдельной overflow-границы здесь нет. Параметризованный
-//! TDS `UPDATE` передаёт `player_id as i32`, сохраняя тот же bit-pattern и
-//! меняя только `_sprintf`/ADO transport. Метод использует уже активную caller-
-//! транзакцию, не начинает и не завершает её; DB-ошибка ставит typed
-//! `Restore` notice вместо исходного `Restore Charactor ERROR.`.
-//!
-//! PDB задаёт `DeletePlayer(unsigned long, long, connection) -> bool`, а raw —
-//! один batch `UPDATE csl_player_base SET DelDate = '%d-%d-%d' WHERE ID=%d`.
-//! Exact `0x00501A60..0x00501B6B` имеет статус `VERIFIED_DISASSEMBLY`: функция
-//! сначала отвергает null connection, затем передаёт signed `long` в
-//! `_localtime`, форматирует только local year/month/day и исходный `u32` как
-//! signed `%d`. Успешный `ExecuteCn` явно ставит `AL=1`; его `false` бросает
-//! `E_FAIL`, а catch и null connection сходятся к `AL=0`. Affected rows не
-//! проверяются.
-//!
-//! Встроенная CRT `_localtime` по `0x0051CA5F` возвращает null для
-//! отрицательного timestamp, но owner по `0x00501AB8` сразу разыменовывает
-//! результат. Достижимость такого `tDelDate` не доказана; безопасный Rust не
-//! назначает старому access violation результат и возвращает локальный
-//! `BLOCKED_MISSING_FACT` с конкретным timestamp. Для неотрицательного пути
-//! `chrono::Local` заменяет CRT и обязан видеть ту же server timezone, иначе
-//! дата около полуночи наблюдаемо изменится. Параметризованный TDS сохраняет
-//! исходную строку `year-month-day` и bit-pattern ID; даже максимальная дата и
-//! signed ID вместе с NUL помещаются в старый `char[128]`.
-//!
-//! `InsertHonorRanks(connection)` читает caller-снимок
-//! `CHonorRanks::m_stDBData.tCopyTime`, обеспечивает строку
-//! `CSL_HonorRanks` для этой календарной даты, затем вызывает
-//! `tagTime::AddDay(1)` и обеспечивает строку следующей даты. PDB задаёт
-//! `tagTime` размером `0x10` как восемь последовательных `unsigned short` и
-//! `CHonorRanks::tagDBData` размером `0x190`, где `tCopyTime` лежит по `+0`;
-//! `InsertHonorRanks` наблюдает только `wYear`, `wMonth` и `wDay`, поэтому
-//! из полной caller-копии использует лишь валидную календарную проекцию этих
-//! трёх полей. Остальные пять полей сохраняет generator-owner, а полный layout
-//! honor-list принадлежит следующему реализованному `SaveHonorRanksByType`.
-//!
-//! Exact `0x00501680..0x005019F4` имеет статус `VERIFIED_DISASSEMBLY`: все
-//! четыре `_snprintf` получают `wYear, wMonth, wDay` и сохраняют исходное
-//! форматирование без ведущих нулей; каждый `SELECT *` при EOF вызывает один
-//! соответствующий `INSERT`, а существующая строка не изменяется. После
-//! успешной второй проверки выставляется `AL=1`; null connection и catch
-//! `Create HonorRanks abort` сходятся к `AL=0`. После этих ответов reverse
-//! прекращён.
-//!
-//! Tiberius `simple_query` сохраняет исходные literal SQL и серверное
-//! преобразование строки `year-month-day` в тип `SortDate`; значения происходят
-//! только из трёх `u16`, поэтому SQL injection невозможен, а оба старых
-//! `char[512]` гарантированно не переполняются. `SELECT` полностью потребляется
-//! до возможного `INSERT`, Rust `Drop` заменяет Recordset/COM cleanup. Метод
-//! работает внутри caller-транзакции и сам не делает begin/commit/rollback;
-//! null connection остаётся тихим `false`, DB-ошибка создаёт один typed
-//! `HonorRanksInsert` notice.
-//!
-//! `SaveHonorRanksByType(history, type, recordset)` выбирает один из четырёх
-//! rank-type `0..=3`, последовательно сериализует его четыре country-list и
-//! очищает каждую выбранную list до попытки записать field. Blob начинается
-//! четырьмя отдельными `DWORD count`; после каждого count непосредственно идут
-//! элементы соответствующей страны. PDB задаёт `tagHorRank` размером `0x24`:
-//! `long nPlayerID`, `unsigned char bLevel`, `char name[20]`, `unsigned char
-//! wOccupationID`, два layout-padding byte, `unsigned long dwAppellationID` и
-//! `unsigned long dwElimilateNum`. Exact-код копирует каждый элемент девятью
-//! `movsd`, поэтому имя вместе с полным хвостом и padding входят в наблюдаемый
-//! DB blob и представлены Rust-типом явно, а не нормализуются.
-//!
-//! Поля выбираются буквально: `DayHonnorRank`, `WeekHonnorRank`,
-//! `MonthHonnorRank`, `TotalHonnorRank`; исходная опечатка `Honnor` сохранена.
-//! Exact `0x00505080..0x005056E5` имеет статус `VERIFIED_DISASSEMBLY` и
-//! исправляет два ложных raw-return: очистка непустого list продолжает все
-//! четыре country, а освобождение временного byte-buffer продолжает запись
-//! field. Успех выставляет `AL=1`; null recordset, type вне `0..=3` и catch
-//! после уничтожения SAFEARRAY сходятся к `AL=0`. После этих ответов reverse
-//! прекращён.
-//!
-//! Rust enum и живая sink-ссылка исключают два ранних invalid-input пути у
-//! единственных project-call-site внутри `SaveHonorRanks`; typed outcome
-//! сохраняет field-error и отдельно локализует 32-битное переполнение старого
-//! `count * 0x24 + 0x10`. Четыре `Vec` заменяют только list storage. Они
-//! очищаются до вызова sink, поэтому ошибка будущего TDS update не восстанавливает
-//! уже дренированный snapshot. SAFEARRAY/VARIANT, ручной byte-buffer и
-//! compiler cleanup удалены как заменённый технический механизм.
-//!
-//! `SaveHonorRanks(connection)` сначала открывает строку даты
-//! `m_stDBData.tCopyTime`, дренирует в неё четыре `History` type и выполняет
-//! один `Recordset::Update`. Только после этого `tagTime::AddDay(1)` выбирает
-//! строку следующего дня, куда тем же порядком дренируются четыре `Current`
-//! type и выполняется второй Update. Отсутствие любой строки возвращает
-//! `false`: создавать их обязан предшествующий `InsertHonorRanks` той же
-//! внешней транзакции.
-//!
-//! Exact `0x00505E20..0x0050624A` имеет статус `VERIFIED_DISASSEMBLY` только
-//! для утраченных raw-границ: первый call передаёт `history=1`, второй — `0`;
-//! обе EOF-ветви сходятся к `AL=0`, обычный успех выставляет `AL=1` лишь после
-//! второго Update, а catch `Save HonorRanks Error` также заканчивается
-//! `AL=0`. Оба `_snprintf` получают `wYear, wMonth, wDay`; после этих ответов
-//! reverse прекращён.
-//!
-//! Tiberius `SELECT *` сохраняет literal date lookup, а один параметризованный
-//! `UPDATE TOP (1)` на дату заменяет четыре field-assignment и единый
-//! Recordset Update. In-memory sink только удерживает уже сформированные blob
-//! до этого вызова; при DB-ошибке все четыре списка данного периода уже
-//! очищены, как в исходнике. Следующий период не начинается после обычного
-//! отказа либо локального `BLOCKED_MISSING_FACT` размера.
-//!
-//! `LoadHonorRanks` снимает local SYSTEMTIME, выбирает history-строку текущей
-//! даты и только после подтверждённого non-EOF очищает все history-list. Затем
-//! четыре поля загружаются по порядку day/week/month/total. После успешного
-//! history прохода `tagTime::AddDay(1)` выбирает current-строку следующего дня;
-//! её отсутствие возвращает `false`, сохраняя уже заменённый history и прежний
-//! current. Current очищается только после найденной второй строки. Старый
-//! Linux C++ staging/swap делал загрузку атомарной и тем самым менял этот
-//! порядок; Rust его не переносит.
-//! Исходная null-ветвь создавала ADO connection внутри функции. Tiberius-owner
-//! не владеет DB settings/runtime, поэтому внешний init-адаптер передаёт ему
-//! уже открытый connection; его отсутствие является достигнутым техническим
-//! `false`, а не поводом встраивать второй неявный connection-owner.
-//!
-//! Каждый непустой field состоит из четырёх последовательных секций
-//! `[u32 count][count * tagHorRank(0x24)]`; пустой/NULL field означает четыре
-//! пустых списка. Exact decoder не сверял `ActualSize` с count и отпускал
-//! SAFEARRAY до чтения сохранённого pointer-а. Эти внутренние lifetime/OOB
-//! дефекты заменены bounds-checked slice decoder-ом: корректные bytes и
-//! insertion order остаются прежними, malformed blob возвращает typed block.
-//! Лишний хвост после четвёртой секции намеренно игнорируется, как exact owner.
-//!
-//! `StatRanks` форматирует exact `SELECT TOP m_nMaxNum`, читает строки в DB-
-//! порядке и сразу вызывает live `CPlayerRanks::AddRank`. Поэтому поздняя
-//! ошибка сохраняет уже добавленный prefix; staging/swap Linux-донора не
-//! переносится. ADO/BSTR заменены Tiberius и Windows-1251. Успех `AL=1` и
-//! catch/null `AL=0` подтверждены machine-кодом `0x00509A6E/0x00509AD6`.
-//! Неинициализированный constructor-ом `m_nMaxNum` и null faction внутри
-//! `IsFreePlayer` остаются локальными typed-границами вместо чтения мусора или
-//! raw null-dereference.
-//!
-//! `GetCDKey` сначала выполняет точный логический `GetPlayerID(name)`, затем
-//! читает `Account` из `CSL_Player_base` по найденному signed ID. Отсутствующая
-//! строка, пустой account и DB-ошибка дают пустую строку; ошибки двух стадий
-//! сохраняются раздельными notice-ами, как исходные `get palyer id ERROR` и
-//! `get cdkey ERROR`. Параметризованный `tiberius::Query` заменяет только
-//! `_sprintf`/ADO и исключает старый SQL-injection/buffer-overflow дефект;
-//! Windows-1251 сохраняет ANSI C-string границу имени и результата.
-//!
-//! Полный caller-connection `LoadPlayer` сохраняет исходную короткую цепочку:
-//! одна ability-row со всеми scalar/binary post-load правилами, отдельный
-//! `LoadQuestData`, затем `CDBGoods::LoadGoods` и `CRsJJcSys::LoadJJcData`.
-//! Каждый следующий owner вызывается только после `true` предыдущего. Exact
-//! `0x00514D0E/0x00514D39` подтверждают порядок Goods/JJC, `0x00514E56` —
-//! normal `AL=1`, общий failure-tail `0x00514D9C` — `AL=0`. Таймер и запись
-//! `TemptLoadDataLog` являются технической диагностикой и не входят в игровой
-//! контракт. `TiberiusPlayerLoadData` связывает этот owner с готовым
-//! `CPlayer::LoadData`, а `WorldPlayerLoadDataAdapter` передаёт его bool-итог
-//! точному `LoadPlayerDataFromDB` worker-у, не пряча registry/config в mutable
-//! singleton.
-//! При null connection exact owner создаёт одно отдельное World DB connection
-//! до ability-query и освобождает его после JJC либо любого раннего failure;
-//! `WorldDatabaseSettings::connect` и Rust `Drop` заменяют только ADO plumbing.
+//! `GetPlayerDeletionDate` различает `0` и catch-result `-1`; caller считает
+//! `-1` ненулевым timestamp. Очередность SQL и уже выполненные partial effects
+//! не откатываются автоматически. Параметризованный Tiberius, owned byte
+//! strings и typed snapshots заменяют ADO/COM, globals и fixed buffers, не
+//! меняя схемы, provider-order, значения отказа или wire-контракты caller-а.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::Infallible;
@@ -552,7 +64,7 @@ pub(crate) struct HonorRankDbEntry {
     pub(crate) level: u8,
     pub(crate) name: [u8; 20],
     pub(crate) occupation_id: u8,
-    /// Два байта между `wOccupationID` и первым DWORD также попадали в blob.
+ /// Два байта между `wOccupationID` и первым DWORD также попадали в blob.
     pub(crate) legacy_padding: [u8; 2],
     pub(crate) appellation_id: u32,
     pub(crate) eliminate_num: u32,
@@ -621,7 +133,7 @@ pub(crate) struct HonorRanksDbDataSnapshot {
 }
 
 impl HonorRanksDbDataSnapshot {
-    /// Принимает уже скопированные `GenerateSaveData` списки без перестановки.
+ /// Принимает уже скопированные `GenerateSaveData` списки без перестановки.
     pub(crate) fn from_legacy_copy(
         copy_time: HonorRanksCopyTimeSnapshot,
         history: HonorRankDbLists,
@@ -687,7 +199,7 @@ pub(crate) enum HonorRanksLoadFailure {
     MissingRow { period: HonorRanksSavePeriod },
 }
 
-/// Уже достигнутая malformed-граница после прежних последовательных эффектов.
+/// Уже действующая malformed-граница после прежних последовательных эффектов.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HonorRanksLoadBlock {
     pub(crate) period: HonorRanksSavePeriod,
@@ -725,7 +237,7 @@ impl HonorRanksType {
     }
 }
 
-/// Декодирует один exact DB-field без старого SAFEARRAY lifetime/OOB дефекта.
+/// Декодирует один оригинал DB-field без старого SAFEARRAY lifetime/OOB дефекта.
 pub(crate) fn decode_honor_ranks_blob(
     rank_type: HonorRanksType,
     blob: Option<&[u8]>,
@@ -856,7 +368,7 @@ impl HonorRanksFieldSink for CollectedHonorRanksFields {
 }
 
 impl HonorRanksCopyTimeSnapshot {
-    /// Принимает полный `SYSTEMTIME`, проверяя только календарную проекцию.
+ /// Принимает полный `SYSTEMTIME`, проверяя только календарную проекцию.
     pub(crate) fn from_legacy_fields(fields: [u16; 8]) -> Option<Self> {
         let [
             year,
@@ -925,9 +437,9 @@ pub(crate) struct PlayerCreationBaseSnapshot {
     pub(crate) sex: u8,
     pub(crate) country: u8,
     pub(crate) head: u8,
-    /// SQL-порядок: HELM..FAIRY, как перечислено в owner-документации.
+ /// SQL-порядок: HELM..FAIRY, как перечислено в owner-документации.
     pub(crate) equipment_ids: [u32; 11],
-    /// Тот же SQL-порядок для `*Level`.
+ /// Тот же SQL-порядок для `*Level`.
     pub(crate) equipment_levels: [u8; 11],
     pub(crate) region_id: i32,
 }
@@ -941,14 +453,14 @@ pub(crate) struct PlayerBaseSaveSnapshot<'a> {
     pub(crate) sex: u8,
     pub(crate) country: u8,
     pub(crate) head: u8,
-    /// SQL-порядок: HELM..FAIRY; отсутствующий runtime goods даёт ноль.
+ /// SQL-порядок: HELM..FAIRY; отсутствующий runtime goods даёт ноль.
     pub(crate) equipment_ids: [u32; 11],
-    /// Тот же SQL-порядок для signed результата `GAP_WEAPON_LEVEL`.
+ /// Тот же SQL-порядок для signed результата `GAP_WEAPON_LEVEL`.
     pub(crate) equipment_levels: [i32; 11],
     pub(crate) region_id: i32,
 }
 
-/// Одна DB-строка exact `OpenPlayerBaseInDB` до подмены live/save-копией.
+/// Одна DB-строка оригинал `OpenPlayerBaseInDB` до подмены live/save-копией.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerBaseDatabaseRow {
     pub(crate) id: u32,
@@ -1013,7 +525,7 @@ pub(crate) enum PlayerCreateOutcome {
 /// Неразрешённая отрицательная `time_t`-граница `DeletePlayer`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PlayerDeleteTimeBlock {
-    /// Timestamp, для которого exact `_localtime` возвращает null.
+ /// Timestamp, для которого оригинал `_localtime` возвращает null.
     pub(crate) deletion_time: i32,
 }
 
@@ -1025,7 +537,7 @@ pub(crate) enum PlayerDeleteOutcome {
     BlockedMissingFact(PlayerDeleteTimeBlock),
 }
 
-/// Структурированная замена достигнутых `CRsPlayer` DB/log-ошибок.
+/// Структурированная замена действующих `CRsPlayer` DB/log-ошибок.
 #[derive(Debug)]
 pub(crate) struct RsPlayerNotice {
     pub(crate) operation: RsPlayerOperation,
@@ -1057,7 +569,7 @@ pub(crate) enum RsPlayerOperation {
     HonorRanksSave,
 }
 
-/// Причина достигнутого log-эквивалента без SQL и runtime player values.
+/// Причина действующего log-эквивалента без SQL и runtime player values.
 #[derive(Debug)]
 pub(crate) enum RsPlayerSaveError {
     Database(RsPlayerDatabaseError),
@@ -1109,7 +621,7 @@ impl Error for RsPlayerSaveError {
     }
 }
 
-/// Ошибка достигнутой ADO/TDS-границы без SQL и runtime player values.
+/// Ошибка действующей ADO/TDS-границы без SQL и runtime player values.
 #[derive(Debug)]
 pub(crate) struct RsPlayerDatabaseError(tiberius::error::Error);
 
@@ -1185,17 +697,17 @@ fn read_ado_integer(
     Err(first_error)
 }
 
-/// Узкая объектная граница достигнутой стадии исходного `CRsPlayer`.
+/// Узкая объектная граница действующей стадии исходного `CRsPlayer`.
 pub(crate) trait RsPlayerOwner {
-    /// Повторяет отдельный `SELECT ID`/ADO RecordCount и его byte/`0xFF` контракт.
+ /// Повторяет отдельный `SELECT ID`/ADO RecordCount и его byte/`0xFF` контракт.
     async fn get_player_count_in_db_by_cdkey(
         &mut self,
         account: &[u8],
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> Option<u8>;
 
-    /// Повторяет World-only `GetPlayerCountInCdkey`: DB sentinel сохраняется,
-    /// successful byte складывается с live creation-count с x86 wrapping.
+ /// Повторяет World-only `GetPlayerCountInCdkey`: DB sentinel сохраняется,
+ /// successful byte складывается с live creation-count с x86 wrapping.
     async fn get_player_count_in_cdkey(
         &mut self,
         account: &[u8],
@@ -1210,35 +722,35 @@ pub(crate) trait RsPlayerOwner {
             })
     }
 
-    /// Читает ordered DB-часть списка; live/save merge остаётся у `CGame`.
+ /// Читает ordered DB-часть списка; live/save merge остаётся у `CGame`.
     async fn open_player_base_in_db(
         &mut self,
         account: &[u8],
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> Result<Vec<PlayerBaseDatabaseRow>, PlayerBaseLoadFailure>;
 
-    /// Возвращает local-midnight `DelDate`: null/missing даёт `0`, catch — `-1`.
+ /// Возвращает local-midnight `DelDate`: null/missing даёт `0`, catch — `-1`.
     async fn get_player_deletion_date(
         &mut self,
         player_id: u32,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> i32;
 
-    /// Возвращает byte country либо исходный ноль при EOF/DB-отказе.
+ /// Возвращает byte country либо исходный ноль при EOF/DB-отказе.
     async fn get_player_country_by_id(
         &mut self,
         player_id: u32,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> u8;
 
-    /// Возвращает ANSI player-name либо исходную пустую строку при отказе.
+ /// Возвращает ANSI player-name либо исходную пустую строку при отказе.
     async fn get_player_name_by_id(
         &mut self,
         player_id: u32,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> Vec<u8>;
 
-    /// Обходит все DB ID указанного account и сравнивает exact u32 bit-pattern.
+ /// Обходит все DB ID указанного account и сравнивает оригинал u32 bit-pattern.
     async fn validate_player_id_in_cdkey(
         &mut self,
         account: &[u8],
@@ -1246,21 +758,21 @@ pub(crate) trait RsPlayerOwner {
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
-    /// Проверяет case-insensitive player-name через parameterized TDS query.
+ /// Проверяет case-insensitive player-name через parameterized TDS query.
     async fn is_name_exist(
         &mut self,
         player_name: &[u8],
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
-    /// Возвращает account по имени либо исходную пустую строку при любом отказе.
+ /// Возвращает account по имени либо исходную пустую строку при любом отказе.
     async fn get_cd_key(
         &mut self,
         player_name: &[u8],
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> Vec<u8>;
 
-    /// Потоково добавляет exact TOP-рейтинг в уже очищенный live owner.
+ /// Потоково добавляет оригинал TOP-рейтинг в уже очищенный live owner.
     async fn stat_ranks(
         &mut self,
         ranks: &mut CPlayerRanks,
@@ -1268,7 +780,7 @@ pub(crate) trait RsPlayerOwner {
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> PlayerRanksStatOutcome;
 
-    /// Выполняет полную цепочку `LoadPlayer` до первого false/block.
+ /// Выполняет полную цепочку `LoadPlayer` до первого false/block.
     async fn load_player<J, G, WeekDay>(
         &mut self,
         player: &mut CPlayer,
@@ -1286,7 +798,7 @@ pub(crate) trait RsPlayerOwner {
         G: DbGoodsOwner,
         WeekDay: FnMut() -> u16;
 
-    /// Выполняет три create-стадии, останавливаясь после первого исходного false.
+ /// Выполняет три create-стадии, останавливаясь после первого исходного false.
     async fn create_player<J: RsJjcSysOwner, G: DbGoodsOwner>(
         &mut self,
         snapshot: Option<&PlayerCreationSnapshot<'_, '_>>,
@@ -1295,7 +807,7 @@ pub(crate) trait RsPlayerOwner {
         goods_owner: &mut G,
     ) -> PlayerCreateOutcome;
 
-    /// Выполняет четыре save-стадии до первого доказанного отказа.
+ /// Выполняет четыре save-стадии до первого доказанного отказа.
     async fn save_player<J: RsJjcSysOwner, G: DbGoodsOwner>(
         &mut self,
         snapshot: Option<&PlayerSaveSnapshot<'_, '_, '_>>,
@@ -1304,21 +816,21 @@ pub(crate) trait RsPlayerOwner {
         goods_owner: &mut G,
     ) -> PlayerSaveOutcome;
 
-    /// Выполняет первый INSERT внутри уже начатой caller-транзакции.
+ /// Выполняет первый INSERT внутри уже начатой caller-транзакции.
     async fn create_player_base(
         &mut self,
         snapshot: &PlayerCreationBaseSnapshot,
         active_transaction: &mut WorldTdsClient,
     ) -> PlayerBaseCreateOutcome;
 
-    /// Обновляет существующую base-row, сохраняя исходный порядок 29 полей.
+ /// Обновляет существующую base-row, сохраняя исходный порядок 29 полей.
     async fn save_player_base(
         &mut self,
         snapshot: Option<&PlayerBaseSaveSnapshot<'_>>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
-    /// Создаёт ability-row в caller-транзакции, затем сохраняет JJc отдельно.
+ /// Создаёт ability-row в caller-транзакции, затем сохраняет JJc отдельно.
     async fn create_player_abilities<J: RsJjcSysOwner>(
         &mut self,
         snapshot: &PlayerAbilityCreationSnapshot<'_>,
@@ -1326,7 +838,7 @@ pub(crate) trait RsPlayerOwner {
         jjc_owner: &mut J,
     ) -> bool;
 
-    /// Обновляет существующую ability-row и только после неё сохраняет JJc.
+ /// Обновляет существующую ability-row и только после неё сохраняет JJc.
     async fn save_player_abilities<J: RsJjcSysOwner>(
         &mut self,
         snapshot: Option<&PlayerAbilitySaveSnapshot<'_>>,
@@ -1334,21 +846,21 @@ pub(crate) trait RsPlayerOwner {
         jjc_owner: &mut J,
     ) -> bool;
 
-    /// Обновляет либо создаёт единственный quest-blob текущего игрока.
+ /// Обновляет либо создаёт единственный quest-blob текущего игрока.
     async fn save_quest_data(
         &mut self,
         snapshot: Option<&PlayerQuestSaveSnapshot<'_>>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
-    /// Снимает `DelDate` у одного unsigned player ID в caller-транзакции.
+ /// Снимает `DelDate` у одного unsigned player ID в caller-транзакции.
     async fn restore_player(
         &mut self,
         player_id: u32,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
-    /// Ставит local calendar-date удаления внутри caller-транзакции.
+ /// Ставит local calendar-date удаления внутри caller-транзакции.
     async fn delete_player(
         &mut self,
         player_id: u32,
@@ -1356,21 +868,21 @@ pub(crate) trait RsPlayerOwner {
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> PlayerDeleteOutcome;
 
-    /// Загружает history текущей даты и current следующей, сохраняя side effects.
+ /// Загружает history текущей даты и current следующей, сохраняя side effects.
     async fn load_honor_ranks<S: HonorRanksLoadSink>(
         &mut self,
         sink: &mut S,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> HonorRanksLoadOutcome;
 
-    /// Обеспечивает строки honor-ranks для дня копии и следующего дня.
+ /// Обеспечивает строки honor-ranks для дня копии и следующего дня.
     async fn insert_honor_ranks(
         &mut self,
         snapshot: &HonorRanksDbDataSnapshot,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
-    /// Дренирует четыре country-list выбранных period/type в один field blob.
+ /// Дренирует четыре country-list выбранных period/type в один field blob.
     fn save_honor_ranks_by_type<S: HonorRanksFieldSink>(
         &mut self,
         snapshot: &mut HonorRanksDbDataSnapshot,
@@ -1379,18 +891,18 @@ pub(crate) trait RsPlayerOwner {
         sink: &mut S,
     ) -> HonorRanksByTypeSaveOutcome<S::Error>;
 
-    /// Записывает History в дату копии, затем Current в следующий день.
+ /// Записывает History в дату копии, затем Current в следующий день.
     async fn save_honor_ranks(
         &mut self,
         snapshot: &mut HonorRanksDbDataSnapshot,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> HonorRanksSaveOutcome;
 
-    /// Забирает следующий исходный log-эквивалент.
+ /// Забирает следующий исходный log-эквивалент.
     fn pop_notice(&mut self) -> Option<RsPlayerNotice>;
 }
 
-/// Linux/TDS-замена достигнутой части исходного `CRsPlayer`.
+/// Linux/TDS-замена действующей части исходного `CRsPlayer`.
 pub(crate) struct TiberiusRsPlayer {
     settings: WorldDatabaseSettings,
     notices: VecDeque<RsPlayerNotice>,
@@ -1414,7 +926,7 @@ pub(crate) enum LeiTingDatabaseResetOutcome {
     ReturnedFalse(LeiTingDatabaseResetFailure),
 }
 
-/// Причина exact false-ветви, сохранённая без исходного catch-all/SEH.
+/// Причина оригинал false-ветви, сохранённая без исходного catch-all/SEH.
 #[derive(Debug)]
 pub(crate) enum LeiTingDatabaseResetFailure {
     UnsupportedUpdateKind(u32),
@@ -1572,7 +1084,7 @@ pub(crate) enum PlayerAbilityScalarField {
 }
 
 impl PlayerAbilityScalarField {
-    /// Возвращает byte-exact имя, переданное исходному `Fields::Item`.
+ /// Возвращает byte-оригинал имя, переданное исходному `Fields::Item`.
     pub(crate) const fn column_name(self) -> &'static str {
         match self {
             Self::Id => "ID",
@@ -1674,21 +1186,21 @@ impl PlayerAbilityScalarField {
 /// Значение с точным исходным ADO `VARIANT`-типом.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum PlayerAbilityScalarValue<'a> {
-    /// `VT_I4` (`long`).
+ /// `VT_I4` (`long`).
     I4(i32),
-    /// `VT_UI4` (`unsigned long`).
+ /// `VT_UI4` (`unsigned long`).
     Ui4(u32),
-    /// `VT_UI2` (`unsigned short`).
+ /// `VT_UI2` (`unsigned short`).
     Ui2(u16),
-    /// `VT_UI1` (`unsigned char`).
+ /// `VT_UI1` (`unsigned char`).
     Ui1(u8),
-    /// `VT_BOOL`: `true` материализуется как `VARIANT_TRUE` (`-1`).
+ /// `VT_BOOL`: `true` материализуется как `VARIANT_TRUE` (`-1`).
     VariantBool(bool),
-    /// `VT_R4` (`float`).
+ /// `VT_R4` (`float`).
     R4(f32),
-    /// `VT_INT`, отдельно от равного по ширине `VT_I4`.
+ /// `VT_INT`, отдельно от равного по ширине `VT_I4`.
     Int(i32),
-    /// `_bstr_t(char const*)`: ANSI C-string до первого NUL.
+ /// `_bstr_t(char const*)`: ANSI C-string до первого NUL.
     BStr(&'a [u8]),
 }
 
@@ -1892,7 +1404,7 @@ pub(crate) fn player_ability_scalar_assignments<'a>(
             Field::DepotPassword,
             Value::BStr(visible_c_string(snapshot.depot_password)),
         ),
-        // Исходные DWORD здесь намеренно попадали в signed VT_I4.
+ // Исходные DWORD здесь намеренно попадали в signed VT_I4.
         assignment(Field::Exploit, Value::I4(snapshot.exploit as i32)),
         assignment(Field::Kudos, Value::I4(snapshot.kudos as i32)),
         assignment(Field::Mode, Value::Ui4(snapshot.mode)),
@@ -1942,7 +1454,7 @@ pub(crate) enum PlayerAbilityBinaryField {
 }
 
 impl PlayerAbilityBinaryField {
-    /// Возвращает byte-exact имя, использованное исходным `AppendChunk`.
+ /// Возвращает byte-оригинал имя, использованное исходным `AppendChunk`.
     pub(crate) const fn column_name(self) -> &'static str {
         match self {
             Self::HotKey => "HotKey",
@@ -1975,7 +1487,7 @@ pub(crate) struct PlayerThing {
 /// Доказанный valid-state view полей `m_lVariable*` исходного `CPlayer`.
 pub(crate) struct PlayerScriptFlagSnapshot<'a> {
     pub(crate) variable_num: i32,
-    /// Срез одновременно доказывает неотрицательную длину и читаемый payload.
+ /// Срез одновременно доказывает неотрицательную длину и читаемый payload.
     pub(crate) variable_data: &'a [u8],
 }
 
@@ -1990,7 +1502,7 @@ pub(crate) struct EmbeddedFriendNameNul {
 }
 
 impl<'a> PlayerFriendName<'a> {
-    /// Принимает полный byte-content `std::string`, если старые size/strlen равны.
+ /// Принимает полный byte-content `std::string`, если старые size/strlen равны.
     pub(crate) fn from_legacy_bytes(bytes: &'a [u8]) -> Result<Self, EmbeddedFriendNameNul> {
         match bytes.iter().position(|byte| *byte == 0) {
             Some(offset) => Err(EmbeddedFriendNameNul { offset }),
@@ -2088,14 +1600,14 @@ pub(crate) fn player_ability_save_scalar_assignments<'a>(
     let mut save = Vec::with_capacity(92);
     save.push(create[0]);
     save.push(assignment(Field::SaveTime, Value::BStr(save_time)));
-    // Save сохраняет Name..DisplayHeadPiece в том же порядке, что create.
+ // Save сохраняет Name..DisplayHeadPiece в том же порядке, что create.
     save.extend_from_slice(&create[1..59]);
     save.push(assignment(Field::Silence, Value::I4(snapshot.silence_time)));
-    // Затем идут country..Kudos, но BattleFairy переставлен раньше Mode.
+ // Затем идут country..Kudos, но BattleFairy переставлен раньше Mode.
     save.extend_from_slice(&create[59..68]);
     save.push(create[72]);
     save.extend_from_slice(&create[68..72]);
-    // FetchPower..dwAuctionSpace предшествуют шести save-only honor-полям.
+ // FetchPower..dwAuctionSpace предшествуют шести save-only honor-полям.
     save.extend_from_slice(&create[73..76]);
     save.push(assignment(
         Field::DaysHonorEliminateNum,
@@ -2121,7 +1633,7 @@ pub(crate) fn player_ability_save_scalar_assignments<'a>(
         Field::AppellationId,
         Value::Ui4(snapshot.appellation_id),
     ));
-    // Хвост dwExalt..dwLT60Stamp снова совпадает с create.
+ // Хвост dwExalt..dwLT60Stamp снова совпадает с create.
     save.extend_from_slice(&create[76..]);
     debug_assert_eq!(save.len(), 92);
     save
@@ -2145,11 +1657,11 @@ impl PlayerAbilityFieldSink for CollectedPlayerAbilityBinaryFields {
     }
 }
 
-/// Синхронная замена достигнутого `Field20::AppendChunk`.
+/// Синхронная замена действующего `Field20::AppendChunk`.
 pub(crate) trait PlayerAbilityFieldSink {
     type Error;
 
-    /// Обязан скопировать `bytes` до возврата, как исходный ADO-вызов.
+ /// Обязан скопировать `bytes` до возврата, как исходный ADO-вызов.
     fn append_binary_field(
         &mut self,
         field: PlayerAbilityBinaryField,
@@ -2157,7 +1669,7 @@ pub(crate) trait PlayerAbilityFieldSink {
     ) -> Result<(), Self::Error>;
 }
 
-/// Сохраняет byte-exact `HotKey` blob создаваемой ability-строки.
+/// Сохраняет byte-оригинал `HotKey` blob создаваемой ability-строки.
 pub(crate) fn save_hot_key_field<S: PlayerAbilityFieldSink>(
     hot_keys: &[u32; 24],
     sink: &mut S,
@@ -2193,7 +1705,7 @@ pub(crate) fn save_script_flag<S: PlayerAbilityFieldSink>(
     sink.append_binary_field(PlayerAbilityBinaryField::ScriptFlag, &bytes)
 }
 
-/// Сохраняет opaque `m_vExStates` byte-exact в `ListState`.
+/// Сохраняет opaque `m_vExStates` byte-оригинал в `ListState`.
 pub(crate) fn save_state_field<S: PlayerAbilityFieldSink>(
     ex_states: &[u8],
     sink: &mut S,
@@ -2242,7 +1754,7 @@ pub(crate) fn save_thing_field<S: PlayerAbilityFieldSink>(
     sink.append_binary_field(PlayerAbilityBinaryField::Thing, &bytes)
 }
 
-/// Кодирует worker-local `GetDailyThingList` в exact `ListThing` blob.
+/// Кодирует worker-local `GetDailyThingList` в оригинал `ListThing` blob.
 fn encode_lei_ting_daily_things(things: &VecDeque<LeiTingDailyThing>) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(things.len() * 8);
     for thing in things {
@@ -2300,7 +1812,7 @@ pub(crate) struct LoadedPlayerScriptFlag {
     pub(crate) variable_data: Vec<u8>,
 }
 
-/// Декодирует exact `LoadHotKeyField`: только blob длиной `0x60` допустим.
+/// Декодирует оригинал `LoadHotKeyField`: только blob длиной `0x60` допустим.
 pub(crate) fn load_hot_key_field(
     blob: &[u8],
 ) -> Result<[u32; 24], PlayerAbilityBlobDecodeBlock> {
@@ -2703,7 +2215,7 @@ pub(crate) fn materialize_player_ability_scalar_row(
     Ok(())
 }
 
-/// Материализует семь binary fields одной ability-строки в exact helper-order.
+/// Материализует семь binary fields одной ability-строки в оригинал helper-order.
 pub(crate) fn materialize_player_ability_binary_row(
     row: &Row,
     player: &mut CPlayer,
@@ -2773,7 +2285,7 @@ pub(crate) fn materialize_player_ability_binary_row(
 }
 
 impl TiberiusRsPlayer {
-    /// Копирует DB setup для исходных методов с автономным connection.
+ /// Копирует DB setup для исходных методов с автономным connection.
     pub(crate) fn new(settings: &WorldDatabaseSettings) -> Self {
         Self {
             settings: settings.clone(),
@@ -2781,15 +2293,15 @@ impl TiberiusRsPlayer {
         }
     }
 
-    /// Выполняет один фоновый проход `DbLetTingUpdate` на отдельном соединении.
-    ///
-    /// Exact `0x00510520` строит `ListThing` до `CreateCn/OpenCn`, затем без
-    /// transaction проходит updatable recordset `csl_player_ability`; успешные
-    /// ранние строки сохраняются даже если последующая строка даёт ошибку.
-    /// TDS не предоставляет этот ADO recordset API, поэтому `ID` добавлен
-    /// только как технический ключ текущей строки, а каждый `UPDATE` остаётся
-    /// отдельным statement в том же исходном порядке без `ORDER BY` и rollback.
-    /// Снятие list происходит внутри worker-вызова, а не при его постановке.
+ /// Выполняет один фоновый проход `DbLetTingUpdate` на отдельном соединении.
+ ///
+ /// Оригинал строит `ListThing` до `CreateCn/OpenCn`, затем без
+ /// transaction проходит updatable recordset `csl_player_ability`; успешные
+ /// ранние строки сохраняются даже если последующая строка даёт ошибку.
+ /// TDS не предоставляет этот ADO recordset API, поэтому `ID` добавлен
+ /// только как технический ключ текущей строки, а каждый `UPDATE` остаётся
+ /// отдельным statement в том же исходном порядке без `ORDER BY` и rollback.
+ /// Снятие list происходит внутри worker-вызова, а не при его постановке.
     pub(crate) async fn db_lei_ting_update(
         &self,
         request: LeiTingDatabaseResetRequest,
@@ -2899,7 +2411,7 @@ impl TiberiusRsPlayer {
         LeiTingDatabaseResetOutcome::ReturnedTrue { updated_rows }
     }
 
-    /// Загружает и публикует одну ordered ability-строку по signed player ID.
+ /// Загружает и публикует одну ordered ability-строку по signed player ID.
     pub(crate) async fn load_player_ability_row(
         &mut self,
         player: &mut CPlayer,
@@ -2991,7 +2503,7 @@ impl TiberiusRsPlayer {
         PlayerAbilityQueryLoadOutcome::ReturnedTrue
     }
 
-    /// Повторяет отдельный `LoadQuestData`; EOF означает пустой успешный owner.
+ /// Повторяет отдельный `LoadQuestData`; EOF означает пустой успешный owner.
     pub(crate) async fn load_player_quest_data(
         &mut self,
         player: &mut CPlayer,
@@ -3177,8 +2689,8 @@ impl RsPlayerOwner for TiberiusRsPlayer {
             }
         };
 
-        // ADO GetRecordCount возвращался через `unsigned char`; `0xFF`
-        // одновременно был sentinel-ом ошибки внешнего owner-а.
+ // ADO GetRecordCount возвращался через `unsigned char`; `0xFF`
+ // одновременно был sentinel-ом ошибки внешнего owner-а.
         let count = rows.len() as u8;
         (count != u8::MAX).then_some(count)
     }
@@ -3407,7 +2919,7 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         let Some(local_midnight) = Local.from_local_datetime(&midnight).earliest() else {
             return 0;
         };
-        // Exact `_mktime == -1` нормализовался в ноль до возврата.
+ // Оригинал `_mktime == -1` нормализовался в ноль до возврата.
         i32::try_from(local_midnight.timestamp()).unwrap_or(0)
     }
 
@@ -4758,934 +4270,3 @@ async fn execute_batch(
     connection.simple_query(sql).await?.into_results().await?;
     Ok(())
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp
-
-
-
-// ============================================================================
-// FUNCTION: CRsPlayer::GetPlayerCountInDBbyCdkey
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2416
-// RVA: 0x00100C40
-// ADDRESS: 00500c40
-// PROTOTYPE: uchar __thiscall GetPlayerCountInDBbyCdkey(char * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@00500e06
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2464
-// RVA: 0x00100E06
-// ADDRESS: 00500e06
-// PROTOTYPE: undefined Catch@00500e06()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_00500e4a
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2475
-// RVA: 0x00100E4A
-// ADDRESS: 00500e4a
-// PROTOTYPE: undefined FUN_00500e4a()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::GetPlayerDeletionDate
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2479
-// RVA: 0x00100EA0
-// ADDRESS: 00500ea0
-// PROTOTYPE: long __thiscall GetPlayerDeletionDate(uint param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@005011d4
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2545
-// RVA: 0x001011D4
-// ADDRESS: 005011d4
-// PROTOTYPE: undefined Catch@005011d4()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_00501238
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2556
-// RVA: 0x00101238
-// ADDRESS: 00501238
-// PROTOTYPE: undefined FUN_00501238()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::ValidatePlayerIDInCdkey
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2668
-// RVA: 0x00101350
-// ADDRESS: 00501350
-// PROTOTYPE: bool __thiscall ValidatePlayerIDInCdkey(char * param_1, uint param_2, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_3)
-//
-// Реализация находится в `TiberiusRsPlayer::validate_player_id_in_cdkey`
-// выше: ordered row scan, ID bit-pattern и false/catch semantics сохранены;
-// parameter binding заменяет только `_sprintf` и ADO/COM plumbing.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@005015fb
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2726
-// RVA: 0x001015FB
-// ADDRESS: 005015fb
-// PROTOTYPE: undefined Catch@005015fb()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_00501648
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2737
-// RVA: 0x00101648
-// ADDRESS: 00501648
-// PROTOTYPE: undefined FUN_00501648()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::IsNameExist
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:641
-// RVA: 0x00101B70
-// ADDRESS: 00501b70
-// PROTOTYPE: bool __thiscall IsNameExist(char * param_1)
-//
-// IMPLEMENTED_OWNER: `RsPlayerOwner::is_name_exist` использует parameterized
-// TDS query, сохраняя case-insensitive lookup и false при quote/DB failure без
-// исходных SQL injection, stack buffers и COM plumbing.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@00501d5a
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:722
-// RVA: 0x00101D5A
-// ADDRESS: 00501d5a
-// PROTOTYPE: undefined Catch@00501d5a()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_00501ddd
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:736
-// RVA: 0x00101DDD
-// ADDRESS: 00501ddd
-// PROTOTYPE: undefined FUN_00501ddd()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::GetPlayerCountryByID
-// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:768
-// RVA: 0x00101E30
-// ADDRESS: 00501e30
-// PROTOTYPE: void __thiscall GetPlayerCountryByID(ulong param_1, uchar * param_2)
-//
-// IMPLEMENTED_OWNER: `RsPlayerOwner::get_player_country_by_id` находится выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@00501ffb
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:789
-// RVA: 0x00101FFB
-// ADDRESS: 00501ffb
-// PROTOTYPE: undefined Catch@00501ffb()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_00502017
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:792
-// RVA: 0x00102017
-// ADDRESS: 00502017
-// PROTOTYPE: undefined FUN_00502017()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::GetPlayerID
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:797
-// RVA: 0x00102080
-// ADDRESS: 00502080
-// PROTOTYPE: long __thiscall GetPlayerID(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@005022ce
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:829
-// RVA: 0x001022CE
-// ADDRESS: 005022ce
-// PROTOTYPE: undefined Catch@005022ce()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_0050231c
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:834
-// RVA: 0x0010231C
-// ADDRESS: 0050231c
-// PROTOTYPE: undefined FUN_0050231c()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// FUNCTION: CRsPlayer::LoadHotKeyField
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2010
-// RVA: 0x00103D40
-// ADDRESS: 00503d40
-// PROTOTYPE: bool __thiscall LoadHotKeyField(CPlayer * param_1, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_2)
-//
-// IMPLEMENTED_OWNER: `load_hot_key_field` выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@00503f92
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2033
-// RVA: 0x00103F92
-// ADDRESS: 00503f92
-// PROTOTYPE: undefined Catch@00503f92()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::LoadStateField
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2167
-// RVA: 0x00103FC0
-// ADDRESS: 00503fc0
-// PROTOTYPE: bool __thiscall LoadStateField(CPlayer * param_1, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_2)
-//
-// IMPLEMENTED_OWNER: `load_state_field` выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@00504204
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2187
-// RVA: 0x00104204
-// ADDRESS: 00504204
-// PROTOTYPE: undefined Catch@00504204()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::LoadScriptFlag
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2331
-// RVA: 0x00104470
-// ADDRESS: 00504470
-// PROTOTYPE: bool __thiscall LoadScriptFlag(CPlayer * param_1, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_2)
-//
-// IMPLEMENTED_OWNER: `load_script_flag` выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0050470f
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2355
-// RVA: 0x0010470F
-// ADDRESS: 0050470f
-// PROTOTYPE: undefined Catch@0050470f()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::GetPlayerCountInCdkey
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2399
-// RVA: 0x00104750
-// ADDRESS: 00504750
-// PROTOTYPE: uchar __thiscall GetPlayerCountInCdkey(char * param_1)
-//
-// IMPLEMENTED_OWNER: default `RsPlayerOwner::get_player_count_in_cdkey` выше
-// сохраняет DB `0xFF` sentinel и wrapping addition, получая прежний singleton-
-// count явным аргументом.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::LoadQuestData
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2741
-// RVA: 0x00104790
-// ADDRESS: 00504790
-// PROTOTYPE: bool __thiscall LoadQuestData(CPlayer * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
-//
-// IMPLEMENTED_OWNER: `TiberiusRsPlayer::load_player_quest_data` и binary
-// `load_quest_data` выше; Tiberius заменяет ADO, а трёхбайтовые записи,
-// игнорирование неполного хвоста и успешный EOF сохранены.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@00504b6a
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2774
-// RVA: 0x00104B6A
-// ADDRESS: 00504b6a
-// PROTOTYPE: undefined Catch@00504b6a()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_00504bba
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2780
-// RVA: 0x00104BBA
-// ADDRESS: 00504bba
-// PROTOTYPE: undefined FUN_00504bba()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::GetPlayerNameByID
-// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:739
-// RVA: 0x00105980
-// ADDRESS: 00505980
-// PROTOTYPE: void __thiscall GetPlayerNameByID(ulong param_1, char * param_2)
-//
-// IMPLEMENTED_OWNER: `RsPlayerOwner::get_player_name_by_id` находится выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@00505b83
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:760
-// RVA: 0x00105B83
-// ADDRESS: 00505b83
-// PROTOTYPE: undefined Catch@00505b83()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_00505b9f
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:763
-// RVA: 0x00105B9F
-// ADDRESS: 00505b9f
-// PROTOTYPE: undefined FUN_00505b9f()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::StatRanks
-// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:1561
-// RVA: 0x00109570
-// ADDRESS: 00509570
-// PROTOTYPE: bool __thiscall StatRanks(CPlayerRanks * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
-//
-// Реализовано выше потоковым Tiberius-чтением с exact live-prefix publication.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@00509a72
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:1611
-// RVA: 0x00109A72
-// ADDRESS: 00509a72
-// PROTOTYPE: undefined Catch@00509a72()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_00509aaf
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:1622
-// RVA: 0x00109AAF
-// ADDRESS: 00509aaf
-// PROTOTYPE: undefined FUN_00509aaf()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::OpenPlayerBaseInDB
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:160
-// RVA: 0x0010D2D0
-// ADDRESS: 0050d2d0
-// PROTOTYPE: bool __thiscall OpenPlayerBaseInDB(char * param_1, CMessage * param_2, long * param_3, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0050e98a
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:375
-// RVA: 0x0010E98A
-// ADDRESS: 0050e98a
-// PROTOTYPE: undefined Catch@0050e98a()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_0050e9f5
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:386
-// RVA: 0x0010E9F5
-// ADDRESS: 0050e9f5
-// PROTOTYPE: undefined FUN_0050e9f5()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::GetCDKey
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:837
-// RVA: 0x0010EA20
-// ADDRESS: 0050ea20
-// PROTOTYPE: basic_string<char,std::char_traits<char>,std::allocator<char>_> __thiscall GetCDKey(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0050ec8a
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:863
-// RVA: 0x0010EC8A
-// ADDRESS: 0050ec8a
-// PROTOTYPE: undefined Catch@0050ec8a()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_0050ecab
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:866
-// RVA: 0x0010ECAB
-// ADDRESS: 0050ecab
-// PROTOTYPE: undefined FUN_0050ecab()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::LoadCiQingField
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:3254
-// RVA: 0x0010EFF0
-// ADDRESS: 0050eff0
-// PROTOTYPE: bool __thiscall LoadCiQingField(CPlayer * param_1, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_2)
-//
-// IMPLEMENTED_OWNER: `load_ci_qing_field` выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0050f24d
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:3278
-// RVA: 0x0010F24D
-// ADDRESS: 0050f24d
-// PROTOTYPE: undefined Catch@0050f24d()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::OpenPlayerBaseInMem
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:44
-// RVA: 0x0010F280
-// ADDRESS: 0050f280
-// PROTOTYPE: bool __thiscall OpenPlayerBaseInMem(char * param_1, CMessage * param_2, long * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::OpenPlayerBase
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:389
-// RVA: 0x0010F750
-// ADDRESS: 0050f750
-// PROTOTYPE: bool __thiscall OpenPlayerBase(char * param_1, CMessage * param_2, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::LoadSkillField
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2041
-// RVA: 0x0010F8E0
-// ADDRESS: 0050f8e0
-// PROTOTYPE: bool __thiscall LoadSkillField(CPlayer * param_1, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_2)
-//
-// IMPLEMENTED_OWNER: `load_skill_field` выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0050fb61
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2076
-// RVA: 0x0010FB61
-// ADDRESS: 0050fb61
-// PROTOTYPE: undefined Catch@0050fb61()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::LoadHonorRanksByType
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2963
-// RVA: 0x0010FB90
-// ADDRESS: 0050fb90
-// PROTOTYPE: bool __thiscall LoadHonorRanksByType(bool param_1, int param_2, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_3)
-//
-// Реализовано выше как bounds-checked decoder одного typed DB-field.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0051022b
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:3023
-// RVA: 0x0011022B
-// ADDRESS: 0051022b
-// PROTOTYPE: undefined Catch@0051022b()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::LoadThingField
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:3332
-// RVA: 0x00110260
-// ADDRESS: 00510260
-// PROTOTYPE: bool __thiscall LoadThingField(CPlayer * param_1, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_2, ulong param_3)
-//
-// IMPLEMENTED_OWNER: binary `load_thing_field` выше и reached daily-ветвь
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@005104eb
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:3361
-// RVA: 0x001104EB
-// ADDRESS: 005104eb
-// PROTOTYPE: undefined Catch@005104eb()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::DbLetTingUpdate
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:3369
-// RVA: 0x00110520
-// ADDRESS: 00510520
-// PROTOTYPE: uint __stdcall DbLetTingUpdate(void * param_1)
-//
-// IMPLEMENTED_OWNER: `TiberiusRsPlayer::db_lei_ting_update` выше сохраняет
-// отдельное connection, worker-time daily list, per-row порядок, partial
-// commit и kind-specific bit mask; `ID` заменяет только hidden ADO row key.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@00510f00
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:3450
-// RVA: 0x00110F00
-// ADDRESS: 00510f00
-// PROTOTYPE: undefined Catch@00510f00()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_00510f4e
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:3464
-// RVA: 0x00110F4E
-// ADDRESS: 00510f4e
-// PROTOTYPE: undefined FUN_00510f4e()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::ResetAllLeitingInDB
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:3468
-// RVA: 0x00110F70
-// ADDRESS: 00510f70
-// PROTOTYPE: bool __thiscall ResetAllLeitingInDB(ulong param_1, long param_2)
-//
-// IMPLEMENTED_OWNER: `WorldLeiTingResetWorker::dispatch` создаёт один
-// detached Rust thread с owned payload/config и не переносит Win32 HANDLE leak.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::LoadFriendField
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2240
-// RVA: 0x00111050
-// ADDRESS: 00511050
-// PROTOTYPE: bool __thiscall LoadFriendField(CPlayer * param_1, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_2)
-//
-// IMPLEMENTED_OWNER: `load_friend_field` выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@00511373
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2283
-// RVA: 0x00111373
-// ADDRESS: 00511373
-// PROTOTYPE: undefined Catch@00511373()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_0051138c
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2287
-// RVA: 0x0011138C
-// ADDRESS: 0051138c
-// PROTOTYPE: undefined FUN_0051138c()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::LoadHonorRanks
-// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2870
-// RVA: 0x001113B0
-// ADDRESS: 005113b0
-// PROTOTYPE: bool __thiscall LoadHonorRanks(_com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_1)
-//
-// Реализовано выше с exact today/tomorrow и последовательной публикацией.
-// Exact `0x005116FA` возвращает true только после второго полного прохода;
-// error/catch хвост `0x005117D0` возвращает false.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0051177f
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2955
-// RVA: 0x0011177F
-// ADDRESS: 0051177f
-// PROTOTYPE: undefined Catch@0051177f()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_005117a9
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:2960
-// RVA: 0x001117A9
-// ADDRESS: 005117a9
-// PROTOTYPE: undefined FUN_005117a9()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::LoadPlayer
-// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:1135
-// RVA: 0x001117F0
-// ADDRESS: 005117f0
-// PROTOTYPE: bool __thiscall LoadPlayer(CPlayer * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
-//
-// IMPLEMENTED_OWNER: `RsPlayerOwner::load_player` и
-// `TiberiusPlayerLoadData` выше; caller-connection переиспользуется, а null
-// connection открывается один раз через `WorldDatabaseSettings::connect`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@00514e5d
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:1545
-// RVA: 0x00114E5D
-// ADDRESS: 00514e5d
-// PROTOTYPE: undefined Catch@00514e5d()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsPlayer::GetPlayerData
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp:432
-// RVA: 0x00114EA0
-// ADDRESS: 00514ea0
-// PROTOTYPE: bool __thiscall GetPlayerData(char * param_1, uint param_2, ulong param_3, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_4)
-//
-// Реализация распределена между `player_select`, clone/queue owners и
-// `CGame::route_loaded_player`; observable order прямого пути сохранён.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-// COMPONENT_VARIANT_END: WorldServer

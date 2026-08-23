@@ -1,80 +1,16 @@
-//! Очереди аукционной World DB `CDbMisc` и MainLoop-dispatch их результатов.
+//! DB-владелец аукционных очередей WorldServer из `dbmisc.cpp/.h`.
+//! Источник контракта — точная пара WorldServer EXE/PDB.
 //!
-//! Статус владельца: `IMPLEMENTED` для `DbNote`, constructor/lifecycle очередей,
-//! `PushItemToListIn/Out`, `PopItemFromListIn/Out`, трёх
-//! `DoneOT_IN_*`, `DoneListIn`, `DoneOutList`, `PopPlayerList`, создания и
-//! active-проверки normal DB-соединения, вставки нового лота с его
-//! addon-свойствами и пяти DB-переходов записи
-//! `DelItemFromDb`/`DelMoneyFromDb`/`ModifyGoodsStateA2S`/`TansferMoney`/
-//! `ModifyGoodsStateA2B`, а также
-//! достигнутой части `LoadAuction`,
-//! caller-контрактов `LoadOwnerBackGoods`,
-//! `LoadOwnerUndoGoods`, `LoadOwnerSuccGoods` и `LoadMoneyById`, а также
-//! Tiberius materialization `LoadGoodsByOwnerId` и `LoadMoneyById`. Остальные
-//! SQL/load-функции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Две очереди `DbNote` и player FIFO сохраняют раздельные locks, выбор
+//! head/tail, правило limit `0 = весь batch`, отрицательный limit `= ничего`
+//! и максимум восемь записей в `DoneOutList`. Старый bool queue helpers всегда
+//! был `false`; Rust возвращает перемещённый batch, не меняя порядок записей.
 //!
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//! SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходные владельцы PDB:
-//! `e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.h/.cpp`.
-//! Существенные RVA: `DbNote` `0x000A51C0`, constructor `0x000F2100`,
-//! push-in/out `0x000F18C0/0x000F1C00`, pop-in/out
-//! `0x000F22F0/0x000F2450`, `DoneOutList` `0x000F2650`, input handlers
-//! `0x000F2210/0x000F2270/0x000F3560`, `DoneListIn` `0x000F35C0`,
-//! `PopPlayerList` `0x000F2C10` и `LoadAuction` `0x000F56F0`.
-//!
-//! Две `std::list<DbNote*>` и player `std::deque<long>` заменены owning
-//! `VecDeque<Box<DbNote>>` под теми же раздельными locks. Push-in сохраняет
-//! выбор head/tail, push-out всегда добавляет в хвост, limit `0` снимает всю
-//! очередь, положительный limit — не больше указанного числа с головы, а
-//! отрицательный ничего не снимает. Возвращаемый `bool` всех четырёх старых
-//! queue helpers всегда был `false`; Rust возвращает сам moved batch и не
-//! превращает этот неинформативный флаг в успех.
-//!
-//! `DoneOutList` снимает не больше восьми notes и сохраняет их порядок. Wire
-//! `0x14ED01`, `0x80405` и `0x80404` строится готовыми `CMessage`, `CGoodsNode`
-//! и `CGoods`; SQL, registry lookup, лог и фактическая send-граница остаются
-//! узкому контексту. Terminal auction-result сначала проверяет server по
-//! owner, затем online-player и повторно server уже по фактическому inherited
-//! player ID. После `0x80404` gold-coin возвращается во входную очередь как
-//! `OT_IN_MODIFY_MONEY`, иной товар — как `OT_IN_DELETE_ITEM_SUCESS`.
-//!
-//! Сохранены две наблюдаемые странности: ошибка A2S маркируется именно
-//! `OT_OUT_INSERT_NEW_ITEM_ERROR`, а ошибка A2B получает
-//! `OT_OUT_MODIFY_STATE_A2B_ERROR` и возвращается во входной хвост. Нарисованные
-//! декомпилятором возвраты из STL-node cleanup не материализованы: иначе batch
-//! limit `8` и list/deque loops физически обрабатывали бы только один элемент.
-//! Для `DoneListIn` это имеет статус `VERIFIED_DISASSEMBLY`: exact EXE
-//! `0x004F36D2/0x004F375B/0x004F3780` сходится в `0x004F3783`, берёт следующий
-//! list-node и возвращается к dispatch; единственный normal `ret` расположен
-//! после сравнения с sentinel по `0x004F37AD`. После ответа reverse прекращён.
-//!
-//! Если terminal note содержит пустой `m_vecGoodsByte`, оригинал сначала
-//! отправляет `0x80404`, затем читает неинициализированный constructor-ом
-//! `CGoods::m_dwBasePropertiesIndex`. Rust сохраняет уже выполненную отправку и
-//! возвращает pending owner с `BLOCKED_MISSING_FACT`, не выбирая money/delete,
-//! случайное значение либо fail-closed реакцию. Ошибки безопасных goods codecs
-//! аналогично возвращают весь ещё не обработанный batch вызывающему. Lock,
-//! allocation, COM AddRef, deleting destructors и STL cleanup выражены
-//! владением Rust и узкими callbacks, а не отдельной имитацией библиотек.
-//! `LoadOwner*Goods` остаются тонкими переходами к одному concrete DB context:
-//! они не переупорядочивают SQL read, не интерпретируют join-строки и передают
-//! назад именно число `CGoodsNode`, которое необходимо caller-у для следующего
-//! остатка лимита. `LoadMoneyById` намеренно не возвращает значение, поскольку
-//! его исходный caller его не использует.
-//! `TiberiusAuctionGoodsReader` открывает отдельное connection и возвращает
-//! полностью собранный goods/money batch вместо ADO/COM recordset; async
-//! bridge, который append-ит batch в общий output FIFO из World MainLoop,
-//! остаётся у concrete context и не подменяется блокирующим вызовом драйвера.
-//! Архивная GameDB05 подтверждает `Auction.GoodsID` как `uniqueidentifier`, а
-//! `dwauctiontime/timebuyer` как `bigint`; read-query явно преобразует GUID в
-//! legacy-текст и читает оба времени 64-битно до сохранения DWORD-снимка.
-//! `TiberiusAuctionWriteOwner` так же не прячет async I/O за синхронным
-//! `DbMiscContext`: удаление лота открывает собственное соединение, а остальные
-//! остальные точные SQL-команды, включая `AddNewGoods`, принимают normal
-//! connection исходного owner-а от вызывающего кода.
+//! Terminal dispatch сохраняет opcodes, повторный lookup сервера по player ID
+//! и различающиеся A2S/A2B error-типы. Пустой goods payload остаётся typed
+//! границей после уже выполненной отправки. Tiberius заменяет ADO/COM и ручное
+//! владение, но не прячет async I/O, не объединяет соединения и не меняет SQL,
+//! FIFO, partial effects или порядок callback-ов.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -150,7 +86,7 @@ impl Default for DbNote {
 }
 
 impl DbNote {
-    /// Повторяет `CGoodsNode` constructor + `Clear`, `OT_NULL`, `-1` и `0`.
+ /// Повторяет `CGoodsNode` constructor + `Clear`, `OT_NULL`, `-1` и `0`.
     pub(crate) fn new() -> Self {
         Self {
             e_type: OperatorType::OT_NULL,
@@ -161,7 +97,7 @@ impl DbNote {
     }
 }
 
-/// Достигнутые поля результата `CGame::GetPlayerGameServer`.
+/// Действующие поля результата `CGame::GetPlayerGameServer`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct DbMiscGameServer {
     pub(crate) connected: bool,
@@ -183,7 +119,7 @@ pub(crate) trait DbMiscDeliveryContext {
 
 /// Технические и DB-owner-границы полного `CDbMisc` queue-dispatch.
 pub(crate) trait DbMiscContext {
-    /// Исходный `CGlobeSetup::m_stSetup.lTransferMoneyTime`.
+ /// Исходный `CGlobeSetup::m_stSetup.lTransferMoneyTime`.
     fn transfer_money_interval_ms(&mut self) -> i32;
     fn current_tick_ms(&mut self) -> u32;
     fn is_active_connect(&mut self) -> bool;
@@ -199,19 +135,19 @@ pub(crate) trait DbMiscContext {
 
     fn gold_coin_index(&mut self) -> u32;
 
-    /// Заполняет destination в SQL recordset-order из
-    /// `SELECT distinct dwowerid FROM Auction (nolock)`.
+ /// Заполняет destination в SQL recordset-order из
+ /// `SELECT distinct dwowerid FROM Auction (nolock)`.
     fn read_auction_owner_ids(&mut self, destination: &mut VecDeque<i32>);
     fn load_goods_by_owner_id(&mut self, owner_id: i32, state: i32, limit: i32);
 
-    /// Выполняет точный owner-read `Auction` и публикует созданные
-    /// `OT_OUT_READ_AUCTION_RESULT` notes в output FIFO. Возвращает число
-    /// товаров, а не строк join-а `AuctionGoods`.
+ /// Выполняет точный owner-read `Auction` и публикует созданные
+ /// `OT_OUT_READ_AUCTION_RESULT` notes в output FIFO. Возвращает число
+ /// товаров, а не строк join-а `AuctionGoods`.
     fn load_owner_auction_goods(&mut self, owner_id: i32, state: i32, limit: i32) -> i32;
 
-    /// Выполняет `LoadMoneyById`: создаёт и публикует возврат gold only при
-    /// ненулевом `AuctionPlayerMoney.dwmoney`; результат чтения намеренно не
-    /// участвует в S2W control-flow оригинала.
+ /// Выполняет `LoadMoneyById`: создаёт и публикует возврат gold only при
+ /// ненулевом `AuctionPlayerMoney.dwmoney`; результат чтения намеренно не
+ /// участвует в S2W control-flow оригинала.
     fn load_owner_auction_money(&mut self, owner_id: i32, money_limit: i32);
 }
 
@@ -253,7 +189,7 @@ pub(crate) struct DbMiscDoneInReport {
     pub(crate) unhandled_notes: usize,
 }
 
-/// Один вызов достигнутой части `LoadAuction`.
+/// Один вызов действующей части `LoadAuction`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DbMiscLoadAuctionReport {
     LoadedOwner { owner_id: i32 },
@@ -287,15 +223,15 @@ impl DbMiscOutputPublisher {
 }
 
 impl CDbMisc {
-    /// Создаёт пустые очереди и вызывает исходный connection initializer.
+ /// Создаёт пустые очереди и вызывает исходный connection initializer.
     pub(crate) fn new(context: &mut impl DbMiscContext) -> Self {
         let owner = Self::with_empty_queues();
         context.create_normal_connection();
         owner
     }
 
-    /// Создаёт queue-owner до process-level сборки concrete context-а.
-    /// Connection по-прежнему обязан быть создан в позиции DB-owner-а Init.
+ /// Создаёт queue-owner до process-level сборки concrete context-а.
+ /// Connection по-прежнему обязан быть создан в позиции DB-owner-а Init.
     pub(crate) fn with_empty_queues() -> Self {
         Self {
             input: Mutex::new(VecDeque::new()),
@@ -317,7 +253,7 @@ impl CDbMisc {
         }
     }
 
-    /// Добавляет non-null note в head либо tail; старый return всегда `false`.
+ /// Добавляет non-null note в head либо tail; старый return всегда `false`.
     pub(crate) fn push_item_to_list_in(&self, note: Box<DbNote>, push_front: bool) -> bool {
         let mut input = self.input.lock();
         if push_front {
@@ -328,13 +264,13 @@ impl CDbMisc {
         false
     }
 
-    /// Добавляет non-null note только в output tail; return остаётся `false`.
+ /// Добавляет non-null note только в output tail; return остаётся `false`.
     pub(crate) fn push_item_to_list_out(&self, note: Box<DbNote>) -> bool {
         self.output.lock().push_back(note);
         false
     }
 
-    /// Снимает input batch после точного transfer-money/reconnect gate.
+ /// Снимает input batch после точного transfer-money/reconnect gate.
     pub(crate) fn pop_item_from_list_in(
         &mut self,
         context: &mut impl DbMiscContext,
@@ -361,12 +297,12 @@ impl CDbMisc {
         move_queue_batch(&mut self.input.lock(), limit)
     }
 
-    /// Снимает output batch без DB connection gate.
+ /// Снимает output batch без DB connection gate.
     pub(crate) fn pop_item_from_list_out(&self, limit: i32) -> VecDeque<Box<DbNote>> {
         move_queue_batch(&mut self.output.lock(), limit)
     }
 
-    /// Выполняет три DB handlers и три terminal input-перехода в list-order.
+ /// Выполняет три DB handlers и три terminal input-перехода в list-order.
     pub(crate) fn done_list_in(
         &self,
         context: &mut impl DbMiscContext,
@@ -391,8 +327,8 @@ impl CDbMisc {
                     note.e_type = if succeeded {
                         OperatorType::OT_OUT_MODIFY_STATE_A2S_OK
                     } else {
-                        // World RVA 0x000F2210 действительно использует чужой
-                        // insert-error discriminant.
+ // World действительно использует чужой
+ // insert-error discriminant.
                         OperatorType::OT_OUT_INSERT_NEW_ITEM_ERROR
                     };
                     let _ = self.push_item_to_list_out(note);
@@ -418,8 +354,7 @@ impl CDbMisc {
                     report.modified_money += 1;
                 }
                 _ => {
-                    // Exact EXE 0x004F3610..0x004F3620 направляет неизвестный
-                    // discriminant прямо к общей итерации 0x004F3783.
+ // Неизвестный discriminant сразу переходит к общей итерации.
                     report.unhandled_notes += 1;
                 }
             }
@@ -427,7 +362,7 @@ impl CDbMisc {
         report
     }
 
-    /// Снимает максимум восемь output notes и исполняет полный World dispatch.
+ /// Снимает максимум восемь output notes и исполняет полный World dispatch.
     pub(crate) fn done_out_list(
         &self,
         context: &mut impl DbMiscDeliveryContext,
@@ -578,7 +513,7 @@ impl CDbMisc {
         Ok(report)
     }
 
-    /// Выполняет достигнутый direct refresh owner-ID списка.
+ /// Выполняет действующий direct refresh owner-ID списка.
     pub(crate) fn done_ot_in_read_auction(&self, context: &mut impl DbMiscContext) {
         if !context.is_active_connect() {
             return;
@@ -588,12 +523,12 @@ impl CDbMisc {
         context.read_auction_owner_ids(&mut player_ids);
     }
 
-    /// Снимает player-ID по тому же limit-контракту отдельной player lock.
+ /// Снимает player-ID по тому же limit-контракту отдельной player lock.
     pub(crate) fn pop_player_list(&self, limit: i32) -> VecDeque<i32> {
         move_queue_batch(&mut self.player_ids.lock(), limit)
     }
 
-    /// Читает не больше одного owner-а либо переносит весь новый owner batch.
+ /// Читает не больше одного owner-а либо переносит весь новый owner batch.
     pub(crate) fn load_auction(
         &mut self,
         context: &mut impl DbMiscContext,
@@ -617,11 +552,11 @@ impl CDbMisc {
         }
     }
 
-    /// Exact общий owner-read, которому принадлежат state и limit аргументы.
-    ///
-    /// Materialization строк `Auction/AuctionGoods` и публикация output note
-    /// остаются в concrete DB context; `CDbMisc` сохраняет сам caller-contract
-    /// и число созданных `CGoodsNode`.
+ /// Оригинал общий owner-read, которому принадлежат state и limit аргументы.
+ ///
+ /// Materialization строк `Auction/AuctionGoods` и публикация output note
+ /// остаются в concrete DB context; `CDbMisc` сохраняет сам caller-contract
+ /// и число созданных `CGoodsNode`.
     pub(crate) fn load_goods_by_owner_id(
         &self,
         context: &mut impl DbMiscContext,
@@ -632,7 +567,7 @@ impl CDbMisc {
         context.load_owner_auction_goods(owner_id, state.raw(), limit)
     }
 
-    /// Exact `LoadOwnerBackGoods(owner, limit)`, state `3`.
+ /// Оригинал `LoadOwnerBackGoods(owner, limit)`, state `3`.
     pub(crate) fn load_owner_back_goods(
         &self,
         context: &mut impl DbMiscContext,
@@ -642,7 +577,7 @@ impl CDbMisc {
         self.load_goods_by_owner_id(context, owner_id, GoodsState::BACK, limit)
     }
 
-    /// Exact `LoadOwnerUndoGoods(owner, limit)`, state `4`.
+ /// Оригинал `LoadOwnerUndoGoods(owner, limit)`, state `4`.
     pub(crate) fn load_owner_undo_goods(
         &self,
         context: &mut impl DbMiscContext,
@@ -652,7 +587,7 @@ impl CDbMisc {
         self.load_goods_by_owner_id(context, owner_id, GoodsState::UNDO, limit)
     }
 
-    /// Exact `LoadOwnerSuccGoods(owner, limit)`, state `2`.
+ /// Оригинал `LoadOwnerSuccGoods(owner, limit)`, state `2`.
     pub(crate) fn load_owner_succ_goods(
         &self,
         context: &mut impl DbMiscContext,
@@ -662,7 +597,7 @@ impl CDbMisc {
         self.load_goods_by_owner_id(context, owner_id, GoodsState::SUCESSED, limit)
     }
 
-    /// Exact `LoadMoneyById`; original caller намеренно игнорировал return.
+ /// Оригинал `LoadMoneyById`; original caller намеренно игнорировал return.
     pub(crate) fn load_money_by_id(
         &self,
         context: &mut impl DbMiscContext,
@@ -787,16 +722,16 @@ pub(crate) enum AuctionWriteBlock {
 #[derive(Debug)]
 pub(crate) enum AuctionWriteOutcome {
     Written,
-    /// `ModifyGoodsStateA2S`, `TansferMoney` и `ModifyGoodsStateA2B` печатали
-    /// ошибку `ExecuteCn`, но normal return оставался `true`. Это не
-    /// технический дефект, который можно исправить локально: `DoneListIn`
-    /// публикует из него внешний успешный переход.
+ /// `ModifyGoodsStateA2S`, `TansferMoney` и `ModifyGoodsStateA2B` печатали
+ /// ошибку `ExecuteCn`, но normal return оставался `true`. Это не
+ /// технический дефект, который можно исправить локально: `DoneListIn`
+ /// публикует из него внешний успешный переход.
     ReturnedTrueAfterDatabaseFailure(AuctionWriteFailure),
     ReturnedFalse(AuctionWriteFailure),
     BlockedMissingFact(AuctionWriteBlock),
 }
 
-/// Результат exact `IsActiveConnect`: `ExecuteCnEx` возвращал unsigned
+/// Результат оригинал `IsActiveConnect`: `ExecuteCnEx` возвращал unsigned
 /// affected-row count, а `CDbMisc` считал соединение активным только при нуле.
 #[derive(Debug)]
 pub(crate) enum AuctionConnectionState {
@@ -806,15 +741,15 @@ pub(crate) enum AuctionConnectionState {
 }
 
 impl AuctionConnectionState {
-    /// Bool для ровно той reconnect-ветки, которую вызывает `DoneListIn`.
+ /// Bool для ровно той reconnect-ветки, которую вызывает `DoneListIn`.
     pub(crate) const fn legacy_bool(&self) -> bool {
         matches!(self, Self::Active)
     }
 }
 
 impl AuctionWriteOutcome {
-    /// Точный bool для будущего async-адаптера `DbMiscContext`; безопасная
-    /// блокировка не выдаётся за доказанный ответ старого процесса.
+ /// Точный bool для внешнего async-адаптера `DbMiscContext`; безопасная
+ /// блокировка не выдаётся за доказанный ответ старого процесса.
     pub(crate) const fn legacy_bool(&self) -> Option<bool> {
         match self {
             Self::Written | Self::ReturnedTrueAfterDatabaseFailure(_) => Some(true),
@@ -827,12 +762,12 @@ impl AuctionWriteOutcome {
 /// Linux/TDS-владелец пяти точных DB-переходов записи `CDbMisc`.
 ///
 /// Проверка машинного кода World EXE фиксирует аргументы format strings:
-/// `MondifyMoney(money, player_id)` в `0x004EFAE0..0x004EFAF9`,
+/// `MondifyMoney(money, player_id)` в..,
 /// `BuyGoods(guid, buyer_id, buyer_name, buyer_id)` в
-/// `0x004EFC05..0x004EFC29`, `TransferMoney(seller_id, payout)` в
-/// `0x004EFD3B..0x004EFD5A` и `UpdateGoodsState(guid, state)` в
-/// `0x004EFE65..0x004EFE81`. Первое удаление сохраняет самостоятельное
-/// соединение `0x004EF961..0x004EFA6E`; четыре прочие команды используют
+///.., `TransferMoney(seller_id, payout)` в
+///.. и `UpdateGoodsState(guid, state)` в
+///... Первое удаление сохраняет самостоятельное
+/// соединение..; четыре прочие команды используют
 /// `m_NormalCn`. Параметризованный TDS заменяет только небезопасный `_sprintf` и
 /// не объединяет последовательные BuyGoods/TransferMoney в транзакцию.
 pub(crate) struct TiberiusAuctionWriteOwner {
@@ -846,12 +781,12 @@ impl TiberiusAuctionWriteOwner {
         }
     }
 
-    /// Заменяет normal connection перед первым DB-batch либо после reconnect.
-    /// Старый `CreateNormalCn` сначала освобождал `m_NormalCn`, затем создавал
-    /// и открывал новый ADO connection; ошибка любого шага попадала в catch и
-    /// возвращала `false`. Владелец старого `WorldTdsClient` в Rust сам решает,
-    /// когда отбросить его перед вызовом, а этот метод передаёт только новый
-    /// успешно установленный owner.
+ /// Заменяет normal connection перед первым DB-batch либо после reconnect.
+ /// Старый `CreateNormalCn` сначала освобождал `m_NormalCn`, затем создавал
+ /// и открывал новый ADO connection; ошибка любого шага попадала в catch и
+ /// возвращала `false`. Владелец старого `WorldTdsClient` в Rust сам решает,
+ /// когда отбросить его перед вызовом, а этот метод передаёт только новый
+ /// успешно установленный owner.
     pub(crate) async fn create_normal_connection(
         &self,
     ) -> Result<WorldTdsClient, AuctionWriteFailure> {
@@ -864,13 +799,12 @@ impl TiberiusAuctionWriteOwner {
             })
     }
 
-    /// Выполняет literal `exec IsActiveConnect` на normal connection.
-    ///
-    /// Exact `0x004EFF7A..0x004EFFB5` передаёт результат `ExecuteCnEx` в
-    /// `test eax,eax; sete dl`: нулевой affected-row count — `true`, любой
-    /// ненулевой count или ADO exception — `false`. Tiberius даёт тот же count
-    /// через `ExecuteResult::total`; ошибка сохраняется отдельно, но для
-    /// legacy caller также означает неактивное соединение.
+ /// Выполняет literal `exec IsActiveConnect` на normal connection.
+ ///
+ /// Нулевой affected-row count `ExecuteCnEx` означает `true`, любой
+ /// ненулевой count или ADO exception — `false`. Tiberius даёт тот же count
+ /// через `ExecuteResult::total`; ошибка сохраняется отдельно, но для
+ /// legacy caller также означает неактивное соединение.
     pub(crate) async fn is_active_connection(
         &self,
         normal_connection: &mut WorldTdsClient,
@@ -891,13 +825,13 @@ impl TiberiusAuctionWriteOwner {
         }
     }
 
-    /// Вставляет один auction lot точной последовательностью `InsertItemToDb`.
-    ///
-    /// Вложенный `CGoods` декодируется до SQL, затем отдельный `exec
-    /// AddNewGoods` записывает главную строку. Base-properties и каждая
-    /// `AddNewGoodsPre` обрабатываются только после этого успеха: ни
-    /// отсутствующая база, ни поздний DB-отказ не откатывают уже созданный
-    /// лот, поскольку exact owner не открывал транзакцию.
+ /// Вставляет один auction lot точной последовательностью `InsertItemToDb`.
+ ///
+ /// Вложенный `CGoods` декодируется до SQL, затем отдельный `exec
+ /// AddNewGoods` записывает главную строку. Base-properties и каждая
+ /// `AddNewGoodsPre` обрабатываются только после этого успеха: ни
+ /// отсутствующая база, ни поздний DB-отказ не откатывают уже созданный
+ /// лот, поскольку оригинал owner не открывал транзакцию.
     pub(crate) async fn insert_item_to_db(
         &self,
         normal_connection: &mut WorldTdsClient,
@@ -984,8 +918,8 @@ impl TiberiusAuctionWriteOwner {
         AuctionWriteOutcome::Written
     }
 
-    /// Выполняет точный `delete auction where goodsid = '%s'` в отдельном
-    /// соединении, как `DelItemFromDb`.
+ /// Выполняет точный `delete auction where goodsid = '%s'` в отдельном
+ /// соединении, как `DelItemFromDb`.
     pub(crate) async fn delete_item_from_db(&self, guid: CGuid) -> AuctionWriteOutcome {
         let mut connection = match self.settings.connect().await {
             Ok(connection) => connection,
@@ -1006,9 +940,9 @@ impl TiberiusAuctionWriteOwner {
         .await
     }
 
-    /// Выполняет `exec MondifyMoney money, player_id` через normal connection
-    /// от вызывающего кода. Значение денег является абсолютным остатком, а не
-    /// суммой для вычитания: именно его передавал `DoneListIn`.
+ /// Выполняет `exec MondifyMoney money, player_id` через normal connection
+ /// от вызывающего кода. Значение денег является абсолютным остатком, а не
+ /// суммой для вычитания: именно его передавал `DoneListIn`.
     pub(crate) async fn delete_money_from_db(
         &self,
         normal_connection: &mut WorldTdsClient,
@@ -1026,9 +960,9 @@ impl TiberiusAuctionWriteOwner {
         .await
     }
 
-    /// Выполняет первую точную часть A2S: `BuyGoods`. Вызывающий обязан вызвать
-    /// `transfer_money` только после `Written`, сохраняя исходную частичную
-    /// фиксацию при отказе второй команды.
+ /// Выполняет первую точную часть A2S: `BuyGoods`. Вызывающий обязан вызвать
+ /// `transfer_money` только после `Written`, сохраняя исходную частичную
+ /// фиксацию при отказе второй команды.
     pub(crate) async fn modify_goods_state_a2s(
         &self,
         normal_connection: &mut WorldTdsClient,
@@ -1055,12 +989,12 @@ impl TiberiusAuctionWriteOwner {
         .await
     }
 
-    /// Выполняет вторую A2S-команду отдельно от `BuyGoods`.
-    ///
-    /// Для money type `1` исходный owner возвращал успех до вычисления
-    /// комиссии и SQL. Для остальных значений вызывающий передаёт точный результат
-    /// `CGame::GetOptMoneyJin`; отсутствие такого значения не превращается в
-    /// нулевое начисление.
+ /// Выполняет вторую A2S-команду отдельно от `BuyGoods`.
+ ///
+ /// Для money type `1` исходный owner возвращал успех до вычисления
+ /// комиссии и SQL. Для остальных значений вызывающий передаёт точный результат
+ /// `CGame::GetOptMoneyJin`; отсутствие такого значения не превращается в
+ /// нулевое начисление.
     pub(crate) async fn transfer_money(
         &self,
         normal_connection: &mut WorldTdsClient,
@@ -1106,7 +1040,7 @@ impl TiberiusAuctionWriteOwner {
         .await
     }
 
-    /// Выполняет `exec UpdateGoodsState guid, node_state` для возврата товара.
+ /// Выполняет `exec UpdateGoodsState guid, node_state` для возврата товара.
     pub(crate) async fn modify_goods_state_a2b(
         &self,
         normal_connection: &mut WorldTdsClient,
@@ -1153,7 +1087,7 @@ impl AuctionInsertText {
     }
 }
 
-/// Сохраняет addon records по exact `SaveGoodsProperties`. Четыре
+/// Сохраняет addon records по оригинал `SaveGoodsProperties`. Четыре
 /// accumulator-а намеренно созданы до внешнего цикла и не сбрасываются между
 /// properties: это подтверждённая DB-семантика, а не техническая деталь.
 async fn save_auction_goods_properties(
@@ -1263,7 +1197,7 @@ fn legacy_unsigned_sql_int(
     })
 }
 
-/// Ошибка достигнутой Tiberius-границы `CDbMisc::LoadGoodsByOwnerId`.
+/// Ошибка действующей Tiberius-границы `CDbMisc::LoadGoodsByOwnerId`.
 #[derive(Debug)]
 pub(crate) enum AuctionGoodsLoadFailure {
     Connection(WorldDatabaseConnectionError),
@@ -1334,7 +1268,7 @@ pub(crate) enum AuctionGoodsLoadBlock {
     },
 }
 
-/// Результат одного exact read `Auction/AuctionGoods`.
+/// Результат одного оригинал read `Auction/AuctionGoods`.
 ///
 /// Успех возвращает уже готовые `OT_OUT_READ_AUCTION_RESULT` notes в порядке
 /// сырого `CGUID`; concrete World context обязан append-нуть их в output FIFO
@@ -1350,7 +1284,7 @@ pub(crate) enum AuctionGoodsLoadOutcome {
 ///
 /// В отличие от старого ADO `OpenRs`, каждый вызов открывает владимое Tiberius
 /// connection. SQL сохраняет исходные `NOLOCK`, join и единственный `ORDER BY`;
-/// `limit` намеренно не превращён в `TOP`, поскольку exact owner ограничивал
+/// `limit` намеренно не превращён в `TOP`, поскольку оригинал owner ограничивал
 /// уже созданные уникальные `GoodsID` после чтения joined rows.
 pub(crate) struct TiberiusAuctionGoodsReader {
     settings: WorldDatabaseSettings,
@@ -1363,8 +1297,8 @@ impl TiberiusAuctionGoodsReader {
         }
     }
 
-    /// Читает exact owner-page seed через уже проверенное normal connection.
-    /// Порядок без `ORDER BY` намеренно остаётся порядком SQL recordset-а.
+ /// Читает оригинал owner-page seed через уже проверенное normal connection.
+ /// Порядок без `ORDER BY` намеренно остаётся порядком SQL recordset-а.
     pub(crate) async fn read_owner_ids(
         &self,
         normal_connection: &mut WorldTdsClient,
@@ -1403,11 +1337,11 @@ impl TiberiusAuctionGoodsReader {
         Ok(owners)
     }
 
-    /// Materializes `Auction` + `AuctionGoods` в будущий output batch.
-    ///
-    /// Набор DaKong addon property types получает здесь сам DB owner через
-    /// статический `CDaKongXiangQian::GetAddType`: exact EXE не читает для
-    /// этого setup state и не требует mutable global singleton.
+ /// Materializes `Auction` + `AuctionGoods` в внешний output batch.
+ ///
+ /// Набор DaKong addon property types получает здесь сам DB owner через
+ /// статический `CDaKongXiangQian::GetAddType`: оригинал EXE не читает для
+ /// этого setup state и не требует mutable global singleton.
     pub(crate) async fn load_goods_by_owner_id(
         &self,
         owner_id: i32,
@@ -1477,10 +1411,10 @@ impl TiberiusAuctionGoodsReader {
             };
 
             if !pending.contains_key(&record.guid) {
-                // Exact `if (param_3 <= map._Mysize) break`: current joined
-                // row is not consumed into a new note once the unique-GUID
-                // bound has been reached. A non-positive legacy limit is
-                // therefore an empty page, after the same connection/query.
+ // Оригинал `if (param_3 <= map._Mysize) break`: current joined
+ // row is not consumed into a new note once the unique-GUID
+ // bound has been reached. A non-positive legacy limit is
+ // therefore an empty page, after the same connection/query.
                 if limit <= i32::try_from(pending.len()).unwrap_or(i32::MAX) {
                     break;
                 }
@@ -1541,12 +1475,12 @@ impl TiberiusAuctionGoodsReader {
         AuctionGoodsLoadOutcome::Loaded(notes)
     }
 
-    /// Читает `AuctionPlayerMoney` и создаёт exact gold-return notes.
-    ///
-    /// `random` принадлежит World owner-у: исходный `CGoodsFactory::CreateGoods`
-    /// выполнял свой probability-roll до проверки `dwmoney != 0`. Поэтому
-    /// callback вызывается и для нулевой строки, а не заменяется созданием
-    /// deterministic `CreateGoodsNoProbability`.
+ /// Читает `AuctionPlayerMoney` и создаёт оригинал gold-return notes.
+ ///
+ /// `random` принадлежит World owner-у: исходный `CGoodsFactory::CreateGoods`
+ /// выполнял свой probability-roll до проверки `dwmoney != 0`. Поэтому
+ /// callback вызывается и для нулевой строки, а не заменяется созданием
+ /// deterministic `CreateGoodsNoProbability`.
     pub(crate) async fn load_money_by_id<Random>(
         &self,
         owner_id: i32,
@@ -1620,16 +1554,16 @@ impl TiberiusAuctionGoodsReader {
                 }
             };
 
-            // В exact EXE `CreateGoods` расположен перед `dwmoney != 0`.
+ // В оригинал EXE `CreateGoods` расположен перед `dwmoney != 0`.
             let created_goods = create_goods(registry, gold_coin_index, random);
             if let Some(mut goods) = created_goods
                 && money != 0
             {
                 let limit_as_u64 = (money_limit as i64) as u64;
                 let (note_amount, goods_amount) = if limit_as_u64 < money {
-                    // 004F1F3E: note получает остаток, а вложенный CGoods —
-                    // именно запрошенную порцию. Эта странность наблюдаема
-                    // через последующий `OT_IN_MODIFY_MONEY` и сохранена.
+ // 004F1F3E: note получает остаток, а вложенный CGoods —
+ // именно запрошенную порцию. Эта странность наблюдаема
+ // через последующий `OT_IN_MODIFY_MONEY` и сохранена.
                     (money.wrapping_sub(limit_as_u64) as i32, money_limit as u32)
                 } else {
                     (0, money as u32)
@@ -1872,11 +1806,11 @@ impl TiberiusDbMiscDatabase {
         }
     }
 
-    /// Открывает исходное `m_NormalCn` в позиции создания process-owner-а.
-    ///
-    /// `CDbMisc` не владеет TDS-клиентом: очередь остаётся доменным owner-ом,
-    /// а соединение живёт в process DB-контексте и затем переиспользуется всеми
-    /// последовательными MainLoop batch-ами.
+ /// Открывает исходное `m_NormalCn` в позиции создания process-owner-а.
+ ///
+ /// `CDbMisc` не владеет TDS-клиентом: очередь остаётся доменным owner-ом,
+ /// а соединение живёт в process DB-контексте и затем переиспользуется всеми
+ /// последовательными MainLoop batch-ами.
     pub(crate) async fn initialize_normal_connection(
         &mut self,
     ) -> Result<(), AuctionWriteFailure> {
@@ -2165,469 +2099,3 @@ impl DbMiscContext for TiberiusDbMiscContext {
         }
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.h
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp
-
-// IMPLEMENTED_OWNER: CDbMisc::DbNote::DbNote находится в typed Rust-владельце выше.
-
-// ============================================================================
-// FUNCTION: CDbMisc::CreateNormalCn
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1799
-// RVA: 0x000EF7F0
-// ADDRESS: 004ef7f0
-// PROTOTYPE: bool __thiscall CreateNormalCn(void)
-//
-// IMPLEMENTED_OWNER: `TiberiusAuctionWriteOwner::create_normal_connection` выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004ef893
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1810
-// RVA: 0x000EF893
-// ADDRESS: 004ef893
-// PROTOTYPE: undefined Catch@004ef893()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDbMisc::DelItemFromDb
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:673
-// RVA: 0x000EF930
-// ADDRESS: 004ef930
-// PROTOTYPE: bool __thiscall DelItemFromDb(CGUID param_1)
-//
-// IMPLEMENTED_OWNER: `TiberiusAuctionWriteOwner::delete_item_from_db` выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004efa3f
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:694
-// RVA: 0x000EFA3F
-// ADDRESS: 004efa3f
-// PROTOTYPE: undefined Catch@004efa3f()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDbMisc::DelMoneyFromDb
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:703
-// RVA: 0x000EFAB0
-// ADDRESS: 004efab0
-// PROTOTYPE: bool __thiscall DelMoneyFromDb(long param_1, long param_2)
-//
-// IMPLEMENTED_OWNER: `TiberiusAuctionWriteOwner::delete_money_from_db` выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004efb3f
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:719
-// RVA: 0x000EFB3F
-// ADDRESS: 004efb3f
-// PROTOTYPE: undefined Catch@004efb3f()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDbMisc::ModifyGoodsStateA2S
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:922
-// RVA: 0x000EFB80
-// ADDRESS: 004efb80
-// PROTOTYPE: bool __thiscall ModifyGoodsStateA2S(CGoodsNode * param_1)
-//
-// IMPLEMENTED_OWNER: `TiberiusAuctionWriteOwner::modify_goods_state_a2s` выше;
-// false `ExecuteCn` возвращается как `ReturnedTrueAfterDatabaseFailure`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004efc68
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:951
-// RVA: 0x000EFC68
-// ADDRESS: 004efc68
-// PROTOTYPE: undefined Catch@004efc68()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_004efc89
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:955
-// RVA: 0x000EFC89
-// ADDRESS: 004efc89
-// PROTOTYPE: undefined FUN_004efc89()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDbMisc::TansferMoney
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:959
-// RVA: 0x000EFCC0
-// ADDRESS: 004efcc0
-// PROTOTYPE: bool __thiscall TansferMoney(CGoodsNode * param_1)
-//
-// IMPLEMENTED_OWNER: `TiberiusAuctionWriteOwner::transfer_money` выше;
-// false `ExecuteCn` возвращается как `ReturnedTrueAfterDatabaseFailure`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004efdb5
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:990
-// RVA: 0x000EFDB5
-// ADDRESS: 004efdb5
-// PROTOTYPE: undefined Catch@004efdb5()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDbMisc::ModifyGoodsStateA2B
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:999
-// RVA: 0x000EFDE0
-// ADDRESS: 004efde0
-// PROTOTYPE: bool __thiscall ModifyGoodsStateA2B(CGoodsNode * param_1)
-//
-// IMPLEMENTED_OWNER: `TiberiusAuctionWriteOwner::modify_goods_state_a2b` выше;
-// false `ExecuteCn` возвращается как `ReturnedTrueAfterDatabaseFailure`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004efec0
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1026
-// RVA: 0x000EFEC0
-// ADDRESS: 004efec0
-// PROTOTYPE: undefined Catch@004efec0()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_004efee1
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1030
-// RVA: 0x000EFEE1
-// ADDRESS: 004efee1
-// PROTOTYPE: undefined FUN_004efee1()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDbMisc::IsActiveConnect
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1829
-// RVA: 0x000EFF10
-// ADDRESS: 004eff10
-// PROTOTYPE: bool __thiscall IsActiveConnect(void)
-//
-// IMPLEMENTED_OWNER: `TiberiusAuctionWriteOwner::is_active_connection` выше.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004eff84
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1839
-// RVA: 0x000EFF84
-// ADDRESS: 004eff84
-// PROTOTYPE: undefined Catch@004eff84()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_004eff9f
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1844
-// RVA: 0x000EFF9F
-// ADDRESS: 004eff9f
-// PROTOTYPE: undefined FUN_004eff9f()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDbMisc::SaveGoodsProperties
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1682
-// RVA: 0x000F02C0
-// ADDRESS: 004f02c0
-// PROTOTYPE: bool __thiscall SaveGoodsProperties(vector<CGoods::tagAddonProperty,std::allocator<CGoods::tagAddonProperty>_> * param_1, CGoodsBaseProperties * param_2, char * param_3, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_4)
-//
-// IMPLEMENTED_OWNER: `save_auction_goods_properties` выше. Накопители value
-// ID 1/2 созданы до outer loop и намеренно carry-ятся между properties.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED_OWNER: CDbMisc::~CDbMisc находится в typed Rust-владельце выше.
-
-// IMPLEMENTED_OWNER: CDbMisc::PushItemToListIn находится в typed Rust-владельце выше.
-
-// IMPLEMENTED_OWNER: CDbMisc::DoneOT_IN_READ_AUCTION находится в typed Rust-владельце выше.
-
-// ============================================================================
-// FUNCTION: Catch@004f1b7c
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:295
-// RVA: 0x000F1B7C
-// ADDRESS: 004f1b7c
-// PROTOTYPE: undefined Catch@004f1b7c()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED_OWNER: CDbMisc::PushItemToListOut находится в typed Rust-владельце выше.
-
-// ============================================================================
-// FUNCTION: CDbMisc::LoadMoneyById
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1566
-// RVA: 0x000F1C60
-// ADDRESS: 004f1c60
-// PROTOTYPE: long __thiscall LoadMoneyById(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004f204c
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1649
-// RVA: 0x000F204C
-// ADDRESS: 004f204c
-// PROTOTYPE: undefined Catch@004f204c()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED_OWNER: CDbMisc::LoadMoneyById materialized выше как
-// TiberiusAuctionGoodsReader::load_money_by_id. Exact EXE `004F1F1D..004F1FEF`
-// подтверждает: nested gold amount = min(limit,money), но note amount при
-// money > limit = money-limit; RAW сохранён как доказательство этой quirk.
-// CDbMisc::CDbMisc находится в typed Rust-владельце выше.
-
-// IMPLEMENTED_OWNER: CDbMisc::DoneOT_IN_MODIFY_STATE_A2S находится в typed Rust-владельце выше.
-
-// IMPLEMENTED_OWNER: CDbMisc::DoneOT_IN_MODIFY_STATE_A2B находится в typed Rust-владельце выше.
-
-// IMPLEMENTED_OWNER: CDbMisc::PopItemFromListIn находится в typed Rust-владельце выше.
-
-// IMPLEMENTED_OWNER: CDbMisc::PopItemFromListOut находится в typed Rust-владельце выше.
-
-// IMPLEMENTED_OWNER: CDbMisc::DoneOutList находится в typed Rust-владельце выше.
-
-// IMPLEMENTED_OWNER: CDbMisc::PopPlayerList находится в typed Rust-владельце выше.
-
-// ============================================================================
-// FUNCTION: CDbMisc::InsertItemToDb
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:729
-// RVA: 0x000F2EC0
-// ADDRESS: 004f2ec0
-// PROTOTYPE: bool __thiscall InsertItemToDb(CGoodsNode * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
-//
-// IMPLEMENTED_OWNER: `TiberiusAuctionWriteOwner::insert_item_to_db` выше.
-// Main `AddNewGoods` не откатывается при позднем lookup/addon-отказе.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004f33db
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:745
-// RVA: 0x000F33DB
-// ADDRESS: 004f33db
-// PROTOTYPE: undefined Catch@004f33db()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED_OWNER: CDbMisc::DoneOT_IN_INSERT_NEW_ITEM находится в typed Rust-владельце выше.
-
-// IMPLEMENTED_OWNER: CDbMisc::DoneListIn находится в typed Rust-владельце выше.
-
-// ============================================================================
-// FUNCTION: CDbMisc::LoadGoodsByOwnerId
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1035
-// RVA: 0x000F37E0
-// ADDRESS: 004f37e0
-// PROTOTYPE: long __thiscall LoadGoodsByOwnerId(long param_1, GoodsState param_2, long param_3, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004f52c8
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1327
-// RVA: 0x000F52C8
-// ADDRESS: 004f52c8
-// PROTOTYPE: undefined Catch@004f52c8()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_004f5640
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1372
-// RVA: 0x000F5640
-// ADDRESS: 004f5640
-// PROTOTYPE: undefined FUN_004f5640()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDbMisc::LoadOwnerBackGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1661
-// RVA: 0x000F5660
-// ADDRESS: 004f5660
-// PROTOTYPE: long __thiscall LoadOwnerBackGoods(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDbMisc::LoadOwnerUndoGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1667
-// RVA: 0x000F5690
-// ADDRESS: 004f5690
-// PROTOTYPE: long __thiscall LoadOwnerUndoGoods(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDbMisc::LoadOwnerSuccGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbmisc.cpp:1673
-// RVA: 0x000F56C0
-// ADDRESS: 004f56c0
-// PROTOTYPE: long __thiscall LoadOwnerSuccGoods(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED_OWNER: CDbMisc::LoadGoodsByOwnerId materialized выше как
-// TiberiusAuctionGoodsReader; RAW сохранён как доказательство query, limit,
-// joined-row и GUID-order семантики. CDbMisc::LoadAuction находится в typed
-// Rust-владельце выше.
-
-// COMPONENT_VARIANT_END: WorldServer

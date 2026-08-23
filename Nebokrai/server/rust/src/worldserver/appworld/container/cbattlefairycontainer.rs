@@ -2,9 +2,8 @@
 //!
 //! `Serialize/Unserialize` и folded
 //! `Clear/Release`,
-//! `Add/Add(position)/Find/Remove/AddFromDB`
-//! —
-//! действует. Источник контракта — точная пара WorldServer EXE/PDB.
+//! `Add/Add(position)/Find/Remove/AddFromDB` входят в контракт owner-а.
+//! Источник контракта — WorldServer EXE/PDB.
 //!
 //! Layout сохраняет размер `0x74` и единственный base
 //! `CVolumeLimitGoodsContainer` по `+0x0`; собственных data-полей нет.

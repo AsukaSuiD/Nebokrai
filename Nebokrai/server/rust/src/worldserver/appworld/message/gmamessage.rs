@@ -1,7 +1,8 @@
 //! WorldServer dispatcher-owner `OnGMAMessage`.
 //!
 //! kick-player `0x4FD01` и transport branches `0x4FD04`, `0x60401`, `0x60402`.
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, исходный owner
+//! Источник контракта — `WorldServer/Nworldserver.exe` и
+//! `WorldServer/WorldServer.pdb`. Owner
 //! Kick-player сохраняет `_strcmpi` lookup аккаунта, online-list gate, точные
 //! payload-ы ошибок LoginServer, отсутствие Login-ответа на успешном пути и
 //! два `AddLogText` в исходном порядке. Небезопасные `char[256]`, `strcpy` и
@@ -15,8 +16,6 @@
 //! Любой opcode вне четырёх case завершает dispatcher без чтения,
 //! отправки и fallback-маршрута; Rust представляет это `NoOp`.
 //!
-//! документация, а не как Rust-реализация.
-
 use std::ffi::CString;
 
 use crate::nets::networld::message::{CMessage, SendMessageError};

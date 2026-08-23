@@ -69,7 +69,7 @@
 //! wrapping add дневной казны, заменяет отрицательный signed результат нулём,
 //! затем ограничивает сверху `_max_country_treasury` и пишет `WS0091` в
 //! `king`. Rust `BTreeMap`-проекция и форматтер заменяют только STL/singleton/
-//! `_sprintf`; donor source/tail/ownership gates сюда не относятся.
+//! `_sprintf`; source/tail/ownership gates в этот контракт не входят.
 //! `AI` снимает unsigned 32-bit tick, сравнивает
 //! его с wrapping `m_dwTimeStamp + _dec_king_control_point_interval` и при
 //! достижении сначала читает decay, затем обновляет timestamp. Списание идёт
@@ -3439,7 +3439,7 @@ impl CCountry {
             .any(|minister| minister.snapshot.id == player_id)
     }
 
- /// Исполняет `CCountry::SuccessExiled` без donor-записи в `ExileMap`.
+ /// Исполняет `CCountry::SuccessExiled` без записи в `ExileMap`.
     pub(crate) fn success_exiled<Context: CountryExileResultContext + ?Sized>(
         &mut self,
         player_id: i32,

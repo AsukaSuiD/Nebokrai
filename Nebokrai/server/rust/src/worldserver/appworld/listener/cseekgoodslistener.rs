@@ -1,7 +1,7 @@
 //! Поиск товаров при обходе контейнера исторического `WorldServer`.
 //!
-//! `SetTarget` и `OnTraversingContainer` —
-//! действует. Источник контракта — точная пара WorldServer EXE/PDB.
+//! `SetTarget` и `OnTraversingContainer` входят в контракт owner-а.
+//! Источник контракта — WorldServer EXE/PDB.
 //!
 //! constructor задаёт target `0` и пустой
 //! `std::vector<CGUID>`; `Vec<CGuid>` и `Drop` заменяют его storage/destructor.

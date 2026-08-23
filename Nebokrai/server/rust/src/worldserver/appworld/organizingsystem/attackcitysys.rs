@@ -33,8 +33,8 @@
 //! сохраняя их исходный порядок. Countdown игнорирует hours/days разности. City
 //! end очищает заявки, закрывает country/enemy relations и пробует до пяти
 //! следующих недель перед восемью ordered registrations. Faction snapshot
-//! имеет формат signed war ID/count/ordered IDs;
-//! подтверждает `true`. Active-state duplicate scan
+//! имеет формат signed war ID/count/ordered IDs и завершает decode значением
+//! `true`. Active-state duplicate scan
 //! и relation rebuild
 //! сохраняют исходные gates, expansion faction/union и взаимный ordered add.
 //! `OnFacWinCity` всегда пишет входной diagnostic, затем при точном совпадении

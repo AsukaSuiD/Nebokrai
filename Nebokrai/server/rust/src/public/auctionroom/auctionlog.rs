@@ -1,72 +1,12 @@
-//! Журнал аукциона исторического `WorldServer`.
+//! Журнал аукциона WorldServer из точной пары EXE/PDB.
 //!
-//! Статус `CAuctionLog`, destructor, `AddItem`, `ComputePage`,
-//! `AddByteAtCurPage`, `AddByteGoodsLog`, `CollectNoNotice`, `LoadItem`,
-//! `UpdateAuctionBangDB` и `SendAuctionMsg2GS` — `IMPLEMENTED`. Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходные владельцы PDB:
-//! `e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.h/.cpp`.
-//!
-//! PDB задаёт `stLogNode` размером `0x150` и exact offsets: восемь `long`
-//! `0x00..0x1c`, `SYSTEMTIME` `0x20`, `strDescri[256]` `0x30`, GUID-ы
-//! `0x130/0x140`. `stBangNode` — три `unsigned long`, размер `0x0c`.
-//! `BTreeMap<i32, Vec<_>>` заменяет MSVC `multimap<long, stLogNode>`:
-//! numeric порядок ключей и insertion order равных ключей сохраняются, а
-//! allocator/tree cleanup переданы Rust. `m_mapPlayerPage` также заменён
-//! `BTreeMap`; process-static singleton выражается явным owned `CAuctionLog`.
-//!
-//! `ComputePage` проверен по machine-коду `0x0044B130..0x0044B1DF`.
-//! Первый запрос создаёт page `0` и возвращает `true`; направление `1`
-//! увеличивает page, откатывает его при неполной следующей странице, но в
-//! обоих случаях возвращает `false`. Направление `2` возвращает `true` только
-//! после реального уменьшения, прочие значения сбрасывают page в ноль и
-//! возвращают `true`. Страница содержит ровно до 17 записей.
-//!
-//! `AddByteGoodsLog` не ищет максимальный timestamp: machine-код
-//! `0x0044A038..0x0044A073` сравнивает время каждой подходящей записи с
-//! нулевым `SYSTEMTIME` и перезаписывает результат, поэтому выбирается
-//! последняя вставленная подходящая запись с представимым временем. Для
-//! корректных современных DB-дат `chrono` заменяет `_mktime`; нормализация
-//! повреждённых полей старым CRT не объявляется контрактом и возвращает typed
-//! block. Миллисекунды и day-of-week, как в exact comparator, не участвуют.
-//!
-//! `CollectNoNotice` намеренно не фильтрует уже отмеченные записи: копирует все
-//! записи игрока, затем по одной ставит live `bNotice=1` и в том же порядке
-//! передаёт SQL внешней write-log очереди, после чего пишет старые снимки
-//! целиком по `0x150` байт. Лимиты, batch-транзакция и pending-claim из старого
-//! Linux C++ донора меняли этот контракт и не перенесены. Формирование SQL,
-//! контейнеры и message storage используют стандартные Rust типы; тонкий
-//! queue-trait оставляет владельцу очереди только исходный порядок публикации.
-//!
-//! `LoadItem` открывает Log DB снаружи технического owner-а и потоково читает
-//! exact `AuctionLog` query. Уже прочитанные строки сразу добавляются в live
-//! multimap и остаются там при поздней ошибке; прежний журнал перед загрузкой
-//! не очищается. Только после успешного открытия второго query функция
-//! очищает `m_vecGoodsList`, затем публикует `auctionmostgoods` построчно.
-//! Ошибка второй строки поэтому оставляет prefix нового ranking-а, а ошибка
-//! открытия второго query — весь прежний ranking. Старый Linux C++ staging и
-//! swap делали обе части атомарными, добавляли schema-probe запросы и меняли
-//! этот exact порядок; они не перенесены.
-//!
-//! ADO recordset/VARIANT заменены потоковым Tiberius result, а `_bstr_t` ANSI
-//! conversion — Windows-1251, уже принятой русским серверным корпусом.
-//! Внешний init передаёт открытый Log DB connection, поскольку этот owner не
-//! владеет setup credentials/runtime. `strcpy(strDescri[256])` локализован
-//! typed-блоком; повреждённый GUID точной legacy-длины также не превращается в
-//! придуманный нулевой GUID. Exact create/query/type failures возвращают
-//! `false`; machine-код `0x0044BCBD..0x0044BD72` и catch `0x0044CBB1`
-//! подтверждают эти ветви, обычный полный проход возвращает исходный `true`.
-//!
-//! `UpdateAuctionBangDB` после доступного Log DB connection сразу очищает
-//! live ranking, читает только первую строку каждого из двух exact query и
-//! публикует соответствующий узел до связанного `UPDATE AuctionMostGoods`.
-//! Транзакции нет: ошибка сохраняет уже опубликованный prefix и уже выполненный
-//! первый update. Linux C++ заменял это staging-вектором, транзакцией, `TOP 1`,
-//! tie-breaker-ами и retry-worker-ом; это более надёжная, но другая семантика.
-//! Tiberius используется как зрелая транспортная реализация, не меняя порядок
-//! запросов, state mutation либо исходный boolean-результат.
+//! `BTreeMap<i32, Vec<_>>` сохраняет numeric key-order и insertion order равных
+//! ключей. Страница содержит до 17 записей; page transitions и bool results
+//! сохраняют исходные асимметрии. Goods-log выбирает последнюю вставленную
+//! подходящую запись, а `CollectNoNotice` не фильтрует уже отмеченные records:
+//! он меняет live flag и ставит SQL в FIFO по одному в исходном порядке.
+//! Owned records и chrono заменяют MSVC/CRT без batch transaction, claim или
+//! нормализации повреждённых дат.
 
 use std::collections::BTreeMap;
 
@@ -84,7 +24,7 @@ const AUCTION_LOG_RECORDS_PER_PAGE: i32 = 17;
 const AUCTION_LOG_NODE_SIZE: usize = 0x150;
 const AUCTION_LOG_DESCRIPTION_SIZE: usize = 0x100;
 
-/// Exact Windows `SYSTEMTIME` аукционного журнала.
+/// Оригинал Windows `SYSTEMTIME` аукционного журнала.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[repr(C)]
 pub(crate) struct AuctionLogSystemTime {
@@ -224,7 +164,7 @@ const _: () = {
     assert!(std::mem::offset_of!(AuctionLogNode, guid_key) == 0x140);
 };
 
-/// Exact 12-байтовый элемент рассылки `AuctionMostGoods`.
+/// Оригинал 12-байтовый элемент рассылки `AuctionMostGoods`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[repr(C)]
 pub(crate) struct AuctionBangNode {
@@ -276,7 +216,7 @@ pub(crate) struct AuctionNoticeCollection {
     pub(crate) record_count: usize,
 }
 
-/// Две recordset-стадии exact `LoadItem`.
+/// Две recordset-стадии оригинал `LoadItem`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AuctionLogLoadStage {
     History,
@@ -307,7 +247,7 @@ pub(crate) enum AuctionLogLoadBlockSource {
     CalendarOutsideSystemTime,
 }
 
-/// Уже достигнутый prefix перед безопасно неразрешимой строкой.
+/// Уже действующий prefix перед безопасно неразрешимой строкой.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AuctionLogLoadBlock {
     pub(crate) row_index: usize,
@@ -322,7 +262,7 @@ pub(crate) enum AuctionLogLoadOutcome {
     BlockedMissingFact(AuctionLogLoadBlock),
 }
 
-/// Этап exact неатомарного `CAuctionLog::UpdateAuctionBangDB`.
+/// Этап оригинал неатомарного `CAuctionLog::UpdateAuctionBangDB`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AuctionBangUpdateStage {
     MostMoneyQuery,
@@ -365,9 +305,9 @@ enum AuctionHistoryRowDecode {
 
 /// Owned-состояние исходного `CAuctionLog` без process-static singleton-а.
 pub(crate) struct CAuctionLog {
-    /// Нулевой sentinel гарантирует первый daily-ranking проход: допустимый
-    /// `tm_mday` лежит в диапазоне `1..=31`. Это безопасная замена чтения
-    /// неинициализированного слова в исходном constructor-е.
+ /// Нулевой sentinel гарантирует первый daily-ranking проход: допустимый
+ /// `tm_mday` лежит в диапазоне `1..=31`. Это безопасная замена чтения
+ /// неинициализированного слова в исходном constructor-е.
     old_auction_day: i32,
     log_list: BTreeMap<i32, Vec<AuctionLogNode>>,
     player_pages: BTreeMap<i32, i32>,
@@ -381,7 +321,7 @@ impl Default for CAuctionLog {
 }
 
 impl CAuctionLog {
-    /// Создаёт только доказанные constructor-ом пустые контейнеры.
+ /// Создаёт только доказанные constructor-ом пустые контейнеры.
     pub(crate) const fn new() -> Self {
         Self {
             old_auction_day: 0,
@@ -399,13 +339,13 @@ impl CAuctionLog {
         self.old_auction_day = day;
     }
 
-    /// Multimap insert всегда принимает ещё одну запись и возвращает `true`.
+ /// Multimap insert всегда принимает ещё одну запись и возвращает `true`.
     pub(crate) fn add_item(&mut self, item: AuctionLogNode) -> bool {
         self.log_list.entry(item.player_id).or_default().push(item);
         true
     }
 
-    /// Потоково загружает live history, затем очищает и загружает ranking.
+ /// Потоково загружает live history, затем очищает и загружает ranking.
     pub(crate) async fn load_item(
         &mut self,
         active_connection: Option<&mut WorldTdsClient>,
@@ -548,7 +488,7 @@ impl CAuctionLog {
         AuctionLogLoadOutcome::ReturnedTrue
     }
 
-    /// Неатомарно пересчитывает две exact строки `AuctionMostGoods`.
+ /// Неатомарно пересчитывает две оригинал строки `AuctionMostGoods`.
     pub(crate) async fn update_auction_bang_db(
         &mut self,
         active_connection: Option<&mut WorldTdsClient>,
@@ -628,7 +568,7 @@ impl CAuctionLog {
         AuctionBangUpdateOutcome::ReturnedTrue
     }
 
-    /// Сохраняет exact переход page и исторически странный bool результата.
+ /// Сохраняет оригинал переход page и исторически странный bool результата.
     pub(crate) fn compute_page(&mut self, direction: i32, player_id: i32) -> bool {
         let Some(page) = self.player_pages.get_mut(&player_id) else {
             self.player_pages.insert(player_id, 0);
@@ -659,7 +599,7 @@ impl CAuctionLog {
         }
     }
 
-    /// Добавляет player/page и до семнадцати сокращённых записей.
+ /// Добавляет player/page и до семнадцати сокращённых записей.
     pub(crate) fn add_byte_at_current_page(
         &self,
         player_id: i32,
@@ -712,7 +652,7 @@ impl CAuctionLog {
         })
     }
 
-    /// Добавляет последнюю вставленную подходящую запись одного GUID.
+ /// Добавляет последнюю вставленную подходящую запись одного GUID.
     pub(crate) fn add_byte_goods_log(
         &self,
         player_id: i32,
@@ -751,7 +691,7 @@ impl CAuctionLog {
         AuctionGoodsLogWriteOutcome::Written { found: true }
     }
 
-    /// Публикует все записи игрока, включая ранее отмеченные, в exact порядке.
+ /// Публикует все записи игрока, включая ранее отмеченные, в оригинал порядке.
     pub(crate) fn collect_no_notice<Q: AuctionNoticeWriteQueue>(
         &mut self,
         player_id: i32,
@@ -784,7 +724,7 @@ impl CAuctionLog {
         }
     }
 
-    /// Строит `0x8040C` и сохраняет исходную отправку по numeric map ID.
+ /// Строит `0x8040C` и сохраняет исходную отправку по numeric map ID.
     pub(crate) fn send_auction_msg_to_game_server(
         &self,
         player_id: u32,
@@ -955,265 +895,3 @@ async fn query_first_auction_bang(
         });
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.h
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp
-
-// ============================================================================
-// FUNCTION: CAuctionLog::GetInstance
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.h:117
-// RVA: 0x000016B0
-// ADDRESS: 004016b0
-// PROTOTYPE: CAuctionLog * __cdecl GetInstance(void)
-//
-// Process-static lazy pointer заменён явным Rust-owner и `CAuctionLog::new`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAuctionLog::SendAuctionMsg2GS
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp:460
-// RVA: 0x00049D60
-// ADDRESS: 00449d60
-// PROTOTYPE: void __thiscall SendAuctionMsg2GS(ulong param_1, ulong param_2)
-//
-// Реализовано выше через готовый World `CMessage` и server sender.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAuctionLog::AddByteGoodsLog
-// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp:369
-// RVA: 0x00049F70
-// ADDRESS: 00449f70
-// PROTOTYPE: void __thiscall AddByteGoodsLog(long param_1, CGUID param_2, CMessage * param_3)
-//
-// Реализовано выше; zero-SYSTEMTIME comparator подтверждён machine-кодом.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAuctionLog::ComputePage
-// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp:277
-// RVA: 0x0004B130
-// ADDRESS: 0044b130
-// PROTOTYPE: bool __thiscall ComputePage(long param_1, long param_2)
-//
-// Реализовано выше с exact bool по `0x0044B130..0x0044B1DF`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAuctionLog::AddItem
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp:244
-// RVA: 0x0004B2E0
-// ADDRESS: 0044b2e0
-// PROTOTYPE: bool __thiscall AddItem(stLogNode param_1)
-//
-// Реализовано выше как ordered multimap-key insertion.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAuctionLog::~CAuctionLog
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp:19
-// RVA: 0x0004B4D0
-// ADDRESS: 0044b4d0
-// PROTOTYPE: void __thiscall ~CAuctionLog(void)
-//
-// Очистка трёх контейнеров передана Rust ownership/Drop.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAuctionLog::AddByteAtCurPage
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp:322
-// RVA: 0x0004B590
-// ADDRESS: 0044b590
-// PROTOTYPE: void __thiscall AddByteAtCurPage(long param_1, CMessage * param_2)
-//
-// Реализовано выше с exact page-size 17 и wire-порядком полей.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAuctionLog::CollectNoNotice
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp:415
-// RVA: 0x0004B840
-// ADDRESS: 0044b840
-// PROTOTYPE: void __thiscall CollectNoNotice(long param_1, CMessage * param_2)
-//
-// Реализовано выше с последовательным live update, SQL queue и full-struct wire.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAuctionLog::CAuctionLog
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp:14
-// RVA: 0x0004BAF0
-// ADDRESS: 0044baf0
-// PROTOTYPE: undefined __thiscall CAuctionLog(void)
-//
-// Реализовано выше; `m_lAucOldDay` получает безопасный нулевой sentinel,
-// потому что исходный constructor оставлял это слово неинициализированным.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAuctionLog::LoadItem
-// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp:26
-// RVA: 0x0004BBB0
-// ADDRESS: 0044bbb0
-// PROTOTYPE: bool __thiscall LoadItem(void)
-//
-// Реализовано выше потоковым Tiberius-проходом с exact partial publication.
-// Create/query/catch false-пути подтверждены machine-кодом.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0044cbb1
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp:115
-// RVA: 0x0004CBB1
-// ADDRESS: 0044cbb1
-// PROTOTYPE: undefined Catch@0044cbb1()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAuctionLog::UpdateAuctionBangDB
-// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp:129
-// RVA: 0x0004CBF0
-// ADDRESS: 0044cbf0
-// PROTOTYPE: bool __thiscall UpdateAuctionBangDB(void)
-//
-// Реализовано выше. Machine-код подтверждает clear до первого query, push до
-// каждого UPDATE, отсутствие transaction и false на create/catch путях.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0044d3e9
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp:204
-// RVA: 0x0004D3E9
-// ADDRESS: 0044d3e9
-// PROTOTYPE: undefined Catch@0044d3e9()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0044d464
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp:172
-// RVA: 0x0004D464
-// ADDRESS: 0044d464
-// PROTOTYPE: undefined Catch@0044d464()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0044d4a6
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp:227
-// RVA: 0x0004D4A6
-// ADDRESS: 0044d4a6
-// PROTOTYPE: undefined Catch@0044d4a6()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_0044d4e1
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp:234
-// RVA: 0x0004D4E1
-// ADDRESS: 0044d4e1
-// PROTOTYPE: undefined FUN_0044d4e1()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Unwind@00535ac0
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionlog.cpp
-// RVA: 0x00135AC0
-// ADDRESS: 00535ac0
-// PROTOTYPE: undefined Unwind@00535ac0()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: WorldServer

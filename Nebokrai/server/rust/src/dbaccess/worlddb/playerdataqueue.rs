@@ -1,41 +1,10 @@
-//! Владелец очереди загруженных игроков исторического `WorldServer`.
+//! FIFO загруженных игроков WorldServer из точной пары EXE/PDB.
 //!
-//! `CPlayerLoadQueue::GetSize` RVA `0x000E6080`,
-//! `CPlayerDataQueue::ResetHonorElimilateInfo` RVA `0x000E6110`,
-//! `CPlayerDataQueue::PopPlayerData` RVA `0x000E6190`, constructor
-//! RVA `0x000E6210`, `Clear` RVA `0x000E6230` и `PushPlayerData`
-//! RVA `0x000E65C0` имеют статус `IMPLEMENTED`. Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\dbaccess\worlddb\playerdataqueue.cpp:25,36,49,65`.
-//!
-//! Точный `tagPlayerDataQueue` занимает `0x20` байт в x86-процессе:
-//! `char szCdkey[20]`, `unsigned nPlayerID`, `unsigned long dwClientIP` и
-//! nullable owning `CPlayer*`. Rust не копирует ABI-layout: fixed account
-//! buffer остаётся `[u8; 20]`, scalar signedness сохраняется, а nullable
-//! pointer становится `Option<Box<CPlayer>>`.
-//! Fixed buffer без NUL остаётся локальной `BLOCKED_MISSING_FACT`: исходные
-//! C-string consumers читали бы за `tagPlayerDataQueue`, поэтому safe API не
-//! назначает ему двадцатибайтовую нормализацию.
-//!
-//! Старые `CRITICAL_SECTION + std::deque<tagPlayerDataQueue*>` заменены
-//! cloneable `Arc<parking_lot::Mutex<VecDeque<_>>>`; `Arc` отделяет только
-//! lifetime общей worker/main FIFO от `CGame`. `GetSize` и `PopPlayerData`
-//! по-прежнему берут блокировку независимо: поэтому snapshot может быть ненулевым, а
-//! последующий pop вернуть `None`, если другой consumer успел забрать запись.
-//! FIFO-порядок и передача владения при pop сохранены. Typed push не может
-//! получить старый null record и потому соответствует только исходной
-//! successful ветви.
-//!
-//! `ResetHonorElimilateInfo` под тем же mutex проходит FIFO без удаления: у
-//! каждого non-null queued player day обнуляется всегда, week при `flags & 2`,
-//! month при `flags & 4`, а total остаётся накопительным. Для `Clear` exact
-//! EXE `0x004E6242..0x004E6321` опровергает ложный ранний return
-//! декомпилятора: цикл уничтожает все player/record owners, tidy-ит deque и
-//! только затем снимает lock. `Mutex<VecDeque<_>>` и `Box/Drop` сохраняют этот
-//! порядок без ручных STL/allocator/destructor internals.
+//! Запись сохраняет 20-byte account buffer, player/client IDs и nullable
+//! player-owner. Size и pop блокируются независимо, FIFO передаёт владение,
+//! reset меняет day/week/month по исходной mask, а clear уничтожает все записи
+//! под одним lock. `Arc<Mutex<VecDeque<_>>>` и `Box` заменяют Win32/STL lifetime
+//! без изменения порядка и без трактовки buffer без NUL как C-строки.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -55,7 +24,7 @@ pub(crate) struct PlayerDataQueueEntry {
 }
 
 impl PlayerDataQueueEntry {
-    /// Создаёт точную запись producer-а после завершения DB-load.
+ /// Создаёт точную запись producer-а после завершения DB-load.
     pub(crate) const fn new(
         cdkey: [u8; PLAYER_DATA_CDKEY_CAPACITY],
         player_id: u32,
@@ -70,7 +39,7 @@ impl PlayerDataQueueEntry {
         }
     }
 
-    /// Возвращает account bytes до обязательного NUL старого fixed buffer-а.
+ /// Возвращает account bytes до обязательного NUL старого fixed buffer-а.
     pub(crate) fn cdkey(&self) -> Option<&[u8]> {
         let end = self.cdkey.iter().position(|byte| *byte == 0)?;
         Some(&self.cdkey[..end])
@@ -84,7 +53,7 @@ impl PlayerDataQueueEntry {
         self.client_ip
     }
 
-    /// Забирает nullable player-owner, оставляя record без указателя.
+ /// Забирает nullable player-owner, оставляя record без указателя.
     pub(crate) fn take_player(&mut self) -> Option<Box<CPlayer>> {
         self.player.take()
     }
@@ -103,23 +72,23 @@ impl CPlayerDataQueue {
         }
     }
 
-    /// Снимает самостоятельный 32-битный snapshot текущего размера.
+ /// Снимает самостоятельный 32-битный snapshot текущего размера.
     pub(crate) fn get_size(&self) -> u32 {
         self.entries.lock().len() as u32
     }
 
-    /// Забирает первый record либо возвращает старый `nullptr` как `None`.
+ /// Забирает первый record либо возвращает старый `nullptr` как `None`.
     pub(crate) fn pop_player_data(&self) -> Option<PlayerDataQueueEntry> {
         self.entries.lock().pop_front()
     }
 
-    /// Передаёт non-null record в хвост и возвращает исходный successful bool.
+ /// Передаёт non-null record в хвост и возвращает исходный successful bool.
     pub(crate) fn push_player_data(&self, entry: PlayerDataQueueEntry) -> bool {
         self.entries.lock().push_back(entry);
         true
     }
 
-    /// Обновляет каждого non-null queued player, сохраняя FIFO и записи.
+ /// Обновляет каждого non-null queued player, сохраняя FIFO и записи.
     pub(crate) fn reset_honor_eliminate_info(&self, rank_mask: u32) {
         let mut entries = self.entries.lock();
         for entry in entries.iter_mut() {
@@ -129,7 +98,7 @@ impl CPlayerDataQueue {
         }
     }
 
-    /// Уничтожает всех player-owner-ов и records в FIFO-порядке под одним lock.
+ /// Уничтожает всех player-owner-ов и records в FIFO-порядке под одним lock.
     pub(crate) fn clear(&self) {
         let mut entries = self.entries.lock();
         while let Some(mut entry) = entries.pop_front() {
@@ -138,15 +107,3 @@ impl CPlayerDataQueue {
         }
     }
 }
-
-// IMPLEMENTED: `CPlayerDataQueue::ResetHonorElimilateInfo` RVA 0x000E6110
-// находится выше. `Mutex<VecDeque<_>>` заменяет только исходный critical
-// section/deque traversal и shared lifetime; player-мутации и их порядок сохранены.
-
-// IMPLEMENTED: `CPlayerDataQueue::Clear` RVA 0x000E6230 находится выше.
-// VERIFIED_DISASSEMBLY:
-// Exact EXE `0x004E6242..0x004E6309` проходит все deque records, virtual-удаляет
-// каждый non-null player, обнуляет pointer, удаляет record и возвращается к
-// условию; `0x004E630E..0x004E6321` tidy-ит deque и снимает critical section.
-// Ложный ранний return декомпилятора не переносится. `Mutex<VecDeque<_>>` и
-// `Box/Drop` заменяют только critical section, deque allocation и destructors.

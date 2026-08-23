@@ -1,126 +1,11 @@
-//! DB-владелец `CDBGoods` исторического WorldServer из `dbgoods.cpp`.
+//! DB-владелец товаров WorldServer из `dbgoods.cpp`.
+//! Источник контракта — точная пара WorldServer EXE/PDB.
 //!
-//! `DeleteGoods` RVA `0x001174F0`, `SaveGoodsFiled` RVA `0x001175D0`,
-//! `SaveGoodsProperties` RVA `0x001178C0` и `SaveGoods` RVA `0x00117B30` имеют
-//! статус `IMPLEMENTED`; caller-connection путь `LoadGoods` RVA `0x00117E20` —
-//! `IMPLEMENTED_PARTIAL/VERIFIED_DISASSEMBLY`, остальные функции ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
-//! исходный путь PDB:
-//! `e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbgoods.cpp`.
-//!
-//! Exact `0x005174F0..0x005175CE` восстанавливает потерянные raw vararg и
-//! `AL`: SQL получает signed `playerID`, успешный `ExecuteCn` возвращает
-//! `true`, null connection и DB-ошибка — `false`. Исходный owner удаляет только
-//! строки `player_goods` и не выполняет отдельный DELETE из
-//! `extend_properties`; Rust сохраняет эту границу и не назначает поведение
-//! возможному DB constraint/cascade вне достигнутой функции. Ссылка исключает
-//! старый null connection, число затронутых строк по-прежнему не проверяется.
-//!
-//! PDB задаёт `CGoods::tagAddonProperty` размером `0x1C`: `gapType` по `+0`,
-//! два runtime-флага по `+4/+8` и vector значений по `+0xC`; флаги при save не
-//! читаются. `tagAddonPropertyValue` имеет размер `0xC`: `dwId: unsigned long`,
-//! `lBaseValue: long`, `lModifier: long`. Snapshot заранее получает результат
-//! `CGoodsBaseProperties::GetOccurProbability`, не перенося фабрику и частично
-//! восстановленный игровой объект внутрь DB-owner-а.
-//!
-//! Exact `0x005178C0..0x00517B2C` подтверждает странность оригинала: четыре
-//! accumulator-а обнуляются один раз до внешнего цикла и не сбрасываются между
-//! addon properties. Значение с `dwId == 1` обновляет первый base/modifier,
-//! `dwId == 2` — второй; остальные ID игнорируются. Для type `0x25` запись
-//! создаётся при `modifier1 != 0 || base1 != base2` и получает второй base;
-//! для остальных type при probability не `10000` запись обязательна, а при
-//! `10000` пропускается только нулевая пара modifier-ов. Этот carry-state
-//! сохранён буквально, а не «исправлен».
-//!
-//! Старый внутренний индекс значений жил в `BL`: vector длиннее 255 элементов
-//! заставлял его циклически переполняться и не завершать обход. Конструктор
-//! Rust-snapshot принимает только доказанный завершающийся диапазон `0..=255`;
-//! отказ материализации явно сообщает эту legacy-границу. Параметризованный
-//! TDS сохраняет значения тех же четырёх колонок и последовательность отдельных
-//! INSERT; каждый исходный batch гарантированно короче `char[512]` даже для
-//! крайних 32-битных чисел и 38-символьного GUID. `tiberius`, stream
-//! consumption и Rust Drop заменяют только ADO/COM, `_sprintf` и cleanup.
-//!
-//! PDB задаёт source-поля одного goods snapshot: inherited
-//! `CBaseObject::m_guExID: CGUID` по `+0xC`, `m_strName: std::string` по `+0x20`,
-//! затем `CGoods::m_dwBasePropertiesIndex/m_dwAmount/m_dwPrice: unsigned long`
-//! по `+0x6C/+0x70/+0x74`. `place` и `position` являются параметрами
-//! `unsigned char`; listener отдельно обрезает найденный `unsigned long`
-//! position до младшего байта при вызове. Player ID — signed `long` по
-//! `CBaseObject +0x8`.
-//!
-//! `SaveGoods` создаёт новый row GUID, но сохраняет исходный goods GUID отдельно
-//! в `GoodsID`. Затем `FixSingleQuotes` удваивает каждый apostrophe в C-string-
-//! части имени в `char[256]`, а `_sprintf` строит точный batch в `char[1024]`.
-//! Rust-параметры передают те же значения без SQL injection. Выход escaping за
-//! первую ёмкость остаётся локальным `BLOCKED_MISSING_FACT`, потому что результат
-//! buffer overflow не доказан. При безопасном escaped имени максимальный
-//! `_sprintf` batch вместе с NUL равен 499 байтам, поэтому второй `char[1024]`
-//! доказанно достаточен. Имя декодируется из Windows-1251, `unsigned long` с
-//! `%d` сохраняет тот же signed 32-битный шаблон, GUID остаются в верхнем
-//! регистре и скобках.
-//!
-//! Exact `0x00517B30..0x00517E1F` возвращает все выходы: ошибка main INSERT,
-//! отсутствие base-properties для непустого addon vector и отказ вложенного
-//! property-helper дают `false`; пустые properties либо полный успех дают
-//! `true`. Основная строка уже существует внутри caller-транзакции до позднего
-//! `false`. Вызов `AddPlayerList` RVA `0x00001000`, ошибочно похожий в raw на
-//! cleanup с connection pointer, является доказанной пустой project-функцией
-//! (`ret`) и не получает Rust-аналога. Исходный `CreateGUID` игнорировал HRESULT-
-//! bool; если Linux RNG не отдаёт полный GUID, Rust не назначает неизвестные
-//! частичные байты и возвращает отдельный `BLOCKED_MISSING_FACT`.
-//!
-//! `SaveGoodsFiled` сначала отвергает null connection, затем удаляет прежние
-//! строки игрока и при `DeleteGoods == false` бросает `E_FAIL` в собственный
-//! catch. Только после успешного удаления он обходит ровно пятнадцать полей
-//! `CPlayer`, каждый раз назначая listener-у place: `m_cPacket(+0xE0)=1`,
-//! `m_cEquipment(+0x154)=2`, `m_cHand(+0x80)=3`, `m_cWallet(+0x184)=4`,
-//! `m_cYuanBao(+0x1AC)=5`, `m_cJiFen(+0x1D4)=6`, `m_cBank(+0x1FC)=7`,
-//! `m_cDepot(+0x228)=8`, `m_cFairy(+0x2A0)=9`, `m_cBF(+0x328)=10`,
-//! `m_cAuctionGoodsContainer(+0x3A0)=11`, `m_cAuctionWallet(+0x488)=12`,
-//! `m_cAuctionContainer(+0x414)=13`, `m_cCiQing(+0x4B0)=14` и
-//! `m_cComposeCiQing(+0x524)=15`. PDB и достигнутый `CPlayer` подтверждают имена
-//! и offsets; порядок и byte-place подтверждены телом owner-а.
-//!
-//! Exact `0x005175D0..0x005178B7` имеет статус `VERIFIED_DISASSEMBLY` для
-//! потерянного raw-эпилога: null connection и catch сходятся к `xor al,al`, а
-//! полный обход — к `mov al,1`. Все достигнутые container traversal-ы имеют
-//! `void` и игнорируют callback `int`, поэтому отдельный `SaveGoods == false`
-//! не останавливает обход и не меняет финальный `true`. Rust сохраняет этот
-//! частичный эффект; только собственный `BLOCKED_MISSING_FACT` вложенного save
-//! не превращается в придуманный успешный исход и передаётся наружу.
-//!
-//! Catch после отказа delete выполнял и `AddErrorLogText`, и `PrintErr`; typed
-//! `NestedDeleteFailed` объединяет их факт с уже поставленным внутренним DB-
-//! notice, не копируя SQL либо player ID. В исходном `__snprintf` размер был
-//! буквально `4`, поэтому задуманная строка с player ID обрезалась и могла не
-//! получить NUL; Rust не воспроизводит чтение за stack-buffer. Null connection
-//! сохраняется отдельным `MissingConnection`. Caller-owned container snapshots
-//! меняют только ещё не материализованный полный `CPlayer` layout: каждый
-//! snapshot обязан сохранить порядок конкретного исходного map/list/wallet.
-//!
-//! `LoadGoods` сначала очищает все пятнадцать container-ов в exact порядке и
-//! восстанавливает их limit/volume, затем читает исходный left join
-//! `player_goods/extend_properties`. Повторная строка той же place/position
-//! mutates уже вставленный goods, поэтому несколько addon rows сохраняют
-//! исходную построчную семантику без staging позднего Linux-donor-а. Tiberius
-//! parameter binding заменяет `_sprintf`, `encoding_rs` — BSTR/ANSI conversion,
-//! `uuid` — валидный GUID parse, а Rust ownership — factory/STL cleanup.
-//! `ChangeGoodsIndexMap` и множество DaKong-type передаются caller-owned
-//! `BTreeMap/BTreeSet`, не создавая недоказанный mutable singleton.
-//!
-//! Exact normal tail `0x005190E3` выполняет `mov al,1`, catch-tail
-//! `0x005191A4` — `xor al,al`. Поэтому неизвестный place, null factory-result
-//! и rejected container insertion остаются успешными skipped rows; DB/ADO
-//! ошибки дают false. Небезопасные края исходника — повреждённый GUID длиной
-//! 38, невыразимое ANSI-имя, отказ RNG при смене индекса и addon-vector короче
-//! двух значений — не получают выдуманного результата и возвращают typed
-//! `BlockedMissingFact`. При `connection == null` owner открывает отдельное
-//! World DB connection после container reset и освобождает его на выходе;
-//! переданный caller-owned connection по-прежнему переиспользуется.
+//! Контракт охватывает delete/load/save товара, base fields и addon properties.
+//! SQL-порядок, signed форматирование legacy `unsigned long`, provider rows и
+//! исходные значения отказа сохраняются. Caller-connection остаётся внешним;
+//! Tiberius и typed goods snapshots заменяют ADO/COM и vararg buffers без
+//! дополнительной транзакции, фильтра или перестановки частичных записей.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -157,7 +42,7 @@ pub(crate) struct GoodsAddonValueCountBlock {
     pub(crate) value_count: usize,
 }
 
-/// Caller-owned view одного addon property и его достигнутого base-property.
+/// Caller-owned view одного addon property и его действующего base-property.
 pub(crate) struct GoodsAddonPropertySnapshot {
     property_type: u32,
     occur_probability: u32,
@@ -165,8 +50,8 @@ pub(crate) struct GoodsAddonPropertySnapshot {
 }
 
 impl GoodsAddonPropertySnapshot {
-    /// Материализует только диапазон, в котором исходный `unsigned char` loop
-    /// действительно достигал конца vector.
+ /// Материализует только диапазон, в котором исходный `unsigned char` loop
+ /// действительно достигал конца vector.
     pub(crate) fn from_legacy_parts(
         property_type: u32,
         occur_probability: u32,
@@ -184,8 +69,8 @@ impl GoodsAddonPropertySnapshot {
         })
     }
 
-    /// Возвращает доказанные части property для другого DB-owner-а. Порядок
-    /// values и все три 32-битных поля остаются исходным `tagAddonProperty`.
+ /// Возвращает доказанные части property для другого DB-owner-а. Порядок
+ /// values и все три 32-битных поля остаются исходным `tagAddonProperty`.
     pub(crate) fn legacy_parts(&self) -> (u32, u32, &[GoodsAddonPropertyValue]) {
         (self.property_type, self.occur_probability, &self.values)
     }
@@ -193,9 +78,9 @@ impl GoodsAddonPropertySnapshot {
 
 /// Состояние lookup-а base-properties после успешного main goods INSERT.
 pub(crate) enum GoodsPropertiesSnapshot {
-    /// Пустой либо полностью материализованный addon vector.
+ /// Пустой либо полностью материализованный addon vector.
     Available(Vec<GoodsAddonPropertySnapshot>),
-    /// Addon vector непуст, но `QueryGoodsBaseProperties` вернул null.
+ /// Addon vector непуст, но `QueryGoodsBaseProperties` вернул null.
     MissingBaseProperties,
 }
 
@@ -203,7 +88,7 @@ pub(crate) enum GoodsPropertiesSnapshot {
 pub(crate) struct GoodsObjectSnapshot {
     pub(crate) goods_id: CGuid,
     pub(crate) base_properties_index: u32,
-    /// Полный byte-content старого `std::string`; save читает его как C-string.
+ /// Полный byte-content старого `std::string`; save читает его как C-string.
     pub(crate) name: Vec<u8>,
     pub(crate) price: u32,
     pub(crate) amount: u32,
@@ -221,9 +106,9 @@ pub(crate) struct GoodsSaveSnapshot<'goods> {
 /// Неразрешённая legacy-граница `SaveGoods`.
 #[derive(Debug)]
 pub(crate) enum GoodsSaveBlock {
-    /// `CreateGUID`-аналог не получил полный идентификатор из системного RNG.
+ /// `CreateGUID`-аналог не получил полный идентификатор из системного RNG.
     GuidGeneration(getrandom::Error),
-    /// `FixSingleQuotes` вышел бы за `char[256]`.
+ /// `FixSingleQuotes` вышел бы за `char[256]`.
     EscapedNameBuffer { required_bytes: usize },
 }
 
@@ -364,7 +249,7 @@ impl Error for DbGoodsSaveError {
     }
 }
 
-/// Ошибка достигнутой ADO/TDS-границы goods-owner-а.
+/// Ошибка действующей ADO/TDS-границы goods-owner-а.
 #[derive(Debug)]
 pub(crate) struct DbGoodsDatabaseError(tiberius::error::Error);
 
@@ -386,9 +271,9 @@ impl From<tiberius::error::Error> for DbGoodsDatabaseError {
     }
 }
 
-/// Узкая объектная граница достигнутых функций `CDBGoods`.
+/// Узкая объектная граница действующих функций `CDBGoods`.
 pub(crate) trait DbGoodsOwner {
-    /// Загружает joined goods rows внутри caller-owned connection.
+ /// Загружает joined goods rows внутри caller-owned connection.
     async fn load_goods(
         &mut self,
         player: &mut CPlayer,
@@ -398,14 +283,14 @@ pub(crate) trait DbGoodsOwner {
         dakong_addon_types: &BTreeSet<i32>,
     ) -> GoodsLoadOutcome;
 
-    /// Удаляет старые строки игрока внутри уже начатой caller-транзакции.
+ /// Удаляет старые строки игрока внутри уже начатой caller-транзакции.
     async fn delete_goods(
         &mut self,
         player_id: i32,
         active_transaction: &mut WorldTdsClient,
     ) -> bool;
 
-    /// Последовательно сохраняет materialized addon properties одного goods ID.
+ /// Последовательно сохраняет materialized addon properties одного goods ID.
     async fn save_goods_properties(
         &mut self,
         properties: &[GoodsAddonPropertySnapshot],
@@ -413,32 +298,32 @@ pub(crate) trait DbGoodsOwner {
         active_transaction: &mut WorldTdsClient,
     ) -> bool;
 
-    /// Сохраняет основную строку и затем её addon properties в той же транзакции.
+ /// Сохраняет основную строку и затем её addon properties в той же транзакции.
     async fn save_goods(
         &mut self,
         snapshot: &GoodsSaveSnapshot<'_>,
         active_transaction: &mut WorldTdsClient,
     ) -> GoodsSaveOutcome;
 
-    /// Удаляет прежние строки и обходит 15 player container-ов в исходном порядке.
+ /// Удаляет прежние строки и обходит 15 player container-ов в исходном порядке.
     async fn save_goods_filed(
         &mut self,
         snapshot: &PlayerGoodsFiledSnapshot<'_>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> GoodsFiledSaveOutcome;
 
-    /// Забирает следующий исходный log-эквивалент.
+ /// Забирает следующий исходный log-эквивалент.
     fn pop_notice(&mut self) -> Option<DbGoodsNotice>;
 }
 
-/// Linux/TDS-замена достигнутой части исходного `CDBGoods`.
+/// Linux/TDS-замена действующей части исходного `CDBGoods`.
 pub(crate) struct TiberiusDbGoods {
     settings: WorldDatabaseSettings,
     notices: VecDeque<DbGoodsNotice>,
 }
 
 impl TiberiusDbGoods {
-    /// Копирует DB setup для исходных load-вызовов без caller connection.
+ /// Копирует DB setup для исходных load-вызовов без caller connection.
     pub(crate) fn new(settings: &WorldDatabaseSettings) -> Self {
         Self {
             settings: settings.clone(),
@@ -795,12 +680,12 @@ impl DbGoodsOwner for TiberiusDbGoods {
             .delete_goods(snapshot.player_id, &mut *active_transaction)
             .await
         {
-            // WorldServer RVA 0x0011783E: `__snprintf(buf, 4,
-            // "CDBGoods::SaveGoodsFiled() :%d", player_id)` обрезал строку и
-            // мог оставить её без NUL перед `AddErrorLogText`.
-            // BLOCKED_MISSING_FACT: какие байты старый logger читал после
-            // первых четырёх, не доказано; typed notice сохраняет сам факт
-            // outer-ошибки без воспроизведения чтения за stack-buffer.
+ // WorldServer: `__snprintf(buf, 4,
+ // "CDBGoods::SaveGoodsFiled():%d", player_id)` обрезал строку и
+ // мог оставить её без NUL перед `AddErrorLogText`.
+ // typed boundary: какие байты старый logger читал после
+ // первых четырёх, не доказано; typed notice сохраняет сам факт
+ // outer-ошибки без воспроизведения чтения за stack-buffer.
             self.notices.push_back(DbGoodsNotice {
                 operation: DbGoodsOperation::SaveGoodsFiled,
                 error: DbGoodsSaveError::NestedDeleteFailed,
@@ -918,59 +803,3 @@ async fn insert_goods_row(
     query.execute(active_transaction).await?;
     Ok(())
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbgoods.cpp
-
-
-
-// ============================================================================
-// FUNCTION: CDBGoods::LoadGoods
-// STATUS: IMPLEMENTED/VERIFIED_DISASSEMBLY
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbgoods.cpp:355
-// RVA: 0x00117E20
-// ADDRESS: 00517e20
-// PROTOTYPE: bool __cdecl LoadGoods(CPlayer * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
-//
-// IMPLEMENTED_OWNER: `DbGoodsOwner::load_goods` выше переиспользует caller-
-// connection либо открывает одно отдельное через `WorldDatabaseSettings`.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@005190ea
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbgoods.cpp:750
-// RVA: 0x001190EA
-// ADDRESS: 005190ea
-// PROTOTYPE: undefined Catch@005190ea()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_005191a4
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\dbgoods.cpp:762
-// RVA: 0x001191A4
-// ADDRESS: 005191a4
-// PROTOTYPE: undefined FUN_005191a4()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-// COMPONENT_VARIANT_END: WorldServer

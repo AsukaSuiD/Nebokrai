@@ -2,12 +2,12 @@
 //!
 //! Constructor, `LoadCitySetup`, virtual
 //! `Load` и serializer — часть контракта owner-а.
-//! Конструктор копирования вложенного `tagBuild` также
-//! действует: он копирует одиннадцать signed `long` в порядке wire-а, а
+//! Конструктор копирования вложенного `tagBuild` копирует одиннадцать signed
+//! `long` в порядке wire-а, а
 //! затем оба C-string значения `strName` и `strScript`. `WorldCityBuild` хранит
 //! эти поля именованно, а обычный `Clone` Rust заменяет только копирование
 //! MSVC `std::string` без переноса SSO и обработки исключений.
-//! подтверждает композицию: один `CWorldWarRegion`, list gates по
+//! Композиция содержит один `CWorldWarRegion`, list gates по
 //! `+0x12C`, defence `tagRegionSetup` по `+0x138`; constructor задаёт war
 //! `3/3/2`, но defence setup не инициализирует. `.city` очищает gates только
 //! после успешного open, читает в первом разделе `0x2C` scalar bytes +
@@ -21,8 +21,8 @@
 //! City Load принимает успех лишь при успешных War/City loads, включённом base
 //! return setup и совпадении own ID с обоими return-region ID; offsets guard-а
 //! `+0xC8/+0xAC/+0x138/+0x8` подтверждены оригинал.
-//! `DecordFromByteArray` и `SetEnterPosXY`
-//! действует; decoder делегирует no-op War owner, не меняет cursor и
+//! `DecordFromByteArray` и `SetEnterPosXY` входят в контракт owner-а; decoder
+//! делегирует no-op War owner, не меняет cursor и
 //! возвращает `true`. Доказанный STL/compiler noise удалён, обычные destructors
 //! заменены `Drop`.
 //! source `worldcityregion.cpp:19,31,48,122,147`. Rust layout старый ABI не

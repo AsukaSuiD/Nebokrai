@@ -1,14 +1,9 @@
 //! Две таблицы преобразования экипировки исторического Miracle.
 //!
-//! World `EquipmentComposeList::LoadList/AddToByteArray` RVA
-//! `0x0008A860/0x0008A750` — `IMPLEMENTED`; Game decoder и lookup queries ниже
-//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! SHA-256 PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! World `EquipmentComposeList::LoadList/AddToByteArray`
+//! —; Game decoder и lookup queries ниже
+//! остаются. Точная пара:
 //! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\public\equipmentcomposelist.cpp:76`.
 //!
 //! Wire состоит из двух последовательных ordered map: для каждой сначала
 //! signed count, затем пары `u32 source + u32 target`. Loader и Game decoder
@@ -20,7 +15,7 @@
 //! `LoadList` очищает обе таблицы до попытки чтения, ищет два точных маркера
 //! `#`, пропускает следующий label и читает signed count с парами signed
 //! `long`, сохраняя их 32-битный шаблон как unsigned key/value. Exact
-//! `0x0048A8F7..0x0048AB11` возвращает `0` только при ошибке открытия и `1`
+//! возвращает `0` только при ошибке открытия и `1`
 //! после любого открытого stream, даже если секции неполны; это legacy-
 //! различие между доступностью ресурса и полнотой данных сохранено.
 
@@ -38,7 +33,7 @@ pub(crate) struct EquipmentComposeList {
 }
 
 impl EquipmentComposeList {
-    /// Загружает две ordered map из уже выбранного resource backend-а.
+ /// Загружает две ordered map из уже выбранного resource backend-а.
     pub(crate) fn load_list(&mut self, source: Option<&[u8]>) -> bool {
         self.clear();
         let Some(source) = source else {
@@ -67,7 +62,7 @@ impl EquipmentComposeList {
         self.second.clear();
     }
 
-    /// Дописывает exact `map1 + map2` wire.
+ /// Дописывает оригинал `map1 + map2` wire.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -180,91 +175,4 @@ fn write_map(
     Ok(())
 }
 
-// Сырой C++ ниже сохранён как локальная документация loader-а, Game decoder-а
 // и lookup queries, а не как Rust-реализация.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\public\equipmentcomposelist.cpp
-
-// ============================================================================
-// FUNCTION: EquipmentComposeList::GetFirstCompose
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\equipmentcomposelist.cpp:137
-// RVA: 0x001CA760
-// ADDRESS: 005ca760
-// PROTOTYPE: ulong __cdecl GetFirstCompose(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: EquipmentComposeList::GetSecondCompose
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\equipmentcomposelist.cpp:150
-// RVA: 0x001CA790
-// ADDRESS: 005ca790
-// PROTOTYPE: ulong __cdecl GetSecondCompose(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: EquipmentComposeList::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\equipmentcomposelist.cpp:102
-// RVA: 0x001CA7C0
-// ADDRESS: 005ca7c0
-// PROTOTYPE: bool __cdecl DecordFromByteArray(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\public\equipmentcomposelist.cpp
-
-// ============================================================================
-// FUNCTION: EquipmentComposeList::AddToByteArray
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\equipmentcomposelist.cpp:76
-// RVA: 0x0008A750
-// ADDRESS: 0048a750
-// PROTOTYPE: bool __cdecl AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: EquipmentComposeList::LoadList
-// STATUS: IMPLEMENTED_OWNER
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\equipmentcomposelist.cpp:17
-// RVA: 0x0008A860
-// ADDRESS: 0048a860
-// PROTOTYPE: int __cdecl LoadList(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: WorldServer

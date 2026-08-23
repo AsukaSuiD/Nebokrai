@@ -1,58 +1,12 @@
-//! Принятое GameServer-соединение WorldServer из
-//! `nets/networld/myserverclient.cpp`.
+//! Принятое GameServer-соединение WorldServer из `myserverclient.cpp`.
+//! Источник контракта — точная пара WorldServer EXE/PDB.
 //!
-//! Статус владельца: `IMPLEMENTED` для constructor/destructor ownership,
-//! `OnClose` и корректного/неполного `OnReceive`. Небезопасные malformed-
-//! границы длины и короткого внутреннего header детерминированно очищают
-//! accumulator и возвращают локальную ошибку.
-//!
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
-//! SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! SHA-256 PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходный путь PDB:
-//! `e:\svn\fengyun_russia_dev\nets\networld\myserverclient.cpp`.
-//! Существенные RVA: конструктор `0x0002BBA0`, деструктор `0x0002BC20`,
-//! `OnClose` `0x0002BC50`, `OnReceive` `0x0002BD00`.
-//!
-//! Производный конструктор после общего `CServerClient` выделял receive-buffer
-//! `0x1400000` и отдельный send-buffer `0x500000`, записывая тому же send-
-//! владельцу capacity и текущий предел `0x500000`. Rust создаёт общий
-//! `CServerClient` с доказанной World receive-capacity; его единый owned send
-//! accumulator растёт по фактическим bytes и не получает дублирующего
-//! component-поля. Начальная allocator-capacity не меняет wire, очередность
-//! или общий server send-limit, а оба старых buffers освобождаются через
-//! обычный `Drop`.
-//!
-//! Receive-envelope имеет форму
-//! `[total_len, crc(total_len), crc(normalized_message), message]`. Length CRC
-//! проверяется сразу после появления 12 bytes, до ожидания полного кадра.
-//! Внутреннее сообщение не сжато: `CreateMessageWithoutRLE` нормализует первое
-//! слово header фактической длиной, после чего content CRC считается по
-//! созданному World `CMessage`. Только прошедшее обе проверки сообщение
-//! получает socket ID, numeric map ID и peer IPv4 принятого соединения и
-//! передаётся будущей общей World FIFO. Строковую map identity этот тип
-//! сообщения не хранил.
-//!
-//! За один callback разбираются все полные frames, а неполный TCP-хвост
-//! сохраняется. Ошибка length/content CRC и доказанный null create-путь
-//! очищают весь ещё не разобранный вход; ранее опубликованные сообщения не
-//! откатываются. `Vec::drain` заменяет allocator-копии и `memmove`. Сжатие
-//! capacity общего accumulator до технического baseline не влияет на
-//! принимаемые bytes и заменяет старое возвратное выделение `0x1400000`.
-//!
-//! `OnClose` всегда создаёт `0x3FC02`, добавляет в payload только текущий
-//! numeric map ID, публикует сообщение и затем выполняет общий socket close.
-//! Socket ID, IP и runtime metadata ему не присваиваются по аналогии с обычным
-//! receive-путём. Rust сохраняет порядок `publish -> mark_closing`.
-//!
-//! Для длины с sign bit либо `total_len < 12` x86-путь достигал signed
-//! сравнения и/или unsigned `len - 12`; наблюдаемая реакция не доказана.
-//! Внутреннее сообщение длиной 1..15 bytes также читало header за границей.
-//! Эти случаи не воспроизводятся через `unsafe`. `std::fill`, `_Ufill`,
-//! `_Insert_n`, deleting-destructor `CBaseMessage`, SEH, allocator loops и
-//! unwind очистки классифицированы как STL/compiler noise и удалены.
+//! Receive разбирает все полные CRC-envelope frames, сохраняет неполный хвост
+//! и назначает принятому сообщению socket/map/IP metadata. Ошибка очищает
+//! оставшийся accumulator без отката ранее опубликованных сообщений. `OnClose`
+//! публикует `0x3FC02 + map_id` до общего socket close. Owned buffers и typed
+//! errors заменяют fixed allocations и небезопасные malformed-frame ветви,
+//! не меняя корректный wire, FIFO или порядок lifecycle effects.
 
 use crate::nets::serverclient::CServerClient;
 use crate::public::crc32static::data_crc32;

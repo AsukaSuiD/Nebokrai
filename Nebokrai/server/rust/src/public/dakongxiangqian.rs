@@ -1,14 +1,11 @@
 //! Правила вставки больших отверстий исторического Miracle.
 //!
-//! Статус World `CDaKongXiangQian::LoadFile` RVA `0x0008CAD0`,
-//! `AddToByteArray` RVA `0x0008BDC0` и статического `GetAddType` RVA
-//! `0x0008C400`: `IMPLEMENTED`; GameServer decoder и runtime query ниже
-//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально). `GetAddType` не зависит от загруженного
+//! Контракт World `CDaKongXiangQian::LoadFile`,
+//! `AddToByteArray` и статического `GetAddType`
+//!:; GameServer decoder и runtime query ниже
+//! остаются. `GetAddType` не зависит от загруженного
 //! `delux_modify`: EXE вставляет фиксированный набор addon property types в
 //! переданный set и всегда возвращает `true`. Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
 //! Owner читает marker-oriented `data/dakongxiangqian.ini`: main vector и
 //! три ordered attribute map очищаются до открытия, а `DaKongDeluxModify`
 //! сохраняется и дополняется отдельным optional resource. `BTreeMap` заменяет
@@ -77,12 +74,12 @@ pub(crate) enum DaKongSerializeError {
 }
 
 impl CDaKongXiangQian {
-    /// Статический World owner `GetAddType` (RVA `0x0008C400`).
-    ///
-    /// Сохраняет содержимое переданного set и добавляет точно те 34 raw enum
-    /// значения, которые EXE передаёт в `std::set::insert`; возвращаемый
-    /// `true` является частью исходной сигнатуры, хотя caller его не
-    /// использует.
+ /// Статический World owner `GetAddType` ( ).
+ ///
+ /// Сохраняет содержимое переданного set и добавляет точно те 34 raw enum
+ /// значения, которые EXE передаёт в `std::set::insert`; возвращаемый
+ /// `true` является частью исходной сигнатуры, хотя caller его не
+ /// использует.
     pub(crate) fn get_add_type(destination: &mut BTreeSet<i32>) -> bool {
         const ADDON_TYPES: [i32; 34] = [
             0x83, 0x82, 0x81, 0x80, 0x78, 0x77, 0x76, 0x75, 0x69, 0x61, 0x60, 0x5F, 0x5D, 0x5C,
@@ -94,7 +91,7 @@ impl CDaKongXiangQian {
         true
     }
 
-    /// Exact pre-open transition: deluxe modifiers deliberately persist.
+ /// Оригинал pre-open transition: deluxe modifiers deliberately persist.
     pub(crate) fn clear_primary_state(&mut self) {
         self.info.clear();
         for attributes in &mut self.external_attributes {
@@ -102,7 +99,7 @@ impl CDaKongXiangQian {
         }
     }
 
-    /// Replaces the owner-internal `rfOpen` calls with supplied resources.
+ /// Replaces the owner-internal `rfOpen` calls with supplied resources.
     pub(crate) fn load_from_resources(
         &mut self,
         main: Option<&[u8]>,
@@ -196,7 +193,7 @@ impl CDaKongXiangQian {
         }
     }
 
-    /// Wire: info, map1, map2, map3, then the accumulated deluxe vector.
+ /// Wire: info, map1, map2, map3, then the accumulated deluxe vector.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -342,286 +339,3 @@ fn parse_legacy_i32(token: &[u8]) -> Option<i32> {
     }
     parsed.then_some(if negative { result.saturating_neg() } else { result })
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::SetKey
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:335
-// RVA: 0x000A27F0
-// ADDRESS: 004a27f0
-// PROTOTYPE: bool __cdecl SetKey(bool param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::GetKey
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:343
-// RVA: 0x000A2800
-// ADDRESS: 004a2800
-// PROTOTYPE: bool __cdecl GetKey(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::SetLogKey
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:348
-// RVA: 0x000A2810
-// ADDRESS: 004a2810
-// PROTOTYPE: bool __cdecl SetLogKey(bool param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::GetLogKey
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:354
-// RVA: 0x000A2820
-// ADDRESS: 004a2820
-// PROTOTYPE: bool __cdecl GetLogKey(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::GetSuccessProbability
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:40
-// RVA: 0x000A29C0
-// ADDRESS: 004a29c0
-// PROTOTYPE: bool __cdecl GetSuccessProbability(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::CheckExterndProperty
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:180
-// RVA: 0x000A2A10
-// ADDRESS: 004a2a10
-// PROTOTYPE: bool __cdecl CheckExterndProperty(ulong param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::ChoiseRandom
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:216
-// RVA: 0x000A2AB0
-// ADDRESS: 004a2ab0
-// PROTOTYPE: int __cdecl ChoiseRandom(vector<long,std::allocator<long>_> param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::GetAddType
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:742
-// RVA: 0x000A3980
-// ADDRESS: 004a3980
-// PROTOTYPE: bool __cdecl GetAddType(set<CGoodsBaseProperties::GOODS_ADDON_PROPERTIES,std::less<CGoodsBaseProperties::GOODS_ADDON_PROPERTIES>,std::allocator<CGoodsBaseProperties::GOODS_ADDON_PROPERTIES>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::GetDaKongDeluxData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:735
-// RVA: 0x000A3F00
-// ADDRESS: 004a3f00
-// PROTOTYPE: bool __cdecl GetDaKongDeluxData(vector<CDaKongXiangQian::stDaKongDeluxModify,std::allocator<CDaKongXiangQian::stDaKongDeluxModify>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::GetColor
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:55
-// RVA: 0x000A3FC0
-// ADDRESS: 004a3fc0
-// PROTOTYPE: int __cdecl GetColor(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::GetExternAttribute
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:78
-// RVA: 0x000A4100
-// ADDRESS: 004a4100
-// PROTOTYPE: bool __cdecl GetExternAttribute(int param_1, ulong param_2, vector<CDaKongXiangQian::stEexternAttrbute,std::allocator<CDaKongXiangQian::stEexternAttrbute>_> * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::MakeSureExternAttrbute
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:146
-// RVA: 0x000A42A0
-// ADDRESS: 004a42a0
-// PROTOTYPE: bool __cdecl MakeSureExternAttrbute(int param_1, ulong param_2, int * param_3, int * param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::AddExternAttribute
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:255
-// RVA: 0x000A4460
-// ADDRESS: 004a4460
-// PROTOTYPE: bool __cdecl AddExternAttribute(int param_1, ulong param_2, stEexternAttrbute param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:622
-// RVA: 0x000A4660
-// ADDRESS: 004a4660
-// PROTOTYPE: bool __cdecl DecordFromByteArray(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::SetKey
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:335
-// RVA: 0x0008AB20
-// ADDRESS: 0048ab20
-// PROTOTYPE: bool __cdecl SetKey(bool param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::AddToByteArray
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:518
-// RVA: 0x0008BDC0
-// ADDRESS: 0048bdc0
-// PROTOTYPE: bool __cdecl AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::GetAddType
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:742
-// RVA: 0x0008C400
-// ADDRESS: 0048c400
-// PROTOTYPE: bool __cdecl GetAddType(set<CGoodsBaseProperties::GOODS_ADDON_PROPERTIES,std::less<CGoodsBaseProperties::GOODS_ADDON_PROPERTIES>,std::allocator<CGoodsBaseProperties::GOODS_ADDON_PROPERTIES>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::AddExternAttribute
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:255
-// RVA: 0x0008C8D0
-// ADDRESS: 0048c8d0
-// PROTOTYPE: bool __cdecl AddExternAttribute(int param_1, ulong param_2, stEexternAttrbute param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CDaKongXiangQian::LoadFile
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\dakongxiangqian.cpp:360
-// RVA: 0x0008CAD0
-// ADDRESS: 0048cad0
-// PROTOTYPE: bool __cdecl LoadFile(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: WorldServer

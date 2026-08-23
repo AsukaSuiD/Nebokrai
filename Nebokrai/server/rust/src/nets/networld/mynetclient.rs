@@ -1,67 +1,14 @@
-//! Исходящее LoginServer-направление WorldServer из
-//! `nets/networld/mynetclient.cpp` и `.h`.
+//! Исходящее LoginServer-направление WorldServer из `mynetclient.cpp/.h`.
+//! Источник контракта — точная пара WorldServer EXE/PDB.
 //!
-//! Статус владельца: `IMPLEMENTED` для constructor/destructor ownership,
-//! явного close, transport-close события, 12-байтового CRC receive-
-//! accumulator, собственной FIFO и одного Linux read/send шага.
-//!
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
-//! SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! SHA-256 PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходные пути PDB:
-//! `e:\svn\fengyun_russia_dev\nets\networld\mynetclient.cpp` и `.h`.
-//! Существенные RVA: конструктор `0x00029B70`, деструктор `0x00029B90`,
-//! `HandleClose` `0x00029BA0`, `OnReceive` `0x00029C30`.
-//!
-//! Конструктор не добавлял инициализации поверх общего `CClient`; найденный
-//! World call site выделял полный объект размером `0x1F0`, а очередь входящих
-//! сообщений достигалась по offset `0x100`. Rust выражает наследование
-//! композицией: этот owner хранит конкретные World FIFO и accumulator, а
-//! connect/send использует уже восстановленные операции `nets/clients.rs`.
-//!
-//! Успешный connect делает направление подключённым. Явный `CClient::Close`
-//! только закрывал общий client и не создавал сообщения. Общий transport
-//! `OnClose` сначала сбрасывал connect flag, затем вызывал виртуальный
-//! `HandleClose`, который публиковал пустое World-сообщение `0x3FC01`.
-//! Эти два пути сохранены раздельно в `close` и `handle_transport_close`.
-//!
-//! Живой receive-контракт — поток envelope
-//! `[total_len, crc(total_len), crc(message), message]`. После накопления как
-//! минимум 12 bytes сначала проверяется IEEE CRC little-endian длины. Полный
-//! frame превращается в `networld::CMessage`, после чего content CRC считается
-//! по уже нормализованному внутреннему сообщению. Только прошедший обе проверки
-//! объект попадает в ту же FIFO, что и transport-close событие. За один вызов
-//! разбираются все полные frames, неполный хвост сохраняется, а доказанная
-//! ошибка очищает весь ещё не разобранный вход без отката уже опубликованных
-//! сообщений.
-//!
-//! Общий `CClient` начинал с receive capacity `0x100000`, читал не более
-//! `0x2800` bytes за один `recv`, при необходимости заранее расширял storage,
-//! переносил хвост через `memmove` и сжимал capacity обратно. `Vec<u8>`
-//! сохраняет те же bytes и границы frames без allocator-копий и немедленного
-//! выделения памяти по одной недоверенной длине; `drain` заменяет `memmove`.
-//! Один awaitable read/send шаг заменяет два Windows socket thread без нового
-//! взаимного порядка. `CMsgQueue<CMessage>` заменяет deque указателей и ручное
-//! виртуальное удаление.
-//!
-//! Для длины с sign bit, `total_len < 12`, внутреннего сообщения короче
-//! 16 bytes и signed-переполнения `m_nSize` исходный код допускает unsigned
-//! underflow либо чтение вне frame. Наблюдаемая реакция не доказана, поэтому
-//! safe Rust локально возвращает отдельные ошибки и не выдаёт это решение за
-//! поведение оригинального процесса. `total_len == 12` отличается: нулевая
-//! длина внутреннего сообщения доказанно даёт null create и очищает вход.
-//!
-//! Чужой `CMyNetServer` deleting-destructor thunk, SEH allocation unwind,
-//! vtable, ручные buffer reallocations и exception plumbing классифицированы
-//! как compiler/allocator noise. `InitNetClient` теперь связывает этот owner с
-//! setup, bind/connect и регистрацией у `worldserver/game.rs`.
-//! `ReConnectLoginServer` создаёт такой же owner отдельно и передаёт его через
-//! typed event FIFO `CMyNetServer`, заменяющий внутрипроцессный
-//! `0x3FC03 + pointer` без integer-pointer. Control-send остаётся выключенным
-//! до фактической замены в World `OnServerMessage` RVA `0x000ADCF0`, opcode
-//! `0x3FC03`.
+//! Accumulator разбирает envelope `[len, crc(len), crc(message), message]`,
+//! публикует все полные frames в FIFO и сохраняет неполный TCP-хвост. Ошибка
+//! очищает только ещё не разобранный input и не откатывает уже опубликованное.
+//! Явный close не создаёт событие; transport close сначала сбрасывает connect
+//! flag и публикует `0x3FC01`. Reconnect передаёт typed client через общую
+//! World FIFO, а control-send включается только после фактической замены.
+//! Tokio/owned buffers заменяют Windows socket threads и ручные reallocations,
+//! сохраняя frame limits, receive order и один awaitable read/send шаг.
 
 use std::error::Error;
 use std::fmt;

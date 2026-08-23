@@ -300,8 +300,8 @@ impl CMessage {
     ) -> Result<i32, DispatchError> {
         let opcode = self.message_type() as u32;
         if opcode == NOOP_HANDLER_OPCODE {
-            // Auth `InitMsgFuncPool` 0x00414252..0x00414268 связывает opcode с
-            // exact target 0x004117E0; тело target — один `ret`.
+            // Auth `InitMsgFuncPool` связывает opcode с no-op handler-ом,
+            // тело которого состоит из одного `ret`.
             return Ok(1);
         }
         if let Some(kind) = AuthMessageKind::from_opcode(opcode) {

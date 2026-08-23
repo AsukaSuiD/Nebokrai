@@ -1,17 +1,9 @@
 //! Владелец equipment-container и соседнего exported volume decoder-а.
 //!
-//! Конструктор и деструктор `CEquipmentContainer`
-//! auto/positional `Add`
-//! `Remove/AddFromDB`
-//!
-//! `Clear/Release`, `GetGoods/GetGoodsAmount`
-//! `GetContentsWeight`,
-//! `Serialize` и разделяемого
-//! с `CVolumeLimitGoodsContainer` `Unserialize`, а также
-//! read-side family /`
-//! и `AI`
-//! входят в контракт owner-а.
-//! Функции остаются именно в этом `.rs`, потому что их PDB source-owner —
+//! Constructor/destructor, auto/positional `Add`, `Remove/AddFromDB`,
+//! `Clear/Release`, `GetGoods/GetGoodsAmount`, `GetContentsWeight`, `Serialize`,
+//! общий с `CVolumeLimitGoodsContainer` `Unserialize`, read-side family и `AI`
+//! входят в контракт owner-а из WorldServer EXE/PDB.
 //!
 //! Layout сохраняет `CGoodsContainer` prefix, secondary `CContainerListener`
 //! по `+0x20` и `std::map<EQUIPMENT_COLUMN, CGoods*> m_mEquipment` по `+0x24`.
@@ -21,10 +13,8 @@
 //! допустимую колонку; ornaments — единственный тип, принимающий две колонки.
 //! Positional `Add` сначала отвергает занятую колонку, неизвестные properties,
 //! не-equipment и несовпадающий slot, затем кладёт pointer и вызывает
-//! listeners. оригинал потерял return из-за security-cookie; точный диапазон
-//! World EXE подтвердил `eax=0` на отказе и `ebx=1`
-//! после вставки.. Оба встроенных callback-а
-//! уже доказанно сведены к no-op.
+//! listeners. Positional `Add` возвращает `0` при отказе и `1` после вставки.
+//! Оба встроенных callback-а являются no-op.
 //!
 //! Rust `BTreeMap<EquipmentColumn, Box<CGoods>>` заменяет только MSVC tree и
 //! оригинал ownership, сохраняя numeric key-order wire-а. Старый `Clear` уведомлял
@@ -42,7 +32,7 @@
 //! virtual `Clear` и positional `Add` остаются вариантными.
 //! Короткий source сохраняет раннюю очистку, cursor и уже добавленные товары.
 //!
-//! global `s_dwEquipmentLimit` по имеет значение `9`.
+//! Global `s_dwEquipmentLimit` имеет значение `9`.
 //! `IsFull` считает non-null map values и проверяет строгое равенство, поэтому
 //! всех колонок `17`; Rust сохраняет подтверждённый результат EXE. Object-
 //! overload position-query сравнивает pointer identity, GUID-overload и `Find`
@@ -50,15 +40,15 @@
 //! `GetGoods(index, vector-by-value)` не возвращал наполненную копию; этот
 //! внутренний дефект исправлен Rust iterator-ом с тем же base-index фильтром.
 //! Auto-`Add` выбирает колонку по equip-place; ornaments сначала пробует
-//! `6`, затем `7`. исправляет ошибку оригинал и передаёт исходный context
-//! в обе ветви, но встроенные callbacks всё равно no-op. `AddFromDB` выполняет
+//! `6`, затем `7`, передавая исходный context в обе ветви; встроенные callbacks
+//! остаются no-op. `AddFromDB` выполняет
 //! те же type/place/column проверки и прямую вставку без callback. `Remove`
 //! передаёт ownership первого GUID-совпадения вызывающему.
 //! Weight-family обходит все equipment values без фильтра и сохраняет unsigned
 //! wrapping-сумму; numeric tree-order на коммутативный результат не влияет.
-//! `AI` в том же numeric tree-order вызывает virtual `CGoods::AI` для каждого
-//! non-null товара. Его Rust owner ещё не действует, поэтому typed callback
-//! передаётся явно, сохраняя dispatch и порядок без оригинал vtable.
+//! `AI` в том же numeric tree-order вызывает `CGoods::AI` для каждого non-null
+//! товара. Typed callback передаётся явно, сохраняя dispatch и порядок без
+//! vtable.
 
 use std::collections::BTreeMap;
 use std::error::Error;

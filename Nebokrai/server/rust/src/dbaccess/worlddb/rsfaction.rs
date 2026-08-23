@@ -1,183 +1,11 @@
-//! DB-владелец `CRsFaction` исторического WorldServer из `rsfaction.cpp`.
+//! DB-владелец `CRsFaction` WorldServer из `rsfaction.cpp`.
+//! Источник контракта — точная пара WorldServer EXE/PDB.
 //!
-//! Статус `DelFaction` RVA `0x000F9A00`, `SaveFaction` RVA `0x000FF070`,
-//! `SaveFactionProperty` RVA
-//! `0x000FA080`, `SaveFactionMembers` RVA `0x000FB700`, `SaveLeaveWords` RVA
-//! `0x000FACA0`, `SaveFactionApplyPersons` RVA `0x000FB240`, `SaveIconData` RVA
-//! `0x000FB3F0`, `SaveFactionPronounce` RVA `0x000FC860` и `SaveAbility` RVA
-//! `0x000FECB0`, private `LoadFactionPronounce`/`LoadIconData`/`LoadAbility`
-//! RVA `0x000F9AD0/0x000F9D60/0x000FAEE0`, `LoadLeaveWords` RVA `0x000FBDE0`,
-//! `LoadFactionProperty`/`LoadFactionMembers` RVA `0x000FCB20/0x000FD840`,
-//! `LoadFactionApplyPersons` RVA `0x000FE710` и `LoadAllFaction` RVA
-//! `0x000FF1D0` — `IMPLEMENTED`; constructor, destructor, catch и
-//! COM/compiler cleanup ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
-//! исходный путь PDB:
-//! `e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp`.
-//!
-//! PDB задаёт `DelFaction(long, connection) -> bool`. Raw показывает один
-//! batch `DELETE CSL_FACTION_BaseProperty WHERE ID = %d` на caller-connection.
-//! Exact `0x004F9A00..0x004F9AD0` имеет статус `VERIFIED_DISASSEMBLY`: signed
-//! `long` передаётся в `_sprintf` напрямую, успешный `ExecuteCn` явно ставит
-//! `AL=1`, а его `false` и null connection — `AL=0`. Только Execute-error пишет
-//! `delete faction ERROR`; null-путь исходно не имеет log. Affected rows не
-//! проверяются.
-//!
-//! Параметризованный TDS сохраняет signed ID и тот же SQL Server DELETE,
-//! заменяя `_sprintf`/ADO transport. Любой `i32` вместе с NUL заведомо
-//! помещался в исходный `char[1024]`, поэтому buffer-границы нет. Метод не
-//! начинает и не завершает транзакцию: соседний `DoSaveData` владеет
-//! begin/commit. `Option` сохраняет тихий null-путь, structured notice создаётся
-//! только для доказанного DB-log и не содержит SQL либо runtime faction ID.
-//!
-//! `SaveFactionProperty(CFaction*, connection)` сначала нормализует save-копию:
-//! пустой `m_szFactionWarLastWinTime` становится буквальной строкой `NULL`, а
-//! найденный через `GetFactionById` live count передаётся достигнутому
-//! `CFaction::SetGoodsWarCount`. Последний снимает local time, ставит dirty-bit
-//! `1` и clamp-ит signed count `<= 0` к `0`; Rust caller передаёт результат
-//! lookup как `canonical_goods_war_count`, не возвращая global singleton.
-//!
-//! Затем ADO открывал updateable recordset единственной строки
-//! `CSL_FACTION_BaseProperty`, делал `MoveFirst`, записывал пятнадцать полей в
-//! исходном порядке и только в конце вызывал `Update`. TDS `UPDATE TOP (1)` с
-//! параметрами сохраняет ту же одну строку и типы; ноль affected rows заменяет
-//! доказанную ошибку `MoveFirst` на typed `MissingPropertyRow`. Exact epilogue
-//! `0x004FABF3..0x004FAC59` подтверждает `true` только после Update и `false`
-//! после catch; catch писал `Save Faction Property`. Null faction остаётся
-//! тихим `false`, а non-null faction успевает выполнить state-нормализацию до
-//! ошибки null connection. После ответов reverse прекращён.
-//!
-//! `SaveFactionMembers(CFaction*, connection)` сначала удаляет все строки
-//! `CSL_FACTION_Members` заданной фракции, затем проходит исходный
-//! `map<long, tagMemInfo>` в signed-key порядке и выполняет отдельный INSERT для
-//! каждого участника. Ошибка DELETE пишет `delete CSL_FACTION_Members ERROR` и
-//! возвращает `false`; ошибка одного INSERT попадает в catch `Save Faction
-//! MemberData`, оставляет уже выполненные изменения caller-транзакции и также
-//! возвращает `false`. Пустая map после успешного DELETE даёт `true`.
-//!
-//! Exact call-site `0x004FB7D9..0x004FB899` имеет статус
-//! `VERIFIED_DISASSEMBLY`: потерянными raw vararg были `wSecond` и
-//! `listPV[10]`; фактически time имеет порядок year/month/day/hour/minute/second,
-//! а INSERT получает все одиннадцать signed purview. Эпилог
-//! `0x004FB8E2..0x004FB940` отдельно подтверждает `AL=1` после полного обхода и
-//! `AL=0` после catch. После этих ответов reverse прекращён.
-//!
-//! `BTreeMap` заменяет только внутренности STL и сохраняет порядок. Tiberius
-//! заменяет ADO, а неэкранированный SQL literal сохранён намеренно: одинарная
-//! кавычка в title должна по-прежнему менять результат SQL-парсера, а не
-//! становиться успешным параметром. ANSI `strTitle` декодируется как Windows-
-//! 1251; при 63 видимых байтах, максимальных i32/u16 и завершающем NUL исходный
-//! `char[1024]` требовал не более 536 байт. Если NUL отсутствует, Rust возвращает
-//! локальный `BLOCKED_MISSING_FACT` после уже выполненного DELETE/предыдущих
-//! INSERT: исходный `%s` читал бы за массивом, но достижимость и результат этого
-//! UB не доказаны. Null faction остаётся тихим `false`; null connection
-//! представляется DELETE-stage notice без SQL и runtime ID.
-//!
-//! `SaveLeaveWords(CFaction*, connection)` так же сначала удаляет все строки
-//! `CSL_FACTIONLeaveWord` faction ID, затем проходит `m_LeaveWords` в list-
-//! порядке и выполняет отдельный INSERT без списка колонок:
-//! `ID, FactionID, LeaveWordPlayerID, Content, LeaveWordTime`. До форматирования
-//! content исходник вызывал `CGame::CheckPoint`, который удваивает одинарные
-//! кавычки; Windows-1251 decode и сырой TDS batch сохраняют те же SQL-значения.
-//! Успешный escaped content ограничен 255 ANSI-байтами, поэтому даже с
-//! максимальными i32/u16 итог вместе с NUL требует не более 374 байт старого
-//! `char[1024]`.
-//!
-//! Exact call-site `0x004FAD8C..0x004FADEB` имеет статус
-//! `VERIFIED_DISASSEMBLY`: потерянными raw vararg были `wSecond` и готовая
-//! time-строка; INSERT получает leave-word ID, faction ID, player ID, escaped
-//! content и `year-month-day hour:minute:second` именно в этом порядке. Хвост
-//! `0x004FAE4F..0x004FAEB6` подтверждает `true` после полного/пустого обхода и
-//! `false` для insert/delete/catch. После этих ответов reverse прекращён.
-//!
-//! Ошибка DELETE пишет исходный `delete CSL_FACTIONLeaveWord ERROR `, ошибка
-//! INSERT — `Save Faction LeaveWord ERROR`; неожиданный старый `_com_error`
-//! имел catch `Save Faction LeaveWords`. Rust DB-ошибки явны и не выдаются за
-//! unwind. Предыдущие INSERT остаются в caller-транзакции. Отсутствующий NUL в
-//! `strContent` либо escaped length `>= 256` возвращает локальный
-//! `BLOCKED_MISSING_FACT` после уже выполненных эффектов: в обоих случаях
-//! оригинал читал бы за fixed/stack buffer. Null faction остаётся тихим
-//! `false`, null connection относится к DELETE-stage notice. Raw owner, catch и
-//! compiler cleanup удалены; `VecDeque`, owned bytes и `Drop` заменяют только
-//! STL/string/stack lifetime.
-//!
-//! `SaveAbility(CFaction*, connection)` открывал первую ability-строку по
-//! signed faction ID. При EOF он открывал updateable table-recordset, делал
-//! `AddNew` и задавал `FactionID`; существующая строка сохраняла текущий row.
-//! `SaveFactionPronounce` получал ровно `0x828` bytes через достигнутый
-//! `CFaction::GetPronounceData` и назначал binary-поле `Pronounce`.
-//! `SaveIconData` назначал byte-vector `IconData` и BSTR
-//! `LastUploadIconDataTime` в формате `year-month-day hour:minute:second`.
-//! Только после успеха обоих private owner-ов выполнялся один recordset
-//! `Update`; затем ability-row уже не откатывался, даже если отдельный
-//! `SaveFactionApplyPersons` завершался `false`.
-//!
-//! Apply-owner сначала выполнял literal
-//! `DELETE FROM CSL_Faction_Apply WHERE FactionID='%d'`, затем проходил
-//! `m_ApplyPersons` в signed map-порядке и делал отдельный
-//! `INSERT INTO CSL_Faction_Apply VALUES(%d,%d)` для каждого key. Ошибка DELETE
-//! писала `delete CSL_Faction_Apply ERROR`, ошибка INSERT — `Save Faction
-//! ApplyList ERROR`; уже выполненные ability update, DELETE и предыдущие INSERT
-//! оставались в caller-транзакции. Пустой map после DELETE давал `true`.
-//! COM/SAFEARRAY исключения private helper-ов имели отдельные строки `Save
-//! Faction Pronounce`, `Save Faction IconData` и `Save Faction Apply`, а внешний
-//! recordset catch — `Save Faction Ability`; в Rust устранённые VARIANT/COM-
-//! операции не получают вымышленных failure-ветвей.
-//!
-//! Exact диапазоны `0x004FB295..0x004FB39C`,
-//! `0x004FB3F0..0x004FB6DF`, `0x004FC860..0x004FCA7C` и
-//! `0x004FECD9..0x004FF04C` имеют статус `VERIFIED_DISASSEMBLY`: второй INSERT-
-//! аргумент берётся из signed map-key по node `+0x0C`; все три private owner-а
-//! и dispatcher возвращают `true` только после полного успеха, а dispatcher
-//! передаёт тот же caller-connection в apply-owner после `Update`. Получив эти
-//! ответы, reverse прекращён.
-//!
-//! Один параметризованный TDS `IF EXISTS UPDATE TOP (1) ELSE INSERT` заменяет
-//! только updateable ADO recordset и сохраняет выбор одной строки, четыре
-//! записываемых поля и один финальный DB-эффект. Binary-параметры сохраняют
-//! byte-exact pronounce/icon, строковый параметр проходит то же преобразование
-//! SQL Server в тип time-колонки. Apply SQL оставлен literal и выполняется
-//! отдельными batch-ами в исходном порядке. Null faction остаётся тихим
-//! `false`; null connection и ошибка ability batch соответствуют `Save Faction
-//! Ability`. `BTreeSet`, slices, Tiberius и `Drop` заменяют только MSVC tree,
-//! SAFEARRAY/VARIANT, ADO и compiler cleanup. Четыре заменённых owner-блока,
-//! catch-и и cleanup-helper-ы удалены.
-//!
-//! Верхний `SaveFaction` один раз читает `m_ChangeDataType`, затем независимо и
-//! строго в порядке bits `1, 2, 4, 8` вызывает property, members, leave-word и
-//! ability owner-ы с одним caller-connection. Возвращаемые leaf-ами `false`
-//! исходно не проверяются и не останавливают следующие ветви; после обычного
-//! прохода dispatcher возвращает `true`, в том числе для нулевой mask. Null
-//! faction остаётся тихим `false`, null connection пишет `Save Thread Sent
-//! Connect Not Found.` и также возвращает `false`.
-//!
-//! Raw уверенно задавал ветвление, но не bool-результат своего catch. Поэтому
-//! exact-проверка была ограничена эпилогами `0x004FF16E..0x004FF18D` и
-//! `0x004FF190..0x004FF1BE`: normal path ставит `AL=1`, catch `Save Faction` —
-//! `AL=0`. После ответа reverse прекращён. В Rust leaf DB-ошибки уже являются
-//! явными `false` и поглощаются dispatcher-ом буквально. Только два ранее
-//! зафиксированных overread-пути возвращают typed `BlockedMissingFact`: их
-//! неизвестная достижимость не заменена продолжением следующих dirty-bits.
-//!
-//! `LoadAllFaction` открывает одно World DB connection и строго вызывает
-//! property, members, leave-words, ability и apply-person owner-ы в этом
-//! порядке. Property буквально читает `SELECT * FROM
-//! CSL_FACTION_BaseProperty ORDER BY id`: public constructor `CFaction`
-//! выполняется до замены DB property/scalar полей. Поэтому staging сохраняет
-//! уже готовый prefix до DB/field failure, а duplicate ID оставляет последнюю
-//! строку. Старый leaked overwritten pointer устранён: он не был виден вне
-//! реализации. `GoodsWarLastTime` проходит SQL calendar time в
-//! `SYSTEMTIME`-эквивалент и форматируется без zero-padding как старый
-//! `_sprintf`; `country` сохраняется как `unsigned char`. После пятого owner-а
-//! точно пересчитываются MemberNums, `InitialPropertyByLvl` и clear dirty mask.
-//! Публикация готовой map в `COrganizingCtrl` принадлежит следующему парному
-//! owner-проходу и здесь не подменяется частичным init-вызовом.
-//! PDB задаёт `LoadAllFaction -> int`; это размер временной map на момент
-//! выхода, который `Initialize` печатает через `%d` даже после её cleanup при
-//! ошибке. Rust передаёт этот count рядом со staging outcome, не оставляя
-//! прежние pointer lifetime и не сохраняя недостижимый signed overflow.
+//! Сохраняются раздельные операции faction property, members, applications,
+//! leave words, icon, pronounce и ability, их SQL-порядок и исходные bool
+//! результаты. Load строит записи в порядке провайдера; save не добавляет
+//! транзакцию или rollback поверх уже выполненных команд. Tiberius и owned
+//! values заменяют ADO/COM и MSVC containers без изменения DB-семантики.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
@@ -240,7 +68,7 @@ pub(crate) enum FactionMembersLoadOutcome {
     BlockedMissingFact(FactionMemberLoadBlock),
 }
 
-/// Безопасная граница короткого binary `Pronounce`: exact memcpy читал бы за
+/// Безопасная граница короткого binary `Pronounce`: оригинал memcpy читал бы за
 /// полученный DB chunk, а внешняя реакция повреждённой строки не доказана.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FactionPronounceLoadBlock {
@@ -287,7 +115,7 @@ fn reported_faction_load_count(factions: &FactionPropertyLoadStaging) -> i32 {
     i32::try_from(factions.len()).unwrap_or(i32::MAX)
 }
 
-/// Scalar-поля property-группы одной достигнутой save-копии `CFaction`.
+/// Scalar-поля property-группы одной действующей save-копии `CFaction`.
 struct FactionPropertySaveSnapshot {
     master_id: i32,
     base_property: FactionBaseProperty,
@@ -302,16 +130,16 @@ pub(crate) enum FactionSaveProjectionBlock {
     DeleteRemainTime,
 }
 
-/// Достигнутая save-копия `CFaction`; property materialизуется только для bit 1.
+/// Действующая save-копия `CFaction`; property materialизуется только для bit 1.
 pub(crate) struct FactionSaveSnapshot<'faction> {
     pub(crate) faction: &'faction mut CFaction,
-    /// Результат исходного `GetFactionById`; `None` сохраняет no-op lookup-а.
+ /// Результат исходного `GetFactionById`; `None` сохраняет no-op lookup-а.
     canonical_goods_war_count: Option<i32>,
     property: Option<FactionPropertySaveSnapshot>,
 }
 
 impl<'faction> FactionSaveSnapshot<'faction> {
-    /// Материализует ровно поля, читаемые `CRsFaction`, из frozen save-копии.
+ /// Материализует ровно поля, читаемые `CRsFaction`, из frozen save-копии.
     pub(crate) fn from_faction(
         faction: &'faction mut CFaction,
         canonical_goods_war_count: Option<i32>,
@@ -400,7 +228,7 @@ pub(crate) enum FactionSaveOutcome {
     BlockedMissingFact(FactionSaveBlock),
 }
 
-/// Структурированная замена достигнутых `CRsFaction` DB-log ветвей.
+/// Структурированная замена действующих `CRsFaction` DB-log ветвей.
 #[derive(Debug)]
 pub(crate) struct RsFactionNotice {
     pub(crate) operation: RsFactionOperation,
@@ -602,8 +430,8 @@ fn read_faction_database_base_state(
         delete_remain_time: read_faction_i32(row, "DelRemainTime")?,
         country: read_faction_u8(row, "country")?,
         goods_war_count: read_faction_i32(row, "GoodsWarCount")?,
-        // `_sprintf` использовал year/month/day/hour/minute/second без zero
-        // padding и не переносил weekday/milliseconds из SYSTEMTIME.
+ // `_sprintf` использовал year/month/day/hour/minute/second без zero
+ // padding и не переносил weekday/milliseconds из SYSTEMTIME.
         goods_war_last_win_time: format!(
             "{}-{}-{} {}:{}:{}",
             goods_war_last_win_time.year,
@@ -654,8 +482,8 @@ async fn load_faction_members_rows(
             }
         };
         let Some(faction) = factions.get_mut(&faction_id) else {
-            // Exact owner печатает `LoadGuildMembers: guild id not exist.` и
-            // только MoveNext; остальные поля текущей строки он не читает.
+ // Оригинал owner печатает `LoadGuildMembers: guild id not exist.` и
+ // только MoveNext; остальные поля текущей строки он не читает.
             notices.push_back(RsFactionNotice {
                 operation: RsFactionOperation::LoadFactionMembers,
                 error: RsFactionSaveError::MissingFaction { faction_id },
@@ -674,8 +502,8 @@ async fn load_faction_members_rows(
         };
         let name_length = visible_legacy_text_len(&member.name);
         if name_length >= 32 {
-            // `strcpy(local_120[32], Name)` выходил за стек. Нет точного
-            // внешнего результата corrupted row, поэтому не дополняем/режем.
+ // `strcpy(local_120[32], Name)` выходил за стек. Нет точного
+ // внешнего результата corrupted row, поэтому не дополняем/режем.
             return FactionMembersLoadOutcome::BlockedMissingFact(FactionMemberLoadBlock {
                 visible_len: name_length,
                 capacity: 32,
@@ -695,8 +523,8 @@ fn read_faction_member(row: &Row) -> Result<FactionMemberDatabaseRow, FactionLoa
     let name = read_faction_text(row, "Name")?;
     let visible_name = visible_legacy_text(&name);
     if visible_name.len() >= 32 {
-        // Возвращаем исходные bytes в row-промежутке, чтобы caller сохранил
-        // prefix и выразил отдельную safe-границу без DB notice.
+ // Возвращаем исходные bytes в row-промежутке, чтобы caller сохранил
+ // prefix и выразил отдельную safe-границу без DB notice.
         return Ok(FactionMemberDatabaseRow {
             name,
             member: TagMemInfo::from_complete_fields(
@@ -726,8 +554,8 @@ fn read_faction_member(row: &Row) -> Result<FactionMemberDatabaseRow, FactionLoa
     member_name[..visible_name.len()].copy_from_slice(visible_name);
     let title = read_faction_text(row, "Title")?;
     let mut member_title = [0; 64];
-    // Exact проверял ANSI `std::string::size() < 0x15`; long title оставлял
-    // C-string пустой, а не обрезанный.
+ // Оригинал проверял ANSI `std::string::size() < 0x15`; long title оставлял
+ // C-string пустой, а не обрезанный.
     let visible_title = visible_legacy_text(&title);
     if visible_title.len() < 0x15 {
         member_title[..visible_title.len()].copy_from_slice(visible_title);
@@ -771,8 +599,8 @@ fn read_faction_member_purview(
             0 => EPurviewOwnState::No,
             1 => EPurviewOwnState::Forbid,
             2 => EPurviewOwnState::Permit,
-            // C++ записывал arbitrary signed `long` в enum storage. Safe
-            // Rust не materialize-ит invalid enum и не выдумывает его wire.
+ // C++ записывал arbitrary signed `long` в enum storage. Safe
+ // Rust не materialize-ит invalid enum и не выдумывает его wire.
             _ => return Err(FactionLoadReadError::MissingRequiredValue(column)),
         };
     }
@@ -884,8 +712,8 @@ fn read_faction_leave_word(row: &Row) -> Result<TagLeaveWord, FactionLoadReadErr
     let mut fixed_content = [0; 212];
     let visible_name = visible_legacy_text(&name);
     let visible_content = visible_legacy_text(&content);
-    // Exact оставлял пустое Content при length >= 201; Name был ограничен
-    // DB-схемой. Для corrupt Name >=20 owner не создаёт unsafe C-string.
+ // Оригинал оставлял пустое Content при length >= 201; Name был ограничен
+ // DB-схемой. Для corrupt Name >=20 owner не создаёт unsafe C-string.
     if visible_name.len() < fixed_name.len() {
         fixed_name[..visible_name.len()].copy_from_slice(visible_name);
     }
@@ -1017,8 +845,8 @@ async fn load_faction_ability_rows(
                 );
             }
             Err(FactionAbilityReadError::Read(error)) => {
-                // Exact LoadAbility считал false private helper-а, печатал
-                // failure и переходил к следующему recordset row.
+ // Оригинал LoadAbility считал false private helper-а, печатал
+ // failure и переходил к следующему recordset row.
                 notices.push_back(RsFactionNotice {
                     operation: RsFactionOperation::LoadAbility,
                     error: error.into(),
@@ -1055,18 +883,18 @@ fn read_faction_ability(
             .ok_or(FactionAbilityReadError::ShortPronounce(bytes.len()))
             .map(Some)?,
     };
-    // Raw `LoadIconData` retrieves this chunk but omits every write to
-    // `m_IconData`; reading it still preserves the same DB-type failure path.
+ // Raw `LoadIconData` retrieves this chunk but omits every write to
+ // `m_IconData`; reading it still preserves the same DB-type failure path.
     let _ = read_faction_binary(row, "IconData").map_err(FactionAbilityReadError::Read)?;
     let icon_time = read_faction_time(row, "LastUploadIconDataTime")
         .map_err(FactionAbilityReadError::Read)?;
     Ok((pronounce, icon_time))
 }
 
-/// Узкая объектная граница достигнутой стадии исходного `CRsFaction`.
+/// Узкая объектная граница действующей стадии исходного `CRsFaction`.
 pub(crate) trait RsFactionOwner {
-    /// Выполняет полный exact порядок пяти load-owner-ов на одном World DB
-    /// connection и возвращает ready-to-publish faction staging map.
+ /// Выполняет полный оригинал порядок пяти load-owner-ов на одном World DB
+ /// connection и возвращает ready-to-publish faction staging map.
     async fn load_all_factions(
         &mut self,
         master_title: &[u8],
@@ -1074,9 +902,9 @@ pub(crate) trait RsFactionOwner {
         parameters: &COrganizingParam,
     ) -> FactionLoadOutcome;
 
-    /// Открывает отдельное World DB соединение и materialize-ит только
-    /// `LoadFactionProperty`; оставшиеся load-owner-ы пока не смешиваются с
-    /// этим staging map.
+ /// Открывает отдельное World DB соединение и materialize-ит только
+ /// `LoadFactionProperty`; оставшиеся load-owner-ы пока не смешиваются с
+ /// этим staging map.
     async fn load_faction_property(
         &mut self,
         master_title: &[u8],
@@ -1084,56 +912,56 @@ pub(crate) trait RsFactionOwner {
         parameters: &COrganizingParam,
     ) -> FactionPropertyLoadOutcome;
 
-    /// Вызывает dirty-bit leaf-ы `1/2/4/8` внутри caller-транзакции.
+ /// Вызывает dirty-bit leaf-ы `1/2/4/8` внутри caller-транзакции.
     async fn save_faction(
         &mut self,
         snapshot: Option<&mut FactionSaveSnapshot<'_>>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> FactionSaveOutcome;
 
-    /// Удаляет base-property row фракции внутри caller-транзакции.
+ /// Удаляет base-property row фракции внутри caller-транзакции.
     async fn del_faction(
         &mut self,
         faction_id: i32,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
-    /// Сохраняет property dirty-bit `1` внутри caller-транзакции.
+ /// Сохраняет property dirty-bit `1` внутри caller-транзакции.
     async fn save_faction_property(
         &mut self,
         snapshot: Option<&mut FactionSaveSnapshot<'_>>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
-    /// Перезаписывает ordered member-снимок для dirty-bit `2` внутри
-    /// caller-транзакции.
+ /// Перезаписывает ordered member-снимок для dirty-bit `2` внутри
+ /// caller-транзакции.
     async fn save_faction_members(
         &mut self,
         faction: Option<&CFaction>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> FactionMembersSaveOutcome;
 
-    /// Перезаписывает ordered leave-word snapshot для dirty-bit `4` внутри
-    /// caller-транзакции.
+ /// Перезаписывает ordered leave-word snapshot для dirty-bit `4` внутри
+ /// caller-транзакции.
     async fn save_leave_words(
         &mut self,
         faction: Option<&CFaction>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> FactionLeaveWordsSaveOutcome;
 
-    /// Сохраняет ability-row, затем ordered apply-person snapshot внутри
-    /// caller-транзакции.
+ /// Сохраняет ability-row, затем ordered apply-person snapshot внутри
+ /// caller-транзакции.
     async fn save_ability(
         &mut self,
         faction: Option<&CFaction>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
-    /// Забирает следующий исходный DB-log эквивалент.
+ /// Забирает следующий исходный DB-log эквивалент.
     fn pop_notice(&mut self) -> Option<RsFactionNotice>;
 }
 
-/// Linux/TDS-замена достигнутой части исходного `CRsFaction`.
+/// Linux/TDS-замена действующей части исходного `CRsFaction`.
 #[derive(Default)]
 pub(crate) struct TiberiusRsFaction {
     settings: Option<WorldDatabaseSettings>,
@@ -1347,8 +1175,8 @@ impl RsFactionOwner for TiberiusRsFaction {
             return FactionSaveOutcome::ReturnedFalse;
         };
 
-        // RVA 0x004FF0F4 читает mask один раз: property-нормализация может снова
-        // поставить bit 1, но не должна менять набор ветвей текущего прохода.
+ // читает mask один раз: property-нормализация может снова
+ // поставить bit 1, но не должна менять набор ветвей текущего прохода.
         let change_data_type = snapshot.faction.change_data_type();
 
         if change_data_type & 1 != 0 {
@@ -1421,8 +1249,8 @@ impl RsFactionOwner for TiberiusRsFaction {
             return false;
         };
         let Some(property) = snapshot.property.as_ref() else {
-            // Единственный caller вызывает owner только для dirty-bit 1, а
-            // закрытый constructor не создаёт такой snapshot без property.
+ // Единственный caller вызывает owner только для dirty-bit 1, а
+ // закрытый constructor не создаёт такой snapshot без property.
             return false;
         };
 
@@ -1670,10 +1498,10 @@ fn build_faction_member_insert(
     let purview = member.purview.map(|state| state.wire_value());
     let contribute = if member.contribute { 1 } else { 0 };
 
-    // Старый sprintf не экранировал Title. Сырой SQL сохраняет наблюдаемую
-    // семантику SQL-парсера: кавычка могла дать ошибку либо изменить batch.
-    // Tiberius заменяет только транспорт ADO. Даже при 63 ANSI-байтах Title и
-    // максимальных i32/u16 нужно не более 536 байт исходного char[1024] с NUL.
+ // Старый sprintf не экранировал Title. Сырой SQL сохраняет наблюдаемую
+ // семантику SQL-парсера: кавычка могла дать ошибку либо изменить batch.
+ // Tiberius заменяет только транспорт ADO. Даже при 63 ANSI-байтах Title и
+ // максимальных i32/u16 нужно не более 536 байт исходного char[1024] с NUL.
     Ok(format!(
         "INSERT INTO CSL_FACTION_Members (FactionID,PlayerID,MemberLvl,Title,bControbute,LastOnlineTime, PV_Disband,PV_Exit,PV_DubJobLvl,PV_ConMem,PV_FireOut,PV_Pronounce,PV_LeaveWord, PV_EditLeaveWord,PV_ObtainTax,PV_OperCityGate,PV_EndueROR) VALUES ({},{},{},N'{}',{},'{}',{},{},{},{},{},{},{},{},{},{},{})",
         faction_id,
@@ -1726,328 +1554,3 @@ async fn execute_faction_statement(
         .await?;
     Ok(())
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp
-
-
-
-// ============================================================================
-// FUNCTION: CRsFaction::LoadFactionPronounce
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:565
-// RVA: 0x000F9AD0
-// ADDRESS: 004f9ad0
-// PROTOTYPE: bool __thiscall LoadFactionPronounce(CFaction * param_1, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004f9d15
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:585
-// RVA: 0x000F9D15
-// ADDRESS: 004f9d15
-// PROTOTYPE: undefined Catch@004f9d15()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsFaction::LoadIconData
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:662
-// RVA: 0x000F9D60
-// ADDRESS: 004f9d60
-// PROTOTYPE: bool __thiscall LoadIconData(CFaction * param_1, _com_ptr_t<_com_IIID<_Recordset,&struct___s_GUID_const__GUID_00000556_0000_0010_8000_00aa006d2ea4>_> * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004fa039
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:685
-// RVA: 0x000FA039
-// ADDRESS: 004fa039
-// PROTOTYPE: undefined Catch@004fa039()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsFaction::LoadAbility
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:447
-// RVA: 0x000FAEE0
-// ADDRESS: 004faee0
-// PROTOTYPE: bool __thiscall LoadAbility(map<long,CFaction*,std::less<long>,std::allocator<std::pair<long_const_,CFaction*>_>_> * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004fb1cd
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:496
-// RVA: 0x000FB1CD
-// ADDRESS: 004fb1cd
-// PROTOTYPE: undefined Catch@004fb1cd()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_004fb21e
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:500
-// RVA: 0x000FB21E
-// ADDRESS: 004fb21e
-// PROTOTYPE: undefined FUN_004fb21e()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-// ============================================================================
-// FUNCTION: CRsFaction::LoadLeaveWords
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:372
-// RVA: 0x000FBDE0
-// ADDRESS: 004fbde0
-// PROTOTYPE: bool __thiscall LoadLeaveWords(map<long,CFaction*,std::less<long>,std::allocator<std::pair<long_const_,CFaction*>_>_> * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004fc50d
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:440
-// RVA: 0x000FC50D
-// ADDRESS: 004fc50d
-// PROTOTYPE: undefined Catch@004fc50d()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_004fc552
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:443
-// RVA: 0x000FC552
-// ADDRESS: 004fc552
-// PROTOTYPE: undefined FUN_004fc552()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-// ============================================================================
-// FUNCTION: CRsFaction::LoadFactionProperty
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:196
-// RVA: 0x000FCB20
-// ADDRESS: 004fcb20
-// PROTOTYPE: bool __thiscall LoadFactionProperty(map<long,CFaction*,std::less<long>,std::allocator<std::pair<long_const_,CFaction*>_>_> * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004fd7cc
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:257
-// RVA: 0x000FD7CC
-// ADDRESS: 004fd7cc
-// PROTOTYPE: undefined Catch@004fd7cc()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_004fd81c
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:261
-// RVA: 0x000FD81C
-// ADDRESS: 004fd81c
-// PROTOTYPE: undefined FUN_004fd81c()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsFaction::LoadFactionMembers
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:265
-// RVA: 0x000FD840
-// ADDRESS: 004fd840
-// PROTOTYPE: bool __thiscall LoadFactionMembers(map<long,CFaction*,std::less<long>,std::allocator<std::pair<long_const_,CFaction*>_>_> * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004fe6a0
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:363
-// RVA: 0x000FE6A0
-// ADDRESS: 004fe6a0
-// PROTOTYPE: undefined Catch@004fe6a0()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_004fe6f0
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:368
-// RVA: 0x000FE6F0
-// ADDRESS: 004fe6f0
-// PROTOTYPE: undefined FUN_004fe6f0()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRsFaction::LoadFactionApplyPersons
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:505
-// RVA: 0x000FE710
-// ADDRESS: 004fe710
-// PROTOTYPE: bool __thiscall LoadFactionApplyPersons(map<long,CFaction*,std::less<long>,std::allocator<std::pair<long_const_,CFaction*>_>_> * param_1, _com_ptr_t<_com_IIID<_Connection,&struct___s_GUID_const__GUID_00000550_0000_0010_8000_00aa006d2ea4>_> param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004fec3f
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:557
-// RVA: 0x000FEC3F
-// ADDRESS: 004fec3f
-// PROTOTYPE: undefined Catch@004fec3f()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_004fec8f
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:561
-// RVA: 0x000FEC8F
-// ADDRESS: 004fec8f
-// PROTOTYPE: undefined FUN_004fec8f()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-// ============================================================================
-// FUNCTION: CRsFaction::LoadAllFaction
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:141
-// RVA: 0x000FF1D0
-// ADDRESS: 004ff1d0
-// PROTOTYPE: int __thiscall LoadAllFaction(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004ff4a4
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp:188
-// RVA: 0x000FF4A4
-// ADDRESS: 004ff4a4
-// PROTOTYPE: undefined Catch@004ff4a4()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Field20::GetValue
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsfaction.cpp
-// RVA: 0x000FF4F0
-// ADDRESS: 004ff4f0
-// PROTOTYPE: _variant_t __thiscall GetValue(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: WorldServer

@@ -1,6 +1,6 @@
 //! Базовый listener обхода контейнера исторического `WorldServer`.
 //!
-//! действует. Источник контракта — точная пара WorldServer EXE/PDB.
+//! Callback входит в контракт owner-а. Источник контракта — WorldServer EXE/PDB.
 //!
 //! безусловно возвращает `1` и не читает ни
 //! `CContainer*`, ни `CBaseObject*`. Rust сохраняет точный `int` callback-а,

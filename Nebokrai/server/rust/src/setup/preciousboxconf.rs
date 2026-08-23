@@ -1,14 +1,9 @@
 //! Конфигурация Precious Box исторического Miracle.
 //!
-//! Статус World `load_conf` RVA `0x00048420` и `AddToByteArray` RVA
-//! `0x00046220`: `IMPLEMENTED`; singleton plumbing и Game decoder/random owner
-//! ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! SHA-256 PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Контракт World `load_conf` и `AddToByteArray`
+//!:; singleton plumbing и Game decoder/random owner
+//! не входят в этот owner и остаются. Точная пара:
 //! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\setup\preciousboxconf.cpp:316`.
 //!
 //! Wire начинается с signed количества box-ов. Далее ordered map выдаёт для
 //! каждого box `i32 id + i32 odds_count`; каждая группа содержит
@@ -17,11 +12,9 @@
 //! Исходные 20-байтные MSVC Item содержат три байта padding после bool, но
 //! serializer намеренно передаёт только 17 значимых байт.
 //!
-//! Точный World `load_conf` очищает оба map-а и публикует XML только в
-//! `_box_conf`, тогда как serializer читает `_box`. `archive/Miracle_server_linux`
-//! добавляет отдельный `PreciousBoxRanges::Build`, которого нет в RAW/EXE owner-е:
-//! Rust сохраняет подтверждённый пустой `0x1E` wire после XML reload и не выдаёт
-//! этот неподтверждённый ремонт за оригинальную семантику. `quick-xml` заменяет
+//! World `load_conf` очищает оба map-а и публикует XML только в `_box_conf`,
+//! тогда как serializer читает `_box`. Поэтому после XML reload wire `0x1E`
+//! остаётся пустым. `quick-xml` заменяет
 //! TinyXML, `BTreeMap` — только MSVC ordered tree, `Vec`/`Drop` — ручной lifetime.
 
 use std::collections::BTreeMap;
@@ -124,7 +117,7 @@ impl PreciousBoxLoadError {
 }
 
 impl PreciousBoxConf {
-    /// Явная граница для будущего подтверждённого XML→range materializer-а.
+ /// Явная граница для внешнего подтверждённого XML→range materializer-а.
     pub(crate) fn insert_box(&mut self, box_id: i32, value: PreciousBox) -> Option<PreciousBox> {
         self.boxes.insert(box_id, value)
     }
@@ -134,7 +127,7 @@ impl PreciousBoxConf {
         self.boxes.clear();
     }
 
-    /// Exact resource adapter. `query_goods_id` is the already-loaded World factory.
+ /// Оригинал resource adapter. `query_goods_id` is the already-loaded World factory.
     pub(crate) fn load_from_bytes(
         &mut self,
         source: Option<&[u8]>,
@@ -332,7 +325,7 @@ impl PreciousBoxConf {
         }
     }
 
-    /// Дописывает exact compact wire без C++ Item padding.
+ /// Дописывает оригинал compact wire без C++ Item padding.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -489,196 +482,4 @@ fn write_count(
     Ok(())
 }
 
-// Сырой C++ ниже сохранён как локальная документация спорного World loader-а,
 // singleton, Game decoder-а и random owner-а, а не как Rust-реализация.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\setup\preciousboxconf.h
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\setup\preciousboxconf.cpp
-
-// ============================================================================
-// FUNCTION: PreciousBoxConf::inst
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\preciousboxconf.h:72
-// RVA: 0x0009CE00
-// ADDRESS: 0049ce00
-// PROTOTYPE: PreciousBoxConf * __cdecl inst(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: PreciousBoxConf::random_item
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\preciousboxconf.cpp:394
-// RVA: 0x001C57B0
-// ADDRESS: 005c57b0
-// PROTOTYPE: bool __thiscall random_item(long param_1, long * param_2, long * param_3, long * param_4, bool * param_5)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: PreciousBoxConf::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\preciousboxconf.cpp:355
-// RVA: 0x001C7030
-// ADDRESS: 005c7030
-// PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: PreciousBoxConf::~PreciousBoxConf
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\preciousboxconf.cpp:18
-// RVA: 0x001C7640
-// ADDRESS: 005c7640
-// PROTOTYPE: void __thiscall ~PreciousBoxConf(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: PreciousBoxConf::PreciousBoxConf
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\preciousboxconf.cpp:16
-// RVA: 0x001C76E0
-// ADDRESS: 005c76e0
-// PROTOTYPE: undefined __thiscall PreciousBoxConf(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-// COMPONENT_VARIANT_END: GameServer
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\setup\preciousboxconf.h
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\setup\preciousboxconf.cpp
-
-// ============================================================================
-// FUNCTION: PreciousBoxConf::inst
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\preciousboxconf.h:72
-// RVA: 0x000015D0
-// ADDRESS: 004015d0
-// PROTOTYPE: PreciousBoxConf * __cdecl inst(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0044544c
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\preciousboxconf.cpp
-// RVA: 0x0004544C
-// ADDRESS: 0044544c
-// PROTOTYPE: undefined Catch@0044544c()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_00445477
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\preciousboxconf.cpp
-// RVA: 0x00045477
-// ADDRESS: 00445477
-// PROTOTYPE: undefined FUN_00445477()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: PreciousBoxConf::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\preciousboxconf.cpp:316
-// RVA: 0x00046220
-// ADDRESS: 00446220
-// PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: PreciousBoxConf::load_conf
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\preciousboxconf.cpp:22
-// RVA: 0x00048420
-// ADDRESS: 00448420
-// PROTOTYPE: bool __thiscall load_conf(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: PreciousBoxConf::~PreciousBoxConf
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\preciousboxconf.cpp:18
-// RVA: 0x00048FC0
-// ADDRESS: 00448fc0
-// PROTOTYPE: void __thiscall ~PreciousBoxConf(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: PreciousBoxConf::PreciousBoxConf
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\preciousboxconf.cpp:16
-// RVA: 0x00049060
-// ADDRESS: 00449060
-// PROTOTYPE: undefined __thiscall PreciousBoxConf(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-// COMPONENT_VARIANT_END: WorldServer

@@ -61,10 +61,9 @@
 //! сообщения на `0xAF502/0xAF505/0xAF506/0xAF504/0xAF508` и отправляют его по
 //! строковой client identity. Payload не пересобирается: cursor-чтение не
 //! удаляет bytes, а `set_message_type` меняет только header, поэтому клиент
-//! получает исходное тело WorldServer с новым типом. Связанный World-owner
-//! подтверждает назначения первых четырёх ответов как
-//! player-base/delete/restore/create; для `0x1FF07` текущий raw доказывает
-//! только account-only relay в `0xAF508`, поэтому доменное имя не назначается.
+//! получает исходное тело WorldServer с новым типом. Первые четыре ответа —
+//! player-base/delete/restore/create; `0x1FF07` выполняет только account-only
+//! relay в `0xAF508`, поэтому дополнительное доменное имя не назначается.
 //!
 //! `0x1FF01` всегда читает status и account, затем сохраняет World map ID из
 //! metadata. Только status `0x1D` сначала вызывает `AddCdkey`, после чего

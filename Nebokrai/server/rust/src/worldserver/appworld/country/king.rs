@@ -3,7 +3,7 @@
 //! Три setter-а king points,
 //! `ChangeControlPoint` и constructor/destructor
 //! — часть контракта owner-а.
-//! подтверждает только upper clamp: отрицательные значения не
+//! `ChangeControlPoint` применяет только upper clamp: отрицательные значения не
 //! исправляются. Rust применяет тот же контракт к действующему king-state без
 //! воспроизведения C++ inheritance/layout.
 //! `ChangeControlPoint` сначала делает wrapping

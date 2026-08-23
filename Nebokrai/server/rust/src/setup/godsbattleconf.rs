@@ -1,19 +1,14 @@
 //! Конфигурация Gods Battle исторического Miracle.
 //!
-//! Статус World `CGodsBattleConf::LoadFile` RVA `0x000810D0`,
-//! `AddByteToArray` RVA `0x0007E990`, runtime accessors/mutations RVA
-//! `0x0007E460/0x0007E480/0x0007EC50`, два accessor-а RVA
-//! `0x000DEA50/0x000DEBA0` и persistence call-site `SaveNpcFaction` RVA
-//! `0x0007E610`: `IMPLEMENTED_CALLSITE_FOLDED`. Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! SHA-256 PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Контракт World `CGodsBattleConf::LoadFile`,
+//! `AddByteToArray`, runtime accessors/mutations
+//! два accessor-а
+//! и persistence call-site `SaveNpcFaction`
+//!:. Точная пара:
 //! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:138`.
 //!
-//! Game decoder `CGodsBattleMgr::DecordFromByteArray` RVA `0x000AB260`
-//! подтверждает wire: NPC `i32 + C-string + C-string`, ordered base-money
+//! Wire `CGodsBattleMgr::DecordFromByteArray`: NPC
+//! `i32 + C-string + C-string`, ordered base-money
 //! records по 12 bytes, затем vector records `16/12/12` bytes, два `u32` XYD
 //! и 28-байтные die-back records. Все counts — signed Windows `long`.
 //! `BTreeMap<u32, _>` заменяет `std::map` без изменения unsigned key-order;
@@ -24,12 +19,12 @@
 //! Loader читает шесть token-stream файлов последовательно, очищая конкретную
 //! секцию непосредственно перед её open. Поэтому отсутствие или безопасная
 //! format-ошибка позднего файла сохраняет уже обновлённые ранние секции и
-//! прежние поздние — это намеренно не transactional reload позднего Linux
-//! donor-а. Исходное formatted чтение повреждённых чисел использовало
+//! прежние поздние: перезагрузка намеренно не транзакционна. Исходное
+//! formatted чтение повреждённых чисел использовало
 //! неинициализированный stack; Rust останавливается на последней полной записи.
 //!
-//! Exact EXE подтверждает спорную decompiler-типизацию: `0x004DEA50` читает
-//! `[ecx+0x60]`, `0x004DEBA0` — `[ecx+0x64]`, а `SetFactionXYD` пишет те же
+//! Оригинал подтверждает спорную decompiler-типизацию: читает
+//! `[ecx+0x60]`, — `[ecx+0x64]`, а `SetFactionXYD` пишет те же
 //! offsets. Это `m_XYD[1]/m_XYD[2]`, а не отдельный `CShape` base-owner.
 
 use std::collections::BTreeMap;
@@ -119,7 +114,7 @@ impl GodsBattleLoadSection {
         }
     }
 
-    /// Exact Win32 notice из соответствующей missing-file ветки World.
+ /// Оригинал Win32 notice из соответствующей missing-file ветки World.
     pub(crate) const fn missing_notice(self) -> (&'static [u8], &'static [u8]) {
         match self {
             Self::NpcNames => (b"error", b"Can't find file: data/gbNpc.ini "),
@@ -243,12 +238,12 @@ pub(crate) struct GodsBattleNpcFactionUpdate {
 }
 
 impl CGodsBattleConf {
-    /// Повторяет `LoadFile`, извлекая resource-байты только при достижении
-    /// соответствующей секции.
-    ///
-    /// `resolve_npc_name` — единственная owner-зависимая часть: exact World
-    /// сразу заменяет string-table ID локализованным именем, а отсутствие ID
-    /// превращает имя в пустую C-строку. `m_XYD[1..=2]` этот loader не меняет.
+ /// Повторяет `LoadFile`, извлекая resource-байты только при достижении
+ /// соответствующей секции.
+ ///
+ /// `resolve_npc_name` — единственная owner-зависимая часть: оригинал World
+ /// сразу заменяет string-table ID локализованным именем, а отсутствие ID
+ /// превращает имя в пустую C-строку. `m_XYD[1..=2]` этот loader не меняет.
     pub(crate) fn load_from_resources<ReadResource, ResolveNpcName>(
         &mut self,
         read_resource: &mut ReadResource,
@@ -305,7 +300,7 @@ impl CGodsBattleConf {
                 GodsBattleLoadSection::BaseMoney,
                 "subtract",
             )?;
-            // `std::map::operator[]` exact owner-а заменяет duplicate key.
+ // `std::map::operator[]` оригинал owner-а заменяет duplicate key.
             self.base_money.insert(
                 money_level,
                 GodsBattleBaseMoney {
@@ -472,12 +467,12 @@ impl CGodsBattleConf {
         self.xyd[2] = faction_two;
     }
 
-    /// Возвращает exact `m_XYD[1]/m_XYD[2]` пару server response-а.
+ /// Возвращает оригинал `m_XYD[1]/m_XYD[2]` пару server response-а.
     pub(crate) const fn faction_xyd(&self) -> (u32, u32) {
         (self.xyd[1], self.xyd[2])
     }
 
-    /// Повторяет `SetFactionXYD`: только faction `1/2` меняют состояние.
+ /// Повторяет `SetFactionXYD`: только faction `1/2` меняют состояние.
     pub(crate) fn set_faction_xyd(
         &mut self,
         faction: i32,
@@ -502,7 +497,7 @@ impl CGodsBattleConf {
         }
     }
 
-    /// Меняет faction первой byte-exact NPC-name записи, как vector scan EXE.
+ /// Меняет faction первой byte-оригинал NPC-name записи, как vector scan EXE.
     pub(crate) fn set_npc_faction(
         &mut self,
         name: &[u8],
@@ -521,7 +516,7 @@ impl CGodsBattleConf {
         })
     }
 
-    /// Заимствует ordered vector для достигнутого `CRSGodsBattle` snapshot-а.
+ /// Заимствует ordered vector для действующего `CRSGodsBattle` snapshot-а.
     pub(crate) fn npc_names(&self) -> &[GodsBattleFactionNpcName] {
         &self.npc_names
     }
@@ -719,166 +714,4 @@ fn write_gods_battle_string(
     Ok(())
 }
 
-// Сырой C++ ниже сохранён как локальная документация loaders, persistence и
 // runtime accessors, а не как Rust-реализация.
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp
-
-// ============================================================================
-// FUNCTION: CGodsBattleConf::SetXYDFrmDB
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:199
-// RVA: 0x0007E460
-// ADDRESS: 0047e460
-// PROTOTYPE: void __thiscall SetXYDFrmDB(ulong param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodsBattleConf::SetFactionXYD
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:234
-// RVA: 0x0007E480
-// ADDRESS: 0047e480
-// PROTOTYPE: void __thiscall SetFactionXYD(int param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodsBattleConf::SaveNpcFaction
-// STATUS: IMPLEMENTED_CALLSITE_FOLDED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:321
-// RVA: 0x0007E610
-// ADDRESS: 0047e610
-// PROTOTYPE: void __thiscall SaveNpcFaction(void)
-//
-// IMPLEMENTED_OWNER: единственный достигнутый caller `OnServerMessage`
-// opcode `0x5FA0F`, subtype `2`, материализует vector snapshot и напрямую
-// вызывает `RsGodsBattleOwner::save_npc_faction_autonomous`. Это заменяет
-// только цепочку process-global `GetGame`/nullable pointer: DB-вызов остаётся
-// no-argument overload-ом с собственным соединением, его bool не влияет на
-// opcode, а отсутствие DB-owner-а остаётся тихим отсутствием side effect.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodsBattleConf::AddByteToArray
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:138
-// RVA: 0x0007E990
-// ADDRESS: 0047e990
-// PROTOTYPE: void __thiscall AddByteToArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Реализация находится выше; декомпиляция сохранена как byte-order provenance.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodsBattleConf::SetNpcFaction
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:247
-// RVA: 0x0007EC50
-// ADDRESS: 0047ec50
-// PROTOTYPE: void __thiscall SetNpcFaction(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodsBattleConf::CGodsBattleConf
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:227
-// RVA: 0x00080FA0
-// ADDRESS: 00480fa0
-// PROTOTYPE: undefined __thiscall CGodsBattleConf(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodsBattleConf::LoadFile
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:10
-// RVA: 0x000810D0
-// ADDRESS: 004810d0
-// PROTOTYPE: int __thiscall LoadFile(void)
-//
-// IMPLEMENTED_OWNER: `CGodsBattleConf::load_from_resources` выше. Точный
-// epilogue `0x004819EF` устанавливает `EAX=1` даже после missing-file ветвей;
-// caller сохраняет этот legacy result отдельно от safe `Result`, который
-// сообщает missing resource или повреждённое поле и сохраняет exact
-// последовательную мутацию уже достигнутых секций.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodsBattleConf::GetInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:206
-// RVA: 0x00081A20
-// ADDRESS: 00481a20
-// PROTOTYPE: CGodsBattleConf * __cdecl GetInstance(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CShape::GetPos
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:217
-// RVA: 0x000DEA50
-// ADDRESS: 004dea50
-// PROTOTYPE: long __thiscall GetPos(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodsBattleConf::GetBFactionXYD
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\setup\godsbattleconf.cpp:222
-// RVA: 0x000DEBA0
-// ADDRESS: 004deba0
-// PROTOTYPE: ulong __thiscall GetBFactionXYD(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: WorldServer

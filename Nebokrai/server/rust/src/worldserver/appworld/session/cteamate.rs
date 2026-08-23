@@ -1,11 +1,11 @@
 //! Участник World-команды `CTeamate`.
 //!
-//! Все десять функций owner-а действуют по точной паре
+//! Источник десяти функций owner-а —
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`: `SetOwnerRegionID`
 //! `OnChangeState`, `PlayerStillExisted`
 //! `IsPlugAvailable`, `GetOwnerName`,
 //! `Serialize`, constructor/destructor,
-//! `SetOwnerName`, `Unserialize`. Исходный owner:
+//! `SetOwnerName`, `Unserialize`.
 //!
 //! Constructor задаёт plug type `5`, region/timestamp `0`, existence `1` и
 //! пустое byte- имя. `SetOwnerRegionID` сначала меняет поле, затем

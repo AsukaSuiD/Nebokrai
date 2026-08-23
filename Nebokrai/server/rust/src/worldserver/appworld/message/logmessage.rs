@@ -1,88 +1,52 @@
 //! WorldServer dispatcher-owner `OnLogMessage`.
 //!
-//! Все действующие ветви dispatcher-а действуют: player lifecycle
+//! Источник контракта — `WorldServer/Nworldserver.exe` и
+//! `WorldServer/WorldServer.pdb`. Owner обрабатывает player lifecycle
 //! `0x5FB01/0x5FB02`, player-list `0x4FB01`, delete-role `0x4FB02`,
 //! restore-role `0x4FB03`, create-role `0x4FB04`, select-player `0x4FB05` и
-//! account cleanup `0x4FB06/0x4FB07`. Неизвестный opcode попадает в исходный
-//! default-return без side effects, а не передаётся общему маршрутизатору.
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
-//! читает account через `GetStr(..., 0x14)`,
-//! затем signed player ID, удаляет первое совпадение из live deletion-list,
-//! добавляет уникальный ID в хвост restore-list и посылает в текущий
-//! LoginServer `0x1FF04 + char(0x15) + player_id + account\0` без priority.
-//! читает account через `GetStr(..., 0x100)`,
-//! находит первое `_strcmpi` совпадение в login-list и строго выполняет
-//! `team exit -> RemovePlayerLoadData -> RemoveLoginPlayer ->
-//! AppendOfflinePlayer`.
-//! сначала ищет online account с действующим
-//! GameServer: посылает `0x7F903 + player_id`, выполняет team-exit и немедленно
-//! возвращается. Только без такого маршрута он чистит первый login account и
-//! всегда отвечает LoginServer `0x1FF06 + account\0 + ""\0 + char(0)`.
-//! читает player ID и два legacy long,
-//! различает offline/online/wrong-map кодами `0/-1/-2`, а на совпавшем map
-//! дописывает полный `CPlayer` в исходное сообщение, меняет opcode на
-//! `0x7F901`, отправляет тому же socket и только потом переводит игрока из
-//! login/offline в online. Safe codec block не заменяется частичным wire.
-//! EXE действительно вызывает два ignored `GetLong` после player ID, хотя
-//! 12-байтный donor-gate не перенесён, а исходный payload в success-ответе
-//! остаётся byte- независимо от результата безопасных ignored reads.
-//! принимает optional subtype-`1` snapshot,
-//! очищает transient pet-вектор и faction-data flag, затем посылает LoginServer
-//! `0x1FF06 + account\0 + name\0 + level`, выполняет login/online/offline и
-//! team переходы и уведомляет каждого действующего online-друга через
-//! `0x7F905 + friend_id + returned_name\0` в исходном list-порядке.
-//! отсутствуют и не перенесены; как и account-wide cancellation/in-flight
-//! lifecycle из его очереди. `VecDeque` заменяет только старые list/deque
-//! nodes, а существующая client FIFO — WinSock transport без изменения
-//! wire/order.
-//! `CRsPlayer::OpenPlayerBase` сначала делает
-//! отдельный `SELECT ID` count, затем добавляет `1 + account\0 + word(byte
-//! wrapping DB+creation count)`. При нуле машинный код добавляет второй
-//! `1 + account\0 + long(0)`; этот legacy quirk сохранён. Ненулевой путь
-//! читает `SELECT *... ORDER BY id`, публикует DB rows перед creation rows,
-//! подменяет DB scalar-ы действующей map/save-копией и вычисляет signed
-//! deletion-status с приоритетом restore/live deletion/DB DelDate. Tiberius,
-//! parameter binding и owned wire snapshots заменяют только ADO/COM,
-//! `_sprintf` и временные C++ locals; исходный clone-codec, SQL-порядок, N+1
-//! DelDate lookup и wire остаются явными.
-//! для `0x4FB02` читает account/player/IP,
-//! форматирует все четыре octet-а little-endian long, снимает `_time` до
-//! organizing/DB gates и вызывает полный `OnDeleteRole`. Коды `1..=4` дают
-//! `0x1FF03 + char(0x13) + player + account\0 + long(code)`; уже поставленное
-//! удаление даёт тот же ответ с нулём. Успех строго снимает restore, добавляет
-//! live deletion time и посылает `char(0x14)` с signed byte `dwDelDays`.
-//! Optional `player_delete_log` начинается только после send и сохраняет
-//! отдельный name lookup/FIFO; Tiberius parameter binding заменяет лишь оригинал
-//! SQL-formatting. `OnDeleteRole` также
-//! `GetMembers`, а не `GetMemberNum() > 1`, поэтому штатно возвращает `1`.
-//! Union-ветвь достигает concrete `CUnion::DelMember`, который всегда true,
-//! отвязывает faction и даёт код `3`; код `2` concrete машиной недостижим.
+//! account cleanup `0x4FB06/0x4FB07`. Неизвестный opcode возвращается без
+//! побочных эффектов и не передаётся следующему dispatcher-у.
 //!
-//! для `0x4FB04` читает
-//! `name/sex/occupation/head/face/country/account`, затем строго выполняет
-//! count/limit, допустимую RU-пару sex/occupation, country, WordsFilter и
-//! шесть name lookup-ов: creation, map, DB-creation, DB-data, persistent DB,
-//! faction/union. Коды ответа `0x18/0x19/0x1A/0x17` и их первая terminal
-//! проверка сохранены. Успех создаёт `CPlayer`, применяет default property,
-//! identity/service поля, pre-increment player ID, ordered origin equipment и
-//! только затем `AppendCreationPlayer`. Ответ `0x1FF05/0x1B` сохраняет
-//! C-строки, signed short level, `sex -> occupation -> country -> head`, 11
-//! equipment ID, 11 level-byte и signed region ID; send остаётся
-//! неприоритетным. Safe name/layout/GUID/append blocks не превращаются в
-//! придуманный legacy ответ, а parameterized Tiberius заменяет только ADO.
-//! для `0x4FB05` читает
-//! `player_id/account/client_ip`, проверяет binding строго через live map,
-//! frozen save-map и только затем `CRsPlayer`. Invalid binding сначала
-//! посылает `0x1FF01/0x1C`, затем пишет исходный error text. `GetPlayerData`
-//! сохраняет restore/deletion gate, clone live перед clone save и только при
-//! обоих miss ставит fixed `char[20]` record в player-load FIFO. Direct clone
-//! после `0x1D` ответа вызывает Largess, публикует login/map state и лишь затем
-//! обновляет friends и сбрасывает faction/login flags; DB-loaded consumer
-//! сохраняет свой подтверждённый обратный
-//! lifecycle queue и account-wide cancellation не перенесены. Tiberius и
-//! parameter binding заменяют только ADO/COM и небезопасный SQL buffer.
+//! Lifecycle сохраняет порядок переходов между login, offline и online,
+//! вызов team-exit и адресную отправку GameServer. Успешный online-маршрут
+//! отправляет полный `CPlayer` до изменения списков. Два дополнительных long
+//! после player ID читаются и игнорируются; они не меняют исходный payload
+//! success-ответа. Offline snapshot сначала очищает transient pet/faction
+//! state, затем отвечает LoginServer, обновляет списки и только после этого
+//! уведомляет online-друзей в исходном порядке.
 //!
-//! документация, а не как Rust-реализация.
+//! Restore удаляет первое совпадение из live deletion-list, добавляет уникальный
+//! ID в хвост restore-list и посылает `0x1FF04/0x15` без priority. Account
+//! cleanup сначала предпочитает действующий online-маршрут; только при его
+//! отсутствии удаляет первый login account и отвечает `0x1FF06`.
+//!
+//! `CRsPlayer::OpenPlayerBase` сначала выполняет отдельный `SELECT ID`, затем
+//! кодирует account и wrapping-сумму DB/creation rows. Нулевой результат
+//! содержит дополнительный `long(0)`. Ненулевой путь читает
+//! `SELECT * ... ORDER BY id`, публикует DB rows перед creation rows, подменяет
+//! scalar-ы действующей map/save-копией и вычисляет deletion-status с
+//! приоритетом restore, live deletion, DB `DelDate`. N+1 lookup `DelDate` и
+//! SQL-порядок сохранены.
+//!
+//! Delete-role снимает время до organizing/DB gates. Ошибки `1..=4` отвечают
+//! `0x1FF03/0x13`; повторное удаление использует тот же ответ с нулём. Успех
+//! снимает restore, добавляет live deletion time и отвечает `0x14` с signed
+//! byte `dwDelDays`; optional delete-log ставится в FIFO только после send.
+//! Faction-проверка использует `GetMembers`, union-ветвь отвязывает faction и
+//! даёт код `3`; код `2` недостижим в этом owner-е.
+//!
+//! Create-role строго выполняет limit, RU sex/occupation, country,
+//! `WordsFilter` и шесть name lookup-ов. Первая terminal-проверка определяет
+//! ответ `0x18/0x19/0x1A/0x17`. Успех применяет default property, выдаёт новый
+//! player ID, добавляет начальную экипировку и лишь затем помещает игрока в
+//! creation-list; ответ сохраняет исходный порядок identity, equipment и
+//! region. Select-player проверяет binding через live map, frozen save-map и
+//! только затем DB. При miss он ставит fixed account record в player-load FIFO;
+//! direct clone публикует Largess/login/map до friends и сброса flags.
+//!
+//! `VecDeque`, owned wire snapshots и параметризованный Tiberius заменяют
+//! list/deque nodes, ADO/COM, `_sprintf` и временные C++ buffers. Они не меняют
+//! wire, SQL-порядок, очереди и частичные lifecycle-эффекты.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

@@ -1,13 +1,7 @@
-//! DB-владелец `CRsRegion` исторического WorldServer из `rsregion.cpp`.
+//! DB-владелец `CRsRegion` WorldServer из `rsregion.cpp`.
 //!
-//! Статусы `CRsRegion::Save` RVA `0x000EEB50` и `LoadRegionParam` RVA
-//! `0x000EF0F0` — `IMPLEMENTED`; constructor и destructor ниже заменены
-//! обычным Rust lifetime. Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
-//! исходный путь PDB:
-//! `e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsregion.cpp`.
+//! Источник контрактов `CRsRegion::Save` и `LoadRegionParam` — WorldServer
+//! EXE/PDB. Constructor и destructor заменены обычным Rust lifetime.
 //!
 //! `Save(CWorldRegion*, connection)` сначала проверяет region pointer, затем
 //! byte-copy-ит весь `CWorldRegion::tagRegionParam` и лишь после этого проверяет
@@ -36,23 +30,18 @@
 //! side effect. Ошибка после опубликованного prefix возвращает `false`, не
 //! откатывая уже применённые параметры. `WorldDatabaseSettings`/Tiberius и
 //! typed target заменяют лишь ADO/COM, `std::map` lookup и raw pointers;
-//! добавленные Linux-донором staging, row validation и атомарная публикация
-//! намеренно не переносятся.
+//! staging, row validation и атомарной публикации нет.
 //!
-//! Exact call-site `0x004EEBF2..0x004EEC04` имеет статус
-//! `VERIFIED_DISASSEMBLY`: потерянный raw-аргумент `_sprintf` берётся из первой
-//! копии структуры, то есть `lID`. Эпилоги `0x004EF071..0x004EF0CB` отдельно
-//! подтверждают `AL=1` только после успешного `Update` и общий `AL=0` для null
-//! region, missing connection и catch `Save CSL_Region ERROR`. После этих
-//! ответов reverse прекращён.
+//! Аргумент `_sprintf` берётся из первой копии структуры, то есть `lID`.
+//! Результат равен `true` только после успешного `Update`; null region, missing
+//! connection и `Save CSL_Region ERROR` возвращают `false`.
 //!
 //! `Option` сохраняет порядок null-проверок: null region возвращает тихий
 //! `false`, а missing connection создаёт исходный log-эквивалент `Save Thread
 //! Sent Connect Not Found.`. DB-ошибка создаёт один structured notice без SQL
 //! и runtime RegionID. Метод использует уже активную caller-транзакцию и сам не
 //! выполняет begin/commit/rollback. `VecDeque`, Tiberius и Rust `Drop` заменяют
-//! только STL/ADO/COM/compiler cleanup; raw реализованного владельца, catch и
-//! служебный cleanup удалены.
+//! только STL/ADO/COM/compiler cleanup.
 
 use std::collections::VecDeque;
 use std::error::Error;
@@ -118,7 +107,7 @@ pub(crate) enum RegionParametersLoadOutcome {
     },
 }
 
-/// Структурированная замена достигнутых log-ветвей `CRsRegion`.
+/// Структурированная замена действующих log-ветвей `CRsRegion`.
 #[derive(Debug)]
 pub(crate) struct RsRegionNotice {
     pub(crate) error: RsRegionError,
@@ -211,27 +200,27 @@ impl From<tiberius::error::Error> for RsRegionDatabaseError {
     }
 }
 
-/// Узкая объектная граница достигнутых DB-владельцев `CRsRegion`.
+/// Узкая объектная граница действующих DB-владельцев `CRsRegion`.
 pub(crate) trait RsRegionOwner {
-    /// Открывает отдельное connection и немедленно применяет recordset-prefix
-    /// к уже опубликованным регионам в порядке `RegionID` SQL-result-а.
+ /// Открывает отдельное connection и немедленно применяет recordset-prefix
+ /// к уже опубликованным регионам в порядке `RegionID` SQL-result-а.
     async fn load_region_parameters(
         &mut self,
         target: &mut dyn RegionParameterLoadTarget,
     ) -> RegionParametersLoadOutcome;
 
-    /// Upsert-ит одну region-строку внутри уже активной caller-транзакции.
+ /// Upsert-ит одну region-строку внутри уже активной caller-транзакции.
     async fn save(
         &mut self,
         snapshot: Option<&RegionSaveSnapshot>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
-    /// Забирает следующий исходный log-эквивалент.
+ /// Забирает следующий исходный log-эквивалент.
     fn pop_notice(&mut self) -> Option<RsRegionNotice>;
 }
 
-/// Linux/TDS-замена достигнутой части исходного `CRsRegion`.
+/// Linux/TDS-замена действующей части исходного `CRsRegion`.
 #[derive(Default)]
 pub(crate) struct TiberiusRsRegion {
     settings: Option<WorldDatabaseSettings>,
@@ -239,7 +228,7 @@ pub(crate) struct TiberiusRsRegion {
 }
 
 impl TiberiusRsRegion {
-    /// Сохраняет immutable setup snapshot для самостоятельного load connection.
+ /// Сохраняет immutable setup snapshot для самостоятельного load connection.
     pub(crate) fn new(settings: WorldDatabaseSettings) -> Self {
         Self {
             settings: Some(settings),
@@ -420,57 +409,3 @@ fn required_i32(
         Err(error) => Err(RsRegionLoadError::Database(error.into())),
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsregion.cpp
-
-
-
-// ============================================================================
-// FUNCTION: CRsRegion::Save
-// STATUS: IMPLEMENTED
-// Реализация и локальная спецификация находятся выше.
-
-// ============================================================================
-// FUNCTION: CRsRegion::LoadRegionParam
-// STATUS: IMPLEMENTED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsregion.cpp:22
-// RVA: 0x000EF0F0
-// ADDRESS: 004ef0f0
-// PROTOTYPE: bool __thiscall LoadRegionParam(map<long,CGame::tagRegion,std::less<long>,std::allocator<std::pair<long_const_,CGame::tagRegion>_>_> * param_1)
-//
-// IMPLEMENTED_OWNER: `RsRegionOwner::load_region_parameters` открывает
-// самостоятельный TDS connection, читает literal recordset и сразу
-// передаёт каждую достигнутую строку `RegionParameterLoadTarget`. `CGame`
-// сохраняет find/non-null gate и вызывает `SetParamFromDB`; порядок prefix и
-// bool после field/DB error не заменяются staging или rollback.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004ef585
-// STATUS: IMPLEMENTED_API_SHAPE_REPLACED
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsregion.cpp:65
-// RVA: 0x000EF585
-// ADDRESS: 004ef585
-// PROTOTYPE: undefined Catch@004ef585()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: WorldServer

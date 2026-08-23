@@ -1,11 +1,8 @@
-//! Статический registry-owner сессий и plug-объектов исторического WorldServer.
+//! Статический registry-owner сессий и plug-объектов WorldServer.
 //!
-//! действует: `AI`, `QuerySession`,
-//! `GarbageCollect`, `QueryPlug`,
-//! `InsertPlug`, `CreateSession`,
-//! `CreatePlug`, `UnserializePlug` и
-//! `UnserializeSession`. Источник контракта — точная пара WorldServer EXE/PDB.
-//! Исходный owner:
+//! `AI`, `QuerySession`, `GarbageCollect`, `QueryPlug`, `InsertPlug`,
+//! `CreateSession`, `CreatePlug`, `UnserializePlug` и `UnserializeSession`
+//! входят в контракт owner-а. Источник контракта — WorldServer EXE/PDB.
 //!
 //! Layout сохраняет `s_lSessionID/s_lPlugID` как signed `long`, оба registry —
 //! как `stdext::hash_map<long, pointer>`, а enum-значения —
@@ -13,7 +10,7 @@
 //! `TYPE_SESSION/TYPE_PLUG=10/11`; data задаёт обоим ID initial `1`.
 //! Factory напрямую строит конкретные `CSession`, `CTeam` и `CTeamate`.
 //! Factory-owned lifetime выражен через `Box`, а `Drop` вызывается ровно там,
-//! где исходник звал scalar deleting destructor. Подключённый `OnTeamMessage`
+//! где owner вызывал scalar deleting destructor. Подключённый `OnTeamMessage`
 //! использует те же registry через узкие `WorldTeamSessionOwner` и
 //! `WorldTeamateOwner` проекции: это safe-эквивалент точных RTTI-переходов, а
 //! не отдельное team-состояние.
@@ -21,8 +18,7 @@
 //! `AI` проходит только session registry. Null value стирается сразу;
 //! недоступная session сначала получает `Abort`, завершённая — `End`, затем
 //! owner уничтожается до erase. Иначе вызывается virtual `AI`, после чего
-//! обход продолжается со следующей записью. Конкретные vtable slots проверены
-//! в (): `CSession` vtable
+//! обход продолжается со следующей записью. `CSession` vtable
 //! содержит `AI +0x40`, `IsSessionEnded +0x50`, `IsSessionAvailable +0x60`,
 //! `InsertPlug +0x64`, `End +0x6C`, `Abort +0x70`, `Unserialize +0x94`; у
 //! `CPlug` vtable `Unserialize` находится по `+0x84`.
@@ -33,7 +29,7 @@
 //! Этот порядок наблюдаем через последовательные virtual side effects `AI`.
 //! Стандартные Rust collections не дают выбрать такой iterator contract;
 //! узкий `LegacyMsvcHashRegistry` хранит owners в `Vec`, воспроизводит только
-//! доказанные `hash = key ^ `, mask/max-index growth и итоговый
+//! `hash = key ^ 0xDEADBEEF`, mask/max-index growth и итоговый
 //! `(bucket, signed key)` порядок. Bucket nodes, iterator-vector, allocation и
 //! rehash pointer surgery являются удалённым STL noise. При 32-битном ID-
 //! collision новая запись уже заменяет старую по тому же ключу, поэтому

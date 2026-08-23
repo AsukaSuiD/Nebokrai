@@ -1,61 +1,11 @@
-//! Узел товара аукциона `CGoodsNode`: начальное состояние, очистка и
-//! двусторонний межсерверный byte-array.
+//! Межсерверный узел аукционного товара `CGoodsNode`.
+//! Источники контракта — точные пары Misc/Game/World EXE/PDB.
 //!
-//! Статус владельца: `IMPLEMENTED` для `CGoodsNode`, `~CGoodsNode`, `Clear`,
-//! `UnSerialize`, `Serialize` и достигнутых переводов состояния из
-//! `CAuctionRoom::AddItemToAuctionRoom`, `DelItemFromAuctionRoom`,
-//! `DelItemFromAuctionRoomByPreBuy`, `DelItemFromAuctionRoomForSucessed` и
-//! `DoneDelList`; `Clone` и остальная доменная семантика ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально).
-//!
-//! Исходные `.cpp/.h`:
-//! `h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp` и
-//! `e:\svn\fengyun_russia_dev\public\auctionroom\auctionnode.cpp/.h`.
-//! Точные пары и существенные RVA:
-//! - MiscServer: `miscserver.exe + miscserver.pdb`, constructor `0x0000BCA0`,
-//!   destructor `0x0000B9E0`, `Clear` `0x0000BA90`, `UnSerialize` `0x0000BB40`,
-//!   `Serialize` `0x0000B8B0`;
-//! - GameServer: `gameserver.exe + GameServer.pdb`, constructor `0x000D93B0`,
-//!   destructor `0x000D9110`, `Clear` `0x000D91C0`, `UnSerialize` `0x000D9270`,
-//!   `Serialize` `0x000D8FE0`;
-//! - WorldServer: `Nworldserver.exe + WorldServer.pdb`, constructor
-//!   `0x000DFBE0`, destructor `0x000DF880`, `Clear` `0x000DF9F0`,
-//!   `UnSerialize` `0x000DFAA0`, `Serialize` `0x000DF8C0`.
-//!
-//! Все три варианта совпадают. Точные PDB задают размер старого класса `0x478`,
-//! 256-байтовые account/name, 16-байтовый `CGUID`, `AuctionInfo` размером
-//! `0x22c` и 32-битный `GoodsState`: `STATE_NONE..STATE_PRE_BUY = 0..5`.
-//! `UnSerialize` сначала вызывает `Clear`, затем последовательно читает bool,
-//! little-endian 32-битные поля, две NUL-terminated строки, GUID с байтом
-//! присутствия, byte-exact `AuctionInfo`, длину и байты товара. Курсор включает
-//! завершающий NUL и GUID-marker.
-//! `Serialize` во всех трёх компонентах совпадает и пишет ровно обратную
-//! последовательность. Старый `vector<unsigned char>` заменён новым owned
-//! `Vec<u8>`; строки включают первый NUL, GUID сохраняет marker `0/0x10`, а
-//! длина goods-вектора остаётся 32-битной.
-//!
-//! Фиксированные C-массивы представлены `[u8; 0x100]`, непрозрачный пока
-//! `AuctionInfo` сохраняется byte-exact wrapper-ом над `[u8; 0x22c]`,
-//! `std::vector<unsigned char>` — `Vec<u8>`, а GUID — готовым `CGuid`.
-//! Достигнутое поле `dwBuyerId` PDB задаёт как unsigned 32-bit по offset
-//! `0x224`. Снимки полей для DB-записи ниже читают только подтверждённые
-//! аргументы exact `CDbMisc`; остальные байты структуры не переинтерпретируются
-//! заранее. У неинициализированных constructor-ом `m_btGoodsType/m_dwLvLimit`
-//! нет придуманного default и TDS-owner останавливает такой вызов до SQL.
-//! Rust-владение заменяет destructor,
-//! allocator и exception cleanup. Форма `long&` сознательно заменена
-//! `&mut usize`, а неинициализированные constructor-ом `m_btGoodsType` и
-//! `m_dwLvLimit` — `Option`: `Clear` буквально не меняет их, успешный
-//! `UnSerialize` задаёт `Some`. Никакой исходный default для этих полей не
-//! придуман.
-//!
-//! Старые helpers не знали длину источника и могли читать за его концом либо
-//! писать строку длиннее 256 байт. Безопасная граница возвращает typed-ошибку,
-//! сохраняя уже выполненные `Clear` и успешные последовательные присваивания.
-//! Наблюдаемая реакция оригинального процесса на эти UB-входы не объявляется
-//! fail-closed контрактом; конкретные неизвестности локализованы у проверок.
-//! Реализованные тела и их прямой compiler/STL cleanup удалены, незатронутый
-//! аукционный псевдокод сохранён ниже.
+//! Все варианты совпадают: decode сначала очищает owner, затем читает scalar
+//! fields, две C-строки, GUID marker, `AuctionInfo`, длину и goods bytes;
+//! encode пишет обратную последовательность. Cursor включает NUL и GUID marker.
+//! Owned vectors и fixed byte arrays заменяют C++ buffers/lifetime, сохраняя
+//! wire, state transitions и partial decode effects.
 
 use std::error::Error;
 use std::fmt;
@@ -169,9 +119,9 @@ impl GoodsState {
         self.0
     }
 
-    /// Сохраняет любой 32-битный database discriminant без преждевременного
-    /// сужения до известных состояний: exact `LoadGoodsByOwnerId` просто
-    /// копировал `GoodsState` из строки в node.
+ /// Сохраняет любой 32-битный database discriminant без преждевременного
+ /// сужения до известных состояний: оригинал `LoadGoodsByOwnerId` просто
+ /// копировал `GoodsState` из строки в node.
     pub(crate) const fn from_raw(raw: i32) -> Self {
         Self(raw)
     }
@@ -403,7 +353,7 @@ impl Default for CGoodsNode {
 }
 
 impl CGoodsNode {
-    /// Создаёт узел в состоянии исходного constructor + `Clear`.
+ /// Создаёт узел в состоянии исходного constructor + `Clear`.
     pub(crate) fn new() -> Self {
         let mut node = Self {
             db: false,
@@ -428,11 +378,11 @@ impl CGoodsNode {
         node
     }
 
-    /// Создаёт результат одной materialized DB-строки `Auction`.
-    ///
-    /// Это узкая граница `CDbMisc::LoadGoodsByOwnerId`: exact owner заполнял
-    /// note после `CreateGoodsNoProbability`, а его goods-byte-array назначал
-    /// позднее, когда все joined `AuctionGoods` строки были применены.
+ /// Создаёт результат одной materialized DB-строки `Auction`.
+ ///
+ /// Это узкая граница `CDbMisc::LoadGoodsByOwnerId`: оригинал owner заполнял
+ /// note после `CreateGoodsNoProbability`, а его goods-byte-array назначал
+ /// позднее, когда все joined `AuctionGoods` строки были применены.
     pub(crate) fn from_auction_database(
         fields: AuctionDatabaseNodeFields,
         goods_bytes: Vec<u8>,
@@ -466,14 +416,14 @@ impl CGoodsNode {
         node
     }
 
-    /// Создаёт `LoadMoneyById`-note после сериализации возвращаемого gold.
-    ///
-    /// Exact owner заполнял только amount, GUID, base-index, `STATE_BACK` и
-    /// goods-byte-array. `m_btGoodsType` и `m_dwLvLimit` оставались прежней
-    /// неинициализированной внутренней областью, но этот path никогда не
-    /// вызывает `CGoodsNode::Serialize`: `DoneOutList` извлекает только
-    /// вложенный `CGoods`. Rust оставляет их `None`, поэтому ошибочный новый
-    /// serialize безопасно выявляется вместо чтения мусора.
+ /// Создаёт `LoadMoneyById`-note после сериализации возвращаемого gold.
+ ///
+ /// Оригинал owner заполнял только amount, GUID, base-index, `STATE_BACK` и
+ /// goods-byte-array. `m_btGoodsType` и `m_dwLvLimit` оставались прежней
+ /// неинициализированной внутренней областью, но этот path никогда не
+ /// вызывает `CGoodsNode::Serialize`: `DoneOutList` извлекает только
+ /// вложенный `CGoods`. Rust оставляет их `None`, поэтому ошибочный новый
+ /// serialize безопасно выявляется вместо чтения мусора.
     pub(crate) fn from_auction_money_return(
         amount: i32,
         guid: CGuid,
@@ -489,10 +439,10 @@ impl CGoodsNode {
         node
     }
 
-    /// Очищает ровно поля исходного `Clear` и освобождает goods-буфер.
-    ///
-    /// `goods_type` и `level_limit` сохраняются: старый метод не присваивал им
-    /// значений ни при повторной очистке, ни в constructor-е.
+ /// Очищает ровно поля исходного `Clear` и освобождает goods-буфер.
+ ///
+ /// `goods_type` и `level_limit` сохраняются: старый метод не присваивал им
+ /// значений ни при повторной очистке, ни в constructor-е.
     pub(crate) fn clear(&mut self) {
         self.db = true;
         self.add_ticket = 0;
@@ -511,10 +461,10 @@ impl CGoodsNode {
         self.goods_bytes = Vec::new();
     }
 
-    /// Читает один узел из старого byte-array, начиная с переданного offset.
-    ///
-    /// При безопасной ошибке уже выполненные очистка, сдвиги курсора и
-    /// успешные присваивания сохраняются; реакция старого UB не имитируется.
+ /// Читает один узел из старого byte-array, начиная с переданного offset.
+ ///
+ /// При безопасной ошибке уже выполненные очистка, сдвиги курсора и
+ /// успешные присваивания сохраняются; реакция старого UB не имитируется.
     pub(crate) fn unserialize(
         &mut self,
         source: &[u8],
@@ -554,10 +504,10 @@ impl CGoodsNode {
         Ok(())
     }
 
-    /// Создаёт byte-exact результат старого `Serialize`.
-    ///
-    /// Ошибка оставляет локально заблокированными только поля, которые старый
-    /// constructor не задавал, либо недостижимую для 32-bit vector длину.
+ /// Создаёт byte-оригинал результат старого `Serialize`.
+ ///
+ /// Ошибка оставляет локально заблокированными только поля, которые старый
+ /// constructor не задавал, либо недостижимую для 32-bit vector длину.
     pub(crate) fn serialize(&self) -> Result<Vec<u8>, GoodsNodeSerializeError> {
         let goods_type = self
             .goods_type
@@ -600,38 +550,38 @@ impl CGoodsNode {
         Ok(output)
     }
 
-    /// Возвращает GUID, по которому комната индексирует этот узел.
+ /// Возвращает GUID, по которому комната индексирует этот узел.
     pub(crate) const fn guid(&self) -> CGuid {
         self.guid
     }
 
-    /// Возвращает ticket вторичного временного индекса.
+ /// Возвращает ticket вторичного временного индекса.
     pub(super) const fn add_ticket(&self) -> u32 {
         self.add_ticket
     }
 
-    /// Возвращает исходный unsigned owner id без изменения битов.
+ /// Возвращает исходный unsigned owner id без изменения битов.
     pub(crate) const fn owner_id(&self) -> u32 {
         self.owner_id
     }
 
-    /// Возвращает exact `m_bDb` для World auction relay.
+ /// Возвращает оригинал `m_bDb` для World auction relay.
     pub(crate) const fn is_db(&self) -> bool {
         self.db
     }
 
-    /// Возвращает PDB-подтверждённый `m_AucInfo.dwBuyerId`.
+ /// Возвращает PDB-подтверждённый `m_AucInfo.dwBuyerId`.
     pub(crate) fn buyer_id(&self) -> u32 {
         self.auction_info.buyer_id()
     }
 
-    /// Выполняет единственное доказанное присваивание `dwBuyerId`.
+ /// Выполняет единственное доказанное присваивание `dwBuyerId`.
     pub(crate) fn set_buyer_id(&mut self, buyer_id: u32) {
         self.auction_info.set_buyer_id(buyer_id);
     }
 
-    /// Собирает только поля, которые исходный `CDbMisc` передавал в свои
-    /// отдельные SQL write-переходы.
+ /// Собирает только поля, которые исходный `CDbMisc` передавал в свои
+ /// отдельные SQL write-переходы.
     pub(crate) fn database_write_fields(&self) -> AuctionDatabaseWriteFields<'_> {
         AuctionDatabaseWriteFields {
             guid: self.guid,
@@ -644,8 +594,8 @@ impl CGoodsNode {
         }
     }
 
-    /// Собирает аргументы exact `exec addnewGoods` без переинтерпретации
-    /// неиспользуемых байтов `AuctionInfo`.
+ /// Собирает аргументы оригинал `exec addnewGoods` без переинтерпретации
+ /// неиспользуемых байтов `AuctionInfo`.
     pub(crate) fn database_insert_fields(&self) -> AuctionDatabaseInsertFields<'_> {
         AuctionDatabaseInsertFields {
             add_ticket: self.add_ticket,
@@ -672,87 +622,87 @@ impl CGoodsNode {
         }
     }
 
-    /// Возвращает старый byte money type.
+ /// Возвращает старый byte money type.
     pub(super) const fn money_type(&self) -> u8 {
         self.money_type
     }
 
-    /// Возвращает тип товара либо неинициализированную старую границу.
+ /// Возвращает тип товара либо неинициализированную старую границу.
     pub(super) const fn goods_type(&self) -> Option<u8> {
         self.goods_type
     }
 
-    /// Возвращает level limit либо неинициализированную старую границу.
+ /// Возвращает level limit либо неинициализированную старую границу.
     pub(super) const fn level_limit(&self) -> Option<u32> {
         self.level_limit
     }
 
-    /// Возвращает фиксированный старый буфер имени товара.
+ /// Возвращает фиксированный старый буфер имени товара.
     pub(super) const fn goods_name(&self) -> &[u8; LEGACY_STRING_CAPACITY] {
         &self.goods_name
     }
 
-    /// Выполняет доказанное присваивание `m_GoodsState = STATE_AUCTION`.
+ /// Выполняет доказанное присваивание `m_GoodsState = STATE_AUCTION`.
     pub(super) fn mark_as_auction(&mut self) {
         self.goods_state = GoodsState::AUCTION;
     }
 
-    /// Проверяет точное состояние `STATE_AUCTION`.
+ /// Проверяет точное состояние `STATE_AUCTION`.
     pub(super) fn is_auction(&self) -> bool {
         self.goods_state == GoodsState::AUCTION
     }
 
-    /// Возвращает достигнутое `DoneDelList` состояние без переинтерпретации.
+ /// Возвращает действующее `DoneDelList` состояние без переинтерпретации.
     pub(crate) const fn goods_state(&self) -> GoodsState {
         self.goods_state
     }
 
-    /// Возвращает достигнутый unsigned индекс исходного auction-node.
+ /// Возвращает действующий unsigned индекс исходного auction-node.
     pub(crate) const fn base_index(&self) -> u32 {
         self.base_index
     }
 
-    /// Возвращает исходное signed количество с сохранением опечатки `Amout`.
+ /// Возвращает исходное signed количество с сохранением опечатки `Amout`.
     pub(crate) const fn amount(&self) -> i32 {
         self.amount
     }
 
-    /// Заимствует вложенный byte-array полного `CGoods`.
+ /// Заимствует вложенный byte-array полного `CGoods`.
     pub(crate) fn goods_bytes(&self) -> &[u8] {
         &self.goods_bytes
     }
 
-    /// Возвращает достигнутый `DoneDelList` флаг наличия ставки.
+ /// Возвращает действующий `DoneDelList` флаг наличия ставки.
     pub(super) const fn offer_price(&self) -> bool {
         self.offer_price
     }
 
-    /// Переводит узел в `STATE_UNDO`.
+ /// Переводит узел в `STATE_UNDO`.
     pub(super) fn mark_as_undo(&mut self) {
         self.goods_state = GoodsState::UNDO;
     }
 
-    /// Переводит узел в `STATE_PRE_BUY`.
+ /// Переводит узел в `STATE_PRE_BUY`.
     pub(super) fn mark_as_pre_buy(&mut self) {
         self.goods_state = GoodsState::PRE_BUY;
     }
 
-    /// Переводит узел в `STATE_SUCESSED` с исходной опечаткой имени.
+ /// Переводит узел в `STATE_SUCESSED` с исходной опечаткой имени.
     pub(super) fn mark_as_sucessed(&mut self) {
         self.goods_state = GoodsState::SUCESSED;
     }
 
-    /// Переводит узел в `STATE_BACK`.
+ /// Переводит узел в `STATE_BACK`.
     pub(super) fn mark_as_back(&mut self) {
         self.goods_state = GoodsState::BACK;
     }
 
-    /// Возвращает reached-поле `AuctionInfo::dwBuyerId`.
+ /// Возвращает reached-поле `AuctionInfo::dwBuyerId`.
     pub(super) fn auction_buyer_id(&self) -> u32 {
         self.auction_info.buyer_id()
     }
 
-    /// Перезаписывает только `AuctionInfo::dwBuyerId`, сохраняя остальные bytes.
+ /// Перезаписывает только `AuctionInfo::dwBuyerId`, сохраняя остальные bytes.
     pub(super) fn set_auction_buyer_id(&mut self, buyer_id: u32) {
         self.auction_info.set_buyer_id(buyer_id);
     }
@@ -837,10 +787,10 @@ impl<'source, 'cursor> LegacyByteArrayReader<'source, 'cursor> {
             let source_offset = *self.cursor;
             let byte = self.read_u8(field)?;
             let Some(slot) = destination.get_mut(destination_offset) else {
-                // BLOCKED_MISSING_FACT: helpers Misc RVA 0x00005830, Game
-                // 0x0007AC80 и World 0x000A3190 после 256 байт продолжали
-                // писать за char[0x100]. Достижимость и реакция процесса на
-                // такую строку не доказаны; unsafe не вводится.
+ // typed boundary: helpers Misc, Game
+ // и World после 256 байт продолжали
+ // писать за char[0x100]. Достижимость и реакция процесса на
+ // такую строку не доказаны; unsafe не вводится.
                 return Err(GoodsNodeUnserializeError::LegacyStringOverflow {
                     field,
                     first_out_of_bounds_offset: source_offset,
@@ -892,10 +842,10 @@ impl<'source, 'cursor> LegacyByteArrayReader<'source, 'cursor> {
             });
         };
         if end > self.source.len() {
-            // BLOCKED_MISSING_FACT: прямые scalar-read в `UnSerialize` сначала
-            // сдвигали `long&`, а helpers строк/буферов тоже не знали длину
-            // источника. Безопасная граница не назначает чтению за концом
-            // наблюдаемого результата и не двигает курсор через отсутствующее.
+ // typed boundary: прямые scalar-read в `UnSerialize` сначала
+ // сдвигали `long&`, а helpers строк/буферов тоже не знали длину
+ // источника. Безопасная граница не назначает чтению за концом
+ // наблюдаемого результата и не двигает курсор через отсутствующее.
             return Err(GoodsNodeUnserializeError::UnexpectedEnd {
                 field,
                 offset,
@@ -906,715 +856,3 @@ impl<'source, 'cursor> LegacyByteArrayReader<'source, 'cursor> {
         Ok(())
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: MiscServer
-// Точная пара: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SHA-256 EXE: F4426942465E6E9D1397EEF7A977B87D0D8C5B12957832770F57656F998AED65
-// SHA-256 PDB: ED5F482DADB3E8B050B37F9911067479D297C5B6D33C1EA2CE99C9CD0FC11FA7
-// Исходный владелец PDB: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-
-// ============================================================================
-// FUNCTION: Catch@00409277
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00009277
-// ADDRESS: 00409277
-// PROTOTYPE: undefined __stdcall Catch@00409277(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0040930e
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x0000930E
-// ADDRESS: 0040930e
-// PROTOTYPE: undefined __stdcall Catch@0040930e(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L87944
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023180
-// ADDRESS: 00423180
-// PROTOTYPE: undefined __stdcall $L87944(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L95669
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000231A0
-// ADDRESS: 004231a0
-// PROTOTYPE: undefined __stdcall $L95669(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L100099
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000231C0
-// ADDRESS: 004231c0
-// PROTOTYPE: undefined __stdcall $L100099(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L100476
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000231E0
-// ADDRESS: 004231e0
-// PROTOTYPE: undefined __stdcall $L100476(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L100477
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000231E8
-// ADDRESS: 004231e8
-// PROTOTYPE: undefined __stdcall $L100477(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L100683
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023200
-// ADDRESS: 00423200
-// PROTOTYPE: undefined __stdcall $L100683(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L100684
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023208
-// ADDRESS: 00423208
-// PROTOTYPE: undefined __stdcall $L100684(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L102981
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023220
-// ADDRESS: 00423220
-// PROTOTYPE: undefined __stdcall $L102981(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L102982
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023228
-// ADDRESS: 00423228
-// PROTOTYPE: undefined __stdcall $L102982(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L102983
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023230
-// ADDRESS: 00423230
-// PROTOTYPE: undefined __stdcall $L102983(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L102984
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023238
-// ADDRESS: 00423238
-// PROTOTYPE: undefined __stdcall $L102984(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L102985
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023240
-// ADDRESS: 00423240
-// PROTOTYPE: undefined __stdcall $L102985(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L105778
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023260
-// ADDRESS: 00423260
-// PROTOTYPE: undefined __stdcall $L105778(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L107657
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023280
-// ADDRESS: 00423280
-// PROTOTYPE: undefined __stdcall $L107657(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L107658
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023288
-// ADDRESS: 00423288
-// PROTOTYPE: undefined __stdcall $L107658(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L107948
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000232A0
-// ADDRESS: 004232a0
-// PROTOTYPE: undefined __stdcall $L107948(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L107949
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000232A8
-// ADDRESS: 004232a8
-// PROTOTYPE: undefined __stdcall $L107949(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L109363
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000232C0
-// ADDRESS: 004232c0
-// PROTOTYPE: undefined __stdcall $L109363(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L109364
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000232C8
-// ADDRESS: 004232c8
-// PROTOTYPE: undefined __stdcall $L109364(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L109365
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000232D3
-// ADDRESS: 004232d3
-// PROTOTYPE: undefined __stdcall $L109365(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L109366
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000232DE
-// ADDRESS: 004232de
-// PROTOTYPE: undefined __stdcall $L109366(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L109367
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000232E9
-// ADDRESS: 004232e9
-// PROTOTYPE: undefined __stdcall $L109367(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L109368
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000232F4
-// ADDRESS: 004232f4
-// PROTOTYPE: undefined __stdcall $L109368(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L109369
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000232FF
-// ADDRESS: 004232ff
-// PROTOTYPE: undefined __stdcall $L109369(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L109370
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x0002330A
-// ADDRESS: 0042330a
-// PROTOTYPE: undefined __stdcall $L109370(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L109371
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023315
-// ADDRESS: 00423315
-// PROTOTYPE: undefined __stdcall $L109371(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L110989
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023330
-// ADDRESS: 00423330
-// PROTOTYPE: undefined __stdcall $L110989(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L110990
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023338
-// ADDRESS: 00423338
-// PROTOTYPE: undefined __stdcall $L110990(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L113025
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023350
-// ADDRESS: 00423350
-// PROTOTYPE: undefined __stdcall $L113025(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L113026
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023358
-// ADDRESS: 00423358
-// PROTOTYPE: undefined __stdcall $L113026(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L113214
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023370
-// ADDRESS: 00423370
-// PROTOTYPE: undefined __stdcall $L113214(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L113215
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023378
-// ADDRESS: 00423378
-// PROTOTYPE: undefined __stdcall $L113215(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L113855
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023390
-// ADDRESS: 00423390
-// PROTOTYPE: undefined __stdcall $L113855(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L113856
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x00023398
-// ADDRESS: 00423398
-// PROTOTYPE: undefined __stdcall $L113856(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L113857
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000233A3
-// ADDRESS: 004233a3
-// PROTOTYPE: undefined __stdcall $L113857(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L113858
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000233AE
-// ADDRESS: 004233ae
-// PROTOTYPE: undefined __stdcall $L113858(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L113859
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000233B9
-// ADDRESS: 004233b9
-// PROTOTYPE: undefined __stdcall $L113859(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L113860
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000233C4
-// ADDRESS: 004233c4
-// PROTOTYPE: undefined __stdcall $L113860(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L113861
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000233CF
-// ADDRESS: 004233cf
-// PROTOTYPE: undefined __stdcall $L113861(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L113862
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000233DA
-// ADDRESS: 004233da
-// PROTOTYPE: undefined __stdcall $L113862(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L115616
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: MiscServer
-// ARTIFACT: MiscServer/miscserver.exe + MiscServer/miscserver.pdb
-// SOURCE: h:\fengyun\fy_russia\src\public\auctionroom\auctionnode.cpp
-// RVA: 0x000233F0
-// ADDRESS: 004233f0
-// PROTOTYPE: undefined __stdcall $L115616(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: MiscServer
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\public\auctionroom\auctionnode.h
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\public\auctionroom\auctionnode.cpp
-
-// ============================================================================
-// FUNCTION: CGoodsNode::SetAccount
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionnode.h:99
-// RVA: 0x0002AB40
-// ADDRESS: 0042ab40
-// PROTOTYPE: void __thiscall SetAccount(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsNode::SetGuid
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionnode.h:127
-// RVA: 0x0002AB60
-// ADDRESS: 0042ab60
-// PROTOTYPE: void __thiscall SetGuid(CGUID param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsNode::SetGoodsName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionnode.h:137
-// RVA: 0x0002ABB0
-// ADDRESS: 0042abb0
-// PROTOTYPE: void __thiscall SetGoodsName(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsNode::ComputerEndTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionnode.cpp:150
-// RVA: 0x000D8FC0
-// ADDRESS: 004d8fc0
-// PROTOTYPE: uint __thiscall ComputerEndTime(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsNode::Clone
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionnode.cpp:44
-// RVA: 0x000D9460
-// ADDRESS: 004d9460
-// PROTOTYPE: bool __thiscall Clone(CGoodsNode * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
-
-// COMPONENT_VARIANT_BEGIN: WorldServer
-// Точная пара: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SHA-256 EXE: F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1
-// SHA-256 PDB: 04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\public\auctionroom\auctionnode.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\public\auctionroom\auctionnode.h
-
-// ============================================================================
-// FUNCTION: CGoodsNode::SetGuid
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: WorldServer
-// ARTIFACT: WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\public\auctionroom\auctionnode.h:127
-// RVA: 0x000EF5F0
-// ADDRESS: 004ef5f0
-// PROTOTYPE: void __thiscall SetGuid(CGUID param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: WorldServer

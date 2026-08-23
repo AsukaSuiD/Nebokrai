@@ -1,7 +1,7 @@
 //! WorldServer dispatcher-owner `OnMSG_M2W_AUCTION`.
 //!
-//! WorldServer/WorldServer.pdb`, исходный owner
-//!
+//! Источник контракта — `WorldServer/Nworldserver.exe` и
+//! `WorldServer/WorldServer.pdb`, исходный owner `OnMSG_M2W_AUCTION`.
 //!
 //! `0x15EB01` и non-`STATE_PRE_BUY` путь `0x15EB02` передают owned `DbNote`
 //! в действующую input queue с operation. `0x15EB02` в

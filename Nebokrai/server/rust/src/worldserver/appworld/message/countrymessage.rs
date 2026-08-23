@@ -1,121 +1,52 @@
 //! WorldServer dispatcher-owner country messages `OnCountryMessage`.
 //!
-//! Dispatcher — часть контракта owner-а: country relays
-//! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, смена country игрока
-//! `0x60301 -> CPlayer::ChangeCountry/0x7FF01`, а также вход country victory
-//! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, appoint-minister
-//! `0x60304 -> SetKing/RegisterKing(0)` либо minister mode `7/6`,
-//! `0x60306 -> GetInfo/0x7FF07`, `0x60307 -> InitialOLPlayersList/Sort/0x7FF08`,
-//! `0x60309 -> 0x7FF04/0x7FF10/0x7FF07`, depose-minister
-//! `0x6030A -> 0x7FF04/0x7FF10/0x7FF07`, absolve
-//! `0x60308 -> CanDemise/RegisterKing/DeposeKing/0x7FE27/0x7FF04/0x7FF10/0x7FF12`,
-//! `0x6030B -> 0x7FF10/0x7FF0C/0x7FF11`, silence
-//! `0x6030C -> 0x7FF10/0x7FF0D/0x7FF11`, exile
-//! `0x6030D -> 0x7FF0E`, `0x6030E -> 0x7FF15`, `0x60316 -> 0x7FF15`, war-declare
-//! `0x60317 -> 0x7FF16` и four-nation result
-//! `0x60319 -> 0x7FE49`, `0x6031A -> 0x7FE46/DB`, no-op `0x6031B` и
-//! `0x6031C -> 0x7FE47`, `0x6031D -> 0x7FA04` входят в контракт owner-а
-//! действует. Victory читает один
-//! unsigned country byte и вызывает исходно
-//! названный `CountryWarSys::on_flag_destory`; соседние opcodes helper не
-//! интерпретирует. Источник контракта — точная пара WorldServer EXE/PDB.
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, исходник
-//! `appworld/message/countrymessage.cpp`.
-//! подтверждает, что оба relay меняют type исходного сообщения и вызывают
-//! общий `SendAll`, не читая payload, не вызывая `Update` и не добавляя
-//! ownership/tail gates. задаёт для `0x60314`
-//! wire `unsigned char country, signed char selector, signed long value` и
-//! тихие no-op на отсутствующей стране или неизвестном selector. Scalar-setter
-//! сохраняет несимметричные исходные ограничения: treasury/power ограничены
-//! снизу нулём и сверху максимумом, tech-exp только сверху, tech-level только
-//! снизу, king points только сверху. Вместо singleton `CCountryParam` Rust
-//! принимает уже принадлежащий main-loop параметр явно.
-//! Вне полного списка case dispatcher завершается общим epilogue без чтения,
-//! отправки и передачи следующему owner-у; Rust фиксирует это `NoOp`.
-//! и PDB layout `COfficer` подтверждают для
-//! `0x60315` три unsigned byte `country/job/оригинал switch`, выбор встроенного king
-//! при job `1`, `GetMinister` только для `2..=7` и запись именно
-//! `_bQuestSwitch +0x25`. Строка `king`-лога сохраняет исходный оригинал switch и
-//! byte- хвост `A1 A3`; безопасный accessor `CGlobeSetup` заменяет только
-//! старое адресное вычисление country-name slot.
-//! задаёт для `0x60316` signed player ID и
-//! country byte, вызов `GetExileResTime` до проверки online-player и общий
-//! ответ `0x7FF15 { remaining_seconds:i32, player_id:i32 }`.
-//! `GetExileResTime` снимает tick до поиска `ExileMap`, использует wrapping
-//! signed 32-bit milliseconds, делит к нулю и зажимает отрицательный результат.
-//! dispatcher сохраняет машинную ошибку, а не принимает donor fix за контракт.
-//! задаёт `0x6030E`: signed player ID, два
-//! signed `char` success/country, ранний stop до чтения списка при отсутствующей
-//! стране, затем синхронный `SuccessExiled` и `0x7FF15 { country:u8,
-//! count:i32, player_ids:i32[] }`. Signed count `<= 0` не читает элементы, но
-//! всё равно публикуется; source metadata и хвост не проверяются. Для
-//! положительного count Rust требует фактически присутствующие DWORD: старый
-//! цикл дополнял оборванный inter-server payload нулями до заявленного размера
-//! и мог выделять до `INT_MAX` элементов, что является внутренним malformed-
-//! input дефектом, а не Miracle-протоколом.
-//! `0x6030D` читает target/king как signed long и country через signed
-//! `char -> unsigned char`, затем строго вызывает `GetCountry -> IsKing ->
-//! CanOperate(4) -> Exile`. Missing country и любой false gate останавливают
-//! цепочку; source map/socket и хвост не участвуют. Donor ownership/socket
-//! gates и pending-request registry поэтому не перенесены.
-//! `0x6030C` имеет тот же wire target/king/country, но selector `5` и вызов
-//! `Silence`; owner возвращает target ID только после всех трёх success-
-//! рассылок. Source metadata и хвост также не проверяются.
-//! `0x6030B` декодирует тот же target/king/country wire, вызывает selector `3`
-//! и `Absolve`; donor payload/ownership gates в dispatcher отсутствуют.
-//! `0x6030A` дополнительно читает signed job-byte между target и king, затем
-//! вызывает selector `2`, `IsMinister` и mode `7`; source/tail/job-range
-//! `0x60309` имеет тот же wire, но selector `1` и mode `6`; donor gates также
-//! отсутствуют, а вложенный `HasJob -> IsKing` сохраняет неожиданный WS0034.
-//! `0x60308` декодирует target/king как signed long и country через signed
-//! `char -> unsigned char`, затем вызывает selector `0` и полный `Demise` без
-//! source/tail gate. подтверждает, что return вложенного
-//! `RegisterKing` игнорируется, а финальный `0x7FF10` строится уже по текущему
-//! `0x60307` декодирует `page:i32, king:i32, country:i8 -> u8`,
-//! затем строго `GetCountry -> IsKing -> GetPlayersList`; source/tail/page gates
-//! отсутствуют. owner сохраняет wrapping page arithmetic,
-//! GM-фильтр и return king ID; добавленные donor-ом валидации и
-//! return count не переносятся.
-//! `0x60306` читает `king:i32, country:i8 -> u8` и строго идёт
-//! `GetCountry -> IsKing -> GetInfo`; последний только вызывает уже
-//! действующий `SendBaseInfoToClient -> 0x7FF07`. Source/tail/country-
-//! `0x60304` читает `country:i8 -> u8, player:i32, appoint:i8 -> u8`.
-//! При appoint `1` сначала делает upper-clamped control point
-//! `100000`, затем `SetKing -> DeposeKing(3)/0x7FF05` и `RegisterKing(0) ->
-//! 0x7FF04/0x7FF12`; иной оригинал byte без range-check становится job для
-//! `DeposeMinister(job, 7)` и затем `AppointMinister(player, job, 6)`.
-//! Donor ownership/payload/player/country/job gates в поставочном EXE отсутствуют.
-//! задаёт `0x60317`: два signed long,
-//! синхронный `player_declare`, затем ответ `char accepted, player, target` в
-//! исходный `m_lMapID`. Проверок socket-owner и полного tail здесь нет; они
-//! для `0x60319` только получает singleton и
-//! передаёт исходное сообщение static `RecvResultFromGS`: source metadata и
-//! хвост не проверяются, отдельного ответа источнику нет.
-//! для `0x6031A` читает два signed long и
-//! вызывает `ConvertMoraleToExploit(player_id, increment)` без source/tail
-//! gate. Последующий DB/online-маршрут материализован в общем async
-//! `ProcessMessage`, поскольку `tiberius` требует await.
-//! для `0x6031B` читает один signed country и
-//! вызывает static `OneCountrySignUp`. Сам owner
-//! только для `1..=4` форматирует неиспользуемый локальный текст; состояния,
-//! log-а и network side effect нет, поэтому Rust сохраняет typed no-op без
-//! мёртвого `_snprintf`.
-//! для `0x6031C` читает signed player ID,
-//! 32-bit war-time и signed country; route/wire выполняет подтверждённый
-//! `SendPlayerWarTimeToGS` без source/tail gate.
-//! для `0x6031D` читает две signed страны и
-//! вызывает `OneCountryFail`; source metadata и хвост не проверяются.
-//! switch target подтверждает, что `0x60318`
-//! читает один unsigned country byte и сразу передаёт его действующему
-//! `CountryWarSys`; конкретный region/country/localization/network context
-//! подключён в общем `ProcessMessage`, а не оставлен отдельным helper-ом.
-//! задаёт для `0x60301` signed player DWORD и
-//! `char -> unsigned char` country, online lookup, затем ответ `0x7FF01`
-//! { player_id:i32, result:i32 }` исходному `m_lMapID`. При отсутствующем
-//! online-player ответа нет. Source socket, хвост и donor-ограничения country
-//! диапазона/ownership не участвуют.
-//! задаёт bodyless `0x60313`: без чтения
-//! payload/source metadata он вызывает `CCountryHandler::SetNewDay(10)`.
+//! Источник контракта — `WorldServer/Nworldserver.exe` и
+//! `WorldServer/WorldServer.pdb`; исходный owner —
+//! `appworld/message/countrymessage.cpp`. Он маршрутизирует смену страны
+//! (`0x60301`), управление правителями и министрами (`0x60304`,
+//! `0x60308..0x6030D`), выдачу сведений (`0x60306..0x60307`), синхронизацию
+//! страны (`0x60314..0x60316`) и события войны (`0x60317..0x6031D`).
+//! Неизвестный opcode завершается как `NoOp`: payload не читается и следующему
+//! owner-у не передаётся. Relay `0x60310/0x60311` только меняют type исходного
+//! сообщения на `0x7FF11/0x7FF12` и вызывают `SendAll`.
+//!
+//! Управляющие ветки сохраняют точный wire-порядок signed long/char и строгую
+//! последовательность `GetCountry`, проверки должности, `CanOperate` и самой
+//! операции. Первая отсутствующая страна или ложная проверка обрывает цепочку.
+//! Source socket/map, ownership, хвост сообщения и pending-request registry не
+//! участвуют. Byte должности не проверяется по диапазону перед передачей в
+//! `AppointMinister`/`DeposeMinister`; вложенный `HasJob -> IsKing` сохраняет
+//! исходный неожиданный `WS0034`. При назначении короля control point сначала
+//! ограничивается сверху значением `100000`, затем идут `SetKing` и
+//! `RegisterKing(0)`; результат вложенного `RegisterKing` при передаче власти
+//! игнорируется.
+//!
+//! `0x60314` читает `country:u8, selector:i8, value:i32`. Неизвестный selector
+//! и отсутствующая страна дают тихий no-op. Ограничения несимметричны:
+//! treasury/power зажимаются с обеих сторон, tech-exp только сверху,
+//! tech-level только снизу, king points только сверху. `0x60315` читает три
+//! byte, выбирает короля для job `1`, министра только для `2..=7` и меняет
+//! `_bQuestSwitch`; лог сохраняет исходный switch и хвост `A1 A3`.
+//!
+//! `0x60316` вызывает `GetExileResTime` до поиска online-player и отвечает
+//! `0x7FF15 { remaining_seconds:i32, player_id:i32 }`. Время вычисляется в
+//! wrapping signed 32-bit миллисекундах, делится к нулю и затем ограничивается
+//! снизу нулём. `0x6030E` прекращает чтение списка при отсутствующей стране;
+//! count `<= 0` не читает элементы, но всё равно публикуется. Для положительного
+//! count Rust требует фактически присутствующие DWORD и не дополняет оборванный
+//! inter-server payload нулями.
+//!
+//! Списки игроков сохраняют wrapping page arithmetic, GM-фильтр и king ID без
+//! дополнительного return count. `0x60317` синхронно выполняет объявление войны
+//! и отвечает в исходный `m_lMapID`; `0x60318` передаёт один country byte в
+//! `CountryWarSys::on_flag_destory`. `0x60319` пересылает исходное сообщение,
+//! `0x6031A` обновляет morale/exploit через общий async DB-маршрут,
+//! `0x6031B` остаётся без побочных эффектов, а `0x6031C/0x6031D` передают время
+//! войны и результат страны без проверки source metadata и хвоста.
+//!
+//! Rust заменяет singleton-доступ явным main-loop context, адресное вычисление
+//! имени страны — accessor-ом `CGlobeSetup`, а небезопасное чтение — typed
+//! codec. Эти замены не меняют порядок вызовов, wire и частичные эффекты.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::tools::put_string_to_file;
