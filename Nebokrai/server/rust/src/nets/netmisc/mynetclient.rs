@@ -215,6 +215,8 @@ impl CMyNetClient {
     }
 
     /// Ждёт ровно один read либо send-readiness и выполняет один I/O-шаг.
+    /// EOF применяет concrete `OnClose` немедленно; остальные постоянные
+    /// transport-ошибки возвращаются `CGame`, который вызывает тот же callback.
     pub(crate) async fn run_io_once(
         &mut self,
         mut recv_time_ms: impl FnMut() -> u32,

@@ -201,8 +201,10 @@ pub(crate) struct MiscInitializationReport {
     pub(crate) legacy_result: i32,
     /// Результат `LoadSetup`; отсутствует только при ранней ошибке debug-файла.
     pub(crate) setup: Option<Result<SetupLoadReport, SetupOpenError>>,
-    /// Connect-попытки в исходном порядке, включая последнюю успешную.
-    pub(crate) attempts: Vec<MiscClientConnectOutcome>,
+    /// Число выполненных connect-попыток без неограниченного хранения истории.
+    pub(crate) attempt_count: u64,
+    /// Последняя попытка; каждая попытка отдельно передаётся process-observer-у.
+    pub(crate) last_attempt: Option<MiscClientConnectOutcome>,
     pub(crate) end: MiscInitializationEnd,
 }
 
@@ -400,6 +402,7 @@ impl CGame {
         &mut self,
         runtime_directory: &Path,
         mut shutdown: Pin<&mut Shutdown>,
+        mut observe_attempt: impl FnMut(&MiscClientConnectOutcome),
     ) -> MiscInitializationReport
     where
         Shutdown: Future<Output = ()> + ?Sized,
@@ -411,7 +414,8 @@ impl CGame {
                 return MiscInitializationReport {
                     legacy_result: 0,
                     setup: None,
-                    attempts: Vec::new(),
+                    attempt_count: 0,
+                    last_attempt: None,
                     end: MiscInitializationEnd::DebugFileUnavailable {
                         path: debug_path,
                         source,
@@ -423,7 +427,8 @@ impl CGame {
 
         self.client_close = true;
         let setup = self.setup.load_setup(runtime_directory.join("setup.ini"));
-        let mut attempts = Vec::new();
+        let mut attempt_count = 0_u64;
+        let mut last_attempt = None;
 
         loop {
             let attempt = tokio::select! {
@@ -432,19 +437,23 @@ impl CGame {
                     return MiscInitializationReport {
                         legacy_result: 0,
                         setup: Some(setup),
-                        attempts,
+                        attempt_count,
+                        last_attempt,
                         end: MiscInitializationEnd::Cancelled,
                     };
                 }
                 attempt = self.init_net_client() => attempt,
             };
             let connected = attempt.legacy_result() != 0;
-            attempts.push(attempt);
+            attempt_count = attempt_count.saturating_add(1);
+            observe_attempt(&attempt);
+            last_attempt = Some(attempt);
             if connected {
                 return MiscInitializationReport {
                     legacy_result: 0,
                     setup: Some(setup),
-                    attempts,
+                    attempt_count,
+                    last_attempt,
                     end: MiscInitializationEnd::Connected,
                 };
             }
@@ -455,7 +464,8 @@ impl CGame {
                     return MiscInitializationReport {
                         legacy_result: 0,
                         setup: Some(setup),
-                        attempts,
+                        attempt_count,
+                        last_attempt,
                         end: MiscInitializationEnd::Cancelled,
                     };
                 }
@@ -721,6 +731,19 @@ impl CGame {
         };
 
         let network = self.poll_client_io_once().await;
+        if matches!(
+            network.as_ref(),
+            Some(Err(MiscClientIoError::Io(_) | MiscClientIoError::Send(_)))
+        ) {
+            // Общий CClient на постоянной transport-ошибке вызывал OnClose;
+            // concrete HandleClose публикует 0x16EA01, которое текущий FIFO
+            // snapshot переводит в доказанный reconnect lifecycle. Malformed
+            // frame сохраняет отдельную подтверждённую политику очистки входа.
+            self.net_client
+                .as_mut()
+                .expect("Misc client существовал при выполнении I/O")
+                .handle_transport_close();
+        }
         let auction = {
             let sender = self
                 .net_client
@@ -908,13 +931,17 @@ async fn poll_once<Output>(future: impl Future<Output = Output>) -> Option<Outpu
 pub(crate) async fn game_thread_func<Shutdown>(
     runtime_directory: &Path,
     shutdown: Shutdown,
+    observe_attempt: impl FnMut(&MiscClientConnectOutcome),
+    mut observe_turn: impl FnMut(&MiscGameThreadTurn),
 ) -> MiscGameThreadReport
 where
     Shutdown: Future<Output = ()>,
 {
     let mut game = CGame::new();
     tokio::pin!(shutdown);
-    let initialization = game.initialize(runtime_directory, shutdown.as_mut()).await;
+    let initialization = game
+        .initialize(runtime_directory, shutdown.as_mut(), observe_attempt)
+        .await;
     let initialized = matches!(&initialization.end, MiscInitializationEnd::Connected);
     let mut completed_turns = 0_u64;
 
@@ -925,7 +952,7 @@ where
                 () = shutdown.as_mut() => break 'main_loop,
                 result = game.run_game_thread_turn() => result,
             };
-            drop(turn);
+            observe_turn(&turn);
             completed_turns = completed_turns.wrapping_add(1);
             tokio::select! {
                 biased;
