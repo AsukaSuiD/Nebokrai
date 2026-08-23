@@ -14,10 +14,13 @@
 
 use super::camountlimitgoodscontainer::{AmountLimitGoodsCleared, AmountLimitGoodsRelease};
 use super::cvolumelimitgoodscontainer::{
-    CVolumeLimitGoodsContainer, VolumeExpandOutcome, VolumeGoodsRemoveOutcome,
+    CVolumeLimitGoodsContainer, VolumeExpandOutcome, VolumeGoodsAddBlock, VolumeGoodsAddOutcome,
+    VolumeGoodsRemoveOutcome,
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
-use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_PARTICULAR_ATTRIBUTE;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
+    GAP_GOODS_PACKAGE_EXTENTION, GAP_PARTICULAR_ATTRIBUTE,
+};
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::public::guid::CGuid;
 
@@ -32,6 +35,44 @@ pub(crate) struct DepotExpandOutcome {
     pub(crate) size: u32,
     pub(crate) initialized_anchors: u32,
     pub(crate) legacy_success: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DepotGoodsAddBlock {
+    Locked,
+    MissingGoods,
+    InvalidCurrency {
+        base_properties_index: u32,
+        position: u32,
+    },
+    NoSpace,
+    PositionUnavailable {
+        position: u32,
+    },
+    ExtensionSlotOccupied {
+        position: u32,
+    },
+    ExtensionGroupInactive {
+        position: u32,
+    },
+    ExtensionItemRequired {
+        position: u32,
+    },
+    InvalidExtensionKind {
+        position: u32,
+        kind: i32,
+    },
+    MissingBaseProperties {
+        base_properties_index: u32,
+    },
+    AmountLimitReached,
+}
+
+#[must_use = "результат depot add определяет ownership и message/listener-эффекты"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum DepotGoodsAddOutcome {
+    Volume(VolumeGoodsAddOutcome),
+    Rejected(DepotGoodsAddBlock),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -93,6 +134,147 @@ impl CDepot {
             return None;
         }
         self.base.remove_goods(ex_id)
+    }
+
+    pub(crate) fn add_goods(
+        &mut self,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> DepotGoodsAddOutcome {
+        if self.locked {
+            return DepotGoodsAddOutcome::Rejected(DepotGoodsAddBlock::Locked);
+        }
+        let Some(goods) = incoming.as_ref() else {
+            return DepotGoodsAddOutcome::Rejected(DepotGoodsAddBlock::MissingGoods);
+        };
+        let Some(position) = self.find_position_for_goods(goods, factory) else {
+            return DepotGoodsAddOutcome::Rejected(DepotGoodsAddBlock::NoSpace);
+        };
+        self.add_goods_at(position, incoming, factory, owner_progress_allows)
+    }
+
+    pub(crate) fn add_goods_at(
+        &mut self,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> DepotGoodsAddOutcome {
+        if self.locked {
+            return DepotGoodsAddOutcome::Rejected(DepotGoodsAddBlock::Locked);
+        }
+        let Some(goods) = incoming.as_ref() else {
+            return DepotGoodsAddOutcome::Rejected(DepotGoodsAddBlock::MissingGoods);
+        };
+        let base_properties_index = goods.base_properties_index();
+        if base_properties_index == factory.get_gold_coin_index()
+            || base_properties_index == factory.get_yuan_bao_index()
+        {
+            return DepotGoodsAddOutcome::Rejected(DepotGoodsAddBlock::InvalidCurrency {
+                base_properties_index,
+                position,
+            });
+        }
+
+        if self.base.get_goods(position).is_some() {
+            if Self::is_extension_item_position(position) {
+                return DepotGoodsAddOutcome::Rejected(DepotGoodsAddBlock::ExtensionSlotOccupied {
+                    position,
+                });
+            }
+            if DEPOT_BASE_CELLS <= position && !self.is_activated(position) {
+                return DepotGoodsAddOutcome::Rejected(
+                    DepotGoodsAddBlock::ExtensionGroupInactive { position },
+                );
+            }
+            return Self::from_volume_add(
+                self.base
+                    .add_goods_at(position, incoming, factory, owner_progress_allows),
+                position,
+                base_properties_index,
+            );
+        }
+
+        if !self.is_space_enough(position) {
+            return DepotGoodsAddOutcome::Rejected(DepotGoodsAddBlock::PositionUnavailable {
+                position,
+            });
+        }
+        if Self::is_extension_item_position(position) {
+            if !goods.query_attribute(GAP_GOODS_PACKAGE_EXTENTION) {
+                return DepotGoodsAddOutcome::Rejected(DepotGoodsAddBlock::ExtensionItemRequired {
+                    position,
+                });
+            }
+            let kind = goods.addon_property_value(factory, GAP_GOODS_PACKAGE_EXTENTION, 1);
+            if kind != 1 {
+                return DepotGoodsAddOutcome::Rejected(DepotGoodsAddBlock::InvalidExtensionKind {
+                    position,
+                    kind,
+                });
+            }
+            return Self::from_volume_add(
+                self.base.add_goods_at_available_or_inactive(
+                    position,
+                    incoming,
+                    factory,
+                    owner_progress_allows,
+                ),
+                position,
+                base_properties_index,
+            );
+        }
+
+        if DEPOT_BASE_CELLS <= position
+            && !self.is_activated(position)
+            && !self.inactive_group_allows_add(position)
+        {
+            return DepotGoodsAddOutcome::Rejected(DepotGoodsAddBlock::ExtensionGroupInactive {
+                position,
+            });
+        }
+        Self::from_volume_add(
+            self.base
+                .add_goods_at(position, incoming, factory, owner_progress_allows),
+            position,
+            base_properties_index,
+        )
+    }
+
+    fn from_volume_add(
+        outcome: VolumeGoodsAddOutcome,
+        position: u32,
+        base_properties_index: u32,
+    ) -> DepotGoodsAddOutcome {
+        let VolumeGoodsAddOutcome::Rejected(block) = outcome else {
+            return DepotGoodsAddOutcome::Volume(outcome);
+        };
+        match block {
+            VolumeGoodsAddBlock::MissingGoods => {
+                DepotGoodsAddOutcome::Rejected(DepotGoodsAddBlock::MissingGoods)
+            }
+            VolumeGoodsAddBlock::InvalidCurrency => {
+                DepotGoodsAddOutcome::Rejected(DepotGoodsAddBlock::InvalidCurrency {
+                    base_properties_index,
+                    position,
+                })
+            }
+            VolumeGoodsAddBlock::PositionUnavailable => {
+                DepotGoodsAddOutcome::Rejected(DepotGoodsAddBlock::PositionUnavailable { position })
+            }
+            VolumeGoodsAddBlock::MissingBaseProperties => {
+                DepotGoodsAddOutcome::Rejected(DepotGoodsAddBlock::MissingBaseProperties {
+                    base_properties_index,
+                })
+            }
+            VolumeGoodsAddBlock::AmountLimitReached => {
+                DepotGoodsAddOutcome::Rejected(DepotGoodsAddBlock::AmountLimitReached)
+            }
+            VolumeGoodsAddBlock::NoSpace => {
+                DepotGoodsAddOutcome::Rejected(DepotGoodsAddBlock::NoSpace)
+            }
+        }
     }
 
     pub(crate) fn clear_goods(&mut self) -> AmountLimitGoodsCleared {

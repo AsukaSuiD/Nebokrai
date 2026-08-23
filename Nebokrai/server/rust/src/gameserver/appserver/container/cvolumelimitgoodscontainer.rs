@@ -230,6 +230,29 @@ impl CVolumeLimitGoodsContainer {
         factory: &CGoodsFactory,
         owner_progress_allows: bool,
     ) -> VolumeGoodsAddOutcome {
+        self.add_goods_at_cell(position, incoming, factory, owner_progress_allows, false)
+    }
+
+    /// Derived depot owner может занимать специальный inactive anchor; все
+    /// остальные storage/factory/amount-limit контракты остаются общими.
+    pub(crate) fn add_goods_at_available_or_inactive(
+        &mut self,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> VolumeGoodsAddOutcome {
+        self.add_goods_at_cell(position, incoming, factory, owner_progress_allows, true)
+    }
+
+    fn add_goods_at_cell(
+        &mut self,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+        allow_inactive: bool,
+    ) -> VolumeGoodsAddOutcome {
         let Some(goods) = incoming.as_ref() else {
             return VolumeGoodsAddOutcome::Rejected(VolumeGoodsAddBlock::MissingGoods);
         };
@@ -247,7 +270,10 @@ impl CVolumeLimitGoodsContainer {
                 owner_progress_allows,
             ));
         }
-        if !self.is_space_enough(position) {
+        let cell_allowed = self.cells.get(position as usize).is_some_and(|cell| {
+            *cell == VolumeCell::Available || allow_inactive && *cell == VolumeCell::Inactive
+        });
+        if position >= self.size || !cell_allowed {
             return VolumeGoodsAddOutcome::Rejected(VolumeGoodsAddBlock::PositionUnavailable);
         }
         if factory
