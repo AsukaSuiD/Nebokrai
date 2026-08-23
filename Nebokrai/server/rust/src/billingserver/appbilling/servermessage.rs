@@ -1,36 +1,10 @@
-//! Две lifecycle-ветви GameServer у BillingServer из
-//! `appbilling/servermessage.cpp`.
+//! GameServer lifecycle-ветви `appbilling/servermessage.cpp`, подтверждённые
+//! `billingserver.exe` и `billingserver.pdb`.
 //!
-//!
-//! `0xEF101` не читает payload: socket ID и peer IPv4 берутся из runtime-
-//! metadata принятого сообщения. При наличии `CGame::m_pGSServer` первым
-//! побочным эффектом ставится общая команда `SetClientMapID(socket, socket)`,
-//! затем безусловно публикуется операторская запись connected. Старый MFC
-//! `LB_INSERTSTRING` добавлял тот же dotted IPv4 в список GameServer; typed
-//! outcome сохраняет адрес один раз для `CGame::ProcessMessage` и не создаёт
-//! Windows GUI-аналог.
-//!
-//! `0x10EF01` последовательно читает `map_id`, C-строку с границей `0x20` и
-//! Windows `long` port. Только при наличии server-owner выполняется прямой
-//! `IsAllowedAddress(address, port as u16)`; его результат выбирает обычную
-//! либо invalid lost-запись. Проверка вызывается независимо от admission-
-//! флага allow-list, как исходный отдельный метод. `map_id` и port сохраняются
-//! как signed payload-слова, хотя старый operator log форматировал их `%lu` и
-//! тем самым показывал тот же 32-битный pattern как unsigned.
-//!
-//! Найденные журналы точной BillingServer-пары независимо подтверждают формы
-//! `GameServer ID<IPv4> Connected OK` и
-//! `[Invalid ]GameServer ID<IPv4:port> Lost`; персональные значения в код и
-//! документацию не переносятся. Недостаток numeric payload сохраняет общий
-//! `CBaseMessage::GetLong == 0`, а ограниченная строка использует уже
-//! восстановленный `GetStr`.
-//!
-//! `nullptr` сообщения заменён обязательной Rust-ссылкой; nullable
-//! `GetGame()/m_pGSServer` представлен `Option<&CServerForGS>`. Полный
-//! `std::list`, generated field-copy/destructor, SEH, allocator и `$L/$E`
-//! cleanup этого compilation unit удалены как library/compiler noise. Их
-//! существенный эффект выражен owned полями, `Clone/Drop` и уже подключёнными
-//! общими FIFO `CBillingPlayerManager`.
+//! Connect сначала назначает socket как map ID, затем публикует событие.
+//! Disconnect всегда проверяет переданный адрес и `port as u16`, независимо от
+//! admission-флага allow-list; signed payload сохраняется, хотя старый журнал
+//! показывал те же биты как unsigned. Nullable server-owner выражен `Option`.
 
 use std::net::Ipv4Addr;
 
@@ -41,38 +15,31 @@ const GAME_SERVER_CONNECTED_MESSAGE_TYPE: i32 = 0x000E_F101;
 const GAME_SERVER_DISCONNECTED_MESSAGE_TYPE: i32 = 0x0010_EF01;
 const GAME_SERVER_ADDRESS_LIMIT: usize = 0x20;
 
-/// Наблюдаемый результат одной ветви Billing `OnServerMessage`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum ServerMessageOutcome {
-    /// GameServer подключился; `map_assignment` отсутствует только без server-owner.
     Connected {
         socket_id: i32,
         address: Ipv4Addr,
         map_assignment: Option<i32>,
     },
-    /// GameServer отключился после явной проверки payload-адреса по allow-list.
     Disconnected {
         map_id: i32,
         address: Vec<u8>,
         port: i32,
         allowed: bool,
     },
-    /// Неизвестный тип сохраняет исходный no-op.
     Unsupported { message_type: i32 },
 }
 
-/// Узкая композиция свободного handler с nullable `CGame::m_pGSServer`.
 pub(crate) struct ServerMessageHandler<'a> {
     server: Option<&'a CServerForGS>,
 }
 
 impl<'a> ServerMessageHandler<'a> {
-    /// Создаёт handler для текущего состояния Billing `CGame`.
     pub(crate) const fn new(server: Option<&'a CServerForGS>) -> Self {
         Self { server }
     }
 
-    /// Выполняет две подтверждённые ветви, сохраняя неизвестный opcode как no-op.
     pub(crate) fn on_server_message(&self, message: &mut CMessage) -> ServerMessageOutcome {
         match message.message_type() {
             GAME_SERVER_CONNECTED_MESSAGE_TYPE => self.on_connected(message),

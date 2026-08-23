@@ -1,42 +1,17 @@
-//! Общие FIFO и записи `CBillingPlayerManager` из
-//! `appbilling/billingplayermanager.{h,cpp}`.
+//! Общие FIFO и worker lifecycle `appbilling/billingplayermanager.{h,cpp}`,
+//! подтверждённые `billingserver.exe` и `billingserver.pdb`.
 //!
-//! Файл содержит записи, три общие FIFO и полный lifecycle DB и cash-log
-//! workers; контракт подтверждён точной парой BillingServer EXE/PDB.
+//! Три process-static очереди представлены одним owner-ом с независимыми
+//! `Mutex<VecDeque<_>>`. `mem::take` атомарно снимает полный snapshot; новые
+//! записи остаются следующей итерации, а AC всегда обрабатывается раньше TR.
+//! В purchase-ветви DB-вызов предшествует лимиту `goods_number < 1001`: при
+//! превышении уже совершённые эффекты сохраняются, ответ и остаток TR snapshot
+//! теряются.
 //!
-//! Три очереди были process-static и общими для всех элементов `CGame::vecBPM`,
-//! а каждый `Push` глубоко копировал запись в конец собственного `std::list`
-//! под отдельным lock и безусловно возвращал `true`. Rust хранит один общий
-//! owner с тремя независимыми `parking_lot::Mutex<VecDeque<_>>`; все workers
-//! разделяют именно этот owner, а не получают собственные FIFO.
-//! Owned аргумент заменяет временную C++ запись и её немедленную глубокую
-//! копию, сохраняя bytes, порядок и lifetime без `new/delete`.
-//!
-//! `Run` и `OnLogProcess` копировали всю соответствующую глобальную очередь в
-//! локальный список и очищали источник под тем же lock. `mem::take` переносит
-//! тот же полный snapshot атомарно, не удерживая lock во время DB/send-
-//! эффектов. Новые записи после снятия остаются следующему проходу. `Run`
-//! всегда обрабатывает AC snapshot раньше отдельно снятого TR snapshot и
-//! строит точные ответы `0xFF001..0xFF003`. В purchase-ветви `BuyItemCode`
-//! выполняется до проверки `goods_number < 1001`: при превышении лимита уже
-//! совершённый DB-эффект и optional IL-запись сохраняются, ответ не уходит,
-//! остаток снятого TR snapshot теряется, а worker завершается.
-//!
-//! Каждый DB-worker имеет собственный `TiberiusRsPlayerAccount`, после
-//! успешного `Run` спит ровно 1 ms и проверяет owned stop только в начале
-//! следующей итерации. Atomic stop заменяет `PostThreadMessage(0x66A)` без
-//! Windows message queue; последовательный `Release` по-прежнему публикует
-//! stop и ждёт workers по одному. Cash-log worker сохраняет исходный do-while:
-//! хотя бы один `OnLogProcess`, чтение текущего `dwSaveLogSvrTime` после DB и
-//! проверка общего `g_bGameThreadExit` после сна. `Start` по-прежнему не делает
-//! ошибку optional log-thread фатальной, а `End` только ждёт его при текущем
-//! `bLogSvrSwitch`.
-//!
-//! COM/ADO заменены готовым DB-owner, Win32 threads/events — owned
-//! `JoinHandle` и atomics, critical sections — `parking_lot::Mutex`. STL/CRT,
-//! SEH, deleting destructors, allocators и static `$E/$L` cleanup удалены как
-//! library/compiler noise. Технические DB/thread ошибки публикуются отдельными
-//! notices без credentials; send-результаты, как в оригинале, игнорируются.
+//! Каждый worker владеет своим Tiberius DB-owner-ом. Stop проверяется в начале
+//! итерации, успешный DB-проход завершается паузой 1 ms; cash-log выполняется
+//! хотя бы раз и останавливается общим exit после сна. Win32 threads/events и
+//! critical sections заменены owned `JoinHandle`, atomics и `parking_lot`.
 
 use std::collections::VecDeque;
 use std::error::Error;
@@ -60,7 +35,6 @@ use crate::nets::servers::ServerCommandHandle;
 use crate::public::guid::CGuid;
 use crate::public::tools::put_string_to_file;
 
-/// Запрос баланса одного игрока из `0xEF201`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TagAccInfo {
     pub(crate) player_id: i32,
@@ -69,7 +43,6 @@ pub(crate) struct TagAccInfo {
 }
 
 impl TagAccInfo {
-    /// Глубоко владеет byte-exact строкой, которую C++ принимал по значению.
     pub(crate) fn new(player_id: i32, player_identity: Vec<u8>, game_server_id: i32) -> Self {
         Self {
             player_id,
@@ -79,7 +52,6 @@ impl TagAccInfo {
     }
 }
 
-/// Входная покупка либо player-to-player trade из `0xEF202/0xEF203`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TagTradeNode {
     pub(crate) trade_type: i32,
@@ -102,7 +74,6 @@ pub(crate) struct TagTradeNode {
     pub(crate) goods_guid: CGuid,
 }
 
-/// Аргументы полного value-конструктора `tagTradeNode`.
 pub(crate) struct TagTradeNodeParts {
     pub(crate) trade_type: i32,
     pub(crate) buyer_id: i32,
@@ -125,7 +96,6 @@ pub(crate) struct TagTradeNodeParts {
 }
 
 impl TagTradeNode {
-    /// Переносит все поля старого длинного конструктора без перестановки.
     pub(crate) fn from_parts(parts: TagTradeNodeParts) -> Self {
         Self {
             trade_type: parts.trade_type,
@@ -150,7 +120,6 @@ impl TagTradeNode {
     }
 }
 
-/// Cash-log запись, которую DB-owner получает после trade.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TagIncLogNode {
     pub(crate) log_time: f64,
@@ -163,7 +132,6 @@ pub(crate) struct TagIncLogNode {
     pub(crate) world_server_id: i32,
 }
 
-/// Аргументы value-конструктора `tagIncLogNode`.
 pub(crate) struct TagIncLogNodeParts {
     pub(crate) log_time: f64,
     pub(crate) buyer_identity: Vec<u8>,
@@ -176,7 +144,6 @@ pub(crate) struct TagIncLogNodeParts {
 }
 
 impl TagIncLogNode {
-    /// Переносит все поля исходного cash-log конструктора.
     pub(crate) fn from_parts(parts: TagIncLogNodeParts) -> Self {
         Self {
             log_time: parts.log_time,
@@ -191,7 +158,6 @@ impl TagIncLogNode {
     }
 }
 
-/// Единый владелец трёх process-static FIFO старого класса.
 #[derive(Default)]
 pub(crate) struct CBillingPlayerManager {
     account_requests: Mutex<VecDeque<TagAccInfo>>,
@@ -201,40 +167,33 @@ pub(crate) struct CBillingPlayerManager {
 }
 
 impl CBillingPlayerManager {
-    /// Создаёт три пустые общие FIFO без запуска worker threads.
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    /// Добавляет account-запрос в конец общей AC FIFO.
     pub(crate) fn push_account_request(&self, request: TagAccInfo) -> bool {
         self.account_requests.lock().push_back(request);
         true
     }
 
-    /// Добавляет cash-log в конец общей IL FIFO.
     pub(crate) fn push_increment_log(&self, record: TagIncLogNode) -> bool {
         self.increment_logs.lock().push_back(record);
         true
     }
 
-    /// Добавляет purchase/trade запрос в конец общей TR FIFO.
     pub(crate) fn push_trade_request(&self, request: TagTradeNode) -> bool {
         self.trade_requests.lock().push_back(request);
         true
     }
 
-    /// Атомарно снимает весь AC snapshot для одного `Run`.
     pub(crate) fn take_account_requests(&self) -> VecDeque<TagAccInfo> {
         mem::take(&mut *self.account_requests.lock())
     }
 
-    /// Атомарно снимает весь IL snapshot для одного `OnLogProcess`.
     pub(crate) fn take_increment_logs(&self) -> VecDeque<TagIncLogNode> {
         mem::take(&mut *self.increment_logs.lock())
     }
 
-    /// Атомарно снимает весь TR snapshot для одного `Run`.
     pub(crate) fn take_trade_requests(&self) -> VecDeque<TagTradeNode> {
         mem::take(&mut *self.trade_requests.lock())
     }
@@ -246,14 +205,12 @@ const PLAYER_TRADE_RESPONSE: i32 = 0x000F_F003;
 const MAX_PURCHASE_GOODS_NUMBER: i32 = 1000;
 const DATABASE_WORKER_CADENCE: Duration = Duration::from_millis(1);
 
-/// Источник typed operator-записи manager runtime.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BillingPlayerWorkerKind {
     Database,
     CashLog,
 }
 
-/// Наблюдаемая либо техническая запись worker lifecycle.
 #[derive(Debug)]
 pub(crate) enum BillingPlayerManagerNotice {
     Database(RsPlayerAccountNotice),
@@ -271,7 +228,6 @@ pub(crate) enum BillingPlayerManagerNotice {
     },
 }
 
-/// Ошибка Linux-замены исходного `CreateThread`.
 #[derive(Debug)]
 pub(crate) enum CreateBillingPlayerWorkerError {
     DatabaseOwner(RsPlayerAccountInitializationError),
@@ -301,7 +257,6 @@ struct DatabaseWorker {
     thread: JoinHandle<()>,
 }
 
-/// Owned Linux lifecycle общей static-части и элементов исходного `vecBPM`.
 pub(crate) struct BillingPlayerManagerRuntime {
     queues: Arc<CBillingPlayerManager>,
     sender: ServerCommandHandle,
@@ -314,7 +269,6 @@ pub(crate) struct BillingPlayerManagerRuntime {
 }
 
 impl CBillingPlayerManager {
-    /// Выполняет один исходный `Run`: AC snapshot, затем отдельный TR snapshot.
     pub(crate) fn run(
         &self,
         stop_requested: &AtomicBool,
@@ -400,7 +354,6 @@ impl CBillingPlayerManager {
         true
     }
 
-    /// Снимает IL snapshot, передаёт его одной DB-сессии и выдерживает cadence.
     pub(crate) fn on_log_process(
         &self,
         database: &mut dyn RsPlayerAccountOwner,
@@ -417,7 +370,6 @@ impl CBillingPlayerManager {
         true
     }
 
-    /// Забирает следующую operator/DB-запись без runtime-значений credentials.
     pub(crate) fn pop_notice(&self) -> Option<BillingPlayerManagerNotice> {
         self.notices.lock().pop_front()
     }
@@ -434,7 +386,6 @@ impl CBillingPlayerManager {
 }
 
 impl BillingPlayerManagerRuntime {
-    /// Связывает общие FIFO с текущими Billing setup-флагами и server-owner.
     pub(crate) fn new(
         queues: Arc<CBillingPlayerManager>,
         sender: ServerCommandHandle,
@@ -455,12 +406,10 @@ impl BillingPlayerManagerRuntime {
         }
     }
 
-    /// Возвращает единственный общий owner трёх process-static FIFO.
     pub(crate) fn queues(&self) -> &Arc<CBillingPlayerManager> {
         &self.queues
     }
 
-    /// Выполняет исходный `Start`; ошибка optional log-thread не меняет `true`.
     pub(crate) fn start(&mut self, log_enabled_at_start: bool) -> bool {
         if !log_enabled_at_start {
             return true;
@@ -503,7 +452,6 @@ impl BillingPlayerManagerRuntime {
         true
     }
 
-    /// Создаёт один owned аналог элемента `CGame::vecBPM`.
     pub(crate) fn create_thread(&mut self) -> Result<(), CreateBillingPlayerWorkerError> {
         let mut database = TiberiusRsPlayerAccount::new(self.database_settings.clone())
             .map_err(CreateBillingPlayerWorkerError::DatabaseOwner)?;
@@ -530,7 +478,6 @@ impl BillingPlayerManagerRuntime {
         Ok(())
     }
 
-    /// Последовательно публикует stop и ждёт каждый DB-worker, как `Release`.
     pub(crate) fn release(&mut self) {
         let workers = mem::take(&mut self.database_workers);
         for worker in workers {
@@ -544,7 +491,6 @@ impl BillingPlayerManagerRuntime {
         }
     }
 
-    /// Ждёт optional log-worker только при текущем `bLogSvrSwitch`, как `End`.
     pub(crate) fn end(&mut self, log_enabled_at_end: bool) -> bool {
         if log_enabled_at_end
             && let Some(worker) = self.log_worker.take()

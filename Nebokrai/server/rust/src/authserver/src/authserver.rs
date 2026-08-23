@@ -1,5 +1,3 @@
-//! WinMain-оболочка и process-global состояние исходного AuthServer.
-//!
-//! Происхождение: `authserver.exe`/`authserver.pdb`, `authserver.cpp`. Сигналы
-//! процесса, Tokio runtime и владение `CGame` реализованы в `main.rs` и
-//! `cgame::game_thread_func`; Win32/MFC plumbing отдельного аналога не требует.
+//! WinMain-оболочка `authserver.cpp`, подтверждённая `authserver.exe` и
+//! `authserver.pdb`. Сигналы, Tokio runtime и владение `CGame` находятся в
+//! process entrypoint и `cgame::game_thread_func`; Win32/MFC-слой не переносится.

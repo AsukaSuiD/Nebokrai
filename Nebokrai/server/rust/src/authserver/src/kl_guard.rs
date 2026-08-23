@@ -1,5 +1,3 @@
-//! Технический lock-guard исходного AuthServer.
-//!
-//! Происхождение: `authserver.exe`/`authserver.pdb`, `kl_guard.cpp`. Его RAII-
-//! семантика выражена стандартными Rust guard-ами у фактических очередей и owner-ов;
+//! Lock-guard `kl_guard.cpp`, подтверждённый `authserver.exe` и `authserver.pdb`.
+//! Его RAII-семантика выражена стандартными Rust guard-ами у фактических очередей;
 //! отдельная обёртка не нужна.

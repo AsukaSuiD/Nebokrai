@@ -1,26 +1,11 @@
-//! Владелец optional `CPlayerFillMgr` исторического BillingServer.
+//! Optional worker `CPlayerFillMgr`, подтверждённый `billingserver.exe` и
+//! `billingserver.pdb` по owner-у `appbilling/playerfillmgr.cpp`.
 //!
-//! Контракт выборки, broadcast, удаления и worker lifecycle подтверждён точной
-//! парой BillingServer EXE/PDB.
-//!
-//! Один проход получает не более 50 строк `TBL_NeedUpdate` в DB-порядке. Для
-//! каждой строки он вызывает фактический `CRsPlayerAccount::GetUserPoint`,
-//! строит broadcast `0xFF004 + Account + result [+ point при result == 0]` и
-//! только после всего snapshot удаляет из таблицы все прочитанные ID одним
-//! вызовом. Ошибка отдельной отправки не отменяет последующие ответы или delete;
-//! DB-fallback `GetUserPoint = -2` остаётся у его собственного владельца.
-//!
-//! Worker один раз выполняет технический `InitConn`, затем проверяет общий
-//! `g_bGameThreadExit` перед каждым проходом и безусловно выдерживает `5000 ms`
-//! после него. `End` только ждёт завершение: отдельного stop-сообщения эта ветвь
-//! `CGame::Release` не посылала. Windows `PeekMessage(0x66A)` не имеет внешнего
-//! sender в достигнутом lifecycle и не получает пустой Linux thread-message
-//! аналог; фактическую остановку сохраняет общий atomic-флаг.
-//!
-//! `JoinHandle` заменяет `_beginthreadex/WaitForSingleObject/CloseHandle`,
-//! Tiberius owners — COM apartment и статический ADO config, а `CString`, `Vec`
-//! и `Drop` — C-string/STL/SEH cleanup. Recordset/ADO, iostream/STL internals,
-//! deleting thunks, `$L/$E` cleanup и compiler catch-блоки удалены.
+//! Проход читает до 50 строк в DB-порядке, рассылает `0xFF004` для каждой и
+//! лишь затем одним вызовом удаляет все прочитанные ID; ошибка отправки не
+//! отменяет следующие ответы или delete. Worker проверяет общий exit перед
+//! проходом и всегда ждёт 5000 ms после него. `End` только присоединяет поток;
+//! Win32 thread API и ADO заменены owned `JoinHandle` и Tiberius.
 
 use std::collections::VecDeque;
 use std::error::Error;
@@ -48,14 +33,12 @@ use crate::nets::servers::ServerCommandHandle;
 const PLAYER_FILL_RESPONSE: i32 = 0x000F_F004;
 const PLAYER_FILL_CADENCE: Duration = Duration::from_millis(5_000);
 
-/// DB-owner, который не смог начать работу внутри уже созданного thread.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerFillWorkerOwner {
     FillTable,
     PlayerAccount,
 }
 
-/// Operator-visible событие optional PlayerFill worker.
 #[derive(Debug)]
 pub(crate) enum PlayerFillNotice {
     FillDatabase(RsPlayerFillNotice),
@@ -67,7 +50,6 @@ pub(crate) enum PlayerFillNotice {
     WorkerPanicked,
 }
 
-/// Точная фатальная граница `Start`: ОС не создала worker thread.
 #[derive(Debug)]
 pub(crate) struct StartPlayerFillError(io::Error);
 
@@ -83,14 +65,12 @@ impl Error for StartPlayerFillError {
     }
 }
 
-/// Общая static-часть исходного `CPlayerFillMgr`.
 #[derive(Default)]
 pub(crate) struct CPlayerFillMgr {
     notices: Mutex<VecDeque<PlayerFillNotice>>,
 }
 
 impl CPlayerFillMgr {
-    /// Выполняет один fetch/send/delete проход исходного `Run`.
     pub(crate) fn run(
         &self,
         fill_database: &mut dyn RsPlayerFillOwner,
@@ -121,7 +101,6 @@ impl CPlayerFillMgr {
         true
     }
 
-    /// Забирает следующее DB/worker-событие без credential/account values.
     pub(crate) fn pop_notice(&self) -> Option<PlayerFillNotice> {
         self.notices.lock().pop_front()
     }
@@ -143,7 +122,6 @@ impl CPlayerFillMgr {
     }
 }
 
-/// Owned Linux lifecycle единственного optional PlayerFill thread.
 pub(crate) struct PlayerFillRuntime {
     manager: Arc<CPlayerFillMgr>,
     fill_database_settings: PlayerFillDatabaseSettings,
@@ -154,7 +132,6 @@ pub(crate) struct PlayerFillRuntime {
 }
 
 impl PlayerFillRuntime {
-    /// Связывает DB settings, broadcast-owner и общий game-thread exit.
     pub(crate) fn new(
         manager: Arc<CPlayerFillMgr>,
         fill_database_settings: PlayerFillDatabaseSettings,
@@ -172,7 +149,6 @@ impl PlayerFillRuntime {
         }
     }
 
-    /// Создаёт единственный worker; только ошибка thread spawn является `false`.
     pub(crate) fn start(&mut self) -> Result<(), StartPlayerFillError> {
         let manager = Arc::clone(&self.manager);
         let fill_settings = self.fill_database_settings.clone();
@@ -207,7 +183,6 @@ impl PlayerFillRuntime {
         Ok(())
     }
 
-    /// Ждёт thread без отдельного stop, как исходный `End`.
     pub(crate) fn end(&mut self) -> bool {
         if let Some(worker) = self.worker.take()
             && worker.join().is_err()

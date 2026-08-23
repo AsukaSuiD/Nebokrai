@@ -1,46 +1,16 @@
-//! Владелец конфигурации AuthServer из `authserver/src/configreader.cpp`.
+//! Конфигурация `authserver/src/configreader.cpp`, подтверждённая
+//! `authserver.exe` и `authserver.pdb`.
 //!
-//! Контракт `ConfigReader::{ConfigReader,reset,load,set_sp_name,getDBSP}`:
-//! подтверждён для корректного baseline `setup.ini`. Необычные malformed-
-//! границы числового `operator>>` локализованы ниже.
+//! `setup.ini` — позиционная последовательность из двадцати пар: labels не
+//! проверяются, перестановка меняет назначение, хвост игнорируется. Поля
+//! изменяются по мере чтения; ошибка после открытия сохраняет прочитанный prefix,
+//! затем отключает IP-фильтр и устанавливает имена процедур. Ошибка открытия
+//! объекта не меняет. Прочитанный `EnableIPFilter` эта сборка всегда заменяла
+//! на `false`.
 //!
-//!
-//! `load` не разбирал настоящий key/value INI: двадцать раз подряд он читал
-//! whitespace-token метки в один scratch `std::string`, тут же забывал его и
-//! затем извлекал значение фиксированного типа. Поэтому названия меток не
-//! проверяются, перестановка пар меняет назначение значений, а лишний хвост
-//! после двадцатой пары игнорируется. `std::fs::read` и байтовый scanner
-//! заменяют `ifstream`/locale/STL на корректном baseline без требования UTF-8
-//! к адресам, именам и учётным данным.
-//!
-//! Поля изменялись прямо во время цепочки `operator>>`. Ошибка после открытия
-//! оставляла уже прочитанный prefix, после чего оригинал всё равно отключал
-//! `_enable_ipfilter`, заполнял четыре имени процедур и возвращал `false`.
-//! Rust сохраняет эту частичную мутацию. Ошибка открытия не меняет объект.
-//! Подтверждённая странность сохранена буквально: успешно прочитанное
-//! `EnableIPFilter(NOT_USED)` безусловно заменяется `false`; поэтому Auth IP
-//! allow-list этой сборкой фактически не включался через `setup.ini`.
-//!
-//! `Vec<u8>` заменяет `std::string`, `BTreeMap<Vec<u8>, Vec<u8>>` — старую
-//! `std::map`; Rust ownership/Drop удаляют constructor/destructor и весь
-//! экспортированный STL/iostream/locale/SEH noise. Отдельная parser-библиотека
-//! не выбрана: обычный INI parser проверял бы имена и разделители, которых в
-//! наблюдаемом формате нет, а стандартный scanner полностью покрывает
-//! корректную поставку. Возвращаемый borrowed slice `get_db_sp` заменяет
-//! старую копию `std::string`; отсутствие ключа по-прежнему даёт пустые bytes.
-//!
-//! Malformed numeric token детерминированно возвращает локальную ошибку поля:
-//! это безопасная замена внутренних `num_get` state bits и overflow, которые не
-//! имеют необходимого runtime-контракта. Для корректной поставки все двенадцать
-//! numeric token независимо проверяются как целые нужного диапазона, а три bool
-//! равны `0/1`. Редкая ошибка чтения уже открытого файла также свёрнута в
-//! owned-read ошибку без попытки воспроизвести частично доступный filesystem.
-//!
-//! Старый `CGame::DBProcData` объединял Windows thread handle и `DBCmdProc`.
-//! После прохода DB lifecycle его существенный эффект принадлежит
-//! `dbaccess/authdb/authproc.rs`: owned `JoinHandle` содержит processor внутри
-//! worker closure. Конструктор/destructor, forced `TerminateThread` и ручное
-//! выделение отдельного Rust-типа не требуют.
+//! Байтовый scanner сохраняет не-UTF-8 данные без семантики обычного INI parser.
+//! Некорректное число или bool безопасно возвращает ошибку поля вместо внутренних
+//! состояний iostream и переполнения, не имевших подтверждённого контракта.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -55,19 +25,13 @@ use crate::authserver::src::cgame::{AuthDbContext, AuthNetworkConfig};
 
 const FIELD_COUNT: usize = 20;
 
-/// Ошибка открытия либо последовательного разбора Auth `setup.ini`.
 #[derive(Debug)]
 pub(crate) enum ConfigLoadError {
-    /// Файл не удалось прочитать целиком.
     Io(io::Error),
-    /// В фиксированной последовательности отсутствует label либо value.
     MissingToken {
-        /// Назначение ожидавшегося значения без раскрытия его содержимого.
         field: &'static str,
     },
-    /// Числовое или bool-значение не соответствует доказанному baseline виду.
     InvalidValue {
-        /// Назначение ошибочного значения без включения секрета в ошибку.
         field: &'static str,
     },
 }
@@ -101,7 +65,6 @@ impl Error for ConfigLoadError {
     }
 }
 
-/// Буквальное состояние исходного Auth `ConfigReader`.
 pub(crate) struct ConfigReader {
     host_port: u32,
     db_thread_count: i32,
@@ -128,7 +91,6 @@ pub(crate) struct ConfigReader {
 }
 
 impl ConfigReader {
-    /// Создаёт reader и применяет исходный `reset`.
     pub(crate) fn new() -> Self {
         let mut reader = Self {
             host_port: 0,
@@ -158,7 +120,6 @@ impl ConfigReader {
         reader
     }
 
-    /// Восстанавливает все исходные defaults и очищает имена DB-процедур.
     pub(crate) fn reset(&mut self) {
         self.host_port = 0x1BBC;
         self.db_thread_count = 1;
@@ -184,17 +145,15 @@ impl ConfigReader {
         self.db_stored_procedures.clear();
     }
 
-    /// Читает двадцать позиционных пар, сохраняя исходную partial-mutation.
     pub(crate) fn load(&mut self, path: impl AsRef<Path>) -> Result<(), ConfigLoadError> {
         let input = fs::read(path).map_err(ConfigLoadError::Io)?;
         let result = self.load_tokens(&input);
-        // failbit. Значение из setup намеренно не влияет на runtime.
+        // После любого результата разбора значение из setup не влияет на runtime.
         self.enable_ip_filter = false;
         self.set_sp_name();
         result
     }
 
-    /// Возвращает имя процедуры либо старую пустую строку для неизвестного ID.
     pub(crate) fn get_db_sp(&self, identifier: &[u8]) -> &[u8] {
         self.db_stored_procedures
             .get(identifier)
@@ -202,77 +161,62 @@ impl ConfigReader {
             .unwrap_or_default()
     }
 
-    /// Возвращает signed предел исходной `mDBQuestQueue` без нормализации.
     pub(crate) const fn max_auth_queue_size(&self) -> i32 {
         self.max_auth_queue_size
     }
 
-    /// Возвращает signed число Auth DB workers из исходного setup.
     pub(crate) const fn database_thread_count(&self) -> i32 {
         self.db_thread_count
     }
 
-    /// Возвращает адрес основной Auth runtime-базы как исходные ANSI-байты.
     pub(crate) fn auth_database_host(&self) -> &[u8] {
         &self.db_ip
     }
 
-    /// Возвращает физическое имя основной Auth runtime-базы как ANSI-байты.
     pub(crate) fn auth_database_name(&self) -> &[u8] {
         &self.auth_database_name
     }
 
-    /// Возвращает физическое имя Auth log-базы как исходные ANSI-байты.
     pub(crate) fn log_database_name(&self) -> &[u8] {
         &self.log_database_name
     }
 
-    /// Возвращает адрес Auth log-базы как исходные ANSI-байты.
     pub(crate) fn log_database_host(&self) -> &[u8] {
         &self.log_db_ip
     }
 
-    /// Возвращает login Auth log-базы; значение нельзя логировать.
     pub(crate) fn log_database_user(&self) -> &[u8] {
         &self.log_db_user
     }
 
-    /// Возвращает пароль Auth log-базы; значение нельзя логировать.
     pub(crate) fn log_database_password(&self) -> &[u8] {
         &self.log_db_password
     }
 
-    /// Возвращает login основной Auth runtime-базы; значение нельзя логировать.
     pub(crate) fn auth_database_user(&self) -> &[u8] {
         &self.db_user
     }
 
-    /// Возвращает пароль основной Auth runtime-базы; значение нельзя логировать.
     pub(crate) fn auth_database_password(&self) -> &[u8] {
         &self.db_password
     }
 
-    /// Сообщает, применялся ли исходный deny-list клиентских IPv4.
     pub(crate) const fn client_ip_filter_enabled(&self) -> bool {
         self.enable_client_ip_filter
     }
 
-    /// Сообщает, выполнял ли исходный main-loop обновление server-info.
     pub(crate) const fn update_server_info_enabled(&self) -> bool {
         self.enable_update_server_info
     }
 
-    /// Возвращает wrapping-интервал запросов актуального server-info.
     pub(crate) const fn update_server_info_time_ms(&self) -> u32 {
         self.update_server_info_time_ms
     }
 
-    /// Возвращает wrapping-интервал постановки server-info в DB-очередь.
     pub(crate) const fn write_server_info_time_ms(&self) -> u32 {
         self.write_server_info_time_ms
     }
 
-    /// Собирает сетевые параметры для исходной последовательности `CGame`.
     pub(crate) fn auth_network_config(&self) -> AuthNetworkConfig {
         AuthNetworkConfig::new(
             self.host_port,
@@ -283,7 +227,6 @@ impl ConfigReader {
         )
     }
 
-    /// Создаёт начальное handler-state из config flag и разобранных шаблонов.
     pub(crate) fn auth_message_handlers(
         &self,
         allowed_patterns: Vec<[u8; 4]>,
@@ -296,7 +239,6 @@ impl ConfigReader {
         )
     }
 
-    /// Передаёт handler-state доказанный config flag и разобранные IP-шаблоны.
     pub(crate) fn apply_login_server_filter(
         &self,
         handlers: &mut AuthMessageHandlers,

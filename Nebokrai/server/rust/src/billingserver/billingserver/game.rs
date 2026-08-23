@@ -1,71 +1,22 @@
-//! Владелец `CGame` исторического BillingServer из `billingserver/game.cpp`.
+//! Runtime-owner `billingserver/game.cpp`, подтверждённый `billingserver.exe`
+//! и `billingserver.pdb`. Он владеет setup, Billing/PlayerFill workers, сетью и
+//! lifecycle `Init -> MainLoop -> Release`; exclusive bind заменяет GUI-проверку
+//! единственного экземпляра.
 //!
-//! Owner содержит PlayerFill-ветви, полные `Init/Release`, owned network
-//! runtime и `GameThreadFunc`. Контракт подтверждён точной парой BillingServer
-//! EXE/PDB. Отдельная Windows-проверка единственного
-//! экземпляра через `FindWindow` не переносится: тот же процессный инвариант
-//! обеспечивает последующий exclusive listener bind в `InitServer`.
+//! Message FIFO снимается snapshot-ом фиксированного размера. `MainLoop`
+//! сохраняет раздельную инициализацию wrapping cadence, refresh до проверки
+//! exit, одноразовую установку ping-флага и паузу 1 ms. `CLOCK_BOOTTIME`
+//! заменяет `timeGetTime`, операторские UI-эффекты — типизированные события.
 //!
+//! `LoadSetup` читает пятнадцать позиционных пар с частичной мутацией; labels не
+//! проверяются, а неподтверждённые defaults представлены `Option`. Ошибка bind
+//! оставляет созданный server-owner, ошибка allow-list после listen нефатальна,
+//! а частично созданные worker-ы не откатываются.
 //!
-//! `ProcessMessage` один раз читает размер FIFO `CServerForGS` и исполняет
-//! ровно этот snapshot. Сообщения, добавленные после чтения размера, остаются
-//! следующему turn. Каждое сообщение немедленно проходит уже восстановленный
-//! `CMessage::Run`, который сам выбирает Billing либо server-handler; numeric
-//! routing здесь не дублируется. Owned `CMessage` и `Drop` заменяют virtual
-//! `Run` и последующий deleting destructor.
-//!
-//! Первый `MainLoop` дважды читает `timeGetTime`: первый tick инициализирует
-//! три process-static cadence-слота, второй становится текущим. Следующие
-//! проходы читают tick один раз. Refresh использует строгое
-//! `interval < now - last`, выполняется до проверки `m_bExit` и при наличии
-//! server-owner публикуется typed-событием вместо MFC `SetWindowText`.
-//! Message snapshot идёт только без exit. Затем отдельно инициализируется ping
-//! cadence; строгое `60000 < delta` один раз ставит `bInPing = true` без
-//! придуманного сетевого ping, которого это тело не отправляло. Успешный turn
-//! заканчивается точным `Sleep(1)`.
-//!
-//! `rustix::CLOCK_BOOTTIME` сохраняет suspend-aware 32-битный wrapping
-//! `timeGetTime`; `VecDeque` хранит typed outcomes вместо Windows GUI-журнала.
-//! Неиспользуемый этим телом `dwServerInfoLogLastTime` всё равно хранится и
-//! инициализируется в исходной позиции.
-//!
-//! `LoadSetup` читает пятнадцать positional-пар, игнорируя labels и сохраняя
-//! partial mutation при преждевременном EOF. Конструктор `tagSetup` не попал в
-//! owner-export; подтверждены только используемые numeric/bool defaults.
-//! Rust хранит остальные поля как `Option`; safe
-//! init останавливается только на конкретной недоказанной границе вместо
-//! придуманного значения. Найденный setup содержит все пятнадцать пар.
-//!
-//! `InitServer` удаляет прежний owner, сохраняет новый до `Host`, поэтому
-//! ошибка bind оставляет неслушающий server как оригинал. Ошибка allow-list
-//! после успешного Host не отменяет init; `rustix::uname + ToSocketAddrs`
-//! заменяют `gethostname/gethostbyname` и сохраняют первый IPv4 одновременно
-//! строкой и x86 DWORD. `InitBPManager` сначала выполняет нефатальный `Start`,
-//! затем создаёт workers по одному; ошибка оставляет уже созданные элементы.
-//! `ReleaseBPManager` останавливает/ждёт DB-workers по порядку и лишь затем
-//! условно ждёт cash-log worker по текущему setup-флагу.
-//! Optional PlayerFill получает те же основную DB-конфигурацию, sender и общий
-//! `g_bGameThreadExit`; Start остаётся фатальным только при ошибке создания
-//! thread, а Release при включённом setup-флаге только присоединяет worker.
-//!
-//! `Init` сохраняет порядок `LoadSetup -> CBaseMessage::Initial -> WinSock ->
-//! InitServer -> InitBPManager -> optional PlayerFill`. Static message pool и
-//! WinSock startup не имеют пустых Rust-вызовов: локальные message buffers и
-//! Tokio sockets уже владеют их техническим эффектом. Network runtime держит
-//! ровно одну accept-задачу и все read/send actions в `JoinSet`; каждый turn
-//! применяет один атомарный `DoNetThreadFunc` snapshot перед исходным
-//! `MainLoop`. `Release` сначала присоединяет Billing/PlayerFill workers, затем
-//! при первом `m_bExit=false` выполняет `QUITALL`, snapshots до пустого map и
-//! уничтожает server-owner. Повторный Release сохраняет исходный skip этой
-//! последней стадии.
-//!
-//! Внешний `GameThreadFunc` владеет единственным локальным `CGame` вместо
-//! `g_pGame/CreateGame/GetGame/DeleteGame`, всегда выполняет Release после
-//! partial Init и принимает внешний shutdown future вместо Windows global,
-//! event и `WM_CLOSE`. Перед cleanup он публикует тот же
-//! `g_bGameThreadExit`, чтобы optional workers увидели уже наступившую границу.
-//! Отдельный Linux entrypoint `src/bin/billingserver.rs` передаёт сюда
-//! process shutdown и снимает наблюдаемые результаты каждого turn.
+//! `Release` присоединяет DB workers до сетевого `QUITALL`; повторный вызов
+//! пропускает уже завершённую сетевую стадию. Локальный `CGame`, process signal
+//! и managed Tokio tasks заменяют глобальный owner, Win32 events и detached I/O,
+//! сохраняя cleanup после любого результата частичного `Init`.
 
 use std::collections::VecDeque;
 use std::fs;
@@ -141,34 +92,29 @@ struct BillingSetup {
     player_fill_check_enabled: Option<bool>,
 }
 
-/// Итог positional-чтения Billing `Setup.ini` без раскрытия значений.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct BillingSetupLoadReport {
     pub(crate) parsed_pairs: usize,
     pub(crate) stopped_at_pair: Option<usize>,
 }
 
-/// Ошибка открытия исходного Billing setup.
 #[derive(Debug)]
 pub(crate) struct BillingSetupOpenError {
     pub(crate) path: PathBuf,
     pub(crate) source: io::Error,
 }
 
-/// Ошибка `InitServer` после уже сохранённого нового server-owner.
 #[derive(Debug)]
 pub(crate) enum BillingServerInitializationError {
     MissingSetupField(&'static str),
     Host(ServerHostError),
 }
 
-/// Нефатальный результат загрузки `GSInfoSetup.ini` после успешного `Host`.
 #[derive(Debug)]
 pub(crate) struct BillingServerInitialization {
     pub(crate) allowed_clients_error: Option<io::Error>,
 }
 
-/// Ошибка точного `InitBPManager` после возможного запуска ранних workers.
 #[derive(Debug)]
 pub(crate) enum BillingPlayerManagerInitializationError {
     MissingSetupField(&'static str),
@@ -176,7 +122,6 @@ pub(crate) enum BillingPlayerManagerInitializationError {
     CreateWorker(CreateBillingPlayerWorkerError),
 }
 
-/// Ошибка optional PlayerFill-ветви `CGame::Init/Release`.
 #[derive(Debug)]
 pub(crate) enum BillingPlayerFillInitializationError {
     MissingSetupField(&'static str),
@@ -184,27 +129,23 @@ pub(crate) enum BillingPlayerFillInitializationError {
     Start(StartPlayerFillError),
 }
 
-/// Результат одного конкретного Billing/server-handler.
 #[derive(Debug)]
 pub(crate) enum BillingGameMessageOutcome {
     Billing(BillingMessageOutcome),
     Server(ServerMessageOutcome),
 }
 
-/// Наблюдаемая позиция MFC/ping-состояния одного `MainLoop`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BillingGameEvent {
     RefreshInfo,
     PingStarted,
 }
 
-/// Ошибка безопасной границы при непрочитанном numeric-поле setup.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BillingMainLoopError {
     MissingRefreshInfoTime,
 }
 
-/// Пути двух файлов, буквально читаемых исходным `CGame::Init`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BillingRuntimePaths {
     pub(crate) setup: PathBuf,
@@ -212,7 +153,6 @@ pub(crate) struct BillingRuntimePaths {
 }
 
 impl BillingRuntimePaths {
-    /// Восстанавливает исходные имена относительно runtime-каталога.
     pub(crate) fn from_runtime_directory(directory: impl AsRef<Path>) -> Self {
         let directory = directory.as_ref();
         Self {
@@ -222,13 +162,11 @@ impl BillingRuntimePaths {
     }
 }
 
-/// Нефатальное событие полного Billing `Init`.
 #[derive(Debug)]
 pub(crate) enum BillingInitializationNotice {
     AllowedGameServersUnavailable(io::Error),
 }
 
-/// Фатальная стадия буквального Billing `CGame::Init`.
 #[derive(Debug)]
 pub(crate) enum BillingInitializationError {
     Setup(BillingSetupOpenError),
@@ -237,21 +175,18 @@ pub(crate) enum BillingInitializationError {
     PlayerFill(BillingPlayerFillInitializationError),
 }
 
-/// Полный успешный итог Billing `CGame::Init`.
 #[derive(Debug)]
 pub(crate) struct BillingInitializationReport {
     pub(crate) setup: BillingSetupLoadReport,
     pub(crate) notices: Vec<BillingInitializationNotice>,
 }
 
-/// Ошибка owned accept/read/send runtime.
 #[derive(Debug)]
 pub(crate) enum BillingNetworkRuntimeError {
     MissingGameServer,
     Task(JoinError),
 }
 
-/// Один concurrent network snapshot перед доменным `MainLoop`.
 #[derive(Debug, Default)]
 pub(crate) struct BillingNetworkTurn {
     pub(crate) admissions: Vec<AdmissionOutcome>,
@@ -261,7 +196,6 @@ pub(crate) struct BillingNetworkTurn {
     pub(crate) snapshot_errors: Vec<ServerSnapshotError<BillingReceiveError>>,
 }
 
-/// Полный наблюдаемый результат одного Billing runtime-turn.
 #[derive(Debug, Default)]
 pub(crate) struct BillingRuntimeStep {
     pub(crate) network: BillingNetworkTurn,
@@ -272,14 +206,12 @@ pub(crate) struct BillingRuntimeStep {
     pub(crate) player_fill_notices: Vec<PlayerFillNotice>,
 }
 
-/// Фатальная граница одного полного runtime-turn.
 #[derive(Debug)]
 pub(crate) enum BillingRuntimeError {
     Network(BillingNetworkRuntimeError),
     MainLoop(BillingMainLoopError),
 }
 
-/// Отчёт буквального `CGame::Release`, который в EXE всегда возвращал true.
 #[derive(Debug)]
 pub(crate) struct BillingReleaseReport {
     pub(crate) legacy_result: bool,
@@ -289,7 +221,6 @@ pub(crate) struct BillingReleaseReport {
     pub(crate) network_task_errors: Vec<JoinError>,
 }
 
-/// Итог единственного owned аналога исходного `GameThreadFunc`.
 #[derive(Debug)]
 pub(crate) struct BillingGameThreadReport {
     pub(crate) initialization: Result<BillingInitializationReport, BillingInitializationError>,
@@ -298,7 +229,6 @@ pub(crate) struct BillingGameThreadReport {
     pub(crate) release: BillingReleaseReport,
 }
 
-/// Достигнутая часть исходного `CGame`; остальные поля добавляются их owners.
 pub(crate) struct CGame {
     gs_server: Option<CServerForGS>,
     billing_players: Arc<CBillingPlayerManager>,
@@ -319,7 +249,6 @@ pub(crate) struct CGame {
 }
 
 impl CGame {
-    /// Создаёт исходное null-server/non-exit состояние без запуска runtime.
     pub(crate) fn new() -> Self {
         Self {
             gs_server: None,
@@ -341,32 +270,26 @@ impl CGame {
         }
     }
 
-    /// Подключает уже созданный component-server в позиции `InitServer`.
     pub(crate) fn set_gs_server(&mut self, server: CServerForGS) {
         self.gs_server = Some(server);
     }
 
-    /// Задаёт доказанное поле setup для cadence `MainLoop`.
     pub(crate) fn set_refresh_info_time(&mut self, interval_ms: u32) {
         self.setup.refresh_info_time_ms = Some(interval_ms);
     }
 
-    /// Возвращает общие process-static Billing FIFO.
     pub(crate) fn billing_players(&self) -> &Arc<CBillingPlayerManager> {
         &self.billing_players
     }
 
-    /// Ставит внутренний аналог `m_bExit`, который проверяется после refresh.
     pub(crate) fn request_exit(&mut self) {
         self.exit_requested = true;
     }
 
-    /// Публикует внешний `g_bGameThreadExit` для optional background workers.
     pub(crate) fn request_game_thread_exit(&self) {
         self.game_thread_exit.store(true, Ordering::Release);
     }
 
-    /// Позиционно читает пятнадцать пар исходного `Setup.ini`.
     pub(crate) fn load_setup(
         &mut self,
         path: impl AsRef<Path>,
@@ -388,7 +311,6 @@ impl CGame {
         Ok(report)
     }
 
-    /// Пересоздаёт Billing listener, затем нефатально читает `GSInfoSetup.ini`.
     pub(crate) fn init_server(
         &mut self,
         allowed_clients_path: impl AsRef<Path>,
@@ -420,7 +342,6 @@ impl CGame {
         })
     }
 
-    /// Выполняет `Start` и создаёт точное число элементов старого `vecBPM`.
     pub(crate) fn init_billing_player_manager(
         &mut self,
     ) -> Result<(), BillingPlayerManagerInitializationError> {
@@ -456,7 +377,6 @@ impl CGame {
         Ok(())
     }
 
-    /// Последовательно освобождает DB-workers и затем optional log-worker.
     pub(crate) fn release_billing_player_manager(
         &mut self,
     ) -> Result<bool, BillingPlayerManagerInitializationError> {
@@ -470,7 +390,6 @@ impl CGame {
         Ok(result)
     }
 
-    /// Условно создаёт единственный PlayerFill worker после BP manager.
     pub(crate) fn init_player_fill_manager(
         &mut self,
     ) -> Result<bool, BillingPlayerFillInitializationError> {
@@ -498,7 +417,6 @@ impl CGame {
         Ok(true)
     }
 
-    /// Условно ждёт PlayerFill worker в исходной позиции `Release`.
     pub(crate) fn release_player_fill_manager(
         &mut self,
     ) -> Result<bool, BillingPlayerFillInitializationError> {
@@ -511,11 +429,6 @@ impl CGame {
         Ok(true)
     }
 
-    /// Выполняет полный порядок исходного `CGame::Init` над готовым owner.
-    ///
-    /// Ошибка allow-list остаётся нефатальной. После любой фатальной стадии
-    /// вызывающий обязан всё равно выполнить [`Self::release`], потому что
-    /// исходный `GameThreadFunc` освобождал и частично созданное состояние.
     pub(crate) fn initialize(
         &mut self,
         paths: &BillingRuntimePaths,
@@ -524,9 +437,6 @@ impl CGame {
             .load_setup(&paths.setup)
             .map_err(BillingInitializationError::Setup)?;
 
-        // `CBaseMessage::Initial` и `CMySocket::MySocketInit` создавали static
-        // buffers/WinSock state. Их эффект уже принадлежит owned messages и
-        // Tokio sockets, поэтому пустые lifecycle-вызовы здесь не вводятся.
         let server = self
             .init_server(&paths.allowed_game_servers)
             .map_err(BillingInitializationError::Server)?;
@@ -543,7 +453,6 @@ impl CGame {
         Ok(BillingInitializationReport { setup, notices })
     }
 
-    /// Выполняет один concurrent accept/read/send snapshot Billing transport.
     pub(crate) async fn run_network_turn(
         &mut self,
     ) -> Result<BillingNetworkTurn, BillingNetworkRuntimeError> {
@@ -571,7 +480,6 @@ impl CGame {
         Ok(turn)
     }
 
-    /// Выполняет технический network snapshot, затем буквальный `MainLoop`.
     pub(crate) async fn run_runtime_turn(
         &mut self,
     ) -> Result<BillingRuntimeStep, BillingRuntimeError> {
@@ -604,10 +512,6 @@ impl CGame {
         }
     }
 
-    /// Выполняет полный порядок исходного `CGame::Release`.
-    ///
-    /// Billing/PlayerFill workers присоединяются до проверки `m_bExit`.
-    /// Повторный вызов, как EXE, пропускает network/socket/message cleanup.
     pub(crate) async fn release(&mut self) -> BillingReleaseReport {
         let billing_player_manager_error = self.release_billing_player_manager().err();
         let player_fill_error = self.release_player_fill_manager().err();
@@ -640,8 +544,6 @@ impl CGame {
             }
             self.io_tasks.shutdown().await;
             self.gs_server.take();
-            // WinSock cleanup и CBaseMessage::Release уже выражены Drop
-            // transport/message owners и не имеют отдельного Rust-состояния.
         }
 
         BillingReleaseReport {
@@ -746,12 +648,10 @@ impl CGame {
         }
     }
 
-    /// Забирает следующее typed-событие optional PlayerFill worker.
     pub(crate) fn pop_player_fill_notice(&self) -> Option<PlayerFillNotice> {
         self.player_fill.pop_notice()
     }
 
-    /// Исполняет ровно начальный размер FIFO GameServer-сообщений.
     pub(crate) fn process_message(&mut self) -> bool {
         let mut remaining = self
             .gs_server
@@ -778,7 +678,6 @@ impl CGame {
         true
     }
 
-    /// Выполняет один точный доменный turn `MainLoop` без network polling.
     pub(crate) fn main_loop(&mut self) -> Result<bool, BillingMainLoopError> {
         let initial_now = match self.main_loop_state.current_time_ms {
             Some(now) => now,
@@ -827,12 +726,10 @@ impl CGame {
         Ok(true)
     }
 
-    /// Забирает следующий handler-outcome в порядке message snapshot.
     pub(crate) fn pop_message_outcome(&mut self) -> Option<BillingGameMessageOutcome> {
         self.message_outcomes.pop_front()
     }
 
-    /// Забирает следующее typed-событие refresh/ping.
     pub(crate) fn pop_event(&mut self) -> Option<BillingGameEvent> {
         self.events.pop_front()
     }
@@ -876,9 +773,8 @@ impl BillingSetup {
                     return tokens.report();
                 };
                 let Some(value) = $parser(raw) else {
-                    // std::string. Malformed numeric token безопасно оставляет
-                    // Option пустым и останавливает positional parsing; Init
-                    // затем возвращает конкретный MissingSetupField.
+                    // Некорректное число оставляет Option пустым и останавливает
+                    // разбор; Init затем возвращает конкретный MissingSetupField.
                     return tokens.report();
                 };
                 self.$field = value;
@@ -1049,11 +945,6 @@ fn resolve_first_local_ipv4() -> Option<Ipv4Addr> {
         })
 }
 
-/// Выполняет полный lifecycle исходного `GameThreadFunc` над одним Billing owner.
-///
-/// `shutdown` заменяет только внешний `g_bGameThreadExit`. Локальное владение
-/// заменяет process-global `g_pGame`; после partial Init и любой runtime-ошибки
-/// всё равно исполняется буквальный Release.
 pub(crate) async fn game_thread_func<Shutdown>(
     paths: &BillingRuntimePaths,
     shutdown: Shutdown,
@@ -1089,10 +980,7 @@ where
         None
     };
 
-    // Нормальный внешний shutdown уже означает true в исходном global.
-    // На partial Init/runtime error Rust также публикует его перед join:
-    // иначе доказанные workers, читающие только этот flag, остались бы
-    // detached навсегда и safe owned cleanup был бы невозможен.
+    // При ошибке флаг публикуется до join: эти workers другого stop-канала не имели.
     game.request_game_thread_exit();
     let release = game.release().await;
     let mut final_step = BillingRuntimeStep::default();
@@ -1118,7 +1006,5 @@ impl Drop for CGame {
         if let Some(task) = self.accept_task.take() {
             task.abort();
         }
-        // Drop JoinSet отменяет оставшиеся owned I/O-задачи. Нормальный путь
-        // GameThreadFunc до этого вызывает async Release и ждёт shutdown.
     }
 }

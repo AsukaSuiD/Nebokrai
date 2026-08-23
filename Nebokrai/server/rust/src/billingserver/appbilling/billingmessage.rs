@@ -1,36 +1,11 @@
-//! Три входные Billing-ветви из `appbilling/billingmessage.cpp`.
+//! Billing-обработчики `appbilling/billingmessage.cpp`, подтверждённые
+//! `billingserver.exe` и `billingserver.pdb`. Они декодируют запрос баланса,
+//! покупку и обмен в общие FIFO `CBillingPlayerManager`.
 //!
-//!
-//! `0xEF201` читает строковую player identity с границей `0x20` и только при
-//! её непустом первом byte читает numeric player ID. Запись
-//! `tagAccInfo(player_id, identity, message.socket_id)` затем безусловно
-//! добавляется в AC FIFO. Пустая identity остаётся тихим no-op и не потребляет
-//! следующий `long`.
-//!
-//! `0xEF202` сначала читает buyer ID, три строки buyer identity/IP/name, затем
-//! yuanbao, goods ID/count, session ID, LoginServer ID и WorldServer ID. Он
-//! создаёт `tagTradeNode` типа `0` с нулевыми seller/plugin полями, пустыми
-//! seller-строками, `GUID_INVALID` и GameServer ID из message metadata. Это
-//! purchase-запись: пустой seller ID позднее выбирает `BuyItemCode` в
-//! `CBillingPlayerManager::Run`.
-//!
-//! `0xEF203` читает type/buyer/seller, шесть строк в порядке buyer identity,
-//! seller identity, buyer IP, seller IP, buyer name, seller name, затем
-//! yuanbao, goods ID/count, session/plugin/Login/World ID и GUID. GameServer ID
-//! снова берётся из socket metadata. Обе ветви глубоко копируют готовую запись
-//! в общую TR FIFO до operator log; owned Rust-запись сохраняет тот же порядок.
-//!
-//! Все numeric поля используют старое `GetLong == 0` при нехватке payload;
-//! каждая строка использует уже восстановленный ограниченный `GetStr`. Нулевой
-//! либо неполный GUID остаётся предварительно созданным `GUID_INVALID`, как у
-//! исходного `CGUID local; GetGUID(...)`. Три старых `sprintf/AddLogText`
-//! представлены typed outcome с полной записью: `CGame::ProcessMessage`
-//! сохраняет их без доступа к очереди и без глобального `char[]`.
-//!
-//! Временные `std::string`, локальные record-копии, SEH и единственный `$L`
-//! cleanup удалены как library/compiler noise; их lifetime выражен `Vec`,
-//! `Clone` и `Drop`. Обработчик только ставит записи в общие FIFO; запуск и
-//! исполнение DB workers остаются у восстановленного manager lifecycle.
+//! Пустая identity в запросе баланса остаётся no-op и не потребляет следующий
+//! `long`. Числа сохраняют общий fallback `GetLong == 0`, неполный GUID —
+//! предварительный `GUID_INVALID`; GameServer ID берётся из metadata сообщения.
+//! Owned-записи заменяют глубокие C++-копии, сохраняя порядок постановки в FIFO.
 
 use crate::billingserver::appbilling::billingplayermanager::{
     CBillingPlayerManager, TagAccInfo, TagTradeNode, TagTradeNodeParts,
@@ -43,33 +18,24 @@ const INCREMENT_PURCHASE_REQUEST: i32 = 0x000E_F202;
 const PLAYER_TRADE_REQUEST: i32 = 0x000E_F203;
 const BILLING_STRING_LIMIT: usize = 0x20;
 
-/// Наблюдаемый результат одной ветви Billing `OnBillingMessage`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum BillingMessageOutcome {
-    /// Пустая identity в `0xEF201` остановила ветвь до numeric ID.
     AccountRequestIgnoredEmpty,
-    /// Account-запрос скопирован в AC FIFO.
     AccountRequestQueued { request: TagAccInfo, queued: bool },
-    /// Обычная покупка скопирована в TR FIFO.
     IncrementPurchaseQueued { request: TagTradeNode, queued: bool },
-    /// Player-to-player trade скопирован в TR FIFO.
     PlayerTradeQueued { request: TagTradeNode, queued: bool },
-    /// Неизвестный тип сохраняет исходный no-op.
     Unsupported { message_type: i32 },
 }
 
-/// Узкая композиция свободного handler с общими FIFO Billing workers.
 pub(crate) struct BillingMessageHandler<'a> {
     queues: &'a CBillingPlayerManager,
 }
 
 impl<'a> BillingMessageHandler<'a> {
-    /// Связывает handler с единственным общим владельцем трёх static FIFO.
     pub(crate) const fn new(queues: &'a CBillingPlayerManager) -> Self {
         Self { queues }
     }
 
-    /// Выполняет три подтверждённые ветви, сохраняя неизвестный opcode как no-op.
     pub(crate) fn on_billing_message(&self, message: &mut CMessage) -> BillingMessageOutcome {
         match message.message_type() {
             ACCOUNT_BALANCE_REQUEST => self.on_account_request(message),

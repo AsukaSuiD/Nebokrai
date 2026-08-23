@@ -1,24 +1,12 @@
-//! Владелец сопоставления IPv4-шаблонов `kl_net::ip_filter` AuthServer.
+//! IPv4-фильтр `kl_net::ip_filter`, подтверждённый `authserver.exe` и
+//! `authserver.pdb` по owner-у `kl_ipfilter.cpp`.
 //!
-//! Сопоставление IPv4 и чтение whitespace-списка canonical адресов подтверждены
-//! точной парой AuthServer EXE/PDB.
-//!
-//! В `Pred::operator()` правило сравнивается с проверяемым адресом по четырём
-//! octet: нулевой octet именно правила является wildcard, остальные должны
-//! совпасть. `to_ip_struct` получает элемент списка, второй операнд —
-//! сохранённый адрес из
-//! predicate, а `test cl, cl` пропускает сравнение нулевого octet правила.
-//! `Vec<[u8; 4]>` заменяет `std::list<std::string>` после разбора и сохраняет
-//! исходный линейный поиск. Const-параметр сохраняет две старые политики:
-//! allow-list разрешает найденное совпадение, deny-list — его отсутствие.
-//!
-//! `load` читал whitespace-token до EOF и добавлял их в исходном порядке.
-//! Token разбирается узким байтовым compatibility-layer: ровно четыре части,
-//! каждая принимает знак и десятичный prefix как `atoi`, затем безопасно
-//! сужается до младшего byte. Переполнение насыщается в signed `i32` до
-//! сужения: это детерминированная замена внутренней CRT/UB-границы, не имеющей
-//! необходимого сетевого эффекта. Ошибка чтения после успешного открытия также
-//! не воспроизводит частично заполненный `std::list`.
+//! Нулевой октет правила является wildcard; allow-list принимает найденное
+//! совпадение, deny-list — его отсутствие. Правила читаются как whitespace-
+//! токены в исходном порядке, а `Vec<[u8; 4]>` сохраняет линейный поиск списка.
+//! Разбор сохраняет `atoi`-подобный десятичный prefix и сужение до младшего
+//! байта; переполнение безопасно насыщается в `i32`, поскольку исходная CRT/UB-
+//! граница не имела подтверждённого сетевого результата.
 
 use std::error::Error;
 use std::fmt;
@@ -26,14 +14,10 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-/// Ошибка чтения либо структурно некорректной записи списка IP-шаблонов.
 #[derive(Debug)]
 pub(crate) enum IpFilterLoadError {
-    /// Файл не удалось прочитать целиком.
     Io(io::Error),
-    /// Token содержит не четыре разделённые точками части.
     InvalidPattern {
-        /// Номер token с нуля без раскрытия его байтов в ошибке.
         token_index: usize,
     },
 }
@@ -59,7 +43,6 @@ impl Error for IpFilterLoadError {
     }
 }
 
-/// Читает canonical whitespace-список IP-шаблонов в исходном порядке.
 pub(crate) fn load_ip_patterns(path: impl AsRef<Path>) -> Result<Vec<[u8; 4]>, IpFilterLoadError> {
     let input = fs::read(path).map_err(IpFilterLoadError::Io)?;
     input
@@ -72,25 +55,21 @@ pub(crate) fn load_ip_patterns(path: impl AsRef<Path>) -> Result<Vec<[u8; 4]>, I
         .collect()
 }
 
-/// IPv4-фильтр над уже разобранными шаблонами старого `ip_filter`.
 pub(crate) struct IpFilter<const ALLOW_MATCH: bool> {
     patterns: Vec<[u8; 4]>,
 }
 
 impl<const ALLOW_MATCH: bool> IpFilter<ALLOW_MATCH> {
-    /// Создаёт пустой список шаблонов без неявного чтения файла.
     pub(crate) const fn new() -> Self {
         Self {
             patterns: Vec::new(),
         }
     }
 
-    /// Полностью заменяет список уже разобранными octet в исходном порядке.
     pub(crate) fn replace_patterns(&mut self, patterns: Vec<[u8; 4]>) {
         self.patterns = patterns;
     }
 
-    /// Применяет старую wildcard-семантику и политику allow/deny варианта.
     pub(crate) fn is_allowed(&self, address: [u8; 4]) -> bool {
         let matched = self.patterns.iter().any(|pattern| {
             pattern

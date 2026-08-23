@@ -1,46 +1,17 @@
-//! Свободные обработчики AuthServer из `appauth/message/message_func.cpp`.
+//! Обработчики `appauth/message/message_func.cpp`, подтверждённые
+//! `authserver.exe` и `authserver.pdb`. Они связывают LoginServer-соединения,
+//! Auth DB-очереди, GM-команды и coalescing server-info с состоянием `CGame`.
 //!
-//! Контракт всех девяти функций таблицы Auth `InitMsgFuncPool` и связанного
-//! состояния `CGame` подтверждён точной парой AuthServer EXE/PDB.
+//! Таблица LoginServer остаётся упорядоченной по area ID; disconnect удаляет
+//! только первую найденную для socket запись. Auth-строки приводятся к нижнему
+//! регистру как Windows-1251 русской поставки; локаль другой Windows-сессии
+//! остаётся внешней границей, а непредставимый одиночный байт сохраняется.
+//! Нехватка числового payload сохраняет `GetLong == 0` без движения курсора.
 //!
-//! Synthetic connect/disconnect получают socket ID и peer IPv4 из runtime-
-//! metadata `CMessage`. Connect сначала публикует операторское событие, затем
-//! при включённом исходном `mIPAllower` проверяет адрес и ставит
-//! `QuitClientBySocketID` при отказе. Disconnect сначала находит первый area ID
-//! по socket ID в порядке `std::map`, публикует событие и затем удаляет ровно
-//! первую найденную запись. `BTreeMap<i32, i32>` сохраняет исходный
-//! `area_id -> socket_id`, упорядоченный поиск и замену значения через
-//! `operator[]` в `LSGetInfo`.
-//! Ответ `0xCF802` читает четыре Windows `long` в порядке player/GS/WS/LS и
-//! передаёт их в тот же coalescing owner `ServerInfoQueue`, который DB worker
-//! снимает целиком при `WriteServerInfo`. Нехватка payload сохраняет старый
-//! `GetLong == 0` без движения курсора.
-//!
-//! Auth/auth-ex читают account, password, client IPv4 и client socket, приводят
-//! обе строки к lower-case и ставят owned DB quest с socket ID текущего
-//! LoginServer. Оригинал вызывает `CharLowerA`, а язык преобразования получал
-//! из внешней Windows-сессии и внутри процесса не закреплял. Rust фиксирует
-//! Windows-1251 русской поставки через `encoding_rs`; для запуска
-//! оригинала под иной системной локалью преобразование байтов `0x80..=0xff`
-//! остаётся внешней границей. Непредставимый одиночный byte сохраняется
-//! буквально. Промежуточный общий `sprintf`-буфер dotted IPv4 использовался
-//! только Windows GUI/log путями и не получает отдельного server-state.
-//!
-//! GM lock читает account и шесть `u16` полей времени в исходном порядке.
-//! GM kick маршрутизирует `0xCF701` по area ID, сохраняя socket отправителя,
-//! account, однобайтовую причину и operator string. Нулевой socket sentinel
-//! возвращает `0x10F201` отправителю. Diagnostic содержит исходный area ID. Ответ
-//! kick пересылается сохранённому socket ID; result `0` несёт две строки,
-//! ненулевой result — одну.
-//!
-//! Старые `AddLogText` и MFC `ListBox` не получают Windows/Rust GUI-аналога:
-//! обработчик складывает структурированные события в FIFO, а управляемый
-//! main-loop снимает их в том же порядке и передаёт процессной диагностике.
-//! Выходная команда отказа идёт через owned `ServerCommandHandle`; handler не знает
-//! внутреннее устройство `CServer`. Недостаток четырёх payload-байт у
-//! `LSGetInfo` сохраняет старый `CBaseMessage::GetLong == 0` без движения
-//! курсора. Единственная локальная граница таблицы — `0x10F101` в
-//! `nets/netauth/message.rs`; отдельного handler здесь нет.
+//! Операторские MFC side effects представлены FIFO событий. Отказ соединения
+//! идёт через `ServerCommandHandle`, а server-info передаётся в общий
+//! `ServerInfoQueue`; wire-порядок и ветви GM-команд определены непосредственно
+//! обработчиками ниже.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
@@ -56,34 +27,21 @@ use crate::authserver::src::kl_ipfilter::IpFilter;
 use crate::nets::netauth::message::{AuthMessageHandler, AuthMessageKind, CMessage, DispatchError};
 use crate::nets::servers::ServerCommandHandle;
 
-/// Структурированное операторское событие вместо старых debug/MFC side effects.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum LoginServerNotice {
-    /// LoginServer прислал synthetic connect до применения IP-фильтра.
     Connected {
-        /// Peer IPv4 соединения.
         address: Ipv4Addr,
-        /// Исходный socket ID.
         socket_id: i32,
-        /// Результат старого `CheckConnection`.
         allowed: bool,
     },
-    /// LoginServer прислал свой area ID и зарегистрирован в таблице `CGame`.
     Registered {
-        /// Peer IPv4 соединения.
         address: Ipv4Addr,
-        /// Переданный LoginServer area ID.
         area_id: i32,
-        /// Socket ID, записанный как значение map.
         socket_id: i32,
     },
-    /// LoginServer прислал synthetic disconnect до удаления map-записи.
     Disconnected {
-        /// Peer IPv4 соединения.
         address: Ipv4Addr,
-        /// Первый найденный area ID либо старый sentinel `0`.
         area_id: i32,
-        /// Исходный socket ID.
         socket_id: i32,
     },
 }
@@ -124,7 +82,6 @@ impl fmt::Display for LoginServerNotice {
     }
 }
 
-/// Конкретные Auth-handler’ы и принадлежавшее `CGame` состояние LoginServer.
 pub(crate) struct AuthMessageHandlers {
     login_servers: BTreeMap<i32, i32>,
     ip_filter_enabled: bool,
@@ -134,7 +91,6 @@ pub(crate) struct AuthMessageHandlers {
 }
 
 impl AuthMessageHandlers {
-    /// Создаёт обработчики с уже разобранными IPv4-шаблонами `mIPAllower`.
     pub(crate) fn new(
         ip_filter_enabled: bool,
         allowed_patterns: Vec<[u8; 4]>,
@@ -151,28 +107,23 @@ impl AuthMessageHandlers {
         }
     }
 
-    /// Атомарно заменяет настройки `mIPAllower` после успешного config reload.
     pub(crate) fn replace_ip_filter(&mut self, enabled: bool, allowed_patterns: Vec<[u8; 4]>) {
         self.ip_filter_enabled = enabled;
         self.ip_allower.replace_patterns(allowed_patterns);
     }
 
-    /// Возвращает socket ID для area ID либо исходный sentinel `0`.
     pub(crate) fn login_server_socket_id(&self, area_id: i32) -> i32 {
         self.login_servers.get(&area_id).copied().unwrap_or(0)
     }
 
-    /// Возвращает первый area ID для socket ID либо исходный sentinel `0`.
     pub(crate) fn login_server_area_id(&self, socket_id: i32) -> i32 {
         self.area_for_socket(socket_id).unwrap_or(0)
     }
 
-    /// Возвращает socket ID зарегистрированных LoginServer в порядке area ID.
     pub(crate) fn login_server_socket_ids(&self) -> impl Iterator<Item = i32> + '_ {
         self.login_servers.values().copied()
     }
 
-    /// Забирает следующее операторское событие в исходном порядке handler’ов.
     pub(crate) fn pop_notice(&mut self) -> Option<LoginServerNotice> {
         self.notices.pop_front()
     }
