@@ -1341,7 +1341,6 @@ use crate::transport::bind_tcp_ipv4;
 use crate::worldserver::appworld::country::country::{
     CountryAbsolveCounterReset, CountryExileMessageDelivery, CountryExileResultContext,
     CountryExileTarget, CountryExileTextArgument, CountryFactionSnapshot, CountryNewTermContext,
-    CountrySetNewDayContext,
     CountryGovernanceContextBlock, CountryKingSaveLimits, CountryOnlinePlayer,
     CountryPlayersListContext, CountryPlayersListContextBlock,
     CountryVillageTaxContext, CountryVillageTaxContextBlock, CountryVillageTaxRegion,
@@ -11164,7 +11163,6 @@ impl CGame {
         ReloadContext,
         TimerCallback,
         CountryDatabase,
-        CountryContext,
     >(
         &mut self,
         runtime_directory: &Path,
@@ -11198,7 +11196,6 @@ impl CGame {
         country_database_connection: Option<&mut WorldTdsClient>,
         goods_war: &mut CGoodsWarMember,
         goods_war_database_connection: Option<&mut WorldTdsClient>,
-        country_context: &mut CountryContext,
         country_war_system: &mut CountryWarSys,
         country_war_callbacks: CountryWarCallbacks<TimerCallback>,
         honor_ranks: &mut CHonorRanks,
@@ -11212,7 +11209,6 @@ impl CGame {
         ReloadContext: WorldReloadContext,
         TimerCallback: Copy,
         CountryDatabase: DbCountryOwner,
-        CountryContext: CountrySetNewDayContext + ?Sized,
     {
         let mut events = Vec::new();
         macro_rules! stop {
@@ -11961,15 +11957,23 @@ impl CGame {
         }
 
         let country_local_time = (callbacks.get_timer_local_time)();
-        let country_initialization = country_handler
-            .initialize(
-                i32::from(country_local_time.day),
-                country_database,
-                country_database_connection,
-                country_parameters,
-                country_context,
-            )
-            .await;
+        let country_initialization = {
+            let (globe_setup, _) = reload_context.globe_setup_and_router();
+            let mut country_context = WorldCountryExileResultEffects {
+                game: self,
+                globe_setup,
+                format_world_string: None,
+            };
+            country_handler
+                .initialize(
+                    i32::from(country_local_time.day),
+                    country_database,
+                    country_database_connection,
+                    country_parameters,
+                    &mut country_context,
+                )
+                .await
+        };
         let succeeded = country_initialization.legacy_result;
         events.push(WorldGameInitEvent::CountryHandlerInitialized(
             country_initialization,
@@ -14401,7 +14405,7 @@ impl CGame {
         let base = WorldCountryExileResultEffects {
             game: self,
             globe_setup,
-            format_world_string,
+            format_world_string: Some(format_world_string),
         };
         let mut effects = WorldCountryDemiseEffects {
             base,
@@ -18004,7 +18008,20 @@ struct WorldCountryExileResultEffects<'a> {
     game: &'a mut CGame,
     globe_setup: &'a GlobeSetupSnapshot,
     format_world_string:
-        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
+        Option<&'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>>,
+}
+
+impl WorldCountryExileResultEffects<'_> {
+    fn format_world_string(
+        &mut self,
+        string_id: &[u8],
+        arguments: &[UnionFormatArgument<'_>],
+    ) -> Vec<u8> {
+        match self.format_world_string.as_deref_mut() {
+            Some(format) => format(string_id, arguments),
+            None => format_union_world_string(self.game.get_string_by_id(string_id), arguments),
+        }
+    }
 }
 
 struct WorldCountryPlayersListEffects<'a> {
@@ -18130,7 +18147,7 @@ impl CountryVillageTaxContext for WorldCountryExileResultEffects<'_> {
                 CountryExileTextArgument::Signed(value) => UnionFormatArgument::Signed(*value),
             })
             .collect::<Vec<_>>();
-        (self.format_world_string)(string_id, &arguments)
+        self.format_world_string(string_id, &arguments)
     }
 
     fn put_king_log(&mut self, text: &[u8]) {
@@ -18245,7 +18262,7 @@ impl CountryExileResultContext for WorldCountryExileResultEffects<'_> {
                 CountryExileTextArgument::Signed(value) => UnionFormatArgument::Signed(*value),
             })
             .collect::<Vec<_>>();
-        (self.format_world_string)(string_id, &arguments)
+        self.format_world_string(string_id, &arguments)
     }
 
     fn game_server_number_by_player_id(&mut self, player_id: i32) -> i32 {
@@ -18598,12 +18615,16 @@ impl CountryExileResultContext for WorldCountryDemiseEffects<'_> {
         let Some(faction) = self.organizing.faction_by_id_mut(faction_id) else {
             return Ok(false);
         };
+        let game = &*self.base.game;
+        let mut format_world_string = |string_id: &[u8], arguments: &[UnionFormatArgument<'_>]| {
+            format_union_world_string(game.get_string_by_id(string_id), arguments)
+        };
         let mut effects = WorldCountryFactionDemiseEffects {
-            game: &*self.base.game,
+            game,
             attack_city: self.attack_city,
             goods_war: self.goods_war,
             world_string: &mut *self.world_string,
-            format_world_string: &mut *self.base.format_world_string,
+            format_world_string: &mut format_world_string,
             update_player: &mut *self.update_player,
             country_id,
             king_id,
@@ -18613,7 +18634,7 @@ impl CountryExileResultContext for WorldCountryDemiseEffects<'_> {
         };
         faction
             .demise(
-                &*self.base.game,
+                game,
                 self.organizing_parameters,
                 old_master_id,
                 new_master_id,
@@ -19476,7 +19497,7 @@ where
             let base = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: &mut *application_callbacks.format_world_string,
+                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             let mut effects = WorldCountryDemiseEffects {
                 base,
@@ -19510,7 +19531,7 @@ where
             let base = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: &mut *application_callbacks.format_world_string,
+                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             let mut effects = WorldCountryDemiseEffects {
                 base,
@@ -19542,7 +19563,7 @@ where
             let mut effects = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: &mut *application_callbacks.format_world_string,
+                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             dispatch_country_info_message(
                 &mut message,
@@ -19582,7 +19603,7 @@ where
             let mut effects = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: &mut *application_callbacks.format_world_string,
+                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             dispatch_country_exile_result_message(
                 &mut message,
@@ -19602,7 +19623,7 @@ where
             let mut effects = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: &mut *application_callbacks.format_world_string,
+                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             dispatch_country_silence_request_message(
                 &mut message,
@@ -19622,7 +19643,7 @@ where
             let mut effects = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: &mut *application_callbacks.format_world_string,
+                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             dispatch_country_absolve_request_message(
                 &mut message,
@@ -19644,7 +19665,7 @@ where
             let base = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: &mut *application_callbacks.format_world_string,
+                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             let mut effects = WorldCountryDemiseEffects {
                 base,
@@ -19676,7 +19697,7 @@ where
             let mut effects = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: &mut *application_callbacks.format_world_string,
+                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             dispatch_country_depose_minister_message(
                 &mut message,
@@ -19696,7 +19717,7 @@ where
             let mut effects = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: &mut *application_callbacks.format_world_string,
+                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             dispatch_country_appoint_minister_message(
                 &mut message,
@@ -19716,7 +19737,7 @@ where
             let mut effects = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: &mut *application_callbacks.format_world_string,
+                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             dispatch_country_exile_request_message(
                 &mut message,
@@ -22700,6 +22721,57 @@ fn format_faction_enemy_world_string(
             }
             (b'd' | b'i' | b'u', FactionEnemyWarLogArgument::Unsigned(value)) => {
                 output.extend_from_slice(value.to_string().as_bytes());
+            }
+            _ => {
+                output.extend_from_slice(&template[offset..offset + 2]);
+                offset += 2;
+                continue;
+            }
+        }
+        argument_index += 1;
+        offset += 2;
+    }
+    output
+}
+
+/// Safe MSVCRT-compatible subset, используемый доказанными World string ID.
+/// Поддерживаются только реально передаваемые `%s`, `%d`, `%i`, `%u` и `%%`;
+/// неизвестный либо не согласованный с аргументом specifier сохраняется как
+/// текст вместо чтения отсутствующего vararg и внутреннего UB оригинала.
+fn format_union_world_string(
+    template: &[u8],
+    arguments: &[UnionFormatArgument<'_>],
+) -> Vec<u8> {
+    let template = legacy_c_string_prefix(template);
+    let mut output = Vec::with_capacity(template.len());
+    let mut argument_index = 0usize;
+    let mut offset = 0usize;
+    while offset < template.len() {
+        if template[offset] != b'%' || offset + 1 == template.len() {
+            output.push(template[offset]);
+            offset += 1;
+            continue;
+        }
+        let specifier = template[offset + 1];
+        if specifier == b'%' {
+            output.push(b'%');
+            offset += 2;
+            continue;
+        }
+        let Some(argument) = arguments.get(argument_index) else {
+            output.extend_from_slice(&template[offset..offset + 2]);
+            offset += 2;
+            continue;
+        };
+        match (specifier, argument) {
+            (b's', UnionFormatArgument::Text(text)) => {
+                output.extend_from_slice(legacy_c_string_prefix(text));
+            }
+            (b'd' | b'i', UnionFormatArgument::Signed(value)) => {
+                output.extend_from_slice(value.to_string().as_bytes());
+            }
+            (b'u', UnionFormatArgument::Signed(value)) => {
+                output.extend_from_slice((*value as u32).to_string().as_bytes());
             }
             _ => {
                 output.extend_from_slice(&template[offset..offset + 2]);
