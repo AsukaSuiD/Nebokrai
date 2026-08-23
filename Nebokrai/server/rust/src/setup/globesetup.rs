@@ -1,9 +1,9 @@
 //! Глобальный gameplay snapshot исторического Miracle.
 //!
 //! Статус World `CGlobeSetup::AddToByteArray` RVA `0x00033470` и
-//! `GetBaseMaxRp` RVA `0x0002EFA0` и три auction accessors, прочитанные
-//! `CGame::GetOptMoneyJin` RVA `0x00002250`: `IMPLEMENTED`; loaders, остальные accessors
-//! и Game decoder side effects ниже остаются
+//! `GetBaseMaxRp` RVA `0x0002EFA0`, auction accessors, прочитанные
+//! `CGame::GetOptMoneyJin` RVA `0x00002250`, и process-поля JJC/DbMisc:
+//! `IMPLEMENTED`; loaders, остальные accessors и Game decoder side effects ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
@@ -72,6 +72,13 @@ const AUCTION_ENABLED_OFFSET: usize = 0xC87;
 const AUCTION_FEE_MAXIMUM_OFFSET: usize = 0xC98;
 const AUCTION_FEE_MINIMUM_OFFSET: usize = 0xCA0;
 const AUCTION_FACTOR_C_OFFSET: usize = 0xCB0;
+const JJC_ENABLED_OFFSET: usize = 0xCD4;
+const JJC_REGION_MIN_OFFSET: usize = 0xCD8;
+const JJC_REGION_MAX_OFFSET: usize = 0xCDC;
+const JJC_MAX_REGIONS_IN_USE_OFFSET: usize = 0xCE0;
+const JJC_PK_TIMEOUT_OFFSET: usize = 0xCE8;
+const JJC_RANK_INTERVAL_OFFSET: usize = 0xCF0;
+const TRANSFER_MONEY_INTERVAL_OFFSET: usize = 0x110C;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -277,6 +284,27 @@ impl GlobeSetupSnapshot {
         self.bytes[0xcd1] != 0
     }
 
+    /// Возвращает process-настройки, которые `CJJcSystem::Run` читает из
+    /// загруженного `gamesetup.ini`. Неиспользуемые этим owner-ом соседние
+    /// `DefaultJJcLevel`, queue interval и buff ID в проекцию не входят.
+    pub(crate) fn jjc_run_config(&self) -> crate::worldserver::appworld::jjcsystem::JjcRunConfig {
+        crate::worldserver::appworld::jjcsystem::JjcRunConfig {
+            use_jjc: self.read_i32(JJC_ENABLED_OFFSET),
+            rank_interval_seconds: self.read_i32(JJC_RANK_INTERVAL_OFFSET),
+            pk_timeout_seconds: self.read_i32(JJC_PK_TIMEOUT_OFFSET),
+            region_id_min: self.read_i32(JJC_REGION_MIN_OFFSET),
+            region_id_max: self.read_i32(JJC_REGION_MAX_OFFSET),
+            max_regions_in_use: self.read_i32(JJC_MAX_REGIONS_IN_USE_OFFSET),
+        }
+    }
+
+    /// Возвращает `lTransferMoneyTime` для reconnect-gate `CDbMisc`.
+    /// Поставочный файл может не содержать последнюю запись; zero-filled
+    /// snapshot тогда сохраняет исходный нулевой интервал.
+    pub(crate) fn transfer_money_interval_ms(&self) -> i32 {
+        self.read_i32(TRANSFER_MONEY_INTERVAL_OFFSET)
+    }
+
     pub(crate) fn player_property_coefficients(&self) -> GlobePlayerPropertyCoefficients {
         let triplet = |offset| std::array::from_fn(|index| self.read_f32(offset + index * 4));
         GlobePlayerPropertyCoefficients {
@@ -393,6 +421,14 @@ impl GlobeSetupSnapshot {
 
     fn read_f32(&self, offset: usize) -> f32 {
         f32::from_le_bytes(
+            self.bytes[offset..offset + 4]
+                .try_into()
+                .expect("PDB-offset находится внутри globe snapshot"),
+        )
+    }
+
+    fn read_i32(&self, offset: usize) -> i32 {
+        i32::from_le_bytes(
             self.bytes[offset..offset + 4]
                 .try_into()
                 .expect("PDB-offset находится внутри globe snapshot"),
