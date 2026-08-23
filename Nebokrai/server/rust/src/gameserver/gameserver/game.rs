@@ -60,6 +60,9 @@
 //! Player templates, trade list, increment shop и contribution setup
 //! `0x01/0x03/0x04/0x05` входят туда же одной resource-группой с исходными
 //! partial publication, cursor и success-log границами.
+//! GlobeSetup, LogSystem и GM-list `0x07/0x08/0x09` также достигаются из FIFO:
+//! router/DaKong/auction/area mutations, Goods-AI broadcast и permission
+//! registry публикуются в подтверждённом порядке до соответствующих logs.
 //! Battle-fairy combine теперь замыкает game player-map с GlobeSetup gate и
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные

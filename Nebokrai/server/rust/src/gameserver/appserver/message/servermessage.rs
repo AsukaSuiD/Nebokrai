@@ -25,6 +25,8 @@
 //! GlobeSetup `0x07` сохраняет вложенный router decode, DaKong key, byte
 //! broadcast `0xBF736`, conditional auction disable и только затем глобальные
 //! area dimensions с финальным startup log.
+//! Вместе с LogSystem `0x08` и GM-list `0x09` он входит в общий живой
+//! runtime-configuration pass, сохраняя state/network/log ordering всей группы.
 //! QuestSystem `0x16` сохраняет exact scalar/script/map mutation order и
 //! публикует runtime lookup-owner до финального startup log.
 //! CountryParam `0x18` сохраняет scalar prefix, пять ordered maps и известные
@@ -346,6 +348,33 @@ pub(crate) struct GamePlayerEconomyStartupMessageReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameRuntimeConfigurationStartupReport {
+    GlobeSetup {
+        decoded: GlobeSetupDecodeReport,
+        goods_ai_broadcast: Result<i32, SendMessageError>,
+        auction_forced_disabled: bool,
+    },
+    LogSystem {
+        entries: usize,
+        da_kong_log: bool,
+    },
+    GmList(GmListDecodeReport),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameRuntimeConfigurationStartupError {
+    GlobeSetup(GlobeSetupDecodeError),
+    LogSystem(LogSystemDecodeError),
+    GmList(GmListDecodeError),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameRuntimeConfigurationStartupMessageReport {
+    pub(crate) decoded: GameRuntimeConfigurationStartupReport,
+    pub(crate) log_effects: Vec<Vec<u8>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageReport {
     ClientServerStart(GameClientServerStartReport),
     StringTable(GameStringTableMessageReport),
@@ -353,6 +382,7 @@ pub(crate) enum GameServerMessageReport {
     BattleFairyStartup(GameBattleFairyStartupMessageReport),
     CombatRegistryStartup(GameCombatRegistryStartupMessageReport),
     PlayerEconomyStartup(GamePlayerEconomyStartupMessageReport),
+    RuntimeConfigurationStartup(GameRuntimeConfigurationStartupMessageReport),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -362,6 +392,7 @@ pub(crate) enum GameServerMessageError {
     BattleFairyStartup(GameBattleFairyStartupError),
     CombatRegistryStartup(GameCombatRegistryStartupError),
     PlayerEconomyStartup(GamePlayerEconomyStartupError),
+    RuntimeConfigurationStartup(GameRuntimeConfigurationStartupError),
 }
 
 /// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
@@ -495,6 +526,96 @@ pub(crate) fn dispatch_server_message(
                     log_effects,
                 },
             )))
+        }
+        GLOBE_SETUP_SELECTOR | LOG_SYSTEM_SELECTOR | GM_LIST_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("runtime-configuration selector проверен без изменения cursor");
+            let mut log_effects = Vec::new();
+            let decoded = match {
+                let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                decode_runtime_configuration_startup(
+                    consumed_selector,
+                    wire,
+                    cursor,
+                    game,
+                    |text| log_effects.push(text.to_vec()),
+                )
+                .expect("runtime-configuration selector проверен outer dispatcher-ом")
+                .map_err(GameServerMessageError::RuntimeConfigurationStartup)
+            } {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(Ok(GameServerMessageReport::RuntimeConfigurationStartup(
+                GameRuntimeConfigurationStartupMessageReport {
+                    decoded,
+                    log_effects,
+                },
+            )))
+        }
+        _ => None,
+    }
+}
+
+fn decode_runtime_configuration_startup(
+    selector: i32,
+    source: &[u8],
+    cursor: &mut usize,
+    game: &mut CGame,
+    mut add_log_text: impl FnMut(&[u8]),
+) -> Option<Result<GameRuntimeConfigurationStartupReport, GameRuntimeConfigurationStartupError>> {
+    match selector {
+        GLOBE_SETUP_SELECTOR => {
+            let decoded = {
+                let (globe_setup, region_router) = game.globe_setup_and_region_router_mut();
+                match globe_setup.decord_from_byte_array(region_router, source, cursor) {
+                    Ok(decoded) => decoded,
+                    Err(error) => {
+                        return Some(Err(GameRuntimeConfigurationStartupError::GlobeSetup(error)));
+                    }
+                }
+            };
+            game.da_kong_xiang_qian_mut().set_key(decoded.da_kong_key);
+            let mut notice = CMessage::new(0x000B_F736);
+            notice.add_byte(u8::from(decoded.goods_ai_enabled));
+            let goods_ai_broadcast = notice.send_all(game.current_net_server());
+            let auction_forced_disabled = !decoded.auction_enabled;
+            if auction_forced_disabled {
+                game.force_auction_disabled();
+            }
+            game.set_area_dimensions(decoded.area_width, decoded.area_height);
+            add_log_text(b"Initial SI_GLOBESETUP...OK!");
+            Some(Ok(GameRuntimeConfigurationStartupReport::GlobeSetup {
+                decoded,
+                goods_ai_broadcast,
+                auction_forced_disabled,
+            }))
+        }
+        LOG_SYSTEM_SELECTOR => {
+            let report = match game.log_system_mut().decord_from_byte_array(source, cursor) {
+                Ok(report) => report,
+                Err(error) => {
+                    return Some(Err(GameRuntimeConfigurationStartupError::LogSystem(error)));
+                }
+            };
+            game.da_kong_xiang_qian_mut().set_key(report.da_kong_log);
+            add_log_text(b"Initial SI_LOGSYSTEM...OK!");
+            Some(Ok(GameRuntimeConfigurationStartupReport::LogSystem {
+                entries: report.items,
+                da_kong_log: report.da_kong_log,
+            }))
+        }
+        GM_LIST_SELECTOR => {
+            let report = game
+                .gm_list_mut()
+                .decord_from_byte_array(source, cursor)
+                .map_err(GameRuntimeConfigurationStartupError::GmList);
+            if report.is_ok() {
+                add_log_text(b"Initial SI_GMLIST...OK!");
+            }
+            Some(report.map(GameRuntimeConfigurationStartupReport::GmList))
         }
         _ => None,
     }
@@ -1345,6 +1466,40 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
     if let Some(result) =
+        decode_runtime_configuration_startup(selector, source, cursor, game, &mut add_log_text)
+    {
+        return Some(match result {
+            Ok(GameRuntimeConfigurationStartupReport::GlobeSetup {
+                decoded,
+                goods_ai_broadcast,
+                auction_forced_disabled,
+            }) => Ok(GameOwnedStartupSnapshotReport::GlobeSetup {
+                decoded,
+                goods_ai_broadcast,
+                auction_forced_disabled,
+            }),
+            Ok(GameRuntimeConfigurationStartupReport::LogSystem {
+                entries,
+                da_kong_log,
+            }) => Ok(GameOwnedStartupSnapshotReport::LogSystem {
+                entries,
+                da_kong_log,
+            }),
+            Ok(GameRuntimeConfigurationStartupReport::GmList(report)) => {
+                Ok(GameOwnedStartupSnapshotReport::GmList(report))
+            }
+            Err(GameRuntimeConfigurationStartupError::GlobeSetup(error)) => {
+                Err(GameOwnedStartupSnapshotError::GlobeSetup(error))
+            }
+            Err(GameRuntimeConfigurationStartupError::LogSystem(error)) => {
+                Err(GameOwnedStartupSnapshotError::LogSystem(error))
+            }
+            Err(GameRuntimeConfigurationStartupError::GmList(error)) => {
+                Err(GameOwnedStartupSnapshotError::GmList(error))
+            }
+        });
+    }
+    if let Some(result) =
         decode_player_economy_startup(selector, source, cursor, game, &mut add_log_text)
     {
         return Some(match result {
@@ -1428,54 +1583,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
         });
     }
     match selector {
-        GLOBE_SETUP_SELECTOR => {
-            let decoded = {
-                let (globe_setup, region_router) = game.globe_setup_and_region_router_mut();
-                match globe_setup.decord_from_byte_array(region_router, source, cursor) {
-                    Ok(report) => report,
-                    Err(error) => {
-                        return Some(Err(GameOwnedStartupSnapshotError::GlobeSetup(error)));
-                    }
-                }
-            };
-
-            game.da_kong_xiang_qian_mut().set_key(decoded.da_kong_key);
-            let mut notice = CMessage::new(0x000B_F736);
-            notice.add_byte(u8::from(decoded.goods_ai_enabled));
-            let goods_ai_broadcast = notice.send_all(game.current_net_server());
-
-            let auction_forced_disabled = !decoded.auction_enabled;
-            if auction_forced_disabled {
-                game.force_auction_disabled();
-            }
-            game.set_area_dimensions(decoded.area_width, decoded.area_height);
-            add_log_text(b"Initial SI_GLOBESETUP...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::GlobeSetup {
-                decoded,
-                goods_ai_broadcast,
-                auction_forced_disabled,
-            }))
-        }
-        LOG_SYSTEM_SELECTOR => {
-            let report = match game.log_system_mut().decord_from_byte_array(source, cursor) {
-                Ok(report) => report,
-                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::LogSystem(error))),
-            };
-            game.da_kong_xiang_qian_mut().set_key(report.da_kong_log);
-            add_log_text(b"Initial SI_LOGSYSTEM...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::LogSystem {
-                entries: report.items,
-                da_kong_log: report.da_kong_log,
-            }))
-        }
-        GM_LIST_SELECTOR => {
-            let report = match game.gm_list_mut().decord_from_byte_array(source, cursor) {
-                Ok(report) => report,
-                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::GmList(error))),
-            };
-            add_log_text(b"Initial SI_GMLIST...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::GmList(report)))
-        }
         FUNCTION_LIST_SELECTOR => {
             let declared_length = match read_script_resource_length(source, cursor, "FunctionList")
             {
