@@ -18,6 +18,7 @@
 //! остаются явным context-контрактом до своих owners; прочие функции ниже raw.
 
 use super::organizingsystem::villagewarsys::CVillageWarSys;
+use super::serverregion::ServerRegionDecodeError;
 use super::serverwarregion::{
     CServerWarRegion, ContendState, WarContendContext, WarRegionContext, WarRegionDecodeContext,
     WarRegionDecodeError,
@@ -59,7 +60,7 @@ impl CServerVillageRegion {
         cursor: &mut usize,
         include_child: bool,
         context: &mut Context,
-    ) -> Result<bool, WarRegionDecodeError<Context::BaseError>> {
+    ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>> {
         let _ = self
             .war
             .decord_from_byte_array(source, cursor, include_child, context)?;

@@ -236,6 +236,10 @@ impl CRegion {
         self.base_object.get_name()
     }
 
+    pub(crate) const fn country(&self) -> Option<u8> {
+        self.country
+    }
+
     pub(crate) fn set_name(&mut self, name: &[u8]) {
         self.base_object.set_name(name);
     }

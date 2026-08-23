@@ -52,7 +52,7 @@ use super::region::{
     RegionCellAccessBlock, RegionRandomContext, RegionRandomPosition, RegionReturnPoint,
     RegionSecurity,
 };
-use super::serverregion::{ServerReturnPlayer, ServerReturnSetupBlock};
+use super::serverregion::{ServerRegionDecodeError, ServerReturnPlayer, ServerReturnSetupBlock};
 use super::serverwarregion::{
     CServerWarRegion, ContendState, RegionDecodeInputBlock, WarContendContext, WarRegionContext,
     WarRegionDecodeContext, WarRegionDecodeError, read_region_array,
@@ -260,7 +260,7 @@ impl CServerCityRegion {
         cursor: &mut usize,
         include_child: bool,
         context: &mut Context,
-    ) -> Result<bool, CityRegionDecodeError<Context::BaseError>> {
+    ) -> Result<bool, CityRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>> {
         let _ = self
             .war
             .decord_from_byte_array(source, cursor, include_child, context)

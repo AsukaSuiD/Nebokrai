@@ -1,12 +1,6 @@
-//! Proxy-region GameServer `CProxyServerRegion`.
-//!
-//! Constructor/destructor RVA `0x001CA8C0/0x001CA8E0` и полный decoder
-//! `DecordFromByteArray` RVA `0x001CA910` имеют статус `IMPLEMENTED,
-//! VERIFIED_DISASSEMBLY`; точная пара `GameServer/gameserver.exe +
-//! GameServer/GameServer.pdb`, SHA-256 EXE
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, PDB
-//! `B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016`.
-//! Исходный owner `server/gameserver/appserver/proxyserverregion.cpp`.
+//! Proxy-region GameServer `CProxyServerRegion`, восстановленный по точной
+//! паре `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходный owner
+//! `server/gameserver/appserver/proxyserverregion.cpp`.
 //!
 //! Wire намеренно не является полным `CServerRegion`: он вызывает только
 //! `CBaseObject::DecordFromByteArray`, затем читает country byte, war-region

@@ -26,7 +26,7 @@
 use std::collections::BTreeMap;
 
 use super::servercountryregion::is_player_contend_symbol;
-use super::serverregion::CServerRegion;
+use super::serverregion::{CServerRegion, ServerRegionDecodeContext, ServerRegionDecodeError};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ContendState {
@@ -103,19 +103,9 @@ pub(crate) enum WarRegionDecodeError<BaseError> {
     Input(RegionDecodeInputBlock),
 }
 
-pub(crate) trait WarRegionDecodeContext {
-    type BaseError;
+pub(crate) trait WarRegionDecodeContext: ServerRegionDecodeContext {}
 
-    /// Выполняет полный `CServerRegion::DecordFromByteArray`; legacy bool
-    /// caller игнорирует, но safe parser-блок обязан остаться видимым.
-    fn decode_base_region(
-        &mut self,
-        region: &mut CServerRegion,
-        source: &[u8],
-        cursor: &mut usize,
-        include_child: bool,
-    ) -> Result<bool, Self::BaseError>;
-}
+impl<Context: ServerRegionDecodeContext + ?Sized> WarRegionDecodeContext for Context {}
 
 pub(crate) trait WarRegionContext {
     type MembershipError;
@@ -204,9 +194,10 @@ impl CServerWarRegion {
         cursor: &mut usize,
         include_child: bool,
         context: &mut Context,
-    ) -> Result<bool, WarRegionDecodeError<Context::BaseError>> {
-        let _ = context
-            .decode_base_region(&mut self.base, source, cursor, include_child)
+    ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>> {
+        let _ = self
+            .base
+            .decord_from_byte_array(source, cursor, include_child, context)
             .map_err(WarRegionDecodeError::Base)?;
 
         self.symbol_total_num = read_region_i32(source, cursor, "m_lSymbolTotalNum")

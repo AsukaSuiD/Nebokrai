@@ -70,7 +70,10 @@ use super::region::{
     RegionSecurity,
 };
 use super::servercityregion::{CityGateRuntimeContext, city_gate_footprint_is_clear};
-use super::serverregion::{CServerRegion, ServerReturnPlayer, ServerReturnSetupBlock};
+use super::serverregion::{
+    CServerRegion, ServerRegionDecodeContext, ServerRegionDecodeError, ServerReturnPlayer,
+    ServerReturnSetupBlock,
+};
 use super::serverwarregion::{
     ContendArithmeticBlock, ContendPlayerState, ContendState, RegionDecodeInputBlock,
     read_region_array,
@@ -154,19 +157,7 @@ pub(crate) enum CountryEntryError {
     Cell(RegionCellAccessBlock),
 }
 
-pub(crate) trait CountryRegionDecodeContext {
-    type BaseError;
-
-    /// Выполняет полный `CServerRegion::DecordFromByteArray`; его legacy bool
-    /// country caller игнорирует.
-    fn decode_base_region(
-        &mut self,
-        region: &mut CServerRegion,
-        source: &[u8],
-        cursor: &mut usize,
-        include_child: bool,
-    ) -> Result<bool, Self::BaseError>;
-
+pub(crate) trait CountryRegionDecodeContext: ServerRegionDecodeContext {
     /// Сначала выдаёт следующий legacy child-ID, затем пытается создать type
     /// `0x4B0`; возвращает runtime ID только успешно созданного gate.
     fn create_country_gate(&mut self, region_id: i32, build: &CountryGateBuild) -> Option<i32>;
@@ -310,9 +301,11 @@ impl CServerCountryRegion {
         cursor: &mut usize,
         include_child: bool,
         context: &mut Context,
-    ) -> Result<bool, CountryRegionDecodeError<Context::BaseError>> {
-        let _ = context
-            .decode_base_region(&mut self.base, source, cursor, include_child)
+    ) -> Result<bool, CountryRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>>
+    {
+        let _ = self
+            .base
+            .decord_from_byte_array(source, cursor, include_child, context)
             .map_err(CountryRegionDecodeError::Base)?;
         self.decode_gate_section(source, cursor, WC_DEFEND, context)?;
         self.decode_gate_section(source, cursor, WC_ATTACK, context)?;
@@ -927,7 +920,7 @@ impl CServerCountryRegion {
         cursor: &mut usize,
         camp: i32,
         context: &mut Context,
-    ) -> Result<(), CountryRegionDecodeError<Context::BaseError>> {
+    ) -> Result<(), CountryRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>> {
         let count = read_country_i32(source, cursor, country_gate_count_field(camp))
             .map_err(CountryRegionDecodeError::Input)?;
         for _ in 0..count.max(0) {
@@ -975,7 +968,7 @@ impl CServerCountryRegion {
         cursor: &mut usize,
         camp: i32,
         context: &mut Context,
-    ) -> Result<(), CountryRegionDecodeError<Context::BaseError>> {
+    ) -> Result<(), CountryRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>> {
         let count = read_country_i32(source, cursor, country_flag_count_field(camp))
             .map_err(CountryRegionDecodeError::Input)?;
         for _ in 0..count.max(0) {

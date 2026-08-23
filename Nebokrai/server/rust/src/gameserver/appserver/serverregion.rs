@@ -48,6 +48,13 @@
 //! Достигнутые movement commands вызывают здесь именно owner
 //! `CShape::SetTileXY`: region дополняет runtime area facts и передаёт virtual
 //! dispatch, не дублируя tile-center либо `CMoveShape::SetPosXY`.
+//! Полный startup decoder сохраняет base/area/NPC/cache/monster/weather/
+//! setup/param wire-order. Создание NPC и monster принадлежит их factories и
+//! вызывается через обязательный `ServerRegionDecodeContext`; War и Country
+//! subtype decoder-ы входят в этот owner напрямую.
+//! Уже используемый crate dependency `encoding_rs` заменяет только ANSI
+//! преобразование имени в совместимый `String`-view; byte-exact имя остаётся
+//! у встроенного `CRegion`, поэтому wire не зависит от Unicode-конверсии.
 //! Общий `OnWarTimeOut/OnClearOtherPlayer/OnRefreshRegion` — один PDB-symbol
 //! RVA `0x00201A70`, три байта `ret 4`, поэтому базовые defaults — no-op.
 //! `GetReturnPoint` сохраняет null-player zero result, local `m_stSetup`
@@ -64,6 +71,8 @@
 //! Остальная поверхность файла ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use std::collections::BTreeSet;
+
+use encoding_rs::WINDOWS_1251;
 
 use super::area::CArea;
 use super::country::countryparam::CCountryParam;
@@ -177,6 +186,120 @@ pub(crate) struct AreaIndexBlock {
 pub(crate) enum ServerRegionLoadError {
     Region(RegionDecodeError),
     AreaGrid(AreaGridBlock),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ServerRegionDecodeInputBlock {
+    pub(crate) field: &'static str,
+    pub(crate) offset: usize,
+    pub(crate) needed: usize,
+    pub(crate) available: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ServerRegionDecodeError<RuntimeError> {
+    Region(RegionDecodeError),
+    AreaGrid(AreaGridBlock),
+    Setup(ServerRegionSetupDecodeError),
+    Input(ServerRegionDecodeInputBlock),
+    Runtime(RuntimeError),
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ServerRegionNpcSetup {
+    pub(crate) show_list: bool,
+    pub(crate) picture_id: i32,
+    pub(crate) left: i32,
+    pub(crate) top: i32,
+    pub(crate) right: i32,
+    pub(crate) bottom: i32,
+    pub(crate) count: i32,
+    pub(crate) direction: i32,
+    pub(crate) time: i32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) script: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ServerRegionMonsterVariant {
+    pub(crate) cumulative_odds: u16,
+    pub(crate) sign: u16,
+    pub(crate) leader_sign: u16,
+    pub(crate) leader_distance: u16,
+    pub(crate) name: Vec<u8>,
+    pub(crate) script: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ServerRegionMonsterSetup {
+    pub(crate) index: i32,
+    pub(crate) left: i32,
+    pub(crate) top: i32,
+    pub(crate) right: i32,
+    pub(crate) bottom: i32,
+    pub(crate) count: i32,
+    pub(crate) reset_time: i32,
+    pub(crate) start_time: i32,
+    pub(crate) direction: i32,
+    pub(crate) living_count: i32,
+    pub(crate) last_reset_time_ms: u32,
+    pub(crate) variants: Vec<ServerRegionMonsterVariant>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ServerRegionWeather {
+    pub(crate) weather_index: i32,
+    pub(crate) fog_color: u32,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ServerRegionWeatherOption {
+    pub(crate) cumulative_odds: i32,
+    pub(crate) weather: Vec<ServerRegionWeather>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ServerRegionWeatherTime {
+    pub(crate) time: i32,
+    pub(crate) options: Vec<ServerRegionWeatherOption>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ServerRegionVisibleNpc {
+    pub(crate) show_list: bool,
+    pub(crate) name: Vec<u8>,
+    pub(crate) tile_x: i32,
+    pub(crate) tile_y: i32,
+}
+
+pub(crate) trait ServerRegionDecodeContext {
+    type RuntimeError;
+
+    fn area_dimensions(&self) -> (i32, i32);
+    fn now_millis(&mut self) -> u32;
+
+    /// Выполняет исходный `AddNpc(setup, true, false)`. Callback обязан сам
+    /// сохранить внутренние per-spawn failures/logs этого owner-а.
+    fn add_region_npc(
+        &mut self,
+        region_id: i32,
+        setup: &ServerRegionNpcSetup,
+    ) -> Result<(), Self::RuntimeError>;
+
+    /// Возвращает traversal текущего `m_mNpcs` после всех `AddNpc`; decoder
+    /// фильтрует его уже созданным owner-ом по исходному show-list признаку.
+    fn visible_region_npcs(
+        &mut self,
+        region_id: i32,
+    ) -> Result<Vec<ServerRegionVisibleNpc>, Self::RuntimeError>;
+
+    /// Выполняет `AddMonsterRect(setup, setup.count, true, false)` после того,
+    /// как decoder назначил living-count и wrapping last-reset time.
+    fn add_region_monster_rect(
+        &mut self,
+        region_id: i32,
+        setup: &ServerRegionMonsterSetup,
+    ) -> Result<(), Self::RuntimeError>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -327,6 +450,9 @@ pub(crate) struct CServerRegion {
     pub(crate) id: i32,
     pub(crate) name: String,
     pub(crate) country: u8,
+    pub(crate) war_region_type: i32,
+    pub(crate) no_pk: bool,
+    pub(crate) no_contribute: bool,
     area_x: i32,
     area_y: i32,
     areas: Vec<CArea>,
@@ -335,6 +461,12 @@ pub(crate) struct CServerRegion {
     pub(crate) param: RegionParamState,
     pub(crate) return_setup: Option<ServerReturnSetup>,
     forbidden_make_goods: BTreeSet<Vec<u8>>,
+    npc_setups: Vec<ServerRegionNpcSetup>,
+    monster_setups: Vec<ServerRegionMonsterSetup>,
+    weather_setup: Vec<ServerRegionWeatherTime>,
+    npc_name_list: Vec<u8>,
+    npc_name_list_count: i32,
+    current_weather_count: i32,
     pub(crate) war_number: i32,
     pub(crate) city_state: i32,
     pub(crate) kick_out_player: bool,
@@ -343,6 +475,238 @@ pub(crate) struct CServerRegion {
 }
 
 impl CServerRegion {
+    /// Декодирует полный World -> Game region snapshot в исходном порядке:
+    /// base region, area-grid, NPC, NPC-name cache, monster rectangles,
+    /// weather, setup и `tagRegionParam`.
+    pub(crate) fn decord_from_byte_array<Context: ServerRegionDecodeContext>(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        include_child: bool,
+        context: &mut Context,
+    ) -> Result<bool, ServerRegionDecodeError<Context::RuntimeError>> {
+        self.region
+            .decord_from_byte_array(source, cursor, include_child)
+            .map_err(ServerRegionDecodeError::Region)?;
+        self.id = self.region.get_id();
+        self.country = self
+            .region
+            .country()
+            .expect("успешный CRegion decoder назначает country");
+        self.name = WINDOWS_1251.decode(self.region.get_name()).0.into_owned();
+
+        self.war_region_type = read_server_region_i32(source, cursor, "m_WarRegionType")
+            .map_err(ServerRegionDecodeError::Input)?;
+        self.no_pk = read_server_region_u8(source, cursor, "m_bNoPk")
+            .map_err(ServerRegionDecodeError::Input)?
+            != 0;
+        self.no_contribute = read_server_region_u8(source, cursor, "m_bNoContribute")
+            .map_err(ServerRegionDecodeError::Input)?
+            != 0;
+
+        let (area_width, area_height) = context.area_dimensions();
+        self.create_area_array(area_width, area_height)
+            .map_err(ServerRegionDecodeError::AreaGrid)?;
+
+        self.npc_setups.clear();
+        let npc_count = read_server_region_i32(source, cursor, "m_listNpc.size")
+            .map_err(ServerRegionDecodeError::Input)?;
+        for _ in 0..npc_count.max(0) {
+            let header = read_server_region_bytes(source, cursor, 0x24, "m_listNpc[]")
+                .map_err(ServerRegionDecodeError::Input)?;
+            let name = read_server_region_c_string(source, cursor, "tagNpc.strName")
+                .map_err(ServerRegionDecodeError::Input)?;
+            let script = read_server_region_c_string(source, cursor, "tagNpc.strScript")
+                .map_err(ServerRegionDecodeError::Input)?;
+            let setup = ServerRegionNpcSetup {
+                show_list: header[0] != 0,
+                picture_id: read_server_region_i32_at(header, 0x04),
+                left: read_server_region_i32_at(header, 0x08),
+                top: read_server_region_i32_at(header, 0x0C),
+                right: read_server_region_i32_at(header, 0x10),
+                bottom: read_server_region_i32_at(header, 0x14),
+                count: read_server_region_i32_at(header, 0x18),
+                direction: read_server_region_i32_at(header, 0x1C),
+                // Оригинал безусловно обнуляет wire `lTime` до `AddNpc`.
+                time: 0,
+                name,
+                script,
+            };
+            self.npc_setups.push(setup);
+            context
+                .add_region_npc(
+                    self.id,
+                    self.npc_setups
+                        .last()
+                        .expect("NPC setup только что добавлен"),
+                )
+                .map_err(ServerRegionDecodeError::Runtime)?;
+        }
+
+        // Compatibility quirk: decoder сбрасывает count, но не очищает bytes
+        // прежнего cache-vector перед новым append.
+        self.npc_name_list_count = 0;
+        let npcs = context
+            .visible_region_npcs(self.id)
+            .map_err(ServerRegionDecodeError::Runtime)?;
+        for npc in npcs {
+            if !npc.show_list {
+                continue;
+            }
+            append_server_region_c_string(&mut self.npc_name_list, &npc.name);
+            self.npc_name_list
+                .extend_from_slice(&npc.tile_x.to_le_bytes());
+            self.npc_name_list
+                .extend_from_slice(&npc.tile_y.to_le_bytes());
+            self.npc_name_list_count = self.npc_name_list_count.wrapping_add(1);
+        }
+
+        self.monster_setups.clear();
+        let monster_count = read_server_region_i32(source, cursor, "m_listMonster.size")
+            .map_err(ServerRegionDecodeError::Input)?;
+        for _ in 0..monster_count.max(0) {
+            let header = read_server_region_bytes(source, cursor, 0x24, "m_listMonster[]")
+                .map_err(ServerRegionDecodeError::Input)?;
+            let variant_count =
+                read_server_region_i32(source, cursor, "tagMonster.vectorMonsterList.size")
+                    .map_err(ServerRegionDecodeError::Input)?;
+            let mut variants = Vec::new();
+            for _ in 0..variant_count.max(0) {
+                let prefix = read_server_region_bytes(
+                    source,
+                    cursor,
+                    0x22,
+                    "tagMonster.vectorMonsterList[]",
+                )
+                .map_err(ServerRegionDecodeError::Input)?;
+                variants.push(ServerRegionMonsterVariant {
+                    cumulative_odds: read_server_region_u16_at(prefix, 0x00),
+                    sign: read_server_region_u16_at(prefix, 0x02),
+                    leader_sign: read_server_region_u16_at(prefix, 0x04),
+                    leader_distance: read_server_region_u16_at(prefix, 0x06),
+                    name: read_server_region_c_string(source, cursor, "tagMonsterList.strName")
+                        .map_err(ServerRegionDecodeError::Input)?,
+                    script: read_server_region_c_string(source, cursor, "tagMonsterList.strScript")
+                        .map_err(ServerRegionDecodeError::Input)?,
+                });
+            }
+            let start_time = read_server_region_i32_at(header, 0x1C);
+            let setup = ServerRegionMonsterSetup {
+                index: read_server_region_i32_at(header, 0x00),
+                left: read_server_region_i32_at(header, 0x04),
+                top: read_server_region_i32_at(header, 0x08),
+                right: read_server_region_i32_at(header, 0x0C),
+                bottom: read_server_region_i32_at(header, 0x10),
+                count: read_server_region_i32_at(header, 0x14),
+                reset_time: read_server_region_i32_at(header, 0x18),
+                start_time,
+                direction: read_server_region_i32_at(header, 0x20),
+                living_count: 0,
+                last_reset_time_ms: context.now_millis().wrapping_sub(start_time as u32),
+                variants,
+            };
+            self.monster_setups.push(setup);
+            context
+                .add_region_monster_rect(
+                    self.id,
+                    self.monster_setups
+                        .last()
+                        .expect("monster setup только что добавлен"),
+                )
+                .map_err(ServerRegionDecodeError::Runtime)?;
+        }
+
+        self.weather_setup.clear();
+        let weather_time_count =
+            read_server_region_i32(source, cursor, "m_vectorWeatherSetup.size")
+                .map_err(ServerRegionDecodeError::Input)?;
+        for _ in 0..weather_time_count.max(0) {
+            let time = read_server_region_i32(source, cursor, "tagWeatherTime.lTime")
+                .map_err(ServerRegionDecodeError::Input)?;
+            let option_count =
+                read_server_region_i32(source, cursor, "tagWeatherTime.vectorOption.size")
+                    .map_err(ServerRegionDecodeError::Input)?;
+            let mut options = Vec::new();
+            for _ in 0..option_count.max(0) {
+                let cumulative_odds =
+                    read_server_region_i32(source, cursor, "tagWeatherTime.tagOption.lOdds")
+                        .map_err(ServerRegionDecodeError::Input)?;
+                let weather_count = read_server_region_i32(
+                    source,
+                    cursor,
+                    "tagWeatherTime.tagOption.vectorWeather.size",
+                )
+                .map_err(ServerRegionDecodeError::Input)?;
+                let mut weather = Vec::new();
+                for _ in 0..weather_count.max(0) {
+                    weather.push(ServerRegionWeather {
+                        weather_index: read_server_region_i32(
+                            source,
+                            cursor,
+                            "tagWeather.lWeatherIndex",
+                        )
+                        .map_err(ServerRegionDecodeError::Input)?,
+                        fog_color: read_server_region_u32(source, cursor, "tagWeather.dwFogColor")
+                            .map_err(ServerRegionDecodeError::Input)?,
+                    });
+                }
+                options.push(ServerRegionWeatherOption {
+                    cumulative_odds,
+                    weather,
+                });
+            }
+            self.weather_setup
+                .push(ServerRegionWeatherTime { time, options });
+            let first_time = self
+                .weather_setup
+                .first()
+                .expect("weather time только что добавлен")
+                .time;
+            self.current_weather_count = first_time.wrapping_mul(60).wrapping_sub(1);
+        }
+
+        self.decord_setup_from_byte_array(source, cursor, include_child)
+            .map_err(ServerRegionDecodeError::Setup)?;
+        let param = read_server_region_bytes(source, cursor, 0x24, "m_Param")
+            .map_err(ServerRegionDecodeError::Input)?;
+        self.param = RegionParamState {
+            region_id: read_server_region_i32_at(param, 0x00),
+            max_tax_rate: read_server_region_i32_at(param, 0x04),
+            current_tax_rate: read_server_region_i32_at(param, 0x08),
+            total_tax: read_server_region_u32_at(param, 0x0C),
+            today_total_tax: read_server_region_u32_at(param, 0x10),
+            superior_region_id: read_server_region_i32_at(param, 0x14),
+            turn_in_tax_rate: read_server_region_i32_at(param, 0x18),
+            owned_faction_id: read_server_region_i32_at(param, 0x1C),
+            owned_union_id: read_server_region_i32_at(param, 0x20),
+        };
+        Ok(true)
+    }
+
+    pub(crate) const fn npc_name_list_count(&self) -> i32 {
+        self.npc_name_list_count
+    }
+
+    pub(crate) fn npc_name_list_length(&self) -> i32 {
+        self.npc_name_list.len() as u32 as i32
+    }
+
+    pub(crate) fn npc_name_list(&self) -> &[u8] {
+        &self.npc_name_list
+    }
+
+    pub(crate) fn npc_setups(&self) -> &[ServerRegionNpcSetup] {
+        &self.npc_setups
+    }
+
+    pub(crate) fn monster_setups(&self) -> &[ServerRegionMonsterSetup] {
+        &self.monster_setups
+    }
+
+    pub(crate) fn weather_setup(&self) -> &[ServerRegionWeatherTime] {
+        &self.weather_setup
+    }
+
     /// Делегирует exact `CServerRegion::New` в базовый `CRegion::New`.
     pub(crate) fn new_region(&mut self) -> Result<i32, RegionStorageBlock> {
         self.region.new_region()
@@ -1220,6 +1584,127 @@ fn read_setup_c_string(
     }
 }
 
+fn read_server_region_u8(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<u8, ServerRegionDecodeInputBlock> {
+    let offset = *cursor;
+    let Some(value) = source.get(offset).copied() else {
+        return Err(ServerRegionDecodeInputBlock {
+            field,
+            offset,
+            needed: 1,
+            available: source.len().saturating_sub(offset),
+        });
+    };
+    *cursor = offset + 1;
+    Ok(value)
+}
+
+fn read_server_region_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<i32, ServerRegionDecodeInputBlock> {
+    let bytes = read_server_region_bytes(source, cursor, 4, field)?;
+    Ok(read_server_region_i32_at(bytes, 0))
+}
+
+fn read_server_region_u32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<u32, ServerRegionDecodeInputBlock> {
+    let bytes = read_server_region_bytes(source, cursor, 4, field)?;
+    Ok(read_server_region_u32_at(bytes, 0))
+}
+
+fn read_server_region_bytes<'a>(
+    source: &'a [u8],
+    cursor: &mut usize,
+    needed: usize,
+    field: &'static str,
+) -> Result<&'a [u8], ServerRegionDecodeInputBlock> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(end) = offset.checked_add(needed) else {
+        return Err(ServerRegionDecodeInputBlock {
+            field,
+            offset,
+            needed,
+            available,
+        });
+    };
+    let Some(bytes) = source.get(offset..end) else {
+        return Err(ServerRegionDecodeInputBlock {
+            field,
+            offset,
+            needed,
+            available,
+        });
+    };
+    *cursor = end;
+    Ok(bytes)
+}
+
+fn read_server_region_c_string(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<Vec<u8>, ServerRegionDecodeInputBlock> {
+    let mut value = Vec::new();
+    loop {
+        let offset = *cursor;
+        let Some(byte) = source.get(offset).copied() else {
+            return Err(ServerRegionDecodeInputBlock {
+                field,
+                offset,
+                needed: 1,
+                available: 0,
+            });
+        };
+        *cursor = offset + 1;
+        if byte == 0 {
+            return Ok(value);
+        }
+        value.push(byte);
+    }
+}
+
+fn read_server_region_i32_at(bytes: &[u8], offset: usize) -> i32 {
+    i32::from_le_bytes(
+        bytes[offset..offset + 4]
+            .try_into()
+            .expect("проверенный region DWORD"),
+    )
+}
+
+fn read_server_region_u32_at(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(
+        bytes[offset..offset + 4]
+            .try_into()
+            .expect("проверенный region DWORD"),
+    )
+}
+
+fn read_server_region_u16_at(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(
+        bytes[offset..offset + 2]
+            .try_into()
+            .expect("проверенное region WORD"),
+    )
+}
+
+fn append_server_region_c_string(destination: &mut Vec<u8>, value: &[u8]) {
+    let end = value
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(value.len());
+    destination.extend_from_slice(&value[..end]);
+    destination.push(0);
+}
+
 fn ceil_positive_division(value: i32, divisor: i32) -> i32 {
     let quotient = value / divisor;
     quotient + i32::from(value % divisor != 0)
@@ -1338,20 +1823,6 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 //
 
 // ============================================================================
-// FUNCTION: CServerRegion::GetNpcNameListNum
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:2609
-// RVA: 0x0007BCB0
-// ADDRESS: 0047bcb0
-// PROTOTYPE: long __thiscall GetNpcNameListNum(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CServerRegion::SetTotalTaxPayment
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -1454,22 +1925,6 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 //
 
 // ============================================================================
-// FUNCTION: CServerRegion::GetNpcNameListLength
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:2603
-// RVA: 0x0007C210
-// ADDRESS: 0047c210
-// PROTOTYPE: long __thiscall GetNpcNameListLength(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: `CServerRegion::Load` материализован выше; покрытый raw-блок удалён.
-
-// ============================================================================
 // FUNCTION: CServerRegion::AdjustTaxRate
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -1520,20 +1975,6 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 // RVA: 0x0007C610
 // ADDRESS: 0047c610
 // PROTOTYPE: void __thiscall SendWeatherInfo(CPlayer * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CServerRegion::GetNpcNameList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:2571
-// RVA: 0x0007C710
-// ADDRESS: 0047c710
-// PROTOTYPE: uchar * __thiscall GetNpcNameList(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -2174,20 +2615,6 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 // RVA: 0x000856B0
 // ADDRESS: 004856b0
 // PROTOTYPE: void __thiscall ~CServerRegion(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CServerRegion::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:543
-// RVA: 0x000858F0
-// ADDRESS: 004858f0
-// PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2, bool param_3)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
