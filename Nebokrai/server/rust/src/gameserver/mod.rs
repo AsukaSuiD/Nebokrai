@@ -8,6 +8,9 @@ pub(crate) mod appserver {
     pub(crate) mod baseobject;
     pub(crate) mod build;
     pub(crate) mod citygate;
+    pub(crate) mod container {
+        pub(crate) mod ccontainer;
+    }
     pub(crate) mod country {
         pub(crate) mod country;
         pub(crate) mod countryhandler;
