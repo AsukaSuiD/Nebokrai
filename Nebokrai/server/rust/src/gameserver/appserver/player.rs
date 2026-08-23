@@ -17,6 +17,9 @@
 //! сравнивается с unsigned-представлением setup limit. Это минимальный owned
 //! player state для будущих equipment/battle-fairy side effects, но не замена
 //! полного constructor-а, property recalc или runtime player lifecycle.
+//! Total honor-rank startup материализует days/weeks/months counters и
+//! nobility rank: reset меняет owned state, а пока RAW `PlayerRunScript`
+//! выражен точным typed AdjustHonorRank script-effect-ом.
 //! Silence-timeout, как и оригинал, проверяется лениво при query по
 //! инъецируемому wrapping `timeGetTime`-значению; GM `0x7FC0B/0x7FC0E`
 //! замыкают name lookup, mutation, двухпроходный ordered query и World
@@ -737,6 +740,21 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) fetch_power: u32,
     pub(crate) battle_fairy_recall: bool,
     pub(crate) battle_fairy_died: bool,
+    pub(crate) days_honor_eliminate: u32,
+    pub(crate) weeks_honor_eliminate: u32,
+    pub(crate) months_honor_eliminate: u32,
+    pub(crate) total_honor_eliminate: u32,
+    pub(crate) rank_of_nobility_id: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerHonorResetReport {
+    pub(crate) player_id: i32,
+    pub(crate) reset_mask: u32,
+    pub(crate) previous_days: u32,
+    pub(crate) previous_weeks: u32,
+    pub(crate) previous_months: u32,
+    pub(crate) adjust_honor_rank_script: Option<&'static [u8]>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -878,6 +896,32 @@ impl CPlayer {
 
     pub(crate) const fn country(&self) -> u8 {
         self.country
+    }
+
+    /// Сохраняет player tail total-honor startup ветви: days сбрасывается
+    /// всегда, weeks/months — по mask `2/4`, total не меняется, а ненулевой
+    /// nobility rank требует точного `AdjustHonorRank` script-effect-а.
+    pub(crate) fn reset_total_honor_eliminate(
+        &mut self,
+        reset_mask: u32,
+    ) -> PlayerHonorResetReport {
+        let report = PlayerHonorResetReport {
+            player_id: self.player_id(),
+            reset_mask,
+            previous_days: self.base_properties.days_honor_eliminate,
+            previous_weeks: self.base_properties.weeks_honor_eliminate,
+            previous_months: self.base_properties.months_honor_eliminate,
+            adjust_honor_rank_script: (self.base_properties.rank_of_nobility_id != 0)
+                .then_some(b"scripts/circle/honorrank/adjusthonorrank.script"),
+        };
+        self.base_properties.days_honor_eliminate = 0;
+        if reset_mask & 2 != 0 {
+            self.base_properties.weeks_honor_eliminate = 0;
+        }
+        if reset_mask & 4 != 0 {
+            self.base_properties.months_honor_eliminate = 0;
+        }
+        report
     }
 
     pub(crate) const fn server_region_id(&self) -> Option<i32> {

@@ -84,6 +84,9 @@
 //! owners сериализуются в client wire, broadcast-ятся и логируются в exact order.
 //! Leiting/GodsBattle `0x36/0x39` проходят общий world-event FIFO pass с
 //! dynamic/internal/final logs и typed file-audit effects в исходном порядке.
+//! Honor configuration/ranks `0x26..0x2A` проходят полный FIFO pass; total
+//! snapshot сбрасывает counters canonical player map и возвращает точные
+//! AdjustHonorRank script-effects для внешнего script runtime.
 //! Battle-fairy combine теперь замыкает game player-map с GlobeSetup gate и
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные
@@ -219,6 +222,7 @@ use crate::gameserver::appserver::player::{
     BattleFairySkillRequestReport, BattleFairySkillResetReport, BattleFairySummonReport,
     BattleFairyWarSoulAction, CPlayer, PlayerCombatProperties, PlayerEquipmentAddReport,
     PlayerEquipmentAddRuntimeFacts, PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
+    PlayerHonorResetReport,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::servercityregion::CServerCityRegion;
@@ -2608,6 +2612,16 @@ impl CGame {
     /// Exact `s_mapPlayer.size()` для GMA `0x80002`; x86 `size_type` — DWORD.
     pub(crate) fn player_count(&self) -> u32 {
         u32::try_from(self.players.len()).expect("x86 player map не может превысить DWORD")
+    }
+
+    pub(crate) fn reset_total_honor_eliminate(
+        &mut self,
+        reset_mask: u32,
+    ) -> Vec<PlayerHonorResetReport> {
+        self.players
+            .values_mut()
+            .map(|player| player.reset_total_honor_eliminate(reset_mask))
+            .collect()
     }
 
     pub(crate) fn register_team_session(&mut self, team_id: u32, session_id: i32) -> Option<i32> {

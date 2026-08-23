@@ -20,6 +20,9 @@
 //! HonorEliminate `0x26` отдельно сохраняет оба подтверждённых sink-а:
 //! `AddLogText` и `PutStringToFile("HonorCompositior", ...)`; payload проверен
 //! по exact EXE и runtime-логам.
+//! Honor ranks `0x27..0x2A` публикуют четыре country snapshots; total branch
+//! после decode сбрасывает player counters в canonical ID-order и возвращает
+//! точный `AdjustHonorRank` script-effect для ненулевого nobility rank.
 //! GodsBattle `0x39` перед финальным startup log сохраняет decoder-local GBK
 //! warning и `PutStringToFile("godsbattleLog", ...)` в их исходных позициях.
 //! GlobeSetup `0x07` сохраняет вложенный router decode, DaKong key, byte
@@ -123,6 +126,7 @@ use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyCompos
 use crate::gameserver::appserver::goods::cgoodsfactory::{
     GoodsFactoryDecodeError, GoodsFactoryDecodeReport,
 };
+use crate::gameserver::appserver::player::PlayerHonorResetReport;
 use crate::gameserver::appserver::proxyserverregion::{CProxyServerRegion, ProxyRegionDecodeError};
 use crate::gameserver::appserver::servercityregion::{
     CServerCityRegion, CityRegionDecodeContext, CityRegionDecodeError,
@@ -847,6 +851,31 @@ pub(crate) struct GamePlayerRanksStartupReport {
     pub(crate) entries: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameHonorStartupReport {
+    EliminateConfiguration {
+        level_difference: i32,
+        minimum_level: i32,
+    },
+    Ranks {
+        startup: HonorRankStartupReport,
+        player_resets: Vec<PlayerHonorResetReport>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameHonorStartupError {
+    EliminateConfiguration(HonorEliminateDecodeError),
+    Ranks(HonorRankStartupError),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameHonorStartupMessageReport {
+    pub(crate) decoded: GameHonorStartupReport,
+    pub(crate) log_effects: Vec<Vec<u8>>,
+    pub(crate) file_effects: Vec<(String, Vec<u8>)>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum GamePlayerRanksStartupError {
     OwnerUnavailable { selector: i32 },
@@ -922,6 +951,7 @@ pub(crate) enum GameServerMessageReport {
     EquipmentEnhancementStartup(GameEquipmentEnhancementStartupMessageReport),
     WorldEventStartup(GameWorldEventStartupMessageReport),
     PlayerRanksStartup(GamePlayerRanksStartupReport),
+    HonorStartup(GameHonorStartupMessageReport),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -941,6 +971,7 @@ pub(crate) enum GameServerMessageError {
     EquipmentEnhancementStartup(GameEquipmentEnhancementStartupError),
     WorldEventStartup(GameWorldEventStartupError),
     PlayerRanksStartup(GamePlayerRanksStartupError),
+    HonorStartup(GameHonorStartupError),
 }
 
 /// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
@@ -1334,8 +1365,123 @@ pub(crate) fn dispatch_server_message(
             };
             Some(Ok(GameServerMessageReport::PlayerRanksStartup(decoded)))
         }
+        HONOR_ELIMINATE_SELECTOR
+        | DAYS_HONOR_RANK_SELECTOR
+        | WEEKS_HONOR_RANK_SELECTOR
+        | MONTHS_HONOR_RANK_SELECTOR
+        | TOTAL_HONOR_RANK_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("honor selector проверен без изменения cursor");
+            let mut log_effects = Vec::new();
+            let mut file_effects = Vec::new();
+            let decoded = match {
+                let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                decode_honor_startup(
+                    consumed_selector,
+                    wire,
+                    cursor,
+                    game,
+                    |text| log_effects.push(text.to_vec()),
+                    |path, text| file_effects.push((path.to_owned(), text.to_vec())),
+                )
+                .expect("honor selector проверен outer dispatcher-ом")
+                .map_err(GameServerMessageError::HonorStartup)
+            } {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(Ok(GameServerMessageReport::HonorStartup(
+                GameHonorStartupMessageReport {
+                    decoded,
+                    log_effects,
+                    file_effects,
+                },
+            )))
+        }
         _ => None,
     }
+}
+
+fn decode_honor_startup(
+    selector: i32,
+    source: &[u8],
+    cursor: &mut usize,
+    game: &mut CGame,
+    mut add_log_text: impl FnMut(&[u8]),
+    mut put_string_to_file: impl FnMut(&str, &[u8]),
+) -> Option<Result<GameHonorStartupReport, GameHonorStartupError>> {
+    if selector == HONOR_ELIMINATE_SELECTOR {
+        let config = game.honor_eliminate_config_mut();
+        if let Err(error) = config.decord_from_byte_array(source, cursor) {
+            return Some(Err(GameHonorStartupError::EliminateConfiguration(error)));
+        }
+        let level_difference = config.level_difference;
+        let minimum_level = config.minimum_level;
+        add_log_text(b"Inital SI_HONOR_ELIMILATE_CONF...ok!");
+        put_string_to_file(
+            "HonorCompositior",
+            b"Inital SI_HONOR_ELIMILATE_CONF...ok\xA3\xA1",
+        );
+        return Some(Ok(GameHonorStartupReport::EliminateConfiguration {
+            level_difference,
+            minimum_level,
+        }));
+    }
+    let (rank_type, log_text, has_reset_mask) = match selector {
+        DAYS_HONOR_RANK_SELECTOR => (
+            0,
+            b"Initial SI_DAYS_HONOR_ELIMILATE_RANK ...ok!\xA3\xA1".as_slice(),
+            false,
+        ),
+        WEEKS_HONOR_RANK_SELECTOR => (
+            1,
+            b"Initial SI_WEEKS_HONOR_ELIMILATE_RANK...ok!\xA3\xA1".as_slice(),
+            false,
+        ),
+        MONTHS_HONOR_RANK_SELECTOR => (
+            2,
+            b"Initial SI_MOHTHS_HONOR_ELIMILATE_RANK...ok!\xA3\xA1".as_slice(),
+            false,
+        ),
+        TOTAL_HONOR_RANK_SELECTOR => (
+            3,
+            b"Initial SI_TOTAL_HONOR_ELIMILATE_RANK...ok!\xA3\xA1".as_slice(),
+            true,
+        ),
+        _ => return None,
+    };
+    let reset_mask = if has_reset_mask {
+        match read_honor_reset_mask(source, cursor) {
+            Ok(mask) => Some(mask),
+            Err(error) => return Some(Err(GameHonorStartupError::Ranks(error))),
+        }
+    } else {
+        None
+    };
+    let decoded = match game
+        .honor_ranks_mut()
+        .decord_from_byte_array(source, cursor, rank_type, -1)
+    {
+        Ok(decoded) => decoded,
+        Err(error) => {
+            return Some(Err(GameHonorStartupError::Ranks(
+                HonorRankStartupError::Decode(error),
+            )));
+        }
+    };
+    let player_resets = reset_mask
+        .map(|mask| game.reset_total_honor_eliminate(mask))
+        .unwrap_or_default();
+    put_string_to_file("HonorRanksLog", log_text);
+    Some(Ok(GameHonorStartupReport::Ranks {
+        startup: HonorRankStartupReport {
+            decoded,
+            reset_mask,
+        },
+        player_resets,
+    }))
 }
 
 fn decode_player_ranks_startup(
@@ -2678,6 +2824,32 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
     mut put_string_to_file: impl FnMut(&str, &[u8]),
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    if selector == HONOR_ELIMINATE_SELECTOR
+        && let Some(result) = decode_honor_startup(
+            selector,
+            source,
+            cursor,
+            game,
+            &mut add_log_text,
+            &mut put_string_to_file,
+        )
+    {
+        return Some(match result {
+            Ok(GameHonorStartupReport::EliminateConfiguration {
+                level_difference,
+                minimum_level,
+            }) => Ok(GameOwnedStartupSnapshotReport::HonorEliminate {
+                level_difference,
+                minimum_level,
+            }),
+            Err(GameHonorStartupError::EliminateConfiguration(error)) => {
+                Err(GameOwnedStartupSnapshotError::HonorEliminate(error))
+            }
+            Ok(GameHonorStartupReport::Ranks { .. }) | Err(GameHonorStartupError::Ranks(_)) => {
+                unreachable!("selector 0x26 не возвращает honor-ranks variant")
+            }
+        });
+    }
     if let Some(result) = decode_player_ranks_startup(selector, source, cursor, game) {
         return Some(match result {
             Ok(GamePlayerRanksStartupReport { entries }) => {
@@ -3135,23 +3307,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
                 path_bytes,
                 declared_length,
                 replaced,
-            }))
-        }
-        HONOR_ELIMINATE_SELECTOR => {
-            let config = game.honor_eliminate_config_mut();
-            if let Err(error) = config.decord_from_byte_array(source, cursor) {
-                return Some(Err(GameOwnedStartupSnapshotError::HonorEliminate(error)));
-            }
-            let level_difference = config.level_difference;
-            let minimum_level = config.minimum_level;
-            add_log_text(b"Inital SI_HONOR_ELIMILATE_CONF...ok!");
-            put_string_to_file(
-                "HonorCompositior",
-                b"Inital SI_HONOR_ELIMILATE_CONF...ok\xA3\xA1",
-            );
-            Some(Ok(GameOwnedStartupSnapshotReport::HonorEliminate {
-                level_difference,
-                minimum_level,
             }))
         }
         STRING_TABLE_SELECTOR => {
