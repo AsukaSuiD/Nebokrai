@@ -607,20 +607,6 @@ impl CGodsBattleMgr {
 //
 
 // ============================================================================
-// FUNCTION: CGodsBattleMgr::DecordFromByteArray
-// STATUS: IMPLEMENTED выше; сохранённый pseudocode документирует машинный контракт
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:750
-// RVA: 0x000AB260
-// ADDRESS: 004ab260
-// PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CGodsBattleMgr::RefreshMonsterForNpc
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
