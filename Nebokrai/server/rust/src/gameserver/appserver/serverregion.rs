@@ -583,8 +583,27 @@ pub(crate) struct CServerRegion {
 }
 
 impl CServerRegion {
-    /// Выполняет только исходный one-second monster refresh fragment region AI;
-    /// modulo gate `s_lAITick % (1000/g_ms)` принадлежит caller-у.
+    /// Сохраняет caller-side gate начала exact `CServerRegion::AI`: signed
+    /// `1000 / g_ms`, затем unsigned `s_lAITick % period`.
+    pub(crate) fn refresh_monster_groups_for_ai_tick<Context: ServerRegionMonsterContext>(
+        &mut self,
+        ai_tick: u32,
+        tick_interval_ms: i32,
+        now_ms: u32,
+        area_width: i32,
+        area_height: i32,
+        context: &mut Context,
+    ) -> Result<Option<ServerRegionMonsterRefreshReport>, ServerRegionMonsterRectBlock> {
+        let period = (1_000i32 / tick_interval_ms) as u32;
+        if ai_tick % period != 0 {
+            return Ok(None);
+        }
+        self.refresh_monster_groups(now_ms, area_width, area_height, context)
+            .map(Some)
+    }
+
+    /// Выполняет исходный periodic monster refresh fragment после gate region
+    /// AI; `now_ms` уже единожды снят caller-ом через `timeGetTime`.
     pub(crate) fn refresh_monster_groups<Context: ServerRegionMonsterContext>(
         &mut self,
         now_ms: u32,
