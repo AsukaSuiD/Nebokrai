@@ -1,189 +1,147 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Состояние участников GoodsWar исторического GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `appserver/goodswarmember.cpp/.h`, подтверждает две ordered collections:
+//! member ID -> faction ID и множество участвующих faction ID, пять записей
+//! счётчика, signed clamp только сверху и World-сообщения `0x60139`.
+//! Constructor после очистки member map немедленно запрашивает полный список
+//! subtype `4`; удаление положительного member отправляет subtype `2`, а
+//! отрицательная парная запись удаляется без сообщения.
+//!
+//! `BTreeMap/BTreeSet` заменяют MSVC tree plumbing с тем же sorted key-order.
+//! Имена счётчика остаются точными 20 wire bytes; client snapshot имеет opcode
+//! `0xC0316` и порядок `count`, затем `AddEx(20 bytes) + signed count`.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goodswarmember.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goodswarmember.h
+use std::collections::{BTreeMap, BTreeSet};
 
-// ============================================================================
-// FUNCTION: CGoodsWarMember::InsertnCount
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goodswarmember.cpp:126
-// RVA: 0x00023D20
-// ADDRESS: 00423d20
-// PROTOTYPE: void __thiscall InsertnCount(int param_1, char * param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::{CMessage, SendMessageError};
 
-// ============================================================================
-// FUNCTION: CGoodsWarMember::SetMaxCount
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goodswarmember.h:68
-// RVA: 0x00023D70
-// ADDRESS: 00423d70
-// PROTOTYPE: long __thiscall SetMaxCount(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+const GOODS_WAR_WORLD_MESSAGE: i32 = 0x0006_0139;
+const GOODS_WAR_CLIENT_COUNTS: i32 = 0x000C_0316;
+const COUNT_CAPACITY: usize = 5;
 
-// ============================================================================
-// FUNCTION: CGoodsWarMember::IsGoodsWarMember
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goodswarmember.cpp:54
-// RVA: 0x00023E40
-// ADDRESS: 00423e40
-// PROTOTYPE: long __thiscall IsGoodsWarMember(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GoodsWarCount {
+    pub(crate) faction_name: [u8; 20],
+    pub(crate) count: i32,
+}
 
-// ============================================================================
-// FUNCTION: CGoodsWarMember::CleanAllFactionId
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goodswarmember.cpp:140
-// RVA: 0x00023EB0
-// ADDRESS: 00423eb0
-// PROTOTYPE: void __thiscall CleanAllFactionId(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Debug, Default)]
+pub(crate) struct CGoodsWarMember {
+    members: BTreeMap<i32, i32>,
+    faction_ids: BTreeSet<i32>,
+    counts: [GoodsWarCount; COUNT_CAPACITY],
+    count_size: i32,
+}
 
-// ============================================================================
-// FUNCTION: CGoodsWarMember::IsOneListFactionId
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goodswarmember.cpp:146
-// RVA: 0x00023F60
-// ADDRESS: 00423f60
-// PROTOTYPE: bool __thiscall IsOneListFactionId(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl CGoodsWarMember {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
 
-// ============================================================================
-// FUNCTION: CGoodsWarMember::DeleteOneMember
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goodswarmember.cpp:60
-// RVA: 0x000244F0
-// ADDRESS: 004244f0
-// PROTOTYPE: void __thiscall DeleteOneMember(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    /// Constructor-side request полного member snapshot у WorldServer.
+    pub(crate) fn request_initial_state(&self, game: &CGame) -> Result<i32, SendMessageError> {
+        let mut message = CMessage::new(GOODS_WAR_WORLD_MESSAGE);
+        message.add_long(4);
+        message.send(game, false)
+    }
 
-// ============================================================================
-// FUNCTION: CGoodsWarMember::DeleteMembersByFactionId
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goodswarmember.cpp:79
-// RVA: 0x000245D0
-// ADDRESS: 004245d0
-// PROTOTYPE: void __thiscall DeleteMembersByFactionId(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn insert_count(&mut self, index: i32, faction_name: [u8; 20], count: i32) {
+        let Ok(index) = usize::try_from(index) else {
+            return;
+        };
+        if let Some(slot) = self.counts.get_mut(index) {
+            *slot = GoodsWarCount {
+                faction_name,
+                count,
+            };
+        }
+    }
 
-// ============================================================================
-// FUNCTION: CGoodsWarMember::InsertOneFactionId2List
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goodswarmember.cpp:153
-// RVA: 0x00024720
-// ADDRESS: 00424720
-// PROTOTYPE: bool __thiscall InsertOneFactionId2List(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    /// Исходный owner ограничивает только верхнюю границу; negative сохраняется.
+    pub(crate) fn set_max_count(&mut self, count: i32) -> i32 {
+        self.count_size = count.min(COUNT_CAPACITY as i32);
+        self.count_size
+    }
 
-// ============================================================================
-// FUNCTION: CGoodsWarMember::~CGoodsWarMember
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goodswarmember.cpp:18
-// RVA: 0x000247B0
-// ADDRESS: 004247b0
-// PROTOTYPE: void __thiscall ~CGoodsWarMember(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    /// Возвращает 0, 1 либо 2 за наличие ключей `member_id` и `-member_id`.
+    pub(crate) fn is_goods_war_member(&self, member_id: i32) -> i32 {
+        i32::from(self.members.contains_key(&member_id))
+            + i32::from(self.members.contains_key(&member_id.wrapping_neg()))
+    }
 
-// ============================================================================
-// FUNCTION: CGoodsWarMember::CGoodsWarMember
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goodswarmember.cpp:5
-// RVA: 0x00024850
-// ADDRESS: 00424850
-// PROTOTYPE: undefined __thiscall CGoodsWarMember(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn clear_all_faction_ids(&mut self) {
+        self.faction_ids.clear();
+    }
 
-// ============================================================================
-// FUNCTION: CGoodsWarMember::InsertOneMember
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goodswarmember.cpp:73
-// RVA: 0x00024970
-// ADDRESS: 00424970
-// PROTOTYPE: void __thiscall InsertOneMember(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn contains_faction_id(&self, faction_id: i32) -> bool {
+        self.faction_ids.contains(&faction_id)
+    }
 
-// ============================================================================
-// FUNCTION: CGoodsWarMember::RequestGoodsWarList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goodswarmember.cpp:101
-// RVA: 0x000249C0
-// ADDRESS: 004249c0
-// PROTOTYPE: void __thiscall RequestGoodsWarList(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    /// Сохраняет exact partial effects: positive erase и World send идут раньше
+    /// безусловной попытки удалить отрицательную парную запись.
+    pub(crate) fn delete_one_member(
+        &mut self,
+        member_id: i32,
+        game: &CGame,
+    ) -> Option<Result<i32, SendMessageError>> {
+        let notification = if self.members.remove(&member_id).is_some() {
+            let mut message = CMessage::new(GOODS_WAR_WORLD_MESSAGE);
+            message.add_long(2);
+            message.add_long(member_id);
+            Some(message.send(game, false))
+        } else {
+            None
+        };
+        self.members.remove(&member_id.wrapping_neg());
+        notification
+    }
 
+    pub(crate) fn delete_members_by_faction_id(&mut self, faction_id: i32) {
+        self.members
+            .retain(|_, member_faction_id| *member_faction_id != faction_id);
+    }
 
+    pub(crate) fn insert_faction_id(&mut self, faction_id: i32) -> bool {
+        self.faction_ids.insert(faction_id)
+    }
 
+    /// Existing member mapping не перезаписывается.
+    pub(crate) fn insert_one_member(&mut self, member_id: i32, faction_id: i32) {
+        self.members.entry(member_id).or_insert(faction_id);
+    }
 
+    pub(crate) fn clear_members(&mut self) {
+        self.members.clear();
+    }
 
+    pub(crate) fn request_goods_war_list(&self, player_id: i32, game: &CGame) -> Option<i32> {
+        game.find_player(player_id)?;
+        let mut message = CMessage::new(GOODS_WAR_CLIENT_COUNTS);
+        message.add_long(self.count_size);
+        if self.count_size > 0 {
+            for entry in self.counts.iter().take(self.count_size as usize) {
+                message.base_mut().add_ex(&entry.faction_name);
+                message.add_long(entry.count);
+            }
+        }
+        Some(message.send_to_player(game.net_server(), player_id))
+    }
 
+    pub(crate) fn members(&self) -> &BTreeMap<i32, i32> {
+        &self.members
+    }
 
+    pub(crate) fn faction_ids(&self) -> &BTreeSet<i32> {
+        &self.faction_ids
+    }
 
+    pub(crate) fn counts(&self) -> &[GoodsWarCount; COUNT_CAPACITY] {
+        &self.counts
+    }
 
-
-// COMPONENT_VARIANT_END: GameServer
+    pub(crate) const fn count_size(&self) -> i32 {
+        self.count_size
+    }
+}

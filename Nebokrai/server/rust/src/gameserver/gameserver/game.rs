@@ -26,12 +26,14 @@
 //! материализован с исходными defaults, частичной мутацией и игнорированием
 //! labels. Открытие listener-а заменяет поздней проверкой bind старый
 //! `FindWindow` single-instance guard; недоказанный default billing bind-port
-//! остаётся typed-границей. Полный общий `Init/Release`, остальные загрузчики
-//! и прочие maps ниже остаются RAW;
-//! Ранний `Init` связан через обязательный World client, общий MSVCRT RNG и
-//! sequence registry до необязательной Billing-попытки. Tokio/socket types
-//! заменяют ненаблюдаемые `CBaseMessage::Initial` и `CMySocket::MySocketInit`;
-//! следующий незакрытый шаг — gameplay owners после Billing.
+//! остаётся typed-границей. `Release`, resource loaders и прочие maps ниже
+//! остаются RAW;
+//! `Init` связан через обязательный World client, общий MSVCRT RNG и sequence
+//! registry до необязательной Billing-попытки, затем создаёт DupliRegion,
+//! move-check, ranks и GoodsWar owners. GoodsWar constructor сохраняет
+//! немедленный World request. Tokio/socket types заменяют ненаблюдаемые
+//! `CBaseMessage::Initial` и `CMySocket::MySocketInit`; следующий незакрытый
+//! шаг — resource/runtime owners после завершённого `Init`.
 //! `with_send_state/register_*/attach_*` являются явной assembly-границей
 //! baseline и не снимают их псевдокод. Network setup передаётся отдельной
 //! post-`LoadSetup*` проекцией. Windows thread handles заменены owned Tokio
@@ -52,12 +54,16 @@ use std::time::Duration;
 
 use rustix::system::uname;
 
+use crate::gameserver::appserver::goodswarmember::CGoodsWarMember;
 use crate::gameserver::appserver::message::sequencestring::{
     CSequenceRegistry, SequenceRegistryInitializationError,
 };
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::player::CPlayer;
-use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeResolver, ShapeView};
+use crate::gameserver::appserver::shape::{
+    MoveCheckCellRegistry, ShapeIdentity, ShapeResolver, ShapeView,
+};
+use crate::gameserver::gameserver::playerranks::CPlayerRanks;
 use crate::nets::clients::ClientConnectError;
 use crate::nets::mysocket::legacy_ipv4_word;
 use crate::nets::netserver::message::{CMessage, GameMessageHandlers, SendMessageError};
@@ -68,6 +74,7 @@ use crate::nets::netserver::mynetserver::{
     CMyNetServer, GameServerEvent, GameServerEventPublisher,
 };
 use crate::nets::servers::ServerHostError;
+use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::transport::bind_tcp_ipv4;
 
 const PLAYER_TYPE: i32 = 400;
@@ -635,6 +642,14 @@ pub(crate) struct GameInitializationThroughBillingReport {
 }
 
 #[derive(Debug)]
+pub(crate) struct GameInitializationReport {
+    pub(crate) through_billing: GameInitializationThroughBillingReport,
+    pub(crate) move_check_cells: usize,
+    pub(crate) player_ranks_initialized: bool,
+    pub(crate) goods_war_request: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug)]
 pub(crate) enum GameInitializationThroughBillingError {
     Setup(GameRuntimeSetupError),
     WorldUnavailable {
@@ -671,6 +686,10 @@ pub(crate) struct CGame {
     setup_ex: GameSetupEx,
     random_state: u32,
     sequence_registry: CSequenceRegistry,
+    dupli_region_setup: Option<CDupliRegionSetup>,
+    move_check_cells: MoveCheckCellRegistry,
+    player_ranks: Option<CPlayerRanks>,
+    goods_war: Option<CGoodsWarMember>,
     login_server_id: i32,
     world_server_id: i32,
     network_setup: Option<GameNetworkSetup>,
@@ -692,6 +711,10 @@ impl CGame {
             setup_ex: GameSetupEx::default(),
             random_state: 1,
             sequence_registry: CSequenceRegistry::default(),
+            dupli_region_setup: None,
+            move_check_cells: MoveCheckCellRegistry::new(),
+            player_ranks: None,
+            goods_war: None,
             login_server_id: 0,
             world_server_id: 0,
             network_setup: None,
@@ -787,6 +810,37 @@ impl CGame {
         })
     }
 
+    /// Завершает точный хвост `CGame::Init` после Billing-попытки.
+    pub(crate) async fn init(
+        &mut self,
+        paths: &GameRuntimePaths,
+        wall_time_seconds: u32,
+        sequence_seed_ms: u32,
+    ) -> Result<GameInitializationReport, GameInitializationThroughBillingError> {
+        let through_billing = self
+            .init_through_billing(paths, wall_time_seconds, sequence_seed_ms)
+            .await?;
+
+        self.dupli_region_setup = Some(CDupliRegionSetup::default());
+        self.move_check_cells.initialize();
+        let move_check_cells = self.move_check_cells.total_len();
+
+        let mut player_ranks = CPlayerRanks::new();
+        let player_ranks_initialized = player_ranks.initialize();
+        self.player_ranks = Some(player_ranks);
+
+        let goods_war = CGoodsWarMember::new();
+        let goods_war_request = goods_war.request_initial_state(self);
+        self.goods_war = Some(goods_war);
+
+        Ok(GameInitializationReport {
+            through_billing,
+            move_check_cells,
+            player_ranks_initialized,
+            goods_war_request,
+        })
+    }
+
     pub(crate) fn net_server(&self) -> &CMyNetServer {
         self.net_server
             .as_ref()
@@ -854,6 +908,26 @@ impl CGame {
 
     pub(crate) const fn sequence_registry(&self) -> &CSequenceRegistry {
         &self.sequence_registry
+    }
+
+    pub(crate) const fn dupli_region_setup(&self) -> Option<&CDupliRegionSetup> {
+        self.dupli_region_setup.as_ref()
+    }
+
+    pub(crate) const fn move_check_cells(&self) -> &MoveCheckCellRegistry {
+        &self.move_check_cells
+    }
+
+    pub(crate) const fn player_ranks(&self) -> Option<&CPlayerRanks> {
+        self.player_ranks.as_ref()
+    }
+
+    pub(crate) const fn goods_war(&self) -> Option<&CGoodsWarMember> {
+        self.goods_war.as_ref()
+    }
+
+    pub(crate) const fn goods_war_mut(&mut self) -> Option<&mut CGoodsWarMember> {
+        self.goods_war.as_mut()
     }
 
     /// Публикует listener-owner до `Host`, затем сохраняет setup-порядок.

@@ -30,6 +30,9 @@
 //! существовать, а абсолютная разница X и Y обязана быть меньше двух. Typed
 //! region argument разрешает owned area-index обратно в координаты вместо
 //! сохранения двух сырых `CArea*`.
+//! `InitMoveCheckCellList` RVA `0x0005BE60` материализован как process-owned
+//! registry: точные 96 offsets распределены по трём figure и восьми direction,
+//! insertion-order и повторный append сохранены, `Vec` заменяет MSVC list.
 
 use super::baseobject::CBaseObject;
 use super::region::{CRegion, RegionCellAccessBlock};
@@ -49,6 +52,152 @@ const DIRECTION_OFFSETS: [(i32, i32); 8] = [
 const REAR_DIRECTIONS: [i32; 8] = [4, 5, 6, 7, 0, 1, 2, 3];
 const LEFT_DIRECTIONS: [i32; 8] = [6, 7, 0, 1, 2, 3, 4, 5];
 const RIGHT_DIRECTIONS: [i32; 8] = [2, 3, 4, 5, 6, 7, 0, 1];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MoveCheckCell {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+}
+
+#[derive(Debug)]
+pub(crate) struct MoveCheckCellRegistry {
+    cells: [[Vec<MoveCheckCell>; 8]; 3],
+}
+
+impl MoveCheckCellRegistry {
+    pub(crate) fn new() -> Self {
+        Self {
+            cells: std::array::from_fn(|_| std::array::from_fn(|_| Vec::new())),
+        }
+    }
+
+    /// Дописывает exact batch; исходные static lists перед Init не очищались.
+    pub(crate) fn initialize(&mut self) {
+        for &(figure, direction, cell) in MOVE_CHECK_CELLS {
+            self.cells[figure][direction].push(cell);
+        }
+    }
+
+    pub(crate) fn get(&self, figure: usize, direction: usize) -> Option<&[MoveCheckCell]> {
+        self.cells
+            .get(figure)
+            .and_then(|directions| directions.get(direction))
+            .map(Vec::as_slice)
+    }
+
+    pub(crate) fn total_len(&self) -> usize {
+        self.cells
+            .iter()
+            .flat_map(|directions| directions.iter())
+            .map(Vec::len)
+            .sum()
+    }
+}
+
+impl Default for MoveCheckCellRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+const MOVE_CHECK_CELLS: &[(usize, usize, MoveCheckCell)] = &[
+    (0, 0, MoveCheckCell { x: 0, y: -1 }),
+    (0, 1, MoveCheckCell { x: 1, y: -1 }),
+    (0, 2, MoveCheckCell { x: 1, y: 0 }),
+    (0, 3, MoveCheckCell { x: 1, y: 1 }),
+    (0, 4, MoveCheckCell { x: 0, y: 1 }),
+    (0, 5, MoveCheckCell { x: -1, y: 1 }),
+    (0, 6, MoveCheckCell { x: -1, y: 0 }),
+    (0, 7, MoveCheckCell { x: -1, y: -1 }),
+    (1, 0, MoveCheckCell { x: -1, y: -2 }),
+    (1, 0, MoveCheckCell { x: 0, y: -2 }),
+    (1, 0, MoveCheckCell { x: 1, y: -2 }),
+    (1, 1, MoveCheckCell { x: 0, y: -2 }),
+    (1, 1, MoveCheckCell { x: 1, y: -2 }),
+    (1, 1, MoveCheckCell { x: 2, y: -2 }),
+    (1, 1, MoveCheckCell { x: 2, y: -1 }),
+    (1, 1, MoveCheckCell { x: 2, y: 0 }),
+    (1, 2, MoveCheckCell { x: 2, y: -1 }),
+    (1, 2, MoveCheckCell { x: 2, y: 0 }),
+    (1, 2, MoveCheckCell { x: 2, y: 1 }),
+    (1, 3, MoveCheckCell { x: 2, y: 0 }),
+    (1, 3, MoveCheckCell { x: 2, y: 1 }),
+    (1, 3, MoveCheckCell { x: 2, y: 2 }),
+    (1, 3, MoveCheckCell { x: 1, y: 2 }),
+    (1, 3, MoveCheckCell { x: 0, y: 2 }),
+    (1, 4, MoveCheckCell { x: -1, y: 2 }),
+    (1, 4, MoveCheckCell { x: 0, y: 2 }),
+    (1, 4, MoveCheckCell { x: 1, y: 2 }),
+    (1, 5, MoveCheckCell { x: 0, y: 2 }),
+    (1, 5, MoveCheckCell { x: -1, y: 2 }),
+    (1, 5, MoveCheckCell { x: -2, y: 2 }),
+    (1, 5, MoveCheckCell { x: -2, y: 1 }),
+    (1, 5, MoveCheckCell { x: -2, y: 0 }),
+    (1, 6, MoveCheckCell { x: -2, y: 1 }),
+    (1, 6, MoveCheckCell { x: -2, y: 0 }),
+    (1, 6, MoveCheckCell { x: -2, y: -1 }),
+    (1, 7, MoveCheckCell { x: -2, y: 0 }),
+    (1, 7, MoveCheckCell { x: -2, y: -1 }),
+    (1, 7, MoveCheckCell { x: -2, y: -2 }),
+    (1, 7, MoveCheckCell { x: -1, y: -2 }),
+    (1, 7, MoveCheckCell { x: 0, y: -2 }),
+    (2, 0, MoveCheckCell { x: -2, y: -3 }),
+    (2, 0, MoveCheckCell { x: -1, y: -3 }),
+    (2, 0, MoveCheckCell { x: 0, y: -3 }),
+    (2, 0, MoveCheckCell { x: 1, y: -3 }),
+    (2, 0, MoveCheckCell { x: 2, y: -3 }),
+    (2, 1, MoveCheckCell { x: -1, y: -3 }),
+    (2, 1, MoveCheckCell { x: 0, y: -3 }),
+    (2, 1, MoveCheckCell { x: 1, y: -3 }),
+    (2, 1, MoveCheckCell { x: 2, y: -3 }),
+    (2, 1, MoveCheckCell { x: 3, y: -3 }),
+    (2, 1, MoveCheckCell { x: 3, y: -2 }),
+    (2, 1, MoveCheckCell { x: 3, y: -1 }),
+    (2, 1, MoveCheckCell { x: 3, y: 0 }),
+    (2, 1, MoveCheckCell { x: 3, y: 1 }),
+    (2, 2, MoveCheckCell { x: 3, y: -2 }),
+    (2, 2, MoveCheckCell { x: 3, y: -1 }),
+    (2, 2, MoveCheckCell { x: 3, y: 0 }),
+    (2, 2, MoveCheckCell { x: 3, y: 1 }),
+    (2, 2, MoveCheckCell { x: 3, y: 2 }),
+    (2, 3, MoveCheckCell { x: 3, y: -1 }),
+    (2, 3, MoveCheckCell { x: 3, y: 0 }),
+    (2, 3, MoveCheckCell { x: 3, y: 1 }),
+    (2, 3, MoveCheckCell { x: 3, y: 2 }),
+    (2, 3, MoveCheckCell { x: 3, y: 3 }),
+    (2, 3, MoveCheckCell { x: 2, y: 3 }),
+    (2, 3, MoveCheckCell { x: 1, y: 3 }),
+    (2, 3, MoveCheckCell { x: 0, y: 3 }),
+    (2, 3, MoveCheckCell { x: -1, y: 3 }),
+    (2, 4, MoveCheckCell { x: 2, y: 3 }),
+    (2, 4, MoveCheckCell { x: 1, y: 3 }),
+    (2, 4, MoveCheckCell { x: 0, y: 3 }),
+    (2, 4, MoveCheckCell { x: -1, y: 3 }),
+    (2, 4, MoveCheckCell { x: -2, y: 3 }),
+    (2, 5, MoveCheckCell { x: 1, y: 3 }),
+    (2, 5, MoveCheckCell { x: 0, y: 3 }),
+    (2, 5, MoveCheckCell { x: -1, y: 3 }),
+    (2, 5, MoveCheckCell { x: -2, y: 3 }),
+    (2, 5, MoveCheckCell { x: -3, y: 3 }),
+    (2, 5, MoveCheckCell { x: -3, y: 2 }),
+    (2, 5, MoveCheckCell { x: -3, y: 1 }),
+    (2, 5, MoveCheckCell { x: -3, y: 0 }),
+    (2, 5, MoveCheckCell { x: -3, y: -1 }),
+    (2, 6, MoveCheckCell { x: -3, y: 2 }),
+    (2, 6, MoveCheckCell { x: -3, y: 1 }),
+    (2, 6, MoveCheckCell { x: -3, y: 0 }),
+    (2, 6, MoveCheckCell { x: -3, y: -1 }),
+    (2, 6, MoveCheckCell { x: -3, y: -2 }),
+    (2, 7, MoveCheckCell { x: -3, y: 1 }),
+    (2, 7, MoveCheckCell { x: -3, y: 0 }),
+    (2, 7, MoveCheckCell { x: -3, y: -1 }),
+    (2, 7, MoveCheckCell { x: -3, y: -2 }),
+    (2, 7, MoveCheckCell { x: -3, y: -3 }),
+    (2, 7, MoveCheckCell { x: -2, y: -3 }),
+    (2, 7, MoveCheckCell { x: -1, y: -3 }),
+    (2, 7, MoveCheckCell { x: 0, y: -3 }),
+    (2, 7, MoveCheckCell { x: 1, y: -3 }),
+];
 
 pub(crate) const SHAPE_CHANGE_NONE: i32 = 0;
 pub(crate) const SHAPE_CHANGE_AREA: i32 = 3;
@@ -730,24 +879,3 @@ fn transformed_direction(direction: i32, table: &[i32; 8]) -> Result<i32, ShapeD
 
 // IMPLEMENTED: `CShape::IsInAround` материализован выше; покрытый raw-блок
 // удалён.
-
-// ============================================================================
-// FUNCTION: CShape::InitMoveCheckCellList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\shape.cpp:37
-// RVA: 0x0005BE60
-// ADDRESS: 0045be60
-// PROTOTYPE: void __cdecl InitMoveCheckCellList(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: `CShape::GetDir` материализован выше; покрытый raw-блок удалён.
-
-
-// IMPLEMENTED: `CShape::SetAction` материализован выше; покрытый raw-блок удалён.
-
-// COMPONENT_VARIANT_END: GameServer

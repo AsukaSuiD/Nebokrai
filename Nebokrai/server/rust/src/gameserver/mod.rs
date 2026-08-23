@@ -12,6 +12,7 @@ pub(crate) mod appserver {
         pub(crate) mod countryparam;
         pub(crate) mod countrywarsys;
     }
+    pub(crate) mod goodswarmember;
     pub(crate) mod message {
         pub(crate) mod countrymessage;
         pub(crate) mod organsysmessage;
@@ -44,4 +45,5 @@ pub(crate) mod appserver {
 )]
 pub(crate) mod gameserver {
     pub(crate) mod game;
+    pub(crate) mod playerranks;
 }

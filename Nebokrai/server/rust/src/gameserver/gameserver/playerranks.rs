@@ -1,12 +1,50 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Рейтинг игроков исторического GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `gameserver/playerranks.cpp`, подтверждает пустые list/map constructor state
+//! и безусловный success `Initialize`. Process singleton заменён прямым
+//! владением `CGame`; `Vec` и `BTreeMap` сохраняют list insertion-order и map
+//! key-order без MSVC allocator/tree plumbing.
+//!
+//! Wire `AddToByteArray/DecordFromByteArray`, поиск позиции и двухсекундный
+//! `OnPlayerGetRanks` cooldown пока остаются RAW ниже: в частности, exact EXE
+//! объявляет ограниченный count, но обходит весь rank list, поэтому их нельзя
+//! подменять исправленным C++-донором до связанного message-прохода.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\playerranks.cpp
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerRankEntry {
+    pub(crate) player_id: i32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) occupation: u16,
+    pub(crate) level: u16,
+    pub(crate) faction_name: Vec<u8>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct CPlayerRanks {
+    ranks: Vec<PlayerRankEntry>,
+    request_expirations_ms: BTreeMap<i32, u32>,
+}
+
+impl CPlayerRanks {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) const fn initialize(&mut self) -> bool {
+        true
+    }
+
+    pub(crate) fn ranks(&self) -> &[PlayerRankEntry] {
+        &self.ranks
+    }
+
+    pub(crate) fn request_expirations(&self) -> &BTreeMap<i32, u32> {
+        &self.request_expirations_ms
+    }
+}
 
 // ============================================================================
 // FUNCTION: CPlayerRanks::AddToByteArray
@@ -31,48 +69,6 @@
 // RVA: 0x0000D700
 // ADDRESS: 0040d700
 // PROTOTYPE: ulong __thiscall GetSpecifyPlayerRank(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayerRanks::CPlayerRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\playerranks.cpp:18
-// RVA: 0x0000E210
-// ADDRESS: 0040e210
-// PROTOTYPE: void __thiscall CPlayerRanks(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayerRanks::~CPlayerRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\playerranks.cpp:23
-// RVA: 0x0000E2A0
-// ADDRESS: 0040e2a0
-// PROTOTYPE: void __thiscall ~CPlayerRanks(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayerRanks::getInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\playerranks.cpp:28
-// RVA: 0x0000E320
-// ADDRESS: 0040e320
-// PROTOTYPE: CPlayerRanks * __cdecl getInstance(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -105,89 +101,3 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: GetPlayerRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\playerranks.cpp:123
-// RVA: 0x0000E6F0
-// ADDRESS: 0040e6f0
-// PROTOTYPE: CPlayerRanks * __cdecl GetPlayerRanks(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayerRanks::Release
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\playerranks.cpp:43
-// RVA: 0x0000E700
-// ADDRESS: 0040e700
-// PROTOTYPE: void __thiscall Release(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayerRanks::Initialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\playerranks.cpp:38
-// RVA: 0x000CFB30
-// ADDRESS: 004cfb30
-// PROTOTYPE: bool __thiscall Initialize(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $L74160
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\playerranks.cpp
-// RVA: 0x0022AB40
-// ADDRESS: 0062ab40
-// PROTOTYPE: undefined $L74160()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $E2
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\playerranks.cpp
-// RVA: 0x0024A650
-// ADDRESS: 0064a650
-// PROTOTYPE: void __cdecl $E2(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $E5
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\playerranks.cpp
-// RVA: 0x0024A660
-// ADDRESS: 0064a660
-// PROTOTYPE: void __cdecl $E5(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
