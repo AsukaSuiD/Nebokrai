@@ -265,6 +265,14 @@ impl GlobeSetupSnapshot {
         self.read_f32(MONSTER_NUMBER_SCALE_OFFSET)
     }
 
+    pub(crate) fn gold_coin_limit(&self) -> u32 {
+        self.read_u32(0x4fc)
+    }
+
+    pub(crate) fn increment_log_days(&self) -> u32 {
+        self.read_u32(0x80c)
+    }
+
     pub(crate) fn player_property_coefficients(&self) -> GlobePlayerPropertyCoefficients {
         let triplet = |offset| std::array::from_fn(|index| self.read_f32(offset + index * 4));
         GlobePlayerPropertyCoefficients {
@@ -381,6 +389,14 @@ impl GlobeSetupSnapshot {
 
     fn read_f32(&self, offset: usize) -> f32 {
         f32::from_le_bytes(
+            self.bytes[offset..offset + 4]
+                .try_into()
+                .expect("PDB-offset находится внутри globe snapshot"),
+        )
+    }
+
+    fn read_u32(&self, offset: usize) -> u32 {
+        u32::from_le_bytes(
             self.bytes[offset..offset + 4]
                 .try_into()
                 .expect("PDB-offset находится внутри globe snapshot"),

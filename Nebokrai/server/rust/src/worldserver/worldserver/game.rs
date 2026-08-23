@@ -2088,9 +2088,7 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     ) -> Result<(), Self::Block>;
     async fn create_rs_setup_owner(&mut self) -> Result<LoadedSetupIds, Self::Block>;
 
-    fn initialize_void_owner(&mut self, owner: WorldGameInitVoidOwner);
-    fn initialize_boolean_owner(&mut self, owner: WorldGameInitBooleanOwner) -> bool;
-    fn load_region_parameters(&mut self, game: &mut CGame) -> bool;
+    async fn load_region_parameters(&mut self, game: &mut CGame) -> bool;
     fn country_parameter_source(&mut self) -> Option<Vec<u8>>;
     fn country_war_source(&mut self) -> Option<Vec<u8>>;
     fn use_appellation_function(&mut self) -> bool;
@@ -2110,10 +2108,6 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn auction_log_database(&mut self) -> Option<&mut WorldTdsClient>;
     /// Exact `CGlobeSetup::m_stSetup.dwIncrementLogDays` для обеих history query.
     fn increment_log_days(&mut self) -> u32;
-    /// Регистрирует exact calendar-цепочку `ClearCopyNum` на owned timer-е.
-    fn register_clear_copy_number_time(
-        &mut self,
-    ) -> Result<CopyNumberScheduleReport, CopyNumberScheduleBlock>;
     /// Даёт каждому concrete worker-у собственные Send-owner-ы; handle остаётся
     /// внутри единственного `CGame` и освобождается его Release.
     fn player_load_worker_runtime(
@@ -11124,6 +11118,8 @@ impl CGame {
         faction_enemy_context: &mut FactionEnemyContext,
         player_ranks: &mut CPlayerRanks,
         timer: &mut CTimer<TimerCallback>,
+        copy_number_timer: &mut CopyNumberTimerState,
+        copy_number_callback: TimerCallback,
         organizing_tax_callback: TimerCallback,
         player_ranks_callback: TimerCallback,
         organizing: &mut COrganizingCtrl,
@@ -11419,7 +11415,7 @@ impl CGame {
             });
         }
 
-        let region_parameters_loaded = context.load_region_parameters(self);
+        let region_parameters_loaded = context.load_region_parameters(self).await;
         events.push(WorldGameInitEvent::RegionParametersLoaded {
             succeeded: region_parameters_loaded,
         });
@@ -12009,7 +12005,8 @@ impl CGame {
             WorldGameInitVoidOwner::InitializeBaseMessage,
             WorldGameInitVoidOwner::InitializeSocket,
         ] {
-            context.initialize_void_owner(owner);
+            // Rust message/socket owners не требуют отдельного глобального
+            // initialize-вызова; их живые transport-owner-ы создаются ниже.
             events.push(WorldGameInitEvent::VoidOwner(owner));
         }
 
@@ -12042,7 +12039,11 @@ impl CGame {
 
         self.player_data_queue.clear();
         events.push(WorldGameInitEvent::PlayerDataQueueCleared);
-        let copy_number_schedule = match context.register_clear_copy_number_time() {
+        let copy_number_schedule = match copy_number_timer.register(
+            (callbacks.get_timer_local_time)(),
+            timer,
+            copy_number_callback,
+        ) {
             Ok(schedule) => schedule,
             Err(error) => stop!(WorldGameInitBlockReason::CopyNumberSchedule(error)),
         };
