@@ -365,9 +365,10 @@ enum AuctionHistoryRowDecode {
 
 /// Owned-состояние исходного `CAuctionLog` без process-static singleton-а.
 pub(crate) struct CAuctionLog {
-    /// Constructor не инициализировал это слово; оно становится известным
-    /// только после достигнутой daily-ranking ветви.
-    old_auction_day: Option<i32>,
+    /// Нулевой sentinel гарантирует первый daily-ranking проход: допустимый
+    /// `tm_mday` лежит в диапазоне `1..=31`. Это безопасная замена чтения
+    /// неинициализированного слова в исходном constructor-е.
+    old_auction_day: i32,
     log_list: BTreeMap<i32, Vec<AuctionLogNode>>,
     player_pages: BTreeMap<i32, i32>,
     goods_list: Vec<AuctionBangNode>,
@@ -383,19 +384,19 @@ impl CAuctionLog {
     /// Создаёт только доказанные constructor-ом пустые контейнеры.
     pub(crate) const fn new() -> Self {
         Self {
-            old_auction_day: None,
+            old_auction_day: 0,
             log_list: BTreeMap::new(),
             player_pages: BTreeMap::new(),
             goods_list: Vec::new(),
         }
     }
 
-    pub(crate) const fn old_auction_day(&self) -> Option<i32> {
+    pub(crate) const fn old_auction_day(&self) -> i32 {
         self.old_auction_day
     }
 
     pub(crate) fn set_old_auction_day(&mut self, day: i32) {
-        self.old_auction_day = Some(day);
+        self.old_auction_day = day;
     }
 
     /// Multimap insert всегда принимает ещё одну запись и возвращает `true`.
@@ -1092,7 +1093,8 @@ async fn query_first_auction_bang(
 // ADDRESS: 0044baf0
 // PROTOTYPE: undefined __thiscall CAuctionLog(void)
 //
-// Реализовано выше; неинициализированный `m_lAucOldDay` сохранён как `Option`.
+// Реализовано выше; `m_lAucOldDay` получает безопасный нулевой sentinel,
+// потому что исходный constructor оставлял это слово неинициализированным.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

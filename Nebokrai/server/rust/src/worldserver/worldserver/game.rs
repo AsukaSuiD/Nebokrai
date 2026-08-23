@@ -518,9 +518,9 @@
 //! timer-owner после него снимает отдельное local time и ставит следующий день.
 //! Суточная
 //! AuctionBang-ветвь передаёт реальный Log DB connection, присваивает день до
-//! update и сохраняет его неатомарный outcome. Неинициализированный исходным
-//! constructor-ом `m_lAucOldDay` остаётся явной типизированной ошибкой, а не
-//! получает придуманное стартовое значение. Отдельный init-проход напрямую
+//! update и сохраняет его неатомарный outcome. Нулевой sentinel в Rust-owner-е
+//! заменяет неинициализированное слово исходного constructor-а и детерминированно
+//! запускает первое суточное обновление. Отдельный init-проход напрямую
 //! вызывает потоковый `CAuctionLog::LoadItem`, сохраняет partial publication и
 //! исходно продолжает инициализацию после `false`, меняя только текст лога.
 //! `AtomicBool` использует отдельные relaxed load/store, а не `swap`, сохраняя
@@ -6174,7 +6174,6 @@ pub(crate) enum WorldMainLoopMaintenanceBlock {
     PlayerRanksStat(PlayerRanksStatRunBlock),
     PlayerRanksSerialization(PlayerRanksSerializationBlock),
     HonorRanks(WorldHonorRanksMaintenanceBlock),
-    AuctionOldDayUnknown { current_month_day: i32 },
 }
 
 /// Полный maintenance-сегмент между reload и collect-player-data.
@@ -16667,11 +16666,7 @@ impl CGame {
         };
 
         let current_month_day = get_auction_month_day();
-        let Some(old_month_day) = auction_log.old_auction_day() else {
-            return Err(WorldMainLoopMaintenanceBlock::AuctionOldDayUnknown {
-                current_month_day,
-            });
-        };
+        let old_month_day = auction_log.old_auction_day();
         let auction_bang = if current_month_day == old_month_day {
             WorldAuctionBangMaintenanceDisposition::AlreadyCurrent {
                 current_month_day,
