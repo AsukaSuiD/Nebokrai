@@ -215,7 +215,8 @@ use crate::gameserver::appserver::message::sequencestring::{
 };
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::message::servermessage::{
-    GameServerMessageError, GameServerMessageReport, dispatch_server_message,
+    GameServerMessageError, GameServerMessageReport, InitialRegionStartupContext,
+    dispatch_server_message,
 };
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::organizingsystem::fournationwarsys::CFourNationWarSys;
@@ -982,7 +983,7 @@ pub(crate) enum GameMainLoopOutcome {
 
 #[must_use = "MainLoop report сохраняет ordering, pacing и legacy return"]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameMainLoopReport {
+pub(crate) struct GameMainLoopReport<RegionRuntimeError> {
     pub(crate) outcome: GameMainLoopOutcome,
     pub(crate) return_value: i32,
     pub(crate) sampled_tick_ms: u32,
@@ -990,7 +991,7 @@ pub(crate) struct GameMainLoopReport {
     pub(crate) stages: Vec<GameMainLoopStage>,
     pub(crate) next_deadline_ms: Option<u32>,
     pub(crate) signed_lag_ms: Option<i32>,
-    pub(crate) messages: Option<GameProcessMessagesReport>,
+    pub(crate) messages: Option<GameProcessMessagesReport<RegionRuntimeError>>,
     pub(crate) net_sessions: Option<NetSessionRunReport>,
     pub(crate) auction: Option<GameAuctionRunReport>,
 }
@@ -1015,14 +1016,15 @@ pub(crate) struct GameAuctionRunReport {
 
 #[must_use = "ProcessMessage report сохраняет server, auction, GM, GMA и depot effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameProcessMessagesReport {
+pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
     pub(crate) legacy_return: i32,
     pub(crate) auction_states:
         Vec<Result<WorldAuctionStateMessageReport, WorldAuctionStateMessageError>>,
     pub(crate) gm_messages: Vec<Result<GmMessageReport, GmMessageError>>,
     pub(crate) gma_messages: Vec<Result<GmaMessageReport, GmaMessageError>>,
     pub(crate) depot_messages: Vec<DepotMessageReport>,
-    pub(crate) server_messages: Vec<Result<GameServerMessageReport, GameServerMessageError>>,
+    pub(crate) server_messages:
+        Vec<Result<GameServerMessageReport, GameServerMessageError<RegionRuntimeError>>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1066,10 +1068,11 @@ struct GameMainLoopState {
     pacing_deadline_ms: u32,
 }
 
-/// Concrete Script/AI/session owners подключаются сюда по мере их
-/// материализации; message routing уже исполняется самим `CGame`.
+/// Concrete Script/region/AI/session owners подключаются сюда по мере их
+/// материализации; message routing уже исполняется самим `CGame`, а region
+/// decoder получает тот же live factory-контекст без отдельного shadow state.
 pub(crate) trait GameMainLoopRuntime:
-    GameMessageHandlers + GameScriptResourceContext
+    GameMessageHandlers + GameScriptResourceContext + InitialRegionStartupContext
 {
     fn exit_requested(&self) -> bool;
     fn tick_interval_ms(&self) -> u32;
@@ -3282,7 +3285,7 @@ impl CGame {
     pub(crate) fn main_loop<Runtime: GameMainLoopRuntime>(
         &mut self,
         runtime: &mut Runtime,
-    ) -> GameMainLoopReport {
+    ) -> GameMainLoopReport<Runtime::RuntimeError> {
         let mut state = self.main_loop_state;
         if !state.initialized {
             state.current_tick_ms = runtime.get_tick_ms();
@@ -3447,7 +3450,7 @@ impl CGame {
     pub(crate) fn process_messages<Runtime: GameMainLoopRuntime>(
         &mut self,
         runtime: &mut Runtime,
-    ) -> GameProcessMessagesReport {
+    ) -> GameProcessMessagesReport<Runtime::RuntimeError> {
         let mut auction_states = Vec::new();
         let mut gm_messages = Vec::new();
         let mut gma_messages = Vec::new();
@@ -3531,7 +3534,9 @@ impl CGame {
         gm_messages: &mut Vec<Result<GmMessageReport, GmMessageError>>,
         gma_messages: &mut Vec<Result<GmaMessageReport, GmaMessageError>>,
         depot_messages: &mut Vec<DepotMessageReport>,
-        server_messages: &mut Vec<Result<GameServerMessageReport, GameServerMessageError>>,
+        server_messages: &mut Vec<
+            Result<GameServerMessageReport, GameServerMessageError<Runtime::RuntimeError>>,
+        >,
     ) {
         if let Some(report) =
             dispatch_server_message(message, self, runtime, |runtime| runtime.get_tick_ms())

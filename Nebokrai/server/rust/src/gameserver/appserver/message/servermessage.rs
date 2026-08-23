@@ -76,9 +76,10 @@
 //! сохраняет собственный clear/partial-decode и exact success-log контракт.
 //! Proxy region `0x0F` создаёт отдельный owner, полностью декодирует короткий
 //! proxy wire и map-assignment-ом публикует его до точного startup log.
-//! Region selector `0x0E` маршрутизирует все шесть concrete subtype-ов через
-//! общий base decoder, публикует ordered `CGame` owner и лишь затем обновляет
-//! startup totals и GodsBattle region-set.
+//! Region selector `0x0E` проходит реальный FIFO через runtime factory-
+//! контекст: все шесть concrete subtype-ов используют общий base decoder,
+//! ordered display-list effect предшествует публикации `CGame` owner-а, а
+//! startup totals и GodsBattle region-set обновляются только после log effect.
 //! Runtime selector `0x10` ищет concrete owner по ID и перечитывает только его
 //! setup/forbid-goods tail; miss не читает tail и не пишет log.
 //! FourNationWar `0x25` декодирует exact 196-byte setup records и пять rects,
@@ -907,6 +908,19 @@ pub(crate) struct GameScriptStartupMessageReport {
     pub(crate) log_effects: Vec<Vec<u8>>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameInitialRegionListEffect {
+    pub(crate) name: Vec<u8>,
+    pub(crate) region_id: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameInitialRegionStartupMessageReport {
+    pub(crate) decoded: InitialRegionStartupReport,
+    pub(crate) region_list_effects: Vec<GameInitialRegionListEffect>,
+    pub(crate) log_effects: Vec<Vec<u8>>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum GamePlayerRanksStartupError {
     OwnerUnavailable { selector: i32 },
@@ -984,10 +998,11 @@ pub(crate) enum GameServerMessageReport {
     PlayerRanksStartup(GamePlayerRanksStartupReport),
     HonorStartup(GameHonorStartupMessageReport),
     ScriptStartup(GameScriptStartupMessageReport),
+    InitialRegionStartup(GameInitialRegionStartupMessageReport),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameServerMessageError {
+pub(crate) enum GameServerMessageError<RegionRuntimeError> {
     StartupSelector(GameClientServerStartPayloadError),
     StringTable(MyStringTableDecodeError),
     BattleFairyStartup(GameBattleFairyStartupError),
@@ -1005,17 +1020,21 @@ pub(crate) enum GameServerMessageError {
     PlayerRanksStartup(GamePlayerRanksStartupError),
     HonorStartup(GameHonorStartupError),
     ScriptStartup(GameScriptStartupError),
+    InitialRegionStartup(InitialRegionStartupError<RegionRuntimeError>),
 }
 
 /// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
 /// startup selector читается один раз, неизвестные selector-ы не двигают
 /// cursor, а обе language-table точки входят в один `CGame` owner.
-pub(crate) fn dispatch_server_message<Context: GameScriptResourceContext>(
+pub(crate) fn dispatch_server_message<Context>(
     message: &mut CMessage,
     game: &mut CGame,
     script_context: &mut Context,
     mut now_ms: impl FnMut(&mut Context) -> u32,
-) -> Option<Result<GameServerMessageReport, GameServerMessageError>> {
+) -> Option<Result<GameServerMessageReport, GameServerMessageError<Context::RuntimeError>>>
+where
+    Context: GameScriptResourceContext + InitialRegionStartupContext,
+{
     if message.message_type() == STRING_TABLE_REFRESH_MESSAGE {
         return Some(dispatch_string_table_message(
             message,
@@ -1217,6 +1236,40 @@ pub(crate) fn dispatch_server_message<Context: GameScriptResourceContext>(
             Some(Ok(GameServerMessageReport::CountryStateStartup(
                 GameCountryStateStartupMessageReport {
                     decoded,
+                    log_effects,
+                },
+            )))
+        }
+        REGION_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("region selector проверен без изменения cursor");
+            let mut region_list_effects = Vec::new();
+            let mut log_effects = Vec::new();
+            let decoded = match dispatch_initial_region_startup(
+                consumed_selector,
+                message,
+                game,
+                script_context,
+                |name, region_id| {
+                    region_list_effects.push(GameInitialRegionListEffect {
+                        name: name.to_vec(),
+                        region_id,
+                    });
+                },
+                |text| log_effects.push(text.to_vec()),
+            )
+            .expect("region selector проверен outer dispatcher-ом")
+            .map_err(GameServerMessageError::InitialRegionStartup)
+            {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(Ok(GameServerMessageReport::InitialRegionStartup(
+                GameInitialRegionStartupMessageReport {
+                    decoded,
+                    region_list_effects,
                     log_effects,
                 },
             )))
@@ -2318,11 +2371,11 @@ fn dispatch_player_count_message(
     })
 }
 
-fn dispatch_string_table_message(
+fn dispatch_string_table_message<RegionRuntimeError>(
     message: &mut CMessage,
     game: &mut CGame,
     source: GameStringTableSource,
-) -> Result<GameServerMessageReport, GameServerMessageError> {
+) -> Result<GameServerMessageReport, GameServerMessageError<RegionRuntimeError>> {
     let mut log_effects = Vec::new();
     let decoded = {
         let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
