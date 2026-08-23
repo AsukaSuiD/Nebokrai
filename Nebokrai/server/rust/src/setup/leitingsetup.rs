@@ -169,7 +169,7 @@ impl Error for ThingSetupFileLoadError {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct CThingSetup {
     all_things: VecDeque<LeiTingThingNode>,
 }

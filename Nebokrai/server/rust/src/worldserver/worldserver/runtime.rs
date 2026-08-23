@@ -3,7 +3,18 @@
 //! StringTable и встроенные setup-владельцы остаются у единственного `CGame`;
 //! здесь собраны исторические process-global owners, передаваемые ему ссылками.
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use parking_lot::RwLock;
+use chrono::Datelike;
+
+use crate::dbaccess::worlddb::dbgoods::TiberiusDbGoods;
+use crate::dbaccess::worlddb::rsjjcsys::TiberiusRsJjcSys;
+use crate::dbaccess::worlddb::rsplayer::{TiberiusPlayerLoadData, TiberiusRsPlayer};
+use crate::dbaccess::worlddb::rssetup::WorldDatabaseSettings;
 
 use crate::public::clientresource::DefaultClientResourceOwner;
 use crate::public::dakongxiangqian::CDaKongXiangQian;
@@ -15,6 +26,7 @@ use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::goodsdestructionconfig::GoodsDestroySetup;
 use crate::setup::honorelimilateconfig::HonorElimilateConfig;
 use crate::setup::lingbao::CLingBaoSetup;
+use crate::setup::leitingsetup::CThingSetup;
 use crate::setup::logsystem::CLogSystem;
 use crate::setup::monsterlist::{MonsterDropRegistry, MonsterRegistry};
 use crate::setup::newskillmonsterlist::NewSkillMonsterConf;
@@ -27,9 +39,83 @@ use crate::worldserver::appworld::goods::cbattlefairyproperty::CBattleFairyPrope
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsNameIndex, GoodsOriginalNameIndex,
 };
+use crate::worldserver::appworld::player::{CPlayer, PlayerPropertyCoefficients};
 use crate::worldserver::appworld::worldregion::WorldRegionResourceContext;
 
-use super::game::WorldReloadContext;
+use super::game::{
+    WorldPlayerDataLoadOwner, WorldPlayerLoadDataAdapter, WorldReloadContext,
+};
+
+#[derive(Clone)]
+pub(crate) struct WorldPlayerLoadSnapshot {
+    pub(crate) thing_setup: CThingSetup,
+    pub(crate) player_list: CPlayerList,
+    pub(crate) globe_setup: GlobeSetupSnapshot,
+    pub(crate) coefficients: PlayerPropertyCoefficients,
+    pub(crate) goods: GoodsBasePropertiesRegistry,
+}
+
+/// Самостоятельный DB-owner одного фонового player-load потока.
+pub(crate) struct WorldProcessPlayerLoadDatabase {
+    player: TiberiusRsPlayer,
+    jjc: TiberiusRsJjcSys,
+    goods: TiberiusDbGoods,
+    snapshot: Arc<RwLock<WorldPlayerLoadSnapshot>>,
+    changed_goods_indices: BTreeMap<u32, u32>,
+    dakong_addon_types: BTreeSet<i32>,
+}
+
+impl WorldProcessPlayerLoadDatabase {
+    pub(crate) fn new(
+        settings: &WorldDatabaseSettings,
+        snapshot: Arc<RwLock<WorldPlayerLoadSnapshot>>,
+    ) -> Self {
+        let mut dakong_addon_types = BTreeSet::new();
+        CDaKongXiangQian::get_add_type(&mut dakong_addon_types);
+        Self {
+            player: TiberiusRsPlayer::new(settings),
+            jjc: TiberiusRsJjcSys::new(settings),
+            goods: TiberiusDbGoods::new(settings),
+            snapshot,
+            // Exact World binary только конструирует/читает static map; кроме
+            // CRT teardown записей в неё нет, поэтому shipped process начинает
+            // и остаётся с пустой таблицей замен индексов.
+            changed_goods_indices: BTreeMap::new(),
+            dakong_addon_types,
+        }
+    }
+}
+
+impl WorldPlayerDataLoadOwner for WorldProcessPlayerLoadDatabase {
+    fn load_player_data<'a>(
+        &'a mut self,
+        player: &'a mut CPlayer,
+    ) -> impl Future<Output = bool> + 'a {
+        async move {
+            let snapshot = self.snapshot.read().clone();
+            let mut get_week_day = || chrono::Local::now().weekday().num_days_from_sunday() as u16;
+            let mut loader = TiberiusPlayerLoadData {
+                player_owner: &mut self.player,
+                active_transaction: None,
+                thing_setup: &snapshot.thing_setup,
+                get_week_day: &mut get_week_day,
+                jjc_owner: &mut self.jjc,
+                goods_owner: &mut self.goods,
+                goods_registry: &snapshot.goods,
+                changed_goods_indices: &self.changed_goods_indices,
+                dakong_addon_types: &self.dakong_addon_types,
+            };
+            let mut player_list = snapshot.player_list.clone();
+            let mut adapter = WorldPlayerLoadDataAdapter::new(
+                &mut loader,
+                &mut player_list,
+                &snapshot.globe_setup,
+                &snapshot.coefficients,
+            );
+            adapter.load_player_data(player).await
+        }
+    }
+}
 
 pub(crate) struct WorldProcessResources {
     runtime_directory: PathBuf,
@@ -60,10 +146,19 @@ pub(crate) struct WorldProcessResources {
     region_npcs: i32,
     log_lines: Vec<Vec<u8>>,
     operator_notices: Vec<(Vec<u8>, Vec<u8>)>,
+    player_load_snapshot: Arc<RwLock<WorldPlayerLoadSnapshot>>,
 }
 
 impl WorldProcessResources {
     pub(crate) fn new(runtime_directory: PathBuf) -> Self {
+        let globe_setup = GlobeSetupSnapshot::default();
+        let player_load_snapshot = Arc::new(RwLock::new(WorldPlayerLoadSnapshot {
+            thing_setup: CThingSetup::default(),
+            player_list: CPlayerList::default(),
+            globe_setup: globe_setup.clone(),
+            coefficients: globe_setup.player_property_coefficients().into(),
+            goods: GoodsBasePropertiesRegistry::default(),
+        }));
         Self {
             runtime_directory,
             default_client_resource: Default::default(),
@@ -75,7 +170,7 @@ impl WorldProcessResources {
             log_system: Default::default(),
             region_setup: Default::default(),
             gm_list: Default::default(),
-            globe_setup: Default::default(),
+            globe_setup,
             region_router: Default::default(),
             player_list: Default::default(),
             goods_destroy: Default::default(),
@@ -93,6 +188,7 @@ impl WorldProcessResources {
             region_npcs: 0,
             log_lines: Vec::new(),
             operator_notices: Vec::new(),
+            player_load_snapshot,
         }
     }
 
@@ -110,6 +206,10 @@ impl WorldProcessResources {
         &mut self,
     ) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + '_ {
         self.operator_notices.drain(..)
+    }
+
+    pub(crate) fn player_load_snapshot(&self) -> Arc<RwLock<WorldPlayerLoadSnapshot>> {
+        Arc::clone(&self.player_load_snapshot)
     }
 }
 
@@ -168,6 +268,16 @@ impl WorldReloadContext for WorldProcessResources {
     fn change_body_conf(&mut self) -> &mut CChangeBodyConf { &mut self.change_body }
     fn precious_box_conf(&mut self) -> &mut PreciousBoxConf { &mut self.precious_box }
     fn ling_bao_setup(&mut self) -> &mut CLingBaoSetup { &mut self.ling_bao }
+
+    fn publish_player_load_snapshot(&mut self, thing_setup: &CThingSetup) {
+        *self.player_load_snapshot.write() = WorldPlayerLoadSnapshot {
+            thing_setup: thing_setup.clone(),
+            player_list: self.player_list.clone(),
+            globe_setup: self.globe_setup.clone(),
+            coefficients: self.globe_setup.player_property_coefficients().into(),
+            goods: self.goods.clone(),
+        };
+    }
 
     fn query_goods_id_by_original_name(&mut self, original_name: &[u8]) -> u32 {
         self.goods_by_original_name.get(original_name).copied().unwrap_or(0)

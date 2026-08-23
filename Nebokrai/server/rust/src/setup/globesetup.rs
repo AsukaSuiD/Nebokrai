@@ -80,6 +80,20 @@ pub(crate) struct GlobeSetupSnapshot {
     country_identity_ids: [Vec<u8>; COUNTRY_IDENTITY_COUNT],
 }
 
+/// Девять occupation-массивов, которые `CPlayer::LoadData` читает из Globe.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GlobePlayerPropertyCoefficients {
+    pub(crate) str_to_max_attack: [f32; 3],
+    pub(crate) str_to_burden: [f32; 3],
+    pub(crate) dex_to_min_attack: [f32; 3],
+    pub(crate) dex_to_stiff: [f32; 3],
+    pub(crate) con_to_max_hp: [f32; 3],
+    pub(crate) con_to_defense: [f32; 3],
+    pub(crate) int_to_element: [f32; 3],
+    pub(crate) int_to_max_mp: [f32; 3],
+    pub(crate) int_to_resistant: [f32; 3],
+}
+
 impl Default for GlobeSetupSnapshot {
     fn default() -> Self {
         Self {
@@ -249,6 +263,21 @@ impl GlobeSetupSnapshot {
     /// Масштаб количества монстров, передаваемый всем region-loader-ам.
     pub(crate) fn monster_number_scale(&self) -> f32 {
         self.read_f32(MONSTER_NUMBER_SCALE_OFFSET)
+    }
+
+    pub(crate) fn player_property_coefficients(&self) -> GlobePlayerPropertyCoefficients {
+        let triplet = |offset| std::array::from_fn(|index| self.read_f32(offset + index * 4));
+        GlobePlayerPropertyCoefficients {
+            str_to_max_attack: triplet(4),
+            str_to_burden: triplet(16),
+            dex_to_min_attack: triplet(28),
+            dex_to_stiff: triplet(40),
+            con_to_max_hp: triplet(52),
+            con_to_defense: triplet(64),
+            int_to_element: triplet(76),
+            int_to_max_mp: triplet(88),
+            int_to_resistant: triplet(100),
+        }
     }
 
     /// Возвращает `m_stSetup.bAuction` из подтверждённого raw snapshot-а.

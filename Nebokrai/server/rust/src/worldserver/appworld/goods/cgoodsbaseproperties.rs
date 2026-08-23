@@ -77,11 +77,13 @@ impl fmt::Display for GoodsBasePropertiesCodecError {
 
 impl Error for GoodsBasePropertiesCodecError {}
 
+#[derive(Clone)]
 struct GoodsBaseIcon {
     icon_type: i32,
     icon_id: u32,
 }
 
+#[derive(Clone)]
 pub(super) struct GoodsBaseAddonPropertyValueModifier {
     probability: u32,
     lower_limit: i32,
@@ -89,6 +91,7 @@ pub(super) struct GoodsBaseAddonPropertyValueModifier {
 }
 
 /// Достигнутые scalar-поля исходного `tagAddonPropertyValue`.
+#[derive(Clone)]
 pub(crate) struct GoodsBaseAddonPropertyValue {
     id: u32,
     base_value: i32,
@@ -96,6 +99,7 @@ pub(crate) struct GoodsBaseAddonPropertyValue {
     modifiers: Vec<GoodsBaseAddonPropertyValueModifier>,
 }
 
+#[derive(Clone)]
 struct GoodsBaseAddonProperty {
     property_type: i32,
     is_enabled: i32,
@@ -105,6 +109,7 @@ struct GoodsBaseAddonProperty {
 }
 
 /// Достигнутая stacking-часть исходного `CGoodsBaseProperties`.
+#[derive(Clone)]
 pub(crate) struct CGoodsBaseProperties {
     original_name: Vec<u8>,
     name: Vec<u8>,

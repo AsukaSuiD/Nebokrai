@@ -371,7 +371,7 @@ use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::date::{TagTime, TagTimeArithmeticBlock};
 use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::public::guid::CGuid;
-use crate::setup::globesetup::GlobeSetupSnapshot;
+use crate::setup::globesetup::{GlobePlayerPropertyCoefficients, GlobeSetupSnapshot};
 use crate::setup::leitingsetup::{CThingSetup, LeiTingDailyThing, LeiTingLocalTime};
 use crate::setup::playerlist::{
     CPlayerList, PlayerCreationPropertiesLookup, PlayerOriginEquipment,
@@ -920,6 +920,7 @@ struct PlayerCarriageInformation {
 }
 
 /// Достигнутые массивы `CGlobeSetup::tagSetup`, каждый строго для трёх occupations.
+#[derive(Clone, Copy)]
 pub(crate) struct PlayerPropertyCoefficients {
     pub(crate) str_to_max_attack: [f32; 3],
     pub(crate) str_to_burden: [f32; 3],
@@ -930,6 +931,22 @@ pub(crate) struct PlayerPropertyCoefficients {
     pub(crate) int_to_element: [f32; 3],
     pub(crate) int_to_max_mp: [f32; 3],
     pub(crate) int_to_resistant: [f32; 3],
+}
+
+impl From<GlobePlayerPropertyCoefficients> for PlayerPropertyCoefficients {
+    fn from(value: GlobePlayerPropertyCoefficients) -> Self {
+        Self {
+            str_to_max_attack: value.str_to_max_attack,
+            str_to_burden: value.str_to_burden,
+            dex_to_min_attack: value.dex_to_min_attack,
+            dex_to_stiff: value.dex_to_stiff,
+            con_to_max_hp: value.con_to_max_hp,
+            con_to_defense: value.con_to_defense,
+            int_to_element: value.int_to_element,
+            int_to_max_mp: value.int_to_max_mp,
+            int_to_resistant: value.int_to_resistant,
+        }
+    }
 }
 
 /// DB-владелец единственного вызова `CRsPlayer::LoadPlayer(this)`.

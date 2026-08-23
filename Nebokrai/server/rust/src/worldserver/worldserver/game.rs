@@ -4776,6 +4776,9 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn precious_box_conf(&mut self) -> &mut PreciousBoxConf;
     /// Token-stream LingBao, идущий следом за CiQing в combined payload `0x35`.
     fn ling_bao_setup(&mut self) -> &mut CLingBaoSetup;
+    /// Публикует immutable snapshot фоновой DB-load очереди после изменения
+    /// любого входящего setup-owner-а.
+    fn publish_player_load_snapshot(&mut self, thing_setup: &CThingSetup);
     /// Concrete lookup уже загруженного World `CGoodsFactory`.
     fn query_goods_id_by_original_name(&mut self, original_name: &[u8]) -> u32;
     /// Concrete display-name lookup того же `CGoodsFactory`.
@@ -8738,6 +8741,7 @@ impl CGame {
                     legacy_result = payload.len() as u32 as i32;
                     self.send_reload_payload(0x15, &payload);
                 }
+                context.publish_player_load_snapshot(&self.thing_setup);
             }
             WorldReloadProfile::GoodsList => {
                 let loaded = match context.read_resource(b"data/goodslist.dat") {
@@ -8777,6 +8781,7 @@ impl CGame {
                     legacy_result = payload.len() as u32 as i32;
                     self.send_reload_payload(0, &payload);
                 }
+                context.publish_player_load_snapshot(&self.thing_setup);
             }
             WorldReloadProfile::MonsterList => {
                 let monsters = match context.read_resource(b"data/monsterlist.ini") {
@@ -9053,6 +9058,7 @@ impl CGame {
                     legacy_result = payload.len() as u32 as i32;
                     self.send_reload_payload(7, &payload);
                 }
+                context.publish_player_load_snapshot(&self.thing_setup);
             }
             WorldReloadProfile::StringTable => {
                 let _ = self.update_string_table(context, profile_name);
@@ -9826,6 +9832,7 @@ impl CGame {
                         .map_err(WorldReloadBlock::ThingSetupCodec)?;
                     self.send_reload_payload(0x36, &bytes);
                 }
+                context.publish_player_load_snapshot(&self.thing_setup);
             }
             WorldReloadProfile::GodsBattle => {
                 let string_table = self.string_table.table();
