@@ -2,7 +2,7 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/gmmessage.cpp` подтверждают
-//! ветви `0x5FF15`, `0x7FC06`, `0x7FC08..0x7FC0F` и `0x7FC13`: requester ID
+//! ветви `0x5FF15`, `0x7FC06`, `0x7FC08..0x7FC0F`, `0x7FC11` и `0x7FC13`: requester ID
 //! читается до switch,
 //! silence duration нормализуется к минимуму `1`, player map
 //! обходится дважды в signed ID-order, а ответы `0x5FF0D/0x5FF10`
@@ -33,6 +33,9 @@
 //! с подтверждённым `%s` и адресный `0xBF806(-1,0,text)`.
 //! Входящий list response `0x5FF15` сохраняет target-player cursor gate и
 //! публикует каждую полученную строку отдельным адресным `0xBF806`.
+//! Запрос `0x7FC11` обходит canonical GM map, оставляет только online entries,
+//! форматирует пять подтверждённых level-шаблонов, меняет ID того же пакета на
+//! `0x5FF15`, дописывает count/строки и возвращает его WorldServer.
 //! Эти цепочки имеют статус `IMPLEMENTED`.
 //! `Vec` заменяет raw allocation; поле declared capacity сохраняет
 //! исходные `sum(name_len + 2) + 0x40`, включая возможное
@@ -55,6 +58,7 @@ const GM_REQUESTER_FEEDBACK_MESSAGE: i32 = 0x0007_FC0C;
 const GM_BROADCAST_MESSAGE: i32 = 0x0007_FC0D;
 const GM_QUERY_SILENCE_MESSAGE: i32 = 0x0007_FC0E;
 const GM_PRIVATE_NOTICE_MESSAGE: i32 = 0x0007_FC0F;
+const GM_LIST_REQUEST_MESSAGE: i32 = 0x0007_FC11;
 const GM_COUNTRY_BROADCAST_MESSAGE: i32 = 0x0007_FC13;
 const GM_SET_SILENCE_RESPONSE: i32 = 0x0005_FF0D;
 const GM_QUERY_SILENCE_RESPONSE: i32 = 0x0005_FF10;
@@ -90,6 +94,8 @@ pub(crate) enum GmMessageError {
     MissingFeedbackOutcome,
     MissingFeedbackText,
     UnsupportedFeedbackFormat,
+    UnsupportedOnlineGmLevel { level: i32 },
+    GmListCountOutsideLegacyRange { count: usize },
     MissingCountryBroadcastText,
     MissingCountry,
     MissingCountryBroadcastFirstField,
@@ -105,6 +111,11 @@ pub(crate) enum GmMessageError {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GmMessageReport {
+    ListRequest {
+        requester_id: i32,
+        entries: Vec<GmListPublishedEntry>,
+        delivery: Result<i32, SendMessageError>,
+    },
     Set {
         requester_id: i32,
         player_name: Vec<u8>,
@@ -204,6 +215,14 @@ pub(crate) enum GmMessageReport {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GmListPublishedEntry {
+    pub(crate) name: Vec<u8>,
+    pub(crate) level: i32,
+    pub(crate) string_id: &'static [u8],
+    pub(crate) text: Vec<u8>,
+}
+
 /// Материализует связанные silence, broadcast и direct-notice ветви `OnGMMessage`.
 /// `None` оставляет прочие selectors их ещё RAW owner-у.
 pub(crate) fn dispatch_gm_message(
@@ -225,6 +244,7 @@ pub(crate) fn dispatch_gm_message(
             | GM_BROADCAST_MESSAGE
             | GM_QUERY_SILENCE_MESSAGE
             | GM_PRIVATE_NOTICE_MESSAGE
+            | GM_LIST_REQUEST_MESSAGE
             | GM_COUNTRY_BROADCAST_MESSAGE
     ) {
         return None;
@@ -232,6 +252,59 @@ pub(crate) fn dispatch_gm_message(
     let Some(requester_id) = message.base_mut().get_long() else {
         return Some(Err(GmMessageError::MissingRequesterId));
     };
+
+    if message_type == GM_LIST_REQUEST_MESSAGE {
+        let mut entries = Vec::new();
+        for info in game.gm_list().gm_info().values() {
+            if game.find_player_by_name(&info.name).is_none() {
+                continue;
+            }
+            let string_id = match info.level {
+                100 => b"GS0035".as_slice(),
+                90 => b"GS0036".as_slice(),
+                50 => b"GS0037".as_slice(),
+                40 => b"GSN0001".as_slice(),
+                30 => b"GSN0002".as_slice(),
+                level => {
+                    return Some(Err(GmMessageError::UnsupportedOnlineGmLevel { level }));
+                }
+            };
+            let text = match format_gm_template(
+                game.get_string_by_id(string_id),
+                &[GmFormatArgument::Text(&info.name)],
+            ) {
+                Ok(formatted) => formatted,
+                Err(()) => return Some(Err(GmMessageError::UnsupportedFeedbackFormat)),
+            };
+            entries.push(GmListPublishedEntry {
+                name: info.name.clone(),
+                level: info.level,
+                string_id,
+                text,
+            });
+        }
+        let count = match i32::try_from(entries.len()) {
+            Ok(count) => count,
+            Err(_) => {
+                return Some(Err(GmMessageError::GmListCountOutsideLegacyRange {
+                    count: entries.len(),
+                }));
+            }
+        };
+        message
+            .base_mut()
+            .set_message_type(GM_LIST_RESPONSE_MESSAGE);
+        message.add_long(count);
+        for entry in &entries {
+            add_legacy_c_string(message, &entry.text);
+        }
+        let delivery = message.send(game, false);
+        return Some(Ok(GmMessageReport::ListRequest {
+            requester_id,
+            entries,
+            delivery,
+        }));
+    }
 
     if message_type == GM_LIST_RESPONSE_MESSAGE {
         let Some(target_player_id) = message.base_mut().get_long() else {

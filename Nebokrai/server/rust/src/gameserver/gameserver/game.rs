@@ -1710,6 +1710,10 @@ impl CGame {
         &mut self.gm_list
     }
 
+    pub(crate) const fn gm_list(&self) -> &CGMList {
+        &self.gm_list
+    }
+
     pub(crate) const fn da_kong_xiang_qian_mut(&mut self) -> &mut CDaKongXiangQian {
         &mut self.da_kong_xiang_qian
     }
