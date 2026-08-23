@@ -414,8 +414,8 @@ impl CRegion {
         R: FnMut(i32) -> i32,
     {
         if self.width < 0 || self.height < 0 {
-            // Оригинал передавал отрицательный
-            // dimension в `random(long)` и signed-арифметику. Достижимость и
+            // Исходный владелец RVA `0x000D6AA0` передавал отрицательный размер в
+            // `random(long)` и знаковую арифметику. Достижимость и
             // реакция старого helper-а для такого region-state не доказаны.
             return Err(RegionRandomPositionBlock::InvalidRegionDimensions {
                 width: self.width,
@@ -538,9 +538,9 @@ impl CRegion {
         self.switches.clear();
         let (Ok(width), Ok(height)) = (usize::try_from(self.width), usize::try_from(self.height))
         else {
-            // Оригинал умножал signed dimensions
-            // с wrap и передавал результат allocator-у. Реакция CRT на такой
-            // размер не задаёт безопасное серверное поведение.
+            // Исходный владелец RVA `0x000D7000` перемножал знаковые размеры с
+            // переполнением и передавал результат allocator-у. Реакция CRT на
+            // такой размер не задаёт безопасное серверное поведение.
             return Err(RegionLoadError::InvalidDimensions {
                 width: self.width,
                 height: self.height,

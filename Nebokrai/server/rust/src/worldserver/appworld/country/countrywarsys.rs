@@ -6,9 +6,9 @@
 //! `0x0008F490/0x0008FA00/0x0008FB40/0x0008FC80/0x00091530`,
 //! `on_flag_destory` (исходное PDB-написание) RVA `0x00091E00`, `initialize`
 //! RVA `0x00092220`, top-info callbacks RVA `0x000916C0/0x000918E0` и
-//! `reload` RVA `0x00092DF0` имеют статус `IMPLEMENTED`; остальной корпус
-//! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара `WorldServer/Nworldserver.exe +
-//! WorldServer/WorldServer.pdb`, исходник `appworld/country/countrywarsys.cpp`.
+//! `reload` RVA `0x00092DF0` реализованы в Rust. Точная пара доказательных
+//! артефактов — `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
+//! исходник: `appworld/country/countrywarsys.cpp`.
 //!
 //! PDB/static map хранит `CountryWarRegion` размером `0x0C`: clear-byte с
 //! padding, signed defend и attack country. `BTreeMap` сохраняет map-order.

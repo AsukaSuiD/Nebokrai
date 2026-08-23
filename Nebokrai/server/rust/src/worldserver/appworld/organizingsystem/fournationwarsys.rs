@@ -1,14 +1,13 @@
 //! Система войны четырёх стран исторического WorldServer.
 //!
-//! Статус `CFourNationWarSys::AddToByteArray` RVA `0x00094250`,
+//! `CFourNationWarSys::AddToByteArray` RVA `0x00094250`,
 //! `RecvResultFromGS` RVA `0x00093C60` и `ConvertMoraleToExploit` RVA
 //! `0x00093F80`, `OnRefreshRegion`/`OnClearWar`/`RequestWarResultFromGS` RVA
 //! `0x00093B10/0x00093B80/0x00093BF0`, `GetWarRegionIDByTime` RVA
 //! `0x00094200`, `OnSignUpWarStart`/`OnWarEnd` RVA
 //! `0x00094F10/0x00095E90`, `Initialize` RVA `0x000963E0` и `ReLoad` RVA
-//! `0x00097370`: `IMPLEMENTED`; прочие calendar branches и остальной Game
-//! runtime ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `0x00097370` реализованы действующими Rust-owner-ами. Точная пара
+//! доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.

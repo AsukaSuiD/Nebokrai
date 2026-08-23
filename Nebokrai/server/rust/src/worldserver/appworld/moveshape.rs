@@ -1,10 +1,10 @@
 //! Владелец подвижного shape-слоя исторического `WorldServer`.
 //!
-//! Статус base-подобъекта `CShape`, включая inherited `GetName`,
+//! Base-подобъект `CShape`, включая inherited `GetName`,
 //! `CMoveShape::SetExStates` RVA `0x000DCCD0`, destructor
 //! RVA `0x000DCD00` и `CMoveShape::CMoveShape` RVA
-//! `0x000DCD70` — `IMPLEMENTED`; остальной корпус ниже остаётся
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `0x000DCD70` представлены действующим Rust-owner-ом. Точная пара
+//! доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.

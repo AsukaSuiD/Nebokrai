@@ -1,6 +1,6 @@
 //! Владелец amount-limited goods-container исторического `WorldServer`.
 //!
-//! Статус constructor RVA `0x000DC700`, `Find(long, GUID)` RVA `0x000D5F50`,
+//! Конструктор RVA `0x000DC700`, `Find(long, GUID)` RVA `0x000D5F50`,
 //! `Find(GUID/object)/IsLocked/TraversingContainer` RVA
 //! `0x000DC180/0x000DBD40/0x000DBDC0/0x000DBE10`, query-family RVA
 //! `0x000DBE70/0x000DBEC0/0x000DBF20/0x000DBF60/0x000DBFE0/0x000DC5B0`,
@@ -13,8 +13,7 @@
 //! `0x000DC030`, основного `Add/AddFromDB` RVA `0x000DC790/0x000DC820`,
 //! `Clear/Release` RVA
 //! `0x000DC9A0/0x000DCAB0`, `Clone` RVA `0x000DCBA0` и destructor RVA
-//! `0x000DCC10` — `IMPLEMENTED`;
-//! остальные операции ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `0x000DCC10` реализованы в Rust. Точная пара доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -595,8 +594,8 @@ fn read_amount_u32(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
-        // Legacy helper не получал длину source; реакция на короткий буфер
-        // определялась выходом за его границы и не имитируется.
+        // Старый вспомогательный код не получал длину источника. При коротком
+        // буфере он выходил за его границы; Rust не воспроизводит это UB.
         return Err(AmountContainerCodecError::UnexpectedEnd {
             field,
             offset,

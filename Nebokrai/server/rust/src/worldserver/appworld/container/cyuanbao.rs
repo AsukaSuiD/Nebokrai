@@ -1,12 +1,11 @@
 //! Владелец yuanbao-container исторического `WorldServer`.
 //!
-//! Статус constructor/destructor-state RVA `0x000D86F0/0x000D8750` и folded
+//! Состояние конструктора и деструктора RVA `0x000D86F0/0x000D8750` и folded
 //! `Clear/Release/IsFull/GetGoods/GetGoodsAmount/Serialize/Unserialize` RVA
 //! `0x000D8670/0x000D5E30/0x000D5E50/0x000D5EC0/0x000D5EE0/0x000D5EF0/`
 //! `0x000D6030` и yuanbao-специфичные query/add-family RVA
 //! `0x000D86B0/0x000D86D0/0x000D8810/0x000D8970/0x000D8A80/0x000D8AC0`
-//! — `IMPLEMENTED`; остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
-//! пара:
+//! реализованы в Rust. Точная пара доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.

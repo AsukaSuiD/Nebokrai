@@ -1,6 +1,6 @@
 //! Владелец союза исторического `WorldServer`.
 //!
-//! Статус достигнутой save-части `CUnion`, `CUnion::Save` RVA `0x000C1A00`,
+//! Достигнутая save-часть `CUnion`, `CUnion::Save` RVA `0x000C1A00`,
 //! `CUnion::CloneSaveData` RVA `0x000C6380`, `SetChangeData` RVA `0x000C17D0`
 //! и `CUnion::IsMember` RVA
 //! `0x000BD840`, `CUnion::GetPlayerHeader` RVA `0x000C6320`, а также
@@ -38,9 +38,7 @@
 //! `InviteJoinConfeder` constructor/`DoAsyncCall`/`OnAsyncCallback` RVA
 //! `0x000C1870/0x000C39B0/0x000C3B10`,
 //! `Disband/FireOut` RVA `0x000C43F0/0x000C49D0` —
-//! `IMPLEMENTED`;
-//! остальной корпус ниже остаётся
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! реализованы в Rust. Точная пара доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.

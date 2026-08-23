@@ -2,10 +2,9 @@
 //!
 //! `SaveLogText` RVA `0x0001E520`, `AddLogText` RVA `0x0001E630`,
 //! `AddErrorLogText` RVA `0x0001E720` и `RefeashInfoText` RVA `0x0001E810`,
-//! а также `AddPlayerList` RVA `0x00001000` как exact no-op имеют статус
-//! `IMPLEMENTED`; остальные
-//! владельцы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
-//! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
+//! а также `AddPlayerList` RVA `0x00001000` как exact no-op реализованы
+//! действующими Rust-owner-ами. Точная пара доказательных артефактов:
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
 //! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
 //! Исходный владелец PDB:

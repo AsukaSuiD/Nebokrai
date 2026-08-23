@@ -1,14 +1,13 @@
 //! Владелец таблиц почётных рангов исторического `WorldServer`.
 //!
-//! Статус `CHonorRanks::GenerateSaveData` RVA `0x0001B090` —
-//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`; `LoadHonorRanks` RVA `0x0001A5A0`,
+//! `CHonorRanks::GenerateSaveData` RVA `0x0001B090` подтверждён дизассемблером;
+//! `LoadHonorRanks` RVA `0x0001A5A0`,
 //! `AddToByteArray` RVA `0x0001A6F0`,
 //! accessors/clear RVA `0x0001A540..0x0001A890`, `UpdateRanksOnWorldServer`
 //! RVA `0x0001A4C0`, `UpdateRanksOnGameServer` RVA `0x0001ABD0`,
 //! `CopyHonorRanks` RVA `0x0001AE20` и `OnNewDay` RVA `0x0001B280` —
-//! `IMPLEMENTED`; `PushToRanks` RVA `0x0001B510` и `KilledOnePlayer` RVA
-//! `0x0001B680` также `IMPLEMENTED`. Остальные функции ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! реализованы в Rust; `PushToRanks` RVA `0x0001B510` и `KilledOnePlayer` RVA
+//! `0x0001B680` входят в тот же owner. Точная пара доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;

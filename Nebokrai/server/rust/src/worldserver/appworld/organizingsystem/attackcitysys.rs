@@ -71,10 +71,10 @@
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`, RVA `0x00060E40`,
 //! пересоздаёт list, отдельно читает count/IDs и event IDs не использует. Это
 //! узкая downstream-compatible замена, не обещание старых residue bytes.
-//! Missing schedule
-//! старый `operator[]` default-constructs с недоказанными scalar/time полями;
-//! эта запись остаётся явной неизвестностью. Malformed extraction, ID overflow
-//! и недоказанная signed calendar arithmetic возвращают локальные ошибки.
+//! При отсутствии записи расписания старый `operator[]` создавал её по
+//! умолчанию с недоказанными числовыми полями и временем; это остаётся явной
+//! неизвестностью. Некорректное чтение, переполнение ID и недоказанная знаковая
+//! календарная арифметика возвращают локальные ошибки.
 //! STL/ifstream/SEH/allocator noise Rust-кода не имеет. Деструктор
 //! `tagAttackCityTime` очищал только list заявившихся фракций; его заменяет
 //! структурный Drop `declaring_factions: Vec<i32>`.
@@ -1111,8 +1111,8 @@ impl CAttackCitySys {
         Callback: Copy,
         Context: AttackCityWarEndContext + ?Sized,
     {
-        // Raw `operator[]` default-constructs отсутствующую
-        // запись, но constructor-init её scalar/time полей не доказан.
+        // Старый `operator[]` создавал отсутствующую запись по умолчанию, но
+        // начальные значения её числовых полей и времени не доказаны.
         let (cleared_factions, city_region_id, is_every_week, declare_time, end_time) = {
             let Some(setup) = self.attacks.get_mut(&war_number) else {
                 return Err(AttackCityWarEndBlock::MissingScheduleDefaultUnknown { war_number });

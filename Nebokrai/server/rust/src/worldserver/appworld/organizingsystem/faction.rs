@@ -262,8 +262,8 @@
 //! и mask, а группы `property/members/leave-word/ability` копирует только для
 //! bits `1/2/4/8`. Property переносится четырнадцатью DWORD вместе с тремя
 //! padding-байтами после `btCountry`. Enemy-set и Goods War поля функция не
-//! копирует. Ещё не материализованные scalar-поля narrow state дают локальный
-//! явную типизированную ошибку, а не выдуманный default.
+//! копирует. Ещё не материализованные числовые поля узкого состояния возвращают
+//! явную типизированную ошибку, а не выдуманное значение по умолчанию.
 //!
 //! Достигнутый leave-word save-state хранит исходный list-order через
 //! `VecDeque<TagLeaveWord>`. Три блока той же точной пары согласуются по полному
@@ -312,7 +312,7 @@
 //! per-member проекцию. Исходно игнорировавшиеся результаты `SendToMapID`
 //! сохраняются в typed-отчёте и не останавливают следующий send. При
 //! отсутствующем NUL уже выполненные предыдущие отправки возвращаются вместе с
-//! локальной типизированной ошибкой; текущий неполный message не отправляется,
+//! локальной типизированной ошибкой; текущее неполное сообщение не отправляется,
 //! а чтение за массивом не воспроизводится.
 //! `chrono::Local::now` заменяет Windows `GetLocalTime`: один полученный local
 //! wall-clock раскладывается в те же восемь `u16`, включая Sunday-based
@@ -354,7 +354,7 @@
 //! очищается. Затем существующий `UpdateMemberInfoToClient` снимает local-time
 //! и выполняет ordered recipient-рассылку. Rust использует slice equality и
 //! bounded copy только там, где меняется fixed member data. Nullable `pRegion`,
-//! отсутствующий NUL в member field и имя длиннее 63 bytes остаются локальными
+//! отсутствующий NUL в поле участника и имя длиннее 63 байт остаются локальными
 //! типизированными ошибками: первый путь разыменовывал null, а два последних
 //! затрагивают fixed layout. Временный `char[256]` заменён owned slice.
 //!
@@ -2657,9 +2657,9 @@ impl TagLeaveWord {
     /// Возвращает `strContent` до первого NUL включительно.
     pub(crate) fn content_wire_bytes(&self) -> Result<&[u8], UnterminatedLeaveWordField> {
         let Some(terminator) = self.content.iter().position(|byte| *byte == 0) else {
-            // SaveLeaveWords передавал `node + 0x34` в CheckPoint без размера;
-            // тот читал бы за
-            // char[212], а достижимость и результат этого пути не доказаны.
+            // WorldServer `SaveLeaveWords` RVA `0x000FACA0` передавал
+            // `node + 0x34` в `CheckPoint` без размера; тот читал бы за
+            // `char[212]`, а достижимость и результат этого пути не доказаны.
             return Err(UnterminatedLeaveWordField {
                 field: "tagLeaveWord::strContent",
             });
@@ -7513,8 +7513,8 @@ impl CFaction {
         let region_name = match game.region_name(region_id) {
             WorldRegionNameLookup::RegionNotFound => &[][..],
             WorldRegionNameLookup::NullRegionPointer => {
-                // Оригинал разыменовывает найденный tagRegion::pRegion без
-                // null-check.
+                // Exact EXE `0x004C0A96..0x004C0A98` разыменовывает найденный
+                // `tagRegion::pRegion` без проверки на null.
                 // Достижимость и наблюдаемая реакция null не доказаны.
                 return MemberEnterOutcome::Blocked(MemberEnterBlockedReason::NullRegionPointer {
                     region_id,
@@ -7550,8 +7550,8 @@ impl CFaction {
             .region
             .len();
         if region_name.len() >= member_region_capacity {
-            // Второй strcpy переполнял бы strRegion[64] уже после доказанного
-            // неравенства.
+            // Второй `strcpy` по `0x004C0B07..0x004C0B11` переполнял бы
+            // `strRegion[64]` уже после доказанного неравенства.
             return MemberEnterOutcome::Blocked(
                 MemberEnterBlockedReason::RegionNameExceedsMemberField {
                     region_id,

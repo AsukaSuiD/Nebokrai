@@ -1,14 +1,14 @@
 //! Wallet-различия, скомпилированные из исторического `cjifen.cpp`.
 //!
-//! Статус `CWallet::Release/IsFull/GetGoods/GetGoodsAmount/Serialize/Unserialize`
+//! `CWallet::Release/IsFull/GetGoods/GetGoodsAmount/Serialize/Unserialize`
 //! RVA `0x000D5E30/0x000D5E50/0x000D5EC0/0x000D5EE0/0x000D5EF0/0x000D6030`
 //! и `Clear/QueryGoodsPosition/Find/Remove` RVA
 //! `0x000D8670/0x000D8350/0x000D8370/0x000D87C0/0x000D8A10`, traversal RVA
 //! `0x000D8690`, а также constructor/destructor-state `CJiFen`
 //! RVA `0x000D8280/0x000D82E0`, собственные query/add-family RVA
 //! `0x000D8240/0x000D8260/0x000D83C0/0x000D8520/0x000D85C0/0x000D8600`
-//! и его folded container-контракт — `IMPLEMENTED`; остальные операции ниже
-//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! и его folded container-контракт реализованы в Rust. Точная пара
+//! доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -332,8 +332,8 @@ impl CWallet {
         self.release();
         let offset = *cursor;
         let Some(&marker) = source.get(offset) else {
-            // Legacy owner не получал длину source; реакция на короткий буфер
-            // определялась выходом за его границы и не имитируется.
+            // Старый владелец не получал длину источника. При коротком буфере
+            // он выходил за его границы; Rust не воспроизводит это UB.
             return Err(GoodsCodecError::UnexpectedEnd {
                 field: marker_field,
                 offset,

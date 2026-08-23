@@ -1,6 +1,6 @@
 //! Владелец volume-limited goods-container исторического `WorldServer`.
 //!
-//! Статус `CSerializeContainer::OnTraversingContainer` RVA `0x000DA6B0`,
+//! `CSerializeContainer::OnTraversingContainer` RVA `0x000DA6B0`,
 //! `Remove` wrapper-ы RVA `0x000DA650/0x000DA660`,
 //! три inherited `Find` wrapper-а RVA `0x000DA670/0x000DA680/0x000DA690`,
 //! `QueryGoodsPosition(CGoods*)/Serialize/GetGoods` RVA
@@ -14,9 +14,8 @@
 //! `0x000E07F0`,
 //! `Release/Clear` RVA `0x000DAE10/0x000DB5B0`, constructor/destructor RVA
 //! `0x000DB4A0/0x000DAF40` и оба `SetContainerVolume` RVA
-//! `0x000DB500/0x000DB560`, `Clone` RVA `0x000DB600` — `IMPLEMENTED`;
-//! остальные операции ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). `Unserialize` RVA `0x000D8DA0` находится у точного PDB-
+//! `0x000DB500/0x000DB560`, `Clone` RVA `0x000DB600` реализованы в Rust.
+//! `Unserialize` RVA `0x000D8DA0` находится у точного PDB-
 //! владельца `cequipmentcontainer.cpp` и реализуется в соседнем экспортированном
 //! `.rs`. Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
 //! SHA-256 EXE

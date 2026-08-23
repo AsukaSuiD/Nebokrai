@@ -331,8 +331,9 @@ impl CWorldCityRegion {
         if state != ECityState::Fight && state != ECityState::Mass {
             return Ok(());
         }
-        // Оригинал разыменовывает `pPlayer` без проверки только в активном
-        // state; достижимая реакция null неизвестна.
+        // Исходный владелец RVA `0x00079DA0` разыменовывает `pPlayer` без
+        // проверки только в активном состоянии; достижимая реакция null
+        // неизвестна.
         let player = player.ok_or(WorldCityRegionEnterBlock::ActiveStateMissingPlayer)?;
         let mut tile_x = player
             .get_tile_x()

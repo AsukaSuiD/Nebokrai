@@ -1,7 +1,7 @@
 //! Владелец базового shape-состояния исторического `WorldServer`.
 //!
-//! Статус достигнутого inherited `CBaseObject::GetName`, полного scalar
-//! accessor-набора `CShape`, `CShape::GetRegionID` RVA `0x000530F0`,
+//! Rust-owner включает унаследованный `CBaseObject::GetName`, полный набор
+//! скалярных accessor-ов `CShape`, `CShape::GetRegionID` RVA `0x000530F0`,
 //! `CShape::SetRegionID` RVA `0x00053100`, `CShape::SetDir` RVA `0x00053170`,
 //! `CShape::SetState` RVA `0x000531D0`, `CShape::SetPosXY` RVA
 //! `0x00053200`, `CShape::GetTileX/GetTileY` RVA `0x000D5120/0x000D5150`,
@@ -9,8 +9,8 @@
 //! `CShape::AddToByteArray` RVA `0x000D5180`,
 //! `CShape::DecordFromByteArray` RVA `0x000D51B0`,
 //! `CShape::AddShapeToByteArray` RVA `0x000D52B0` и
-//! `CShape::DecordShapeFromByteArray` RVA `0x000D5370` — `IMPLEMENTED`; остальной корпус
-//! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `CShape::DecordShapeFromByteArray` RVA `0x000D5370`. Точная пара
+//! доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.

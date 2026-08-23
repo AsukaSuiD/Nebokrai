@@ -909,8 +909,8 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
     loop {
         let offset = *cursor;
         let Some(byte) = source.get(offset).copied() else {
-            // World helper не знал
-            // длину источника и продолжал чтение до NUL. Реакция при
+            // Вспомогательная функция World RVA `0x000A3190` не знала длину
+            // источника и продолжала чтение до NUL. Реакция при
             // отсутствующем terminator неизвестна, поэтому байт и cursor не
             // придумываются.
             return Err(BaseObjectDecodeError::UnexpectedEnd {
@@ -923,8 +923,8 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
         *cursor = offset + 1;
 
         if name.len() == LEGACY_NAME_CAPACITY {
-            // Helper уже потребил этот байт перед
-            // записью за local `char[256]`; достижимость и результат такого
+            // Вспомогательная функция уже потребила этот байт перед записью за
+            // границей локального `char[256]`; достижимость и результат такого
             // повреждения stack не доказаны.
             return Err(BaseObjectDecodeError::LegacyNameOverflow {
                 first_out_of_bounds_offset: offset,

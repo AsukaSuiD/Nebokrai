@@ -1,12 +1,11 @@
 //! Владелец wallet-container исторического `WorldServer`.
 //!
-//! Статус constructor-state `CWallet::CWallet` RVA `0x000D5F60`,
+//! Состояние конструктора `CWallet::CWallet` RVA `0x000D5F60`,
 //! destructor ownership RVA `0x000D5FC0`, `GetGoldCoinsAmount` RVA
 //! `0x000D5F40`, query-family RVA `0x000D5E80/0x000D5EA0/0x000D63F0`,
 //! `AddFromDB` RVA `0x000D6090` и обеих перегрузок `Add` RVA
 //! `0x000D61F0/0x000D63B0`, а также `AddGoldCoinOfLargess` RVA `0x000D6290`
-//! — `IMPLEMENTED`; остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
-//! пара:
+//! реализованы в Rust. Точная пара доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.

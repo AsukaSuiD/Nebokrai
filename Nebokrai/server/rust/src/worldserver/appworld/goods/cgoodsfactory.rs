@@ -1,6 +1,6 @@
 //! Фабрика товаров исторического `WorldServer`.
 //!
-//! Статус `GarbageCollect` RVA `0x00055C20`,
+//! `GarbageCollect` RVA `0x00055C20`,
 //! `QueryGoodsBaseProperties/QueryGoodsName` RVA
 //! `0x00055DB0/0x00055DE0`,
 //! `UnserializeGoods` RVA `0x00055E20` и `QueryGoodsIDByOriginalName` RVA
@@ -11,9 +11,8 @@
 //! `0x00055F20/0x000561C0`,
 //! `CreateGoods/CreateGoodsNoProbability` RVA
 //! `0x00059460/0x000597C0`, `Release/Load` RVA
-//! `0x00058380/0x00059EE0`, `Serialize` RVA `0x00056130` — `IMPLEMENTED`;
-//! остальной корпус ниже остаётся
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `0x00058380/0x00059EE0`, `Serialize` RVA `0x00056130` реализованы в Rust.
+//! Точная пара доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.

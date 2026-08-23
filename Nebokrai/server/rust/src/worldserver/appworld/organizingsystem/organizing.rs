@@ -1,8 +1,8 @@
 //! Владелец общего organizing-состояния исторического `WorldServer`.
 //!
-//! Статус PDB-layout `COrganizing::tagMemInfo` и его вложенного
-//! `ePurview/ePurviewOwnState` — `IMPLEMENTED`; полный `COrganizing`,
-//! billboard-типы и их методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! PDB-layout `COrganizing::tagMemInfo`, его вложенные
+//! `ePurview/ePurviewOwnState`, `COrganizing` и billboard-типы представлены
+//! действующими Rust-owner-ами. Точная пара доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -28,8 +28,8 @@
 //! ни padding всего объекта, ни native Rust memory не отправляются в wire.
 //! Plain `char` хранится как byte-exact `u8`; фиксированные массивы не
 //! заменяются `String`/`Vec`, а C-string view заканчивается на первом NUL и
-//! включает его. Отсутствующий NUL был бы старым чтением за границей массива;
-//! безопасная граница возвращает локальную типизированную ошибку, не
+//! включает его. Отсутствующий NUL привёл бы к чтению за границей массива;
+//! безопасный Rust возвращает локальную типизированную ошибку, не
 //! придумывая наблюдаемую реакцию.
 //!
 //! `CFaction::Initial` RVA `0x000BD950` полностью заполняет локальный
@@ -327,8 +327,8 @@ fn terminated_field<'a>(
     name: &'static str,
 ) -> Result<&'a [u8], UnterminatedMemberField> {
     let Some(terminator) = field.iter().position(|byte| *byte == 0) else {
-        // Исходные char*-overload-ы продолжали бы чтение
-        // за фиксированным массивом. Достижимость и наблюдаемая реакция такого
+        // Исходные перегрузки с `char*` продолжали бы чтение за фиксированным
+        // массивом. Достижимость и наблюдаемая реакция такого
         // состояния не доказаны и не заменяются добавленным NUL или unsafe.
         return Err(UnterminatedMemberField { field: name });
     };

@@ -1,13 +1,12 @@
 //! DB-save orchestration исторического WorldServer из `savedb.cpp`.
 //!
-//! Статус setup-ID, VarData, New Character, Restore Character, Delete Character,
+//! Rust-owner охватывает setup-ID, VarData, New Character, Restore Character, Delete Character,
 //! Delete Union, Delete Faction, Save Faction, Save Union, Save Region, Save
 //! HonorRanks, двух GodsBattle, EnemyFactions, Update Country Data и Save
 //! Charactor LoadDetails Data, Save Charactor Data и финального отчёта
 //! transaction-участков `DoSaveData` RVA `0x0001C610`, а также folded
-//! copy/destructor `CPlayerRanks::tagRank` RVA `0x0001B920/0x0001B7F0` —
-//! `IMPLEMENTED`; остальные фазы владельца ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
-//! Точная пара:
+//! copy/destructor `CPlayerRanks::tagRank` RVA `0x0001B920/0x0001B7F0`.
+//! Точная пара доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
@@ -106,8 +105,8 @@
 //! `save_new_characters_from_world_snapshot` теперь применяет эту судьбу к
 //! реальному `VecDeque<Box<CPlayer>>`: `Commit` немедленно уничтожает owner и
 //! удаляет текущий node, `Failure` сохраняет node и продвигает cursor.
-//! Safe-state не содержит null pointer. Если вложенный owner останавливается
-//! на неизвестном исходе старого UB, orchestration не придумывает
+//! Безопасное состояние не содержит null-указателя. Если вложенный владелец
+//! останавливается на неизвестном исходе старого UB, оркестрация не придумывает
 //! commit/rollback/log и запрещает продолжать lifecycle на этом connection.
 //!
 //! Exact `0x0041C874..0x0041C890` отдельно подтверждает: итоговый `Charactor
@@ -258,8 +257,8 @@
 //!
 //! `do_save_data_through_unions` теперь вызывает эти владельцы строго в
 //! подтверждённом порядке: setup-ID, VarData, New, Restore, Delete Character,
-//! Delete Union, Delete Faction, Save Faction и Save Union. Каждая
-//! Неизвестный исход старого UB останавливает передачу connection следующей фазе;
+//! Delete Union, Delete Faction, Save Faction и Save Union. Неизвестный исход
+//! старого UB останавливает передачу connection следующей фазе;
 //! отчёты и уже применённые container cleanup остаются доступны caller-у.
 //!
 //! Save Region отдельно сохраняет начальный `_Mysize`, затем без lock обходит
@@ -1559,7 +1558,7 @@ pub(crate) enum DoSaveDataThroughUnionsDisposition {
         phase: DoSaveDataPhase,
         block: WorldSnapshotSaveBlock,
     },
-    /// Текущий phase-report содержит конкретную нерешённую границу вложенного owner-а.
+    /// Отчёт текущей фазы содержит конкретную нерешённую границу вложенного владельца.
     BlockedPhase(DoSaveDataPhase),
     /// Logger остановил lifecycle до следующего DB/container эффекта.
     BlockedLog {

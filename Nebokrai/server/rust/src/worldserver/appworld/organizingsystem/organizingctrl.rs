@@ -5797,9 +5797,9 @@ impl COrganizingCtrl {
     pub(crate) fn is_free_player(&self, player_id: i32) -> FreePlayerLookup {
         for (&map_key, faction) in &self.factions {
             let Some(faction) = faction.as_deref() else {
-                // `IsFreePlayer` разыменовывает map-value без null-check.
-                // Достижимость и
-                // наблюдаемая реакция null не доказаны.
+                // `IsFreePlayer` RVA `0x000343A0` разыменовывает значение map
+                // без проверки на null. Достижимость и наблюдаемая реакция
+                // такого состояния не доказаны.
                 return FreePlayerLookup::BlockedNullFaction { map_key };
             };
             let faction_id = faction.is_member(player_id);
@@ -5814,9 +5814,9 @@ impl COrganizingCtrl {
     pub(crate) fn is_free_faction(&self, faction_id: i32) -> FreeFactionLookup {
         for (&map_key, union) in &self.confederations {
             let Some(union) = union.as_deref() else {
-                // `IsFreeFaction` разыменовывает map-value без null-check.
-                // Достижимость и
-                // наблюдаемая реакция null не доказаны.
+                // `IsFreeFaction` RVA `0x00034420` разыменовывает значение map
+                // без проверки на null. Достижимость и наблюдаемая реакция
+                // такого состояния не доказаны.
                 return FreeFactionLookup::BlockedNullConfederation { map_key };
             };
             let union_id = union.is_member(faction_id);

@@ -1,10 +1,10 @@
 //! Владелец bank-container исторического `WorldServer`.
 //!
-//! Статус constructor/destructor-state RVA `0x000D7FE0/0x000D8060`,
+//! Состояние конструктора и деструктора RVA `0x000D7FE0/0x000D8060`,
 //! `Release/Clear` RVA `0x000D8040/0x000D8050` и унаследованного wallet-codec
 //! RVA `0x000D5EF0/0x000D6030`, а также lock-gated `Find/Remove/Add/AddFromDB`
-//! RVA `0x000D8000/0x000D8010/0x000D8020/0x000D8030/0x000D80E0` —
-//! `IMPLEMENTED`; остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! RVA `0x000D8000/0x000D8010/0x000D8020/0x000D8030/0x000D80E0`
+//! реализованы в Rust. Точная пара доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.

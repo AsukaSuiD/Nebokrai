@@ -7,11 +7,8 @@
 //! `0x000A2BD0`, `DelOneFactionfCount` `0x000A1FA0` и
 //! `DeleteMembersByFactionId` `0x000A2850`, `IsInFactionIdList` `0x000A2760`,
 //! destructor `0x000A29C0`, `reInitDB` `0x000A22E0` и все достигнутые
-//! mutation/refresh/faction-win маршруты имеют статус `IMPLEMENTED`.
-//! Оставшийся `UNKNOWN` (исследовательский декомпилят хранится локально) относится только к COM/SEH cleanup-фрагментам,
-//! не образующим самостоятельного игрового owner-а.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! mutation/refresh/faction-win маршруты реализованы в Rust. COM/SEH cleanup
+//! исходного бинарника не образует самостоятельного игрового контракта.
 //!
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
 //! исходный owner:

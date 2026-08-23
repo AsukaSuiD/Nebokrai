@@ -1,6 +1,7 @@
 //! Владелец игрока исторического `WorldServer`.
 //!
-//! Статус `CPlayer::GetAccount` RVA `0x00002F90`, `CPlayer::SaveData` RVA
+//! Rust-owner включает `CPlayer::GetAccount` RVA `0x00002F90`,
+//! `CPlayer::SaveData` RVA
 //! `0x0005B4E0`, `CPlayer::CheckGoodsInPacket` RVA `0x0005BA90`, inherited
 //! `GetName`, reached `ProcessPlayerDataQueue`, `CPlayer::ChangeCountry` RVA
 //! `0x0005EA30`, `CPlayer::ChangeName` RVA `0x0005D1C0`,
@@ -20,8 +21,8 @@
 //! `0x004C2C51..0x004C2C5E`,
 //! достигнутого base-подобъекта `CMoveShape`, поля `m_bGetFactionData` в
 //! `CPlayer::CPlayer` RVA `0x0005EB10` и `CPlayer::~CPlayer` RVA
-//! `0x0005F020` — `IMPLEMENTED`; остальной корпус ниже остаётся
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `0x0005F020` представлены действующими Rust-owner-ами. Точная пара
+//! доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -4218,8 +4219,8 @@ fn read_player_c_string(
         return Ok(bytes[..length].to_vec());
     }
 
-    // Legacy helper писал до NUL в фиксированный stack
-    // buffer. Ни overflow, ни чтение за source безопасный Rust не имитирует.
+    // Старый вспомогательный код писал до NUL в фиксированный стековый буфер.
+    // Rust не воспроизводит ни переполнение, ни чтение за источником.
     Err(PlayerCodecError::UnterminatedString {
         field,
         offset,
@@ -4272,8 +4273,8 @@ fn read_player_array<const N: usize>(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
-        // Legacy helper не получал длину source и читал
-        // дальше. Safe Rust останавливает только эту локальную границу.
+        // Старый вспомогательный код не получал длину источника и продолжал
+        // чтение. Rust останавливает только эту локальную операцию.
         return Err(PlayerCodecError::UnexpectedEnd {
             field,
             offset,

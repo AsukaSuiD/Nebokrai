@@ -1,6 +1,6 @@
 //! Владелец equipment-container и соседнего exported volume decoder-а.
 //!
-//! Статус `CEquipmentContainer` constructor/destructor RVA
+//! Конструктор и деструктор `CEquipmentContainer` RVA
 //! `0x000D9F70/0x000D9E70`, auto/positional `Add` RVA
 //! `0x000D8B30/0x000DA020`, `Remove/AddFromDB` RVA
 //! `0x000D9B30/0x000DA280`,
@@ -10,8 +10,7 @@
 //! с `CVolumeLimitGoodsContainer` `Unserialize` RVA `0x000D8DA0`, а также
 //! read-side family RVA `0x000D9000/0x000D90F0/0x000D9180/0x000D9280/`
 //! `0x000D92F0/0x000D9350/0x000D93E0/0x000DA530` и `AI` RVA `0x000D9210`
-//! — `IMPLEMENTED`;
-//! остальные operations ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! реализованы в Rust.
 //! Функции остаются именно в этом `.rs`, потому что их точный PDB source-owner —
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:22,36,43,135,158,173,210,237,257,291,470,648,670,694,713,731,745,773,813,834`.
 //! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
@@ -570,8 +569,8 @@ fn read_volume_u32(
         .into());
     };
     let Some(bytes) = source.get(offset..end) else {
-        // Legacy helper не получал длину source; реакция на короткий буфер
-        // определялась выходом за его границы и не имитируется.
+        // Старый вспомогательный код не получал длину источника. При коротком
+        // буфере он выходил за его границы; Rust не воспроизводит это UB.
         return Err(AmountContainerCodecError::UnexpectedEnd {
             field,
             offset,
@@ -604,8 +603,8 @@ fn read_equipment_u32(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
-        // Legacy helper не получал длину source; реакция на короткий буфер
-        // определялась выходом за его границы и не имитируется.
+        // Старый вспомогательный код не получал длину источника. При коротком
+        // буфере он выходил за его границы; Rust не воспроизводит это UB.
         return Err(EquipmentContainerCodecError::UnexpectedEnd {
             field,
             offset,

@@ -1,8 +1,8 @@
 //! Владелец мирового региона исторического `WorldServer`.
 //!
-//! Статус достигнутой base-цепочки `CWorldRegion -> CRegion -> CBaseObject`,
-//! полного constructor-state `CWorldRegion::CWorldRegion` RVA `0x000778B0`,
-//! чтения унаследованного byte-exact имени,
+//! Rust-owner включает base-цепочку `CWorldRegion -> CRegion -> CBaseObject`,
+//! полное состояние конструктора `CWorldRegion::CWorldRegion` RVA `0x000778B0`,
+//! чтение унаследованного byte-exact имени,
 //! `LoadMonsterList` RVA `0x00076AC0`, `LoadNpcList` RVA `0x00075660`,
 //! `LoadWeatherSetup` RVA `0x00077A70`,
 //! `LoadTaxParam` RVA `0x00074580`,
@@ -16,8 +16,8 @@
 //! direct `New` RVA `0x00077980`, `InitOwnerRelation` RVA `0x000759D0`,
 //! `GetReturnPoint` RVA `0x00075AA0`,
 //! `SetEnterPosXY` RVA `0x00075C30`, а также
-//! `CWorldRegion::GenerateSaveData` RVA `0x00077DF0` — `IMPLEMENTED`;
-//! остальной virtual gameplay API ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `CWorldRegion::GenerateSaveData` RVA `0x00077DF0`. Точная пара
+//! доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.

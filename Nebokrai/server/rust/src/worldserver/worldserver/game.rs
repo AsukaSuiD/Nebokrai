@@ -1,6 +1,7 @@
 //! Главный владелец исторического `WorldServer`.
 //!
-//! Статус `CGame::tagSetup::tagSetup` RVA `0x00004C30`, позиционной части
+//! Rust-owner включает `CGame::tagSetup::tagSetup` RVA `0x00004C30`,
+//! позиционную часть
 //! `CGame::LoadSetup` RVA `0x0000F890`, `CGame::InitNetServer` RVA
 //! `0x00001860`, `CGame::InitNetClient` RVA `0x000030F0` и
 //! `CGame::ReConnectLoginServer` RVA `0x00003280` и
@@ -74,8 +75,7 @@
 //! полный `CGame::ProcessPlayerDataQueue` RVA `0x00013BD0`,
 //! worker `LoadPlayerDataFromDB` RVA `0x000092C0`,
 //! `CGame::ProcessTimeOutLoginPlayer` RVA `0x00014A60` и весь достигнутый
-//! `CGame::MainLoop` RVA `0x00019A00` — `IMPLEMENTED`;
-//! остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `CGame::MainLoop` RVA `0x00019A00`. Точная пара доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -6673,8 +6673,8 @@ impl WorldSetup {
                     return tokens.outcome();
                 };
                 let Some(value) = $parser(raw) else {
-                    // Для лексически неверного numeric/bool
-                    // token не доказана мутация destination старым MSVC iostream.
+                    // Для лексически неверного числового или логического token
+                    // не доказана мутация destination старым MSVC iostream.
                     // Найденный setup содержит только корректные такие значения.
                     return tokens.outcome();
                 };
@@ -6762,8 +6762,8 @@ impl WorldSetup {
                     return tokens.outcome();
                 };
                 let Some(value) = $parser(raw) else {
-                    // Malformed numeric/bool token не
-                    // встречается в найденном oracle; MSVC destination не угадываем.
+                    // Некорректный числовой или логический token не встречается
+                    // в найденном oracle; MSVC destination не угадываем.
                     return tokens.outcome();
                 };
                 self.$field = value;
@@ -8808,8 +8808,8 @@ impl CGame {
         context.add_log_text(&log);
 
         let Some(data) = self.get_script_file_data(path).map(legacy_c_string_prefix) else {
-            // Оригинал передаёт исходный path в GetScriptFileData после того,
-            // как LoadOneScript нормализовал
+            // Исходный владелец RVA `0x00013760` передаёт исходный path в
+            // `GetScriptFileData` после того, как `LoadOneScript` нормализовал
             // только map-key. При несовпадении оригинал вызывает lstrlen(NULL).
             return Err(WorldReloadOneScriptBlock {
                 requested_path: path.to_vec(),
@@ -11870,8 +11870,8 @@ impl CGame {
             }
 
             let Some(index) = current_index else {
-                // При неуспехе первого numeric
-                // extraction exact EXE всё равно использовал неизвестный
+                // При неуспехе первого числового чтения exact EXE всё равно
+                // использовал неизвестный
                 // stack-key в map::operator[]. Safe Rust не выбирает ключ.
                 blocked_at_record = Some(record_index as usize + 1);
                 break;
@@ -13696,7 +13696,7 @@ impl CGame {
         snapshot.base_mut().add_ulong(world_number);
         snapshot.base_mut().add_ulong(declared_online_players);
         for &player_id in &self.online_players {
-            // Оригинал выполнял
+            // World owner RVA `0x000083D0` выполнял
             // При отсутствии узла используется ноль; иначе node->second, затем чтение со смещением 0x744.
             // Достижимость/реакция null-dereference не доказана; safe Rust не
             // отправляет частичный snapshot и не выдаёт эту ошибку за legacy.
@@ -15551,7 +15551,7 @@ impl CGame {
         };
 
         let Some(release_interval_ms) = self.setup.release_login_player_time_ms else {
-            // Constructor не задавал это поле, а safe Rust
+            // Конструктор не задавал это поле, а safe Rust
             // не выбирает значение для исходного чтения неинициализированного DWORD.
             return WorldMainLoopTailStageReport::BlockedMissingReleaseInterval { pacing };
         };
@@ -16345,7 +16345,7 @@ impl CGame {
         state: &mut WorldMainLoopLargessState,
     ) -> WorldMainLoopLargessGateReport {
         let Some(load_interval_ms) = self.setup.load_largess_time_ms else {
-            // Constructor не задавал dwLoadLargessTime;
+            // Конструктор не задавал `dwLoadLargessTime`;
             // неизвестное C++-чтение не позволяет назначить последующий counter.
             return WorldMainLoopLargessGateReport::BlockedMissingFact {
                 field: "dwLoadLargessTime",
@@ -18846,7 +18846,7 @@ impl CGame {
     ) -> Result<(), WorldLocalMessageQueueBlock> {
         let message_type = message.message_type();
         let Some(net_server) = self.net_server.as_ref() else {
-            // Исходный owner безусловно разыменовывал
+            // Исходный владелец безусловно разыменовывал
             // обязательный s_pNetServer. Safe Rust не подменяет этот путь
             // прямым вызовом handler-а и сохраняет границу FIFO.
             return Err(WorldLocalMessageQueueBlock { message_type });

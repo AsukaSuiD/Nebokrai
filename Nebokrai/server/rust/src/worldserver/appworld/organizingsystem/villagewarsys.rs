@@ -77,7 +77,7 @@
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`, RVA `0x0005F320`,
 //! пересоздаёт list, отдельно читает count/IDs и event IDs не использует. Это
 //! доказанный downstream-compatible слой, а не заявление о старых residue bytes.
-//! Malformed extraction, overflow ID и недоказанная signed календарная
+//! Некорректное чтение, переполнение ID и недоказанная знаковая календарная
 //! арифметика возвращают локальные типизированные ошибки.
 //! STL/ifstream/SEH cleanup остаются library/compiler noise без Rust-аналогов.
 

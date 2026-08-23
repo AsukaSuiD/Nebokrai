@@ -1,15 +1,14 @@
 //! Владелец войн фракций исторического `WorldServer`.
 //!
-//! Статус registry/lifecycle, `IsEnemyRelation` RVA `0x00064090`,
+//! Реестр и жизненный цикл, `IsEnemyRelation` RVA `0x00064090`,
 //! `ClearEnemyFaction` RVA `0x000640D0`, `AddOneEnmeyFaction` RVA
 //! `0x00064A30`, `GetDecWarMoneyByType` RVA `0x00064D40`,
 //! `DigUpTheHatchet` RVA `0x00064D80`, `OnPlayerDied` RVA `0x00065750`,
 //! `StopFactionWar` RVA `0x00065D10`,
 //! `GenerateSaveData` RVA `0x000662F0`, constructor RVA `0x000663F0` и
 //! `Run` RVA `0x00066590`, `LoadIni` RVA `0x00064BB0` и
-//! `Initialize` RVA `0x00066530` —
-//! `IMPLEMENTED`; остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная
-//! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
+//! `Initialize` RVA `0x00066530` реализованы в Rust. Точная пара
+//! доказательных артефактов: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
 //! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
 //! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
 //! исходные владельцы PDB:

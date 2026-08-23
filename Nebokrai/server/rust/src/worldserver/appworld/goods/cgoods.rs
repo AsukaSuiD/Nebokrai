@@ -1,6 +1,6 @@
 //! Владелец товара исторического `WorldServer`.
 //!
-//! Статус `CGoods::Serialize/Unserialize` RVA `0x000518E0/0x00053220`,
+//! `CGoods::Serialize/Unserialize` RVA `0x000518E0/0x00053220`,
 //! byte-array wrappers `0x000516E0/0x00051700`, `Release` RVA `0x000533C0`,
 //! scalar `GetAddonPropertyValues` RVA `0x000517B0`, `GetMaxStackNumber` RVA
 //! `0x00052530`, `GetWeight` RVA `0x00051730`,
@@ -10,9 +10,8 @@
 //! `SetExID` RVA `0x000530E0`, base-подобъекта и defaults конструктора RVA
 //! `0x00053060`, а также непосредственной destructor-цепочки RVA `0x000534B0`
 //! и сломанный `CanUpgraded` RVA `0x000528E0`, а также локальный adapter
-//! применения joined addon-строк `CDBGoods::LoadGoods`
-//! — `IMPLEMENTED`;
-//! остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! применения joined addon-строк `CDBGoods::LoadGoods` реализованы в Rust.
+//! Точная пара доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
@@ -789,8 +788,8 @@ fn read_goods_array<const N: usize>(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
-        // Legacy helper не получал длину source; реакция на короткий буфер
-        // определялась выходом за его границы и не имитируется.
+        // Старый вспомогательный код не получал длину источника. При коротком
+        // буфере он выходил за его границы; Rust не воспроизводит это UB.
         return Err(GoodsCodecError::UnexpectedEnd {
             field,
             offset,

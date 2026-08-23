@@ -1,6 +1,6 @@
 //! Владелец базовых свойств товаров исторического `WorldServer`.
 //!
-//! Статус constructor RVA `0x000D5010`, `Serialize` RVA `0x000D4BD0`,
+//! Конструктор RVA `0x000D5010`, `Serialize` RVA `0x000D4BD0`,
 //! `tagAddonProperty::Serialize` RVA `0x000D4B20`,
 //! `GetPrice/GetWeight/GetName/GetDescribe/GetIconID` RVA
 //! `0x000D4930/0x000D4940/0x000D4960/0x000D4970/0x000D4980`,
@@ -9,8 +9,7 @@
 //! `0x000D4E50/0x000D4D90`, `GetOccurProbability/IsImplicit` RVA
 //! `0x000D49C0/0x000D4A10`, lifecycle addon-ов RVA
 //! `0x000D4D70/0x000D4EE0/0x000D4F00/0x000D4F90` и destructor RVA
-//! `0x000D5080` — `IMPLEMENTED`; остальной корпус ниже остаётся
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `0x000D5080` реализованы в Rust. Точная пара доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.

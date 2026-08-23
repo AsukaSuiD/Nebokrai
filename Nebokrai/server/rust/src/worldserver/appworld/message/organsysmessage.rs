@@ -206,8 +206,8 @@
 //! выполняется явный `Update`. Несовпадение нумерации сохранено: serializer
 //! распознаёт `1/2/3`, поэтому type `0` пишет count `0`, `1` отдаёт members,
 //! `2` — offense; defense недостижим. Отрицательный type исходник не отсекал
-//! и индексировал память перед process-static массивом; Rust останавливает
-//! этот внутренний выход за границы массива типизированной ошибкой.
+//! и индексировал память перед статическим массивом процесса; Rust возвращает
+//! типизированную ошибку вместо этого внутреннего выхода за границы.
 //! Exact `0x004A799C..0x004A79FE` для `0x60126` читает `(faction ID,
 //! player ID)`, ищет online player, декодирует в него полный snapshot с
 //! текущего message cursor и только затем повторно разрешает faction. При
@@ -4469,8 +4469,8 @@ pub(crate) fn dispatch_faction_billboard(
     }
     let Ok(title_index) = usize::try_from(billboard_type) else {
         // Оригинал проверяет только `2 < type`, поэтому отрицательный selector
-        // индексирует process-static `std::string[3]` до начала массива.
-        // Результат такого out-of-bounds чтения не имитируется.
+        // индексирует статический `std::string[3]` до начала массива. Rust не
+        // воспроизводит результат такого чтения за границами.
         return Some(Err(OrganizingFactionBillboardBlock {
             request_id,
             billboard_type,

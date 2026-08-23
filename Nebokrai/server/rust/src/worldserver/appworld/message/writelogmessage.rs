@@ -1,8 +1,8 @@
 //! WorldServer dispatcher-owner `OnWriteLogMessage`.
 //!
-//! Исходный dispatcher RVA `0x000A8AB0` сохранён ниже как `UNKNOWN` (исследовательский декомпилят хранится локально), а
-//! все его wire-ветки `0x60201..0x60218`, включая reserved no-op
-//! `0x60211..0x60213`, материализованы выше со статусом `IMPLEMENTED`.
+//! Исходный dispatcher RVA `0x000A8AB0` и все его wire-ветки `0x60201..0x60218`,
+//! включая reserved no-op `0x60211..0x60213`, материализованы действующим
+//! Rust-owner-ом.
 //! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
 //! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\writelogmessage.cpp:18`.

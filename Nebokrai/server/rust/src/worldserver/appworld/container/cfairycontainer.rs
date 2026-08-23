@@ -182,8 +182,8 @@ fn read_hatch_time(source: &[u8], cursor: &mut usize) -> Result<u32, VolumeConta
         .into());
     };
     let Some(bytes) = source.get(offset..end) else {
-        // Legacy owner не получал длину source; реакция на короткий буфер
-        // определялась выходом за его границы и не имитируется.
+        // Старый владелец не получал длину источника. При коротком буфере он
+        // выходил за его границы; Rust не воспроизводит это UB.
         return Err(AmountContainerCodecError::UnexpectedEnd {
             field: "CFairyContainer hatch time",
             offset,

@@ -1,6 +1,6 @@
 //! Save-владелец `CCountry` исторического `WorldServer`.
 //!
-//! Статус `CCountry::SetCountryPower/SetCountryTreasury/SetCountryTech` RVA
+//! `CCountry::SetCountryPower/SetCountryTreasury/SetCountryTech` RVA
 //! `0x000A4750/0x000A4790/0x000A47D0`, `CCountry::AddToByteArray` RVA `0x000C6E30`,
 //! `CCountry::IsKing/HasJob/CanOperate/Exile/SuccessExiled/Silence/Absolve` RVA
 //! `0x000C7160/0x000C8820/0x000C7520/0x000C7AD0/0x000C7EE0/0x000C81D0/0x000C8570`,
@@ -10,9 +10,8 @@
 //! `CCountry::CloneSaveData` RVA `0x000CC470`, `CCountry::AI` RVA
 //! `0x000CB710`, `GetMinister` RVA `0x000C6DE0`, `SendPrivateMsg` RVA
 //! `0x000C6870`, `SendCountryMsg` RVA `0x000C7090` и `SetKing` RVA
-//! `0x000CC290`, а также destructor `CCountry::~CCountry` RVA `0x000CA0C0` —
-//! `IMPLEMENTED`; остальной
-//! корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! `0x000CC290`, а также destructor `CCountry::~CCountry` RVA `0x000CA0C0`
+//! реализованы в Rust. Точная пара доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;

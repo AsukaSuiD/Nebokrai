@@ -1,9 +1,9 @@
 //! Владелец монстра исторического `WorldServer`.
 //!
-//! Статус base-подобъекта, полного `m_Property` и type-default внутри
+//! Base-подобъект, полный `m_Property` и type-default внутри
 //! `CMonster::CMonster` RVA `0x000E0490`, а также непосредственной
-//! destructor-цепочки RVA `0x000E0410` и `GetFigure` RVA `0x000E0460` —
-//! `IMPLEMENTED`. Остальной корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! destructor-цепочки RVA `0x000E0410` и `GetFigure` RVA `0x000E0460`
+//! реализованы в Rust. Точная пара доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.

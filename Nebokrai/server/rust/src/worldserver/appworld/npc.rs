@@ -1,8 +1,8 @@
 //! Владелец NPC исторического `WorldServer`.
 //!
-//! Статус base-подобъекта, type-default и lifecycle собственного списка внутри
-//! `CNpc::CNpc/~CNpc` RVA `0x000E04F0/0x000E0560` — `IMPLEMENTED`; остальной
-//! корпус ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! Base-подобъект, type-default и lifecycle собственного списка внутри
+//! `CNpc::CNpc/~CNpc` RVA `0x000E04F0/0x000E0560` представлены действующим
+//! Rust-owner-ом. Точная пара доказательных артефактов:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
 //! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
 //! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
