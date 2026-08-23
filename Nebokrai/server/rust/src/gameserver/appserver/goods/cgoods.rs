@@ -17,7 +17,9 @@
 //! legacy object. `CGoodsFactory` передаётся явно вместо исходного
 //! process-global registry.
 
-use super::cbattlefairyproperty::CBattleFairyProperty;
+use super::cbattlefairyproperty::{
+    BattleFairyExpBlock, BattleFairyExpReport, BattleFairyPlayerFacts, CBattleFairyProperty,
+};
 use super::cgoodsbaseproperties::{
     CGoodsBaseProperties, EQUIP_PLACE_HEADGEAR, GAP_BF_AGILITY, GAP_BF_AGILITY_BASE, GAP_BF_BLAST,
     GAP_BF_BRAVE, GAP_BF_BRAVE_BASE, GAP_BF_CURRENT_EXP, GAP_BF_CURRENT_MAX_EXP,
@@ -33,7 +35,7 @@ use super::cgoodsbaseproperties::{
     GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
 use super::cgoodsfactory::CGoodsFactory;
-use super::fairyproperties::CFairyProperties;
+use super::fairyproperties::{CFairyProperties, FairyExpBlock, FairyExpReport, FairyExpRuntime};
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::public::guid::CGuid;
 
@@ -199,6 +201,45 @@ impl CGoods {
 
     pub(crate) const fn battle_fairy_property_mut(&mut self) -> Option<&mut CBattleFairyProperty> {
         self.battle_fairy_property.as_mut()
+    }
+
+    /// Safe adapter legacy interior pointer: временно отделяет property owner,
+    /// но возвращает его товару и при typed block-е.
+    pub(crate) fn fairy_exp_up<Threshold>(
+        &mut self,
+        experience: &mut u32,
+        runtime: FairyExpRuntime<'_>,
+        threshold_for_level: Threshold,
+    ) -> Result<Option<FairyExpReport>, FairyExpBlock>
+    where
+        Threshold: FnMut(u32, u32) -> u32,
+    {
+        let Some(mut fairy) = self.fairy_properties.take() else {
+            return Ok(None);
+        };
+        let result = fairy.exp_up(experience, runtime, threshold_for_level);
+        self.fairy_properties = Some(fairy);
+        result.map(Some)
+    }
+
+    /// Safe adapter двойного mutable borrow исходных `property + goods`.
+    pub(crate) fn battle_fairy_exp_up<Threshold>(
+        &mut self,
+        factory: &CGoodsFactory,
+        player: Option<BattleFairyPlayerFacts<'_>>,
+        experience: &mut u32,
+        threshold_for_level: Threshold,
+    ) -> Result<Option<BattleFairyExpReport>, BattleFairyExpBlock>
+    where
+        Threshold: FnMut(u32, u32) -> u32,
+    {
+        let Some(mut battle_fairy) = self.battle_fairy_property.take() else {
+            return Ok(None);
+        };
+        let result =
+            battle_fairy.exp_up(Some(self), factory, player, experience, threshold_for_level);
+        self.battle_fairy_property = Some(battle_fairy);
+        result.map(Some)
     }
 
     /// Exact ordinary-fairy loader обрывает traversal на первом addon-е без
@@ -433,10 +474,35 @@ impl CGoods {
         Ok(true)
     }
 
-    /// Prefix `CopyAddonProperties`; fairy reload остаётся у незамкнутого
-    /// suffix-owner-а и потому не скрывается этим именем.
+    /// Общий storage-prefix обоих exact copy overload-ов.
     pub(crate) fn copy_addon_properties_core_from(&mut self, source: &Self) {
         self.addon_properties.clone_from(&source.addon_properties);
+    }
+
+    pub(crate) fn copy_fairy_addon_properties_from<Threshold>(
+        &mut self,
+        source: &Self,
+        factory: &CGoodsFactory,
+        threshold_for_level: Threshold,
+    ) -> Result<bool, GoodsBasePropertyBlock>
+    where
+        Threshold: FnMut(u32, u32) -> u32,
+    {
+        self.copy_addon_properties_core_from(source);
+        self.load_fairy_properties(factory, threshold_for_level)
+    }
+
+    pub(crate) fn copy_battle_fairy_addon_properties_from<Threshold>(
+        &mut self,
+        source: &Self,
+        factory: &CGoodsFactory,
+        threshold_for_level: Threshold,
+    ) -> Result<bool, GoodsBasePropertyBlock>
+    where
+        Threshold: FnMut(u32, u32) -> u32,
+    {
+        self.copy_addon_properties_core_from(source);
+        self.load_battle_fairy_property(factory, threshold_for_level)
     }
 
     pub(crate) fn query_attribute(&self, property_type: i32) -> bool {
