@@ -12,11 +12,11 @@
 //! player-ам двух участвующих стран при count `2`; count `0/1/3` не отправляет.
 //! `0x7FF1F` читает ровно три signed long и игнорирует legacy bool writer-а;
 //! `0x7FF22` читает unsigned country byte и запускает flag-destroy victory
-//! chain. Независимые goods-war `0x7FF20/21` и другие opcodes этот helper не
-//! интерпретирует. Достигнутая family проходит живой FIFO: `CountryWarSys`,
-//! country regions/results и canonical player traversal принадлежат `CGame`,
-//! а gate/guard/kick и virtual contender effects остаются обязательной
-//! runtime-границей concrete owners.
+//! chain. Goods-war `0x7FF20/21` маршрутизируются соседнему owned helper-у;
+//! другие opcodes этот helper не интерпретирует. Достигнутая family проходит
+//! живой FIFO: `CountryWarSys`, country regions/results и canonical player
+//! traversal принадлежат `CGame`, а gate/guard/kick и virtual contender
+//! effects остаются обязательной runtime-границей concrete owners.
 
 use super::super::country::countrywarsys::{
     CountryWarPhaseContext, CountryWarRegionContext, CountryWarSys, CountryWarVictoryContext,

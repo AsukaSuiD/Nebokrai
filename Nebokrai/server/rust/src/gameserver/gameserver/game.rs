@@ -96,6 +96,8 @@
 //! CountryWar `0x7FF17..0x7FF22` продолжает тот же lifecycle: мутирует
 //! country-region phases/results, выполняет clear через concrete runtime и
 //! переиспользует входной message для all/country-filtered client broadcast.
+//! GoodsWar `0x7FF20/21` тем же country route публикует member/faction/count
+//! snapshots в process-owned owner и сохраняет World delete notification.
 //! Battle-fairy combine теперь замыкает game player-map с GlobeSetup gate и
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные
@@ -203,7 +205,10 @@ use crate::gameserver::appserver::country::countrywarsys::CountryWarSys;
 use crate::gameserver::appserver::goods::cbattlefairyproperty::CBattleFairyProperty;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::gameserver::appserver::goodswarmember::CGoodsWarMember;
+use crate::gameserver::appserver::goodswarmember::{
+    CGoodsWarMember, GameGoodsWarMessageError, GameGoodsWarMessageReport,
+    dispatch_game_goods_war_message,
+};
 use crate::gameserver::appserver::message::countrymessage::{
     CountryWarMessageDispatchError, GameCountryWarMessageReport, GameCountryWarRuntime,
     dispatch_game_country_war_message,
@@ -1063,6 +1068,7 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
             CountryWarMessageDispatchError<CountryBattleStateBlock>,
         >,
     >,
+    pub(crate) goods_war_messages: Vec<Result<GameGoodsWarMessageReport, GameGoodsWarMessageError>>,
     pub(crate) server_messages:
         Vec<Result<GameServerMessageReport, GameServerMessageError<RegionRuntimeError>>>,
 }
@@ -2313,6 +2319,14 @@ impl CGame {
 
     pub(crate) const fn goods_war_mut(&mut self) -> Option<&mut CGoodsWarMember> {
         self.goods_war.as_mut()
+    }
+
+    pub(crate) fn take_goods_war(&mut self) -> Option<CGoodsWarMember> {
+        self.goods_war.take()
+    }
+
+    pub(crate) fn restore_goods_war(&mut self, goods_war: CGoodsWarMember) {
+        self.goods_war = Some(goods_war);
     }
 
     /// Публикует listener-owner до `Host`, затем сохраняет setup-порядок.
@@ -3665,6 +3679,7 @@ impl CGame {
         let mut depot_messages = Vec::new();
         let mut organizing_war_messages = Vec::new();
         let mut country_war_messages = Vec::new();
+        let mut goods_war_messages = Vec::new();
         let mut server_messages = Vec::new();
         let world_messages = self
             .world_client
@@ -3681,6 +3696,7 @@ impl CGame {
                 &mut depot_messages,
                 &mut organizing_war_messages,
                 &mut country_war_messages,
+                &mut goods_war_messages,
                 &mut server_messages,
             );
         }
@@ -3699,6 +3715,7 @@ impl CGame {
                 &mut depot_messages,
                 &mut organizing_war_messages,
                 &mut country_war_messages,
+                &mut goods_war_messages,
                 &mut server_messages,
             );
         }
@@ -3719,6 +3736,7 @@ impl CGame {
                         &mut depot_messages,
                         &mut organizing_war_messages,
                         &mut country_war_messages,
+                        &mut goods_war_messages,
                         &mut server_messages,
                     );
                 }
@@ -3738,6 +3756,7 @@ impl CGame {
             depot_messages,
             organizing_war_messages,
             country_war_messages,
+            goods_war_messages,
             server_messages,
         }
     }
@@ -3761,6 +3780,7 @@ impl CGame {
                 CountryWarMessageDispatchError<CountryBattleStateBlock>,
             >,
         >,
+        goods_war_messages: &mut Vec<Result<GameGoodsWarMessageReport, GameGoodsWarMessageError>>,
         server_messages: &mut Vec<
             Result<GameServerMessageReport, GameServerMessageError<Runtime::RuntimeError>>,
         >,
@@ -3783,6 +3803,8 @@ impl CGame {
             organizing_war_messages.push(report);
         } else if let Some(report) = dispatch_game_country_war_message(message, self, runtime) {
             country_war_messages.push(report);
+        } else if let Some(report) = dispatch_game_goods_war_message(message, self) {
+            goods_war_messages.push(report);
         } else {
             message.run(self, runtime);
         }
