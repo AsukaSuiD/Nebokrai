@@ -1,24 +1,12 @@
-//! Технический владелец `CMyWinInet` из
-//! `loginserver/applogin/mywininet.cpp` и `.h`.
+//! HTTP-owner `loginserver/applogin/mywininet.cpp/.h`, подтверждённый
+//! `loginserver.exe` и `loginserver.pdb`.
 //!
-//! Контракт подтверждён точной парой LoginServer EXE/PDB.
-//! Наблюдаемый контракт — синхронный HTTP/1 POST с user-agent `App`,
-//! `Accept: text/*`, form-urlencoded content type, системным proxy и
-//! совместимостью со старым HTTPS-сервером с недоверенным CA. WinInet заменён
-//! зрелым blocking-клиентом `reqwest` с rustls; вызовы выполняются только
-//! выделенным `CGasThread`. Для HTTPS сознательно сохранён обход проверки CA,
-//! но проверка имени узла остаётся включённой. Ограниченный таймаут reqwest
-//! заменяет неограниченное владение системным handle и позволяет безопасно
-//! завершить Rust-thread.
-//!
-//! `Recv` оригинала перечитывал ответ кусками прямо в один 1024-байтовый буфер,
-//! поэтому после EOF наружу выходил его последний C-string-срез, включая
-//! историческое сохранение хвоста предыдущего куска. Ошибка очередного read,
-//! как `InternetReadFile == 0`, также завершает цикл и оставляет уже прочитанный
-//! буфер доступным анализатору. `Close` после запроса полностью обнуляет его.
-//! Это поведение сохранено. Если полный последний кусок не оставляет NUL,
-//! оригинал читал за границей массива; safe Rust возвращает весь bounded
-//! 1024-байтовый блок анализатору без OOB.
+//! WinInet заменён blocking `reqwest`/rustls с теми же HTTP/1 POST headers,
+//! системным proxy и обходом проверки CA старого HTTPS-сервера; hostname всё
+//! ещё проверяется, а конечный timeout позволяет присоединить `CGasThread`.
+//! `Recv` сохраняет последний C-string-срез общего 1024-байтового буфера вместе
+//! с хвостом предыдущего куска. При полном куске без NUL безопасная граница
+//! возвращает весь буфер вместо исходного чтения за массивом.
 
 use std::error::Error;
 use std::fmt;
@@ -41,7 +29,7 @@ pub(crate) enum MyWinInetError {
 
 impl fmt::Debug for MyWinInetError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // reqwest::Error может содержать полный setup URL. Operator-visible
+        // reqwest::Error может содержать полный setup URL. Диагностический
         // отчёт сохраняет тип ошибки, но не публикует локальное значение.
         fmt::Display::fmt(self, formatter)
     }

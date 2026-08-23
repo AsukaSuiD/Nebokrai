@@ -1,31 +1,15 @@
-//! Генератор legacy valid-code `CValidCode` из `validcode.cpp` и `.h`.
+//! Генератор `validcode.cpp/.h`, подтверждённый `loginserver.exe` и
+//! `loginserver.pdb`.
 //!
-//! Owner реализует генерацию кода, `CodeToBitmap` и BMP-layout; контракт
-//! подтверждён точной парой LoginServer EXE/PDB.
-//! `validcode.ini` читается как исходная whitespace-последовательность:
-//! byte-exact двухбайтовый набор символов, три signed параметра шума и список
-//! font-файлов. Четыре вызова выбирают по одной двухбайтовой паре и образуют
-//! восьмибайтовый ответ. Пары baseline-файла являются GBK; `encoding_rs`
-//! заменяет Windows `MultiByteToWideChar(CP_ACP)` для получения Unicode glyph,
-//! но сравниваемое с ответом клиента значение остаётся исходными байтами.
+//! `ValidCode.ini` остаётся whitespace-последовательностью двухбайтовых GBK-пар,
+//! параметров шума и шрифтов. `encoding_rs` преобразует glyph в Unicode, но
+//! клиентский ответ сравнивается с исходными восемью байтами. Bundled FreeType
+//! заменяет TTF/raster API; выбор, поворот, координаты, шум и wire-layout
+//! реализованы здесь. Имена runtime-файлов разрешаются без учёта ASCII-регистра.
 //!
-//! `freetype-rs` с bundled FreeType заменяет те же `FT_Init_FreeType`,
-//! `FT_New_Face`, `FT_Set_Char_Size`, `FT_Set_Transform` и `FT_Load_Char`.
-//! Библиотека отвечает только за разбор TTF и raster glyph; выбор символов,
-//! размеры, поворот, координаты, отсутствие alpha-blend, шум и итоговый wire
-//! остаются здесь. Linux case-sensitive пути разрешаются ASCII-
-//! нечувствительно внутри runtime-каталога, сохраняя поведение Windows для
-//! исходных `ValidCode.ini` и имён шрифтов.
-//!
-//! Итог всегда имеет ровно `0x70B6` байт: packed 14-байтовый BMP file header,
-//! 40-байтовый info header и `200 * 48 * 3` BGR pixels. Подтверждённые
-//! странности оригинала сохранены: `bfSize = 0xF6` и `biSizeImage = 0xC0`,
-//! хотя фактический payload больше; glyph bitmap проверяется только на
-//! ненулевой байт и его grayscale intensity не смешивается с цветом.
-//!
-//! Внутренности `std::string/vector/ifstream`, ручное владение wide-buffer и
-//! FreeType handles удалены: их эффекты выражены owned `Vec`, `Box`, RAII и
-//! библиотечными объектами.
+//! BMP всегда занимает `0x70B6` байт. Исторические `bfSize = 0xF6` и
+//! `biSizeImage = 0xC0` намеренно не соответствуют payload; glyph использует
+//! только признак ненулевого пикселя без grayscale blending.
 
 use std::error::Error;
 use std::fmt;
@@ -36,7 +20,6 @@ use encoding_rs::GBK;
 use freetype::face::LoadFlag;
 use freetype::{Library, Matrix, Vector};
 
-/// Фактическая длина BMP, которую LoginServer добавлял после `0x70B6`.
 pub(crate) const VALID_CODE_BITMAP_LEN: usize = 0x70B6;
 
 const WIDTH: i32 = 200;
@@ -75,18 +58,12 @@ struct ValidCodeSetup {
     fonts: Vec<PathBuf>,
 }
 
-/// Ошибка подготовки исходного valid-code изображения.
 #[derive(Debug)]
 pub(crate) enum ValidCodeError {
-    /// Не удалось прочитать runtime `ValidCode.ini` либо каталог шрифтов.
     Io(std::io::Error),
-    /// Whitespace-структура `ValidCode.ini` не соответствует исходному reader.
     InvalidSetup(&'static str),
-    /// Набор символов не состоит из двухбайтовых GBK-пар.
     InvalidCharset,
-    /// Системный источник случайных значений Linux недоступен.
     Random(getrandom::Error),
-    /// Bundled FreeType не смог открыть библиотеку, face или glyph.
     FreeType(String),
 }
 
@@ -135,14 +112,12 @@ impl From<getrandom::Error> for ValidCodeError {
     }
 }
 
-/// Owned-форма исходного `CValidCode`: ответ и packed BMP wire.
 pub(crate) struct CValidCode {
     valid_code: Vec<u8>,
     bitmap: Box<[u8; VALID_CODE_BITMAP_LEN]>,
 }
 
 impl CValidCode {
-    /// Загружает setup относительно текущего LoginServer runtime-каталога.
     pub(crate) fn generate(runtime_directory: &Path) -> Result<Self, ValidCodeError> {
         let setup = ValidCodeSetup::load(runtime_directory)?;
         let valid_code = generate_valid_code_string(&setup.charset)?;
@@ -153,12 +128,10 @@ impl CValidCode {
         Ok(Self { valid_code, bitmap })
     }
 
-    /// Возвращает исходные восемь байт, которые должен прислать клиент.
     pub(crate) fn valid_code(&self) -> &[u8] {
         &self.valid_code
     }
 
-    /// Возвращает packed BMP ровно исходной wire-длины `0x70B6`.
     pub(crate) fn bitmap(&self) -> &[u8; VALID_CODE_BITMAP_LEN] {
         &self.bitmap
     }

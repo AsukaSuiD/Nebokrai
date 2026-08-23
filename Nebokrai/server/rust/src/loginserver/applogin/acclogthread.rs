@@ -1,17 +1,16 @@
-//! Consumer account-журналов LoginServer из `applogin/acclogthread.cpp`.
-//! Контракт подтверждён точной парой LoginServer EXE/PDB.
+//! Consumer account-журналов из `acclogthread.cpp`, подтверждённый
+//! `loginserver.exe` и `loginserver.pdb`.
 //!
 //! Четыре SQL-шаблона, регистр имён, пробелы и формат времени без ведущих
 //! нулей соответствуют producer-функциям `game.cpp` и runtime-журналам
-//! компонента. ADO/COM и Windows thread
-//! заменены Tiberius и owned Rust thread с current-thread Tokio runtime; на
+//! компонента. ADO/COM и Windows thread заменены Tiberius и owned Rust thread;
+//! на
 //! каждую запись, как в оригинале, создаётся отдельное DB-соединение.
 //! Windows-1251 декодируется только после byte-exact сборки SQL.
 //!
 //! Исходные producer-функции писали в `char[512]` через небезопасный `sprintf`.
-//! Это внутреннее ограничение и stack-overflow не переносятся: owned SQL может
-//! быть длиннее, сохраняя тот же текст и DB side effect.
-//! STL/CRT, SEH, COM cleanup и compiler thunks отдельного контракта не имели.
+//! Это внутреннее ограничение не переносится: owned SQL может быть длиннее,
+//! сохраняя тот же текст и DB-эффект.
 
 use std::fmt;
 use std::io;
@@ -31,7 +30,6 @@ use crate::loginserver::loginserver::game::AccountLogRecord;
 
 use super::gasoperator::format_ipv4;
 
-/// Вид исходной producer-функции, не содержащий персональных значений записи.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AccLogRecordKind {
     AccountEnter,
@@ -40,14 +38,12 @@ pub(crate) enum AccLogRecordKind {
     AccountLeave,
 }
 
-/// Стадия отдельного ADO/TDS цикла, на которой потеряна текущая запись.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AccLogDatabaseOperation {
     Connect,
     Execute,
 }
 
-/// Operator-visible результат фоновой обработки без раскрытия SQL-текста.
 pub(crate) enum AccLogThreadNotice {
     Executed {
         kind: AccLogRecordKind,
@@ -80,7 +76,6 @@ impl fmt::Debug for AccLogThreadNotice {
     }
 }
 
-/// Owned Rust-замена одного исторического `AccLogThread`.
 pub(crate) struct AccLogThread {
     queue: Arc<AccLogQueue>,
     stop: Arc<AtomicBool>,
@@ -89,7 +84,6 @@ pub(crate) struct AccLogThread {
 }
 
 impl AccLogThread {
-    /// Создаёт runtime до публикации thread, поэтому ошибка запуска не оставляет worker.
     pub(crate) fn start(
         queue: Arc<AccLogQueue>,
         settings: LoginDatabaseSettings,
@@ -115,7 +109,6 @@ impl AccLogThread {
         })
     }
 
-    /// Забирает накопленные результаты в порядке завершения записей.
     pub(crate) fn drain_notices(&mut self) -> Vec<AccLogThreadNotice> {
         self.notices.try_iter().collect()
     }

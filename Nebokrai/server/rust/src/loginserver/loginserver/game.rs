@@ -1,262 +1,32 @@
-//! Фактический `CGame` LoginServer из `loginserver/game.cpp` и `.h`.
+//! Владелец runtime из `loginserver/game.cpp/.h`, подтверждённый
+//! `loginserver.exe` и `loginserver.pdb`. Он связывает AuthServer, маршрутизацию
+//! World/client, CD-key, фоновые запросы к БД, setup и цикл
+//! `Init -> MainLoop -> Release`.
 //!
-//! Файл объединяет AuthServer lifecycle, World/client routing, CD-key и online
-//! state, account logs, setup reload, DB owners, network cadence и полный
-//! `CGame::Init -> MainLoop -> Release`/`GameThreadFunc`. Внешние контракты
-//! подтверждены точной парой LoginServer EXE/PDB; неизвестности локализованы у
-//! конкретных безопасных границ.
+//! Перед чтением `aslist.ini` список очищается; неполная последняя запись не
+//! отменяет уже прочитанные адреса. Отсутствие Auth-соединения не прерывает
+//! инициализацию. Reconnect перебирает адреса по порядку и передаёт новый client
+//! через FIFO старого; старый client уничтожается до включения нового.
 //!
-//! `LoadASList` сначала очищал список, затем читал whitespace-пары
-//! `string + unsigned short` и возвращал успех даже для пустого либо частично
-//! разобранного файла. Rust сохраняет этот partial-read контракт и bytes имени
-//! без требования UTF-8. Числовой endpoint разбирается в формах `inet_addr`,
-//! включая сокращённые, octal и hex; `INADDR_NONE` запускает исходный DNS
-//! fallback с выбором первого IPv4.
+//! Карта World сохраняет числовой порядок. Повторный CD-key отбрасывается, поиск
+//! и удаление выбирают первый World по ID, а полный промах очищает login-map.
+//! Активация World, счётчики очередей и рассылки сохраняют исходный порядок;
+//! `PrepareEnter`, `KickOut` и маршруты ролей допускают отсутствующий World и
+//! не откатывают уже выполненные эффекты.
 //!
-//! `InitAuthClient` всегда возвращал `true`, даже если список пуст или ни один
-//! AuthServer не подключился. После попыток он безусловно включал
-//! `m_bControlSend` и ставил `0xCF503 + area_id` в send-очередь. Эта странность
-//! сохранена в `AuthInitializationReport::legacy_result`; ошибки отдельных
-//! endpoint не превращаются в новый фатальный init.
+//! Записи online-user и server-info не объединены в транзакцию: отдельная
+//! SQL-ошибка не останавливает пакет. Tiberius и присоединяемые Rust-потоки
+//! заменяют ADO и detached workers, сохраняя сериализацию и порядок завершения.
 //!
-//! `ReconnectAS` создавал отдельный client, проходил список по порядку и при
-//! успехе публиковал `0xCF302 + CMyNetClientAuth*` в FIFO старого клиента.
-//! Rust-представление этого type-erased 32-bit pointer описано у
-//! `nets/netlogin/mynetclient_auth.rs`: владеющий typed event сохраняет ту же
-//! очередь и момент `ReassignAS` без `unsafe`. `ReassignAS` сначала уничтожает
-//! старый client, затем включает send у нового, копирует resolved endpoint и
-//! только после этого ставит LoginServer-info в очередь.
-//! Управляемая reconnect-задача отменяет и дожидается прежней задачи, сразу
-//! выполняет первый `ReconnectAS`-проход, затем повторяет его через пять секунд.
-//! `JoinHandle::abort` заменяет служебное Win32-сообщение `0x464`; publisher
-//! имеет доступ только к FIFO конкретного прежнего Auth-клиента.
+//! Setup-файлы читаются позиционно, без проверки имён слева от значений;
+//! прочитанный префикс сохраняется. Значение `m_lVerifiSignUpper` не найдено,
+//! поэтому остаётся явной внешней границей. Reload не перезапускает listeners,
+//! а abstract Unix socket заменяет GUI-проверку единственного экземпляра.
 //!
-//! `m_listWorldInfo` представлен `BTreeMap`: как исходный `std::map`, он ищет
-//! в порядке numeric world ID. Имя сравнивается byte-exact, а найденная запись
-//! с нулевым state возвращает тот же sentinel `-1`. `ServerCommandHandle`
-//! заменяет фактический `s_pNetServer_World`, не перенося состояние сети в
-//! message-handler.
-//! `AddWorld`/`DelWorld` сохраняют setup-запись и меняют только runtime state,
-//! рассылают `0xAF509`, записывают неизменный размер карты в `m_nWordNum` и
-//! затем заменяют/удаляют World-список CD-key. Неоднозначный decompiler iterator
-//! `AddWorld` подтверждено точным EXE: в точном EXE инструкции
-//! аргумента (`world_id`), а слот второго аргумента используют как iterator-
-//! output после того, как byte-name уже сохранён в `EDI`. Возврат карты читается
-//! Старый `UpdateDisplayWorldInfo` только очищал/заполнял MFC listbox строками
-//! `Disconnected/Started/Closed`; Linux runtime не получает Windows GUI/FFI,
-//! а фактическое состояние остаётся доступно у typed `CGame`.
-//! `AddCdkey` принимает только уже созданный `s_listCdkey[world_id]`, отвергает
-//! byte-exact duplicate и после добавления вычисляет state `1/2/3` по первым
-//! двум рабочим порогам `m_StateLvl`. `FindCdkey` возвращает первый World ID в
-//! numeric порядке, а `ClearLoginCdkey` удаляет C-string account только из
-//! `m_LoginCdkeyWorld`. `ClearCDKey` удаляет только первое совпадение в порядке
-//! World ID и пересчитывает тот же state; лишь полное отсутствие account во
-//! всех World вызывает `ClearLoginCdkey`. Повреждённый
-//! Rust-slice не представляет nullable `char*`; все достигнутые вызовы
-//! `ClearLoginCdkey` передают ненулевой адрес буфера, а C-string граница
-//! сохраняется усечением по первому NUL.
-//!
-//! `UpdateOnlineUser2DB` сохраняет отдельное соединение и нетранзакционный
-//! `DELETE world -> INSERT account...` в порядке snapshot. Аргументы потерянных
-//! же ID в INSERT. Игнорируемая ошибка каждого `ExecuteCn` не обрывала цикл;
-//! Rust собирает её в typed report и продолжает. Detached `_beginthreadex` и
-//! COM apartment заменены параллельными owned `std::thread::JoinHandle`, каждый
-//! с отдельным current-thread Tokio/Tiberius runtime; `CGame::Drop` дожидается
-//! оставшихся workers, не оставляя доступ к уничтоженным credentials/state.
-//! `m_vectorPingWorldServerInfo` сохраняет append-only порядок ответов
-//! `OnServerMessage(0x1FE04)` до исходной позиции очистки при следующем ping в
-//! достигнутом `MainLoop`; `Vec` заменяет `std::vector`, а byte-exact строки не
-//! требуют UTF-8.
-//! `AppendServerInfoLog` использует неблокирующий `Mutex::try_lock`, глубоко
-//! копирует весь текущий telemetry-вектор в существующий staging и при занятом
-//! consumer lock отбрасывает только эту попытку копирования. `ServerInfoLog`
-//! держит тот же lock на всём TDS-проходе, поэтому несколько detached workers
-//! остаются сериализованными; owned `JoinHandle` и `CGame::Drop` заменяют
-//! закрываемые Win32 handles без доступа потока к уничтоженному состоянию.
-//! Ветка Login читает canonical IP World listener и атомарный снимок суммы
-//! `s_listCdkey` в исходной позиции `GetCdkeyCount`; World использует свой port
-//! одновременно как `server_num/world_id`, Game — свой port и World port.
-//! Потерянные variadic-аргументы подтверждены точным EXE: существенные
-//! `%d` bit-pattern, parent port и порядок IPv4 octets. ADO/COM заменены зрелым
-//! `tiberius`; исходные непараметризованные SQL-строки, lookup-before-write,
-//! отсутствие транзакции, pop-before-INSERT и очистка staging также при COM-
-//! ошибке сохранены. Provider-строка была механизмом ADO и не переносится в
-//! Linux/TDS; остальные пять server-info setup-полей сохраняют свои роли.
-//! `IsExitWorld`, `GetLoginWorldPlayerNumByWorldName` и
-//! `GetLoginCdkeyWorldServer` читают те же owned карты без копии чужой
-//! семантики в LoginQueue. `L2W_QuestDetail_Send` сохраняет nullable World,
-//! точный `0x4FB05` payload и signed bit-pattern IPv4. Интервал повторного
-//! player-запроса хранит exact signed `long` из `tagSetupEx`; при использовании
-//! как boot-tick интервала его bit-pattern переводится в `u32`.
-//! Три role-route owner также сохраняют nullable World и byte-exact account.
-//! Create-role меняет opcode входного сообщения на `0x4FB04`, дописывает
-//! account к уже существующему payload и только затем отправляет тот же объект.
-//! Delete/restore строят новые `0x4FB02/0x4FB03`; delete единственный проверяет
-//! пустой C-string account и добавляет raw IPv4 после signed player ID, restore
-//! добавляет только account и unsigned 32-битный player ID. Результат старого void-send
-//! становится `Result<bool, GameRouteError>`: `false` означает исходный no-op
-//! до отправки, а transport-ошибка не маскируется.
-//!
-//! `KickOut` сначала проверяет `m_LoginCdkeyWorld`: найденный account получает
-//! client `QUIT` по строковой identity. Только при отсутствии этой записи
-//! `FindCdkey` проходит `s_listCdkey` в порядке World ID и отправляет
-//! `0x4FB07 + account` найденному WorldServer. Password-error `BTreeMap`
-//! сохраняет тот же ordered map и пороговую проверку; сам записывающий вызов
-//! остаётся за присоединяемым `CRsCDKey`, а не за `CGame` или `AuthHandler`.
-//! Тот же DB-owner выполняет достигнутый `matrix_validate`; его отсутствие не
-//! превращается во временный успешный ответ.
-//! Embedded C++ `mAuthHandler` не воспроизводится самоссылкой: технический
-//! `AuthListener for CGame` синхронно передаёт callbacks stateless-владельцу
-//! `authhandler.rs`.
-//!
-//! `PrepareEnter` сохраняет порядок `KickOut -> 0xAF501/8` либо client
-//! identity -> account-enter record -> `m_LoginCdkeyWorld`. Только после этих
-//! side effects исходный matrix-путь возвращает управление фактическому
-//! `CLoginQueue::matrix_register` и не запускает `EnterGame`. Обычная ветвь
-//! `EnterGame` либо отправляет клиенту `0xAF501/2 + account + world list`, либо
-//! публикует `0x4FB01 + account` выбранному открытому WorldServer. Закрытый мир
-//! остаётся доступен только account из исходного no-queue списка.
-//! `AccountEnterLog`, `RoleEnterLog`, `LeaveLog` и `AccountLeaveLog`
-//! сохраняются вариантами одной typed-FIFO исходной `_acc_logs`, поэтому их
-//! взаимный порядок не теряется. Account-enter хранит raw IPv4, role-enter —
-//! byte-exact имя, unsigned level и переданный signed World number. `LeaveLog`
-//! сохраняет одну метку для одновременного обновления RoleLeaveTime и
-//! AccountLeaveTime; все варианты сохраняют byte-exact account и local time,
-//! снятые в исходной позиции. `AccLogQueue` сохраняет общую FIFO и semaphore-
-//! семантику, а `AccLogThread` строит и выполняет доказанные legacy SQL в
-//! отдельном Tiberius-соединении для каждой записи.
-//!
-//! `LoadSetup` сначала открывает обычный `setup.ini`, а только при неуспехе —
-//! побайтово декодированный `setup.dat`. Обе формы читаются как пары
-//! `label + value`; label не проверяется, строки остаются byte-exact, а
-//! stream fail-state сохраняет уже выполненные мутации и прежние значения
-//! хвоста. Найденный Login `setup.ini` содержит 54 полные пары: следующие
-//! `m_lIsInsideUse/m_strVerificationAddr/m_lVerifiSignUpper` читаются уже на
-//! EOF, поэтому первые два сохраняют constructor-default, а последний остаётся
-//! явной uninitialized-границей. Четыре DB-поля создают единый Tiberius-owner
-//! в достигнутой позиции `Init` после ADO-конфигурации и до network owners;
-//! секреты не входят ни в отчёт, ни в ошибки.
-//!
-//! `LoadSetupEx` читает одиннадцать whitespace-пар из `setupex.ini`, игнорирует
-//! label и после успешного open сохраняет partial mutation при stream fail.
-//! Signed `long/int` и единственный unsigned `dwValidErrStayTime` представлены
-//! буквально. Найденный Login-файл содержит все одиннадцать корректных пар.
-//! Доказанные defaults `10/4000`, `5/4000`, `3000`, `60000`, `0`, `60000`,
-//! `3/180000` происходят из `CGame::CGame`; area ID исходный constructor не
-//! инициализировал, поэтому Rust-конструктор требует его явно до загрузки.
-//! `ReLoadSetupEx` после успешного чтения меняет только четыре поздних поля
-//! существующих Client/World network owners и не перезапускает listener.
-//! Owned `Option` заменяет raw pointers; отсутствие owner вне доказанного
-//! вызова после `Init` возвращается как Rust-ошибка предусловия. Остальные
-//! setup-ex значения уже изменены самим load.
-//!
-//! `ReLoadSetup` игнорирует ошибку повторного открытия setup и в любом случае
-//! применяет сохранённые значения строго Client -> World -> `AuthManager`, не
-//! меняя listener port и не перезапуская network owner. `ReLoadWorldSetup`
-//! также игнорирует результат load: уже очищенная/частично прочитанная setup-
-//! карта рассылается текущим client account, а отдельный runtime world-map не
-//! перестраивается. MFC display-update не имеет Linux-эффекта.
-//! `LoadNoQueueCDKeyList` сохраняет безусловный внешний успех и передаёт
-//! фактическое чтение соседнему `CLoginQueue`; его typed ошибка остаётся
-//! operator-visible. `GetLoginWorldCdkeyNumbers` суммирует все World-списки в
-//! numeric порядке с исходным 32-битным wrapping и обслуживает тот же atomic
-//! snapshot, который читает server-info worker.
-//!
-//! `load_listen_port` отдельно читает две пары из `port.ini` и сохраняет
-//! partial mutation при stream fail. Его связь с listeners имеет статус
-//! подтверждено точным EXE: точный EXE пишет Client/World значения в
-//! `CGame+0x32C/+0x328`, а `InitNetServer_Client/World` читают именно эти
-//! offsets при вызове `Host`; одноимённые поля `tagSetup` не подменяют их.
-//! Rust хранит ещё не извлечённые порты как `Option` и блокирует только Host-
-//! границу вместо чтения исходной uninitialized памяти.
-//! `LoadWorldSetup` очищает setup-карту до открытия `WorldInfoSetup.ini`, ищет
-//! точный `#`, читает `long + byte-name + long` и заменяет duplicate numeric
-//! ID. ASCII-регистр имени файла совместим с Windows lookup, содержимое не
-//! нормализуется. `SetListWorldInfoBySetup` глубоко копирует setup-карту в
-//! отдельную runtime-карту и обнуляет только runtime state; проверка открытия
-//! мира продолжает читать ненулевой state из setup-карты.
-//!
-//! Префикс `Init` сохраняет исходный порядок обязательных и нефатальных
-//! границ вплоть до создания двух worker threads. Первый `LoadSetup` не вызывает
-//! `CLoginQueue::OnInitial`, потому что старый pointer создавался только после
-//! single-instance проверки; constructor очереди в этой позиции сначала
-//! загружает `NoQueueAccounts.conf`, а явный `OnInitial` остаётся после
-//! публикации world-map. Нефатальный итог constructor-load входит в отчёт.
-//! `ClearOnlineUserDatabase` открывает отдельное TDS-соединение и исполняет
-//! точный `DELETE FROM online_user`; ошибка соединения/execute возвращается в
-//! typed-отчёте, но, как исходный `false`, не останавливает `Init` или `Release`.
-//! ADO/COM и MFC error-log заменены существующим Tiberius-owner и typed ошибкой.
-//! Начальные `srand(time) + random(100)` обслуживали общий CRT RNG; достигнутые
-//! Login-потребители случайности уже используют системный `getrandom`, поэтому
-//! отдельное process-global seed/warm-up состояние в Rust не создаётся.
-//!
-//! Windows `FindWindowA/SetWindowTextA` проверяли ключ
-//! `LoginServer[area_id][client_port]-FengYun` до очистки runtime-БД. Порядок и
-//! EXE. На единственной Linux-платформе тот же ключ атомарно удерживается
-//! abstract Unix listener до `Drop`; он не создаёт файл в read-only runtime и
-//! не допускает вторую очистку БД раньше bind основных listeners. Стартовая
-//! ServLog сохраняет source IPv4 World owner, `server_num = -1`, `world_id = 0`
-//! и исходную опечатку `LoingServer`; порядок отдельных date/time буферов
-//!
-//! Оба `InitNetServer_*` сначала уничтожали прежний owner, сохраняли новый
-//! pointer и только затем вызывали `Host(nullptr, 1, true)`. Ошибка bind/listen
-//! оставляла этот новый pointer до `Release`; Rust так же сохраняет неслушающий
-//! `Option<owner>` и его command handle. После успешного `Host` один результат
-//! `gethostname/gethostbyname` задавал одновременно canonical dotted IPv4 и
-//! x86 DWORD. `rustix::uname + ToSocketAddrs` заменяют эти системные вызовы и
-//! выбирают первый IPv4; неуспех сохраняет constructor default. Затем Client
-//! получает обе CRC-настройки, receive/ban/message и connection/send limits,
-//! World — только наблюдаемые receive/ban и connection/send limits, после чего
-//! обоим слишком поздно записываются setup-ex backlog/first-message timeout.
-//! `bWorldCheckMsgCon` и `dwWorldMaxMsgLen` исходный код записывал, но World
-//! parser этой сборки их не читал; притворное Rust-состояние для них не создано.
-//!
-//! `ProcessMessage` снимает размер каждой FIFO только при достижении её
-//! позиции и обрабатывает snapshots строго World -> Client -> Auth. Поэтому
-//! World-handler ещё может добавить сообщение в Client/Auth до их замера, а
-//! сообщение, добавленное в уже обрабатываемую очередь, остаётся следующему
-//! проходу. Переданный async runner является узкой заменой виртуального
-//! `CMessage::Run`: он вызывается немедленно для каждого owned сообщения, а
-//! `Drop` после возврата заменяет deleting destructor. Typed Auth reconnect
-//! применяется в своей позиции FIFO самим `CGame` и не выдаётся как wire-
-//! сообщение. Конкретная композиция находится в `applogin/message`; общий
-//! protocol framework здесь не создаётся.
-//!
-//! Достигнутый `MainLoop` сохраняет два вызова boot clock при первой
-//! инициализации, strict/wrapping refresh и ping cadence, порядок
-//! `ProcessMessage -> CLoginQueue::Run`, очистку telemetry перед `0x4FC01`,
-//! независимые complete/timeout отчёты и inclusive server-info cadence.
-//! `RefeashInfoText` и `AddLogText` были MFC/operator side effects: Linux turn
-//! возвращает их typed-признаками и snapshots без Windows GUI. `Sleep(1)`
-//! заменён `tokio::time::sleep` после всех side effects. Достигнутый срок
-//! server-info сначала выполняет неблокирующий append, затем при непустом
-//! staging/FIFO запускает сериализованный worker; typed outcome и отдельный
-//! DB-отчёт не выдают ошибку соединения либо SQL за успешную запись.
-//! Старые `int 0/1` представлены вариантами `Exit/Continue`; безопасные
-//! lifecycle-ошибки вынесены в `Result` и не маскируются под исходный успех.
-//!
-//! WinSock socket/net threads и `Sleep(1)` заменены owned Tokio accept/I/O
-//! tasks и одним неблокирующим poll `CMyNetClientAuth::run_io_once` перед
-//! доменным `MainLoop`. Новый общий runtime, доменные Auth handlers и обработка
-//! неизвестного opcode `0x10F101` здесь не создаются. Для следующего
-//! endpoint Tokio требует новый consumed `TcpSocket`; повторный bind сохраняет
-//! исходные local IP/port, а socket identity не являлась wire-контрактом.
-//! Полный `CGame::Init` восстановлен до исходного успешного `return 1`:
-//! после `CGasThread` создаётся и запускается `AccLogThread`, а оба
-//! проигнорированных результата старого `Thread::Start` публикуются в отчёте.
-//! `Release` сохраняет порядок World/Client `ExitWorkerThread`, Auth close,
-//! очистки account FIFO, остановки AccLog/GAS, удаления network/DB/queue
-//! owners и нефатального `ClearOnlineUserDatabase`. Оба network shutdown
-//! останавливают accept, ставят `QUITALL`, обрабатывают snapshots до пустой
-//! client-map и затем присоединяют оставшиеся I/O tasks. Внешний
-//! `GameThreadFunc` всегда вызывает этот проход после partial `Init`, shutdown
-//! либо фатальной typed runtime-ошибки.
-//! `CMySocket` cleanup, ADO/COM apartment и static message buffers не получают
-//! пустых вызовов: их эффект уже выражен Tokio/Tiberius и локальным владением.
-//! Rust дополнительно дожидается detached DB workers перед уничтожением их
-//! shared state; они по-прежнему могут конкурировать с исходной DB-clear до
-//! момента join. Повторный `Release` после `m_bExit` выполняет только две
-//! operator-visible границы и возвращает исходный успех без повторной очистки.
+//! Очереди сообщений снимаются в порядке World -> Client -> Auth. `MainLoop`
+//! сохраняет wrapping-таймеры, очистку telemetry перед ping и паузу 1 ms.
+//! `Release` после любого исхода `Init` останавливает сети, workers и БД в
+//! исходном порядке; повторный вызов не повторяет уже выполненную очистку.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
@@ -335,7 +105,6 @@ const LOGIN_RESPONSE_MESSAGE_TYPE: i32 = 0x000A_F501;
 const WORLD_INFO_MESSAGE_TYPE: i32 = 0x000A_F509;
 const AUTH_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
-/// Одна строка исходного `aslist.ini`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AuthServerConfig {
     host: Vec<u8>,
@@ -343,17 +112,14 @@ pub(crate) struct AuthServerConfig {
 }
 
 impl AuthServerConfig {
-    /// Создаёт byte-exact адрес и исходный `unsigned short` port.
     pub(crate) fn new(host: Vec<u8>, port: u16) -> Self {
         Self { host, port }
     }
 
-    /// Возвращает исходный whitespace-token адреса без перекодирования.
     pub(crate) fn host(&self) -> &[u8] {
         &self.host
     }
 
-    /// Возвращает порт в типе исходного `ASConfig::_port`.
     pub(crate) const fn port(&self) -> u16 {
         self.port
     }
@@ -391,27 +157,18 @@ impl AuthServerConfig {
     }
 }
 
-/// Результат исходного partial-read `LoadASList` после успешного открытия.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LoadAsListOutcome {
-    /// Число полностью прочитанных пар `host + port`.
     pub(crate) loaded: usize,
-    /// Последняя неполная/некорректная пара выставила failbit старого stream.
     pub(crate) stopped_on_invalid_pair: bool,
 }
 
-/// Ошибка одной попытки подключиться к Auth endpoint.
 #[derive(Debug)]
 pub(crate) enum AuthConnectFailure {
-    /// Byte-oriented hostname нельзя передать системному Linux resolver.
     AddressEncodingUnsupported { host: Vec<u8> },
-    /// Числовой адрес и исходный DNS fallback не дали IPv4.
     AddressResolution { host: Vec<u8>, error: io::Error },
-    /// Bind IP из setup не принимается исходным `inet_addr`.
     BindAddressInvalid { host: Vec<u8> },
-    /// Не удалось создать либо bind-нуть очередной Linux socket.
     Bind(io::Error),
-    /// Общий `CClient` не завершил connect успешно.
     Connect(ClientConnectError),
 }
 
@@ -449,38 +206,26 @@ impl Error for AuthConnectFailure {
     }
 }
 
-/// Одна выполненная в исходном порядке попытка `CClient::Connect`.
 #[derive(Debug)]
 pub(crate) struct AuthConnectAttempt {
-    /// Конфигурационная пара, использованная для попытки.
     pub(crate) endpoint: AuthServerConfig,
-    /// Причина неуспеха; `None` означает выбранное соединение.
     pub(crate) failure: Option<AuthConnectFailure>,
 }
 
-/// Наблюдаемый итог `InitAuthClient` без превращения неуспеха в новый rollback.
 #[derive(Debug)]
 pub(crate) struct AuthInitializationReport {
-    /// Буквальный исходный return `true`.
     pub(crate) legacy_result: bool,
-    /// Все попытки до первого успеха либо конца списка.
     pub(crate) attempts: Vec<AuthConnectAttempt>,
-    /// Resolved endpoint выбранного AuthServer.
     pub(crate) connected: Option<AuthServerConfig>,
-    /// Результат безусловной постановки `0xCF503 + area_id` в send-очередь.
     pub(crate) login_server_info: Result<i32, SendMessageError>,
 }
 
-/// Итог одного вызова `ReconnectAS`.
 #[derive(Debug)]
 pub(crate) struct AuthReconnectReport {
-    /// Буквальный исходный bool: удалось ли выбрать endpoint.
     pub(crate) connected: bool,
-    /// Все попытки до первого успеха либо конца списка.
     pub(crate) attempts: Vec<AuthConnectAttempt>,
 }
 
-/// Живая часть исходного `tagWorldInfo`, нужная GMA и входу в мир.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldRoute {
     world_id: i32,
@@ -489,7 +234,6 @@ pub(crate) struct WorldRoute {
 }
 
 impl WorldRoute {
-    /// Сохраняет ID, byte-exact имя и текущий runtime state-level.
     pub(crate) fn new(world_id: i32, name: Vec<u8>, state_level: i32) -> Self {
         Self {
             world_id,
@@ -511,7 +255,6 @@ struct LoginListenPorts {
     world: Option<u32>,
 }
 
-/// Одна GameServer-запись исходного `tagPingGameServerInfo`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PingGameServerInfo {
     ip: Vec<u8>,
@@ -520,7 +263,6 @@ pub(crate) struct PingGameServerInfo {
 }
 
 impl PingGameServerInfo {
-    /// Сохраняет byte-exact IP и 32-битные поля без изменения bit pattern.
     pub(crate) fn new(ip: Vec<u8>, port: u32, player_count: u32) -> Self {
         Self {
             ip,
@@ -530,7 +272,6 @@ impl PingGameServerInfo {
     }
 }
 
-/// Один WorldServer-ответ исходного `tagPingWorldServerInfo`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PingWorldServerInfo {
     ip: Vec<u8>,
@@ -540,7 +281,6 @@ pub(crate) struct PingWorldServerInfo {
 }
 
 impl PingWorldServerInfo {
-    /// Сохраняет dotted IPv4, map-ID port и GameServer-вектор одним snapshot.
     pub(crate) fn new(
         ip: Vec<u8>,
         port: u32,
@@ -556,55 +296,40 @@ impl PingWorldServerInfo {
     }
 }
 
-/// Причина буквального отказа `CGame::AddWorld` активировать соединение.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldActivationFailure {
-    /// Numeric World ID отсутствует в загруженном `WorldInfoSetup.ini`.
     UnknownWorld,
-    /// ID существует, но присланное имя не совпадает byte-exact.
     NameMismatch,
 }
 
-/// Ошибка проигнорированной оригиналом рассылки `0xAF509` одному клиенту.
 #[derive(Debug)]
 pub(crate) struct WorldInfoBroadcastFailure {
-    /// Byte-exact account, по которому выполнялся `SendToClient`.
     pub(crate) account: Vec<u8>,
-    /// Фактическая ошибка Client transport-owner.
     pub(crate) error: GameRouteError,
 }
 
-/// Наблюдаемый итог `CGame::AddWorld`.
 #[derive(Debug)]
 pub(crate) enum WorldActivationOutcome {
-    /// Мир активирован, а возвращённое число равно размеру setup-карты.
     Activated {
         world_count: i32,
         broadcast_failures: Vec<WorldInfoBroadcastFailure>,
     },
-    /// Оригинал написал `INVALID World Server Connectting!` и вернул `-1`.
     Rejected(WorldActivationFailure),
 }
 
-/// Наблюдаемый итог `CGame::DelWorld`.
 #[derive(Debug)]
 pub(crate) struct WorldDeactivationOutcome {
-    /// Размер setup-карты; отключение не удаляет её запись.
     pub(crate) world_count: i32,
-    /// Ошибки проигнорированных оригиналом client-send операций.
     pub(crate) broadcast_failures: Vec<WorldInfoBroadcastFailure>,
 }
 
-/// Результат условной постановки connect-записи в `_serv_logs`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ServerInfoLogDisposition {
     Disabled,
     Queued,
-    /// `LoadSetup` ещё не доказал значение `dwServerInfoLogTime`.
     SetupValueMissing,
 }
 
-/// Точная SQL-стадия `ServerInfoLog`, на которой остановился один worker.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ServerInfoDatabaseOperation {
     Connect,
@@ -629,7 +354,6 @@ pub(crate) enum ServerInfoDatabaseOperation {
     },
 }
 
-/// Неуспех одного сериализованного `ServerInfoLog` без credentials и payload.
 #[derive(Debug)]
 pub(crate) enum ServerInfoDatabaseFailure {
     Runtime(io::Error),
@@ -640,7 +364,6 @@ pub(crate) enum ServerInfoDatabaseFailure {
     WorkerPanicked,
 }
 
-/// Итог одного owned-аналога исходного `ServerInfoLog`.
 #[derive(Debug)]
 pub(crate) struct ServerInfoDatabaseReport {
     pub(crate) staged_world_records: usize,
@@ -686,7 +409,6 @@ impl ServerInfoLogShared {
     }
 }
 
-/// Неуспех отдельной стадии `UpdateOnlineUser2DB` без account/credentials.
 #[derive(Debug)]
 pub(crate) enum OnlineUserDatabaseFailure {
     Runtime(io::Error),
@@ -699,7 +421,6 @@ pub(crate) enum OnlineUserDatabaseFailure {
     WorkerPanicked,
 }
 
-/// Итог одного owned-аналога исходного `UpdateOnlineUser2DB`.
 #[derive(Debug)]
 pub(crate) struct OnlineUserDatabaseReport {
     pub(crate) world_id: i32,
@@ -709,7 +430,6 @@ pub(crate) struct OnlineUserDatabaseReport {
     pub(crate) failures: Vec<OnlineUserDatabaseFailure>,
 }
 
-/// Неуспех постановки независимого DB worker без изменения уже собранных карт.
 #[derive(Debug)]
 pub(crate) enum OnlineUserUpdateStartError {
     SettingsMissing,
@@ -745,62 +465,41 @@ struct OnlineUserUpdateTask {
     handle: ThreadJoinHandle<OnlineUserDatabaseReport>,
 }
 
-/// Typed-замена трёх достигнутых вызовов `AddLogText` World lifecycle.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WorldOperatorLogRecord {
-    /// Точная строка оригинала: `INVALID World Server Connectting!`.
     InvalidConnection,
-    /// Точный формат оригинала: `WorldServer [%s] connected...ok!`.
     Connected { world_name: Vec<u8> },
-    /// Точный формат оригинала: `WorldServer [%s] lost!`.
     Lost { world_name: Vec<u8> },
 }
 
-/// Typed-форма одной записи исходной `_acc_logs` из `AccountEnterLog`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AccountEnterRecord {
-    /// Byte-exact account.
     pub(crate) account: Vec<u8>,
-    /// Исходное 32-битное представление IPv4 до строкового SQL-форматирования.
     pub(crate) client_ip: u32,
-    /// Local-time метка, снятая в исходной позиции `AccountEnterLog`.
     pub(crate) recorded_at: NaiveDateTime,
 }
 
-/// Typed-форма одной записи исходной `_acc_logs` из `AccountLeaveLog`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AccountLeaveRecord {
-    /// Byte-exact account.
     pub(crate) account: Vec<u8>,
-    /// Local-time метка, снятая в исходной позиции `AccountLeaveLog`.
     pub(crate) recorded_at: NaiveDateTime,
 }
 
-/// Typed-форма одной записи исходной `_acc_logs` из `RoleEnterLog`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RoleEnterRecord {
-    /// Byte-exact account.
     pub(crate) account: Vec<u8>,
-    /// Byte-exact имя роли.
     pub(crate) role_name: Vec<u8>,
-    /// Исходный `uchar` уровня роли.
     pub(crate) role_level: u8,
-    /// Signed World number, переданный исходному `RoleEnterLog`.
     pub(crate) world_number: i32,
-    /// Local-time метка, снятая в исходной позиции `RoleEnterLog`.
     pub(crate) recorded_at: NaiveDateTime,
 }
 
-/// Typed-форма одной записи исходной `_acc_logs` из `LeaveLog`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SessionLeaveRecord {
-    /// Byte-exact account.
     pub(crate) account: Vec<u8>,
-    /// Единая local-time метка для RoleLeaveTime и AccountLeaveTime.
     pub(crate) recorded_at: NaiveDateTime,
 }
 
-/// Восстановленные варианты единой FIFO исходной `_acc_logs`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AccountLogRecord {
     Enter(AccountEnterRecord),
@@ -809,36 +508,25 @@ pub(crate) enum AccountLogRecord {
     Leave(AccountLeaveRecord),
 }
 
-/// Управление `HandlePwdChecked` после доказанной части `PrepareEnter`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PrepareEnterOutcome {
-    /// Нужно немедленно выполнить `EnterGame` для той же записи.
     Continue,
-    /// Запись полностью обработана без `EnterGame`.
     Finished,
-    /// Caller должен выполнить `CLoginQueue::matrix_register` и пропустить вход.
     MatrixRegistrationRequired,
 }
 
-/// Событие, переданное узким Auth lifecycle остальному `CGame`.
 pub(crate) enum AuthGameEvent {
-    /// Обычное Auth/close сообщение ожидает своего доменного `Run`.
     Message(CMessage),
-    /// Типизированный reconnect был применён в исходной позиции FIFO.
     Reassigned {
         endpoint: AuthServerConfig,
         login_server_info: Result<i32, SendMessageError>,
     },
 }
 
-/// Ошибка безопасной границы частично восстановленного Auth lifecycle.
 #[derive(Debug)]
 pub(crate) enum AuthLifecycleError {
-    /// Операция требует существующий старый Auth client.
     MissingCurrentClient,
-    /// Reconnect event содержит client без успешного endpoint.
     ReplacementEndpointMissing,
-    /// Управляемая reconnect-задача вызвана вне Tokio runtime.
     RuntimeUnavailable,
 }
 
@@ -860,25 +548,17 @@ impl fmt::Display for AuthLifecycleError {
 
 impl Error for AuthLifecycleError {}
 
-/// Ошибка безопасной Rust-границы `CGame::ProcessMessage`.
 #[derive(Debug)]
 pub(crate) enum ProcessMessageError<HandlerError> {
-    /// Typed reconnect-событие не может быть применено без отсутствующего факта.
     AuthLifecycle(AuthLifecycleError),
-    /// Конкретный component handler достиг собственной доказанной ошибки.
     Handler(HandlerError),
 }
 
-/// Ошибка безопасной границы одного достигнутого `CGame::MainLoop` turn.
 #[derive(Debug)]
 pub(crate) enum LoginMainLoopError {
-    /// Конкретный message-handler либо typed Auth lifecycle завершился ошибкой.
     ProcessMessage(ProcessMessageError<LoginComponentMessageError>),
-    /// Частично прочитанный setup не определил cadence, достигнутый этим turn.
     MissingSetupField(&'static str),
-    /// Достигнутый `ServerInfoLog` требует уже созданный World listener.
     MissingWorldServerForServerInfo,
-    /// Внешний `Init` ещё не собрал server-info connection settings.
     MissingServerInfoDatabaseSettings,
 }
 
@@ -918,27 +598,22 @@ impl From<ProcessMessageError<LoginComponentMessageError>> for LoginMainLoopErro
     }
 }
 
-/// Один operator-visible результат ping-части исходного `MainLoop`.
 #[derive(Debug)]
 pub(crate) enum LoginPingWorldEvent {
-    /// Начат новый опрос после очистки прежнего telemetry-вектора.
     Requested {
         cleared_responses: usize,
         send_result: Result<i32, GameRouteError>,
     },
-    /// Число ответов достигло полного размера setup-карты миров.
     Completed {
         expected_worlds: usize,
         responses: Vec<PingWorldServerInfo>,
     },
-    /// Strict error-timeout завершил текущий опрос с накопленными ответами.
     TimedOut {
         expected_worlds: usize,
         responses: Vec<PingWorldServerInfo>,
     },
 }
 
-/// Результат достигнутой server-info позиции одного turn.
 #[derive(Debug)]
 pub(crate) enum LoginServerInfoTurn {
     Disabled,
@@ -959,12 +634,9 @@ pub(crate) enum LoginServerInfoTurn {
     },
 }
 
-/// Наблюдаемый итог одного вызова восстановленного `CGame::MainLoop`.
 #[derive(Debug)]
 pub(crate) enum LoginMainLoopOutcome {
-    /// `m_bExit` был установлен; message/queue/ping позиции не выполнялись.
     Exit { refresh_info_due: bool },
-    /// Полный достигнутый turn завершился исходным результатом `1`.
     Continue {
         refresh_info_due: bool,
         gas: Vec<GasProcessOutcome>,
@@ -976,14 +648,12 @@ pub(crate) enum LoginMainLoopOutcome {
     },
 }
 
-/// Конкретное входящее направление managed Login runtime.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LoginNetworkDirection {
     World,
     Client,
 }
 
-/// Один технический World network turn до доменного `ProcessMessage`.
 #[derive(Debug, Default)]
 pub(crate) struct LoginWorldNetworkTurn {
     pub(crate) admissions: Vec<AdmissionOutcome>,
@@ -993,7 +663,6 @@ pub(crate) struct LoginWorldNetworkTurn {
     pub(crate) snapshot_errors: Vec<ServerSnapshotError<WorldReceiveError>>,
 }
 
-/// Один технический Client network turn до доменного `ProcessMessage`.
 #[derive(Debug, Default)]
 pub(crate) struct LoginClientNetworkTurn {
     pub(crate) admissions: Vec<AdmissionOutcome>,
@@ -1003,16 +672,13 @@ pub(crate) struct LoginClientNetworkTurn {
     pub(crate) snapshot_errors: Vec<ServerSnapshotError<ClientReceiveError>>,
 }
 
-/// Итог concurrent network cadence перед одним `CGame::MainLoop`.
 #[derive(Debug, Default)]
 pub(crate) struct LoginNetworkTurn {
     pub(crate) world: LoginWorldNetworkTurn,
     pub(crate) client: LoginClientNetworkTurn,
-    /// `None` означает отсутствие подключённого Auth socket либо readiness.
     pub(crate) auth: Option<Result<AuthClientIoStep, AuthClientIoError>>,
 }
 
-/// Наблюдаемый итог одного полного runtime-turn и накопленных side effects.
 #[derive(Debug, Default)]
 pub(crate) struct LoginRuntimeStep {
     pub(crate) network: LoginNetworkTurn,
@@ -1024,7 +690,6 @@ pub(crate) struct LoginRuntimeStep {
     pub(crate) rs_cdkey_notices: Vec<RsCdKeyNotice>,
 }
 
-/// Фатальная ошибка owned-задачи либо отсутствующего init-owner.
 #[derive(Debug)]
 pub(crate) enum LoginNetworkRuntimeError {
     MissingNetworkOwner(LoginNetworkDirection),
@@ -1064,7 +729,6 @@ impl Error for LoginNetworkRuntimeError {
     }
 }
 
-/// Ошибка одного внешнего `GameThreadFunc` turn.
 #[derive(Debug)]
 pub(crate) enum LoginRuntimeError {
     Network(LoginNetworkRuntimeError),
@@ -1089,7 +753,6 @@ impl Error for LoginRuntimeError {
     }
 }
 
-/// Полный отчёт единственного owned аналога исходного `GameThreadFunc`.
 #[derive(Debug)]
 pub(crate) struct LoginGameThreadReport {
     pub(crate) initialization: Result<LoginInitializationReport, LoginInitializationError>,
@@ -1128,16 +791,11 @@ where
     }
 }
 
-/// Ошибка доказанной GMA-маршрутизации из `CGame`.
 #[derive(Debug)]
 pub(crate) enum GameRouteError {
-    /// Текущий Auth client ещё не создан.
     MissingAuthClient,
-    /// World net-owner ещё не присоединён к `CGame`.
     MissingWorldServer,
-    /// Client net-owner ещё не присоединён к `CGame`.
     MissingClientServer,
-    /// Построение legacy envelope завершилось ошибкой.
     Message(SendMessageError),
 }
 
@@ -1171,39 +829,25 @@ impl From<SendMessageError> for GameRouteError {
     }
 }
 
-/// Итог изменения исходного `m_mapPWError` после default Auth-отказа.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PasswordFailureOutcome {
-    /// `lforbitTime == 0`: счётчик и DB-владелец не затронуты.
     Disabled,
-    /// Создан либо увеличен счётчик текущего account.
     Counted { failures: i32 },
-    /// Достигнутый ранее лимит вызвал синхронный `CDKeyBan`.
     BanAttempted { succeeded: bool },
-    /// DB-owner ещё не присоединён к частично восстановленному `CGame`.
     BanOwnerMissing,
 }
 
-/// Структурированная замена исходных проигнорированных send-результатов и log.
 #[derive(Debug)]
 pub(crate) enum AuthHandlerNotice {
-    /// Не удалось передать `0xAF501` текущему client net-owner.
     ClientResponseFailed {
-        /// Исходный signed socket ID.
         socket_id: i32,
-        /// Причина ошибки фактической сетевой границы.
         error: GameRouteError,
     },
-    /// Duplicate queue-entry дошёл до `KickOut`, но его маршрут не выполнен.
     KickOutFailed {
-        /// Byte-exact account прежней записи.
         account: Vec<u8>,
-        /// Причина ошибки фактической сетевой границы.
         error: GameRouteError,
     },
-    /// Исходный `CDKeyBan` вернул `false`.
     CdKeyBanFailed { account: Vec<u8> },
-    /// Частично восстановленный Login lifecycle ещё не присоединил `CRsCDKey`.
     CdKeyBanOwnerMissing { account: Vec<u8> },
 }
 
@@ -1214,31 +858,21 @@ struct AuthReconnectPlan {
     auth_servers: Vec<AuthServerConfig>,
 }
 
-/// Источник, который исходный `LoadSetup` смог открыть первым.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LoginSetupSource {
-    /// Обычный positional `setup.ini` новой формы.
     Plain,
-    /// Декодированный `setup.dat` старой сокращённой формы.
     Encoded,
 }
 
-/// Нечувствительный итог одного исходного `LoadSetup`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LoginSetupLoadReport {
-    /// Фактически выбранный файл без его содержимого.
     pub(crate) source: LoginSetupSource,
-    /// Число полностью прочитанных пар `label + value` до stream fail-state.
     pub(crate) parsed_pairs: usize,
-    /// Первая пара, которую stream уже не смог извлечь.
     pub(crate) stopped_at_pair: Option<usize>,
-    /// Были ли безопасно пересчитаны четыре исходных world state-level.
     pub(crate) state_levels_applied: bool,
-    /// Получила ли очередь все три обязательных значения `OnInitial`.
     pub(crate) login_queue_initialized: bool,
 }
 
-/// Оба исходных setup-файла недоступны; их содержимое в ошибку не попадает.
 #[derive(Debug)]
 pub(crate) struct LoginSetupOpenError {
     plain: io::Error,
@@ -1261,51 +895,37 @@ impl Error for LoginSetupOpenError {
     }
 }
 
-/// Нечувствительный итог positional-чтения `setupex.ini`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LoginSetupExLoadReport {
-    /// Число полностью прочитанных пар `label + value` до stream fail-state.
     pub(crate) parsed_pairs: usize,
-    /// Первая пара, которую stream уже не смог извлечь.
     pub(crate) stopped_at_pair: Option<usize>,
 }
 
-/// Итог positional-чтения отдельного `port.ini`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LoginListenPortLoadReport {
-    /// Число полностью прочитанных пар `label + u32`.
     pub(crate) parsed_pairs: usize,
-    /// Первая пара, на которой старый stream вошёл бы в fail-state.
     pub(crate) stopped_at_pair: Option<usize>,
 }
 
-/// Итог чтения отдельного `WorldInfoSetup.ini` без публикации имён миров.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LoginWorldSetupLoadReport {
-    /// Число полностью прочитанных записей `# + id + name + state`.
     pub(crate) parsed_records: usize,
-    /// Число уникальных numeric ID после исходной map-замены duplicates.
     pub(crate) unique_worlds: usize,
-    /// Первая запись с неполной либо нечисловой тройкой.
     pub(crate) stopped_at_record: Option<usize>,
 }
 
-/// Operator-visible итог вложенного `CLoginQueue::LoadNoQueueCdkeyList`.
 #[derive(Debug)]
 pub(crate) enum LoginNoQueueAccountsLoadDisposition {
     Loaded(NoQueueAccountsLoadReport),
     Failed(NoQueueAccountsLoadError),
 }
 
-/// Итог исходной безусловно успешной `CGame::LoadNoQueueCDKeyList`.
 #[derive(Debug)]
 pub(crate) struct LoginNoQueueAccountsReloadOutcome {
-    /// Всегда равен исходному `return true` после существующего queue-owner.
     pub(crate) legacy_result: bool,
     pub(crate) load: LoginNoQueueAccountsLoadDisposition,
 }
 
-/// Safe Rust-предусловие GUI-вызова после полного `CGame::Init`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LoginQueueOwnerMissing;
 
@@ -1317,14 +937,12 @@ impl fmt::Display for LoginQueueOwnerMissing {
 
 impl Error for LoginQueueOwnerMissing {}
 
-/// Итог `ReLoadSetup`: ошибка чтения не отменяет применение прежнего setup.
 #[derive(Debug)]
 pub(crate) struct LoginSetupReloadOutcome {
     pub(crate) legacy_result: bool,
     pub(crate) load: Result<LoginSetupLoadReport, LoginSetupOpenError>,
 }
 
-/// Безопасная граница `ReLoadSetup` вне доказанного post-Init вызова.
 #[derive(Debug)]
 pub(crate) enum LoginSetupReloadError {
     SetupField(&'static str),
@@ -1346,7 +964,6 @@ impl fmt::Display for LoginSetupReloadError {
 
 impl Error for LoginSetupReloadError {}
 
-/// Итог безусловно успешной `ReLoadWorldSetup` после существующего queue-owner.
 #[derive(Debug)]
 pub(crate) struct LoginWorldSetupReloadOutcome {
     pub(crate) legacy_result: bool,
@@ -1354,66 +971,43 @@ pub(crate) struct LoginWorldSetupReloadOutcome {
     pub(crate) broadcast_failures: Vec<WorldInfoBroadcastFailure>,
 }
 
-/// Итог доказанного префикса `CGame::Init` до создания двух worker threads.
 #[derive(Debug)]
 pub(crate) struct LoginInitializationPrefixReport {
-    /// Результат обязательного позиционного `LoadSetup`.
     pub(crate) setup: LoginSetupLoadReport,
-    /// Результат обязательного чтения отдельного `port.ini`.
     pub(crate) listen_ports: LoginListenPortLoadReport,
-    /// Нефатальный результат `LoadSetupEx`; ошибка открытия не останавливала Init.
     pub(crate) setup_ex: Result<LoginSetupExLoadReport, io::Error>,
-    /// Результат обязательного чтения setup-карты миров.
     pub(crate) world_setup: LoginWorldSetupLoadReport,
-    /// Результат обязательного чтения Auth endpoint-списка.
     pub(crate) auth_servers: LoadAsListOutcome,
-    /// Число runtime World-записей после `SetListWorldInfoBySetup`.
     pub(crate) world_routes: usize,
-    /// Выполнен ли явный `CLoginQueue::OnInitial` из собственной позиции Init.
     pub(crate) login_queue_initialized: bool,
-    /// Нефатальный итог constructor-загрузки `NoQueueAccounts.conf`.
     pub(crate) no_queue_accounts: Result<NoQueueAccountsLoadReport, NoQueueAccountsLoadError>,
-    /// Нефатальный результат исходного проигнорированного DB-clear.
     pub(crate) online_user_clear: Result<(), RsCdKeyDatabaseError>,
-    /// Полный исходный результат `InitAuthClient`, включая неуспешные endpoints.
     pub(crate) auth: AuthInitializationReport,
-    /// Поставлена ли стартовая запись в `_serv_logs`.
     pub(crate) startup_log: ServerInfoLogDisposition,
 }
 
-/// Итог доказанного префикса `CGame::Init` через запуск `CGasThread`.
 #[derive(Debug)]
 pub(crate) struct LoginInitializationThroughGasReport {
-    /// Полный уже доказанный префикс до worker-tail.
     pub(crate) prefix: LoginInitializationPrefixReport,
-    /// Исходно проигнорированный результат `Thread::Start(m_pGasThread)`.
     pub(crate) gas_thread_start: Result<(), io::Error>,
 }
 
-/// Полный итог восстановленного `CGame::Init`, чей исходный результат равен `1`.
 #[derive(Debug)]
 pub(crate) struct LoginInitializationReport {
-    /// Префикс и нефатальный результат запуска `CGasThread`.
     pub(crate) through_gas: LoginInitializationThroughGasReport,
-    /// Исходно проигнорированный результат `Thread::Start(AccLogThread)`.
     pub(crate) account_log_thread_start: Result<(), io::Error>,
 }
 
-/// Две исходные `PutDebugString`-позиции, выполняемые при каждом `Release`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LoginReleaseOperatorNotice {
     Exiting,
     Exited,
 }
 
-/// Итог полного обратного прохода `CGame::Release` без credential values.
 #[derive(Debug)]
 pub(crate) struct LoginReleaseReport {
-    /// Всегда равен исходному `return 1`.
     pub(crate) legacy_result: bool,
-    /// `false` означает повторный вызов после уже установленного `m_bExit`.
     pub(crate) performed: bool,
-    /// Обе debug-позиции существуют даже у повторного no-op вызова.
     pub(crate) operator_notices: [LoginReleaseOperatorNotice; 2],
     pub(crate) world_network_was_present: bool,
     pub(crate) client_network_was_present: bool,
@@ -1425,10 +1019,8 @@ pub(crate) struct LoginReleaseReport {
     pub(crate) account_log_thread_was_present: bool,
     pub(crate) gas_thread_was_present: bool,
     pub(crate) database_owner_was_present: bool,
-    /// `None` у повторного no-op; DB-ошибка исходно не меняла результат.
     pub(crate) online_user_clear: Option<Result<(), RsCdKeyDatabaseError>>,
     pub(crate) login_queue_was_present: bool,
-    /// Owned Rust workers, присоединённые перед уничтожением shared state.
     pub(crate) online_user_workers_joined: usize,
     pub(crate) server_info_workers_joined: usize,
 }
@@ -1460,26 +1052,16 @@ impl LoginReleaseReport {
     }
 }
 
-/// Фатальная граница доказанного префикса `CGame::Init`.
 #[derive(Debug)]
 pub(crate) enum LoginInitializationError {
-    /// Обязательный основной setup не открыт.
     Setup(LoginSetupOpenError),
-    /// Обязательный `port.ini` не открыт.
     ListenPort(io::Error),
-    /// Exact single-instance ключ уже занят либо не может быть создан.
     SingleInstance(io::Error),
-    /// Обязательный `WorldInfoSetup.ini` не открыт.
     WorldSetup(io::Error),
-    /// Обязательный `aslist.ini` не открыт.
     AuthServerList(io::Error),
-    /// Частично прочитанный setup не дал обязательного поля.
     MissingSetupField(&'static str),
-    /// Не создан основной DB-owner CD-key.
     DatabaseOwner(RsCdKeyInitializationError),
-    /// Не создан WorldServer listener.
     WorldNetwork(LoginNetworkInitializationError),
-    /// Не создан client listener.
     ClientNetwork(LoginNetworkInitializationError),
 }
 
@@ -1530,12 +1112,9 @@ impl Error for LoginInitializationError {
     }
 }
 
-/// Ошибка безопасной границы одного `InitNetServer_*`.
 #[derive(Debug)]
 pub(crate) enum LoginNetworkInitializationError {
-    /// Обязательное поле частично прочитанной конфигурации не инициализировано.
     MissingSetupField(&'static str),
-    /// Общий Linux listener не смог выполнить исходный `Host`.
     Host(ServerHostError),
 }
 
@@ -1562,14 +1141,10 @@ impl Error for LoginNetworkInitializationError {
     }
 }
 
-/// Ошибка Rust-предусловий достигнутого `ReLoadSetupEx`.
 #[derive(Debug)]
 pub(crate) enum LoginSetupExReloadError {
-    /// Повторное чтение `setupex.ini` завершилось ошибкой открытия.
     Load(io::Error),
-    /// Client owner ещё не создан частично восстановленным `Init`.
     MissingClientServer,
-    /// World owner ещё не создан частично восстановленным `Init`.
     MissingWorldServer,
 }
 
@@ -1598,7 +1173,6 @@ impl From<io::Error> for LoginSetupExReloadError {
     }
 }
 
-/// Owned-форма исходного `CGame::tagSetupEx` с точной signedness полей.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LoginSetupEx {
     area_id: i32,
@@ -1615,7 +1189,6 @@ pub(crate) struct LoginSetupEx {
 }
 
 impl LoginSetupEx {
-    /// Создаёт setup-ex с доказанными defaults и явным area ID Rust-границы.
     const fn new(area_id: i32) -> Self {
         Self {
             area_id,
@@ -1674,7 +1247,6 @@ impl LoginSetupEx {
     }
 }
 
-/// Owned-форма исходного `CGame::tagSetup` с явными uninitialized-границами.
 #[derive(Clone, Debug)]
 pub(crate) struct LoginSetup {
     server_version: Option<i32>,
@@ -1801,12 +1373,10 @@ impl LoginSetup {
         })
     }
 
-    /// Возвращает версию client protocol только после успешного extraction.
     pub(crate) const fn server_version(&self) -> Option<i32> {
         self.server_version
     }
 
-    /// Возвращает три исходных IP admission-флага без назначения defaults.
     pub(crate) const fn ip_checks(&self) -> Option<(bool, bool, bool)> {
         match (
             self.check_allowed_ip,
@@ -1818,7 +1388,6 @@ impl LoginSetup {
         }
     }
 
-    /// Возвращает режим внешней GAS-очереди, сохраняя constructor-default `1`.
     pub(crate) const fn inside_use(&self) -> Option<i32> {
         self.inside_use
     }
@@ -2111,7 +1680,6 @@ impl<'a> SetupTokens<'a> {
     }
 }
 
-/// Восстановленный `CGame` LoginServer с owned lifecycle и network cadence.
 pub(crate) struct CGame {
     instance_guard: Option<UnixListener>,
     auth_servers: Vec<AuthServerConfig>,
@@ -2160,7 +1728,6 @@ pub(crate) struct CGame {
 }
 
 impl CGame {
-    /// Создаёт единственный owned `CGame` до чтения setup в исходном `Init`.
     pub(crate) fn new(area_id: i32) -> Self {
         Self {
             instance_guard: None,
@@ -2262,21 +1829,19 @@ impl CGame {
         }
     }
 
-    /// Сообщает буквальный `mASClient != nullptr && IsConnect()`.
     pub(crate) fn is_connect_as(&self) -> bool {
         self.auth_client
             .as_ref()
             .is_some_and(CMyNetClientAuth::is_connected)
     }
 
-    /// Выполняет явный close текущего Auth client без synthetic `0xCF301`.
     pub(crate) fn disconnect_as(&mut self) {
         if let Some(client) = self.auth_client.as_mut() {
             let _legacy_result = client.close();
         }
     }
 
-    /// Пробует новый client по тому же списку и публикует typed reconnect в
+    /// Пробует новый client по тому же списку и публикует reconnect-событие в
     /// FIFO старого клиента; фактическая замена произойдёт при обработке FIFO.
     pub(crate) async fn reconnect_as(&mut self) -> Result<AuthReconnectReport, AuthLifecycleError> {
         if self.auth_client.is_none() {
@@ -2320,7 +1885,6 @@ impl CGame {
         Ok(())
     }
 
-    /// Обрабатывает одно Auth FIFO-событие без преждевременного доменного Run.
     pub(crate) fn process_next_auth_event(
         &mut self,
     ) -> Result<Option<AuthGameEvent>, AuthLifecycleError> {
@@ -2341,7 +1905,6 @@ impl CGame {
         }
     }
 
-    /// Выполняет один awaitable read/send шаг текущего Auth client.
     pub(crate) async fn run_auth_io_once(&mut self) -> Result<AuthClientIoStep, AuthClientIoError> {
         let client = self
             .auth_client
@@ -2350,28 +1913,25 @@ impl CGame {
         client.run_io_once().await
     }
 
-    /// Возвращает send-очередь текущего Auth client доменным producers.
     pub(crate) fn auth_send_queue(&self) -> Option<&ClientSendQueue> {
         self.auth_client.as_ref().map(CMyNetClientAuth::send_queue)
     }
 
-    /// Возвращает resolved endpoint текущего назначенного AuthServer.
     pub(crate) fn current_auth_server(&self) -> Option<&AuthServerConfig> {
         self.current_auth_server.as_ref()
     }
 
-    /// Возвращает число событий в текущей Auth FIFO.
     pub(crate) fn pending_auth_events(&self) -> i32 {
         self.auth_client
             .as_ref()
             .map_or(0, CMyNetClientAuth::pending_events)
     }
 
-    /// Обрабатывает один исходный snapshot трёх входных FIFO.
+    /// Обрабатывает один snapshot трёх входных FIFO.
     ///
     /// Runner вызывается немедленно в позиции старого virtual `Run`; сообщения,
     /// добавленные в текущую очередь во время callback, остаются следующему
-    /// проходу. Typed Auth reconnect выполняется в том же snapshot без вызова
+    /// проходу. Auth reconnect выполняется в том же snapshot без вызова
     /// runner, потому что он заменяет внутрипроцессный pointer, а не `CMessage`.
     pub(crate) async fn process_message<Runner, HandlerError>(
         &mut self,
@@ -2432,9 +1992,9 @@ impl CGame {
 
     /// Выполняет один достигнутый turn исходного `CGame::MainLoop`.
     ///
-    /// При ошибке message-handler уже выполненные более ранние side effects не
-    /// откатываются. Server-info telemetry копируется неблокирующе, а SQL-
-    /// consumer запускается отдельным сериализованным owned worker.
+    /// При ошибке обработчика уже выполненные эффекты не откатываются.
+    /// Server-info telemetry копируется неблокирующе, а SQL-consumer запускается
+    /// отдельным сериализованным worker-ом.
     pub(crate) async fn main_loop_turn(
         &mut self,
         auth_manager: &mut AuthManager,
@@ -2612,7 +2172,6 @@ impl CGame {
         })
     }
 
-    /// Устанавливает исходный `m_bExit` для следующего `MainLoop` turn.
     pub(crate) fn request_exit(&mut self) {
         self.exit_requested = true;
     }
@@ -2640,7 +2199,7 @@ impl CGame {
             // EOF уже проходит этот путь внутри `run_io_once`. Ошибка
             // установленного transport также означает потерю соединения:
             // synthetic 0xCF301 в следующем MainLoop запускает тот же
-            // доказанный OnClose/reconnect lifecycle. Ошибка framing сюда не
+            // обычный OnClose/reconnect lifecycle. Ошибка framing сюда не
             // относится: политика закрытия malformed frame оригиналом не
             // подтверждена.
             self.auth_client
@@ -2893,7 +2452,7 @@ impl CGame {
         let (client_network_shutdown_snapshots, client_network_task_errors) =
             self.release_client_network().await;
 
-        // Managed reconnect заменяет ещё один небезопасный внешний thread,
+        // Управляемый reconnect заменяет небезопасный внешний thread,
         // способный обратиться к mASClient после его исходной позиции delete.
         self.stop_reconnect_task().await;
         let auth_client_was_present = self.auth_client.is_some();
@@ -2954,7 +2513,6 @@ impl CGame {
         }
     }
 
-    /// Выдаёт cadence-owner право публикации в FIFO текущего Auth-клиента.
     pub(crate) fn auth_event_publisher(
         &self,
     ) -> Result<AuthClientEventPublisher, AuthLifecycleError> {
@@ -2964,7 +2522,6 @@ impl CGame {
             .ok_or(AuthLifecycleError::MissingCurrentClient)
     }
 
-    /// Возвращает исходный `m_SetupEx.iAreaId` для GMA server-info запроса.
     pub(crate) const fn area_id(&self) -> i32 {
         self.setup_ex.area_id
     }
@@ -2973,7 +2530,7 @@ impl CGame {
     ///
     /// Ошибка `Host` сохраняет новый, но не слушающий owner. Частично
     /// прочитанный setup без обязательного поля блокируется до замены старого
-    /// owner: безопасный Rust не воспроизводит чтение uninitialized памяти.
+    /// owner: отсутствующее значение не читается как неинициализированная память.
     pub(crate) fn init_net_server_client(&mut self) -> Result<(), LoginNetworkInitializationError> {
         let port = required_setup(self.listen_ports.client, "_listen_port.dwListenPort_Client")?;
         let config = self
@@ -3065,27 +2622,22 @@ impl CGame {
         Ok(())
     }
 
-    /// Присоединяет фактическую командную границу Client net-owner.
     pub(crate) fn attach_client_sender(&mut self, sender: ServerCommandHandle) {
         self.client_sender = Some(sender);
     }
 
-    /// Присоединяет фактическую командную границу World net-owner.
     pub(crate) fn attach_world_sender(&mut self, sender: ServerCommandHandle) {
         self.world_sender = Some(sender);
     }
 
-    /// Присоединяет единый DB-владелец достигнутых операций `CRsCDKey`.
     pub(crate) fn attach_rs_cdkey_owner(&mut self, owner: Box<dyn RsCdKeyOwner>) {
         self.rs_cdkey_owner = Some(owner);
     }
 
-    /// Возвращает текущую owned-копию исходного `m_Setup`.
     pub(crate) const fn login_setup(&self) -> &LoginSetup {
         &self.setup
     }
 
-    /// Возвращает текущую owned-копию исходного `m_SetupEx`.
     pub(crate) const fn login_setup_ex(&self) -> &LoginSetupEx {
         &self.setup_ex
     }
@@ -3184,7 +2736,7 @@ impl CGame {
                 parse_ascii::<i32>(configured_state),
             ) else {
                 // Старый extraction оставлял локальную переменную без
-                // определённого значения; safe Rust не создаёт malformed route.
+                // определённого значения; malformed route не создаётся.
                 stopped_at_record = Some(record);
                 break;
             };
@@ -3205,7 +2757,6 @@ impl CGame {
         })
     }
 
-    /// Перестраивает runtime `m_listWorldInfo` из setup-карты со state `0`.
     pub(crate) fn set_list_world_info_by_setup(&mut self) -> usize {
         self.world_routes.clear();
         for (&world_id, setup) in &self.world_setup_routes {
@@ -3215,14 +2766,13 @@ impl CGame {
         self.world_routes.len()
     }
 
-    /// Проверяет ненулевой setup-state независимо от runtime подключения World.
     pub(crate) fn world_server_is_open_state(&self, world_id: i32) -> bool {
         self.world_setup_routes
             .get(&world_id)
             .is_some_and(|setup| setup.configured_state != 0)
     }
 
-    /// Выполняет доказанный префикс `CGame::Init` до запуска GAS/AccLog threads.
+    /// Выполняет префикс `CGame::Init` до запуска GAS/AccLog threads.
     ///
     /// Успешный результат не означает полный исходный `Init`: оба готовых
     /// worker-owner запускаются следующими двумя позициями [`Self::initialize`].
@@ -3298,7 +2848,7 @@ impl CGame {
     /// Продолжает префикс `CGame::Init` ровно через создание `CGasThread`.
     ///
     /// Как оригинальный `Init`, эта ступень не делает ошибку запуска worker
-    /// фатальной и возвращает её только в operator-visible отчёте.
+    /// фатальной и сохраняет её только в отчёте инициализации.
     pub(crate) async fn initialize_through_gas_thread(
         &mut self,
         runtime_directory: &Path,
@@ -3314,7 +2864,7 @@ impl CGame {
         })
     }
 
-    /// Выполняет полный доказанный `CGame::Init` до исходного `return 1`.
+    /// Выполняет полный `CGame::Init` до исходного `return 1`.
     ///
     /// Оба `Thread::Start` не влияли на возвращаемое значение оригинала;
     /// ошибки публикации Rust workers поэтому остаются только в отчёте.
@@ -3420,7 +2970,7 @@ impl CGame {
     /// Передаёт reload фиксированного файла фактическому `CLoginQueue` owner.
     ///
     /// Ошибка вложенного чтения не меняет исходный безусловный `return true`;
-    /// она возвращается как operator-visible disposition. Вызов вне интервала
+    /// она сохраняется в отчёте. Вызов вне интервала
     /// между созданием queue в `Init` и `Release` является Rust-ошибкой.
     pub(crate) fn load_no_queue_cdkey_list(
         &self,
@@ -3451,7 +3001,7 @@ impl CGame {
     ///
     /// Ошибка открытия обоих файлов исходно игнорировалась: уже существующий
     /// setup всё равно повторно записывался в Client, затем World и AuthManager.
-    /// Missing-field/owner возможен только вне доказанного post-Init вызова и
+    /// Missing-field/owner возможен только при вызове до завершения `Init` и
     /// блокирует ровно ещё не выполненную часть этого порядка.
     pub(crate) fn reload_setup(
         &mut self,
@@ -3536,8 +3086,8 @@ impl CGame {
 
     /// Перечитывает setup-ex и применяет четыре поздние сетевые записи.
     ///
-    /// Отсутствующий network owner сообщает нарушение доказанного вызова после
-    /// полного `Init`, не разыменовывая nullable raw pointer.
+    /// Отсутствующий network owner сообщает вызов до завершения `Init`, не
+    /// разыменовывая nullable raw pointer.
     pub(crate) fn reload_setup_ex(
         &mut self,
         runtime_directory: &Path,
@@ -3631,7 +3181,7 @@ impl CGame {
             self.change_all_world_state();
             true
         } else {
-            // Safe Rust не передаёт uninitialized/out-of-range setup-значения
+            // Неинициализированные и выходящие за диапазон setup-значения не идут
             // в старую `_ftol2`-границу и сохраняет прежние state levels.
             false
         };
@@ -3719,31 +3269,26 @@ impl CGame {
         Ok(())
     }
 
-    /// Забирает следующее структурированное DB/file-log событие `CRsCDKey`.
     pub(crate) fn pop_rs_cdkey_notice(&mut self) -> Option<RsCdKeyNotice> {
         self.rs_cdkey_owner
             .as_mut()
             .and_then(|owner| owner.pop_notice())
     }
 
-    /// Обновляет два исходных setup-поля политики неверного пароля.
     pub(crate) fn configure_password_failure_policy(&mut self, ban_minutes: i32, error_limit: i32) {
         self.password_ban_minutes = ban_minutes;
         self.password_error_limit = error_limit;
     }
 
-    /// Обновляет два setup-поля, используемые password-check FIFO.
     pub(crate) fn configure_valid_code_policy(&mut self, enabled: bool, error_limit: i32) {
         self.setup_ex.valid_code = i32::from(enabled);
         self.setup_ex.valid_error_upper_limit = error_limit;
     }
 
-    /// Обновляет исходный `m_SetupEx.dwValidErrStayTime` в миллисекундах.
     pub(crate) const fn configure_valid_error_stay_time(&mut self, stay_time_ms: u32) {
         self.setup_ex.valid_error_stay_time_ms = stay_time_ms;
     }
 
-    /// Обновляет исходные timeout-поля matrix и legacy valid-code setup.
     pub(crate) const fn configure_login_queue_timeouts(
         &mut self,
         matrix_timeout_ms: i32,
@@ -3753,35 +3298,30 @@ impl CGame {
         self.setup_ex.valid_code_overtime_ms = valid_code_overtime_ms;
     }
 
-    /// Обновляет исходный `m_SetupEx.lQuestPlayerDataInterval`.
     pub(crate) const fn configure_quest_player_data_interval(&mut self, interval_ms: i32) {
         self.setup_ex.quest_player_data_interval_ms = interval_ms;
     }
 
-    /// Возвращает текущий интервал защиты повторного запроса `player_id`.
     pub(crate) const fn quest_player_data_interval_ms(&self) -> u32 {
         self.setup_ex.quest_player_data_interval_ms as u32
     }
 
-    /// Возвращает исходный `m_SetupEx.bValidCode`.
     pub(crate) const fn valid_code_enabled(&self) -> bool {
         self.setup_ex.valid_code != 0
     }
 
-    /// Возвращает исходный `m_SetupEx.iValidErrUpperLimit`.
     pub(crate) const fn valid_error_limit(&self) -> i32 {
         self.setup_ex.valid_error_upper_limit
     }
 
-    /// Возвращает исходный `m_SetupEx.dwValidErrStayTime`.
     pub(crate) const fn valid_error_stay_time_ms(&self) -> u32 {
         self.setup_ex.valid_error_stay_time_ms
     }
 
     /// Передаёт matrix-card проверку фактическому `CRsCDKey`.
     ///
-    /// `None` означает, что частично восстановленный lifecycle ещё не
-    /// присоединил DB-owner; это не считается успешной проверкой.
+    /// `None` означает, что lifecycle ещё не присоединил DB-owner; это не
+    /// считается успешной проверкой.
     pub(crate) fn validate_matrix_card(
         &mut self,
         account: &[u8],
@@ -3823,18 +3363,15 @@ impl CGame {
         false
     }
 
-    /// Заменяет одну запись `m_listWorldInfo` для World lifecycle.
     pub(crate) fn upsert_world_route(&mut self, route: WorldRoute) {
         self.world_routes.insert(route.world_id, route);
     }
 
-    /// Добавляет World telemetry в конец исходного `m_vectorPingWorldServerInfo`.
     pub(crate) fn append_ping_world_server_info(&mut self, info: PingWorldServerInfo) -> usize {
         self.ping_world_server_info.push(info);
         self.ping_world_server_info.len() - 1
     }
 
-    /// Добавляет account только в существующий список World без дубликата.
     pub(crate) fn add_cdkey(&mut self, account: &[u8], world_id: i32) -> bool {
         let account = legacy_c_string_prefix(account);
         let Some(accounts) = self.world_cdkeys.get_mut(&world_id) else {
@@ -3852,7 +3389,6 @@ impl CGame {
         true
     }
 
-    /// Возвращает первый World ID с C-string account либо исходный sentinel `-1`.
     pub(crate) fn find_cdkey(&self, account: &[u8]) -> i32 {
         let account = legacy_c_string_prefix(account);
         self.world_cdkeys
@@ -3866,14 +3402,12 @@ impl CGame {
             .unwrap_or(-1)
     }
 
-    /// Удаляет C-string account только из исходного `m_LoginCdkeyWorld`.
     pub(crate) fn clear_login_cdkey(&mut self, account: &[u8]) -> bool {
         self.login_cdkey_world
             .remove(legacy_c_string_prefix(account))
             .is_some()
     }
 
-    /// Удаляет первое совпадение в порядке World ID либо login-map запись.
     pub(crate) fn clear_cdkey(&mut self, account: &[u8]) {
         let account = legacy_c_string_prefix(account);
         let world_id = self.world_cdkeys.iter().find_map(|(world_id, accounts)| {
@@ -3928,7 +3462,6 @@ impl CGame {
         );
     }
 
-    /// Запускает независимую DB-замену списка и сохраняет owned join handle.
     pub(crate) fn start_online_user_database_update(
         &mut self,
         world_id: i32,
@@ -3952,7 +3485,6 @@ impl CGame {
         Ok(())
     }
 
-    /// Извлекает завершённый DB-отчёт, не ожидая ещё работающие workers.
     pub(crate) fn pop_online_user_database_report(&mut self) -> Option<OnlineUserDatabaseReport> {
         self.collect_finished_online_user_updates();
         self.online_user_database_reports.pop_front()
@@ -4026,7 +3558,6 @@ impl CGame {
         Ok(())
     }
 
-    /// Извлекает завершённый `ServerInfoLog`, не ожидая работающие workers.
     pub(crate) fn pop_server_info_database_report(&mut self) -> Option<ServerInfoDatabaseReport> {
         self.collect_finished_server_info_logs();
         self.server_info_database_reports.pop_front()
@@ -4067,7 +3598,6 @@ impl CGame {
         joined
     }
 
-    /// Ставит numeric identity текущему World socket до изменения game-state.
     pub(crate) fn set_world_socket_map_id(
         &self,
         socket_id: i32,
@@ -4080,7 +3610,6 @@ impl CGame {
         Ok(sender.set_client_map_id(socket_id, world_id))
     }
 
-    /// Выполняет буквальную полезную часть `CGame::AddWorld`.
     pub(crate) fn activate_world(
         &mut self,
         world_id: i32,
@@ -4112,14 +3641,12 @@ impl CGame {
         }
     }
 
-    /// Возвращает byte-exact имя настроенного мира по numeric ID.
     pub(crate) fn world_name_by_id(&self, world_id: i32) -> Option<&[u8]> {
         self.world_routes
             .get(&world_id)
             .map(|route| route.name.as_slice())
     }
 
-    /// Очищает список вошедших CD-key, сохраняя сам World entry.
     pub(crate) fn clear_cdkeys_by_world_id(&mut self, world_id: i32) {
         if let Some(accounts) = self.world_cdkeys.get_mut(&world_id) {
             accounts.clear();
@@ -4127,7 +3654,6 @@ impl CGame {
         }
     }
 
-    /// Ставит известный connect-log после `AddWorld` и до `0x4FC03`.
     pub(crate) fn queue_world_connected_operator_log(&mut self, world_name: &[u8]) {
         self.world_operator_log_records
             .push_back(WorldOperatorLogRecord::Connected {
@@ -4135,7 +3661,6 @@ impl CGame {
             });
     }
 
-    /// Ставит известный lost-log до очистки World CD-key.
     pub(crate) fn queue_world_lost_operator_log(&mut self, world_name: &[u8]) {
         self.world_operator_log_records
             .push_back(WorldOperatorLogRecord::Lost {
@@ -4143,7 +3668,6 @@ impl CGame {
             });
     }
 
-    /// Выполняет буквальную полезную часть `CGame::DelWorld`.
     pub(crate) fn deactivate_world(&mut self, world_id: i32) -> WorldDeactivationOutcome {
         if let Some(route) = self.world_routes.get_mut(&world_id) {
             route.state_level = 0;
@@ -4159,7 +3683,6 @@ impl CGame {
         }
     }
 
-    /// Рассылает новый список миров только account, ещё не выбравшим World.
     fn update_world_info_to_all_clients(&self) -> Vec<WorldInfoBroadcastFailure> {
         let mut failures = Vec::new();
         for (account, world_name) in &self.login_cdkey_world {
@@ -4181,7 +3704,6 @@ impl CGame {
         failures
     }
 
-    /// Отправляет connect-ack конкретному World socket.
     pub(crate) fn send_to_world_socket(
         &self,
         message: &CMessage,
@@ -4196,7 +3718,6 @@ impl CGame {
             .map_err(GameRouteError::Message)
     }
 
-    /// Ставит точную legacy connect-строку в исходную `_serv_logs`.
     pub(crate) fn queue_world_connected_server_info_log(
         &mut self,
         source_ip: u32,
@@ -4229,7 +3750,6 @@ impl CGame {
         }
     }
 
-    /// Возвращает исходный setup-gate до чтения server-log payload.
     pub(crate) fn server_info_log_disposition(&self) -> ServerInfoLogDisposition {
         match self.setup.server_info_log_time {
             None => ServerInfoLogDisposition::SetupValueMissing,
@@ -4238,7 +3758,6 @@ impl CGame {
         }
     }
 
-    /// Ставит готовую запись после выполненного вызывающим setup-gate.
     pub(crate) fn push_server_info_log(
         &self,
         source_ip: u32,
@@ -4254,12 +3773,10 @@ impl CGame {
         ));
     }
 
-    /// Извлекает старейшую typed-запись исходной `_serv_logs`.
     pub(crate) fn pop_server_info_log_record(&self) -> Option<ServLog> {
         self.server_info_log_shared.logs.pop()
     }
 
-    /// Извлекает старейший World lifecycle вызов исходного `AddLogText`.
     pub(crate) fn pop_world_operator_log_record(&mut self) -> Option<WorldOperatorLogRecord> {
         self.world_operator_log_records.pop_front()
     }
@@ -4275,12 +3792,10 @@ impl CGame {
             .map_or(-1, |route| route.world_id)
     }
 
-    /// Проверяет существование включённого WorldServer по byte-exact имени.
     pub(crate) fn is_exit_world(&self, name: &[u8]) -> bool {
         self.world_id_by_name(name) != -1
     }
 
-    /// Возвращает число известных account выбранного World либо sentinel `-1`.
     pub(crate) fn login_world_player_num_by_name(&self, name: &[u8]) -> i32 {
         let world_id = self.world_id_by_name(name);
         if world_id == -1 {
@@ -4292,18 +3807,15 @@ impl CGame {
             .unwrap_or(-1)
     }
 
-    /// Возвращает выбранный World из исходного `m_LoginCdkeyWorld`.
     pub(crate) fn login_cdkey_world_server(&self, account: &[u8]) -> Option<&[u8]> {
         self.login_cdkey_world.get(account).map(Vec::as_slice)
     }
 
-    /// Заменяет выбранный World для byte-exact account.
     pub(crate) fn set_login_cdkey_world_server(&mut self, account: &[u8], world_name: &[u8]) {
         self.login_cdkey_world
             .insert(account.to_vec(), world_name.to_vec());
     }
 
-    /// Копирует сообщение в send-команду WorldServer по numeric map ID.
     pub(crate) fn send_msg_to_world(
         &self,
         message: &CMessage,
@@ -4318,7 +3830,6 @@ impl CGame {
             .map_err(GameRouteError::Message)
     }
 
-    /// Копирует RLE-ответ клиенту по исходному signed socket ID.
     pub(crate) fn send_to_client(
         &self,
         message: &CMessage,
@@ -4333,7 +3844,6 @@ impl CGame {
             .map_err(GameRouteError::Message)
     }
 
-    /// Копирует RLE-ответ клиенту по строковой CD-key identity.
     pub(crate) fn send_to_client_cdkey(
         &self,
         message: &CMessage,
@@ -4348,7 +3858,6 @@ impl CGame {
             .map_err(GameRouteError::Message)
     }
 
-    /// Выполняет исходный `KickOut`: client identity имеет приоритет над world.
     pub(crate) fn kick_out(&self, account: &[u8]) -> Result<bool, GameRouteError> {
         let account = legacy_c_string_prefix(account);
         if self.login_cdkey_world.contains_key(account) {
@@ -4367,7 +3876,6 @@ impl CGame {
         Ok(true)
     }
 
-    /// Ставит client `QUIT` по C-string CD-key identity.
     pub(crate) fn quit_client_by_cdkey(&self, account: &[u8]) -> Result<i32, GameRouteError> {
         let sender = self
             .client_sender
@@ -4376,7 +3884,6 @@ impl CGame {
         Ok(sender.quit_by_map_name(legacy_c_string_prefix(account)))
     }
 
-    /// Передаёт owned password-check в очередь и сохраняет порядок duplicate.
     pub(crate) fn push_back_pwd_checked(&mut self, checked: TagPwdChecked) {
         let queue = Arc::clone(self.login_queue_ref());
         queue.push_back_pwd_checked(checked, |account| {
@@ -4390,18 +3897,15 @@ impl CGame {
         });
     }
 
-    /// Возвращает владеющую ссылку на embedded `CLoginQueue` этого `CGame`.
     pub(crate) fn login_queue(&self) -> Arc<CLoginQueue> {
         Arc::clone(self.login_queue_ref())
     }
 
-    /// Запускает один полный исходный `HandlePwdChecked` у queue-owner.
     pub(crate) fn handle_pwd_checked(&mut self) -> HandlePwdCheckedReport {
         let queue = Arc::clone(self.login_queue_ref());
         queue.handle_pwd_checked(self)
     }
 
-    /// Выполняет один полный проход восстановленного `CLoginQueue::Run`.
     pub(crate) fn run_login_queue(
         &mut self,
         auth_manager: &mut AuthManager,
@@ -4417,7 +3921,7 @@ impl CGame {
         )
     }
 
-    /// Выполняет доказанный timeout-хвост отдельно для диагностического owner.
+    /// Выполняет timeout-хвост отдельно для диагностического owner.
     ///
     /// Он намеренно остаётся доступен отдельно от полного прохода только для
     /// точечной проверки трёх cadence-владельцев.
@@ -4435,7 +3939,6 @@ impl CGame {
             .expect("CLoginQueue доступна только между успешной позицией Init и Release")
     }
 
-    /// Выполняет доказанную часть `PrepareEnter` до `EnterGame`.
     pub(crate) fn prepare_enter(
         &mut self,
         checked: &TagPwdChecked,
@@ -4471,7 +3974,6 @@ impl CGame {
         Ok(PrepareEnterOutcome::Continue)
     }
 
-    /// Выполняет доказанную обычную ветвь `EnterGame`.
     pub(crate) fn enter_game(
         &self,
         checked: &TagPwdChecked,
@@ -4512,7 +4014,6 @@ impl CGame {
         Ok(true)
     }
 
-    /// Ставит account-leave запись в общую FIFO исходной `_acc_logs`.
     pub(crate) fn account_leave_log(&mut self, account: &[u8]) {
         let end = account
             .iter()
@@ -4525,7 +4026,6 @@ impl CGame {
             }));
     }
 
-    /// Ставит role-enter запись в общую FIFO исходной `_acc_logs`.
     pub(crate) fn role_enter_log(
         &mut self,
         account: &[u8],
@@ -4543,7 +4043,6 @@ impl CGame {
             }));
     }
 
-    /// Ставит `LeaveLog`-запись в общую FIFO исходной `_acc_logs`.
     pub(crate) fn leave_log(&mut self, account: &[u8]) {
         self.account_log_queue
             .push(AccountLogRecord::SessionLeave(SessionLeaveRecord {
@@ -4566,7 +4065,6 @@ impl CGame {
         }
     }
 
-    /// Дописывает список миров с исходной проверкой no-queue для account.
     pub(crate) fn add_world_info_to_message_for_account(
         &self,
         message: &mut CMessage,
@@ -4625,7 +4123,6 @@ impl CGame {
         Ok(true)
     }
 
-    /// Отправляет `0x4FB02 + account + player ID + IPv4`.
     pub(crate) fn l2w_delete_role_send(
         &self,
         world_name: Option<&[u8]>,
@@ -4652,7 +4149,6 @@ impl CGame {
         Ok(true)
     }
 
-    /// Отправляет `0x4FB03 + account + player ID`.
     pub(crate) fn l2w_restore_role_send(
         &self,
         world_name: Option<&[u8]>,
@@ -4700,7 +4196,6 @@ impl CGame {
         Ok(true)
     }
 
-    /// Применяет default-ветвь исходного счётчика и синхронного `CDKeyBan`.
     pub(crate) fn register_password_failure(&mut self, account: &[u8]) -> PasswordFailureOutcome {
         if self.password_ban_minutes == 0 {
             return PasswordFailureOutcome::Disabled;
@@ -4729,17 +4224,14 @@ impl CGame {
         }
     }
 
-    /// Добавляет структурированное событие в исходной позиции side effect.
     pub(crate) fn push_auth_handler_notice(&mut self, notice: AuthHandlerNotice) {
         self.auth_handler_notices.push_back(notice);
     }
 
-    /// Извлекает самое старое событие `AuthHandler`.
     pub(crate) fn pop_auth_handler_notice(&mut self) -> Option<AuthHandlerNotice> {
         self.auth_handler_notices.pop_front()
     }
 
-    /// Копирует сообщение всем текущим WorldServer.
     pub(crate) fn send_all_world(&self, message: &CMessage) -> Result<i32, GameRouteError> {
         let sender = self
             .world_sender
@@ -4750,7 +4242,6 @@ impl CGame {
             .map_err(GameRouteError::Message)
     }
 
-    /// Копирует сообщение текущему AuthServer.
     pub(crate) fn send_to_auth(&self, message: &CMessage) -> Result<i32, GameRouteError> {
         let sender = self
             .auth_send_queue()
@@ -5359,9 +4850,10 @@ async fn connect_new_auth_client(
 
     (client, attempts, connected)
 }
+/// Полный аналог исходного `GameThreadFunc` с явным владением ресурсами.
 ///
 /// Единственный `CGame` всегда проходит `Release` перед уничтожением, включая
-/// фатальный partial `Init` и ошибку runtime turn. `shutdown` заменяет внешний
+/// фатальный частичный `Init` и ошибку runtime turn. `shutdown` заменяет внешний
 /// `g_bGameThreadExit`; он не подменяет его полем `m_bExit` внутри владельца.
 pub(crate) async fn game_thread_func<Shutdown>(
     runtime_directory: &Path,

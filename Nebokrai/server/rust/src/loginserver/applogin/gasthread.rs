@@ -1,21 +1,18 @@
-//! Владелец `CGasThread` LoginServer.
+//! `CGasThread`, подтверждённый `loginserver.exe` и `loginserver.pdb`.
 //!
-//! Контракт подтверждён точной парой LoginServer EXE/PDB.
 //! Worker сохраняет одну FIFO GAS, 10-миллисекундную idle cadence, один
 //! `CMyWinInet` с исторически повторно используемым receive-буфером и точную
 //! таблицу ответных кодов. HTTP остаётся в выделенном blocking-thread. Вместо
 //! небезопасного доступа исходного worker к глобальному `CGame` он публикует
-//! owned-результаты; главный Login turn применяет DB/network side effects в том
+//! owned-результаты; главный Login turn применяет DB/network-эффекты в том
 //! же FIFO-порядке и подтверждает завершение до следующего HTTP-запроса. Эта
 //! узкая сериализация сохраняет наблюдаемый межсистемный порядок одного GAS
 //! worker и не вводит общий `Arc<Mutex<CGame>>`.
 //!
 //! Принудительный Win32 `TerminateThread`, COM init, singleton `CGasOperator`,
 //! STL allocator/copy и EH cleanup заменены владением Rust, atomic stop,
-//! `JoinHandle`, каналом и соседними техническими владельцами. Для путей,
-//! где C++ мог читать за границей массива, короткий digest безопасно
-//! отклоняется. Фиксированные nickname/format buffers были внутренними
-//! ограничениями и заменены owned `Vec` без изменения HTTP-формата.
+//! `JoinHandle` и каналом. Короткий digest безопасно отклоняется вместо чтения
+//! за массивом; fixed buffers заменены owned `Vec` без изменения HTTP-формата.
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -124,7 +121,6 @@ impl CGasThread {
         })
     }
 
-    /// Забирает все уже опубликованные результаты без ожидания worker.
     pub(crate) fn drain_events(&mut self) -> Vec<GasWorkerEvent> {
         self.receiver.try_iter().collect()
     }

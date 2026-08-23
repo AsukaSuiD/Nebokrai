@@ -1,115 +1,24 @@
-//! Client/World сообщения LoginServer из `logmessage.cpp`.
+//! Client/World-обработчики `logmessage.cpp`, подтверждённые `loginserver.exe`
+//! и `loginserver.pdb`. Неизвестные opcode не имеют побочных эффектов.
 //!
-//! `OnLogMessage` обрабатывает synthetic disconnect `0x10001`, World opcode
-//! `0x1FF01..0x1FF07` и client opcode `0x2FD01..0x2FD0C`. Неизвестный opcode
-//! проходит исходный default без side effects. Контракт подтверждён точной
-//! парой LoginServer EXE/PDB.
+//! Valid-code и matrix ветви сохраняют endpoint-проверки, порядок изменения
+//! `ValidErr` и одноразовое удаление записей. Player list/data запросы используют
+//! CD-key из metadata до первого NUL; create/delete/restore идут только
+//! в известный подключённый World. При выходе transport-ошибка не прерывает
+//! последующие `ClearCDKey -> OnClientLost -> AccountLeaveLog`.
 //!
-//! `0x2FD09` сначала выполняет `CheckMsgInfo` над принятым account и немедленно
-//! игнорирует только socket-mismatch. Затем непустой account приводится к
-//! lowercase, читается ответ с границей `10` и вызывается `ValidateValidCode`.
-//! Ошибка добавляет `ValidErr` до client-кода `L`; успех повторяет исходный
-//! `DelValidCode` и продолжает `PrepareEnter -> EnterGame/matrix_register` с
-//! сохранёнными world/matrix полями.
+//! Synthetic disconnect обновляет login-map и ставит client `QUIT` до поиска World;
+//! найденный World ID даёт ранний возврат, иначе account/queue cleanup идёт в
+//! историческом nullable-порядке. World-ответы меняют только opcode исходного
+//! сообщения: cursor-чтение не удаляет пересылаемый payload. Role-enter усекает
+//! номер World до младшего байта; leave очищает CD-key до записи журнала.
 //!
-//! `0x2FD0A` не меняет регистр account: `CHECK_SUCC` создаёт новую картинку,
-//! меняет code/change-time и отправляет `J`; frequent даёт `O`, отсутствующая
-//! запись — `P`, а socket-mismatch остаётся без ответа. `0x2FD08` читает
-//! lowercase account и ровно три байта, вызывает одноразовый
-//! `CLoginQueue::matirx_validate`, после `C` удаляет valid-code и продолжает
-//! вход только при существующем `m_LoginCdkeyWorld`; `D` сначала увеличивает
-//! `ValidErr`, затем отправляется клиенту.
-//!
-//! `0x2FD02` читает только byte-exact World-name с границей `0x14`, затем
-//! передаёт его вместе с socket ID и metadata CD-key в
-//! `AddQuestPlayerList`. `0x2FD03` сначала читает signed Windows `long`
-//! player ID, затем передаёт socket ID, metadata CD-key и IPv4 в
-//! `AddQuestPlayerData`. Обе исходные ветви игнорировали результат queue-
-//! владельца; typed outcome делает тихое принятие/отказ наблюдаемым для
-//! runtime runner, не меняя порядок либо side effects. Metadata CD-key во
-//! всех этих C++-вызовах передавался как `char*`; единый helper сохраняет
-//! byte-prefix только до первого NUL.
-//!
-//! `0x2FD04..0x2FD06` сначала получают nullable World-name по metadata CD-key;
-//! delete/restore только после этого читают один 32-битный player ID; delete
-//! сохраняет его как signed `long`, restore — как unsigned `uint`.
-//! Create-role передаёт исходное сообщение владельцу, который сохраняет его
-//! payload, меняет opcode на `0x4FB04` и дописывает account. Delete строит
-//! `0x4FB02 + account + player ID + IPv4`, restore —
-//! `0x4FB03 + account + player ID`. Отсутствующий либо отключённый World даёт
-//! исходный no-op без нового client-ответа.
-//!
-//! `0x2FD07` всегда сначала читает signed status и при ненулевом значении
-//! завершает ветвь без других эффектов. Ноль получает nullable World-name;
-//! известному открытому World ставится `0x4FB06 + account`, но ошибка этой
-//! исходно void-отправки не прерывает последующие `ClearCDKey -> OnClientLost
-//! -> AccountLeaveLog`. Queue cleanup затрагивает только первые совпадения
-//! обычных request FIFO. Typed outcome сохраняет проигнорированную transport-
-//! ошибку, не меняя порядок cleanup.
-//!
-//! Synthetic `0x10001` читает account из payload с границей `0x20`, удаляет
-//! его из login-map и ставит client `QUIT` до поиска World CD-key. Найденный
-//! World ID вызывает исходный ранний возврат без account/queue cleanup. При
-//! отсутствии World CD-key буквально сохраняется дальнейшая nullable цепочка
-//! `GetLoginCdkeyWorldServer -> GetWorldIDByName`: из-за уже выполненного
-//! `ClearLoginCdkey` она не находит World, но после неё всё равно выполняются
-//! `AccountLeaveLog -> ClearCDKey -> OnClientLost`. Ошибки ещё не собранного
-//! transport-owner фиксируются typed outcome и не меняют исходный порядок.
-//!
-//! Пять прямых World-ответов сначала пропускают доказанные status/player-
-//! поля, затем читают account с границей `0x20`, меняют opcode того же
-//! сообщения на `0xAF502/0xAF505/0xAF506/0xAF504/0xAF508` и отправляют его по
-//! строковой client identity. Payload не пересобирается: cursor-чтение не
-//! удаляет bytes, а `set_message_type` меняет только header, поэтому клиент
-//! получает исходное тело WorldServer с новым типом. Первые четыре ответа —
-//! player-base/delete/restore/create; `0x1FF07` выполняет только account-only
-//! relay в `0xAF508`, поэтому дополнительное доменное имя не назначается.
-//!
-//! `0x1FF01` всегда читает status и account, затем сохраняет World map ID из
-//! metadata. Только status `0x1D` сначала вызывает `AddCdkey`, после чего
-//! последовательно читает дополнительную строку, `long`, role name и role
-//! level. Первые два поля handler не использует; вторые два вместе с account
-//! попадают в `RoleEnterLog`, причём World number исходно усекался до младшего
-//! octet через `map_id & 0xFF`. После условной ветви сообщение независимо от
-//! status меняет opcode на `0xAF503` и отправляется по account identity.
-//! Role-enter сохраняется typed-вариантом общей `_acc_logs` до её consumer;
-//! cursor-чтение не меняет пересылаемый payload.
-//!
-//! `0x1FF06` читает account с границей `0x20`, затем буквально выполняет
-//! `ClearCDKey`, потребляет дополнительную строку `0x100` и один `char` и
-//! вызывает `LeaveLog(account)`. Два последних payload-поля не используются,
-//! а client-send в этой ветви отсутствует. `LeaveLog` ставит typed-запись в
-//! общую `_acc_logs` после очистки CD-key.
-//!
-//! Client login-request `0x2FD01` читает два `long` как marker/version,
-//! удаляет из account все пробелы и принимает только длину `1..=31`. Затем
-//! обязательный `GetEx(..., 0x10)` даёт digest; marker должен быть `6`, а
-//! version — совпадать с setup. Оба несоответствия отправляют client-код `4`,
-//! наличие `'`, `=` либо пробела — код `5`; неверная длина account/digest
-//! остаётся исходным тихим возвратом. После проверок последовательно читаются
-//! `short` client code, `long` encryption key, неиспользуемая строка `0x40` и
-//! World `0x14`; только затем account приводится к lowercase и полный owner-
-//! набор ставится в `CLoginQueue::AddQuestCdkey` с login type `0`.
-//! Неустойчивая decompiler dataflow подтверждено точным EXE:
-//!
-//! Расширенный login-вариант `0x2FD0B` читает marker/version, World `0x20`,
-//! account `0x20` и password-source `0x104`. Пустой password вызывает тихий
-//! возврат раньше пустого account; затем из account удаляются пробелы без
-//! повторной проверки и без lowercase. Marker/version проверяются уже после
-//! сборки digest; отказ отправляет `0xAF50A + long(6) + "" + ""`. Успех
-//! ставит тот же queue-owner с login type `1`, нулевыми client code/key и
-//! принятым World. Странность digest подтверждено точным EXE:
-//! prefix исходного buffer и добавляет NUL только при отсутствии пробелов.
-//!
-//! Малый запрос списка миров `0x2FD0C` читает account с границей `0x20` и
-//! оставляет пустое значение без ответа. Для непустого account он строит
-//! `0xAF50B + account`, затем фактический owner `AddWorldInfoToMsg` дописывает
-//! число и записи миров с исходной no-queue проверкой и только после этого
-//! сообщение отправляется по socket ID принятого запроса.
-//!
-//! `Vec`, owned message и типизированные outcomes заменяют stack-массивы,
-//! `std::string`, SEH и ручные деструкторы. Сырые участки всех двадцати case и
-//! их compiler-generated cleanup-блоки удалены после переноса полезного эффекта.
+//! Обычный login удаляет пробелы, проверяет длины, marker/version и запрещённые
+//! символы до lowercase и постановки в CD-key FIFO. Расширенный login проверяет
+//! пустой password раньше account, не приводит account к lowercase и проверяет
+//! marker/version после сборки digest. Его digest сохраняет prefix исходного
+//! буфера и добавляет NUL только при отсутствии пробелов. Пустой account в
+//! запросе списка миров остаётся без ответа.
 
 use std::error::Error;
 use std::fmt;
@@ -167,39 +76,27 @@ const LOGIN_UNUSED_FIELD_LIMIT: usize = 0x40;
 const EXTENDED_LOGIN_WORLD_LIMIT: usize = 0x20;
 const EXTENDED_LOGIN_PASSWORD_LIMIT: usize = 0x104;
 
-/// Наблюдаемый результат одной из восстановленных ветвей `OnLogMessage`.
 #[derive(Debug)]
 pub(crate) enum LogMessageOutcome {
-    /// Ветка выполнила все достижимые side effects.
     Handled {
-        /// Неуспешные send/RNG side effects продолжения password-check.
         notices: Vec<PwdCheckedNotice>,
     },
-    /// Запрос списка персонажей передан queue-owner либо тихо им отклонён.
     PlayerListQuest { accepted: bool },
-    /// Запрос данных персонажа передан queue-owner либо тихо им отклонён.
     PlayerDataQuest { accepted: bool, player_id: i32 },
-    /// Create-role payload переслан выбранному World либо дал исходный no-op.
     CreateRole { forwarded: bool },
-    /// Delete-role запрос переслан выбранному World либо дал исходный no-op.
     DeleteRole { forwarded: bool, player_id: i32 },
-    /// Restore-role запрос переслан выбранному World либо дал исходный no-op.
     RestoreRole { forwarded: bool, player_id: u32 },
-    /// Ненулевой status завершил `0x2FD07` до любых cleanup-эффектов.
     ClientCleanupSkipped { status: i32 },
-    /// Нулевая ветвь выполнила полный cleanup независимо от World send.
     ClientCleanup {
         world_notified: bool,
         world_notice_error: Option<GameRouteError>,
         queue: ClientLostCleanupReport,
     },
-    /// Synthetic disconnect нашёл account в World-списке и вернулся раньше cleanup.
     SyntheticDisconnectWorldCdkeyPresent {
         login_mapping_removed: bool,
         client_quit_error: Option<GameRouteError>,
         world_id: i32,
     },
-    /// Synthetic disconnect не нашёл World CD-key и выполнил оставшийся cleanup.
     SyntheticDisconnectCleaned {
         login_mapping_removed: bool,
         client_quit_error: Option<GameRouteError>,
@@ -207,58 +104,35 @@ pub(crate) enum LogMessageOutcome {
         world_notice_error: Option<GameRouteError>,
         queue: ClientLostCleanupReport,
     },
-    /// World payload переслан исходному client identity после in-place opcode.
     WorldClientRelay { response_type: i32 },
-    /// World login-result переслан после условных CD-key/role-log side effects.
     WorldLoginResult {
         status: i8,
         cdkey_added: Option<bool>,
         role_logged: bool,
     },
-    /// World leave-result выполнил cleanup и поставил leave-запись без send.
     WorldLeaveResult,
-    /// Account после удаления пробелов не попал в исходную длину `1..=31`.
     LoginRequestAccountIgnored,
-    /// `GetEx(..., 0x10)` доказанно вернул null без client-ответа.
     LoginRequestPasswordIgnored,
-    /// Marker/version/account-проверка отправила исходный client-код.
     LoginRequestRejected { response_code: u8 },
-    /// Полный login-request поставлен фактическому queue-owner.
     LoginRequestQueued,
-    /// `0x2FD0B` получил пустой password-source и вернулся раньше account.
     ExtendedLoginPasswordIgnored,
-    /// `0x2FD0B` получил пустой account до удаления пробелов.
     ExtendedLoginAccountIgnored,
-    /// Marker либо version вызвали точный ответ `0xAF50A`.
     ExtendedLoginRejected,
-    /// Полный `0x2FD0B` поставлен queue-owner с login type `1`.
     ExtendedLoginQueued,
-    /// `0x2FD0C` получил пустой account и оставил запрос без ответа.
     WorldListRequestIgnored,
-    /// `0x2FD0C` отправил account и фактический список миров по исходному socket.
     WorldListSent,
-    /// `CheckMsgInfo` доказанно оставлял socket-mismatch без ответа.
     SocketMismatchIgnored,
-    /// Matrix/valid-code handler получил пустой account и только диагностировал его.
     EmptyAccountIgnored,
-    /// Malformed payload безопасно отклонён без чтения за его границей.
     MalformedPayloadIgnored,
-    /// Успешная matrix-проверка не нашла обязательную login/world запись.
     LoginStateMissing,
-    /// Для opcode отсутствует case в исходном `OnLogMessage`.
     Unsupported { message_type: i32 },
 }
 
-/// Ошибка безопасной границы восстановленных ветвей `OnLogMessage`.
 #[derive(Debug)]
 pub(crate) enum LogMessageError {
-    /// Фактический Client/World transport-owner не выполнил обязательный send.
     Route(GameRouteError),
-    /// Новую valid-code картинку нельзя построить из runtime-ресурсов.
     ValidCode(ValidCodeError),
-    /// Positional Login setup не определил сравниваемую client version.
     LoginServerVersionMissing,
-    /// Частичный Login lifecycle ещё не присоединил исходный `CRsCDKey`.
     MatrixDatabaseOwnerMissing,
 }
 
@@ -300,18 +174,15 @@ impl From<ValidCodeError> for LogMessageError {
     }
 }
 
-/// Узкая композиция `OnLogMessage` с фактическим `CGame` LoginServer.
 pub(crate) struct LogMessageHandler<'a> {
     game: &'a mut CGame,
 }
 
 impl<'a> LogMessageHandler<'a> {
-    /// Связывает client-handler с текущим LoginServer owner.
     pub(crate) fn new(game: &'a mut CGame) -> Self {
         Self { game }
     }
 
-    /// Выполняет двадцать восстановленных opcode; неизвестные повторяют default no-op.
     pub(crate) fn on_log_message(
         &mut self,
         message: &mut CMessage,

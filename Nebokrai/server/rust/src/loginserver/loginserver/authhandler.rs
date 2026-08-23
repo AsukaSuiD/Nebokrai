@@ -1,27 +1,11 @@
-//! Владелец ответа AuthServer `AuthHandler` из `authhandler.cpp`.
+//! Embedded `AuthHandler` из `authhandler.cpp`, подтверждённый `loginserver.exe`
+//! и `loginserver.pdb`. Первый listener-slot остаётся no-op; второй синхронно
+//! передаётся stateless owner-у через адаптер `CGame`.
 //!
-//! Контракт обеих virtual-функций подтверждён точной парой LoginServer EXE/PDB.
-//! Первый slot, вызываемый `AuthManager::addQuest`, является no-op. `OnResponse` при
-//! результате `0` создаёт owned `TagPwdChecked` с пустым world-name и
-//! `has_matrix = false`, затем передаёт его в `CLoginQueue`. При совпадении
-//! account очередь вызывает `CGame::KickOut` под исходным queue-lock, удаляет
-//! прежний объект и добавляет новый в хвост.
-//!
-//! Любой ненулевой результат сначала отправляет клиенту `0xAF501` с одним
-//! байтом. Коды `2..=6` и `8..=12` имеют отдельное отображение;
-//! `1`, `7` и остальные значения идут через исходный default `7`. Только
-//! default-ветвь после client-send изменяет счётчик неверного пароля. Первая
-//! ошибка записывает `1`, последующие увеличивают значение, пока старое
-//! значение меньше лимита; следующая ошибка вызывает `CRsCDKey::CDKeyBan` и
-//! удаляет счётчик независимо от результата вызова.
-//!
-//! В оригинале `mAuthHandler` был встроен в `CGame`, а callbacks находили тот
-//! же глобальный `CGame`. Самоссылочная Rust-структура для этого не создаётся:
-//! `CGame` реализует технический `AuthListener`-адаптер и немедленно передаёт
-//! оба вызова этому stateless owner. Такая форма API меняет только владение,
-//! но сохраняет синхронный порядок callbacks. `std::string`, `std::map`, SEH,
-//! ручные `new/delete` и compiler cleanup удалены как технический шум; их
-//! существенные эффекты выражены owned bytes, владельцами и `Drop`.
+//! Успех ставит `TagPwdChecked` с пустым world-name и `has_matrix = false`.
+//! Ошибка сначала отправляет клиентский код; только default-код `7` затем меняет
+//! счётчик паролей. При превышении лимита ban вызывается до безусловного удаления
+//! счётчика, независимо от результата DB-owner-а.
 
 use crate::loginserver::loginserver::authmanager::{AuthQuest, AuthResult};
 use crate::loginserver::loginserver::game::{AuthHandlerNotice, CGame, PasswordFailureOutcome};
@@ -30,14 +14,11 @@ use crate::nets::netlogin::message::CMessage;
 
 const AUTH_FAILED_MESSAGE_TYPE: i32 = 0x000A_F501;
 
-/// Stateless-владелец двух virtual slot исходного embedded `AuthHandler`.
 pub(crate) struct AuthHandler;
 
 impl AuthHandler {
-    /// Сохраняет доказанный no-op первого virtual slot.
     pub(crate) fn on_quest(_quest: &AuthQuest) {}
 
-    /// Выполняет полный доказанный switch исходного `OnResponse`.
     pub(crate) fn on_response(game: &mut CGame, result: &AuthResult) {
         if result.result == 0 {
             let checked = TagPwdChecked::new(

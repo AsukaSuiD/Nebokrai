@@ -1,5 +1,5 @@
 //! Внутренний диагностический helper исходного LoginServer.
 //!
-//! Происхождение: `loginserver.exe`/`LoginServer.pdb`, `pre_test.cpp`. Функции
+//! Происхождение: `loginserver.exe`/`loginserver.pdb`, `pre_test.cpp`. Функции
 //! использовались только для локальных замеров и тестовой печати и не входят в
 //! runtime-, wire- или DB-контракт сервиса; исполняемого owner-а здесь нет.

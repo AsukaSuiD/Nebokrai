@@ -1,26 +1,10 @@
-//! Свободный handler `OnOtherMsg` из `miscserver/othermessage.cpp`.
+//! Ответные ветви `miscserver/othermessage.cpp`, подтверждённые
+//! `miscserver.exe` и `miscserver.pdb`.
 //!
-//! Контракт двух ответных ветвей и ширина единственного response-поля
-//! подтверждены точной парой MiscServer EXE/PDB.
-//!
-//!
-//! Handler знает только два полных opcode. `0x0007F809` при существующем
-//! `CMyNetClient` строит `0x0005FA0A`, а `0x0007F80B` без предварительной
-//! проверки client строит `0x0005FA0C`. Оба ответа содержат один нулевой
-//! 32-битный payload и отправляются без приоритета; результат `Send` исходник
-//! игнорировал. При отсутствии client первая ветвь завершается до создания
-//! сообщения, тогда как вторая всё равно вызывает `Send` и получает старый
-//! нулевой результат. Остальные opcode ничего не делают.
-//!
-//! Перегрузка `CBaseMessage::Add(..., 0)` увеличивает длину на четыре. Нулевой
-//! signed/unsigned bit-pattern одинаков;
-//! Rust использует существующий `add_long(0)` и не назначает полю доменное имя.
-//!
-//! Nullable входной `CMessage*` заменён обязательной ссылкой: `CMessage::Run`
-//! вызывает handler только для живого owned сообщения. Nullable global
-//! `s_pNetClient` остаётся `Option<&dyn MessageSender>`. SEH, stack-local
-//! destructors и ручной выбор удаляемого `CMessage*` заменены владением и
-//! `Drop`; иных функций или неразрешённых блоков в этом owner-файле нет.
+//! Оба ответа несут одно нулевое 32-битное поле и отправляются без приоритета.
+//! Без client-а `0x7F809` завершается до создания ответа, тогда как `0x7F80B`
+//! всё равно вызывает `Send` и получает нулевой результат. Остальные opcode —
+//! no-op.
 
 use crate::nets::netmisc::message::{CMessage, MessageSender, SendMessageError};
 
@@ -29,21 +13,16 @@ const WORLD_STATUS_RESPONSE: i32 = 0x0005_FA0A;
 const WORLD_SYNC_REQUEST: i32 = 0x0007_F80B;
 const WORLD_SYNC_RESPONSE: i32 = 0x0005_FA0C;
 
-/// Наблюдаемый итог одного вызова исходного `OnOtherMsg`.
 #[derive(Debug)]
 pub(crate) enum OtherMessageOutcome {
-    /// Opcode не входил в две известные ветви handler-а.
     Unhandled,
-    /// `0x7F809` завершился до создания ответа из-за отсутствующего client.
     MissingClient,
-    /// Ответ создан, а исходно игнорировавшийся результат отправки сохранён.
     Response {
         message_type: i32,
         send: Result<i32, SendMessageError>,
     },
 }
 
-/// Обрабатывает две доказанные служебные ветви World-to-Misc.
 pub(crate) fn on_other_msg(
     message: &CMessage,
     sender: Option<&dyn MessageSender>,

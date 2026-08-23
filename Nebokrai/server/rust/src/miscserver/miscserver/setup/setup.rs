@@ -1,22 +1,14 @@
-//! Конфигурация соединения MiscServer из `miscserver/setup/setup.cpp` и `.h`.
+//! Конфигурация `miscserver/setup/setup.cpp/.h`, подтверждённая
+//! `miscserver.exe` и `miscserver.pdb`.
 //!
-//!
-//! `LoadIpPort` открывал ровно `setup.ini` и последовательно извлекал четыре
-//! пары `label value`: World IP, World port, local bind IP и listen port.
-//! Labels не проверялись. Строки остаются byte-exact, оба порта — исходные
-//! `unsigned short`. Успешный open давал `true` даже после позднего stream
-//! fail, сохраняя уже записанный prefix; Rust возвращает тот же partial
-//! snapshot отдельным отчётом. Ошибка открытия не меняет прежнее состояние.
-//!
-//! Constructor записывал только vtable и не задавал полям `IP_PORT` defaults.
-//! Поэтому Rust хранит каждое ещё не прочитанное поле как `None`, а не
-//! придумывает ноль либо пустой адрес. Process-global lazy `GetInstance`
-//! заменён обычным owned `CSetup`: единственный `CGame` получает тот
-//! же единственный экземпляр без global mutable state и ручного `new`.
-//!
-//! `std::vector<unsigned char>::resize`, два `$L` unwind-funclet, allocator,
-//! iostream internals и singleton allocation удалены как library/compiler
-//! plumbing. Их существенный эффект выражен owned bytes, `fs::read` и `Drop`.
+//! `LoadIpPort` читает из `setup.ini` четыре позиционные пары: World IP и порт,
+//! local bind IP и listen port. Имена слева игнорируются, строки остаются
+//! byte-exact, порты сохраняют тип `unsigned short`. После успешного открытия
+//! поздний stream fail оставляет прочитанный префикс и общий успех; ошибка
+//! открытия не меняет прежнее состояние.
+//! Неинициализированные поля оригинала представлены `None`. Процессный
+//! singleton заменён единственным owned `CSetup`; файловый ввод и память
+//! переданы стандартной библиотеке.
 
 use std::error::Error;
 use std::fmt;
@@ -24,7 +16,6 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Четыре значения исходного `IP_PORT`, ещё не прочитанные после constructor.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct IpPortSetup {
     world_ip: Option<Vec<u8>>,
@@ -34,37 +25,29 @@ pub(crate) struct IpPortSetup {
 }
 
 impl IpPortSetup {
-    /// Возвращает byte-exact адрес WorldServer либо исходное отсутствие value.
     pub(crate) fn world_ip(&self) -> Option<&[u8]> {
         self.world_ip.as_deref()
     }
 
-    /// Возвращает исходный WorldServer port.
     pub(crate) const fn world_port(&self) -> Option<u16> {
         self.world_port
     }
 
-    /// Возвращает byte-exact local bind IPv4 либо исходное отсутствие value.
     pub(crate) fn local_ip(&self) -> Option<&[u8]> {
         self.local_ip.as_deref()
     }
 
-    /// Возвращает port, который MiscServer сообщает WorldServer при connect.
     pub(crate) const fn listen_port(&self) -> Option<u16> {
         self.listen_port
     }
 }
 
-/// Итог одного успешного открытия positional Misc `setup.ini`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SetupLoadReport {
-    /// Число полностью применённых пар в диапазоне `0..=4`.
     pub(crate) parsed_pairs: usize,
-    /// Первая недочитанная либо malformed пара; `None` означает полный файл.
     pub(crate) stopped_at_pair: Option<usize>,
 }
 
-/// Ошибка открытия исходного Misc `setup.ini` без раскрытия его содержимого.
 #[derive(Debug)]
 pub(crate) struct SetupOpenError {
     pub(crate) path: PathBuf,
@@ -88,19 +71,16 @@ impl Error for SetupOpenError {
     }
 }
 
-/// Owned форма единственного исходного singleton `CSetup`.
 #[derive(Debug, Default)]
 pub(crate) struct CSetup {
     ip_port: IpPortSetup,
 }
 
 impl CSetup {
-    /// Создаёт состояние без придуманных constructor-defaults.
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    /// Возвращает текущий partial либо полный снимок `m_IpPort`.
     pub(crate) const fn ip_port(&self) -> &IpPortSetup {
         &self.ip_port
     }
@@ -122,7 +102,6 @@ impl CSetup {
         Ok(self.parse_ip_port(&bytes))
     }
 
-    /// Сохраняет прямое делегирование исходного `LoadSetup` в `LoadIpPort`.
     pub(crate) fn load_setup(
         &mut self,
         path: impl AsRef<Path>,

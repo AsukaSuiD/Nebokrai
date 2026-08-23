@@ -9,10 +9,10 @@
 //! остальные владельцы выполняются синхронно в той же позиции сообщения.
 //!
 //! `process_login_messages` соединяет runner с
-//! `CGame::ProcessMessage` и сохраняет typed outcome каждого сообщения в
+//! `CGame::ProcessMessage` и сохраняет результат каждого сообщения в
 //! порядке World -> Client -> Auth. Неизвестный opcode получает только
-//! доказанный no-op `CMessage::Run`; общий protocol framework, runtime-loop и
-//! обработчик недоказанного `0x10F101` здесь не создаются.
+//! no-op `CMessage::Run`; общий protocol framework, runtime-loop и обработчик
+//! неподтверждённого `0x10F101` здесь не создаются.
 
 use std::error::Error;
 use std::fmt;
@@ -30,7 +30,6 @@ pub(crate) mod gmmessage;
 pub(crate) mod logmessage;
 pub(crate) mod servermessage;
 
-/// Наблюдаемый результат одного конкретно маршрутизированного Login-сообщения.
 #[derive(Debug)]
 pub(crate) enum LoginComponentMessageOutcome {
     Auth(AsMessageOutcome),
@@ -38,22 +37,17 @@ pub(crate) enum LoginComponentMessageOutcome {
     Gma(AsMessageOutcome),
     Log(LogMessageOutcome),
     Server(ServerMessageOutcome),
-    /// `CMessage::Run` не назначил исторического владельца этому opcode.
     Ignored {
         message_type: i32,
     },
 }
 
-/// Итог исходного snapshot `CGame::ProcessMessage` и outcomes в FIFO-порядке.
 #[derive(Debug)]
 pub(crate) struct LoginProcessMessageOutcome {
-    /// Исходный успешный результат `CGame::ProcessMessage` равен `1`.
     pub(crate) legacy_result: i32,
-    /// Результаты сообщений строго в порядке World -> Client -> Auth.
     pub(crate) messages: Vec<LoginComponentMessageOutcome>,
 }
 
-/// Ошибка выбранного `CMessage::Run` исторического владельца.
 #[derive(Debug)]
 pub(crate) enum LoginComponentMessageError {
     Auth(AsMessageError),
@@ -84,18 +78,15 @@ impl Error for LoginComponentMessageError {
     }
 }
 
-/// Конкретная композиция Login handlers с единственным process-wide AuthManager.
 pub(crate) struct LoginComponentRunner<'a> {
     auth_manager: &'a mut AuthManager,
 }
 
 impl<'a> LoginComponentRunner<'a> {
-    /// Присоединяет исходный глобальный `gAuthMgr` к component-runner.
     pub(crate) fn new(auth_manager: &'a mut AuthManager) -> Self {
         Self { auth_manager }
     }
 
-    /// Выполняет владельца, выбранного фактическим `CMessage::Run`.
     pub(crate) async fn run(
         &mut self,
         game: &mut CGame,
@@ -134,7 +125,6 @@ impl<'a> LoginComponentRunner<'a> {
     }
 }
 
-/// Выполняет один исходный snapshot трёх Login FIFO конкретными handlers.
 pub(crate) async fn process_login_messages(
     game: &mut CGame,
     auth_manager: &mut AuthManager,

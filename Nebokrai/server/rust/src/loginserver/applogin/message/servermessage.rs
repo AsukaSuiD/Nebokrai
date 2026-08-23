@@ -1,54 +1,19 @@
-//! World lifecycle-ветви LoginServer из `applogin/message/servermessage.cpp`.
+//! World lifecycle, CD-key snapshots, telemetry и server-log обработчики
+//! `applogin/message/servermessage.cpp`, подтверждённые `loginserver.exe` и
+//! `loginserver.pdb`.
 //!
-//! `0x1FE01`/`0xFF01` (World lifecycle) и `0x1FE02`/`0x1FE03` (CD-key
-//! snapshot/clear), `0x1FE04` (World/Game telemetry) и
-//! `0x1FE05`/`0x1FE06`/`0x1FE08` (`_serv_logs`). Контракт подтверждён точной
-//! парой LoginServer EXE/PDB.
+//! Connect назначает socket identity до `AddWorld`, а ack и журнал выполняются
+//! даже после отказа добавления; disconnect всегда завершает `DelWorld`.
+//! Setup-карта не меняет состав, а world-state, queue count и CD-key snapshot
+//! обновляются в исходном порядке. Игнорируемые transport-ошибки этот порядок
+//! не прерывают.
 //!
-//! Connect буквально читает `world_id/name`, сначала ставит numeric identity
-//! socket, затем вызывает `AddWorld`, пишет операторский результат, отправляет
-//! `0x4FC03 + area_id` тому же socket и только после этого условно ставит
-//! запись `_serv_logs`. Даже rejected `AddWorld` не отменяет ack и connect-log;
-//! ошибка ack также не пропускает более позднюю log-позицию. Disconnect берёт
-//! ID из metadata, только для известного имени пишет lost-log и очищает CD-key,
-//! после чего всегда вызывает `DelWorld`.
-//!
-//! `CGame` сохраняет setup-карту: connect/disconnect меняют её state-level, но
-//! не состав. Обе мутации рассылают `0xAF509` account без выбранного World,
-//! обновляют `CLoginQueue::m_nWordNum` и затем соответственно заменяют либо
-//! удаляют `s_listCdkey[world_id]`. Проигнорированные исходником ошибки рассылки
-//! и ack остаются typed-результатами, а не меняют порядок side effects.
-//!
-//! Строка connect-записи `_serv_logs` сохраняется byte-exact:
-//! `WS%s` + CP936 `在` + `_strdate` + пробел + `_strtime` + CP936 `连接` +
-//! `LS.`; поля queue равны `(peer_ip, -2, world_id, description)`. Два вызова
-//! `Local::now` сохраняют отдельные позиции старых `_strdate/_strtime`.
-//! MFC `UpdateDisplayWorldInfo` не переносится в Linux runtime: наблюдаемое
-//! состояние уже принадлежит `CGame`, а Windows GUI не является контрактом.
-//! FreeType/STL/SEH cleanup из сырого экспорта удалён как library/compiler noise.
-//!
-//! `0x1FE02` сохраняет short-circuit: при нулевом World ID второй `long` даже
-//! не читается; любой ненулевой count создаёт owned DB-контекст, но строки
-//! читаются только пока count положителен. Каждый account сначала независимо
-//! передаётся `AddCdkey`, затем всегда попадает в DB snapshot, даже при
-//! duplicate/неизвестном World. `UpdateOnlineUser2DB` выполняется отдельным
-//! owned worker: DELETE и INSERT идут в исходном порядке, ошибки отдельных
-//! statements не останавливают следующие. `0x1FE03` вызывает `ClearCDKey`
-//! только для положительного count.
-//!
-//! `0x1FE04` безусловно добавляет один World snapshot. World player count,
-//! map-ID port и оба GameServer numeric-поля сохраняют исходный 32-битный bit
-//! pattern; Game-записи читаются только при положительном signed count.
-//! Потерянные IPv4-varargs подтверждены точным EXE: точный EXE
-//! старшему, что совпадает с общим `legacy_ipv4_word`.
-//!
-//! Три server-log opcode проверяют `dwServerInfoLogTime` до чтения payload и
-//! при нуле немедленно возвращаются. `0x1FE06` ставит тип `-2`, `0x1FE08`
-//! sign-расширяет исходный `char`, обе ветви глубоко копируют готовые `0x80`-
-//! ограниченные bytes. Формат `0x1FE05` подтверждено точным EXE:
-//! передаёт `_strdate`, `_strtime`, затем signed `m_lMapID`. Source IP и второй
-//! `long` входят только в поля queue. Два `Local::now` сохраняют отдельные
-//! позиции старых date/time вызовов; описание остаётся byte-exact.
+//! Нулевой World ID в user snapshot не потребляет count. Каждый account сначала
+//! проходит `AddCdkey`, затем независимо попадает в DB snapshot; DELETE и INSERT
+//! worker-а продолжаются после отдельных SQL-ошибок. Signed counts управляют
+//! чтением записей, а numeric telemetry сохраняет 32-битные bit patterns.
+//! Server-log ветви проверяют cadence до payload; byte-exact описания и порядок
+//! отдельных date/time вызовов сохраняются.
 
 use std::net::Ipv4Addr;
 
@@ -73,7 +38,6 @@ const SERVER_STRING_LIMIT: usize = 0x100;
 const GAME_SERVER_IP_LIMIT: usize = 0xFF;
 const SERVER_LOG_TEXT_LIMIT: usize = 0x80;
 
-/// Наблюдаемый результат восстановленных ветвей `OnServerMessage`.
 #[derive(Debug)]
 pub(crate) enum ServerMessageOutcome {
     WorldConnected {
@@ -86,13 +50,11 @@ pub(crate) enum ServerMessageOutcome {
     },
     WorldDisconnected {
         world_id: i32,
-        /// `Some` соответствует позиции исходного `AddLogText(...lost!)`.
         world_name: Option<Vec<u8>>,
         deactivation: WorldDeactivationOutcome,
     },
     WorldUsersSnapshot {
         world_id: i32,
-        /// `None` сохраняет short-circuit нулевого World ID.
         declared_count: Option<i32>,
         processed_accounts: usize,
         added_accounts: usize,
@@ -119,18 +81,15 @@ pub(crate) enum ServerMessageOutcome {
     },
 }
 
-/// Узкая композиция `OnServerMessage` с фактическим `CGame` LoginServer.
 pub(crate) struct ServerMessageHandler<'a> {
     game: &'a mut CGame,
 }
 
 impl<'a> ServerMessageHandler<'a> {
-    /// Связывает server-handler с текущим LoginServer owner.
     pub(crate) fn new(game: &'a mut CGame) -> Self {
         Self { game }
     }
 
-    /// Выполняет все подтверждённые ветви и сохраняет default как no-op.
     pub(crate) fn on_server_message(
         &mut self,
         message: &mut CMessage,

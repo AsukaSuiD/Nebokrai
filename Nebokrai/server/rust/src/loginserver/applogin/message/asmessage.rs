@@ -1,31 +1,13 @@
-//! Сообщения AuthServer и GMA LoginServer из `asmessage.cpp`.
+//! AuthServer/GMA-обработчики `asmessage.cpp`, подтверждённые `loginserver.exe`
+//! и `loginserver.pdb`.
 //!
-//! Owner реализует общий selector, AuthServer и GMA handlers; контракт
-//! подтверждён точной парой LoginServer EXE/PDB.
-//!
-//! `0xCF301` сначала явно закрывает текущий Auth client и только затем заменяет
-//! прежний reconnect-thread управляемой Tokio-задачей. Она немедленно пробует
-//! весь `aslist.ini`, после неуспеха ждёт исходные пять секунд и при успехе
-//! публикует owned replacement в ту же FIFO прежнего клиента. Поэтому
-//! `ReassignAS` всё ещё исполняется в исходной позиции очереди, а Win32
-//! `PostThreadMessage(0x464)`, handle и передача указателя через `0xCF302` не
-//! получают небезопасных Rust-аналогов. Wire-пакет `0xCF302` отвергается
-//! отдельно: в оригинале этот тип был только внутрипроцессным pointer-event.
-//!
-//! `0xCF601` передаётся фактическому `AuthManager`, который удаляет pending
-//! quest и синхронно вызывает точную `AuthListener`-границу реализованного
-//! embedded `AuthHandler` через `CGame`; результат также возвращается как outcome
-//! для logging/runtime-owner. GMA ветви меняют opcode того же сообщения и
-//! используют реальные Auth/World send-владельцы `CGame`. `GetWorldIDByName`
-//! сохраняет byte-exact имя, connected-state и sentinel `-1`. Для отсутствующего
-//! мира ответ `0xCF801` содержит request ID, нулевой result, operator/account и
-//! diagnostic с исходным world name.
-//!
-//! Diagnostic-строка получает адрес буфера world name. Ограничение обоих
-//! `GetStr` равно `0x100`;
-//! отсутствие NUL в пределах буфера сохраняет пустой результат и уже
-//! сдвинутый курсор. SEH, stack cookie, временные C-массивы и ручные
-//! деструкторы заменены владеющими `Vec`/`CMessage`.
+//! Закрытие Auth-соединения предшествует запуску управляемого reconnect; успешная
+//! замена возвращается в ту же FIFO-позицию. `0xCF302` остаётся только
+//! внутрипроцессным pointer-event оригинала и отвергается на wire.
+//! Ответ Auth удаляет pending quest до синхронного `AuthListener` callback.
+//! GMA-ветви переиспользуют сообщение с новым opcode и фактические Auth/World
+//! send-owner-ы. Ограниченные строки сохраняют сдвиг курсора и пустой результат
+//! при отсутствии NUL.
 
 use std::error::Error;
 use std::fmt;
@@ -51,39 +33,26 @@ const GMA_AUTH_RANGE_START: u32 = 0x000C_F700;
 const GMA_AUTH_RANGE_END: u32 = 0x000C_F8FF;
 const LEGACY_STRING_LIMIT: usize = 0x100;
 
-/// Какой исходный обработчик встретил неизвестный opcode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum UnknownAsMessageOwner {
-    /// `OnASMessage` после исключения доказанных ветвей.
     Auth,
-    /// `OnGMAMessage` после исключения четырёх доказанных ветвей.
     Gma,
 }
 
-/// Наблюдаемый результат одного обработчика без прежнего `AddLogText`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AsMessageOutcome {
-    /// Доказанная ветвь полностью выполнила свои side effects.
     Handled,
-    /// `AuthManager` разобрал ответ и синхронно вызвал `AuthListener`.
     AuthResponse(AuthResponseOutcome),
-    /// Старый warning представлен структурированно process diagnostics.
     Unknown {
-        /// Обработчик, владевший warning.
         owner: UnknownAsMessageOwner,
-        /// Полный исходный тип сообщения.
         message_type: i32,
     },
 }
 
-/// Ошибка безопасной границы доказанных AS/GMA маршрутов.
 #[derive(Debug)]
 pub(crate) enum AsMessageError {
-    /// Фактический Auth/World transport-owner недоступен либо не собрал frame.
     Route(GameRouteError),
-    /// Управляемый reconnect-owner не смог быть запущен.
     Reconnect(AuthLifecycleError),
-    /// В wire пришёл исторический тип, содержавший только process-local pointer.
     LegacyReconnectPointerOnWire,
 }
 
@@ -120,19 +89,16 @@ impl From<AuthLifecycleError> for AsMessageError {
     }
 }
 
-/// Конкретная композиция `g_pGame` и `gAuthMgr` исходного message-файла.
 pub(crate) struct AsMessageHandlers<'a> {
     game: &'a mut CGame,
     auth_manager: &'a mut AuthManager,
 }
 
 impl<'a> AsMessageHandlers<'a> {
-    /// Связывает обработчик с `CGame`, содержащим embedded listener-owner.
     pub(crate) fn new(game: &'a mut CGame, auth_manager: &'a mut AuthManager) -> Self {
         Self { game, auth_manager }
     }
 
-    /// Выполняет `OnASMessage`, включая упорядоченный close/reconnect путь.
     pub(crate) async fn on_as_message(
         &mut self,
         message: &mut CMessage,
@@ -160,7 +126,6 @@ impl<'a> AsMessageHandlers<'a> {
         }
     }
 
-    /// Выполняет `OnGMAMessage` для сообщений как от Auth, так и от GM-входа.
     pub(crate) fn on_gma_message(
         &mut self,
         message: &mut CMessage,

@@ -1,23 +1,11 @@
-//! GM-обработчик LoginServer из `applogin/message/gmmessage.cpp`.
+//! GM-обработчик `applogin/message/gmmessage.cpp`, подтверждённый
+//! `loginserver.exe` и `loginserver.pdb`.
 //!
-//!
-//! Единственный известный opcode `0x20001` читает ограниченный 256-байтовый
-//! account, затем signed Windows `long` duration и синхронно вызывает
-//! `CRsCDKey::CDKeyBan`. Неизвестный opcode остаётся исходным no-op. Обычная
-//! нехватка числового payload у общего `CBaseMessage` даёт доказанный legacy-
-//! ноль без сдвига курсора; поэтому короткий duration передаётся как `0`, а
-//! фактический DB-owner возвращает `false` без SQL side effect.
-//!
-//! Borrowed `CGame` заменяет глобальный `GetGame`, а `Vec<u8>` — stack-массив
-//! `char[256]`; bytes не требуют UTF-8 и передаются единственному уже
-//! восстановленному `CRsCDKey`. Отсутствующий DB-owner выражен ошибкой
-//! незавершённого Rust lifecycle, а не временным успехом. Исходный handler
-//! игнорировал `bool` DB-вызова; typed outcome только делает его доступным
-//! component-runner’у и не добавляет побочного эффекта.
-//!
-//! Попавшие в экспорт `std::transform`, внутренности STL и `$L...` cleanup
-//! относятся к заменённым библиотечным/compiler-механизмам большого соседнего
-//! handler и удалены. Их память и деструкторы уже выражены владением и `Drop`.
+//! Opcode `0x20001` читает account до 256 байт и signed Windows `long`, затем
+//! синхронно вызывает `CRsCDKey::CDKeyBan`; остальные opcode — no-op. Короткое
+//! числовое поле даёт legacy-ноль без сдвига курсора. Account остаётся набором
+//! байт, отсутствие DB-owner-а является ошибкой незавершённого lifecycle.
+//! Результат DB-вызова оригинал игнорировал; отчёт не меняет эффектов.
 
 use std::error::Error;
 use std::fmt;
@@ -28,19 +16,14 @@ use crate::nets::netlogin::message::CMessage;
 const CD_KEY_BAN_MESSAGE_TYPE: i32 = 0x0002_0001;
 const ACCOUNT_LIMIT: usize = 0x100;
 
-/// Наблюдаемый результат `OnGMMessage` без добавления новой реакции.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GmMessageOutcome {
-    /// `CRsCDKey::CDKeyBan` вызван, а исходно проигнорированный bool сохранён.
     BanAttempted { succeeded: bool },
-    /// Opcode не принадлежит единственной ветви этого владельца.
     Unsupported { message_type: i32 },
 }
 
-/// Ошибка обязательной lifecycle-границы GM-handler.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GmMessageError {
-    /// `CGame::Init` ещё не присоединил исходный `CRsCDKey`.
     DatabaseOwnerMissing,
 }
 
@@ -56,18 +39,15 @@ impl fmt::Display for GmMessageError {
 
 impl Error for GmMessageError {}
 
-/// Узкая композиция `OnGMMessage` с фактическим `CGame` LoginServer.
 pub(crate) struct GmMessageHandler<'a> {
     game: &'a mut CGame,
 }
 
 impl<'a> GmMessageHandler<'a> {
-    /// Связывает GM-handler с текущим LoginServer owner.
     pub(crate) fn new(game: &'a mut CGame) -> Self {
         Self { game }
     }
 
-    /// Выполняет единственный известный GM opcode; остальные оставляет no-op.
     pub(crate) fn on_gm_message(
         &mut self,
         message: &mut CMessage,

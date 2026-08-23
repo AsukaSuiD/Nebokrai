@@ -1,84 +1,20 @@
-//! Свободный handler `OnMSG_W2M_AUCTION` из `miscservermessage.cpp`.
+//! Auction-handler `miscservermessage.cpp`, подтверждённый `miscserver.exe` и
+//! `miscserver.pdb` для `0x14ED01` и `0x14ED04..0x14ED09`.
 //!
-//! Handler реализует ветви `0x0014ED01` и `0x0014ED04..0x0014ED09`; контракт
-//! подтверждён точной парой MiscServer EXE/PDB.
+//! Добавление безусловно увеличивает wrapping add-счётчик; auction room владеет
+//! отказом invalid/duplicate и del-счётчиком. Operation `3` сохраняет дефект
+//! helper-а: он возвращает `false` даже после мутации, поэтому нулевой ack
+//! отправляется всегда. Operation `1` игнорирует тот же return и не отвечает.
 //!
+//! Sync выполняется не более раза за turn, использует строгое wrapping-условие
+//! 120 секунд и ставит done-count только после полного batch helper-а. Page
+//! меняется до построения ответа; последующая безопасная ошибка сериализации не
+//! откатывает эту мутацию. Короткие числа становятся нулями, короткий GUID —
+//! `GUID_INVALID`.
 //!
-//! `0x0014ED01` безусловно wrapping увеличивает `CGame::m_dwAddNewCount`,
-//! создаёт один heap `CGoodsNode`, читает его из общего message buffer по
-//! текущему `long&` cursor и независимо от результата добавления ничего не
-//! отправляет. Готовый `CAuctionRoom::AddItemToAuctionRoom` сохраняет
-//! invalid/duplicate отказ, удаление нового owner и `m_dwDelNewCount`.
-//!
-//! `0x0014ED04` читает signed player ID, затем GUID, и вызывает Misc
-//! `PushItemToOptList` с operation `3`. Сохраняется наблюдаемый дефект:
-//! helper всегда возвращает `false`, даже когда записал buyer и вставил GUID в
-//! opt-list. Поэтому handler всегда строит `0x0015EB06` с двумя 32-битными
-//! полями `0` и исходным player ID и отправляет его без приоритета. Ширина
-//! достигнутого `OnOtherMsg`.
-//! Короткий wire сохраняет поведение готовых безопасных getters: отсутствующий
-//! long становится `0`, а отсутствующий GUID — `GUID_INVALID`, после чего
-//! helper не мутирует комнату, но тот же ответ всё равно отправляется.
-//!
-//! `0x0014ED05` только при turn-local `m_dwDoneSysnCount == 0` читает map ID,
-//! unsigned 32-битный count и столько GUID в ordered `CGUID -> bool(false)`.
-//! Значение больше `10000` порождает прежний операторский warning, но не
-//! ограничивает цикл. Пока `m_bDoneSyscMsg == false`, handler лишь проверяет
-//! строгое wrapping-условие `m_dwStartTime + 120000 < timeGetTime`; даже при
-//! срабатывании текущий пакет не синхронизируется. Уже разрешённая ветвь строит
-//! доказанный batch `UnityGoods`, игнорирует результаты всех `Send` и только
-//! после полного возврата helper-а ставит `m_dwDoneSysnCount = 1`.
-//! Constructor не задавал этот count; safe Rust задаёт внутренний ноль, а
-//! фактический `GameThreadFunc` всё равно повторяет исходную turn-local запись.
-//!
-//! `0x0014ED06` читает player ID как unsigned 32-битный шаблон, первым пишет
-//! его в `0x0015EB07`, затем вызывает готовый self-list owner и выполняет один
-//! неприоритетный `Send`. Signed owner-key получается тем же 32-битным
-//! преобразованием, что и в старом вызове `uint -> int`. Safe-ошибка
-//! `CGoodsNode::Serialize` локально блокирует ещё не отправленный response:
-//! старый `void Serialize` не задаёт байты неинициализированных полей.
-//!
-//! `0x0014ED07` читает unsigned player ID и page-operation, сначала буквально
-//! меняет сохранённую page через `ComputePlayerPage`, затем строит `0x0015EB08`
-//! с player ID первым полем, дописывает временную страницу и выполняет один
-//! неприоритетный `Send`. Отсутствующий player-search узел оставляет response
-//! только с player ID. Любая safe page/filter/serialization граница блокирует
-//! ещё не отправленное локальное сообщение, сохраняя уже выполненную page-
-//! мутацию, но не назначая результат старого UB.
-//!
-//! `0x0014ED08` читает один GUID и ничего не делает для `GUID_INVALID`.
-//! Живой GUID передаётся готовому Misc `PushItemToOptList` с operation `1` и
-//! player ID `0`: этот operation записывает исходный owner ID в buyer перед
-//! постановкой GUID в opt-list. Доказанный всегда-`false` return helper-а
-//! игнорируется, ответ и `Send` отсутствуют. Короткий wire безопасно становится
-//! `GUID_INVALID` по уже принятой замене `GetGUID` и потому тоже не мутирует
-//! комнату; недоказанное старое чтение за границей не назначается.
-//!
-//! `0x0014ED09` создаёт `stPlayerOptNode` с page `0`, затем читает unsigned
-//! player ID и пять signed полей low/up/use-self/money/weapon, после чего
-//! принимает имя старым `GetStr(..., 0x100)`. Полный узел передаётся готовому
-//! `ModifyPlayerSeachCondition`: новый player ID вставляется, существующий
-//! получает полную замену значения. Ответ и `Send` отсутствуют. Короткие
-//! numeric-поля сохраняют уже принятую legacy-замену нулём; строка остаётся
-//! byte-exact в нулевом 256-байтовом буфере.
-//!
-//! `Box` заменяет `operator new/delete`, а общий wire-срез с `&mut usize` —
-//! старые `unsigned char* + long&`; cursor начинается после 16-байтового
-//! заголовка и сохраняет каждый успешный сдвиг. Nullable вход исключён:
-//! `CMessage::Run` вызывает handler только с живым owned сообщением.
-//!
-//! Старый `UnSerialize` не имел длины и не возвращал ошибку. Если безопасная
-//! граница встречает короткий buffer, переполненную строку либо невыделимый
-//! goods-вектор, уже выполненные add-счётчик, `Clear`, присваивания и сдвиги
-//! cursor сохраняются, а handler безопасно отклоняет узел до вызова комнаты.
-//! Rust-owner освобождается обычным `Drop`, а доменный
-//! `m_dwDelNewCount` не меняется, поскольку комната не достигнута. Реакция
-//! исходного UB и недостающие байты не назначаются; это не объявляется
-//! доказанным fail-closed поведением оригинала.
-//!
-//! Полное заменённое тело handler-а удалено. Два `$L` были его
-//! compiler-generated destructor/unwind cleanup без отдельного наблюдаемого
-//! эффекта и также удалены; Rust-массив и `PlayerOptNode` освобождаются `Drop`.
+//! Исходный `UnSerialize` не имел длины. Безопасная граница сохраняет уже
+//! выполненные счётчики, очистки, присваивания и cursor, но отклоняет неполный
+//! goods до передачи комнате; недоопределённое чтение за буфер не имитируется.
 
 use std::collections::BTreeMap;
 
@@ -107,58 +43,38 @@ const SYNC_WAIT_MILLISECONDS: u32 = 120_000;
 const UNITY_COUNT_WARNING_THRESHOLD: u32 = 10_000;
 const SEARCH_GOODS_NAME_BYTES: usize = 0x100;
 
-/// Наблюдаемый либо локально заблокированный итог достигнутой ветви handler-а.
 #[derive(Debug)]
 pub(crate) enum WorldAuctionOutcome {
-    /// Opcode ещё не принадлежит реализованной ветви этого владельца.
     Unhandled,
-    /// Узел принят комнатой и проиндексирован.
     ItemAdded,
-    /// Invalid либо duplicate GUID отклонён с исходным delete-счётчиком.
     ItemRejected,
-    /// Безопасное чтение остановилось на недоказанной старой UB-границе.
     UnserializeRejected(GoodsNodeUnserializeError),
-    /// Успешное чтение неожиданно достигло неинициализированного type-поля.
     MissingGoodsType(AddAuctionItemMissingGoodsType),
-    /// Теоретический положительный return helper-а подавил response.
     OperationWithoutResponse,
-    /// Обязательный из-за exact-дефекта ответ создан и отправлен.
     OperationResponse { send: Result<i32, SendMessageError> },
-    /// Sync уже был выполнен в текущем turn; payload не потреблялся.
     UnityAlreadyProcessed,
-    /// GUID-map прочитан, но sync-флаг ещё не разрешал вызов комнаты.
     UnityWaiting {
         count_warning: bool,
         enabled_now: bool,
     },
-    /// Safe-граница сериализации остановила Unity после сохранённых send-ов.
     UnitySerializeBlocked {
         count_warning: bool,
         sends: Vec<Result<i32, SendMessageError>>,
         error: GoodsNodeSerializeError,
     },
-    /// Unity полностью завершён и turn-local count поставлен в `1`.
     UnityCompleted {
         count_warning: bool,
         sends: Vec<Result<i32, SendMessageError>>,
     },
-    /// Safe-сериализация self-list остановилась до единственного Send.
     SelfAuctionSerializeBlocked(GoodsNodeSerializeError),
-    /// Self-list полностью построен и отправлен без приоритета.
     SelfAuctionResponse { send: Result<i32, SendMessageError> },
-    /// Safe page/filter-граница остановила ещё не отправленный response.
     AuctionPageBuildBlocked(AuctionPageBuildError),
-    /// Страница построена и отправлена без приоритета.
     AuctionPageResponse { send: Result<i32, SendMessageError> },
-    /// Invalid GUID не достиг operation helper-а и не изменил комнату.
     OwnerOperationIgnored,
-    /// Operation helper вызван; его всегда-`false` return намеренно отброшен.
     OwnerOperationRequested,
-    /// Полное условие поиска вставлено либо заменило прежнее значение.
     SearchConditionModified,
 }
 
-/// Обрабатывает доказанные ветви `0x0014ED01` и `0x0014ED04..0x0014ED09`.
 pub(crate) fn on_msg_w2m_auction(message: &mut CMessage, game: &mut CGame) -> WorldAuctionOutcome {
     if message.message_type() == QUEUE_AUCTION_OPERATION {
         let player_id = message.base_mut().get_long().unwrap_or(0);
@@ -274,7 +190,7 @@ pub(crate) fn on_msg_w2m_auction(message: &mut CMessage, game: &mut CGame) -> Wo
         item.unserialize(source, cursor)
     };
     if let Err(error) = unserialize {
-        // safe Rust не передаёт комнате частично прочитанный узел.
+        // Неполный узел не передаётся комнате вместо исходного чтения за буфером.
         return WorldAuctionOutcome::UnserializeRejected(error);
     }
 

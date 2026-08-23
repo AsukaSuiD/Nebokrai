@@ -1,15 +1,14 @@
-//! FIFO и сигнализация исторического `AccLogQueue` LoginServer.
+//! FIFO и сигнализация `AccLogQueue`, подтверждённые `loginserver.exe` и
+//! `loginserver.pdb`.
 //!
-//! Контракт подтверждён точной парой LoginServer EXE/PDB.
 //! Сохранена наблюдаемая странность: `push` сначала добавляет запись и
 //! игнорирует отказ `ReleaseSemaphore`, поэтому после 10000 накопленных
 //! сигналов более новые записи могут остаться в deque без сигнала. `clear`
 //! очищает только deque, не счётчик; следующий `pop` способен поглотить старый
 //! сигнал, получить пустую очередь и тем самым завершить `AccLogThread`.
-//! Typed-запись заменяет промежуточную C-строку, но SQL строится владельцем
+//! Typed-запись заменяет промежуточную C-строку, но SQL строится consumer-ом
 //! consumer в исходной producer-позиции времени. Явное stop-пробуждение —
-//! безопасная Linux/Rust-замена принудительного `TerminateThread` из `Release`.
-//! Локальных неизвестностей нет.
+//! безопасная замена принудительного `TerminateThread` из `Release`.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,7 +25,6 @@ struct AccLogQueueState {
     signals: usize,
 }
 
-/// Общая FIFO account-журналов с точной семантикой старого semaphore.
 pub(crate) struct AccLogQueue {
     state: Mutex<AccLogQueueState>,
     ready: Condvar,
@@ -40,7 +38,6 @@ impl AccLogQueue {
         }
     }
 
-    /// Добавляет запись даже при исчерпанном исходном лимите сигналов.
     pub(crate) fn push(&self, record: AccountLogRecord) {
         let mut state = self.state.lock();
         state.records.push_back(record);
@@ -50,7 +47,6 @@ impl AccLogQueue {
         }
     }
 
-    /// Ждёт один сигнал и извлекает старейшую запись, если она ещё существует.
     pub(crate) fn pop(&self, stop: &AtomicBool) -> Option<AccountLogRecord> {
         let mut state = self.state.lock();
         while state.signals == 0 && !stop.load(Ordering::Acquire) {
@@ -63,12 +59,10 @@ impl AccLogQueue {
         state.records.pop_front()
     }
 
-    /// Очищает deque, намеренно сохраняя уже накопленные semaphore-сигналы.
     pub(crate) fn clear(&self) {
         self.state.lock().records.clear();
     }
 
-    /// Будит ожидающий worker после установки безопасного stop-флага.
     pub(crate) fn wake_all(&self) {
         self.ready.notify_all();
     }

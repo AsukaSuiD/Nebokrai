@@ -1,123 +1,23 @@
-//! Владелец `CGame` исторического MiscServer из `miscserver/game.cpp`.
+//! Владелец runtime из `miscserver/game.cpp`, подтверждённый `miscserver.exe` и
+//! `miscserver.pdb`. Он управляет World-соединением, auction room, FIFO сообщений,
+//! статистикой и жизненным циклом процесса.
 //!
+//! Первичное соединение и reconnect удаляют прежний client и используют общий
+//! десятисекундный IPv4 connect. Оба отправляют регистрацию; первый добавляет
+//! sync и берёт порт из setup, второй использует `0x092F`. Ошибка reconnect
+//! оставляет client отсутствующим. Системный resolver заменяет старый поиск
+//! адреса, сохраняя выбор первого IPv4.
 //!
+//! FIFO снимается целиком. Opcode записывается до обработчика и сбрасывается
+//! после него, а reconnect завершается до следующего элемента. Семейство
+//! `0x14EC00` остаётся no-op с результатом `1`, прочие сообщения — с `0`.
 //!
-//! Обе network-функции сначала уничтожают прежний `CMyNetClient`, создают новый
-//! IPv4 socket через исходные `Create(0, 0, 1)` и синхронно разрешают World
-//! host до общего десятисекундного connect. `CreateSocketThread` заменён
-//! awaitable Tokio readiness у самого owned client; static message buffers и
-//! WinSock startup не получают пустых вызовов. Неуспех закрывает и уничтожает
-//! новый owner, оставляя nullable client, а успех включает `m_bControlSend` и
-//! только после постановки регистрационных сообщений сбрасывает
-//! `m_bClientClose`.
-//!
-//! Оба пути отправляют `0x5FA01 + byte(0) + long(port) + local_ip\0`, но port
-//! различается буквально: initial использует setup listen-port, reconnect —
-//! константу `0x092F`. Только initial затем ставит пустой `0x15EB05`.
-//! Результаты исходных `Send` игнорировались; Rust сохраняет их в отчёте, не
-//! меняя legacy success connect. Byte-oriented setup host/local IP получают
-//! C-string границу по первому NUL. Standard `ToSocketAddrs` заменяет
-//! `inet_addr/gethostbyname` и выбирает первый IPv4; high-bit/non-UTF8 hostname
-//! остаётся отдельной недоказанной resolution-границей.
-//!
-//! `ProcessMessage` атомарно забирает весь текущий `CMyNetClient` FIFO. Перед
-//! каждым `CMessage::Run` он сохраняет полный opcode в `m_dwCurMsg` и
-//! увеличивает signed `std::map<long,long>`; первая запись получает `1`, а
-//! последующие используют машинное 32-битное wrapping. После `Run` текущий
-//! opcode сбрасывается до удаления сообщения. `BTreeMap<i32, i32>` сохраняет
-//! ordered-map семантику без STL node/iterator plumbing, а owned очередь не
-//! может содержать старый nullable `CBaseMessage*`. Узкий `MessageHandlers`
-//! только запоминает владельца, выбранного точным numeric switch `Run`; затем
-//! вызываются готовые `OnMSG_W2M_AUCTION`, `OnMSG_M2M_Fuction` либо
-//! `OnOtherMsg`. Результат каждого handler-а и старый return `Run` сохраняются
-//! в FIFO-отчёте. Process snapshot стал awaitable только потому, что исходный
-//! синхронный `ReConnect` заменён async transport: следующий элемент не может
-//! обогнать его завершение. Особое семейство `0x14EC00` остаётся доказанным
-//! no-op с return `1`, а default `OnOtherMsg` — return `0`.
-//!
-//! Частичная Rust-форма `CGame` владеет достигнутыми setup/network полями,
-//! статистикой сообщений, двумя auction allocation-счётчиками и уже
-//! восстановленным Misc `CAuctionRoom<CGoodsNode>`. Оба счётчика constructor
-//! задавал нулями; handler `0x14ED01` увеличивает `m_dwAddNewCount`, а комната
-//! увеличивает `m_dwDelNewCount` только при invalid/duplicate GUID. Windows
-//! `unsigned long` выражен `u32` с явным wrapping.
-//!
-//! Для ветви `0x14ED05` точный PDB задаёт `m_bDoneSyscMsg: bool` по offset
-//! `0x7D`, `m_dwStartTime: unsigned long` по `0x80` и
-//! `m_dwDoneSysnCount: unsigned long` по `0x84`. Constructor ставит только
-//! первый флаг в `false` и снимает `timeGetTime` в start-time. Sync-count он не
-//! инициализирует: `GameThreadFunc` обнуляет его в начале каждого turn перед
-//! `ProcessMessage`. Rust задаёт безопасный constructor-ноль и повторяет
-//! обязательную запись в начале каждого runtime turn.
-//! `CLOCK_BOOTTIME` уже является совместимой suspend-aware заменой
-//! `timeGetTime`, а преобразование в `u32` сохраняет wrapping миллисекунд.
-//!
-//! `Init` первым создаёт либо очищает относительный `debug.txt` через
-//! write-open. Ошибка этой операции сохраняет прежние поля и немедленно
-//! завершает функцию. Только успешный close пустого файла ставит
-//! `m_bClientClose = true`, вызывает готовый positional `LoadSetup` и начинает
-//! `InitNetClient`; каждый нулевой результат создаёт operator-visible failed
-//! attempt, затем ровно `8000 ms` паузы и новую попытку до первого успеха.
-//! Legacy return самой функции равен `0` на всех путях, включая connected.
-//!
-//! `File::create` заменяет `fopen("debug.txt", "wb")/fclose`, а Tokio timer —
-//! `Sleep(8000)`. Linux shutdown передаётся как повторно используемый pinned
-//! future и может отменить connect либо паузу: оригинал не имел safe
-//! owned-выхода из бесконечного Init-retry, а Rust lifecycle не остаётся
-//! навсегда заблокированным после сигнала. Cancellation получает
-//! отдельный typed outcome и не выдаётся за старый return. `CBaseMessage::Initial`
-//! и `CMySocket::MySocketInit` не имеют пустых вызовов: static message scratch
-//! и WinSock startup уже заменены локальным message ownership и Linux
-//! transport. Единственные Misc `srand(time)` и проигнорированный
-//! `random(100)` не имеют последующего project-caller, поэтому отдельный
-//! process-global PRNG не создаётся заранее.
-//!
-//! `ReFlushLog` сначала снимает summary из размера primary auction-map,
-//! sync-флага и двух wrapping auction-счётчиков, затем выполняет
-//! `PutMemCondition`, копирует не более первых десяти пар ordered message-map и
-//! безусловно очищает весь map. MFC `SetWindowText`, `PutLogInfo` и
-//! `AddLogText` заменены одним typed-отчётом в том же порядке; точные старые
-//! форматы сохранены в документации его частей. Узкий accessor комнаты
-//! возвращает прежний 32-битный `_Mysize`, не открывая её контейнер владельцу.
-//!
-//! `PutMemCondition` сравнивает resident working set с порогом `0x02800000` и
-//! при превышении сбрасывает sync-флаг перед новым boot tick.
-//!
-//! `procfs 0.18` заменяет `GetProcessMemoryInfo`: Linux `VmRSS` является
-//! resident working set, а `VmSize` сохраняет ближайший доступный process-wide
-//! address-space показатель для исторической подписи `PagefileUsage`. Только
-//! `VmRSS` участвует в серверной мутации; различие Windows commit charge и
-//! Linux virtual size остаётся операторской диагностической заменой. Ошибка
-//! `/proc/self/status` сохраняет исходные предварительные нули и не сбрасывает
-//! sync. Значения `kB` сдвигаются на десять бит, что эквивалентно старому
-//! `bytes >> 20` без округления.
-//!
-//! `GameThreadFunc` владеет единственным локальным `CGame` вместо
-//! `CreateGame/GetGame/g_pGame`. Каждый turn сначала обнуляет sync-count, затем
-//! проверяет буквально `last.wrapping_add(10000) < now`, делает один
-//! cancellation-safe readiness poll старого client I/O непосредственно перед
-//! `AI`, после чего сохраняет порядок `AI -> ProcessMessage -> client-close ->
-//! ReConnect -> 0x10EF00`. Read и send раньше жили в независимых Windows
-//! threads, поэтому неблокирующий poll не вводит между ними новый порядок и не
-//! задерживает доменный turn при отсутствии readiness; кадры, принятые poll-ом,
-//! попадают в его текущий FIFO snapshot, а исходящие сообщения обслуживаются на
-//! следующей cadence не позднее очередной паузы `50 ms`.
-//!
-//! Ошибка раннего `debug.txt` оставляла `m_bClientClose` неинициализированным.
-//! Это внутренний lifecycle-дефект: safe Rust не входит в main-loop после
-//! неуспешного Init и не читает неопределённое состояние.
-//! Внешний shutdown является технической owned-заменой global exit flag и может
-//! отменить ожидающий connect/I/O turn. После любой достигнутой границы
-//! сохраняется `2005 ms -> exit notice -> CAuctionRoom::Clear`; `exit(0)` стал
-//! возвращаемым legacy status, потому что доменный owner не завершает общий
-//! общий Linux-процесс самостоятельно.
-//!
-//! compiler catch читает `CGame+0x88` (`m_dwCurMsg`), передаёт его формату
-//! shutdown-tail, а не к следующему turn. Safe handlers уже возвращают typed
-//! outcomes; SEH/COM, WinSock startup/cleanup, MFC logging, message destructor,
-//! STL map allocation и ручные new/delete не получают пустых аналогов. `Drop`,
-//! локальные сообщения, `BTreeMap`, Tokio и typed reports выражают их достигнутый
-//! эффект.
+//! `Init` очищает `debug.txt`, читает setup и повторяет connect каждые 8000 ms;
+//! его исторический результат всегда `0`. Shutdown может прервать ожидание.
+//! `ReFlushLog` проверяет память, сохраняет первые десять счётчиков и очищает
+//! карту. `/proc/self/status` заменяет Windows API; только `VmRSS` может сбросить
+//! sync-флаг. Runtime сохраняет порядок `AI -> ProcessMessage -> reconnect ->
+//! confirm`, паузу 50 ms и shutdown-tail `2005 ms -> notice -> auction Clear`.
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -154,7 +54,6 @@ const GAME_THREAD_DELAY: Duration = Duration::from_millis(50);
 const GAME_THREAD_SHUTDOWN_DELAY: Duration = Duration::from_millis(2_005);
 const RECONNECT_CONFIRMATION_TYPE: i32 = 0x0010_EF00;
 
-/// Причина нулевого результата исходного connect-прохода.
 #[derive(Debug)]
 pub(crate) enum MiscClientConnectFailure {
     MissingSetupField(&'static str),
@@ -163,14 +62,12 @@ pub(crate) enum MiscClientConnectFailure {
     Connect(ClientConnectError),
 }
 
-/// Два исходно игнорировавшихся результата постановки registration packets.
 #[derive(Debug)]
 pub(crate) struct MiscRegistrationReport {
     pub(crate) registration: Result<i32, SendMessageError>,
     pub(crate) initial_sync: Option<Result<i32, SendMessageError>>,
 }
 
-/// Полный итог одной попытки `InitNetClient` либо `ReConnect`.
 #[derive(Debug)]
 pub(crate) enum MiscClientConnectOutcome {
     Connected {
@@ -180,47 +77,34 @@ pub(crate) enum MiscClientConnectOutcome {
     Failed(MiscClientConnectFailure),
 }
 
-/// Причина завершения исходного init-прохода либо его Linux cancellation.
 #[derive(Debug)]
 pub(crate) enum MiscInitializationEnd {
-    /// Ранний write-open `debug.txt` не состоялся; остальные стадии пропущены.
     DebugFileUnavailable { path: PathBuf, source: io::Error },
-    /// `InitNetClient` впервые вернул исходный успех.
     Connected,
-    /// Owned lifecycle запросил shutdown во время connect либо паузы.
     Cancelled,
 }
 
-/// Полный typed-отчёт исходного `CGame::Init`.
 #[derive(Debug)]
 pub(crate) struct MiscInitializationReport {
-    /// Исходная функция возвращала `0` на любом пути.
     pub(crate) legacy_result: i32,
-    /// Результат `LoadSetup`; отсутствует только при ранней ошибке debug-файла.
     pub(crate) setup: Option<Result<SetupLoadReport, SetupOpenError>>,
-    /// Число выполненных connect-попыток без неограниченного хранения истории.
     pub(crate) attempt_count: u64,
-    /// Последняя попытка; каждая попытка отдельно передаётся process-observer-у.
     pub(crate) last_attempt: Option<MiscClientConnectOutcome>,
     pub(crate) end: MiscInitializationEnd,
 }
 
-/// Значения Linux `/proc/self/status`, соответствующие старой memory diagnostic.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MiscProcessMemorySnapshot {
-    /// `VmRSS` в единицах procfs `kB`.
     pub(crate) working_set_kib: Option<u64>,
-    /// `VmSize` в единицах procfs `kB` для старой подписи `PagefileUsage`.
     pub(crate) pagefile_usage_kib: Option<u64>,
 }
 
-/// Результат безопасной Linux-замены `GetProcessMemoryInfo`.
 #[derive(Debug)]
 pub(crate) enum MiscProcessMemoryQuery {
     Read(MiscProcessMemorySnapshot),
-    /// Старый zero-initialized `PROCESS_MEMORY_COUNTERS` оставался нулевым.
     Unavailable(ProcError),
 }
+/// Результат проверки лимита памяти и связанного сброса синхронизации.
 ///
 /// Основная строка имела точный формат
 /// `WorkingSetSize = %u(M)  PagefileUsage = %u(M) \n`; при reset следовала
@@ -228,11 +112,8 @@ pub(crate) enum MiscProcessMemoryQuery {
 #[derive(Debug)]
 pub(crate) struct MiscMemoryConditionReport {
     pub(crate) query: MiscProcessMemoryQuery,
-    /// Первый `%u(M)`: floor `WorkingSetSize / 2^20`.
     pub(crate) working_set_mib: u32,
-    /// Второй `%u(M)`: floor `PagefileUsage / 2^20`.
     pub(crate) pagefile_usage_mib: u32,
-    /// Был ли строго превышен порог `0x02800000` и сброшен auction sync.
     pub(crate) auction_sync_reset: bool,
 }
 
@@ -240,13 +121,9 @@ pub(crate) struct MiscMemoryConditionReport {
 /// `AuctionGoodsCount = %ld  SyscSign = %d AddMsg %u DisMsg %u \r\n`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MiscAuctionStatusSnapshot {
-    /// Старый формат: `AuctionGoodsCount = %ld`.
     pub(crate) auction_goods_count: i32,
-    /// Старый формат: `SyscSign = %d`, всегда `0` либо `1`.
     pub(crate) sync_sign: i32,
-    /// Старый формат: `AddMsg %u`.
     pub(crate) added_messages: u32,
-    /// Старый формат: `DisMsg %u`.
     pub(crate) discarded_messages: u32,
 }
 
@@ -254,23 +131,18 @@ pub(crate) struct MiscAuctionStatusSnapshot {
 /// ` MsgType = %u   MsgCount = %u \n`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MiscMessageCountSnapshot {
-    /// Старый формат: `MsgType = %u`.
     pub(crate) message_type: u32,
-    /// Старый формат: `MsgCount = %u`.
     pub(crate) message_count: u32,
 }
 
-/// Typed-замена GUI/file diagnostics одного `ReFlushLog`.
 #[derive(Debug)]
 pub(crate) struct MiscLogRefreshReport {
     pub(crate) status: MiscAuctionStatusSnapshot,
     pub(crate) memory: MiscMemoryConditionReport,
-    /// Первые десять signed-map ключей в возрастающем порядке, показанные как `%u`.
     pub(crate) message_counts: Vec<MiscMessageCountSnapshot>,
 }
 
 impl MiscClientConnectOutcome {
-    /// Возвращает исходный `1/0` без потери typed diagnostic.
     pub(crate) const fn legacy_result(&self) -> i32 {
         match self {
             Self::Connected { .. } => 1,
@@ -279,17 +151,14 @@ impl MiscClientConnectOutcome {
     }
 }
 
-/// Результат фактического владельца, выбранного `CMessage::Run`.
 #[derive(Debug)]
 pub(crate) enum MiscComponentHandlerOutcome {
-    /// Семейство `0x14EC00` вызвало пустой деструктор GUID.
     GuidFamilyNoOp,
     WorldAuction(WorldAuctionOutcome),
     MiscFunction(MiscFunctionOutcome),
     Other(OtherMessageOutcome),
 }
 
-/// Итог одного сообщения внутри исходного FIFO snapshot.
 #[derive(Debug)]
 pub(crate) struct MiscComponentMessageOutcome {
     pub(crate) message_type: i32,
@@ -297,28 +166,20 @@ pub(crate) struct MiscComponentMessageOutcome {
     pub(crate) handler: MiscComponentHandlerOutcome,
 }
 
-/// Итог одного полного `CGame::ProcessMessage` snapshot.
 #[derive(Debug)]
 pub(crate) struct MiscProcessMessageOutcome {
-    /// Исходный безусловный return `ProcessMessage` равен `0`.
     pub(crate) legacy_result: i32,
-    /// Результаты сообщений в точном порядке снятого WorldServer FIFO.
     pub(crate) messages: Vec<MiscComponentMessageOutcome>,
 }
 
-/// Результаты ветви `m_bClientClose != false` одного game-thread turn.
 #[derive(Debug)]
 pub(crate) struct MiscReconnectTurn {
-    /// Исходный operator notice `ReConnect....` достигнут.
     pub(crate) reconnect_notice: bool,
     pub(crate) connection: MiscClientConnectOutcome,
-    /// `0x10EF00` ставится после попытки reconnect даже при её неуспехе.
     pub(crate) confirmation: Result<i32, SendMessageError>,
 }
 
-/// Полный результат одного доказанного доменного turn до паузы `50 ms`.
 pub(crate) struct MiscGameThreadTurn {
-    /// Один неблокирующий I/O-шаг; `None` означает отсутствие readiness/client.
     pub(crate) network: Option<Result<MiscClientIoStep, MiscClientIoError>>,
     pub(crate) refresh: Option<MiscLogRefreshReport>,
     pub(crate) auction: crate::public::aucitionroom::AuctionAiOutcome,
@@ -326,23 +187,18 @@ pub(crate) struct MiscGameThreadTurn {
     pub(crate) reconnect: Option<MiscReconnectTurn>,
 }
 
-/// Выполненный общий tail оригинального `GameThreadFunc`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MiscGameThreadRelease {
-    /// Исходный operator notice `exit` достигнут после паузы `2005 ms`.
     pub(crate) exit_notice: bool,
-    /// Старый `exit(0)` возвращён владельцу общего process lifecycle.
     pub(crate) legacy_exit_status: i32,
 }
 
-/// Итог единственного owned аналога исходного `GameThreadFunc`.
 pub(crate) struct MiscGameThreadReport {
     pub(crate) initialization: MiscInitializationReport,
     pub(crate) completed_turns: u64,
     pub(crate) release: MiscGameThreadRelease,
 }
 
-/// Достигнутая setup/network-часть исходного `CGame`.
 pub(crate) struct CGame {
     setup: CSetup,
     auction_room: CAuctionRoom<CGoodsNode>,
@@ -359,7 +215,6 @@ pub(crate) struct CGame {
 }
 
 impl CGame {
-    /// Создаёт partial owner с явно переданным единственным `CSetup`.
     pub(crate) fn with_setup(setup: CSetup) -> Self {
         Self {
             setup,
@@ -377,17 +232,14 @@ impl CGame {
         }
     }
 
-    /// Создаёт единственный game-thread owner с исходно пустым setup singleton.
     pub(crate) fn new() -> Self {
         Self::with_setup(CSetup::new())
     }
 
-    /// Возвращает setup для исходной позиции `CGame::Init -> LoadSetup`.
     pub(crate) const fn setup(&self) -> &CSetup {
         &self.setup
     }
 
-    /// Даёт `Init` единственный изменяемый setup-owner.
     pub(crate) fn setup_mut(&mut self) -> &mut CSetup {
         &mut self.setup
     }
@@ -471,27 +323,22 @@ impl CGame {
         }
     }
 
-    /// Сообщает достигнутое значение старого `m_bClientClose`.
     pub(crate) const fn client_close(&self) -> bool {
         self.client_close
     }
 
-    /// Даёт достигнутым auction-handler единственный mutable owner комнаты.
     pub(crate) fn auction_room_mut(&mut self) -> &mut CAuctionRoom<CGoodsNode> {
         &mut self.auction_room
     }
 
-    /// Даёт sync-handler неизменяемый owner комнаты для ordered merge.
     pub(crate) const fn auction_room(&self) -> &CAuctionRoom<CGoodsNode> {
         &self.auction_room
     }
 
-    /// Увеличивает `m_dwAddNewCount` в исходной позиции auction-handler-а.
     pub(crate) fn count_new_auction_item(&mut self) {
         self.add_new_count = self.add_new_count.wrapping_add(1);
     }
 
-    /// Передаёт owned-узел комнате вместе с её исходным delete-счётчиком.
     pub(crate) fn add_auction_item(
         &mut self,
         item: Box<CGoodsNode>,
@@ -500,67 +347,54 @@ impl CGame {
             .add_item_to_auction_room(item, &mut self.deleted_new_count)
     }
 
-    /// Возвращает wrapping-число созданных handler-ом auction-узлов.
     pub(crate) const fn add_new_count(&self) -> u32 {
         self.add_new_count
     }
 
-    /// Возвращает wrapping-число удалённых комнатой новых auction-узлов.
     pub(crate) const fn deleted_new_count(&self) -> u32 {
         self.deleted_new_count
     }
 
-    /// Воспроизводит запись `m_dwDoneSysnCount = 0` в начале game-thread turn.
     pub(crate) fn begin_auction_sync_turn(&mut self) {
         self.done_sync_count = 0;
     }
 
-    /// Возвращает turn-local sync-count либо неинициализированную границу.
     pub(crate) const fn auction_sync_count(&self) -> u32 {
         self.done_sync_count
     }
 
-    /// Возвращает разрешение `m_bDoneSyscMsg` на фактическую синхронизацию.
     pub(crate) const fn auction_sync_enabled(&self) -> bool {
         self.done_sync_message
     }
 
-    /// Возвращает wrapping boot tick начала ожидания sync.
     pub(crate) const fn auction_sync_start_time(&self) -> u32 {
         self.sync_start_time
     }
 
-    /// Ставит исходный sync-флаг после строгого 120-секундного условия.
     pub(crate) fn enable_auction_sync(&mut self) {
         self.done_sync_message = true;
     }
 
-    /// Отмечает единственный выполненный sync текущего game-thread turn.
     pub(crate) fn finish_auction_sync_turn(&mut self) {
         self.done_sync_count = 1;
     }
 
-    /// Ставит исходный `m_bClientClose` перед блокирующим `ReConnect`.
     pub(crate) fn mark_client_closed(&mut self) {
         self.client_close = true;
     }
 
-    /// Возвращает текущий nullable WorldServer client.
     pub(crate) const fn net_client(&self) -> Option<&CMyNetClient> {
         self.net_client.as_ref()
     }
 
-    /// Выполняет initial connect и оба исходных registration send.
     pub(crate) async fn init_net_client(&mut self) -> MiscClientConnectOutcome {
         self.connect_world(None, true).await
     }
 
-    /// Пересоздаёт WorldServer client и использует исторический port `0x092F`.
     pub(crate) async fn reconnect(&mut self) -> MiscClientConnectOutcome {
         self.connect_world(Some(RECONNECT_LISTEN_PORT), false).await
     }
 
-    /// Выполняет один awaitable read/send шаг текущего client-owner.
     pub(crate) async fn run_client_io_once(
         &mut self,
     ) -> Result<MiscClientIoStep, MiscClientIoError> {
@@ -571,7 +405,6 @@ impl CGame {
         client.run_io_once(legacy_tick_ms).await
     }
 
-    /// Делает один cancellation-safe readiness poll бывших socket threads.
     pub(crate) async fn poll_client_io_once(
         &mut self,
     ) -> Option<Result<MiscClientIoStep, MiscClientIoError>> {
@@ -583,12 +416,11 @@ impl CGame {
         }
     }
 
-    /// Возвращает send-очередь текущего client доменным producers.
     pub(crate) fn client_send_queue(&self) -> Option<&ClientSendQueue> {
         self.net_client.as_ref().map(CMyNetClient::send_queue)
     }
 
-    /// Выполняет один атомарный snapshot исходного `CGame::ProcessMessage`.
+    /// Снимает и обрабатывает один атомарный snapshot `CGame::ProcessMessage`.
     ///
     /// Сообщения, опубликованные callback-ами после снятия FIFO, остаются
     /// следующему проходу. Reconnect полностью завершается до следующего
@@ -640,12 +472,10 @@ impl CGame {
         }
     }
 
-    /// Возвращает полный opcode сообщения, которое сейчас исполняет handler.
     pub(crate) const fn current_message(&self) -> u32 {
         self.current_message
     }
 
-    /// Возвращает ordered signed-счётчики обработанных opcode.
     pub(crate) const fn message_record(&self) -> &BTreeMap<i32, i32> {
         &self.message_record
     }
@@ -682,7 +512,6 @@ impl CGame {
         }
     }
 
-    /// Возвращает один исходно упорядоченный diagnostic-report и очищает map.
     pub(crate) fn reflush_log(&mut self) -> MiscLogRefreshReport {
         let status = MiscAuctionStatusSnapshot {
             auction_goods_count: self.auction_room.legacy_auction_goods_count() as i32,
@@ -709,7 +538,6 @@ impl CGame {
         }
     }
 
-    /// Выполняет доказанный порядок одного `GameThreadFunc` turn до `Sleep(50)`.
     pub(crate) async fn run_game_thread_turn(
         &mut self,
     ) -> MiscGameThreadTurn {
@@ -734,7 +562,7 @@ impl CGame {
         ) {
             // Общий CClient на постоянной transport-ошибке вызывал OnClose;
             // concrete HandleClose публикует 0x16EA01, которое текущий FIFO
-            // snapshot переводит в доказанный reconnect lifecycle. Malformed
+            // snapshot переводит в обычный reconnect lifecycle. Malformed
             // frame сохраняет отдельную подтверждённую политику очистки входа.
             self.net_client
                 .as_mut()
@@ -923,8 +751,9 @@ async fn poll_once<Output>(future: impl Future<Output = Output>) -> Option<Outpu
     })
     .await
 }
+/// Полный аналог исходного `GameThreadFunc` с явным владением ресурсами.
 ///
-/// `shutdown` заменяет только внешний `g_bMainThreadExit`. Локальный owner
+/// `shutdown` заменяет только внешний `g_bMainThreadExit`. Локальный владелец
 /// заменяет `g_pGame`; после любой достигнутой границы аукционная комната
 /// очищается в исходной позиции общего shutdown-tail.
 pub(crate) async fn game_thread_func<Shutdown>(

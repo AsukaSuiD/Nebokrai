@@ -1,121 +1,24 @@
-//! Очереди и проверки `CLoginQueue` из `loginqueue.cpp` и `.h`.
+//! Очереди `loginqueue.cpp/.h`, подтверждённые `loginserver.exe` и
+//! `loginserver.pdb`. Они связывают CD-key/player/GAS FIFO, проверку пароля,
+//! valid-code и matrix с их wrapping-таймерами.
 //!
-//! Owner содержит GAS/CD-key/player очереди, password/valid-code/matrix
-//! проверки, timeout cadence и их side effects. Контракт подтверждён точной
-//! парой LoginServer EXE/PDB.
-//! `TagPwdChecked` сохраняет signed socket ID, исходный IPv4 `ulong`,
-//! byte-exact account/world-name и matrix-флаг. `PushBackPwdChecked` игнорировал
-//! `nullptr`; Rust меняет форму API и принимает только owned значение. Под
-//! `lockPwdChecked` исходная функция искала первое точное совпадение account,
-//! вызывала `CGame::KickOut`, уничтожала прежний объект и узел, затем всегда
-//! добавляла новый объект в хвост. `parking_lot::Mutex<VecDeque<_>>` заменяет
-//! `Lock + std::list + new/delete`; callback выполняется до удаления и всё ещё
-//! под тем же lock, поэтому наблюдаемый порядок не изменён.
+//! Замена `TagPwdChecked`, полная выгрузка очереди и callbacks выполняются под
+//! одним прежним lock. Нулевые socket/IP отбрасываются. Valid-code удаляется при
+//! несовпадении endpoint или успехе, но остаётся после неверного кода;
+//! matrix-запись удаляется после любой проверки либо несовпадения endpoint.
 //!
-//! `HandlePwdChecked` держал этот же lock вокруг полного drain и выполнял
-//! client-send, `PrepareEnter` и `EnterGame` до освобождения. Rust сохраняет
-//! эту широкую сериализацию. Проверка `p_Var12 == nullptr` относилась к
-//! внутреннему storage pointer `std::string`, а не к пустоте account: owned
-//! Rust-строка всегда имеет допустимое хранилище, и пустой account не получает
-//! придуманного отказа. Нулевые socket ID и IPv4 по-прежнему отбрасываются.
-//! `m_mapValidErr` не находился под `lockPwdChecked` и представлен отдельным
-//! mutex; `IsValidErrManyTimes` сравнивает `error_times >= setup limit`,
-//! `AddValidErr` создаёт `1` либо увеличивает signed счётчик с 32-битным
-//! wrapping и продлевает boot-tick deadline, а `CheckValidErr` удаляет запись
-//! только при строгом `next_login_time < now`.
+//! Один проход сохраняет порядок GAS/no-queue, обычных FIFO, паролей, player-
+//! очередей, `AuthManager` и трёх timeout-проверок. GAS повторяется, no-queue
+//! очищается, а конкурентно добавленные элементы остаются следующему проходу.
+//! Все сроки используют исходные строгие wrapping-сравнения.
 //!
-//! Включённая ветка legacy valid-code сохраняет замену прежней записи с
-//! уведомлением `N` старому socket, `added_time/change_time`, исходные поля
-//! world/matrix и ответ `J + account + 0x70B6 + BMP`. `CheckMsgInfo` различает
-//! отсутствующий account, другой socket и строгий интервал одной секунды;
-//! `ChangeValidCode` меняет только код и boot tick. `ValidateValidCode`
-//! удаляет запись при endpoint mismatch либо успехе `K`, но сохраняет её при
-//! неверном коде `L`. Периодический timeout использует unsigned wrapping
-//! разность и отправляет `M` перед удалением.
-//!
-//! `matrix_add` отвергает нулевой socket/IP и уже существующий account;
-//! иначе он один раз сохраняет endpoint, три позиции и текущий boot tick.
-//! Nullable `char*`/`uchar*` заменены обязательными safe Rust-ссылками.
-//! `matrix_register` сначала выбирает три позиции `0..80`, затем заменяет
-//! старую запись с `F`, вызывает ту же границу `matrix_add` и независимо от
-//! её исходно проигнорированного результата отправляет `B + account + 3
-//! bytes`.
-//! `matirx_validate` сохраняет одноразовую запись: отсутствующая запись даёт `D`,
-//! endpoint mismatch удаляет её без DB-вызова, а совпавший endpoint передаёт
-//! позиции и ответ единому `CRsCDKey` и затем удаляет запись при любом `C/D`.
-//! `matrices_timeout` использует отдельный boot tick для каждой записи,
-//! строгую unsigned wrapping-разность, отправляет `E` до удаления и сохраняет
-//! ошибку отправки только как наблюдаемое уведомление.
-//!
-//! немедленные GAS/no-queue drains, один обычный CD-key по cadence,
-//! `HandlePwdChecked`, по одному player-list/player-data на World, ответы
-//! позиции `0xAF507`, `ClearTimeoutList`, `AuthManager::run` и три timeout-
-//! проверки. Один boot tick обслуживает очередь и позиции; timeout-хвост
-//! отдельно семплирует tick перед каждой проверкой. Matrix и valid-code
-//! таймеры обновляются при строгом `last + 1000 < now` только для непустой
-//! map; valid-error таймер — при строгом `last + 3000 < now` независимо от её
-//! содержимого. Все сложения остаются 32-битными wrapping, а исходные три
-//! нулевых timer-поля собраны в локальное состояние cadence без нового общего
-//! scheduler.
-//! После обработки GAS очищается no-queue CD-key FIFO, сама GAS FIFO остаётся и
-//! повторяется в
-//! следующих проходах. Safe Rust семплирует GAS и полностью извлекаемые
-//! no-queue maps в начале соответствующей стадии; конкурентное добавление
-//! остаётся следующему проходу. Исходный race при конкурентной мутации этих
-//! контейнеров не имеет требуемого внешнего контракта и не воспроизводится.
-//! `BTreeMap` и owned значения заменяют `std::map` и ручное владение; отдельные
-//! mutex не расширяют доменную семантику, а широкая сериализация
-//! `lockPwdChecked` по-прежнему охватывает весь password drain и его sends.
-//! `OnInitial` переносит три positional setup-значения, исправляет исходный
-//! нулевой `m_nWordNum` на `1` и от одного boot-tick выставляет оба wrapping-
-//! deadline. Остальные queue-поля не назначаются раньше их владельцев.
-//!
-//! `AddQuestCdkey` сохраняет signed IDs, IPv4, login/version/code/key, byte-
-//! exact account, digest и World, ставит wrapping send-deadline и выбирает
-//! обычную либо no-queue FIFO по точному account. `OnQuestCdkey` сначала
-//! обслуживает уже выбранный World, затем буквально различает inside/GAS-
-//! режимы. Локальная ветка сохраняет порядок numeric fix -> ban -> allow ->
-//! forbid -> between -> matrix -> AuthServer/local password. Первые 16 байт
-//! digest кодируются в 32 uppercase hex для локальной DB; только AuthServer-
-//! ветка применяет исходный lowercase. Короткий digest безопасно отклоняется,
-//! а отсутствие `CRsCDKey` не превращается в успех.
-//! `Mutex<VecDeque<QuestCdkey>>` заменяет обычные `std::list` и GAS
-//! `Locker + list<tagQuestCdkey*>`; clone/Drop заменяют copy constructor и
-//! ручное владение без изменения FIFO.
-//! Player-очереди сохраняют исходное `map<world, list<...>>` через
-//! `Mutex<BTreeMap<Vec<u8>, VecDeque<_>>>`: ключи и FIFO остаются byte-exact,
-//! no-queue слой отделён. `m_mLoginList` использует ordered map `player_id ->
-//! boot tick`; повтор допустим только после строгого истечения wrapping-
-//! интервала. `OnQuestPlayerData` независимо от результата World send сначала
-//! фиксирует новый login tick, а ранний повтор получает `0xAF503 + 0x1C +
-//! account` по строковой client identity.
-//! `OnClientLost` принимает byte-exact C-string account и последовательно
-//! удаляет только первое совпадение из обычной CD-key FIFO, затем не более
-//! первого совпадения из каждого World FIFO обычных player-list и player-data
-//! карт. Пустые World entries остаются в картах. No-queue, GAS, password,
-//! valid-code и matrix слои исходная функция не трогала. Три отдельных mutex-
-//! секции сохраняют порядок контейнеров без придуманной общей атомарности;
-//! `VecDeque::remove` и `Drop` заменяют unlink/destructor/delete.
-//!
-//! `LoadNoQueueCdkeyList` очищает ordered set до открытия case-insensitive
-//! `NoQueueAccounts.conf`, читает whitespace-token, применяет C-locale `_strlwr`
-//! и вставляет каждый account немедленно, сохраняя partial mutation и
-//! дедупликацию. Размер `char[0x100]` подтверждено точным EXE:
-//! `ESP+0x1C8`; безопасный предел равен 255 bytes плюс NUL. Найденный fixture
-//! непустой, содержит два коротких ASCII-token. Пустой файл, более длинный
-//! token безопасно отклоняется до переполнения; пустой файл даёт пустой set.
-//! Exact EXE не устанавливает process locale: встроенный CRT `_strlwr` поэтому
-//! меняет только ASCII `A..Z`, а high-bit bytes сохраняет.
-//! `IsInNoQueueList` представлен byte-exact поиском в том же `BTreeSet`;
-//! nullable C-string не переносится во внутренний owned API.
-//!
-//! Constructor создаёт пустые collections и нулевые cadence-поля, затем в
-//! собственной последней позиции выполняет начальный `LoadNoQueueCdkeyList`;
-//! его нефатальный результат возвращается только в operator-report `CGame`.
-//! `Drop` всех полей заменяет ручной destructor; его внутренний порядок
-//! удаления не воспроизводится, поскольку там нет внешнего callback либо
-//! иного наблюдаемого эффекта. Collections, mutex guards, Tiberius и `Drop`
-//! заменяют STL/iostream, ADO/COM и compiler cleanup.
+//! CD-key проходит локальные проверки до uppercase digest для БД; lowercase
+//! применяется только для AuthServer. Потеря client-а удаляет лишь первые
+//! совпадения обычных player-очередей и не затрагивает остальные слои.
+//! `NoQueueAccounts.conf` очищает set до открытия и вставляет ASCII-lowercase
+//! токены по мере чтения. Токен длиннее 255 байт отклоняется вместо переполнения
+//! `char[0x100]`. `Mutex`, `BTreeMap` и `VecDeque` сохраняют прежние lock-границы
+//! и FIFO без ручного Win32/STL-владения.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -145,7 +48,6 @@ const PLAYER_DATA_REJECT_MESSAGE_TYPE: i32 = 0x000A_F503;
 const QUEUE_POSITION_MESSAGE_TYPE: i32 = 0x000A_F507;
 const NO_QUEUE_ACCOUNT_BUFFER_SIZE: usize = 0x100;
 
-/// Owned-форма исходного `CLoginQueue::tagPwdChecked`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TagPwdChecked {
     client_ip: u32,
@@ -156,7 +58,6 @@ pub(crate) struct TagPwdChecked {
 }
 
 impl TagPwdChecked {
-    /// Сохраняет все пять полей без перекодирования и нормализации.
     pub(crate) fn new(
         socket_id: i32,
         client_ip: u32,
@@ -173,33 +74,27 @@ impl TagPwdChecked {
         }
     }
 
-    /// Возвращает byte-exact account, по которому очередь ищет duplicate.
     pub(crate) fn account(&self) -> &[u8] {
         &self.account
     }
 
-    /// Возвращает исходный signed client socket ID.
     pub(crate) const fn socket_id(&self) -> i32 {
         self.socket_id
     }
 
-    /// Возвращает исходный 32-битный client IPv4.
     pub(crate) const fn client_ip(&self) -> u32 {
         self.client_ip
     }
 
-    /// Возвращает byte-exact имя уже выбранного WorldServer.
     pub(crate) fn world_server(&self) -> &[u8] {
         &self.world_server
     }
 
-    /// Возвращает исходный matrix-флаг.
     pub(crate) const fn has_matrix(&self) -> bool {
         self.has_matrix
     }
 }
 
-/// Owned-форма исходного `CLoginQueue::tagQuestCdkey`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct QuestCdkey {
     socket_id: i32,
@@ -248,49 +143,40 @@ impl QuestCdkey {
         }
     }
 
-    /// Возвращает byte-exact account исходной заявки.
     pub(crate) fn account(&self) -> &[u8] {
         &self.account
     }
 
-    /// Возвращает исходный signed client socket ID.
     pub(crate) const fn socket_id(&self) -> i32 {
         self.socket_id
     }
 
-    /// Возвращает исходный 32-битный client IPv4.
     pub(crate) const fn client_ip(&self) -> u32 {
         self.client_ip
     }
 
-    /// Возвращает byte-exact первые байты password digest из заявки.
     pub(crate) fn password_digest(&self) -> &[u8] {
         &self.password_digest
     }
 
-    /// Возвращает byte-exact имя выбранного WorldServer.
     pub(crate) fn world_server(&self) -> &[u8] {
         &self.world_server
     }
 
-    /// Возвращает nickname, полученный от GAS.
     pub(crate) fn nickname(&self) -> &[u8] {
         &self.nickname
     }
 
-    /// Сохраняет успешный GAS nickname одновременно как nickname и account.
     pub(crate) fn replace_account_with_nickname(&mut self, nickname: Vec<u8>) {
         self.account.clone_from(&nickname);
         self.nickname = nickname;
     }
 
-    /// Возвращает исходный deadline повторного queue-сообщения.
     pub(crate) const fn send_message_time(&self) -> u32 {
         self.send_message_time
     }
 }
 
-/// Owned-форма исходного `CLoginQueue::tagQuestPlayerList`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct QuestPlayerList {
     socket_id: i32,
@@ -315,7 +201,6 @@ impl QuestPlayerList {
     }
 }
 
-/// Owned-форма исходного `CLoginQueue::tagQuestPlayerData`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct QuestPlayerData {
     socket_id: i32,
@@ -343,65 +228,40 @@ impl QuestPlayerData {
     }
 }
 
-/// Итог доказанного `OnQuestPlayerData`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum QuestPlayerDataOutcome {
-    /// Запрос принят; bool сообщает, существовал ли World route при отправке.
     Forwarded { world_found: bool },
-    /// `player_id` ещё находится внутри исходного repeat-интервала.
     Repeated,
 }
 
-/// Итог исходного точечного cleanup `CLoginQueue::OnClientLost`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ClientLostCleanupReport {
-    /// Удалена ли первая обычная CD-key заявка.
     pub(crate) cdkey_removed: bool,
-    /// Число World FIFO, из которых удалена первая player-list заявка.
     pub(crate) player_list_removed: usize,
-    /// Число World FIFO, из которых удалена первая player-data заявка.
     pub(crate) player_data_removed: usize,
 }
 
-/// Итог одного вызова исходного `OnQuestCdkey`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum QuestCdkeyOutcome {
-    /// Непустой World прошёл доказанный `PrepareEnter -> EnterGame` путь.
     DirectWorld,
-    /// `PrepareEnter` полностью завершил прямую ветвь без `EnterGame`.
     DirectWorldFinished,
-    /// Режим `m_lIsInsideUse == 0` передал owned-копию в GAS FIFO.
     QueuedForGas,
-    /// Иное доказанное значение `m_lIsInsideUse` является исходным no-op.
     InsideModeIgnored { mode: i32 },
-    /// Действующий `ban_time` отправлен клиенту кодом `0x10`.
     ActiveBan,
-    /// Allow/forbid IP-проверка отправила общий код `0x12`.
     IpRejected,
-    /// Account/IP-list проверка отправила отдельный код `0x11`.
     BetweenIpRejected,
-    /// Заявка передана подключённому AuthServer либо оказалась duplicate.
     AuthQuest(AddQuestOutcome),
-    /// Локальная проверка пароля отправила исходный код `7`.
     LocalPasswordRejected,
-    /// Локальный пароль подтверждён, а запись добавлена в password-check FIFO.
     LocalPasswordAccepted,
 }
 
-/// Безопасная неразрешимая граница `OnQuestCdkey` либо ошибка его send.
 #[derive(Debug)]
 pub(crate) enum QuestCdkeyError {
-    /// Частичный lifecycle ещё не присоединил обязательный `CRsCDKey`.
     DatabaseOwnerMissing,
-    /// Positional setup не определил все три IP admission-флага.
     IpSetupMissing,
-    /// Positional setup не определил `m_lIsInsideUse`.
     InsideModeMissing,
-    /// Оригинал без проверки читал первые 16 байт более короткого digest.
     PasswordDigestTooShort { actual_len: usize },
-    /// `CharLowerA` зависит от внешней ANSI locale исходной Windows-системы.
     AuthAnsiCaseMappingUnknown,
-    /// Фактическая Client/World transport-граница не выполнила send.
     Route(GameRouteError),
 }
 
@@ -471,96 +331,60 @@ struct MatrixEntry {
     added_time: u32,
 }
 
-/// Исходный `eCheckRes` для client valid-code сообщений.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CheckMessageInfo {
-    /// Account и socket совпали, одна секунда после последней замены прошла.
     Success,
-    /// Account отсутствует в `m_mapValidCode`.
     Missing,
-    /// Сообщение пришло не с сохранённого socket ID.
     SocketMismatch,
-    /// Новый запрос картинки пришёл раньше `change_time + 1000`.
     Frequent,
 }
 
-/// Итог исходного `ValidateValidCode` с кодами `K/L`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ValidateValidCodeOutcome {
-    /// Код `K`: запись удалена, а сохранённые поля возвращены caller.
     Accepted {
-        /// Выбранный до проверки byte-exact WorldServer.
         world_server: Vec<u8>,
-        /// Исходный matrix-флаг password-check записи.
         has_matrix: bool,
     },
-    /// Код `L`: значение не совпало; корректная endpoint-запись остаётся.
     Rejected,
 }
 
-/// Итог исходного `matirx_validate` с внутренними кодами `C/D`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MatrixValidationOutcome {
-    /// Код `C`: endpoint и три matrix-значения подтверждены DB-owner.
     Accepted,
-    /// Код `D`: запись отсутствует, endpoint не совпал либо значения неверны.
     Rejected,
-    /// Частичный lifecycle ещё не присоединил обязательный `CRsCDKey`.
     DatabaseOwnerMissing,
 }
 
-/// Наблюдаемая проблема одной уже извлечённой password-check записи.
 #[derive(Debug)]
 pub(crate) enum PwdCheckedNotice {
-    /// Не удалось отправить клиенту доказанный `0xAF501 + 'Q'`.
     ClientResponse {
-        /// Исходный signed socket ID.
         socket_id: i32,
-        /// Ошибка фактического client net-owner.
         error: GameRouteError,
     },
-    /// Не удалось построить исходный `CValidCode` из runtime-ресурсов.
     ValidCodeGeneration {
-        /// Byte-exact account извлечённой записи.
         account: Vec<u8>,
-        /// Ошибка фактического owner изображения.
         error: ValidCodeError,
     },
-    /// `PrepareEnter` не смог выполнить обязательный client/World side effect.
     PrepareEnter {
-        /// Byte-exact account извлечённой записи.
         account: Vec<u8>,
-        /// Ошибка фактической сетевой границы.
         error: GameRouteError,
     },
-    /// Linux RNG не выдал три позиции исходного `matrix_register`.
     MatrixRandom {
-        /// Byte-exact account matrix-регистрации.
         account: Vec<u8>,
-        /// Ошибка системного источника случайности.
         error: getrandom::Error,
     },
-    /// `EnterGame` не смог выполнить обязательный client/World side effect.
     EnterGame {
-        /// Byte-exact account извлечённой записи.
         account: Vec<u8>,
-        /// Ошибка фактической сетевой границы.
         error: GameRouteError,
     },
 }
 
-/// Итог одного исходного полного drain `HandlePwdChecked`.
 #[derive(Debug)]
 pub(crate) struct HandlePwdCheckedReport {
-    /// Число извлечённых owned записей.
     pub(crate) processed: usize,
-    /// Число записей, отброшенных из-за нулевого socket ID либо IPv4.
     pub(crate) dropped_invalid_endpoint: usize,
-    /// Число account, отвергнутых текущим `m_mapValidErr`.
     pub(crate) rejected_by_valid_errors: usize,
-    /// Число созданных и поставленных client valid-code картинок.
     pub(crate) generated_valid_codes: usize,
-    /// Ошибки и локальные недостающие владельцы в порядке обработки.
     pub(crate) notices: Vec<PwdCheckedNotice>,
 }
 
@@ -576,95 +400,56 @@ impl HandlePwdCheckedReport {
     }
 }
 
-/// Итог одного восстановленного timeout-хвоста `CLoginQueue::Run`.
 #[derive(Debug)]
 pub(crate) struct LoginQueueTimeoutReport {
-    /// Запускался ли `matrices_timeout` после непустой map и строгого интервала.
     pub(crate) matrices_ran: bool,
-    /// Запускался ли `ValidCodeOvertime` после непустой map и строгого интервала.
     pub(crate) valid_codes_ran: bool,
-    /// Запускался ли `CheckValidErr` после строгого трёхсекундного интервала.
     pub(crate) valid_errors_ran: bool,
-    /// Ошибки client-send кодов `E/M` в исходном порядке стадий.
     pub(crate) notices: Vec<PwdCheckedNotice>,
 }
 
-/// Стадия полного `CLoginQueue::Run`, на которой transport/owner дал ошибку.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LoginQueueRunStage {
-    /// Повторно обрабатываемая GAS FIFO.
     GasCdkey,
-    /// Немедленная no-queue CD-key FIFO.
     NoQueueCdkey,
-    /// Немедленная no-queue player-list map.
     NoQueuePlayerList,
-    /// Немедленная no-queue player-data map.
     NoQueuePlayerData,
-    /// Один обычный CD-key по cadence.
     RegularCdkey,
-    /// Один player-list на каждый World по cadence.
     RegularPlayerList,
-    /// Один player-data на каждый World по cadence.
     RegularPlayerData,
-    /// Периодический client-ответ с текущей позицией.
     QueuePosition,
 }
 
-/// Структурированная замена проигнорированной ошибки одного элемента `Run`.
 #[derive(Debug)]
 pub(crate) enum LoginQueueRunNotice {
-    /// Ошибка полного `OnQuestCdkey` с byte-exact account.
     Cdkey {
-        /// Стадия, на которой выполнялась заявка.
         stage: LoginQueueRunStage,
-        /// Byte-exact account исходной заявки.
         account: Vec<u8>,
-        /// Ошибка владельца CD-key проверки.
         error: QuestCdkeyError,
     },
-    /// Ошибка World/client маршрута player-заявки либо queue-position ответа.
     Route {
-        /// Стадия, на которой выполнялась заявка или отправка позиции.
         stage: LoginQueueRunStage,
-        /// Byte-exact account исходной заявки.
         account: Vec<u8>,
-        /// Signed socket ID исходной заявки.
         socket_id: i32,
-        /// Ошибка маршрута к World либо client.
         error: GameRouteError,
     },
 }
 
-/// Наблюдаемый итог одного полного прохода `CLoginQueue::Run`.
 #[derive(Debug)]
 pub(crate) struct LoginQueueRunReport {
-    /// Число заявок из неизвлекаемой GAS FIFO, обработанных в этом проходе.
     pub(crate) gas_cdkeys_processed: usize,
-    /// Число no-queue CD-key заявок, уничтоженных подтверждённым GAS-дефектом.
     pub(crate) no_queue_cdkeys_discarded_by_gas_bug: usize,
-    /// Число обработанных no-queue CD-key заявок.
     pub(crate) no_queue_cdkeys_processed: usize,
-    /// Число обработанных no-queue player-list заявок.
     pub(crate) no_queue_player_lists_processed: usize,
-    /// Число обработанных no-queue player-data заявок.
     pub(crate) no_queue_player_data_processed: usize,
-    /// Число обычных CD-key заявок; за проход не больше одной.
     pub(crate) regular_cdkeys_processed: usize,
-    /// Число обычных player-list заявок; за World не больше одной.
     pub(crate) regular_player_lists_processed: usize,
-    /// Число обычных player-data заявок; за World не больше одной.
     pub(crate) regular_player_data_processed: usize,
-    /// Число предпринятых client-отправок позиции `0xAF507`.
     pub(crate) queue_position_messages: usize,
-    /// Число удалённых просроченных player ID.
     pub(crate) login_timeouts_removed: usize,
-    /// Итог password-result drain в исходной позиции прохода.
     pub(crate) pwd_checked: HandlePwdCheckedReport,
-    /// Итог `AuthManager::run` либо отсутствие подключённого Auth publisher.
     pub(crate) auth: Result<AuthRunOutcome, AuthLifecycleError>,
-    /// Итог matrix/valid-code/valid-error timeout-хвоста.
     pub(crate) timeout_tail: LoginQueueTimeoutReport,
-    /// Ошибки проигнорированных оригиналом send/owner-вызовов по порядку.
     pub(crate) notices: Vec<LoginQueueRunNotice>,
 }
 
@@ -685,21 +470,15 @@ struct LoginQueueSetup {
     log_queue_time: u32,
 }
 
-/// Итог успешного чтения исходного `NoQueueAccounts.conf`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct NoQueueAccountsLoadReport {
-    /// Число реально извлечённых whitespace-token до `std::set` дедупликации.
     pub(crate) extracted_accounts: usize,
-    /// Итоговый размер byte-exact ordered set после lowercase.
     pub(crate) unique_accounts: usize,
 }
 
-/// Ошибка чтения либо безопасная граница старого небезопасного `char[0x100]`.
 #[derive(Debug)]
 pub(crate) enum NoQueueAccountsLoadError {
-    /// Файл не найден либо не прочитан; set уже очищен в исходной позиции.
     Io(io::Error),
-    /// Token не помещается вместе с NUL в доказанный stack-buffer.
     TokenTooLong {
         token_index: usize,
         actual: usize,
@@ -738,7 +517,6 @@ impl From<io::Error> for NoQueueAccountsLoadError {
     }
 }
 
-/// Минимальный восстановленный owner очереди подтверждённых паролей.
 pub(crate) struct CLoginQueue {
     cdkey_quests: Mutex<VecDeque<QuestCdkey>>,
     no_queue_cdkey_quests: Mutex<VecDeque<QuestCdkey>>,
@@ -760,8 +538,8 @@ pub(crate) struct CLoginQueue {
 impl CLoginQueue {
     /// Создаёт все исходные контейнеры и загружает no-queue accounts.
     ///
-    /// Ошибка файла не отменяет создание owner и возвращается отдельно, как
-    /// нефатальный operator-visible результат исходного constructor.
+    /// Ошибка файла не отменяет создание owner и возвращается отдельно, не
+    /// меняя нефатальное поведение исходного конструктора.
     pub(crate) fn new(
         runtime_directory: &Path,
     ) -> (
@@ -789,7 +567,6 @@ impl CLoginQueue {
         (queue, no_queue_accounts)
     }
 
-    /// Применяет исходный `OnInitial` после позиционного `CGame::LoadSetup`.
     pub(crate) fn on_initial(
         &self,
         interval_ms: u32,
@@ -808,12 +585,10 @@ impl CLoginQueue {
         setup.log_queue_time = (interval_ms / setup.world_count).wrapping_add(now);
     }
 
-    /// Обновляет исходный `m_nWordNum` после `AddWorld`/`DelWorld`.
     pub(crate) fn set_world_count(&self, world_count: u32) {
         self.setup.lock().world_count = world_count;
     }
 
-    /// Создаёт исходный `tagQuestCdkey` и выбирает обычную/no-queue FIFO.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn add_quest_cdkey(
         &self,
@@ -849,12 +624,10 @@ impl CLoginQueue {
         }
     }
 
-    /// Извлекает старейшую owned-заявку GAS под исходным queue-lock.
     pub(crate) fn pop_gas_quest(&self) -> Option<QuestCdkey> {
         self.gas_quests.lock().pop_front()
     }
 
-    /// Выполняет полный доказанный `OnQuestCdkey` в исходном порядке.
     pub(crate) fn on_quest_cdkey(
         &self,
         game: &mut CGame,
@@ -1034,7 +807,6 @@ impl CLoginQueue {
         true
     }
 
-    /// Добавляет запрос деталей персонажа в карту текущего World account.
     pub(crate) fn add_quest_player_data(
         &self,
         game: &CGame,
@@ -1068,7 +840,6 @@ impl CLoginQueue {
         true
     }
 
-    /// Удаляет первые обычные заявки потерянного client account.
     pub(crate) fn on_client_lost(&self, account: &[u8]) -> ClientLostCleanupReport {
         let end = account
             .iter()
@@ -1121,7 +892,6 @@ impl CLoginQueue {
         }
     }
 
-    /// Выполняет исходную repeat-проверку и маршрутизацию деталей персонажа.
     pub(crate) fn on_quest_player_data(
         &self,
         game: &CGame,
@@ -1151,7 +921,6 @@ impl CLoginQueue {
         Ok(QuestPlayerDataOutcome::Repeated)
     }
 
-    /// Разрешает отсутствующий либо строго просроченный `player_id`.
     pub(crate) fn is_valid_quest(&self, player_id: i32, interval_ms: u32) -> bool {
         let mut login_list = self.login_list.lock();
         let Some(added_time) = login_list.get(&player_id).copied() else {
@@ -1165,7 +934,6 @@ impl CLoginQueue {
         true
     }
 
-    /// Вставляет новый `player_id`; существующая запись не обновляется.
     pub(crate) fn push_login_list(&self, player_id: i32) -> bool {
         let mut login_list = self.login_list.lock();
         if login_list.contains_key(&player_id) {
@@ -1175,7 +943,6 @@ impl CLoginQueue {
         true
     }
 
-    /// Удаляет записи только при строгом `added + interval < now`.
     pub(crate) fn clear_timeout_list(&self, interval_ms: u32) -> usize {
         let mut login_list = self.login_list.lock();
         let previous_len = login_list.len();
@@ -1186,7 +953,7 @@ impl CLoginQueue {
         previous_len - login_list.len()
     }
 
-    /// Выполняет полный доказанный порядок исходного `CLoginQueue::Run`.
+    /// Выполняет полный порядок исходного `CLoginQueue::Run`.
     ///
     /// Неопределённый исходный race с producers заменён короткими snapshot-
     /// границами: конкурентно добавленные элементы остаются следующему проходу.
@@ -1515,12 +1282,10 @@ impl CLoginQueue {
         queue.push_back(checked);
     }
 
-    /// Возвращает текущий размер для исходного queue cadence.
     pub(crate) fn pwd_checked_len(&self) -> usize {
         self.pwd_checked.lock().len()
     }
 
-    /// Полностью дренирует FIFO под исходным `lockPwdChecked`.
     pub(crate) fn handle_pwd_checked(&self, game: &mut CGame) -> HandlePwdCheckedReport {
         let mut report = HandlePwdCheckedReport::new();
         let mut queue = self.pwd_checked.lock();
@@ -1606,7 +1371,6 @@ impl CLoginQueue {
         report
     }
 
-    /// Продолжает исходный `PrepareEnter -> EnterGame/matrix_register` после `K`.
     pub(crate) fn continue_validated_login(
         &self,
         game: &mut CGame,
@@ -1617,7 +1381,6 @@ impl CLoginQueue {
         notices
     }
 
-    /// Сохраняет исходный `AddValidErr` с wrapping tick и продлением stay-time.
     pub(crate) fn add_valid_error(&self, account: &[u8], stay_time_ms: u32) {
         let now = legacy_tick_ms();
         let next_login_time = now.wrapping_add(stay_time_ms);
@@ -1639,7 +1402,6 @@ impl CLoginQueue {
         }
     }
 
-    /// Удаляет записи, для которых `next_login_time < now`, как `CheckValidErr`.
     pub(crate) fn clear_expired_valid_errors(&self, now: u32) {
         self.valid_errors
             .lock()
@@ -1723,7 +1485,7 @@ impl CLoginQueue {
     ///
     /// Каждый account приводится к ASCII lowercase и вставляется сразу после
     /// extraction, поэтому безопасная ошибка позднего token сохраняет уже
-    /// выполненную partial mutation. Ошибка открытия также оставляет set
+    /// выполненное частичное изменение. Ошибка открытия также оставляет set
     /// пустым, как исходный вызов до `ifstream::open`.
     pub(crate) fn load_no_queue_cdkey_list(
         &self,
@@ -1765,7 +1527,6 @@ impl CLoginQueue {
         })
     }
 
-    /// Проверяет account/socket и исходный one-second change interval.
     pub(crate) fn check_message_info(&self, account: &[u8], socket_id: i32) -> CheckMessageInfo {
         let valid_codes = self.valid_codes.lock();
         let Some(entry) = valid_codes.get(account) else {
@@ -1781,7 +1542,6 @@ impl CLoginQueue {
         }
     }
 
-    /// Меняет сохранённый ответ и ставит `change_time = timeGetTime()`.
     pub(crate) fn change_valid_code(&self, account: &[u8], valid_code: &[u8]) {
         if let Some(entry) = self.valid_codes.lock().get_mut(account) {
             entry.change_time = legacy_tick_ms();
@@ -1790,7 +1550,6 @@ impl CLoginQueue {
         }
     }
 
-    /// Проверяет endpoint и byte-exact ответ, сохраняя удаление `K/L` ветвей.
     pub(crate) fn validate_valid_code(
         &self,
         socket_id: i32,
@@ -1818,12 +1577,10 @@ impl CLoginQueue {
         }
     }
 
-    /// Удаляет точный account из `m_mapValidCode`.
     pub(crate) fn delete_valid_code(&self, account: &[u8]) {
         self.valid_codes.lock().remove(account);
     }
 
-    /// Проверяет одноразовую matrix-запись и удаляет её в исходных `C/D` ветвях.
     pub(crate) fn validate_matrix(
         &self,
         game: &mut CGame,
@@ -1841,14 +1598,14 @@ impl CLoginQueue {
             return MatrixValidationOutcome::Rejected;
         }
         let Some(validation) = game.validate_matrix_card(account, &entry.positions, answer) else {
-            // Без исходного DB-owner продолжить вызов невозможно; запись не
-            // выдаётся за проверенную и остаётся для штатного lifecycle.
+            // Без DB-owner продолжить вызов невозможно; запись не считается
+            // проверенной и остаётся для штатного lifecycle.
             return MatrixValidationOutcome::DatabaseOwnerMissing;
         };
         let accepted = match validation {
             MatrixValidation::Compared(accepted) => accepted,
             // Короткий DB blob в оригинале приводил к out-of-bounds чтению.
-            // Safe Rust детерминированно считает проверку неуспешной.
+            // Короткий blob считается неуспешной проверкой без чтения за границей.
             MatrixValidation::BlockedMatrixCardTooShort { .. } => false,
         };
         matrices.remove(account);
@@ -1890,12 +1647,10 @@ impl CLoginQueue {
         true
     }
 
-    /// Проверяет наличие account в исходном `NoQueueCDkeyList`.
     pub(crate) fn is_no_queue_account(&self, account: &[u8]) -> bool {
         self.no_queue_accounts.lock().contains(account)
     }
 
-    /// Отправляет `M` и удаляет все записи со строгим unsigned timeout.
     pub(crate) fn expire_valid_codes(
         &self,
         game: &CGame,
@@ -1920,7 +1675,6 @@ impl CLoginQueue {
         notices
     }
 
-    /// Отправляет `E` и удаляет matrix-записи со строгим unsigned timeout.
     pub(crate) fn expire_matrices(&self, game: &CGame, timeout_ms: u32) -> Vec<PwdCheckedNotice> {
         let mut notices = Vec::new();
         let mut matrices = self.matrices.lock();
@@ -2066,7 +1820,7 @@ fn send_queue_position(game: &CGame, socket_id: i32, position: i32) -> Result<()
 
 fn password_digest_hex(digest: &[u8]) -> Result<Vec<u8>, QuestCdkeyError> {
     if digest.len() < 16 {
-        // safe Rust отклоняет короткий внешний digest до доступа.
+        // Короткий внешний digest отклоняется до индексирования.
         return Err(QuestCdkeyError::PasswordDigestTooShort {
             actual_len: digest.len(),
         });
