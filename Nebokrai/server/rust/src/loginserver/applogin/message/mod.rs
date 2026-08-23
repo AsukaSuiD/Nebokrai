@@ -1,14 +1,14 @@
 //! Свободные обработчики сообщений LoginServer из `applogin/message`.
 //!
-//! Контракт композиции: восстановлено. Исторический `CMessage::Run` из точной
-//! пары `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb` выбирает
+//! Исторический `CMessage::Run`, подтверждённый точной парой LoginServer
+//! EXE/PDB, выбирает
 //! ровно одного владельца Auth/GMA, GM, Log либо Server. `LoginComponentRunner`
 //! не повторяет его numeric switch: узкий selector принимает callback от
 //! `Run`, после чего вызывает соответствующий фактический handler. Auth-путь
 //! остаётся awaitable ради упорядоченного завершения прежней reconnect-задачи;
 //! остальные владельцы выполняются синхронно в той же позиции сообщения.
 //!
-//! `process_login_messages` соединяет runner с восстановленным
+//! `process_login_messages` соединяет runner с
 //! `CGame::ProcessMessage` и сохраняет typed outcome каждого сообщения в
 //! порядке World -> Client -> Auth. Неизвестный opcode получает только
 //! доказанный no-op `CMessage::Run`; общий protocol framework, runtime-loop и

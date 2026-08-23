@@ -1,7 +1,6 @@
 //! Две lifecycle-ветви GameServer у BillingServer из
 //! `appbilling/servermessage.cpp`.
 //!
-//! Исходный путь PDB:
 //!
 //! `0xEF101` не читает payload: socket ID и peer IPv4 берутся из runtime-
 //! metadata принятого сообщения. При наличии `CGame::m_pGSServer` первым

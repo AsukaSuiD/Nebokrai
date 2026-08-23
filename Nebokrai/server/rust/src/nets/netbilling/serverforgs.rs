@@ -1,24 +1,11 @@
 //! Производный владелец GameServer-соединений BillingServer из
 //! `nets/netbilling/serverforgs.cpp` и доказанных call sites `CGame`.
 //!
-//! Статус владельца: `IMPLEMENTED` для component defaults, virtual-фабрики
-//! принятого `CClientForGS`, общего command snapshot и выдачи конкретной FIFO.
+//! Owner создаёт `CClientForGS`, обрабатывает общий command snapshot и выдаёт
+//! конкретную FIFO. Контракт подтверждён точной парой BillingServer EXE/PDB.
 //! Долгоживущие Linux I/O actions возвращаются runtime через общий `CServer`;
 //! этот owner не исполняет доменные Billing-сообщения и не создаёт второй
 //! transport runtime.
-//!
-//! Точная пара: `BillingServer/billingserver.exe + BillingServer/billingserver.pdb`;
-//! SHA-256 EXE
-//! `FA32E3C043CB49965686129696A4EB34B733ACA1D60CAF57D369F97D5E68FB19`,
-//! SHA-256 PDB
-//! `F900CD0330BEFF32AC071B107AB653FD403CD18746896B3C0187C5751ACA0B21`.
-//! Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\nets\netbilling\serverforgs.cpp`.
-//!
-//! Существенные RVA: конструктор `0x0000C780`, деструктор `0x0000C7B0`,
-//! `CreateServerClient` `0x0000C7C0`; `CGame::LoadGSSetup` `0x00001880`,
-//! `CGame::InitServer` `0x000018C0` и `CGame::ProcessMessage` `0x00001A50`.
-//!
 //! Производный конструктор менял общий максимум незавершённых send-операций на
 //! `100` и per-client send-buffer limit на `0x1000000`. В отличие от Auth и
 //! Login World, Billing `CGame` не перезаписывал эти лимиты из setup. После
@@ -210,7 +197,6 @@ impl Default for CServerForGS {
     }
 }
 
-// BLOCKED_MISSING_FACT: `CClientForGS::SetSendRevBuf` RVA `0x0000F2D0`
-// задавал Windows `SO_SNDBUF=0`, а constructor field `+0x120 = 0` пока не
-// связано с именованным состоянием. Оба факта не получают фиктивных Linux/Rust
-// аналогов до доказательства их наблюдаемого контракта.
+// `CClientForGS::SetSendRevBuf` задавал Windows `SO_SNDBUF=0`, а значение
+// constructor field `+0x120 = 0` не связано с именованным состоянием.
+// Совместимые Linux/Rust-аналоги для этих границ неизвестны и не назначены.

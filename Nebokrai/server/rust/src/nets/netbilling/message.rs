@@ -1,22 +1,9 @@
 //! Сообщение направления GameServer <-> BillingServer из
 //! `nets/netbilling/message.cpp`.
 //!
-//! Статус владельца: `IMPLEMENTED` для layout/runtime metadata, RLE и
-//! несжатого create-путей, 12-байтового CRC-envelope, `SendToGS`,
-//! `SendToAllGS` и selector `Run`.
-//!
-//! Точная пара: `BillingServer/billingserver.exe + BillingServer/billingserver.pdb`;
-//! SHA-256 EXE
-//! `FA32E3C043CB49965686129696A4EB34B733ACA1D60CAF57D369F97D5E68FB19`,
-//! SHA-256 PDB
-//! `F900CD0330BEFF32AC071B107AB653FD403CD18746896B3C0187C5751ACA0B21`.
-//! Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\nets\netbilling\message.cpp`.
-//!
-//! Существенные RVA: деструктор `0x0000F690`, `SendToGS` `0x0000F6F0`,
-//! `SendToAllGS` `0x0000F780`, `Run` `0x0000F810`, конструктор
-//! `0x0000F860`, `CreateMessage` `0x0000F8E0` и
-//! `CreateMessageWithoutRLE` `0x0000FA30`.
+//! Owner сохраняет сжатый и несжатый create-пути, 12-байтовый CRC-envelope,
+//! `SendToGS`, `SendToAllGS` и selector `Run`. Контракт подтверждён точной
+//! парой BillingServer EXE/PDB.
 //!
 //! Конструктор пишет полный `MsgType` в header `+4`, оставляет пустой CD-key,
 //! нулевые socket/map/IP и null player/region. Rust хранит только metadata,

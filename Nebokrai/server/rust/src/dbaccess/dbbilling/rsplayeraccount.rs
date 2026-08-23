@@ -1,20 +1,9 @@
 //! DB-владелец `CRsPlayerAccount` BillingServer из `rsplayeraccount.cpp`.
 //!
-//! Статус функций `GetUserPoint` RVA `0x00014BB0`, `PutCashLog`
-//! RVA `0x00015480`, `BuyPlayerItem` RVA `0x00016AF0` и `BuyItemCode`
-//! RVA `0x00018240` — `IMPLEMENTED`. Граница transaction code дополнительно
-//! имеет статус `VERIFIED_DISASSEMBLY`: exact EXE по `0x00417975..0x00417994`
-//! и `0x00418DAD..0x00418DCC` создаёт output `@TranCode` как `adVarChar`
-//! размером 500, а `0x00417DE8..0x00417DF2` и
-//! `0x00419150..0x0041915A` копирует его в 512-байтовый caller-буфер.
-//!
-//! Точная пара: `BillingServer/billingserver.exe + BillingServer/billingserver.pdb`;
-//! SHA-256 EXE
-//! `FA32E3C043CB49965686129696A4EB34B733ACA1D60CAF57D369F97D5E68FB19`,
-//! SHA-256 PDB
-//! `F900CD0330BEFF32AC071B107AB653FD403CD18746896B3C0187C5751ACA0B21`.
-//! Исходный владелец PDB:
-//! `h:\fengyun\fy_russia\src\dbaccess\dbbilling\rsplayeraccount.cpp`.
+//! Реализованы операции `GetUserPoint`, `PutCashLog`, `BuyPlayerItem` и
+//! `BuyItemCode`. Выходной `@TranCode` остаётся `adVarChar(500)`, а принимающий
+//! буфер сохраняет исходную ёмкость 512 байт. Контракт подтверждён точной
+//! парой BillingServer EXE/PDB.
 //!
 //! `tiberius` заменяет ADO/COM, но не SQL владельца. Каждая публичная операция
 //! по-прежнему открывает отдельное соединение; `PutCashLog` открывает одно
@@ -41,13 +30,10 @@
 //! теряет его хвост. Rust возвращает тот же код, а техническую ошибку оставляет
 //! в отдельной FIFO notices без credential или account values.
 //!
-//! Адресные чтения exact EXE дополнительно имеют статус
-//! `VERIFIED_DISASSEMBLY`: `GetUserPoint` `0x00414BDC..0x00414C2F`,
-//! `BuyPlayerItem` `0x00416B1C..0x00416B6F` и `BuyItemCode`
-//! `0x0041826C..0x004182BF` берут основную четвёрку setup, тогда как
-//! `PutCashLog` `0x004154AC..0x0041551F` берёт отдельные LogServer/LogDB поля.
-//! Поэтому один Rust-owner хранит две TDS-конфигурации и выбирает их в точных
-//! функциях; смешивать cash-log с Billing DB нельзя.
+//! `GetUserPoint`, `BuyPlayerItem` и `BuyItemCode` используют основную
+//! четвёрку setup, тогда как `PutCashLog` использует отдельные поля
+//! LogServer/LogDB. Поэтому owner хранит две TDS-конфигурации; смешивать
+//! cash-log с Billing DB нельзя.
 //!
 //! После успешного `buyItemCode` исходная функция при включённом LogServer
 //! снимала local time и ставила `tagIncLogNode` в общую очередь. Глобальный

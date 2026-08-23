@@ -1,22 +1,8 @@
 //! Очереди и проверки `CLoginQueue` из `loginqueue.cpp` и `.h`.
 //!
-//! `AddGasQueue` `0x000199A0`, `OnQuestCdkey` `0x0001A130`,
-//! `IsValidQuest` `0x000172C0`, `ClearTimeoutList` `0x00017330`,
-//! `PushLoginList` `0x0001AAB0`, `OnQuestPlayerData` `0x0001B3F0`,
-//! `AddQuestPlayerList` `0x0001E740`, `AddQuestPlayerData` `0x0001E880`,
-//! `OnClientLost` `0x0001A800`,
-//! `IsInNoQueueList` `0x00016040`, `LoadNoQueueCdkeyList` `0x000195E0`,
-//! `0x00019880`, `IsValidErrManyTimes` `0x000163E0`, `CheckValidErr`
-//! `0x00018700`, `AddValidErr` `0x0001C100` и baseline-ветви
-//! `HandlePwdChecked` `0x0001BB20`, `tagValidCode` `0x00015F70`,
-//! `CheckMsgInfo` `0x00016200`, `ChangeValidCode` `0x00016300`,
-//! `ValidateValidCode` `0x000184B0`, `ValidCodeOvertime` `0x00018610`,
-//! `matrix_get/matrix_del/matirx_validate` `0x00016100/0x00018310/0x00019800`,
-//! `matrix_add` `0x0001B870`, `matrix_register` `0x0001B950`,
-//! `matrices_timeout` `0x000183D0`, constructor/destructor
-//! `0x0001E9F0/0x0001E490` и timeout-хвост `Run` `0x0001D500` —
-//! восстановлено; спорные field/call mappings этих функций —
-//! подтверждено точным EXE. Владелец завершён. Точная пара:
+//! Owner содержит GAS/CD-key/player очереди, password/valid-code/matrix
+//! проверки, timeout cadence и их side effects. Контракт подтверждён точной
+//! парой LoginServer EXE/PDB.
 //! `TagPwdChecked` сохраняет signed socket ID, исходный IPv4 `ulong`,
 //! byte-exact account/world-name и matrix-флаг. `PushBackPwdChecked` игнорировал
 //! `nullptr`; Rust меняет форму API и принимает только owned значение. Под
@@ -54,7 +40,7 @@
 //! старую запись с `F`, вызывает ту же границу `matrix_add` и независимо от
 //! её исходно проигнорированного результата отправляет `B + account + 3
 //! bytes`.
-//! `0x00019800` сохраняют одноразовую запись: отсутствующая запись даёт `D`,
+//! `matirx_validate` сохраняет одноразовую запись: отсутствующая запись даёт `D`,
 //! endpoint mismatch удаляет её без DB-вызова, а совпавший endpoint передаёт
 //! позиции и ответ единому `CRsCDKey` и затем удаляет запись при любом `C/D`.
 //! `matrices_timeout` использует отдельный boot tick для каждой записи,
@@ -71,8 +57,8 @@
 //! содержимого. Все сложения остаются 32-битными wrapping, а исходные три
 //! нулевых timer-поля собраны в локальное состояние cadence без нового общего
 //! scheduler.
-//! Точный код `0x0001D52B..0x0001D58A` подтвердил дефект: после обработки GAS
-//! очищается no-queue CD-key FIFO, сама GAS FIFO остаётся и повторяется в
+//! После обработки GAS очищается no-queue CD-key FIFO, сама GAS FIFO остаётся и
+//! повторяется в
 //! следующих проходах. Safe Rust семплирует GAS и полностью извлекаемые
 //! no-queue maps в начале соответствующей стадии; конкурентное добавление
 //! остаётся следующему проходу. Исходный race при конкурентной мутации этих
@@ -1533,7 +1519,7 @@ impl CLoginQueue {
         queue.push_back(checked);
     }
 
-    /// Возвращает текущий размер для будущего исходного queue cadence.
+    /// Возвращает текущий размер для исходного queue cadence.
     pub(crate) fn pwd_checked_len(&self) -> usize {
         self.pwd_checked.lock().len()
     }
@@ -1664,7 +1650,7 @@ impl CLoginQueue {
             .retain(|_, error| error.next_login_time >= now);
     }
 
-    /// Выполняет только хвост `Run` после ещё не восстановленных промежуточных стадий.
+    /// Выполняет timeout-хвост `Run` после промежуточных стадий caller-а.
     ///
     /// Три вызова boot clock намеренно не объединены: исходник вызывал
     /// `timeGetTime` отдельно перед matrix, valid-code и valid-error проверкой.

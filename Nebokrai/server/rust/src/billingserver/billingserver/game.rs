@@ -1,11 +1,11 @@
 //! Владелец `CGame` исторического BillingServer из `billingserver/game.cpp`.
 //!
-//! Восстановлены достигнутые PlayerFill-ветви, полные `Init/Release`, owned
-//! network runtime и `GameThreadFunc`. Отдельная Windows-проверка единственного
+//! Owner содержит PlayerFill-ветви, полные `Init/Release`, owned network
+//! runtime и `GameThreadFunc`. Контракт подтверждён точной парой BillingServer
+//! EXE/PDB. Отдельная Windows-проверка единственного
 //! экземпляра через `FindWindow` не переносится: тот же процессный инвариант
 //! обеспечивает последующий exclusive listener bind в `InitServer`.
 //!
-//! Исходный путь PDB:
 //!
 //! `ProcessMessage` один раз читает размер FIFO `CServerForGS` и исполняет
 //! ровно этот snapshot. Сообщения, добавленные после чтения размера, остаются
@@ -27,13 +27,12 @@
 //! `rustix::CLOCK_BOOTTIME` сохраняет suspend-aware 32-битный wrapping
 //! `timeGetTime`; `VecDeque` хранит typed outcomes вместо Windows GUI-журнала.
 //! Неиспользуемый этим телом `dwServerInfoLogLastTime` всё равно хранится и
-//! инициализируется в исходной позиции. Для `ProcessMessage/MainLoop` повторный
-//! reverse не требовался; отдельные setup/DB-факты ниже проверены адресно.
+//! инициализируется в исходной позиции.
 //!
 //! `LoadSetup` читает пятнадцать positional-пар, игнорируя labels и сохраняя
 //! partial mutation при преждевременном EOF. Конструктор `tagSetup` не попал в
-//! owner-export, поэтому его точное тело проверено адресно: Billing EXE
-//! задавая numeric/bool defaults. Rust хранит такие поля как `Option`; safe
+//! owner-export; подтверждены только используемые numeric/bool defaults.
+//! Rust хранит остальные поля как `Option`; safe
 //! init останавливается только на конкретной недоказанной границе вместо
 //! придуманного значения. Найденный setup содержит все пятнадцать пар.
 //!

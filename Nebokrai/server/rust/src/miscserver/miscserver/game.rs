@@ -1,7 +1,6 @@
 //! Владелец `CGame` исторического MiscServer из `miscserver/game.cpp`.
 //!
 //!
-//! Исходный путь PDB:
 //!
 //! Обе network-функции сначала уничтожают прежний `CMyNetClient`, создают новый
 //! IPv4 socket через исходные `Create(0, 0, 1)` и синхронно разрешают World
@@ -62,10 +61,10 @@
 //! Legacy return самой функции равен `0` на всех путях, включая connected.
 //!
 //! `File::create` заменяет `fopen("debug.txt", "wb")/fclose`, а Tokio timer —
-//! `Sleep(8000)`. Будущий Linux shutdown передаётся как повторно используемый
-//! pinned future и может отменить connect либо паузу: оригинал не имел safe
-//! owned-выхода из бесконечного Init-retry, но оставить будущий Rust lifecycle
-//! навсегда заблокированным после сигнала нельзя. Cancellation получает
+//! `Sleep(8000)`. Linux shutdown передаётся как повторно используемый pinned
+//! future и может отменить connect либо паузу: оригинал не имел safe
+//! owned-выхода из бесконечного Init-retry, а Rust lifecycle не остаётся
+//! навсегда заблокированным после сигнала. Cancellation получает
 //! отдельный typed outcome и не выдаётся за старый return. `CBaseMessage::Initial`
 //! и `CMySocket::MySocketInit` не имеют пустых вызовов: static message scratch
 //! и WinSock startup уже заменены локальным message ownership и Linux
@@ -81,9 +80,8 @@
 //! форматы сохранены в документации его частей. Узкий accessor комнаты
 //! возвращает прежний 32-битный `_Mysize`, не открывая её контейнер владельцу.
 //!
-//! Потерянные декомпилятором varargs подтверждены точным EXE по
-//! `+0x0C/+0x10`. В `PutMemCondition` адреса
-//! `0x02800000` и при превышении сбрасывают sync-флаг перед новым boot tick.
+//! `PutMemCondition` сравнивает resident working set с порогом `0x02800000` и
+//! при превышении сбрасывает sync-флаг перед новым boot tick.
 //!
 //! `procfs 0.18` заменяет `GetProcessMemoryInfo`: Linux `VmRSS` является
 //! resident working set, а `VmSize` сохраняет ближайший доступный process-wide
@@ -111,7 +109,7 @@
 //! Внешний shutdown является технической owned-заменой global exit flag и может
 //! отменить ожидающий connect/I/O turn. После любой достигнутой границы
 //! сохраняется `2005 ms -> exit notice -> CAuctionRoom::Clear`; `exit(0)` стал
-//! возвращаемым legacy status, потому что доменный owner не завершает будущий
+//! возвращаемым legacy status, потому что доменный owner не завершает общий
 //! общий Linux-процесс самостоятельно.
 //!
 //! compiler catch читает `CGame+0x88` (`m_dwCurMsg`), передаёт его формату
@@ -119,8 +117,7 @@
 //! outcomes; SEH/COM, WinSock startup/cleanup, MFC logging, message destructor,
 //! STL map allocation и ручные new/delete не получают пустых аналогов. `Drop`,
 //! локальные сообщения, `BTreeMap`, Tokio и typed reports выражают их достигнутый
-//! эффект. Сырой `AddLogText` ниже остаётся до реализации остальных владельцев,
-//! которые ещё ссылаются на общий diagnostic helper.
+//! эффект.
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -190,7 +187,7 @@ pub(crate) enum MiscInitializationEnd {
     DebugFileUnavailable { path: PathBuf, source: io::Error },
     /// `InitNetClient` впервые вернул исходный успех.
     Connected,
-    /// Будущий owned lifecycle запросил shutdown во время connect либо паузы.
+    /// Owned lifecycle запросил shutdown во время connect либо паузы.
     Cancelled,
 }
 
@@ -334,7 +331,7 @@ pub(crate) struct MiscGameThreadTurn {
 pub(crate) struct MiscGameThreadRelease {
     /// Исходный operator notice `exit` достигнут после паузы `2005 ms`.
     pub(crate) exit_notice: bool,
-    /// Старый `exit(0)` возвращён владельцу будущего общего process lifecycle.
+    /// Старый `exit(0)` возвращён владельцу общего process lifecycle.
     pub(crate) legacy_exit_status: i32,
 }
 
@@ -390,14 +387,14 @@ impl CGame {
         &self.setup
     }
 
-    /// Даёт будущему `Init` единственный изменяемый setup-owner.
+    /// Даёт `Init` единственный изменяемый setup-owner.
     pub(crate) fn setup_mut(&mut self) -> &mut CSetup {
         &mut self.setup
     }
 
     /// Выполняет исходный file/setup/connect init до успеха либо shutdown.
     ///
-    /// `shutdown` остаётся пригодным будущему caller-у после успешного init.
+    /// `shutdown` остаётся пригодным caller-у после успешного init.
     pub(crate) async fn initialize<Shutdown>(
         &mut self,
         runtime_directory: &Path,

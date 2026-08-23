@@ -1,38 +1,10 @@
 //! Фактический `CGame` LoginServer из `loginserver/game.cpp` и `.h`.
 //!
-//! Восстановлены функции для AuthServer lifecycle-функций
-//! `LoadASList`, `SendLSInfoToAS`, `IsConnectAS`, `DisconnectAS`,
-//! `ReconnectAS`, `ReassignAS`, `InitAuthClient`, обработки типизированного
-//! reconnect-события, управляемых `StartReconnectThread/_ReconnectThread`,
-//! `GetWorldIDByName`, `IsExitWorld`, `GetLoginWorldPlayerNumByWorldName`,
-//! `GetWorldNameByID`, `AddWorld`, `DelWorld`,
-//! `ClearCDKeyByWorldServerID`, `UpdateWorldInfoToAllClient`,
-//! `AddCdkey`, `FindCdkey`, `ClearCDKey`, `ClearLoginCdkey`,
-//! `UpdateOnlineUser2DB`, `GetCdkeyCount`, накопления
-//! `m_vectorPingWorldServerInfo`, `AppendServerInfoLog`, `ServerInfoLog`,
-//! `GetLoginCdkeyWorldServer`, `SendMsg2World`, `SendToClient`, `KickOut`, baseline-
-//! ветвей `PrepareEnter/EnterGame`, `AddWorldInfoToMsg`,
-//! `L2W_PlayerBase_Send`, `L2W_QuestDetail_Send`, `L2W_CreateRole_Send`,
-//! `L2W_DeleteRole_Send`, `L2W_RestoreRole_Send`,
-//! `SetLoginCdkeyWorldServer`, typed-границы
-//! `AccountEnterLog`, `RoleEnterLog`, `LeaveLog`, `AccountLeaveLog`,
-//! password-error части
-//! `AuthHandler`, `tagSetup`,
-//! позиционного `LoadSetup`, точного `tagSetupEx`, `LoadSetupEx`,
-//! `ReLoadSetup`, `ReLoadSetupEx`, `load_listen_port`, `LoadWorldSetup`,
-//! `ReLoadWorldSetup`, `LoadNoQueueCDKeyList`, `GetLoginWorldCdkeyNumbers`,
-//! `SetListWorldInfoBySetup`, `WorldServerIsOpenState`,
-//! `InitNetServer_Client`, `InitNetServer_World`,
-//! `ClearOnlineUserDatabase`, полного `CGame::Init/Release` и запуска его
-//! `CGasThread`/`AccLogThread`, `ExecuteProce`, owned `GameThreadFunc` и
-//! управляемого World/Client/Auth network cadence,
-//! `ProcessMessage`, достигнутого turn `MainLoop`, `ChangeAllWorldSate`,
-//! достигнутых границ
-//! `CRsCDKey`, создания его Linux/TDS-owner из точных DB setup-полей,
-//! `CLoginQueue::OnInitial` и readiness-driven Linux read/send шага.
-//! После закрытия последних серверных границ заменённый псевдокод,
-//! constructor/destructor, STL/CRT и compiler cleanup удалены; оставшиеся
-//! неизвестности локализованы у конкретных безопасных границ.
+//! Файл объединяет AuthServer lifecycle, World/client routing, CD-key и online
+//! state, account logs, setup reload, DB owners, network cadence и полный
+//! `CGame::Init -> MainLoop -> Release`/`GameThreadFunc`. Внешние контракты
+//! подтверждены точной парой LoginServer EXE/PDB; неизвестности локализованы у
+//! конкретных безопасных границ.
 //!
 //! `LoadASList` сначала очищал список, затем читал whitespace-пары
 //! `string + unsigned short` и возвращал успех даже для пустого либо частично
@@ -148,7 +120,7 @@
 //! сохраняются вариантами одной typed-FIFO исходной `_acc_logs`, поэтому их
 //! взаимный порядок не теряется. Account-enter хранит raw IPv4, role-enter —
 //! byte-exact имя, unsigned level и переданный signed World number. `LeaveLog`
-//! сохраняет одну метку для будущего одновременного обновления RoleLeaveTime и
+//! сохраняет одну метку для одновременного обновления RoleLeaveTime и
 //! AccountLeaveTime; все варианты сохраняют byte-exact account и local time,
 //! снятые в исходной позиции. `AccLogQueue` сохраняет общую FIFO и semaphore-
 //! семантику, а `AccLogThread` строит и выполняет доказанные legacy SQL в
@@ -848,7 +820,7 @@ pub(crate) enum PrepareEnterOutcome {
     MatrixRegistrationRequired,
 }
 
-/// Событие, переданное узким Auth lifecycle остальному будущему `CGame`.
+/// Событие, переданное узким Auth lifecycle остальному `CGame`.
 pub(crate) enum AuthGameEvent {
     /// Обычное Auth/close сообщение ожидает своего доменного `Run`.
     Message(CMessage),
@@ -2647,7 +2619,7 @@ impl CGame {
 
     /// Выполняет один concurrent network cadence перед доменным `MainLoop`.
     ///
-    /// World и Client snapshots идут в порядке будущего `ProcessMessage`.
+    /// World и Client snapshots идут в порядке `ProcessMessage`.
     /// Auth read/send polling выполняется один раз без ожидания readiness:
     /// старые направления обслуживались независимыми threads, поэтому между
     /// ними не вводится новый блокирующий порядок.
@@ -3851,7 +3823,7 @@ impl CGame {
         false
     }
 
-    /// Заменяет одну запись `m_listWorldInfo` для будущего World lifecycle.
+    /// Заменяет одну запись `m_listWorldInfo` для World lifecycle.
     pub(crate) fn upsert_world_route(&mut self, route: WorldRoute) {
         self.world_routes.insert(route.world_id, route);
     }

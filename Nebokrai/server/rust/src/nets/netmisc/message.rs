@@ -1,25 +1,14 @@
 //! Сообщение сетевого направления MiscServer, восстановленное из
 //! `nets/netmisc/message.cpp`.
 //!
-//! Статус владельца: `IMPLEMENTED`.
-//!
-//! Точная пара: `MiscServer/miscserver.exe + MiscServer/miscserver.pdb`;
-//! SHA-256 EXE
-//! `F4426942465E6E9D1397EEF7A977B87D0D8C5B12957832770F57656F998AED65`,
-//! SHA-256 PDB
-//! `ED5F482DADB3E8B050B37F9911067479D297C5B6D33C1EA2CE99C9CD0FC11FA7`.
-//! Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\nets\netmisc\message.cpp`.
-//!
-//! Существенные RVA: деструктор `0x00010770`, конструктор `0x000107A0`,
-//! `CreateMessage` `0x000107D0`, `CreateMessageWithoutRLE` `0x00010920`,
-//! `Send` `0x000109F0`, `Run` `0x00010AB0`.
+//! Owner реализует сжатый и несжатый create-пути, отправку и selector `Run`;
+//! контракт подтверждён точной парой MiscServer EXE/PDB.
 //!
 //! Конструктор создаёт базовый 16-байтовый header, записывает `MsgType` в слово
 //! `+4` и обнуляет `MapID`, `SocketID`, IP и receive tick. Оба create-пути
 //! копируют все четыре слова входного header, затем нормализуют длину по реально
 //! добавленному payload и фиксируют 32-битный millisecond tick. Rust получает
-//! tick параметром: будущий Linux runtime обязан предоставить совместимый
+//! tick параметром: Linux runtime предоставляет совместимый
 //! монотонный wrapping-счётчик, а этот wire-владелец не подменяет `timeGetTime`
 //! системным временем.
 //!
@@ -31,8 +20,8 @@
 //!
 //! `Send` строит межсерверный envelope `[total_len, crc(total_len),
 //! crc(message), message]`, где все три слова little-endian, а CRC — IEEE из
-//! `public/crc32static.rs`. Исходный `CMyNetClient::SendToServer` RVA
-//! `0x000113F0` немедленно копирует весь вход в owned `tagSocketOper`, поэтому
+//! `public/crc32static.rs`. `CMyNetClient::SendToServer` немедленно копирует
+//! весь вход в owned `tagSocketOper`, поэтому
 //! локальный `Vec<u8>` совместим по lifetime. Наблюдаемая сериализация исходной
 //! `m_CSTemptBuffer` вокруг build/CRC/send пока сохранена отдельным mutex: её
 //! нельзя удалить только из-за исчезновения общей scratch-памяти.
@@ -41,9 +30,7 @@
 //! `OnMSG_W2M_AUCTION`, `0x16EA00` — `OnMSG_M2M_Fuction`, остальные значения —
 //! `OnOtherMsg`; первые два возвращают `1`, последний `0`. Ветка `0x14EC00`
 //! вызывает `CGUID::~CGUID(this)` и возвращает `1`. Поскольку деструктор GUID
-//! пуст, она сохранена как no-op. Странность подтверждена точечным
-//! дизассемблированием MiscServer RVA `0x00010AB0`: call target RVA
-//! `0x000057A0`, совпадающий с доказанным пустым `CGUID::~CGUID`.
+//! пуст, она сохранена как no-op.
 //!
 //! `MessageHandlers` является узкой синхронной selector-границей трёх свободных
 //! handler-функций. Конкретный `CGame::ProcessMessage` запоминает выбранного
@@ -232,8 +219,8 @@ impl CMessage {
     /// Выполняет точную маршрутизацию исходного `Run` и возвращает его `long`.
     pub(crate) fn run(&mut self, handlers: &mut dyn MessageHandlers) -> i32 {
         match self.message_type() as u32 & MESSAGE_FAMILY_MASK {
-            // VERIFIED_DISASSEMBLY: MiscServer RVA 0x00010AB0 вызывает пустой
-            // CGUID::~CGUID RVA 0x000057A0 с `this`, затем возвращает 1.
+            // Пустой `CGUID::~CGUID` не даёт отдельного side effect; selector
+            // возвращает исходную единицу.
             0x0014_EC00 => 1,
             0x0014_ED00 => {
                 handlers.on_world_auction(self);

@@ -1,21 +1,8 @@
 //! DB-владелец `CRsCDKey` LoginServer из `rscdkey.cpp`.
 //!
-//! Статус достигнутых функций `CDKeyBan` RVA `0x00062310`, `IPIsAllowed`
-//! RVA `0x000625E0`, `IPIsForbidded` RVA `0x00062880`, `matrix_used`
-//! RVA `0x00062B20`, `GetBanTime` RVA `0x00062CC0`, `matrix_validate`
-//! RVA `0x00063020`, `IsBetweenIP` RVA `0x00063580`, `FixPtAcc`
-//! RVA `0x00063AB0` и `ValidateLocalPassord` RVA `0x00063D70` —
-//! `IMPLEMENTED`; соседний вызов GAS-процедуры `getAccInfoEx` из
-//! `CGame::ExecuteProce` RVA `0x00007AB0` также реализован этим единственным
-//! Login DB-owner. Управляющие переходы IP-фильтров и `matrix_used`, потерянные
-//! декомпилятором, дополнительно имеют статус `VERIFIED_DISASSEMBLY`.
-//! Точная пара: `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`,
-//! SHA-256 EXE
-//! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`,
-//! SHA-256 PDB
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`.
-//! Исходные пути PDB: `d:\complite_version\fengyun_russia\trunk\dbaccess\`
-//! `logindb\rscdkey.cpp/.h`.
+//! Owner реализует `CDKeyBan`, IP-фильтры, matrix-card операции, `GetBanTime`,
+//! `FixPtAcc`, `ValidateLocalPassord` и GAS-процедуру `getAccInfoEx`.
+//! Контракты подтверждены точной парой LoginServer EXE/PDB.
 //!
 //! Каждая операция по-прежнему открывает отдельное соединение. `CDKeyBan`
 //! сохраняет нетранзакционный `SELECT WITH(NOLOCK) -> UPDATE/INSERT`;
@@ -29,8 +16,8 @@
 //! аргументом вместо чтения глобального `CGame`. Перед сравнением с `bigint`
 //! исходный raw WinSock IPv4 разворачивается тем же `bswap`. Allow-ошибка даёт
 //! `false`, forbid-ошибка — также `false`, поэтому только allow остаётся
-//! fail-closed. У `IsBetweenIP` EXE на RVA `0x0006369A`, `0x000636E9` и
-//! `0x00063A1D` сводит и EOF, и найденный диапазон к `true`: любой успешно
+//! fail-closed. `IsBetweenIP` сводит и EOF, и найденный диапазон к `true`:
+//! любой успешно
 //! прочитанный result set разрешает вход, а `false` возможен только при ADO-
 //! ошибке. Этот наблюдаемый дефект сохранён без придуманного deny-результата.
 //!
@@ -54,15 +41,15 @@
 //! границу. Полный найденный
 //! `LoginDB.bak` подтверждает `csl_cdkey`, `ip_allow`, `ip_forbid`, `ip_list` и
 //! их типы, но ни он, ни `Account.bak` не содержат `userinfo`. Поэтому контракт
-//! двух account-функций подтверждён EXE/PDB, а их DB-schema остаётся локальным
-//! `BLOCKED_MISSING_FACT`: нельзя утверждать длину/тип `userid`, `originsdid` и
-//! `passwd` либо создавать собственную таблицу.
+//! двух account-функций подтверждён EXE/PDB, но их DB-schema неизвестна:
+//! нельзя утверждать длину/тип `userid`, `originsdid` и `passwd` либо создавать
+//! собственную таблицу.
 //!
 //! Во всех четырёх backup-наборах `LoginDB.bak` строки `matrix_card image`
 //! равны `NULL`; `sp_bindCdkey` принимает blob любой ненулевой длины. Оригинал
 //! не проверял индекс перед чтением `SAFEARRAY`. Для blob, покрывающего три
-//! позиции, сохраняется исходный `bool`; выход за длину остаётся отдельным
-//! `BLOCKED_MISSING_FACT` без `unsafe` и без придуманного `false`. Конструктор,
+//! позиции, сохраняется исходный `bool`; выход за длину остаётся явно
+//! неразрешённой границей без `unsafe` и без придуманного `false`. Конструктор,
 //! деструктор, ADO wrappers, STL/COM internals и EH cleanup удалены как
 //! доказанный compiler/library noise.
 //! Техническая функция `connect_login_database` переиспользуется соседним
@@ -604,8 +591,8 @@ impl RsCdKeyOwner for TiberiusRsCdKey {
             .runtime
             .block_on(Self::read_ip_list(self.config.clone(), account, raw_ipv4))
         {
-            // VERIFIED_DISASSEMBLY: Login RVA 0x0006369A/0x000636E9 и
-            // 0x00063A1D возвращают true и при EOF, и при совпавшем диапазоне.
+            // И EOF, и найденный диапазон возвращают true; false остаётся
+            // только результатом ошибки запроса.
             Ok(()) => true,
             Err(error) => {
                 self.push_database_failure(RsCdKeyOperation::IsBetweenIp, error);
@@ -653,8 +640,8 @@ impl RsCdKeyOwner for TiberiusRsCdKey {
             .max()
             .map_or(0, |position| usize::from(position) + 1);
         if matrix_card.len() < required_len {
-            // BLOCKED_MISSING_FACT: Login RVA 0x00063020 индексировал SAFEARRAY
-            // без проверки. `LoginDB.bak` не задаёт minimum length у image,
+            // Оригинал индексировал SAFEARRAY без проверки. `LoginDB.bak` не
+            // задаёт minimum length у image,
             // поэтому реакция выхода позиции за blob не доказана.
             return MatrixValidation::BlockedMatrixCardTooShort {
                 actual_len: matrix_card.len(),

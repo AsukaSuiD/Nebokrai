@@ -1,23 +1,12 @@
 //! Принятое GameServer-соединение BillingServer из
 //! `nets/netbilling/clientforgs.cpp`.
 //!
-//! Статус владельца: `IMPLEMENTED` для constructor state, `OnClose` и
-//! корректного/неполного `OnReceive`. Небезопасные malformed-границы длины и
+//! Owner реализует закрытие и разбор корректного либо неполного `OnReceive`.
+//! Небезопасные malformed-границы длины и
 //! короткого внутреннего header детерминированно очищают accumulator и
 //! возвращают локальную ошибку. `SetSendRevBuf` остаётся отдельной
-//! transport-границей до доказательства совместимого Linux socket option.
-//!
-//! Точная пара: `BillingServer/billingserver.exe + BillingServer/billingserver.pdb`;
-//! SHA-256 EXE
-//! `FA32E3C043CB49965686129696A4EB34B733ACA1D60CAF57D369F97D5E68FB19`,
-//! SHA-256 PDB
-//! `F900CD0330BEFF32AC071B107AB653FD403CD18746896B3C0187C5751ACA0B21`.
-//! Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\nets\netbilling\clientforgs.cpp`.
-//!
-//! Существенные RVA: конструктор `0x0000F180`, деструктор `0x0000F200`,
-//! `OnClose` `0x0000F230`, `SetSendRevBuf` `0x0000F2D0` и
-//! `OnReceive` `0x0000F320`.
+//! transport-границей: совместимый Linux socket option неизвестен.
+//! Контракт подтверждён точной парой BillingServer EXE/PDB.
 //!
 //! Производный конструктор выделял receive-buffer `0xA00000` и send-buffer
 //! `0x100000`. Rust использует общий `CServerClient` с Billing-capacity для
@@ -221,6 +210,6 @@ impl CClientForGS {
     }
 }
 
-// BLOCKED_MISSING_FACT: `SetSendRevBuf` RVA `0x0000F2D0` задавал Windows
-// `SO_SNDBUF=0`. Нужно доказать требуемую наблюдаемую семантику backpressure,
-// прежде чем выбирать отличающийся Linux socket option в server-owner.
+// `SetSendRevBuf` задавал Windows `SO_SNDBUF=0`. Совместимая наблюдаемая
+// семантика backpressure для Linux неизвестна, поэтому отличающийся socket
+// option в server-owner не назначен.

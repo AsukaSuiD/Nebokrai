@@ -1,8 +1,6 @@
-//! восстановлено — владелец `CGasThread` из
+//! Владелец `CGasThread` LoginServer.
 //!
-//! Точная пара LoginServer.exe/PDB:
-//! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876` /
-//! Исходный путь PDB:
+//! Контракт подтверждён точной парой LoginServer EXE/PDB.
 //! Worker сохраняет одну FIFO GAS, 10-миллисекундную idle cadence, один
 //! `CMyWinInet` с исторически повторно используемым receive-буфером и точную
 //! таблицу ответных кодов. HTTP остаётся в выделенном blocking-thread. Вместо

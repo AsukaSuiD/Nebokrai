@@ -1,11 +1,7 @@
 //! Свободные обработчики AuthServer из `appauth/message/message_func.cpp`.
 //!
-//! Контракт всех девяти функций таблицы Auth `InitMsgFuncPool`: восстановлено.
-//! Исходный путь PDB:
-//! Связанное состояние и helpers подтверждены в `cgame.cpp/.h`: `addLSItem`
-//! `0x000020E0`, `gmaGetSocketID` `0x00003E60`, `gmaGetAreaID` `0x00003EA0`,
-//! `delLSItem` `0x00004350`, `CheckConnection` `0x000058E0` и inline
-//! `gmaRemoveLS` `0x00016A70`.
+//! Контракт всех девяти функций таблицы Auth `InitMsgFuncPool` и связанного
+//! состояния `CGame` подтверждён точной парой AuthServer EXE/PDB.
 //!
 //! Synthetic connect/disconnect получают socket ID и peer IPv4 из runtime-
 //! metadata `CMessage`. Connect сначала публикует операторское событие, затем
@@ -22,7 +18,7 @@
 //!
 //! Auth/auth-ex читают account, password, client IPv4 и client socket, приводят
 //! обе строки к lower-case и ставят owned DB quest с socket ID текущего
-//! LoginServer. Точный EXE вызывает `CharLowerA`, а язык преобразования получал
+//! LoginServer. Оригинал вызывает `CharLowerA`, а язык преобразования получал
 //! из внешней Windows-сессии и внутри процесса не закреплял. Linux-вариант
 //! фиксирует Windows-1251 русской поставки через `encoding_rs`; для запуска
 //! оригинала под иной системной локалью преобразование байтов `0x80..=0xff`
@@ -33,8 +29,7 @@
 //! GM lock читает account и шесть `u16` полей времени в исходном порядке.
 //! GM kick маршрутизирует `0xCF701` по area ID, сохраняя socket отправителя,
 //! account, однобайтовую причину и operator string. Нулевой socket sentinel
-//! возвращает `0x10F201` отправителю. Пропущенный декомпилятом аргумент
-//! `0x00016100`: diagnostic действительно содержит исходный area ID. Ответ
+//! возвращает `0x10F201` отправителю. Diagnostic содержит исходный area ID. Ответ
 //! kick пересылается сохранённому socket ID; result `0` несёт две строки,
 //! ненулевой result — одну.
 //!
@@ -44,10 +39,8 @@
 //! Выходная команда отказа идёт через owned `ServerCommandHandle`; handler не знает
 //! внутреннее устройство `CServer`. Недостаток четырёх payload-байт у
 //! `LSGetInfo` сохраняет старый `CBaseMessage::GetLong == 0` без движения
-//! курсора. Реализованные девять доменных функций удалены из сырого блока
-//! вместе с их STL/MFC/SEH-шумом; несвязанные compiler/library helpers остаются
-//! provenance-корпусом. Единственная локальная граница таблицы — `0x10F101` в
-//! `nets/netauth/message.rs`; временного handler здесь нет.
+//! курсора. Единственная локальная граница таблицы — `0x10F101` в
+//! `nets/netauth/message.rs`; отдельного handler здесь нет.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;

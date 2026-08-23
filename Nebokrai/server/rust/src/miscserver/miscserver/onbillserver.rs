@@ -1,13 +1,12 @@
 //! Свободный handler `OnMSG_M2M_Fuction` из `onbillserver.cpp`.
 //!
-//! Восстановлены функции.
+//! Контракт двух служебных ветвей подтверждён точной парой MiscServer EXE/PDB.
 //!
-//! Исходный путь PDB:
 //!
 //! Handler знает два полных opcode. `0x0016EA01` сначала ставит
 //! `m_bClientClose = true`, затем синхронно вызывает `CGame::ReConnect`.
 //! Linux connect является `async`, поэтому Rust-функция ждёт его до возврата:
-//! будущий snapshot-runner обязан await-ить handler и не может переставить
+//! snapshot-runner await-ит handler и не может переставить
 //! следующее сообщение раньше reconnect. Исходный `0/1` результат reconnect
 //! игнорировался; typed outcome сохраняет его для диагностики.
 //!
@@ -20,7 +19,7 @@
 //! Nullable входной `CMessage*` заменён обязательной ссылкой: `CMessage::Run`
 //! вызывает handler только для живого owned сообщения. Два process-global
 //! обращения `GetGame()` выражены одной mutable ссылкой на единственного
-//! будущего `CGame`. `std::map<CGUID, bool>` и его tree/iterator функции в этом
+//! `CGame`. `std::map<CGUID, bool>` и его tree/iterator функции в этом
 //! translation unit не вызываются handler-ом и классифицированы как STL noise;
 //! десять `$L` являются destructor/unwind cleanup. Они заменены стандартными
 //! коллекциями, владением и `Drop`, поэтому отдельных Rust-тел не имеют.

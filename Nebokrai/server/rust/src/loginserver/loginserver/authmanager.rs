@@ -1,10 +1,8 @@
 //! Менеджер запросов авторизации LoginServer из `authmanager.cpp` и `.h`.
 //!
-//! `0x0001FBD0`, `send_quest_message` `0x0001FBF0`, `run` `0x0001FD20`,
-//! конструктор `AuthQuest` `0x0001FF10`, `removeQuest` `0x000201A0`,
-//! `OnResponseAuth` `0x00020200`, конструктор/деструктор manager
-//! `0x00020350/0x00020390` и две формы `addQuest`
-//! `0x000203E0/0x00020460`.
+//! Owner реализует `AuthQuest`, обе формы `addQuest`, отправку запроса,
+//! timeout-проход, удаление и обработку ответа. Контракт подтверждён точной
+//! парой LoginServer EXE/PDB.
 //!
 //! Заявка хранит client IPv4/socket ID, byte-exact account/password и wrapping
 //! `timeGetTime` начала. `addQuest` отбрасывает точный duplicate account; новую
@@ -27,7 +25,7 @@
 //! vtable listener. Вместо хранения сырого nullable listener-pointer Rust
 //! принимает проверенный mutable borrow только на время синхронного вызова;
 //! момент и порядок callbacks не меняются. Старые `AddLogText` представлены
-//! `InvalidResponse` и числом timeout-событий для будущего logging-owner.
+//! `InvalidResponse` и числом timeout-событий для process diagnostics.
 //! Глобальный `gAuthMgr`, `atexit`, SEH, allocators и ручные деструкторы не
 //! получают отдельных Rust-аналогов.
 

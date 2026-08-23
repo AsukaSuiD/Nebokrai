@@ -1,23 +1,12 @@
 //! Производный владелец игровых client-соединений LoginServer из
 //! `nets/netlogin/mynetserver_client.cpp` и доказанных call sites `CGame`.
 //!
-//! Статус владельца: `IMPLEMENTED` для component defaults, virtual-фабрики
-//! accepted client, условных receive-проверок, общего command snapshot,
+//! Owner создаёт accepted client, применяет условные receive-проверки и общий
+//! command snapshot, обрабатывает
 //! `OnMapStrError`, доказанных limit diagnostics и выдачи конкретной FIFO.
 //! Долгоживущие Linux I/O actions возвращаются runtime через общий `CServer`;
 //! этот owner не создаёт второй transport и не исполняет доменные сообщения.
-//!
-//! Точная пара: `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`;
-//! SHA-256 EXE
-//! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`,
-//! SHA-256 PDB
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`.
-//! Исходный путь PDB:
-//! `d:\complite_version\fengyun_russia\trunk\nets\netlogin\mynetserver_client.cpp`.
-//!
-//! Существенные RVA: конструктор `0x0006A870`, деструктор `0x0006A8A0`,
-//! `CreateServerClient` `0x0006A8B0`, `OnMapStrError` `0x0006A910`;
-//! `CGame::InitNetServer_Client` `0x00002DA0`, `ReLoadSetup` `0x0000F4E0`.
+//! Контракт подтверждён точной парой LoginServer EXE/PDB.
 //!
 //! Конструктор менял общий максимум незавершённых send-операций на `5` и
 //! per-client send-buffer limit на `0x400000`. `CGame` после `Host` записывал
@@ -309,5 +298,5 @@ impl Default for CMyNetServerClient {
     }
 }
 
-// BLOCKED_MISSING_FACT: поле Login-конструктора `+0x120 = 0` ещё не связано
-// с живым именованным состоянием по PDB/call sites и не получает пустого поля.
+// Поле Login-конструктора `+0x120 = 0` не связано с живым именованным
+// состоянием и не получает пустого Rust-поля только ради layout.

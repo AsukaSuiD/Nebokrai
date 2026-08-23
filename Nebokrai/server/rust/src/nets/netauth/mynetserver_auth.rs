@@ -1,25 +1,12 @@
 //! Производный сетевой владелец AuthServer, восстановленный из
 //! `nets/netauth/mynetserver_auth.cpp` и доказанных call sites `CGame`.
 //!
-//! Статус владельца: `IMPLEMENTED` для component defaults, virtual-фабрики
-//! принятого клиента, synthetic accept/close сообщений, общего command
-//! snapshot и выдачи конкретной FIFO владельцу `CGame::ProcessMessage`.
+//! Owner создаёт принятых клиентов, публикует synthetic accept/close сообщения,
+//! обрабатывает общий command snapshot и передаёт конкретную FIFO владельцу
+//! `CGame::ProcessMessage`. Контракт подтверждён точной парой AuthServer EXE/PDB.
 //! Долгоживущие Linux read-задачи и send-operation возвращаются runtime как
 //! типизированные `ServerIoAction`; этот owner не создаёт второй transport
 //! runtime и не исполняет доменные сообщения.
-//!
-//! Точная пара: `AuthServer/authserver.exe + AuthServer/authserver.pdb`;
-//! SHA-256 EXE
-//! `AE0022429C135553092364F01838FA6EF8E631D558C96278123FF3ADE6AD3B15`,
-//! SHA-256 PDB
-//! `26F8936605024F56B0A2C3BBB1923BCACD3DF9E17221FCC20AB38070E28403D5`.
-//! Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\nets\netauth\mynetserver_auth.cpp`.
-//!
-//! Существенные RVA: конструктор `0x00012770`, деструктор `0x000127A0`,
-//! `CreateServerClient` `0x000127B0`; `CGame::InitNetServer_Auth`
-//! `0x00002AF0`, `CGame::ProcessMessage` `0x00002090`.
-//!
 //! Производный конструктор менял максимум незавершённых send-операций на `100`
 //! и per-client send-buffer limit на `0x1000000`. Позднее `CGame` заменял их
 //! значениями setup вместе с max LoginServer count, записывал поздний backlog
@@ -206,8 +193,8 @@ impl ServerComponentCallbacks for AuthNetworkCallbacks<'_> {
         _actual: i32,
         _permitted: i32,
     ) {
-        // Auth наследует пустой CServerClient::OnOneMessageSizeOver RVA
-        // 0x000147B0; последующие forbid/QUIT выполняет общий owner.
+        // Auth наследует пустой `CServerClient::OnOneMessageSizeOver`;
+        // последующие forbid/QUIT выполняет общий owner.
     }
 
     fn on_missing_map_id_client(&mut self, _map_id: i32, _socket_id: i32) {
@@ -225,9 +212,8 @@ impl Default for CMyNetServerAuth {
     }
 }
 
-// BLOCKED_MISSING_FACT: поле Auth-конструктора `+0x120 = 0` ещё не связано с
-// живым именованным состоянием по PDB/call sites. Оно не получает пустого поля
-// Rust только ради совпадения layout.
+// Поле Auth-конструктора `+0x120 = 0` не связано с живым именованным
+// состоянием. Оно не получает пустого поля Rust только ради совпадения layout.
 
 // Accept-delay, net snapshot cadence и JoinHandle долгоживущих read-задач
 // принадлежат `authserver/src/cgame.rs`; здесь остаётся только network state.

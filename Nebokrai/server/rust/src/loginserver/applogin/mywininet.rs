@@ -1,9 +1,7 @@
-//! восстановлено — технический владелец `CMyWinInet` из
+//! Технический владелец `CMyWinInet` из
 //! `loginserver/applogin/mywininet.cpp` и `.h`.
 //!
-//! Точная пара LoginServer.exe/PDB:
-//! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876` /
-//! Исходный путь PDB:
+//! Контракт подтверждён точной парой LoginServer EXE/PDB.
 //! Наблюдаемый контракт — синхронный HTTP/1 POST с user-agent `App`,
 //! `Accept: text/*`, form-urlencoded content type, системным proxy и
 //! совместимостью со старым HTTPS-сервером с недоверенным CA. WinInet заменён

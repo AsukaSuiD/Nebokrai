@@ -1,14 +1,7 @@
 //! Владелец `CRsPlayerFillMgr` исторического BillingServer.
 //!
-//! Статус `InitConn` RVA `0x00019550`, `GetPlayerDeleteSQL` RVA `0x00019840`,
-//! `DeletePlayerFillLog` RVA `0x000199C0` и `GetPlayerFillLog`
-//! RVA `0x00019FB0` — `IMPLEMENTED`. Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\dbaccess\dbbilling\rsplayerfillmgr.cpp`.
-//! Точная пара: `BillingServer/billingserver.exe + BillingServer/billingserver.pdb`;
-//! SHA-256 EXE
-//! `FA32E3C043CB49965686129696A4EB34B733ACA1D60CAF57D369F97D5E68FB19`,
-//! SHA-256 PDB
-//! `F900CD0330BEFF32AC071B107AB653FD403CD18746896B3C0187C5751ACA0B21`.
+//! Реализованы `InitConn`, `GetPlayerDeleteSQL`, `DeletePlayerFillLog` и
+//! `GetPlayerFillLog`; контракт подтверждён точной парой BillingServer EXE/PDB.
 //!
 //! `InitConn` выбирает основную Billing DB, а не отдельную cash-log DB.
 //! Каждый последующий вызов открывает собственное соединение. Fetch выполняет
@@ -20,11 +13,9 @@
 //! обычные send/delete, как partial mutation исходного caller-owned vector;
 //! `futures-util::TryStreamExt` сохраняет это поверх потокового TDS-result.
 //!
-//! Потерянные аргументы `sprintf` в `GetPlayerDeleteSQL` имеют статус
-//! `VERIFIED_DISASSEMBLY`: `0x004198B9..0x004198CE` читает signed поле
-//! `tagPlayerFillInfo+0x1C` и передаёт его формату `%d`; итоговая строка получает
-//! собранный список по `0x00419931..0x00419956`. Поэтому ID не заменён индексом
-//! vector и не параметризован другим значением.
+//! `GetPlayerDeleteSQL` читает signed поле `ID` строки и передаёт его формату
+//! `%d`. Поэтому ID не заменён индексом vector и не параметризован другим
+//! значением.
 //!
 //! ADO/COM, `SQLOLEDB`, recordset, BSTR/VARIANT и SEH заменены Tiberius и
 //! current-thread Tokio runtime. Windows ANSI-преобразование DB `varchar`
@@ -67,7 +58,7 @@ pub(crate) struct PlayerFillDatabaseSettingsParts {
 }
 
 impl PlayerFillDatabaseSettings {
-    /// Копирует точный setup snapshot для будущих отдельных соединений.
+    /// Копирует setup snapshot для последующих отдельных соединений.
     pub(crate) fn from_parts(parts: PlayerFillDatabaseSettingsParts) -> Self {
         Self {
             host: parts.host,
@@ -277,8 +268,8 @@ impl TiberiusRsPlayerFillMgr {
                 .position(|byte| *byte == 0)
                 .map_or(account.as_ref(), |end| &account[..end]);
 
-            // `GetPlayerFillLog` RVA 0x00019FB0 копировал `_bstr_t` через
-            // `strcpy` в `char[64]`. Rust сохраняет доказанный 63-byte payload
+            // `_bstr_t` копировался через `strcpy` в `char[64]`. Rust сохраняет
+            // 63-byte payload
             // без stack overflow; oversized DB-значение детерминированно
             // обрезается на внутренней фиксированной границе.
             entries.push(PlayerFillInfo {

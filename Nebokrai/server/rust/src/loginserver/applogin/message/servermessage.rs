@@ -2,8 +2,8 @@
 //!
 //! `0x1FE01`/`0xFF01` (World lifecycle) и `0x1FE02`/`0x1FE03` (CD-key
 //! snapshot/clear), `0x1FE04` (World/Game telemetry) и
-//! `0x1FE05`/`0x1FE06`/`0x1FE08` (`_serv_logs`). Точная пара:
-//! Исходный путь PDB:
+//! `0x1FE05`/`0x1FE06`/`0x1FE08` (`_serv_logs`). Контракт подтверждён точной
+//! парой LoginServer EXE/PDB.
 //!
 //! Connect буквально читает `world_id/name`, сначала ставит numeric identity
 //! socket, затем вызывает `AddWorld`, пишет операторский результат, отправляет
@@ -19,7 +19,7 @@
 //! удаляют `s_listCdkey[world_id]`. Проигнорированные исходником ошибки рассылки
 //! и ack остаются typed-результатами, а не меняют порядок side effects.
 //!
-//! Строка connect-записи `_serv_logs` восстановлена byte-exact из точного EXE:
+//! Строка connect-записи `_serv_logs` сохраняется byte-exact:
 //! `WS%s` + CP936 `在` + `_strdate` + пробел + `_strtime` + CP936 `连接` +
 //! `LS.`; поля queue равны `(peer_ip, -2, world_id, description)`. Два вызова
 //! `Local::now` сохраняют отдельные позиции старых `_strdate/_strtime`.

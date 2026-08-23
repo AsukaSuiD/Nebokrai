@@ -1,12 +1,8 @@
 //! Типизированные элементы DB-очередей AuthServer из `dbqueue.h`.
 //!
-//! Восстановлены функции для форм quest/result и coalescing-очереди
-//! `ServerInfo`. SQL-исполнение принадлежит `dbaccess/authdb/authproc.rs`.
-//!
-//! исходный владелец PDB:
-//! `AuthQuestData` `0x000164D0`, специализированный
-//! `my_fucking_list<ServerInfo>::push_back` `0x00016B60`. Поля остальных
-//! вариантов подтверждены их созданием и
+//! Файл определяет формы quest/result и coalescing-очередь `ServerInfo`;
+//! SQL-исполнение принадлежит `dbaccess/authdb/authproc.rs`. Поля вариантов
+//! подтверждены их созданием и
 //! потреблением в `message_func.cpp`, `cgame.cpp` и `authproc.cpp`.
 //!
 //! Старый `db_element_type { socket_id, type, void *data }` заменён двумя
@@ -15,7 +11,7 @@
 //! и ветви удаления по integer tag. Account/password остаются bytes: их
 //! кодировка не угадывается и credential bytes нельзя включать в логи.
 //!
-//! `ServerInfoQueue` сохраняет отдельный доказанный контракт старого custom-
+//! `ServerInfoQueue` сохраняет отдельный контракт старого custom-
 //! списка: ключ `(ls_id, ws_id, gs_id)` обновляет только `player_count` на
 //! прежней позиции, новый ключ добавляется в хвост, `pop_all` сохраняет порядок.
 //! Неиспользуемые Windows condition/semaphore не получают пустого Rust-аналога.

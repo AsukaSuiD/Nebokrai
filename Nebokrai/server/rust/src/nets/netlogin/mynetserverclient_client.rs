@@ -1,23 +1,12 @@
 //! Входное соединение игрового клиента LoginServer из
 //! `nets/netlogin/mynetserverclient_client.cpp`.
 //!
-//! Статус владельца: `IMPLEMENTED` для constructor state, условных проверок
-//! длины/CRC, RLE create-пути, opcode-range, metadata, FIFO-публикации,
+//! Owner сохраняет проверки длины/CRC, RLE create-путь, opcode-range,
+//! metadata, FIFO-публикацию,
 //! неполного TCP-хвоста и synthetic disconnect по непустому CD-key.
 //! Небезопасные malformed-границы длины и RLE детерминированно очищают
 //! accumulator и возвращают локальную ошибку без воспроизведения UB.
-//!
-//! Точная пара: `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`;
-//! SHA-256 EXE
-//! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`,
-//! SHA-256 PDB
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`.
-//! Исходный путь PDB:
-//! `d:\complite_version\fengyun_russia\trunk\nets\netlogin\mynetserverclient_client.cpp`.
-//!
-//! Существенные RVA: конструктор `0x0006E590`, деструктор `0x0006E610`,
-//! `OnClose` `0x0006E660`, `OnOneMessageSizeOver` `0x0006E730`,
-//! `OnTotalMessageSizeOver` `0x0006E7A0`, `OnReceive` `0x0006E810`.
+//! Контракт подтверждён точной парой LoginServer EXE/PDB.
 //!
 //! Производный конструктор выделял receive-buffer `0x5000` и второй buffer
 //! `0xC800`. Первый представлен общей `CServerClient` capacity; второй был
@@ -42,7 +31,7 @@
 //! следующий фактический `CMyNetServer_Client`. Ошибка создания с доказанным
 //! нулевым результатом очищает accumulator без ban. Старые `PutDebugString`
 //! не превращаются здесь в новый logging API; параметры диагностик сохранены
-//! в типизированных ошибках для будущего владельца.
+//! в типизированных ошибках для server-owner’а.
 //!
 //! `OnClose` публиковал `0x10001` с NUL-terminated CD-key и вызывал общий close
 //! только при непустой строке. Эта странность сохранена буквально; фактическое

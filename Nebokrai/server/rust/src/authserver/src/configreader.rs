@@ -1,10 +1,9 @@
 //! Владелец конфигурации AuthServer из `authserver/src/configreader.cpp`.
 //!
 //! Контракт `ConfigReader::{ConfigReader,reset,load,set_sp_name,getDBSP}`:
-//! восстановлено для корректного baseline `setup.ini`. Необычные malformed-
+//! подтверждён для корректного baseline `setup.ini`. Необычные malformed-
 //! границы числового `operator>>` локализованы ниже.
 //!
-//! Исходный путь PDB:
 //!
 //! `load` не разбирал настоящий key/value INI: двадцать раз подряд он читал
 //! whitespace-token метки в один scratch `std::string`, тут же забывал его и

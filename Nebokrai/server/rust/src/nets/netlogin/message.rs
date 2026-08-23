@@ -1,21 +1,8 @@
 //! Сообщение трёх сетевых направлений LoginServer из `nets/netlogin/message.cpp`.
 //!
-//! Статус владельца: `IMPLEMENTED` для layout/metadata, RLE client-wire,
-//! 12-байтового CRC server-wire, шести методов отправки, несжатого и RLE
-//! create-пути, байтовой C-строки и маршрутизации `Run`.
-//!
-//! Точная пара: `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`;
-//! SHA-256 EXE
-//! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`,
-//! SHA-256 PDB
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`.
-//! Исходный путь PDB:
-//! `d:\complite_version\fengyun_russia\trunk\nets\netlogin\message.cpp`.
-//!
-//! Существенные RVA: конструктор `0x00065540`, `CreateMessage`
-//! `0x000655C0`, `CreateMessageWithoutRLE` `0x00065710`, `GetString`
-//! `0x000657D0`, `Run` `0x00065490`, client send `0x00065190/0x000651E0`,
-//! World send `0x00065230/0x000652C0/0x00065350`, Auth send `0x000653E0`.
+//! Owner реализует 12-байтовый CRC server-wire, шесть методов отправки,
+//! несжатый и RLE create-пути, байтовую C-строку и маршрутизацию `Run`.
+//! Контракт подтверждён точной парой LoginServer EXE/PDB.
 //!
 //! Конструктор записывает полный `MsgType` в header `+4`, оставляет пустой
 //! CD-key, нулевые socket/map/IP и null player/region. Rust пока хранит только

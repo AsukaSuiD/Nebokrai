@@ -1,23 +1,10 @@
 //! Сообщение направления LoginServer -> AuthServer, восстановленное из
 //! `nets/netauth/message.cpp`.
 //!
-//! Статус владельца: `IMPLEMENTED` для 16-байтового сообщения, runtime-
-//! metadata, несжатого create-пути, полной Auth-таблицы обработчиков и отправки
-//! через `CServer::SendBySocketID`. Exact EXE подтверждает, что элемент
-//! `0x10F101` указывает на пустой handler `0x004117E0` (`ret`).
-//!
-//! Точная пара: `AuthServer/authserver.exe + AuthServer/authserver.pdb`;
-//! SHA-256 EXE
-//! `AE0022429C135553092364F01838FA6EF8E631D558C96278123FF3ADE6AD3B15`,
-//! SHA-256 PDB
-//! `26F8936605024F56B0A2C3BBB1923BCACD3DF9E17221FCC20AB38070E28403D5`.
-//! Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\nets\netauth\message.cpp`.
-//!
-//! Существенные RVA: деструктор `0x00013670`, конструктор `0x000136B0`,
-//! `Run` `0x00013710`, `CreateMessageWithoutRLE` `0x00013760`,
-//! `SendToLogin` `0x00013830`, `GetStr` `0x000138C0`,
-//! `InitMsgFuncPool` `0x000141A0`.
+//! Owner сохраняет runtime metadata, несжатый create-путь, полную таблицу
+//! Auth-обработчиков и отправку через `CServer::SendBySocketID`. Opcode
+//! `0x10F101` намеренно связан с пустым handler. Контракт подтверждён точной
+//! парой AuthServer EXE/PDB.
 //!
 //! Конструктор пишет `MsgType` в слово header `+4`, оставляет пустой CD-key и
 //! обнуляет socket ID, map ID, IPv4 и receive tick. Create-путь буквально
@@ -33,7 +20,7 @@
 //! сохраняет исходную байтовую строку без предположения UTF-8.
 //!
 //! `SendToLogin` строит envelope `[total_len, crc(total_len), crc(message),
-//! message]`. Auth `CServer::SendBySocketID` RVA `0x0000DB00` копирует весь
+//! message]`. Auth `CServer::SendBySocketID` копирует весь
 //! вход в owned `tagSocketOper` до возврата, поэтому локальный `Vec<u8>` имеет
 //! правильный lifetime. В этом Auth-методе не было critical section вокруг
 //! build/CRC/send, поэтому чужая сериализация из других направлений сюда не

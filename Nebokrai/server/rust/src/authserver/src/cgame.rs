@@ -1,10 +1,9 @@
 //! Runtime-владелец `CGame` AuthServer из `authserver/src/cgame.cpp/.h`.
 //!
-//! Контракт владельца смешанный: восстановлено для сохранённого `mConfiger`,
-//! DB-очередей, `PushDBQuest`, owned DB workers, `ProcessMessage`,
-//! `ProcessDBResult`, `UpdateServerInfo`, `MainLoop`, `GameThreadFunc`, узкой
-//! Linux-замены accept/net/worker lifecycle и внешнего порядка `Init/Release`;
-//! остальные доменные функции ниже сохраняют невосстановленные функции до проходов.
+//! Owner объединяет `mConfiger`, DB-очереди и workers, message/result
+//! processing, server-info cadence, network lifecycle и полный порядок
+//! `Init -> MainLoop -> Release`/`GameThreadFunc`. Контракт подтверждён точной
+//! парой AuthServer EXE/PDB.
 //!
 //! Оригинал держал accept-, net-, IOCP-worker- и game-thread раздельно. Их
 //! относительный порядок зависел от Windows scheduler, но каждый net snapshot
@@ -45,7 +44,7 @@
 //! static timer; при единственном исходном game-owner он не добавляет нового
 //! межсервисного порядка и не заменяет доменную проверку интервалов.
 //!
-//! `InitNetServer_Auth` восстановлен целиком: прежний owner освобождается,
+//! `InitNetServer_Auth`: прежний owner освобождается,
 //! `allowed_ls.ini` загружается до `Host`, после успешного listen независимо
 //! разрешаются DWORD и строковая формы первого IPv4 локального hostname, затем
 //! применяются setup-лимиты. Rustix `uname().nodename()` заменяет Linux
@@ -497,7 +496,7 @@ impl AuthDbContext {
     }
 }
 
-/// Частично восстановленный `CGame`, владеющий config, Auth network и handlers.
+/// `CGame`, владеющий config, Auth network и handlers.
 pub(crate) struct CGame<Handler> {
     db: AuthDbContext,
     db_workers: AuthDatabaseWorkers,

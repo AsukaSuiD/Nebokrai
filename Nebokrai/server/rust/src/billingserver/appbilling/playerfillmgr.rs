@@ -1,6 +1,7 @@
 //! Владелец optional `CPlayerFillMgr` исторического BillingServer.
 //!
-//! восстановлено. Исходный путь PDB:
+//! Контракт выборки, broadcast, удаления и worker lifecycle подтверждён точной
+//! парой BillingServer EXE/PDB.
 //!
 //! Один проход получает не более 50 строк `TBL_NeedUpdate` в DB-порядке. Для
 //! каждой строки он вызывает фактический `CRsPlayerAccount::GetUserPoint`,

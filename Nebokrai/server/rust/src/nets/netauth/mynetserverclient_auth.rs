@@ -1,21 +1,11 @@
 //! Component-поведение принятого LoginServer-соединения, восстановленное из
 //! `nets/netauth/mynetserverclient_auth.cpp`.
 //!
-//! Статус владельца: `IMPLEMENTED` для constructor state, `OnAccept`,
-//! `OnClose` и полного safe `OnReceive` envelope. Malformed-границы, на которых
+//! Owner реализует `OnAccept`, `OnClose` и безопасный разбор полного
+//! `OnReceive` envelope. Malformed-границы, на которых
 //! исходный x86 уходил в небезопасную арифметику, детерминированно очищают
 //! accumulator и возвращают локальную ошибку без воспроизведения UB.
-//!
-//! Точная пара: `AuthServer/authserver.exe + AuthServer/authserver.pdb`;
-//! SHA-256 EXE
-//! `AE0022429C135553092364F01838FA6EF8E631D558C96278123FF3ADE6AD3B15`,
-//! SHA-256 PDB
-//! `26F8936605024F56B0A2C3BBB1923BCACD3DF9E17221FCC20AB38070E28403D5`.
-//! Исходный путь PDB:
-//! `h:\fengyun\fy_russia\src\nets\netauth\mynetserverclient_auth.cpp`.
-//!
-//! Существенные RVA: конструктор `0x00015A10`, деструктор `0x00015A90`,
-//! `OnAccept` `0x00015AD0`, `OnClose` `0x00015B60`, `OnReceive` `0x00015C10`.
+//! Контракт подтверждён точной парой AuthServer EXE/PDB.
 //!
 //! Производный конструктор выделял receive-buffer `0xA00000` и send-buffer
 //! `0x100000`. Rust использует общий `CServerClient` с Auth-capacity для

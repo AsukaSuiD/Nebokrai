@@ -1,9 +1,8 @@
 //! Свободный handler `OnMSG_W2M_AUCTION` из `miscservermessage.cpp`.
 //!
-//! Восстановлены функции для всех доказанных ветвей
-//! `0x0014ED01` и `0x0014ED04..0x0014ED09`.
+//! Handler реализует ветви `0x0014ED01` и `0x0014ED04..0x0014ED09`; контракт
+//! подтверждён точной парой MiscServer EXE/PDB.
 //!
-//! Исходный путь PDB:
 //!
 //! `0x0014ED01` безусловно wrapping увеличивает `CGame::m_dwAddNewCount`,
 //! создаёт один heap `CGoodsNode`, читает его из общего message buffer по
@@ -12,11 +11,11 @@
 //! invalid/duplicate отказ, удаление нового owner и `m_dwDelNewCount`.
 //!
 //! `0x0014ED04` читает signed player ID, затем GUID, и вызывает Misc
-//! `PushItemToOptList` с operation `3`. Exact EXE доказал наблюдаемый дефект:
+//! `PushItemToOptList` с operation `3`. Сохраняется наблюдаемый дефект:
 //! helper всегда возвращает `false`, даже когда записал buyer и вставил GUID в
 //! opt-list. Поэтому handler всегда строит `0x0015EB06` с двумя 32-битными
 //! полями `0` и исходным player ID и отправляет его без приоритета. Ширина
-//! `0x00010F20` в достигнутом `OnOtherMsg`; повторный reverse не выполнялся.
+//! достигнутого `OnOtherMsg`.
 //! Короткий wire сохраняет поведение готовых безопасных getters: отсутствующий
 //! long становится `0`, а отсутствующий GUID — `GUID_INVALID`, после чего
 //! helper не мутирует комнату, но тот же ответ всё равно отправляется.

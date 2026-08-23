@@ -1,23 +1,12 @@
 //! Входное соединение WorldServer у LoginServer из
 //! `nets/netlogin/mynetserverclient_world.cpp`.
 //!
-//! Статус владельца: `IMPLEMENTED` для constructor state, `OnClose` и
-//! корректного/неполного `OnReceive`. Небезопасные malformed-границы длины и
+//! Owner реализует закрытие и разбор корректного либо неполного `OnReceive`.
+//! Небезопасные malformed-границы длины и
 //! короткого внутреннего header детерминированно очищают accumulator и
 //! возвращают локальную ошибку. `SetSendRevBuf` остаётся отдельной
-//! transport-границей до доказательства совместимого Linux socket option.
-//!
-//! Точная пара: `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`;
-//! SHA-256 EXE
-//! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`,
-//! SHA-256 PDB
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`.
-//! Исходный путь PDB:
-//! `d:\complite_version\fengyun_russia\trunk\nets\netlogin\mynetserverclient_world.cpp`.
-//!
-//! Существенные RVA: конструктор `0x0006EC60`, деструктор `0x0006ECE0`,
-//! `OnClose` `0x0006ED10`, `SetSendRevBuf` `0x0006EDA0`,
-//! `OnReceive` `0x0006EDF0`.
+//! transport-границей: совместимый Linux socket option неизвестен.
+//! Контракт подтверждён точной парой LoginServer EXE/PDB.
 //!
 //! Производный конструктор выделял receive-buffer `0xA00000` и send-buffer
 //! `0x100000`. Rust использует общий `CServerClient` с World-capacity для
@@ -43,7 +32,8 @@
 //! `SetSendRevBuf` передавал ноль в Windows `SO_SNDBUF`. На Linux нулевое
 //! значение не гарантирует ту же семантику и обычно преобразуется ядром в
 //! минимальный buffer. Поэтому вызов не подменён похожим `setsockopt`: точный
-//! вопрос о требуемом backpressure остаётся будущему server/transport-owner.
+//! требуемая семантика backpressure остаётся неизвестной границей
+//! server/transport-owner’а.
 //!
 //! Для длины с sign bit либо `total_len < 12` x86-путь переходил к signed
 //! сравнению и/или unsigned `len - 12`; внутреннее сообщение длиной 1..15
@@ -207,6 +197,6 @@ impl CMyNetServerClientWorld {
     }
 }
 
-// BLOCKED_MISSING_FACT: `SetSendRevBuf` RVA 0x0006EDA0 задавал Windows
-// `SO_SNDBUF=0`. Нужно доказать требуемую наблюдаемую семантику backpressure,
-// прежде чем выбирать отличающийся Linux socket option в server-owner.
+// `SetSendRevBuf` задавал Windows `SO_SNDBUF=0`. Совместимая наблюдаемая
+// семантика backpressure для Linux неизвестна, поэтому отличающийся socket
+// option в server-owner не назначен.

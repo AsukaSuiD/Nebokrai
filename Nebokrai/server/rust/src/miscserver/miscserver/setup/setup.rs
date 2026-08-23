@@ -11,7 +11,7 @@
 //! Constructor записывал только vtable и не задавал полям `IP_PORT` defaults.
 //! Поэтому Rust хранит каждое ещё не прочитанное поле как `None`, а не
 //! придумывает ноль либо пустой адрес. Process-global lazy `GetInstance`
-//! заменён обычным owned `CSetup`: единственный будущий `CGame` получает тот
+//! заменён обычным owned `CSetup`: единственный `CGame` получает тот
 //! же единственный экземпляр без global mutable state и ручного `new`.
 //!
 //! `std::vector<unsigned char>::resize`, два `$L` unwind-funclet, allocator,

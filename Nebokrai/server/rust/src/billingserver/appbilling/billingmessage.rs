@@ -1,6 +1,5 @@
 //! Три входные Billing-ветви из `appbilling/billingmessage.cpp`.
 //!
-//! Исходный путь PDB:
 //!
 //! `0xEF201` читает строковую player identity с границей `0x20` и только при
 //! её непустом первом byte читает numeric player ID. Запись

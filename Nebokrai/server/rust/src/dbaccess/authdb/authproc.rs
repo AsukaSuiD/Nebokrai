@@ -1,21 +1,8 @@
 //! Владелец Auth MSSQL-команд из `dbaccess/authdb/authproc.cpp`.
 //!
-//! Статус владельца: `IMPLEMENTED` для `do_auth`, `do_auth_ex`, `do_lock`,
-//! `do_write_log`, трёх `push_*_result`, обработки команд и DB worker
-//! lifecycle.
-//!
-//! Точная пара: `AuthServer/authserver.exe + AuthServer/authserver.pdb`;
-//! SHA-256 EXE:
-//! `AE0022429C135553092364F01838FA6EF8E631D558C96278123FF3ADE6AD3B15`,
-//! SHA-256 PDB:
-//! `26F8936605024F56B0A2C3BBB1923BCACD3DF9E17221FCC20AB38070E28403D5`;
-//! исходный владелец PDB:
-//! `h:\fengyun\fy_russia\src\dbaccess\authdb\authproc.cpp`.
-//! Существенные RVA: constructor `0x00016E10`, `init` `0x00016E20`,
-//! `do_auth` `0x00017530`, `do_auth_ex` `0x00017CC0`, `do_lock` `0x00018730`,
-//! result builders `0x00018DD0`, `0x00018F90`, `0x00019160`,
-//! `do_write_log` `0x00019270`, `process_quest` `0x0001A360`, worker entry
-//! `0x0001A910`.
+//! Файл реализует `do_auth`, `do_auth_ex`, `do_lock`, `do_write_log`,
+//! построение ответов, обработку команд и lifecycle DB workers. Контракты
+//! восстановлены по точной паре AuthServer EXE/PDB.
 //!
 //! `tiberius` заменяет ADO/COM и выполняет те же именованные MSSQL-процедуры.
 //! Каждый вызов по-прежнему открывает отдельное соединение; параметры account,
@@ -23,7 +10,7 @@
 //! через узкий `DECLARE/EXEC/SELECT` batch. Procedure name берётся только из
 //! исходной карты `ConfigReader` и экранируется как SQL identifier. Драйвер
 //! собран без TLS feature: исходная ODBC-строка не запрашивала шифрование, а
-//! разрешённая цель этой фазы — специально поднятая локальная baseline MSSQL.
+//! целевой runtime — специально поднятая локальная baseline MSSQL.
 //! Auth и log соединения используют собственные host/database/user/password
 //! поля исходного setup; секреты не входят ни в SQL-текст, ни в ошибки этого
 //! владельца. Auth settings обновляются перед каждым queue snapshot, log
@@ -597,7 +584,7 @@ where
         self.database.refresh_log_config(&config);
         let procedure = config.get_db_sp(b"sp_writelog").to_vec();
         drop(config);
-        // Auth RVA 0x00019270 фиксирует время до атомарного pop_all.
+        // Одна метка времени фиксируется до атомарного извлечения всего снимка.
         let logged_at = Local::now().naive_local();
         let entries = game.pop_all_server_info();
         if let Err(error) = self

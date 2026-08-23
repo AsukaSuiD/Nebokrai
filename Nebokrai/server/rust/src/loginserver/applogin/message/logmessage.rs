@@ -1,9 +1,9 @@
 //! Client/World сообщения LoginServer из `logmessage.cpp`.
 //!
-//! Контракт `OnLogMessage`: восстановлено для synthetic disconnect `0x10001`,
-//! World opcode `0x1FF01..0x1FF07` и client opcode `0x2FD01..0x2FD0C`.
-//! Неизвестный opcode проходит исходный default без side effects. Точная пара:
-//! Исходный путь PDB:
+//! `OnLogMessage` обрабатывает synthetic disconnect `0x10001`, World opcode
+//! `0x1FF01..0x1FF07` и client opcode `0x2FD01..0x2FD0C`. Неизвестный opcode
+//! проходит исходный default без side effects. Контракт подтверждён точной
+//! парой LoginServer EXE/PDB.
 //!
 //! `0x2FD09` сначала выполняет `CheckMsgInfo` над принятым account и немедленно
 //! игнорирует только socket-mismatch. Затем непустой account приводится к
@@ -26,7 +26,7 @@
 //! player ID, затем передаёт socket ID, metadata CD-key и IPv4 в
 //! `AddQuestPlayerData`. Обе исходные ветви игнорировали результат queue-
 //! владельца; typed outcome делает тихое принятие/отказ наблюдаемым для
-//! будущего runner, не меняя порядок либо side effects. Metadata CD-key во
+//! runtime runner, не меняя порядок либо side effects. Metadata CD-key во
 //! всех этих C++-вызовах передавался как `char*`; единый helper сохраняет
 //! byte-prefix только до первого NUL.
 //!
@@ -73,8 +73,8 @@
 //! попадают в `RoleEnterLog`, причём World number исходно усекался до младшего
 //! octet через `map_id & 0xFF`. После условной ветви сообщение независимо от
 //! status меняет opcode на `0xAF503` и отправляется по account identity.
-//! Role-enter сохраняется typed-вариантом общей `_acc_logs` до её будущего
-//! consumer; cursor-чтение не меняет пересылаемый payload.
+//! Role-enter сохраняется typed-вариантом общей `_acc_logs` до её consumer;
+//! cursor-чтение не меняет пересылаемый payload.
 //!
 //! `0x1FF06` читает account с границей `0x20`, затем буквально выполняет
 //! `ClearCDKey`, потребляет дополнительную строку `0x100` и один `char` и

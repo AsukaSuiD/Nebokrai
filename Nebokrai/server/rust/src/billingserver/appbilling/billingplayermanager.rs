@@ -1,10 +1,8 @@
 //! Общие FIFO и записи `CBillingPlayerManager` из
 //! `appbilling/billingplayermanager.{h,cpp}`.
 //!
-//! Восстановлены записи, три общие FIFO и полный lifecycle worker-ов:
-//! `BPMThreadFunc` `0x00012CC0`, `LogThreadFunc` `0x00012D70`, `Start`
-//! `0x00012E10`, `CreateThread` `0x00012E60`, `Release` `0x00011840` и
-//! `End` `0x000117E0`.
+//! Файл содержит записи, три общие FIFO и полный lifecycle DB и cash-log
+//! workers; контракт подтверждён точной парой BillingServer EXE/PDB.
 //!
 //! Три очереди были process-static и общими для всех элементов `CGame::vecBPM`,
 //! а каждый `Push` глубоко копировал запись в конец собственного `std::list`
@@ -16,8 +14,8 @@
 //!
 //! `Run` и `OnLogProcess` копировали всю соответствующую глобальную очередь в
 //! локальный список и очищали источник под тем же lock. `mem::take` переносит
-//! тот же полный snapshot атомарно, не удерживая lock на будущих DB/send-
-//! эффектах. Новые записи после снятия остаются следующему проходу. `Run`
+//! тот же полный snapshot атомарно, не удерживая lock во время DB/send-
+//! эффектов. Новые записи после снятия остаются следующему проходу. `Run`
 //! всегда обрабатывает AC snapshot раньше отдельно снятого TR snapshot и
 //! строит точные ответы `0xFF001..0xFF003`. В purchase-ветви `BuyItemCode`
 //! выполняется до проверки `goods_number < 1001`: при превышении лимита уже
@@ -26,7 +24,7 @@
 //!
 //! Каждый DB-worker имеет собственный `TiberiusRsPlayerAccount`, после
 //! успешного `Run` спит ровно 1 ms и проверяет owned stop только в начале
-//! следующего прохода. Atomic stop заменяет `PostThreadMessage(0x66A)` без
+//! следующей итерации. Atomic stop заменяет `PostThreadMessage(0x66A)` без
 //! Windows message queue; последовательный `Release` по-прежнему публикует
 //! stop и ждёт workers по одному. Cash-log worker сохраняет исходный do-while:
 //! хотя бы один `OnLogProcess`, чтение текущего `dwSaveLogSvrTime` после DB и

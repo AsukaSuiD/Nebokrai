@@ -1,8 +1,7 @@
 //! Сообщения AuthServer и GMA LoginServer из `asmessage.cpp`.
 //!
-//! `0x0007F110`, `OnGMAMessage` `0x0007F2A0`, `OnASMessage` `0x0007F320`.
-//!
-//! Исходный путь PDB:
+//! Owner реализует общий selector, AuthServer и GMA handlers; контракт
+//! подтверждён точной парой LoginServer EXE/PDB.
 //!
 //! `0xCF301` сначала явно закрывает текущий Auth client и только затем заменяет
 //! прежний reconnect-thread управляемой Tokio-задачей. Она немедленно пробует
@@ -22,8 +21,8 @@
 //! мира ответ `0xCF801` содержит request ID, нулевой result, operator/account и
 //! diagnostic с исходным world name.
 //!
-//! Пропущенный декомпилятором vararg этой diagnostic-строки точечно подтверждён
-//! кладётся адрес буфера world name. Ограничение обоих `GetStr` равно `0x100`;
+//! Diagnostic-строка получает адрес буфера world name. Ограничение обоих
+//! `GetStr` равно `0x100`;
 //! отсутствие NUL в пределах буфера сохраняет пустой результат и уже
 //! сдвинутый курсор. SEH, stack cookie, временные C-массивы и ручные
 //! деструкторы заменены владеющими `Vec`/`CMessage`.
@@ -68,7 +67,7 @@ pub(crate) enum AsMessageOutcome {
     Handled,
     /// `AuthManager` разобрал ответ и синхронно вызвал `AuthListener`.
     AuthResponse(AuthResponseOutcome),
-    /// Старый warning представлен структурированно будущему logging-owner.
+    /// Старый warning представлен структурированно process diagnostics.
     Unknown {
         /// Обработчик, владевший warning.
         owner: UnknownAsMessageOwner,

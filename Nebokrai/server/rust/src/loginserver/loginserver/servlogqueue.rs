@@ -1,6 +1,6 @@
 //! Потокобезопасный FIFO-владелец `ServLogQueue` LoginServer.
 //!
-//! восстановлено. Точная пара:
+//! Контракт подтверждён точной парой LoginServer EXE/PDB.
 //! `push` копировал четыре поля в отдельный heap-object и добавлял указатель в
 //! конец `std::deque` под `CRITICAL_SECTION`; `pop` снимал начало, `size`
 //! читал длину, а `clear` удалял все записи под тем же lock. `Mutex<VecDeque>`

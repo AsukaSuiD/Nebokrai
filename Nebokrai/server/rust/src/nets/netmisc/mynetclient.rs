@@ -1,18 +1,8 @@
 //! Входной межсерверный поток MiscServer, восстановленный из
 //! `nets/netmisc/mynetclient.cpp` и `.h`.
 //!
-//! Статус владельца: `IMPLEMENTED`; спорная signed-граница длины дополнительно
-//! имеет статус `VERIFIED_DISASSEMBLY`.
-//!
-//! Точная пара: `MiscServer/miscserver.exe + MiscServer/miscserver.pdb`;
-//! SHA-256 EXE
-//! `F4426942465E6E9D1397EEF7A977B87D0D8C5B12957832770F57656F998AED65`,
-//! SHA-256 PDB
-//! `ED5F482DADB3E8B050B37F9911067479D297C5B6D33C1EA2CE99C9CD0FC11FA7`.
-//! Исходные пути PDB:
-//! `h:\fengyun\fy_russia\src\nets\netmisc\mynetclient.cpp` и `.h`.
-//! Существенные RVA: конструктор `0x00012760`, деструктор `0x00012780`,
-//! `HandleClose` `0x00012790`, `OnReceive` `0x00012820`.
+//! Owner реализует `HandleClose` и `OnReceive`; контракт подтверждён точной
+//! парой MiscServer EXE/PDB.
 //!
 //! Живой входной контракт — поток 12-байтовых envelope:
 //! `[total_len, crc(total_len), crc(message), message]`. После накопления как
@@ -36,7 +26,7 @@
 //! кадров без allocator-копий и без немедленного выделения памяти по одной лишь
 //! недоверенной длине. `drain` заменяет `memmove`; изменение capacity не является
 //! wire- или доменной семантикой. `CMsgQueue<CMessage>` заменяет deque указателей
-//! и ручное виртуальное удаление. `CGame::ProcessMessage` RVA `0x000026A0`
+//! и ручное виртуальное удаление. `CGame::ProcessMessage`
 //! атомарно забирает все элементы через `GetAllMessage`, а системные события
 //! также могут положить готовый `CMessage` в эту же очередь; Rust API сохраняет
 //! обе операции без раскрытия внутреннего mutex.

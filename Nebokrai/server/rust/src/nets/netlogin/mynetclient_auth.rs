@@ -1,20 +1,9 @@
 //! Исходящее AuthServer-направление LoginServer из
 //! `nets/netlogin/mynetclient_auth.cpp` и `.h`.
 //!
-//! Статус владельца: `IMPLEMENTED` для композиции общего `CClient`, успешного
-//! connect/явного close, transport-close события, 12-байтового CRC receive-
-//! accumulator, собственной FIFO и одного Linux read/send шага.
-//!
-//! Точная пара: `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`;
-//! SHA-256 EXE
-//! `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`,
-//! SHA-256 PDB
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`.
-//! Исходные пути PDB:
-//! `d:\complite_version\fengyun_russia\trunk\nets\netlogin\mynetclient_auth.cpp`
-//! и `.h`.
-//! Существенные RVA: конструктор `0x0006CAC0`, деструктор `0x0006CAE0`,
-//! `HandleClose` `0x0006CAF0`, `OnReceive` `0x0006CB90`.
+//! Owner сохраняет connect, явный close, transport-close событие, 12-байтовый
+//! CRC receive-accumulator, собственную FIFO и один Linux read/send шаг.
+//! Контракт подтверждён точной парой LoginServer EXE/PDB.
 //!
 //! Конструктор не добавлял состояния поверх `CClient`: receive-buffer
 //! `0x100000`, очередь входящих сообщений и очередь owned send-команд являются
@@ -49,7 +38,7 @@
 //! сообщение короче 16 bytes и переполнение signed `m_nSize` не доказана.
 //! Безопасный Rust локально отвергает эти границы отдельными ошибками, не
 //! выдавая выбранную реакцию за контракт исходного процесса. Неизвестный Auth
-//! opcode `0x10F101` относится к будущему доменному обработчику, а не к этому
+//! opcode `0x10F101` относится к доменному обработчику, а не к этому
 //! framing-owner.
 //!
 //! Успешный `ReconnectAS` передавал новый `CMyNetClientAuth*` через synthetic
@@ -231,7 +220,7 @@ impl CMyNetClientAuth {
         self.connection.is_some()
     }
 
-    /// Возвращает подключённый stream будущему Login runtime-owner.
+    /// Возвращает подключённый stream Login runtime-owner’у.
     pub(crate) fn connection(&self) -> Option<&TcpStream> {
         self.connection.as_ref()
     }
