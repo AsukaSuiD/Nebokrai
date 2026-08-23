@@ -15,7 +15,11 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use super::cgoodsbaseproperties::{CGoodsBaseProperties, GoodsBasePropertiesDecodeError};
+use super::cgoods::{CGoods, GoodsAddonProperty, GoodsAddonPropertyValue};
+use super::cgoodsbaseproperties::{
+    CGoodsBaseProperties, GoodsBasePropertiesDecodeError, ICON_TYPE_GROUND,
+};
+use crate::public::guid::CGuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GoodsFactoryDecodeReport {
@@ -68,6 +72,69 @@ pub(crate) struct CGoodsFactory {
 }
 
 impl CGoodsFactory {
+    /// Достигнутый object/addon prefix `CreateGoods` RVA `0x000682E0`.
+    /// Fairy/BattleFairy loaders остаются отдельной незамкнутой suffix-веткой.
+    pub(crate) fn create_goods_core<Random, Guid>(
+        &self,
+        goods_index: u32,
+        mut random: Random,
+        mut create_guid: Guid,
+    ) -> Option<CGoods>
+    where
+        Random: FnMut(i32) -> i32,
+        Guid: FnMut() -> CGuid,
+    {
+        let properties = self.query_goods_base_properties(goods_index)?;
+        let mut goods = CGoods::with_reached_constructor_defaults();
+        goods.set_base_properties_index(goods_index);
+        goods.set_name(properties.name());
+        goods.set_description(properties.description());
+        goods.set_price(properties.price());
+        goods.set_graphics_id(properties.get_icon_id(ICON_TYPE_GROUND) as i32);
+        goods.set_amount(1);
+
+        for property in properties
+            .addon_properties()
+            .iter()
+            .filter(|property| property.is_enabled == 1)
+        {
+            let roll = random(10_000) as u32;
+            if roll >= property.occur_probability {
+                continue;
+            }
+            let mut values = Vec::with_capacity(property.values.len());
+            for value in &property.values {
+                let mut modifier = 0;
+                if value.is_modifier_enabled != 0 {
+                    let modifier_roll = random(10_000) as u32;
+                    let mut cumulative = 0u32;
+                    if let Some(selected) = value.modifiers.iter().find(|candidate| {
+                        let selected =
+                            modifier_roll.wrapping_sub(cumulative) < candidate.probability;
+                        cumulative = cumulative.wrapping_add(candidate.probability);
+                        selected
+                    }) {
+                        let width = selected.upper_limit.wrapping_sub(selected.lower_limit);
+                        modifier = random(width).wrapping_add(selected.lower_limit);
+                    }
+                }
+                values.push(GoodsAddonPropertyValue {
+                    id: value.id,
+                    base_value: value.base_value,
+                    modifier,
+                });
+            }
+            goods.push_addon_property(GoodsAddonProperty {
+                property_type: property.property_type,
+                is_enabled: 1,
+                is_implicit_attribute: property.is_implicit_attribute,
+                values,
+            });
+        }
+        goods.set_ex_id(create_guid());
+        Some(goods)
+    }
+
     pub(crate) fn release(&mut self) {
         self.goods.clear();
         self.original_name_index.clear();

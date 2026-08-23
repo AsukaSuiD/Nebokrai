@@ -86,6 +86,14 @@ impl CGoods {
         self.shape.base_object_mut().set_ex_id(ex_id);
     }
 
+    pub(crate) fn set_name(&mut self, name: &[u8]) {
+        self.shape.base_object_mut().set_name(name);
+    }
+
+    pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
+        self.shape.base_object_mut().set_graphics_id(graphics_id);
+    }
+
     pub(crate) const fn set_base_properties_index(&mut self, index: u32) {
         self.base_properties_index = index;
     }
@@ -147,6 +155,10 @@ impl CGoods {
 
     pub(crate) fn addon_properties_mut(&mut self) -> &mut Vec<GoodsAddonProperty> {
         &mut self.addon_properties
+    }
+
+    pub(crate) fn push_addon_property(&mut self, property: GoodsAddonProperty) {
+        self.addon_properties.push(property);
     }
 
     pub(crate) fn query_attribute(&self, property_type: i32) -> bool {

@@ -86,6 +86,7 @@ use crate::gameserver::appserver::country::countryhandler::CCountryHandler;
 use crate::gameserver::appserver::country::countryparam::CCountryParam;
 use crate::gameserver::appserver::country::countrywarsys::CountryWarSys;
 use crate::gameserver::appserver::goods::cbattlefairyproperty::CBattleFairyProperty;
+use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::goodswarmember::CGoodsWarMember;
 use crate::gameserver::appserver::message::sequencestring::{
@@ -123,6 +124,7 @@ use crate::public::ciqing::CCiQingSetup;
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::public::equipmentcomposelist::EquipmentComposeList;
+use crate::public::guid::CGuid;
 use crate::public::mystringtable::{
     MyStringTable, MyStringTableDecodeError, MyStringTableDecodeReport,
 };
@@ -1213,6 +1215,17 @@ impl CGame {
 
     pub(crate) const fn goods_factory_mut(&mut self) -> &mut CGoodsFactory {
         &mut self.goods_factory
+    }
+
+    /// Создаёт достигнутый GameServer goods core; исходный код игнорировал
+    /// ошибку `CoCreateGuid`, поэтому failure оставляет нулевой GUID.
+    pub(crate) fn create_goods_core(&mut self, goods_index: u32) -> Option<CGoods> {
+        let random_state = &mut self.random_state;
+        self.goods_factory.create_goods_core(
+            goods_index,
+            |upper_bound| game_legacy_random(random_state, upper_bound),
+            || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+        )
     }
 
     pub(crate) const fn skill_factory(&self) -> &CSkillFactory {
