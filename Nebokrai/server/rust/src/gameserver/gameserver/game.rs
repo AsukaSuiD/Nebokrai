@@ -112,6 +112,9 @@
 //! Depot family `0x7FBxx/0x8FExx` проходит тот же FIFO до generic route:
 //! player guards, password mutation, bank/depot locks и адресные
 //! `0xBFB07/0xBFB08` выполняются одним owner-ом.
+//! Terminal server startup `0x7F801/0x3B` из FIFO действительно поднимает
+//! client-facing listener, сохраняет ordered dialog/log effects и только
+//! после них читает login/world IDs; другие startup selectors не перехватывает.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
@@ -166,6 +169,10 @@ use crate::gameserver::appserver::message::sequencestring::{
     CSequenceRegistry, SequenceRegistryInitializationError,
 };
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
+use crate::gameserver::appserver::message::servermessage::{
+    GameClientServerStartMessageError, GameClientServerStartReport,
+    dispatch_client_server_start_message,
+};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::organizingsystem::fournationwarsys::CFourNationWarSys;
 use crate::gameserver::appserver::player::{
@@ -961,7 +968,7 @@ pub(crate) struct GameAuctionRunReport {
     pub(crate) state_request: Option<Result<i32, SendMessageError>>,
 }
 
-#[must_use = "ProcessMessage report сохраняет auction, GM, GMA и depot effects"]
+#[must_use = "ProcessMessage report сохраняет server, auction, GM, GMA и depot effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameProcessMessagesReport {
     pub(crate) legacy_return: i32,
@@ -970,6 +977,8 @@ pub(crate) struct GameProcessMessagesReport {
     pub(crate) gm_messages: Vec<Result<GmMessageReport, GmMessageError>>,
     pub(crate) gma_messages: Vec<Result<GmaMessageReport, GmaMessageError>>,
     pub(crate) depot_messages: Vec<DepotMessageReport>,
+    pub(crate) client_server_starts:
+        Vec<Result<GameClientServerStartReport, GameClientServerStartMessageError>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1528,9 +1537,13 @@ impl CGame {
         self.billing_client.as_mut()
     }
 
-    /// Сохраняет обе identity из terminal startup-пакета после попытки Host.
-    pub(crate) const fn set_server_ids(&mut self, login_server_id: i32, world_server_id: i32) {
+    /// Terminal startup присваивает login ID до чтения world ID; раздельные
+    /// setter-ы сохраняют partial effect malformed хвоста.
+    pub(crate) const fn set_login_server_id(&mut self, login_server_id: i32) {
         self.login_server_id = login_server_id;
+    }
+
+    pub(crate) const fn set_world_server_id(&mut self, world_server_id: i32) {
         self.world_server_id = world_server_id;
     }
 
@@ -3383,6 +3396,7 @@ impl CGame {
         let mut gm_messages = Vec::new();
         let mut gma_messages = Vec::new();
         let mut depot_messages = Vec::new();
+        let mut client_server_starts = Vec::new();
         let world_messages = self
             .world_client
             .as_ref()
@@ -3396,6 +3410,7 @@ impl CGame {
                 &mut gm_messages,
                 &mut gma_messages,
                 &mut depot_messages,
+                &mut client_server_starts,
             );
         }
         let billing_messages = self
@@ -3411,6 +3426,7 @@ impl CGame {
                 &mut gm_messages,
                 &mut gma_messages,
                 &mut depot_messages,
+                &mut client_server_starts,
             );
         }
         let server_events = self
@@ -3428,6 +3444,7 @@ impl CGame {
                         &mut gm_messages,
                         &mut gma_messages,
                         &mut depot_messages,
+                        &mut client_server_starts,
                     );
                 }
                 GameServerEvent::WorldClientReconnected(client) => {
@@ -3444,6 +3461,7 @@ impl CGame {
             gm_messages,
             gma_messages,
             depot_messages,
+            client_server_starts,
         }
     }
 
@@ -3457,8 +3475,15 @@ impl CGame {
         gm_messages: &mut Vec<Result<GmMessageReport, GmMessageError>>,
         gma_messages: &mut Vec<Result<GmaMessageReport, GmaMessageError>>,
         depot_messages: &mut Vec<DepotMessageReport>,
+        client_server_starts: &mut Vec<
+            Result<GameClientServerStartReport, GameClientServerStartMessageError>,
+        >,
     ) {
         if let Some(report) =
+            dispatch_client_server_start_message(message, self, || runtime.get_tick_ms())
+        {
+            client_server_starts.push(report);
+        } else if let Some(report) =
             dispatch_world_auction_state(message, self, || runtime.wall_time_seconds())
         {
             auction_states.push(report);

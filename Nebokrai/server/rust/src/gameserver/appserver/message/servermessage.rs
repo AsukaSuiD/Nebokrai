@@ -59,7 +59,8 @@
 //! Terminal selector сначала вызывает `InitNetServer`, затем читает login и
 //! world ID и присваивает их даже после ошибки Host. Rust сохраняет этот
 //! partial-effect порядок: malformed хвост возвращается отдельно, не откатывая
-//! уже выполненный network init и не подставляя нулевые identity.
+//! уже выполненный network init и не подставляя нулевые identity. Dialog/log
+//! вызовы возвращаются ordered typed effects на внешней runtime-границе.
 
 use std::error::Error;
 use std::fmt;
@@ -144,6 +145,7 @@ use crate::setup::synthesis::{SynthesisDecodeError, SynthesisDecodeReport};
 use crate::setup::tradelist::TradeListDecodeError;
 
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
+const SERVER_STARTUP_MESSAGE: i32 = 0x0007_F801;
 const CLIENT_SERVER_START_SELECTOR: i32 = 0x3b;
 const GOODS_LIST_SELECTOR: i32 = 0x00;
 const PLAYER_LIST_SELECTOR: i32 = 0x01;
@@ -209,10 +211,70 @@ pub(crate) struct GameClientServerStartPayloadError {
     pub(crate) available: usize,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameClientServerStartNetwork {
+    Started,
+    MissingNetworkSetup,
+    HostFailed { detail: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameClientServerStartEffect {
+    FailureDialog {
+        message: &'static [u8],
+        title: &'static [u8],
+    },
+    Log(Vec<u8>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameClientServerStartReport {
-    pub(crate) network: Result<(), GameNetworkInitializationError>,
+    pub(crate) network: GameClientServerStartNetwork,
+    pub(crate) effects: Vec<GameClientServerStartEffect>,
     pub(crate) server_ids: Result<GameServerIds, GameClientServerStartPayloadError>,
+    pub(crate) applied_login_id: Option<i32>,
+    pub(crate) applied_world_id: Option<i32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GameClientServerStartMessageError {
+    pub(crate) selector: GameClientServerStartPayloadError,
+}
+
+/// Подключает terminal selector к полному `OnServerMessage` family, не двигая
+/// cursor у остальных startup selectors.
+pub(crate) fn dispatch_client_server_start_message(
+    message: &mut CMessage,
+    game: &mut CGame,
+    mut now_ms: impl FnMut() -> u32,
+) -> Option<Result<GameClientServerStartReport, GameClientServerStartMessageError>> {
+    if message.message_type() != SERVER_STARTUP_MESSAGE {
+        return None;
+    }
+    let selector = {
+        let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+        let mut probe = *cursor;
+        match read_start_long(wire, &mut probe) {
+            Ok(selector) => selector,
+            Err(selector) => {
+                return Some(Err(GameClientServerStartMessageError { selector }));
+            }
+        }
+    };
+    if selector != CLIENT_SERVER_START_SELECTOR {
+        return None;
+    }
+    let consumed_selector = message
+        .base_mut()
+        .get_long()
+        .expect("terminal selector проверен без изменения cursor");
+    Some(Ok(dispatch_client_server_start(
+        consumed_selector,
+        message,
+        game,
+        now_ms(),
+    )
+    .expect("selector 0x3B проверен outer dispatcher-ом")))
 }
 
 /// Выполняет terminal startup selector `0x3B` в исходном порядке side effects.
@@ -226,24 +288,70 @@ pub(crate) fn dispatch_client_server_start(
         return None;
     }
 
-    let network = game.init_net_server(now_ms);
-    let server_ids = read_server_ids(message);
-    if let Ok(server_ids) = server_ids {
-        game.set_server_ids(server_ids.login, server_ids.world);
+    let network = match game.init_net_server(now_ms) {
+        Ok(()) => GameClientServerStartNetwork::Started,
+        Err(GameNetworkInitializationError::MissingNetworkSetup) => {
+            GameClientServerStartNetwork::MissingNetworkSetup
+        }
+        Err(GameNetworkInitializationError::Host(error)) => {
+            GameClientServerStartNetwork::HostFailed {
+                detail: error.to_string(),
+            }
+        }
+    };
+    let mut effects = Vec::new();
+    if network != GameClientServerStartNetwork::Started {
+        effects.push(GameClientServerStartEffect::FailureDialog {
+            message: b"Can't init NetServer!",
+            title: b"Message",
+        });
+        effects.push(GameClientServerStartEffect::Log(
+            b"==========Initial NetServer FAILED==========".to_vec(),
+        ));
     }
+    let (monsters, npcs) = game.initial_region_totals();
+    effects.push(GameClientServerStartEffect::Log(
+        format!("GS : Monster={monsters} Npc={npcs}!").into_bytes(),
+    ));
+    effects.push(GameClientServerStartEffect::Log(
+        b"GameServer As Client Server SUCCESS!".to_vec(),
+    ));
+    let (server_ids, applied_login_id, applied_world_id) = read_and_apply_server_ids(message, game);
     Some(GameClientServerStartReport {
         network,
+        effects,
         server_ids,
+        applied_login_id,
+        applied_world_id,
     })
 }
 
-fn read_server_ids(
+fn read_and_apply_server_ids(
     message: &mut CMessage,
-) -> Result<GameServerIds, GameClientServerStartPayloadError> {
-    let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-    let login = read_start_long(wire, cursor)?;
-    let world = read_start_long(wire, cursor)?;
-    Ok(GameServerIds { login, world })
+    game: &mut CGame,
+) -> (
+    Result<GameServerIds, GameClientServerStartPayloadError>,
+    Option<i32>,
+    Option<i32>,
+) {
+    let login = {
+        let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+        match read_start_long(wire, cursor) {
+            Ok(login) => login,
+            Err(error) => return (Err(error), None, None),
+        }
+    };
+    game.set_login_server_id(login);
+
+    let world = {
+        let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+        match read_start_long(wire, cursor) {
+            Ok(world) => world,
+            Err(error) => return (Err(error), Some(login), None),
+        }
+    };
+    game.set_world_server_id(world);
+    (Ok(GameServerIds { login, world }), Some(login), Some(world))
 }
 
 fn read_start_long(
@@ -1126,9 +1234,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
             {
                 Ok(report) => report,
                 Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::CountryHandler(
-                        error,
-                    )));
+                    return Some(Err(GameOwnedStartupSnapshotError::CountryHandler(error)));
                 }
             };
             add_log_text(b"Initial SI_COUNTRY...OK!");
@@ -1461,10 +1567,7 @@ pub(crate) struct HonorRankStartupReport {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HonorRankStartupError {
-    MissingResetMask {
-        offset: usize,
-        available: usize,
-    },
+    MissingResetMask { offset: usize, available: usize },
     Decode(HonorRanksDecodeError),
 }
 
@@ -1542,10 +1645,7 @@ pub(crate) fn dispatch_honor_rank_startup_setup<Context: HonorRankPlayerResetCon
     }))
 }
 
-fn read_honor_reset_mask(
-    source: &[u8],
-    cursor: &mut usize,
-) -> Result<u32, HonorRankStartupError> {
+fn read_honor_reset_mask(source: &[u8], cursor: &mut usize) -> Result<u32, HonorRankStartupError> {
     let offset = *cursor;
     let available = source.len().saturating_sub(offset);
     let Some(bytes) = source.get(offset..offset.saturating_add(4)) else {
@@ -1616,10 +1716,7 @@ fn read_script_resource_length(
             .expect("длина script resource содержит ровно четыре байта"),
     );
     if declared < 0 {
-        return Err(GameScriptResourceDecodeError::NegativeLength {
-            resource,
-            declared,
-        });
+        return Err(GameScriptResourceDecodeError::NegativeLength { resource, declared });
     }
     Ok(declared)
 }
