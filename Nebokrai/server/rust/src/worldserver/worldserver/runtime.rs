@@ -280,8 +280,11 @@ pub(crate) struct WorldProcessInitContext {
     enemy_factions: Option<TiberiusRsEnemyFactions>,
     region: Option<TiberiusRsRegion>,
     country: Option<TiberiusDbCountry>,
+    country_connection: Option<WorldTdsClient>,
+    goods_war_connection: Option<WorldTdsClient>,
     db_misc: Option<TiberiusDbMiscDatabase>,
     gods_battle: Option<TiberiusRsGodsBattle>,
+    gods_battle_connection: Option<WorldTdsClient>,
     log_connection: Option<WorldTdsClient>,
     largess: Option<Arc<TiberiusLargess>>,
     player_load_snapshot: Arc<RwLock<WorldPlayerLoadSnapshot>>,
@@ -308,8 +311,11 @@ impl WorldProcessInitContext {
             enemy_factions: None,
             region: None,
             country: None,
+            country_connection: None,
+            goods_war_connection: None,
             db_misc: None,
             gods_battle: None,
+            gods_battle_connection: None,
             log_connection: None,
             largess: None,
             player_load_snapshot,
@@ -320,11 +326,11 @@ impl WorldProcessInitContext {
         self.db_misc.as_mut()
     }
 
-    pub(crate) fn country_database(&mut self) -> Option<&mut TiberiusDbCountry> {
+    pub(crate) fn country_database_owner(&mut self) -> Option<&mut TiberiusDbCountry> {
         self.country.as_mut()
     }
 
-    pub(crate) fn gods_battle_database(&mut self) -> Option<&mut TiberiusRsGodsBattle> {
+    pub(crate) fn gods_battle_database_owner(&mut self) -> Option<&mut TiberiusRsGodsBattle> {
         self.gods_battle.as_mut()
     }
 
@@ -346,6 +352,7 @@ impl WorldGameInitContext for WorldProcessInitContext {
     type GeneralVariableDatabase = TiberiusRsGenVar;
     type UnionDatabase = TiberiusRsUnion;
     type FactionDatabase = TiberiusRsFaction;
+    type CountryDatabase = TiberiusDbCountry;
     type PlayerLoadDatabase = WorldProcessPlayerLoadDatabase;
     type PlayerLoadLargess = Box<dyn FnMut(&mut CPlayer) + Send>;
     type PlayerLoadClock = Box<dyn FnMut() -> u32 + Send>;
@@ -453,13 +460,17 @@ impl WorldGameInitContext for WorldProcessInitContext {
             }
             WorldGameDatabaseOwner::DbCountry => {
                 self.country = Some(TiberiusDbCountry::default());
+                self.country_connection = settings.connect().await.ok();
             }
             WorldGameDatabaseOwner::RsGodsBattle => {
                 self.gods_battle = Some(TiberiusRsGodsBattle::new(&settings));
+                self.gods_battle_connection = settings.connect().await.ok();
+            }
+            WorldGameDatabaseOwner::GoodsWarMember => {
+                self.goods_war_connection = settings.connect().await.ok();
             }
             WorldGameDatabaseOwner::RsVillageWar
-            | WorldGameDatabaseOwner::RsCityWar
-            | WorldGameDatabaseOwner::GoodsWarMember => {}
+            | WorldGameDatabaseOwner::RsCityWar => {}
         }
         Ok(())
     }
@@ -505,6 +516,23 @@ impl WorldGameInitContext for WorldProcessInitContext {
             self.union.as_mut().expect("CRsUnion уже создан"),
             self.faction.as_mut().expect("CRsFaction уже создан"),
         )
+    }
+
+    fn country_database(
+        &mut self,
+    ) -> (&mut Self::CountryDatabase, Option<&mut WorldTdsClient>) {
+        (
+            self.country.as_mut().expect("CDBCountry уже создан"),
+            self.country_connection.as_mut(),
+        )
+    }
+
+    fn goods_war_database_connection(&mut self) -> Option<&mut WorldTdsClient> {
+        self.goods_war_connection.as_mut()
+    }
+
+    fn gods_battle_database(&mut self) -> Option<&mut TiberiusRsGodsBattle> {
+        self.gods_battle.as_mut()
     }
 
     fn increment_log_database(&mut self) -> Option<&mut WorldTdsClient> {

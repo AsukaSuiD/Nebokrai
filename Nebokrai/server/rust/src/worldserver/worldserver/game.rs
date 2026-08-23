@@ -2064,6 +2064,7 @@ pub(crate) trait WorldGameInitContext {
     type GeneralVariableDatabase: RsGenVarOwner;
     type UnionDatabase: RsUnionOwner;
     type FactionDatabase: RsFactionOwner;
+    type CountryDatabase: DbCountryOwner;
     type PlayerLoadDatabase: WorldPlayerDataLoadOwner + Send + 'static;
     type PlayerLoadLargess: FnMut(&mut CPlayer) + Send + 'static;
     type PlayerLoadClock: FnMut() -> u32 + Send + 'static;
@@ -2098,6 +2099,15 @@ pub(crate) trait WorldGameInitContext {
     fn general_variable_database(&mut self) -> &mut Self::GeneralVariableDatabase;
     /// Возвращает два самостоятельных DB-owner-а exact organizing Initialize.
     fn organizing_databases(&mut self) -> (&mut Self::UnionDatabase, &mut Self::FactionDatabase);
+    /// Возвращает country DB-owner и его отдельное World connection.
+    fn country_database(
+        &mut self,
+    ) -> (&mut Self::CountryDatabase, Option<&mut WorldTdsClient>);
+    /// Возвращает отдельное соединение constructor-а `CGoodsWarMember`.
+    fn goods_war_database_connection(&mut self) -> Option<&mut WorldTdsClient>;
+    /// Возвращает созданный `CRSGodsBattle`; до соответствующего create-event
+    /// owner закономерно отсутствует.
+    fn gods_battle_database(&mut self) -> Option<&mut TiberiusRsGodsBattle>;
     /// Возвращает уже открытый Log DB connection техническому increment-owner-у.
     fn increment_log_database(&mut self) -> Option<&mut WorldTdsClient>;
     /// Возвращает уже открытый Log DB connection техническому auction-owner-у.
@@ -11162,7 +11172,6 @@ impl CGame {
         Context,
         ReloadContext,
         TimerCallback,
-        CountryDatabase,
     >(
         &mut self,
         runtime_directory: &Path,
@@ -11171,7 +11180,6 @@ impl CGame {
         jjc: &mut CJJcSystem,
         gods_battle: &mut CGodsBattleConf,
         skills: &mut CSkillFactory,
-        mut rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
         time_to_return: &mut TimeToReturn,
         time_to_return_callbacks: TimeToReturnCallbacks<TimerCallback>,
         general_variables: &mut Option<CVariableList>,
@@ -11192,10 +11200,7 @@ impl CGame {
         organizing: &mut COrganizingCtrl,
         country_handler: &mut CCountryHandler,
         country_parameters: &mut CCountryParam,
-        country_database: &mut CountryDatabase,
-        country_database_connection: Option<&mut WorldTdsClient>,
         goods_war: &mut CGoodsWarMember,
-        goods_war_database_connection: Option<&mut WorldTdsClient>,
         country_war_system: &mut CountryWarSys,
         country_war_callbacks: CountryWarCallbacks<TimerCallback>,
         honor_ranks: &mut CHonorRanks,
@@ -11208,7 +11213,6 @@ impl CGame {
         Context: WorldGameInitContext,
         ReloadContext: WorldReloadContext,
         TimerCallback: Copy,
-        CountryDatabase: DbCountryOwner,
     {
         let mut events = Vec::new();
         macro_rules! stop {
@@ -11414,10 +11418,16 @@ impl CGame {
         // оставался опубликованным, а CGame::Init продолжал следующий шаг.
         // Замена прежнего Rust owner-а повторяет `new`; старый owner штатно
         // освобождается Drop вместо исходной утечки при повторном Init.
+        if let Err(block) = context
+            .create_database_owner(WorldGameDatabaseOwner::GoodsWarMember)
+            .await
+        {
+            stop!(WorldGameInitBlockReason::Context(block));
+        }
         *goods_war = CGoodsWarMember::with_reached_empty_state();
         goods_war.begin_lifecycle();
         let goods_war_report = goods_war
-            .reinitialize_database(goods_war_database_connection)
+            .reinitialize_database(context.goods_war_database_connection())
             .await;
         events.push(WorldGameInitEvent::DatabaseOwnerCreated(
             WorldGameDatabaseOwner::GoodsWarMember,
@@ -11465,7 +11475,7 @@ impl CGame {
                     jjc,
                     gods_battle,
                     skills,
-                    rs_gods_battle.as_deref_mut(),
+                    context.gods_battle_database(),
                     profile,
                     false,
                     false,
@@ -11511,7 +11521,7 @@ impl CGame {
                     jjc,
                     gods_battle,
                     skills,
-                    rs_gods_battle.as_deref_mut(),
+                    context.gods_battle_database(),
                     profile,
                     false,
                     false,
@@ -11590,7 +11600,7 @@ impl CGame {
                     jjc,
                     gods_battle,
                     skills,
-                    rs_gods_battle.as_deref_mut(),
+                    context.gods_battle_database(),
                     profile,
                     false,
                     false,
@@ -11642,7 +11652,7 @@ impl CGame {
                 jjc,
                 gods_battle,
                 skills,
-                rs_gods_battle.as_deref_mut(),
+                context.gods_battle_database(),
                 b"godsBattle",
                 false,
                 false,
@@ -11656,8 +11666,8 @@ impl CGame {
             profile: b"godsBattle",
             legacy_result,
         });
-        let rs_gods_battle = rs_gods_battle
-            .as_deref_mut()
+        let rs_gods_battle = context
+            .gods_battle_database()
             .expect("успешный godsBattle reload проверил DB-owner");
         let succeeded = rs_gods_battle.load_faction_xyd(gods_battle).await;
         events.push(WorldGameInitEvent::GodsBattleFactionXydLoaded { succeeded });
@@ -11964,6 +11974,7 @@ impl CGame {
                 globe_setup,
                 format_world_string: None,
             };
+            let (country_database, country_database_connection) = context.country_database();
             country_handler
                 .initialize(
                     i32::from(country_local_time.day),
