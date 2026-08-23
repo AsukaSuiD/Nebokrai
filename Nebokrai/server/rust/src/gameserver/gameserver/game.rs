@@ -58,8 +58,8 @@
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные
 //! effects, потому что transport encoder этого семейства ещё отдельный owner.
-//! Equipment remove проведён через canonical player registry до war-soul
-//! state/skills, post-remove property callback, vitals clamp и typed around
+//! Equipment add/remove проведены через canonical player registry до war-soul
+//! state/skills, property callbacks, remove vitals clamp и typed around
 //! `0xBF720`; полный virtual property owner остаётся caller adapter-ом.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
@@ -108,8 +108,8 @@ use crate::gameserver::appserver::player::{
     BattleFairyCombineReport, BattleFairyDeathReport, BattleFairyEquipmentMutationReport,
     BattleFairyFollowReport, BattleFairySkillRequest, BattleFairySkillRequestFacts,
     BattleFairySkillRequestReport, BattleFairySkillResetReport, BattleFairySummonReport,
-    BattleFairyWarSoulAction, CPlayer, PlayerCombatProperties, PlayerEquipmentRemoveReport,
-    PlayerEquipmentRemoveRuntimeFacts,
+    BattleFairyWarSoulAction, CPlayer, PlayerCombatProperties, PlayerEquipmentAddReport,
+    PlayerEquipmentAddRuntimeFacts, PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::servercityregion::CServerCityRegion;
@@ -2141,6 +2141,32 @@ impl CGame {
                 goods_factory,
                 skill_factory,
                 runtime,
+                recompute_properties,
+            )
+        })
+    }
+
+    /// Полный player-owned tail positional `CEquipmentContainer::Add`; оба
+    /// callback-а вызываются в native порядке относительно container commit.
+    pub(crate) fn add_player_equipment(
+        &mut self,
+        player_id: i32,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        runtime: PlayerEquipmentAddRuntimeFacts,
+        register_with_goods_ai: &mut dyn FnMut(&CGoods),
+        recompute_properties: &mut dyn FnMut(&CPlayer) -> PlayerCombatProperties,
+    ) -> Option<PlayerEquipmentAddReport> {
+        let (players, goods_factory, skill_factory) =
+            (&mut self.players, &self.goods_factory, &self.skill_factory);
+        players.get_mut(&player_id).map(|player| {
+            player.add_equipment_goods(
+                position,
+                incoming,
+                goods_factory,
+                skill_factory,
+                runtime,
+                register_with_goods_ai,
                 recompute_properties,
             )
         })

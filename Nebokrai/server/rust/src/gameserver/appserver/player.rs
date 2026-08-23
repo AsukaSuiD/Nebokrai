@@ -75,6 +75,9 @@
 //! headgear с exact `SetWarSoulStaus(0)`, девятью skill detach, пересчётом
 //! свойств при уже отсутствующем slot-е, HP/MP clamp и `0xBF720`. Полный
 //! virtual property owner остаётся injected callback-границей.
+//! Симметричный `OnObjectAdded` сохраняет late-block partial mutations, после
+//! commit добавляет девять war-soul skills, пересчитывает свойства, публикует
+//! `0xBF720` с исключением owner-а и отражает даже zero-delta `PackExpand` log.
 
 use super::area::WarSoulPoint;
 use super::container::cbattlefairycontainer::{
@@ -83,7 +86,8 @@ use super::container::cbattlefairycontainer::{
     BattleFairyPropertyAddEffect, BattleFairyUpgradeConsumedGem, CBattleFairyContainer,
 };
 use super::container::cequipmentcontainer::{
-    CEquipmentContainer, EquipmentAroundUpdate, EquipmentColumn, EquipmentRemoveOutcome,
+    CEquipmentContainer, EquipmentAddOutcome, EquipmentAddRuntimeFacts, EquipmentAroundUpdate,
+    EquipmentColumn, EquipmentOwnerPlayerFacts, EquipmentRemoveOutcome,
     EquipmentRemoveRuntimeFacts,
 };
 use super::container::cvolumelimitgoodscontainer::{
@@ -353,6 +357,39 @@ pub(crate) struct PlayerEquipmentRemoveReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: EquipmentRemoveOutcome,
     pub(crate) effects: Vec<PlayerEquipmentRemoveEffect>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerEquipmentAddRuntimeFacts {
+    pub(crate) can_mount_result: i32,
+    pub(crate) pack_add_enabled: bool,
+    pub(crate) now: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerEquipmentAddEffect {
+    WarSoulSkillAttached {
+        skill_id: u32,
+        level: i32,
+    },
+    SkillAdded(BattleFairySkillAdded),
+    PropertiesChanged {
+        combat_properties: PlayerCombatProperties,
+    },
+    AroundUpdate(EquipmentAroundUpdate),
+    PackageExtensionLogged {
+        category: &'static str,
+        string_id: &'static str,
+        expanded_package_num: u32,
+    },
+}
+
+#[must_use = "equipment add report сохраняет partial mutations и player/network tail"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerEquipmentAddReport {
+    pub(crate) player_id: i32,
+    pub(crate) outcome: EquipmentAddOutcome,
+    pub(crate) effects: Vec<PlayerEquipmentAddEffect>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1142,6 +1179,83 @@ impl CPlayer {
             ));
         }
         PlayerEquipmentRemoveReport {
+            player_id,
+            outcome,
+            effects,
+        }
+    }
+
+    /// Полный player-tail positional `CEquipmentContainer::Add`. Timed и
+    /// goods-AI partial effects остаются наблюдаемы даже при late block; skill,
+    /// properties, around и package-log выполняются только после commit.
+    pub(crate) fn add_equipment_goods(
+        &mut self,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        skill_factory: &CSkillFactory,
+        runtime: PlayerEquipmentAddRuntimeFacts,
+        register_with_goods_ai: &mut dyn FnMut(&CGoods),
+        recompute_properties: &mut dyn FnMut(&CPlayer) -> PlayerCombatProperties,
+    ) -> PlayerEquipmentAddReport {
+        let player_id = self.player_id();
+        let previous_expanded_package_num = self.equipment.expanded_package_num();
+        let outcome = self.equipment.add_at(
+            position,
+            incoming,
+            factory,
+            EquipmentAddRuntimeFacts {
+                owner_player: Some(EquipmentOwnerPlayerFacts {
+                    can_mount_result: runtime.can_mount_result,
+                }),
+                pack_add_enabled: runtime.pack_add_enabled,
+                now: runtime.now,
+            },
+            register_with_goods_ai,
+        );
+        let mut effects = Vec::new();
+        if let EquipmentAddOutcome::Added(added) = &outcome
+            && let Some(player_effects) = added.player_effects
+        {
+            if added.package_extension_applied {
+                self.equipment
+                    .set_expanded_package_num_snapshot(previous_expanded_package_num);
+            }
+            if player_effects.add_war_soul_skill
+                && let Some(goods) = self.equipment.get_goods(added.column.position())
+            {
+                for (skill_id, level) in war_soul_skill_entries_from_goods(goods, factory) {
+                    let _added = self.move_shape.add_skill(skill_id, level, skill_factory);
+                    effects
+                        .push(PlayerEquipmentAddEffect::WarSoulSkillAttached { skill_id, level });
+                    if let Some(skill) = self.move_shape.skill(skill_id) {
+                        effects.push(PlayerEquipmentAddEffect::SkillAdded(
+                            battle_fairy_skill_snapshot(player_id, skill),
+                        ));
+                    }
+                }
+            }
+            if player_effects.recompute_properties {
+                self.combat_properties = recompute_properties(self);
+                effects.push(PlayerEquipmentAddEffect::PropertiesChanged {
+                    combat_properties: self.combat_properties,
+                });
+            }
+            effects.push(PlayerEquipmentAddEffect::AroundUpdate(
+                player_effects.around_update,
+            ));
+            if added.package_extension_applied {
+                self.equipment.set_expanded_package_num_snapshot(
+                    previous_expanded_package_num.wrapping_add(added.package_extension_delta),
+                );
+                effects.push(PlayerEquipmentAddEffect::PackageExtensionLogged {
+                    category: "PackExpand",
+                    string_id: "KR002",
+                    expanded_package_num: self.equipment.expanded_package_num(),
+                });
+            }
+        }
+        PlayerEquipmentAddReport {
             player_id,
             outcome,
             effects,

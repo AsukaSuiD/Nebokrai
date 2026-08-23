@@ -20,7 +20,9 @@
 //! loss. Ordinary/battle-fairy growth замкнут через свойства `CGoods`, включая
 //! old-client update и необратимый delete/add transition; конкретный goods
 //! payload codec и player dispatcher остаются callback-границами связанных
-//! owners. Внешний equipment codec сохраняет wire-order и partial decode.
+//! owners. Add-report отдельно хранит факт применения package-extension, так
+//! как native пишет `PackExpand` log и при нулевой дельте. Внешний equipment
+//! codec сохраняет wire-order и partial decode.
 //! Достигнутое ядро не выдаётся за весь контейнер.
 
 use std::collections::BTreeMap;
@@ -205,6 +207,7 @@ pub(crate) struct EquipmentAddedReport {
     pub(crate) amount: u32,
     pub(crate) partial_effects: EquipmentAddPartialEffects,
     pub(crate) player_effects: Option<EquipmentPlayerAddedEffects>,
+    pub(crate) package_extension_applied: bool,
     pub(crate) package_extension_delta: u32,
     pub(crate) listeners: Vec<ContainerListenerHandle>,
 }
@@ -516,6 +519,12 @@ impl CEquipmentContainer {
 
     pub(crate) const fn expanded_package_num(&self) -> u32 {
         self.expanded_package_num
+    }
+
+    /// Player callback adapter временно возвращает pre-add snapshot, чтобы
+    /// `PropertiesChanged` и around-send предшествовали native PackAdd tail-у.
+    pub(crate) const fn set_expanded_package_num_snapshot(&mut self, value: u32) {
+        self.expanded_package_num = value;
     }
 
     pub(crate) fn occupied_count(&self) -> u32 {
@@ -1013,11 +1022,11 @@ impl CEquipmentContainer {
                     exclude_owner: true,
                 },
             });
-        let package_extension_delta = if player_effects.is_some()
+        let package_extension_applied = player_effects.is_some()
             && runtime.pack_add_enabled
             && goods.query_attribute(GAP_GOODS_PACKAGE_EXTENTION)
-            && goods.addon_property_value(factory, GAP_GOODS_PACKAGE_EXTENTION, 1) == 2
-        {
+            && goods.addon_property_value(factory, GAP_GOODS_PACKAGE_EXTENTION, 1) == 2;
+        let package_extension_delta = if package_extension_applied {
             goods.addon_property_value(factory, GAP_GOODS_PACKAGE_EXTENTION, 2) as u32
         } else {
             0
@@ -1038,6 +1047,7 @@ impl CEquipmentContainer {
             amount,
             partial_effects,
             player_effects,
+            package_extension_applied,
             package_extension_delta,
             listeners: self.base.base().listeners().to_vec(),
         })
