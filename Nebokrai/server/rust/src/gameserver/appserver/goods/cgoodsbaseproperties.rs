@@ -59,6 +59,7 @@ pub(crate) const GAP_BF_SPRITUALISM: i32 = 160;
 pub(crate) const GAP_BF_STRENGH: i32 = 161;
 pub(crate) const GAP_BF_PULLULATERATE: i32 = 162;
 pub(crate) const GAP_BF_MODULE: i32 = 164;
+pub(crate) const GAP_BF_BATTLE_FAIRY: i32 = 172;
 pub(crate) const GAP_BF_GEM: i32 = 177;
 pub(crate) const GAP_BF_MAX_HP: i32 = 185;
 pub(crate) const GAP_BF_MAX_MP: i32 = 186;

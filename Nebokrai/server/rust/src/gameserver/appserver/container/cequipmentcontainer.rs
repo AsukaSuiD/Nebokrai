@@ -17,29 +17,39 @@
 //!
 //! Add/remove/swap сохраняют player facts как явный runtime-вход, partial
 //! timed/AI/package effects, typed skill/property/message callbacks и rollback
-//! loss. Интеграция этих effects с player dispatcher-ом, fairy/battle-fairy и
-//! goods payload codec остаются границами связанных owners; внешний equipment
-//! codec уже сохраняет wire-order и partial decode. Достигнутое ядро не
-//! выдаётся за весь контейнер.
+//! loss. Ordinary/battle-fairy growth замкнут через свойства `CGoods`, включая
+//! old-client update и необратимый delete/add transition; конкретный goods
+//! payload codec и player dispatcher остаются callback-границами связанных
+//! owners. Внешний equipment codec сохраняет wire-order и partial decode.
+//! Достигнутое ядро не выдаётся за весь контейнер.
 
 use std::collections::BTreeMap;
 
 use super::ccontainer::ContainerListenerHandle;
 use super::cgoodscontainer::{CGoodsContainer, GoodsContainerMode};
-use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cbattlefairyproperty::{
+    BattleFairyExpBlock, BattleFairyExpReport, BattleFairyExpUpResult, BattleFairyPlayerFacts,
+};
+use crate::gameserver::appserver::goods::cgoods::{CGoods, GoodsBasePropertyBlock};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     EQUIP_PLACE_BODY, EQUIP_PLACE_BOOT, EQUIP_PLACE_FAIRY, EQUIP_PLACE_FROCK, EQUIP_PLACE_GLOVE,
     EQUIP_PLACE_HAND, EQUIP_PLACE_HEAD, EQUIP_PLACE_HEADGEAR, EQUIP_PLACE_JEWELRY,
     EQUIP_PLACE_LING_BAO, EQUIP_PLACE_MANTEAU, EQUIP_PLACE_MEDAL, EQUIP_PLACE_ORNAMENTS,
-    EQUIP_PLACE_POSTERIOR, EQUIP_PLACE_TALISMAN, EQUIP_PLACE_WING, GAP_BF_BFEQUIPEMENT,
-    GAP_BF_LEVEL, GAP_GOODS_PACKAGE_EXTENTION, GAP_WEAPON_LEVEL, GOODS_TYPE_EQUIPMENT,
+    EQUIP_PLACE_POSTERIOR, EQUIP_PLACE_TALISMAN, EQUIP_PLACE_WING, GAP_BF_BATTLE_FAIRY,
+    GAP_BF_BFEQUIPEMENT, GAP_BF_LEVEL, GAP_GOODS_PACKAGE_EXTENTION, GAP_WEAPON_LEVEL,
+    GOODS_TYPE_EQUIPMENT,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::gameserver::appserver::goods::fairyproperties::{
+    FairyExpBlock, FairyExpReport, FairyExpRuntime, FairyExpUpResult,
+};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
 
 pub(crate) const EQUIPMENT_COLUMN_LIMIT: u32 = 17;
 pub(crate) const EQUIPMENT_AROUND_UPDATE_MESSAGE_TYPE: u32 = 0x0b_f720;
+pub(crate) const EQUIPMENT_FAIRY_UPDATE_MESSAGE_TYPE: u32 = 0x0b_f918;
+pub(crate) const EQUIPMENT_CONTAINER_EXTEND_ID: u32 = 2;
 const PLAYER_OWNER_TYPE: i32 = 400;
 
 #[repr(u32)]
@@ -362,6 +372,118 @@ pub(crate) struct EquipmentUnserializeFailure {
     pub(crate) report: EquipmentUnserializeReport,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EquipmentFairyExpRuntimeFacts {
+    pub(crate) grow_log_enabled: bool,
+    pub(crate) egg_max_level: u32,
+    pub(crate) upgrade_rate: f32,
+    pub(crate) remove: EquipmentRemoveRuntimeFacts,
+    pub(crate) replacement_add: EquipmentAddRuntimeFacts,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EquipmentBattleFairyExpRuntimeFacts<'a> {
+    pub(crate) player: Option<BattleFairyPlayerFacts<'a>>,
+    pub(crate) remove: EquipmentRemoveRuntimeFacts,
+    pub(crate) replacement_add: EquipmentAddRuntimeFacts,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentFairyMoveOperation {
+    DeleteObject,
+    NewObject,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentFairyObjectMove {
+    pub(crate) operation: EquipmentFairyMoveOperation,
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) column: EquipmentColumn,
+    pub(crate) container_extend_id: u32,
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) amount: u32,
+    pub(crate) old_client_payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentFairyGoodsUpdate {
+    pub(crate) message_type: u32,
+    pub(crate) player_id: i32,
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) old_client_payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentFairyTransitionEffect {
+    ObjectMove(EquipmentFairyObjectMove),
+    GarbageCollected(ShapeIdentity),
+}
+
+#[must_use = "transition сохраняет removal/add reports и порядок move/GC effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentFairyTransition {
+    ReplacementCreationFailed {
+        goods_index: u32,
+    },
+    RemovalFailed {
+        removal: EquipmentRemoveOutcome,
+        effects: Vec<EquipmentFairyTransitionEffect>,
+    },
+    ReplacementRejected {
+        removed: EquipmentRemovedEvent,
+        add: EquipmentAddBlockedReport,
+        effects: Vec<EquipmentFairyTransitionEffect>,
+    },
+    Changed {
+        removed: EquipmentRemovedEvent,
+        added: EquipmentAddedReport,
+        effects: Vec<EquipmentFairyTransitionEffect>,
+    },
+}
+
+#[must_use = "outcome содержит property logs, update payload или transition effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentFairyExpOutcome {
+    NoChange(FairyExpReport),
+    Updated {
+        exp: FairyExpReport,
+        update: EquipmentFairyGoodsUpdate,
+    },
+    StateChanged {
+        exp: FairyExpReport,
+        transition: EquipmentFairyTransition,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentFairyExpBlock {
+    Properties(FairyExpBlock),
+    ReplacementProperties(GoodsBasePropertyBlock),
+    ReplacementFairyPropertiesMissing,
+}
+
+#[must_use = "outcome содержит level logs, update payload или transition effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentBattleFairyExpOutcome {
+    NoChange(BattleFairyExpReport),
+    Updated {
+        exp: BattleFairyExpReport,
+        update: EquipmentFairyGoodsUpdate,
+    },
+    StateChanged {
+        exp: BattleFairyExpReport,
+        transition: EquipmentFairyTransition,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentBattleFairyExpBlock {
+    Properties(BattleFairyExpBlock),
+    ReplacementProperties(GoodsBasePropertyBlock),
+    ReplacementBattleFairyPropertiesMissing,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CEquipmentContainer {
     base: CGoodsContainer,
@@ -478,6 +600,316 @@ impl CEquipmentContainer {
                     .is_some()
             })
             .count() as u32
+    }
+
+    /// Exact `FairyExpUp` работает с headgear column, несмотря на отдельную
+    /// legacy колонку `EC_FAIRY`. Пустой input не делает даже lookup-а.
+    pub(crate) fn fairy_exp_up(
+        &mut self,
+        experience: u32,
+        factory: &CGoodsFactory,
+        runtime: EquipmentFairyExpRuntimeFacts,
+        fairy_threshold_for_level: &mut dyn FnMut(u32, u32) -> u32,
+        create_goods: &mut dyn FnMut(u32) -> Option<CGoods>,
+        register_with_goods_ai: &mut dyn FnMut(&CGoods),
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> Result<EquipmentFairyExpOutcome, EquipmentFairyExpBlock> {
+        let mut remaining = experience;
+        if remaining == 0 {
+            return Ok(EquipmentFairyExpOutcome::NoChange(FairyExpReport {
+                result: FairyExpUpResult::None,
+                remaining_experience: remaining,
+                grow_logs: Vec::new(),
+            }));
+        }
+
+        let owner_id = self.base.owner_id();
+        let Some(goods) = self.equipment.get_mut(&EquipmentColumn::Headgear) else {
+            return Ok(EquipmentFairyExpOutcome::NoChange(FairyExpReport {
+                result: FairyExpUpResult::None,
+                remaining_experience: remaining,
+                grow_logs: Vec::new(),
+            }));
+        };
+        let fairy_guid = goods.identity().ex_id.to_string().into_bytes();
+        let fairy_name = goods.name().to_vec();
+        let fairy_runtime = FairyExpRuntime {
+            player_id: owner_id,
+            fairy_guid: &fairy_guid,
+            fairy_name: &fairy_name,
+            log_value: 0,
+            suppress_grow_log: false,
+            grow_log_enabled: runtime.grow_log_enabled,
+            egg_max_level: runtime.egg_max_level,
+            upgrade_rate: runtime.upgrade_rate,
+        };
+        let Some(exp) = goods
+            .fairy_exp_up(
+                &mut remaining,
+                fairy_runtime,
+                &mut *fairy_threshold_for_level,
+            )
+            .map_err(EquipmentFairyExpBlock::Properties)?
+        else {
+            return Ok(EquipmentFairyExpOutcome::NoChange(FairyExpReport {
+                result: FairyExpUpResult::None,
+                remaining_experience: remaining,
+                grow_logs: Vec::new(),
+            }));
+        };
+        if exp.result <= FairyExpUpResult::None {
+            return Ok(EquipmentFairyExpOutcome::NoChange(exp));
+        }
+        goods
+            .save_fairy_properties(factory)
+            .expect("equipped goods сохраняет живую catalog entry");
+        if exp.result != FairyExpUpResult::ChangeState {
+            return Ok(EquipmentFairyExpOutcome::Updated {
+                update: Self::fairy_goods_update(owner_id, goods, encode_old_client),
+                exp,
+            });
+        }
+
+        let ripe_id = goods
+            .fairy_properties()
+            .expect("успешный fairy exp report требует property owner")
+            .ripe_id;
+        let Some(mut replacement) = create_goods(ripe_id) else {
+            return Ok(EquipmentFairyExpOutcome::StateChanged {
+                exp,
+                transition: EquipmentFairyTransition::ReplacementCreationFailed {
+                    goods_index: ripe_id,
+                },
+            });
+        };
+        replacement
+            .copy_fairy_addon_properties_from(goods, factory, &mut *fairy_threshold_for_level)
+            .map_err(EquipmentFairyExpBlock::ReplacementProperties)?;
+        let Some(replacement_fairy) = replacement.fairy_properties_mut() else {
+            return Err(EquipmentFairyExpBlock::ReplacementFairyPropertiesMissing);
+        };
+        replacement_fairy.fairy_state = 2;
+        if !replacement
+            .save_fairy_properties(factory)
+            .map_err(EquipmentFairyExpBlock::ReplacementProperties)?
+        {
+            return Err(EquipmentFairyExpBlock::ReplacementFairyPropertiesMissing);
+        }
+        let old_goods_id = goods.identity().ex_id;
+        let transition = self.replace_headgear_fairy(
+            old_goods_id,
+            replacement,
+            factory,
+            runtime.remove,
+            runtime.replacement_add,
+            register_with_goods_ai,
+            encode_old_client,
+        );
+        Ok(EquipmentFairyExpOutcome::StateChanged { exp, transition })
+    }
+
+    /// Exact BF guard — addon 172/value 1 == 1. Текущее `LevelUp` всегда
+    /// возвращает `LevelUp`, но unreachable transition branch owner-а
+    /// сохранён явно для совместимости с исходным enum-контрактом.
+    pub(crate) fn battle_fairy_level_up(
+        &mut self,
+        experience: u32,
+        factory: &CGoodsFactory,
+        runtime: EquipmentBattleFairyExpRuntimeFacts<'_>,
+        battle_threshold_for_level: &mut dyn FnMut(u32, u32) -> u32,
+        create_goods: &mut dyn FnMut(u32) -> Option<CGoods>,
+        register_with_goods_ai: &mut dyn FnMut(&CGoods),
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> Result<EquipmentBattleFairyExpOutcome, EquipmentBattleFairyExpBlock> {
+        let mut remaining = experience;
+        if remaining == 0 {
+            return Ok(EquipmentBattleFairyExpOutcome::NoChange(
+                Self::empty_battle_fairy_exp_report(remaining),
+            ));
+        }
+        let Some(goods) = self.equipment.get_mut(&EquipmentColumn::Headgear) else {
+            return Ok(EquipmentBattleFairyExpOutcome::NoChange(
+                Self::empty_battle_fairy_exp_report(remaining),
+            ));
+        };
+        if goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
+            return Ok(EquipmentBattleFairyExpOutcome::NoChange(
+                Self::empty_battle_fairy_exp_report(remaining),
+            ));
+        }
+        let Some(exp) = goods
+            .battle_fairy_exp_up(
+                factory,
+                runtime.player,
+                &mut remaining,
+                &mut *battle_threshold_for_level,
+            )
+            .map_err(EquipmentBattleFairyExpBlock::Properties)?
+        else {
+            return Ok(EquipmentBattleFairyExpOutcome::NoChange(
+                Self::empty_battle_fairy_exp_report(remaining),
+            ));
+        };
+        if exp.result <= BattleFairyExpUpResult::None {
+            return Ok(EquipmentBattleFairyExpOutcome::NoChange(exp));
+        }
+        goods
+            .save_battle_fairy_property(factory)
+            .expect("equipped goods сохраняет живую catalog entry");
+        let owner_id = self.base.owner_id();
+        if exp.result != BattleFairyExpUpResult::ChangeState {
+            return Ok(EquipmentBattleFairyExpOutcome::Updated {
+                update: Self::fairy_goods_update(owner_id, goods, encode_old_client),
+                exp,
+            });
+        }
+
+        let change_id = goods
+            .battle_fairy_property()
+            .expect("успешный battle-fairy exp report требует property owner")
+            .change_id;
+        let Some(mut replacement) = create_goods(change_id) else {
+            return Ok(EquipmentBattleFairyExpOutcome::StateChanged {
+                exp,
+                transition: EquipmentFairyTransition::ReplacementCreationFailed {
+                    goods_index: change_id,
+                },
+            });
+        };
+        replacement
+            .copy_battle_fairy_addon_properties_from(
+                goods,
+                factory,
+                &mut *battle_threshold_for_level,
+            )
+            .map_err(EquipmentBattleFairyExpBlock::ReplacementProperties)?;
+        let Some(replacement_battle_fairy) = replacement.battle_fairy_property_mut() else {
+            return Err(EquipmentBattleFairyExpBlock::ReplacementBattleFairyPropertiesMissing);
+        };
+        replacement_battle_fairy.module = Some(3);
+        if !replacement
+            .save_battle_fairy_property(factory)
+            .map_err(EquipmentBattleFairyExpBlock::ReplacementProperties)?
+        {
+            return Err(EquipmentBattleFairyExpBlock::ReplacementBattleFairyPropertiesMissing);
+        }
+        let old_goods_id = goods.identity().ex_id;
+        let transition = self.replace_headgear_fairy(
+            old_goods_id,
+            replacement,
+            factory,
+            runtime.remove,
+            runtime.replacement_add,
+            register_with_goods_ai,
+            encode_old_client,
+        );
+        Ok(EquipmentBattleFairyExpOutcome::StateChanged { exp, transition })
+    }
+
+    fn empty_battle_fairy_exp_report(remaining_experience: u32) -> BattleFairyExpReport {
+        BattleFairyExpReport {
+            result: BattleFairyExpUpResult::None,
+            remaining_experience,
+            level_logs: Vec::new(),
+            goods_update: None,
+        }
+    }
+
+    fn fairy_goods_update(
+        player_id: i32,
+        goods: &CGoods,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> EquipmentFairyGoodsUpdate {
+        EquipmentFairyGoodsUpdate {
+            message_type: EQUIPMENT_FAIRY_UPDATE_MESSAGE_TYPE,
+            player_id,
+            goods: goods.identity(),
+            old_client_payload: encode_old_client(goods),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn replace_headgear_fairy(
+        &mut self,
+        old_goods_id: CGuid,
+        replacement: CGoods,
+        factory: &CGoodsFactory,
+        remove_runtime: EquipmentRemoveRuntimeFacts,
+        add_runtime: EquipmentAddRuntimeFacts,
+        register_with_goods_ai: &mut dyn FnMut(&CGoods),
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> EquipmentFairyTransition {
+        let replacement_identity = replacement.identity();
+        let removed = match self.remove(old_goods_id, factory, remove_runtime) {
+            EquipmentRemoveOutcome::Removed(removed) => removed,
+            removal => {
+                return EquipmentFairyTransition::RemovalFailed {
+                    removal,
+                    effects: vec![EquipmentFairyTransitionEffect::GarbageCollected(
+                        replacement_identity,
+                    )],
+                };
+            }
+        };
+        let EquipmentRemovedReport {
+            event: removed_event,
+            goods: old_goods,
+        } = removed;
+        let old_identity = old_goods.identity();
+        let mut effects = vec![
+            EquipmentFairyTransitionEffect::ObjectMove(EquipmentFairyObjectMove {
+                operation: EquipmentFairyMoveOperation::DeleteObject,
+                owner_type: removed_event.owner_type,
+                owner_id: removed_event.owner_id,
+                column: removed_event.column,
+                container_extend_id: EQUIPMENT_CONTAINER_EXTEND_ID,
+                goods: old_identity,
+                amount: old_goods.amount(),
+                old_client_payload: Vec::new(),
+            }),
+            EquipmentFairyTransitionEffect::GarbageCollected(old_identity),
+        ];
+        drop(old_goods);
+
+        let mut incoming = Some(replacement);
+        match self.add_preferred(&mut incoming, factory, add_runtime, register_with_goods_ai) {
+            EquipmentAddOutcome::Blocked(add) => {
+                let rejected = incoming
+                    .take()
+                    .expect("rejected fairy replacement сохраняет ownership");
+                effects.push(EquipmentFairyTransitionEffect::GarbageCollected(
+                    rejected.identity(),
+                ));
+                EquipmentFairyTransition::ReplacementRejected {
+                    removed: removed_event,
+                    add,
+                    effects,
+                }
+            }
+            EquipmentAddOutcome::Added(added) => {
+                let added_goods = self
+                    .equipment
+                    .get(&added.column)
+                    .expect("successful Add публикует replacement в map");
+                effects.push(EquipmentFairyTransitionEffect::ObjectMove(
+                    EquipmentFairyObjectMove {
+                        operation: EquipmentFairyMoveOperation::NewObject,
+                        owner_type: added.owner_type,
+                        owner_id: added.owner_id,
+                        column: added.column,
+                        container_extend_id: EQUIPMENT_CONTAINER_EXTEND_ID,
+                        goods: added_goods.identity(),
+                        amount: added_goods.amount(),
+                        old_client_payload: encode_old_client(added_goods),
+                    },
+                ));
+                EquipmentFairyTransition::Changed {
+                    removed: removed_event,
+                    added,
+                    effects,
+                }
+            }
+        }
     }
 
     /// Exact positional `Add` сохраняет необычный порядок: BF/mount/occupied/
