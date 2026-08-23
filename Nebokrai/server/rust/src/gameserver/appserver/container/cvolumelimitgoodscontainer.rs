@@ -9,9 +9,10 @@
 //! GameServer-адаптером.
 //!
 //! Constructor, volume reset, space/cell queries, add/remove и lifecycle
-//! материализованы. Expansion policy, player packet checks, listener message
-//! assembly, codec, swap, clone и auction-scale mutation ниже остаются RAW до
-//! замыкания соответствующих setup/player/message/goods owners.
+//! материализованы. Базовый expansion получает setup-policy явно и сохраняет
+//! exact release→resize→restore-owner order. Player packet checks, listener
+//! message assembly, codec, swap, clone и auction-scale mutation ниже остаются
+//! RAW до замыкания соответствующих setup/player/message/goods owners.
 
 use super::camountlimitgoodscontainer::{
     AmountLimitGoodsAdded, AmountLimitGoodsCleared, AmountLimitGoodsRelease, AmountLimitGoodsTaken,
@@ -57,6 +58,23 @@ pub(crate) enum VolumeGoodsAddOutcome {
 pub(crate) enum VolumeGoodsRemoveOutcome {
     Removed(AmountLimitGoodsTaken),
     RemovedButCellMissing(AmountLimitGoodsTaken),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum VolumeExpandBlock {
+    Disabled,
+    ZeroAmount,
+    ExceedsMaximum { current: u32, requested: u32 },
+}
+
+#[must_use = "успешный expansion содержит release ownership-эффект"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum VolumeExpandOutcome {
+    Expanded {
+        size: u32,
+        released: AmountLimitGoodsRelease,
+    },
+    Rejected(VolumeExpandBlock),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -320,6 +338,44 @@ impl CVolumeLimitGoodsContainer {
                 *cell = VolumeCell::Inactive;
             }
         }
+    }
+
+    pub(crate) fn is_cell_inactive(&self, position: u32) -> bool {
+        self.cells.get(position as usize) == Some(&VolumeCell::Inactive)
+    }
+
+    pub(crate) fn set_cell_inactive(&mut self, position: u32) -> bool {
+        let Some(cell) = self.cells.get_mut(position as usize) else {
+            return false;
+        };
+        *cell = VolumeCell::Inactive;
+        true
+    }
+
+    pub(crate) fn expand(
+        &mut self,
+        requested: u32,
+        expansion_enabled: bool,
+    ) -> VolumeExpandOutcome {
+        if !expansion_enabled {
+            return VolumeExpandOutcome::Rejected(VolumeExpandBlock::Disabled);
+        }
+        if requested == 0 {
+            return VolumeExpandOutcome::Rejected(VolumeExpandBlock::ZeroAmount);
+        }
+        let current = self.size;
+        let size = current.wrapping_add(requested);
+        if 0xff < size {
+            return VolumeExpandOutcome::Rejected(VolumeExpandBlock::ExceedsMaximum {
+                current,
+                requested,
+            });
+        }
+        let owner_type = self.base.base().owner_type();
+        let owner_id = self.base.base().owner_id();
+        let released = self.set_container_volume(size);
+        self.base.set_owner(owner_type, owner_id);
+        VolumeExpandOutcome::Expanded { size, released }
     }
 
     pub(crate) fn activated_but_unused_count(&self, pack_add_enabled: bool) -> u32 {

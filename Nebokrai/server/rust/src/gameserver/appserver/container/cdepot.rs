@@ -1,6 +1,230 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Lock/position/expansion core `CDepot` исторического GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
+//! `server/gameserver/appserver/container/cdepot.cpp`. Depot оборачивает
+//! `CVolumeLimitGoodsContainer`, стартует locked и разрешает storage mutation
+//! только после внешне подтверждённого player-password check. Базовые позиции
+//! `0..95` обычные; extension-группы начинаются в `96 + 13n`, а anchor goods
+//! активирует остальные двенадцать позиций группы.
+//!
+//! `Vec`/`IndexMap` базы остаются библиотечным storage-слоем. Здесь сохранены
+//! exact position selection, inactive-anchor и expansion partial effects.
+//! Extension-item add/remove callbacks, player notifications и codec restore
+//! ниже остаются RAW до замыкания goods/player/message owners.
+
+use super::camountlimitgoodscontainer::{AmountLimitGoodsCleared, AmountLimitGoodsRelease};
+use super::cvolumelimitgoodscontainer::{
+    CVolumeLimitGoodsContainer, VolumeExpandOutcome, VolumeGoodsRemoveOutcome,
+};
+use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_PARTICULAR_ATTRIBUTE;
+use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::public::guid::CGuid;
+
+const DEPOT_BASE_CELLS: u32 = 96;
+const DEPOT_EXTENSION_WIDTH: u32 = 13;
+const DEPOT_EXTENSION_END: u32 = 161;
+
+#[must_use = "expansion может изменить storage даже при false legacy return"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DepotExpandOutcome {
+    pub(crate) base: VolumeExpandOutcome,
+    pub(crate) size: u32,
+    pub(crate) initialized_anchors: u32,
+    pub(crate) legacy_success: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CDepot {
+    base: CVolumeLimitGoodsContainer,
+    locked: bool,
+}
+
+impl Default for CDepot {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CDepot {
+    pub(crate) fn new() -> Self {
+        Self {
+            base: CVolumeLimitGoodsContainer::new(),
+            locked: true,
+        }
+    }
+
+    pub(crate) const fn base(&self) -> &CVolumeLimitGoodsContainer {
+        &self.base
+    }
+
+    pub(crate) const fn base_mut(&mut self) -> &mut CVolumeLimitGoodsContainer {
+        &mut self.base
+    }
+
+    pub(crate) const fn is_locked(&self) -> bool {
+        self.locked
+    }
+
+    pub(crate) fn lock(&mut self) -> bool {
+        self.locked = true;
+        true
+    }
+
+    /// Player/game owner выполняет owner lookup и byte-exact password compare;
+    /// неуспех оставляет текущее состояние без изменений.
+    pub(crate) fn unlock_if_authenticated(&mut self, authenticated: bool) -> bool {
+        if !authenticated {
+            return false;
+        }
+        self.locked = false;
+        true
+    }
+
+    pub(crate) fn find(&self, ex_id: CGuid) -> Option<&CGoods> {
+        if self.locked {
+            return None;
+        }
+        self.base.base().find(ex_id)
+    }
+
+    pub(crate) fn remove_goods(&mut self, ex_id: CGuid) -> Option<VolumeGoodsRemoveOutcome> {
+        if self.locked {
+            return None;
+        }
+        self.base.remove_goods(ex_id)
+    }
+
+    pub(crate) fn clear_goods(&mut self) -> AmountLimitGoodsCleared {
+        self.locked = true;
+        self.base.clear_goods()
+    }
+
+    pub(crate) fn release(&mut self) -> AmountLimitGoodsRelease {
+        self.locked = true;
+        self.base.release()
+    }
+
+    pub(crate) fn is_extension_item_position(position: u32) -> bool {
+        if position < DEPOT_BASE_CELLS {
+            return false;
+        }
+        let mut anchor = DEPOT_BASE_CELLS;
+        while anchor < DEPOT_EXTENSION_END {
+            if position == anchor {
+                return true;
+            }
+            anchor = anchor.wrapping_add(DEPOT_EXTENSION_WIDTH);
+        }
+        false
+    }
+
+    pub(crate) fn is_activated(&self, position: u32) -> bool {
+        if position < DEPOT_BASE_CELLS || self.base.size() < position {
+            return false;
+        }
+        let group = position.wrapping_sub(DEPOT_BASE_CELLS) / DEPOT_EXTENSION_WIDTH;
+        let anchor = group
+            .wrapping_mul(DEPOT_EXTENSION_WIDTH)
+            .wrapping_add(DEPOT_BASE_CELLS);
+        self.base.get_goods(anchor).is_some()
+    }
+
+    pub(crate) fn inactive_group_allows_add(&self, position: u32) -> bool {
+        if position < DEPOT_BASE_CELLS || self.base.size() < position {
+            return false;
+        }
+        let group = position.wrapping_sub(DEPOT_BASE_CELLS) / DEPOT_EXTENSION_WIDTH;
+        let anchor = group
+            .wrapping_mul(DEPOT_EXTENSION_WIDTH)
+            .wrapping_add(DEPOT_BASE_CELLS);
+        self.base.is_cell_inactive(anchor)
+    }
+
+    pub(crate) fn is_space_enough(&self, position: u32) -> bool {
+        if self.base.is_space_enough(position) {
+            return true;
+        }
+        position < self.base.size()
+            && Self::is_extension_item_position(position)
+            && self.base.is_cell_inactive(position)
+    }
+
+    pub(crate) fn find_empty_space_for_goods(&self) -> Option<u32> {
+        for position in 0..self.base.size() {
+            if !self.base.is_space_enough(position) {
+                continue;
+            }
+            if position < DEPOT_BASE_CELLS {
+                return Some(position);
+            }
+            if Self::is_extension_item_position(position) {
+                continue;
+            }
+            if self.is_activated(position) {
+                return Some(position);
+            }
+        }
+        None
+    }
+
+    pub(crate) fn find_position_for_goods(
+        &self,
+        incoming: &CGoods,
+        factory: &CGoodsFactory,
+    ) -> Option<u32> {
+        let maximum = incoming.max_stack_number(factory);
+        if 1 < maximum {
+            for stored in self.base.base().traversing_goods() {
+                if stored.base_properties_index() != incoming.base_properties_index()
+                    || maximum < incoming.amount().wrapping_add(stored.amount())
+                    || incoming.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1)
+                        != stored.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1)
+                {
+                    continue;
+                }
+                let Some(position) = self.base.query_goods_position(stored.identity().ex_id) else {
+                    continue;
+                };
+                if position < DEPOT_BASE_CELLS {
+                    return Some(position);
+                }
+                if Self::is_extension_item_position(position) {
+                    return None;
+                }
+                return self.is_activated(position).then_some(position);
+            }
+        }
+        self.find_empty_space_for_goods()
+    }
+
+    pub(crate) fn expand(&mut self, requested: u32, expansion_enabled: bool) -> DepotExpandOutcome {
+        let base = self.base.expand(requested, expansion_enabled);
+        let size = self.base.size();
+        let mut anchor = DEPOT_BASE_CELLS;
+        let mut initialized_anchors = 0u32;
+        while anchor < DEPOT_EXTENSION_END {
+            if size <= anchor {
+                return DepotExpandOutcome {
+                    base,
+                    size,
+                    initialized_anchors,
+                    legacy_success: false,
+                };
+            }
+            let initialized = self.base.set_cell_inactive(anchor);
+            debug_assert!(initialized, "expanded depot anchor обязан существовать");
+            initialized_anchors = initialized_anchors.wrapping_add(u32::from(initialized));
+            anchor = anchor.wrapping_add(DEPOT_EXTENSION_WIDTH);
+        }
+        DepotExpandOutcome {
+            base,
+            size,
+            initialized_anchors,
+            legacy_success: true,
+        }
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -288,12 +512,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer
