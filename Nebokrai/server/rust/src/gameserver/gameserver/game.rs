@@ -115,6 +115,9 @@
 //! Terminal server startup `0x7F801/0x3B` из FIFO действительно поднимает
 //! client-facing listener, сохраняет ordered dialog/log effects и только
 //! после них читает login/world IDs; другие startup selectors не перехватывает.
+//! Language table проходит тот же server dispatcher как startup `0x2F` и
+//! runtime `0x7F807`: обе ветви очищают один `CGame` owner, сохраняют partial
+//! decode/error, точный cursor и ordered log-effect в process report.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
@@ -170,8 +173,7 @@ use crate::gameserver::appserver::message::sequencestring::{
 };
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::message::servermessage::{
-    GameClientServerStartMessageError, GameClientServerStartReport,
-    dispatch_client_server_start_message,
+    GameServerMessageError, GameServerMessageReport, dispatch_server_message,
 };
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::organizingsystem::fournationwarsys::CFourNationWarSys;
@@ -977,8 +979,7 @@ pub(crate) struct GameProcessMessagesReport {
     pub(crate) gm_messages: Vec<Result<GmMessageReport, GmMessageError>>,
     pub(crate) gma_messages: Vec<Result<GmaMessageReport, GmaMessageError>>,
     pub(crate) depot_messages: Vec<DepotMessageReport>,
-    pub(crate) client_server_starts:
-        Vec<Result<GameClientServerStartReport, GameClientServerStartMessageError>>,
+    pub(crate) server_messages: Vec<Result<GameServerMessageReport, GameServerMessageError>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3396,7 +3397,7 @@ impl CGame {
         let mut gm_messages = Vec::new();
         let mut gma_messages = Vec::new();
         let mut depot_messages = Vec::new();
-        let mut client_server_starts = Vec::new();
+        let mut server_messages = Vec::new();
         let world_messages = self
             .world_client
             .as_ref()
@@ -3410,7 +3411,7 @@ impl CGame {
                 &mut gm_messages,
                 &mut gma_messages,
                 &mut depot_messages,
-                &mut client_server_starts,
+                &mut server_messages,
             );
         }
         let billing_messages = self
@@ -3426,7 +3427,7 @@ impl CGame {
                 &mut gm_messages,
                 &mut gma_messages,
                 &mut depot_messages,
-                &mut client_server_starts,
+                &mut server_messages,
             );
         }
         let server_events = self
@@ -3444,7 +3445,7 @@ impl CGame {
                         &mut gm_messages,
                         &mut gma_messages,
                         &mut depot_messages,
-                        &mut client_server_starts,
+                        &mut server_messages,
                     );
                 }
                 GameServerEvent::WorldClientReconnected(client) => {
@@ -3461,7 +3462,7 @@ impl CGame {
             gm_messages,
             gma_messages,
             depot_messages,
-            client_server_starts,
+            server_messages,
         }
     }
 
@@ -3475,14 +3476,10 @@ impl CGame {
         gm_messages: &mut Vec<Result<GmMessageReport, GmMessageError>>,
         gma_messages: &mut Vec<Result<GmaMessageReport, GmaMessageError>>,
         depot_messages: &mut Vec<DepotMessageReport>,
-        client_server_starts: &mut Vec<
-            Result<GameClientServerStartReport, GameClientServerStartMessageError>,
-        >,
+        server_messages: &mut Vec<Result<GameServerMessageReport, GameServerMessageError>>,
     ) {
-        if let Some(report) =
-            dispatch_client_server_start_message(message, self, || runtime.get_tick_ms())
-        {
-            client_server_starts.push(report);
+        if let Some(report) = dispatch_server_message(message, self, || runtime.get_tick_ms()) {
+            server_messages.push(report);
         } else if let Some(report) =
             dispatch_world_auction_state(message, self, || runtime.wall_time_seconds())
         {

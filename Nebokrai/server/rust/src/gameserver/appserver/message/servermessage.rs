@@ -237,17 +237,45 @@ pub(crate) struct GameClientServerStartReport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GameClientServerStartMessageError {
-    pub(crate) selector: GameClientServerStartPayloadError,
+pub(crate) enum GameStringTableSource {
+    Startup,
+    RuntimeRefresh,
 }
 
-/// Подключает terminal selector к полному `OnServerMessage` family, не двигая
-/// cursor у остальных startup selectors.
-pub(crate) fn dispatch_client_server_start_message(
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameStringTableMessageReport {
+    pub(crate) source: GameStringTableSource,
+    pub(crate) decoded: MyStringTableDecodeReport,
+    pub(crate) log_effects: Vec<Vec<u8>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameServerMessageReport {
+    ClientServerStart(GameClientServerStartReport),
+    StringTable(GameStringTableMessageReport),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameServerMessageError {
+    StartupSelector(GameClientServerStartPayloadError),
+    StringTable(MyStringTableDecodeError),
+}
+
+/// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
+/// startup selector читается один раз, неизвестные selector-ы не двигают
+/// cursor, а обе language-table точки входят в один `CGame` owner.
+pub(crate) fn dispatch_server_message(
     message: &mut CMessage,
     game: &mut CGame,
     mut now_ms: impl FnMut() -> u32,
-) -> Option<Result<GameClientServerStartReport, GameClientServerStartMessageError>> {
+) -> Option<Result<GameServerMessageReport, GameServerMessageError>> {
+    if message.message_type() == STRING_TABLE_REFRESH_MESSAGE {
+        return Some(dispatch_string_table_message(
+            message,
+            game,
+            GameStringTableSource::RuntimeRefresh,
+        ));
+    }
     if message.message_type() != SERVER_STARTUP_MESSAGE {
         return None;
     }
@@ -257,24 +285,55 @@ pub(crate) fn dispatch_client_server_start_message(
         match read_start_long(wire, &mut probe) {
             Ok(selector) => selector,
             Err(selector) => {
-                return Some(Err(GameClientServerStartMessageError { selector }));
+                return Some(Err(GameServerMessageError::StartupSelector(selector)));
             }
         }
     };
-    if selector != CLIENT_SERVER_START_SELECTOR {
-        return None;
+    match selector {
+        CLIENT_SERVER_START_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("terminal selector проверен без изменения cursor");
+            Some(Ok(GameServerMessageReport::ClientServerStart(
+                dispatch_client_server_start(consumed_selector, message, game, now_ms())
+                    .expect("selector 0x3B проверен outer dispatcher-ом"),
+            )))
+        }
+        STRING_TABLE_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("language-table selector проверен без изменения cursor");
+            debug_assert_eq!(consumed_selector, STRING_TABLE_SELECTOR);
+            Some(dispatch_string_table_message(
+                message,
+                game,
+                GameStringTableSource::Startup,
+            ))
+        }
+        _ => None,
     }
-    let consumed_selector = message
-        .base_mut()
-        .get_long()
-        .expect("terminal selector проверен без изменения cursor");
-    Some(Ok(dispatch_client_server_start(
-        consumed_selector,
-        message,
-        game,
-        now_ms(),
-    )
-    .expect("selector 0x3B проверен outer dispatcher-ом")))
+}
+
+fn dispatch_string_table_message(
+    message: &mut CMessage,
+    game: &mut CGame,
+    source: GameStringTableSource,
+) -> Result<GameServerMessageReport, GameServerMessageError> {
+    let mut log_effects = Vec::new();
+    let decoded = {
+        let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+        game.create_string_table(wire, cursor, |text| log_effects.push(text.to_vec()))
+            .map_err(GameServerMessageError::StringTable)?
+    };
+    Ok(GameServerMessageReport::StringTable(
+        GameStringTableMessageReport {
+            source,
+            decoded,
+            log_effects,
+        },
+    ))
 }
 
 /// Выполняет terminal startup selector `0x3B` в исходном порядке side effects.
@@ -1531,21 +1590,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
         }
         _ => None,
     }
-}
-
-/// Обрабатывает runtime language refresh `0x7F807` тем же CGame-owner-ом.
-pub(crate) fn dispatch_string_table_refresh(
-    message_type: i32,
-    message: &mut CMessage,
-    game: &mut CGame,
-    mut add_log_text: impl FnMut(&[u8]),
-) -> Option<Result<MyStringTableDecodeReport, MyStringTableDecodeError>> {
-    if message_type != STRING_TABLE_REFRESH_MESSAGE {
-        return None;
-    }
-
-    let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-    Some(game.create_string_table(source, cursor, &mut add_log_text))
 }
 
 pub(crate) trait HonorRankPlayerResetContext {
