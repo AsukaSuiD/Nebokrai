@@ -12672,7 +12672,6 @@ impl CGame {
             let mut country_context = WorldCountryExileResultEffects {
                 game: self,
                 globe_setup,
-                format_world_string: None,
             };
             let (country_database, country_database_connection) = context.country_database();
             country_handler
@@ -15064,9 +15063,6 @@ impl CGame {
         goods_war: &mut CGoodsWarMember,
         globe_setup: &GlobeSetupSnapshot,
         mut get_tick: GetTick,
-        world_string: &mut dyn FnMut(&[u8]) -> Vec<u8>,
-        format_world_string:
-            &mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
         refresh_owned_city: &mut dyn FnMut(i32, i32, i32),
         update_player: &mut dyn FnMut(i32),
         faction_master_log_enabled: bool,
@@ -15096,7 +15092,6 @@ impl CGame {
                         attack_city,
                         country_handler: &*country_handler,
                         goods_war: &mut *goods_war,
-                        world_string: &mut *world_string,
                     };
                     organizing.disband_faction(
                         &*self,
@@ -15132,7 +15127,6 @@ impl CGame {
         let base = WorldCountryExileResultEffects {
             game: self,
             globe_setup,
-            format_world_string: Some(format_world_string),
         };
         let mut effects = WorldCountryDemiseEffects {
             base,
@@ -15140,7 +15134,6 @@ impl CGame {
             organizing_parameters,
             attack_city,
             goods_war,
-            world_string,
             refresh_owned_city,
             update_player,
             faction_master_log_enabled,
@@ -15949,8 +15942,6 @@ impl CGame {
                 owners.goods_war,
                 owners.globe_setup,
                 &mut *callbacks.get_tick,
-                &mut *callbacks.world_string_by_id,
-                &mut *callbacks.format_union_world_string,
                 &mut *callbacks.refresh_union_owned_city,
                 &mut *callbacks.update_union_player,
                 callbacks.faction_master_log_enabled,
@@ -18748,8 +18739,6 @@ struct WorldCountryWarEffects<'a> {
 struct WorldCountryExileResultEffects<'a> {
     game: &'a mut CGame,
     globe_setup: &'a GlobeSetupSnapshot,
-    format_world_string:
-        Option<&'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>>,
 }
 
 impl WorldCountryExileResultEffects<'_> {
@@ -18758,10 +18747,7 @@ impl WorldCountryExileResultEffects<'_> {
         string_id: &[u8],
         arguments: &[UnionFormatArgument<'_>],
     ) -> Vec<u8> {
-        match self.format_world_string.as_deref_mut() {
-            Some(format) => format(string_id, arguments),
-            None => format_union_world_string(self.game.get_string_by_id(string_id), arguments),
-        }
+        self.game.format_world_string(string_id, arguments)
     }
 }
 
@@ -18769,8 +18755,6 @@ struct WorldCountryPlayersListEffects<'a> {
     game: &'a CGame,
     organizing: &'a COrganizingCtrl,
     globe_setup: &'a GlobeSetupSnapshot,
-    format_world_string:
-        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
 }
 
 struct WorldCountryDemiseEffects<'a> {
@@ -18779,7 +18763,6 @@ struct WorldCountryDemiseEffects<'a> {
     organizing_parameters: &'a COrganizingParam,
     attack_city: &'a CAttackCitySys,
     goods_war: &'a CGoodsWarMember,
-    world_string: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
     refresh_owned_city: &'a mut dyn FnMut(i32, i32, i32),
     update_player: &'a mut dyn FnMut(i32),
     faction_master_log_enabled: bool,
@@ -18791,9 +18774,6 @@ struct WorldCountryFactionDemiseEffects<'a> {
     game: &'a CGame,
     attack_city: &'a CAttackCitySys,
     goods_war: &'a CGoodsWarMember,
-    world_string: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
-    format_world_string:
-        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
     update_player: &'a mut dyn FnMut(i32),
     country_id: u8,
     king_id: i32,
@@ -18810,7 +18790,6 @@ struct WorldOrganizingDisbandEffects<'a> {
     attack_city: &'a CAttackCitySys,
     country_handler: &'a CCountryHandler,
     goods_war: &'a mut CGoodsWarMember,
-    world_string: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
 }
 
 /// Отдельный immutable transport-view устраняет искусственную зависимость
@@ -18830,8 +18809,6 @@ struct WorldFourNationExploitEffects<'a> {
 struct WorldFourNationCountryFailEffects<'a> {
     game: &'a CGame,
     organizing: &'a COrganizingCtrl,
-    format_world_string:
-        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
 }
 
 impl CountryNewTermContext for WorldCountryExileResultEffects<'_> {
@@ -19104,7 +19081,7 @@ impl CountryPlayersListContext for WorldCountryPlayersListEffects<'_> {
                 CountryExileTextArgument::Signed(value) => UnionFormatArgument::Signed(*value),
             })
             .collect::<Vec<_>>();
-        (self.format_world_string)(string_id, &arguments)
+        self.game.format_world_string(string_id, &arguments)
     }
 
     fn game_server_number_by_player_id(&mut self, player_id: i32) -> i32 {
@@ -19126,7 +19103,7 @@ impl CountryPlayersListContext for WorldCountryPlayersListEffects<'_> {
 
 impl FactionOrganizingInfoContext for WorldCountryFactionDemiseEffects<'_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
-        Some((self.world_string)(string_id))
+        Some(self.game.get_string_by_id(string_id).to_vec())
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -19144,7 +19121,7 @@ impl GoodsWarDeliveryContext for WorldGoodsWarDelivery<'_> {
 
 impl FactionOrganizingInfoContext for WorldOrganizingDisbandEffects<'_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
-        Some((self.world_string)(string_id))
+        Some(self.game.get_string_by_id(string_id).to_vec())
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
@@ -19210,7 +19187,8 @@ impl FactionDemiseContext for WorldCountryFactionDemiseEffects<'_> {
         string_id: &'static [u8],
         value: i32,
     ) -> Vec<u8> {
-        (self.format_world_string)(string_id, &[UnionFormatArgument::Signed(value)])
+        self.game
+            .format_world_string(string_id, &[UnionFormatArgument::Signed(value)])
     }
 
     fn format_demise_change(
@@ -19219,7 +19197,7 @@ impl FactionDemiseContext for WorldCountryFactionDemiseEffects<'_> {
         old_master_name: &[u8],
         new_master_name: &[u8],
     ) -> Vec<u8> {
-        (self.format_world_string)(
+        self.game.format_world_string(
             string_id,
             &[
                 UnionFormatArgument::Text(old_master_name),
@@ -19357,15 +19335,10 @@ impl CountryExileResultContext for WorldCountryDemiseEffects<'_> {
             return Ok(false);
         };
         let game = &*self.base.game;
-        let mut format_world_string = |string_id: &[u8], arguments: &[UnionFormatArgument<'_>]| {
-            format_union_world_string(game.get_string_by_id(string_id), arguments)
-        };
         let mut effects = WorldCountryFactionDemiseEffects {
             game,
             attack_city: self.attack_city,
             goods_war: self.goods_war,
-            world_string: &mut *self.world_string,
-            format_world_string: &mut format_world_string,
             update_player: &mut *self.update_player,
             country_id,
             king_id,
@@ -19476,7 +19449,7 @@ impl FourNationCountryFailContext for WorldFourNationCountryFailEffects<'_> {
             .iter()
             .map(|argument| UnionFormatArgument::Text(argument))
             .collect::<Vec<_>>();
-        (self.format_world_string)(string_id, &arguments)
+        self.game.format_world_string(string_id, &arguments)
     }
 
     fn send_top_info(&mut self, text: &[u8]) -> Result<i32, SendMessageError> {
@@ -20237,7 +20210,6 @@ where
             let base = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             let mut effects = WorldCountryDemiseEffects {
                 base,
@@ -20245,7 +20217,6 @@ where
                 organizing_parameters,
                 attack_city: &*attack_city,
                 goods_war: &*goods_war,
-                world_string: &mut *application_callbacks.world_string,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 update_player,
                 faction_master_log_enabled,
@@ -20271,7 +20242,6 @@ where
             let base = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             let mut effects = WorldCountryDemiseEffects {
                 base,
@@ -20279,7 +20249,6 @@ where
                 organizing_parameters,
                 attack_city: &*attack_city,
                 goods_war: &*goods_war,
-                world_string: &mut *application_callbacks.world_string,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 update_player,
                 faction_master_log_enabled,
@@ -20303,7 +20272,6 @@ where
             let mut effects = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             dispatch_country_info_message(
                 &mut message,
@@ -20324,7 +20292,6 @@ where
                 game: &*game,
                 organizing: &*organizing,
                 globe_setup,
-                format_world_string: &mut *application_callbacks.format_world_string,
             };
             dispatch_country_players_list_message(
                 &mut message,
@@ -20343,7 +20310,6 @@ where
             let mut effects = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             dispatch_country_exile_result_message(
                 &mut message,
@@ -20363,7 +20329,6 @@ where
             let mut effects = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             dispatch_country_silence_request_message(
                 &mut message,
@@ -20383,7 +20348,6 @@ where
             let mut effects = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             dispatch_country_absolve_request_message(
                 &mut message,
@@ -20405,7 +20369,6 @@ where
             let base = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             let mut effects = WorldCountryDemiseEffects {
                 base,
@@ -20413,7 +20376,6 @@ where
                 organizing_parameters,
                 attack_city: &*attack_city,
                 goods_war: &*goods_war,
-                world_string: &mut *application_callbacks.world_string,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 update_player,
                 faction_master_log_enabled,
@@ -20437,7 +20399,6 @@ where
             let mut effects = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             dispatch_country_depose_minister_message(
                 &mut message,
@@ -20457,7 +20418,6 @@ where
             let mut effects = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             dispatch_country_appoint_minister_message(
                 &mut message,
@@ -20477,7 +20437,6 @@ where
             let mut effects = WorldCountryExileResultEffects {
                 game,
                 globe_setup,
-                format_world_string: Some(&mut *application_callbacks.format_world_string),
             };
             dispatch_country_exile_request_message(
                 &mut message,
@@ -20497,7 +20456,6 @@ where
             let mut effects = WorldFourNationCountryFailEffects {
                 game,
                 organizing: &*organizing,
-                format_world_string: &mut *application_callbacks.format_world_string,
             };
             dispatch_four_nation_country_fail_message(
                 &mut message,
@@ -21860,7 +21818,6 @@ where
                 attack_city: &*attack_city,
                 country_handler: &*country_handler,
                 goods_war: &mut *goods_war,
-                world_string: &mut *application_callbacks.world_string,
             };
             dispatch_faction_disband(&mut message, &*game, organizing, &mut effects)
         };
