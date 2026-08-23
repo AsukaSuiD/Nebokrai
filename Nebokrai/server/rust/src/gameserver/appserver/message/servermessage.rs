@@ -37,6 +37,8 @@
 //! WorldServer wire и только после полного decode пишет точный startup log.
 //! Skill list `0x06` очищает и заново публикует composite-key registry из
 //! парного WorldServer wire, затем пишет точный startup log.
+//! Proxy region `0x0F` создаёт отдельный owner, полностью декодирует короткий
+//! proxy wire и map-assignment-ом публикует его до точного startup log.
 //! FourNationWar `0x25` декодирует exact 196-byte setup records и пять rects,
 //! затем проецирует war state и relive rectangles в доступные nation regions.
 //! Script resources `0x0A..0x0D` сохраняют signed lengths, bounded path,
@@ -77,6 +79,7 @@ use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyCompos
 use crate::gameserver::appserver::goods::cgoodsfactory::{
     GoodsFactoryDecodeError, GoodsFactoryDecodeReport,
 };
+use crate::gameserver::appserver::proxyserverregion::{CProxyServerRegion, ProxyRegionDecodeError};
 use crate::gameserver::appserver::skills::skillfactory::{
     SkillFactoryDecodeError, SkillFactoryDecodeReport,
 };
@@ -134,6 +137,7 @@ const FUNCTION_LIST_SELECTOR: i32 = 0x0a;
 const VARIABLE_LIST_SELECTOR: i32 = 0x0b;
 const GENERAL_VARIABLE_SELECTOR: i32 = 0x0c;
 const SCRIPT_FILE_SELECTOR: i32 = 0x0d;
+const PROXY_REGION_SELECTOR: i32 = 0x0f;
 const REGION_SETUP_SELECTOR: i32 = 0x11;
 const ID_INDEX_SELECTOR: i32 = 0x12;
 const HIT_LEVEL_SELECTOR: i32 = 0x14;
@@ -331,6 +335,10 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
         declared_length: i32,
         replaced: bool,
     },
+    ProxyRegion {
+        region_id: i32,
+        replaced: bool,
+    },
     RegionSetup {
         entries: usize,
     },
@@ -407,6 +415,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     LogSystem(LogSystemDecodeError),
     GmList(GmListDecodeError),
     ScriptResource(GameScriptResourceDecodeError),
+    ProxyRegion(ProxyRegionDecodeError),
     RegionSetup(RegionSetupDecodeError),
     IdIndex(GameIdIndexDecodeError),
     HitLevel(HitLevelDecodeError),
@@ -459,6 +468,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::LogSystem(error) => error.fmt(formatter),
             Self::GmList(error) => error.fmt(formatter),
             Self::ScriptResource(error) => error.fmt(formatter),
+            Self::ProxyRegion(error) => error.fmt(formatter),
             Self::RegionSetup(error) => error.fmt(formatter),
             Self::IdIndex(error) => error.fmt(formatter),
             Self::HitLevel(error) => error.fmt(formatter),
@@ -508,6 +518,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::LogSystem(error) => Some(error),
             Self::GmList(error) => Some(error),
             Self::ScriptResource(error) => Some(error),
+            Self::ProxyRegion(error) => Some(error),
             Self::RegionSetup(error) => Some(error),
             Self::IdIndex(error) => Some(error),
             Self::HitLevel(error) => Some(error),
@@ -751,6 +762,19 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
             Some(Ok(GameOwnedStartupSnapshotReport::ScriptFile {
                 path_bytes,
                 declared_length,
+                replaced,
+            }))
+        }
+        PROXY_REGION_SELECTOR => {
+            let mut region = CProxyServerRegion::default();
+            if let Err(error) = region.decord_from_byte_array(source, cursor, true) {
+                return Some(Err(GameOwnedStartupSnapshotError::ProxyRegion(error)));
+            }
+            let region_id = region.get_id();
+            let replaced = game.add_proxy_region(region);
+            add_log_text(b"Add Proxy Region : (%d) %s ...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::ProxyRegion {
+                region_id,
                 replaced,
             }))
         }

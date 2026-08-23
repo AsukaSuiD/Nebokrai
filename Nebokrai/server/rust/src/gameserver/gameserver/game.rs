@@ -54,6 +54,9 @@
 //! lookup-ы без process-global raw pointers.
 //! `CGoodsFactory` аналогично хранит startup selector `0x00`, включая оба
 //! byte-name index-а для последующего container/goods lifecycle.
+//! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
+//! `0x0000AD10` сохраняет map-assignment, а `FindProxyRegion` `0x0000AD30` —
+//! lookup/null. Proxy snapshot `0x0F` публикуется целиком до startup log.
 //! `with_send_state/register_*/attach_*` являются явной assembly-границей
 //! baseline и не снимают их псевдокод. Network setup передаётся отдельной
 //! post-`LoadSetup*` проекцией. Windows thread handles заменены owned Tokio
@@ -86,6 +89,7 @@ use crate::gameserver::appserver::message::sequencestring::{
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::organizingsystem::fournationwarsys::CFourNationWarSys;
 use crate::gameserver::appserver::player::CPlayer;
+use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::servergodsbattleregion::CGodsBattleMgr;
 use crate::gameserver::appserver::shape::{
     MoveCheckCellRegistry, ShapeIdentity, ShapeResolver, ShapeView,
@@ -821,6 +825,7 @@ pub(crate) struct CGame {
     world_reconnect_task: Option<GameReconnectTask>,
     billing_reconnect_task: Option<GameReconnectTask>,
     players: BTreeMap<i32, CPlayer>,
+    proxy_regions: BTreeMap<i32, CProxyServerRegion>,
     team_session_ids: BTreeMap<u32, i32>,
 }
 
@@ -893,6 +898,7 @@ impl CGame {
             world_reconnect_task: None,
             billing_reconnect_task: None,
             players: BTreeMap::new(),
+            proxy_regions: BTreeMap::new(),
             team_session_ids: BTreeMap::new(),
         }
     }
@@ -1136,6 +1142,16 @@ impl CGame {
 
     pub(crate) const fn skill_factory_mut(&mut self) -> &mut CSkillFactory {
         &mut self.skill_factory
+    }
+
+    /// Сохраняет исходный `std::map::operator[] = pointer`: повторный ID
+    /// заменяет опубликованный proxy-owner.
+    pub(crate) fn add_proxy_region(&mut self, region: CProxyServerRegion) -> bool {
+        self.proxy_regions.insert(region.get_id(), region).is_some()
+    }
+
+    pub(crate) fn find_proxy_region(&self, region_id: i32) -> Option<&CProxyServerRegion> {
+        self.proxy_regions.get(&region_id)
     }
 
     pub(crate) const fn thing_setup(&self) -> &CThingSetup {
@@ -2625,34 +2641,6 @@ impl ShapeResolver for CGame {
 // RVA: 0x0000ACF0
 // ADDRESS: 0040acf0
 // PROTOTYPE: void __thiscall AddRegion(long param_1, CServerRegion * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::AddProxyRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:991
-// RVA: 0x0000AD10
-// ADDRESS: 0040ad10
-// PROTOTYPE: void __thiscall AddProxyRegion(long param_1, CProxyServerRegion * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::FindProxyRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:996
-// RVA: 0x0000AD30
-// ADDRESS: 0040ad30
-// PROTOTYPE: CServerRegion * __thiscall FindProxyRegion(long param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

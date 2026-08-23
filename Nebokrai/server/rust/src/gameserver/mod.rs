@@ -32,6 +32,7 @@ pub(crate) mod appserver {
     }
     pub(crate) mod moveshape;
     pub(crate) mod player;
+    pub(crate) mod proxyserverregion;
     pub(crate) mod organizingsystem {
         pub(crate) mod attackcitysys;
         pub(crate) mod fournationwarsys;
