@@ -94,6 +94,12 @@
 //! всегда возвращает `false` независимо от queue result.
 //! Named kick `0x7FC06` использует byte-exact ordered `FindPlayer(char*)`,
 //! ставит тот же close side effect и только затем отвечает WorldServer.
+//! Around-kick `0x7FC07` связывает name lookup, player father-region и
+//! 7×7 `GetShape` scan с consecutive-only `list::unique`, ordered kicks и
+//! итоговым World `0x5FD02`; повреждённые pointer/coordinate facts заменены
+//! typed block outcome без выдуманного успешного ответа. Общий resolver
+//! дополнен owned monster/NPC; любой ещё не owned goods/other registry entry
+//! блокирует scan, чтобы не пропустить более ранний non-player `GetShape`.
 //! Presence feedback `0x7FC08` сохраняет signed-char outcome, локализует
 //! `GS0025/GS0026` с одним byte-string аргументом и отвечает requester-у.
 //! Region-kick `0x7FC0A` связывает `FindRegion`, physical row-major area
@@ -148,6 +154,7 @@ use crate::gameserver::appserver::message::sequencestring::{
     CSequenceRegistry, SequenceRegistryInitializationError,
 };
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
+use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::organizingsystem::fournationwarsys::CFourNationWarSys;
 use crate::gameserver::appserver::player::{
     BattleFairyCombineReport, BattleFairyDeathReport, BattleFairyEquipmentMutationReport,
@@ -163,10 +170,11 @@ use crate::gameserver::appserver::servergodsbattleregion::{
     CGodsBattleMgr, CServerGodsBattleRegion,
 };
 use crate::gameserver::appserver::servernationregion::ServerNationRegion;
-use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::serverregion::{CServerRegion, RegionMembershipBlock};
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::shape::{
-    MoveCheckCellRegistry, ShapeIdentity, ShapeResolver, ShapeView,
+    MoveCheckCellRegistry, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeResolver,
+    ShapeView,
 };
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::gameserver::honorranks::CHonorRanks;
@@ -226,6 +234,8 @@ use crate::setup::tradelist::CTradeList;
 use crate::transport::bind_tcp_ipv4;
 
 const PLAYER_TYPE: i32 = 400;
+const NPC_TYPE: i32 = 500;
+const MONSTER_TYPE: i32 = 600;
 const DEFAULT_SOCKET_TYPE: i32 = 1;
 const WORLD_REGISTRATION: i32 = 0x0005_FA01;
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
@@ -953,6 +963,27 @@ pub(crate) struct GameKickPlayerReport {
     pub(crate) player_id: i32,
     pub(crate) command_result: i32,
     pub(crate) legacy_return: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameKickAroundOutcome {
+    TargetMissing,
+    ServerRegionMissing,
+    CoordinateBlocked(ShapeCoordinateBlock),
+    RegionMissing,
+    UnresolvedShape(ShapeIdentity),
+    LookupBlocked(RegionMembershipBlock),
+    Completed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameKickAroundReport {
+    pub(crate) outcome: GameKickAroundOutcome,
+    pub(crate) target_player_id: Option<i32>,
+    pub(crate) server_region_id: Option<i32>,
+    pub(crate) window_origin: Option<(i32, i32)>,
+    pub(crate) matched_player_ids: Vec<i32>,
+    pub(crate) kicks: Vec<GameKickPlayerReport>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -2562,6 +2593,107 @@ impl CGame {
             .collect()
     }
 
+    /// Exact `OnGMMessage 0x7FC07` до network response: X-major 7×7 scan
+    /// использует region `GetShape`, а `Vec::dedup` повторяет именно
+    /// consecutive-only семантику исходного `std::list::unique`.
+    pub(crate) fn kick_players_around_name(&self, name: &[u8]) -> GameKickAroundReport {
+        let Some(player) = self.find_player_by_name(name) else {
+            return game_kick_around_block(GameKickAroundOutcome::TargetMissing, None, None);
+        };
+        let target_player_id = player.player_id();
+        let Some(server_region_id) = player.server_region_id() else {
+            return game_kick_around_block(
+                GameKickAroundOutcome::ServerRegionMissing,
+                Some(target_player_id),
+                None,
+            );
+        };
+        let tile_x = match player.shape().get_tile_x() {
+            Ok(tile_x) => tile_x,
+            Err(block) => {
+                return game_kick_around_block(
+                    GameKickAroundOutcome::CoordinateBlocked(block),
+                    Some(target_player_id),
+                    Some(server_region_id),
+                );
+            }
+        };
+        let tile_y = match player.shape().get_tile_y() {
+            Ok(tile_y) => tile_y,
+            Err(block) => {
+                return game_kick_around_block(
+                    GameKickAroundOutcome::CoordinateBlocked(block),
+                    Some(target_player_id),
+                    Some(server_region_id),
+                );
+            }
+        };
+        let Some(region) = self.regions.get(&server_region_id) else {
+            return game_kick_around_block(
+                GameKickAroundOutcome::RegionMissing,
+                Some(target_player_id),
+                Some(server_region_id),
+            );
+        };
+        let region = region.base();
+        if let Some(identity) = region
+            .registered_shape_identities()
+            .into_iter()
+            .find(|identity| self.resolve_shape(*identity).is_none())
+        {
+            return game_kick_around_block(
+                GameKickAroundOutcome::UnresolvedShape(identity),
+                Some(target_player_id),
+                Some(server_region_id),
+            );
+        }
+        let window_x = gm_kick_window_origin(tile_x, region.region.width);
+        let window_y = gm_kick_window_origin(tile_y, region.region.height);
+        let (area_width, area_height) = self.area_dimensions();
+        let mut matched_player_ids = Vec::new();
+        let window_end_x = window_x.wrapping_add(7);
+        let window_end_y = window_y.wrapping_add(7);
+        let mut scan_x = window_x;
+        while scan_x < window_end_x {
+            let mut scan_y = window_y;
+            while scan_y < window_end_y {
+                let shape = match region.get_shape(scan_x, scan_y, area_width, area_height, self) {
+                    Ok(shape) => shape,
+                    Err(block) => {
+                        return GameKickAroundReport {
+                            outcome: GameKickAroundOutcome::LookupBlocked(block),
+                            target_player_id: Some(target_player_id),
+                            server_region_id: Some(server_region_id),
+                            window_origin: Some((window_x, window_y)),
+                            matched_player_ids,
+                            kicks: Vec::new(),
+                        };
+                    }
+                };
+                if let Some(shape) = shape.filter(|shape| shape.identity.object_type == PLAYER_TYPE)
+                {
+                    matched_player_ids.push(shape.identity.id);
+                }
+                scan_y = scan_y.wrapping_add(1);
+            }
+            scan_x = scan_x.wrapping_add(1);
+        }
+        matched_player_ids.dedup();
+        let kicks = matched_player_ids
+            .iter()
+            .copied()
+            .map(|player_id| self.kick_player(player_id))
+            .collect();
+        GameKickAroundReport {
+            outcome: GameKickAroundOutcome::Completed,
+            target_player_id: Some(target_player_id),
+            server_region_id: Some(server_region_id),
+            window_origin: Some((window_x, window_y)),
+            matched_player_ids,
+            kicks,
+        }
+    }
+
     /// Exact name lookup + `KickPlayer` side effect для GM `0x7FC06`.
     pub(crate) fn kick_player_by_name(&self, name: &[u8]) -> Option<GameKickPlayerReport> {
         let player_id = self.find_player_by_name(name)?.player_id();
@@ -3572,6 +3704,31 @@ fn add_legacy_c_string(message: &mut crate::nets::basemessage::CBaseMessage, val
     message.add_byte(0);
 }
 
+fn game_kick_around_block(
+    outcome: GameKickAroundOutcome,
+    target_player_id: Option<i32>,
+    server_region_id: Option<i32>,
+) -> GameKickAroundReport {
+    GameKickAroundReport {
+        outcome,
+        target_player_id,
+        server_region_id,
+        window_origin: None,
+        matched_player_ids: Vec::new(),
+        kicks: Vec::new(),
+    }
+}
+
+fn gm_kick_window_origin(tile: i32, extent: i32) -> i32 {
+    if tile.wrapping_add(3) >= extent {
+        extent.wrapping_sub(7)
+    } else if tile.wrapping_sub(3) <= 0 {
+        0
+    } else {
+        tile.wrapping_sub(3)
+    }
+}
+
 fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
     let end = value
         .iter()
@@ -3594,14 +3751,45 @@ fn resolve_first_local_ipv4() -> Option<Ipv4Addr> {
 
 impl ShapeResolver for CGame {
     fn resolve_shape(&self, identity: ShapeIdentity) -> Option<ShapeView> {
-        if identity.object_type != PLAYER_TYPE {
-            return None;
+        match identity.object_type {
+            PLAYER_TYPE => {
+                let player = self.find_player(identity.id)?;
+                let view = player.shape_view()?;
+                (view.identity.object_type == identity.object_type
+                    && view.identity.id == identity.id)
+                    .then_some(view)
+            }
+            MONSTER_TYPE => {
+                let monster = self
+                    .regions
+                    .values()
+                    .find_map(|region| region.base().find_monster_by_id(identity.id))?;
+                let property =
+                    self.find_monster_property_by_origin_name(monster.base_property_key()?)?;
+                shape_view(monster.move_shape().shape(), CMonster::figure(property))
+            }
+            NPC_TYPE => {
+                let npc = self
+                    .regions
+                    .values()
+                    .find_map(|region| region.base().find_npc_by_id(identity.id))?;
+                shape_view(npc.move_shape().shape(), ShapeFigure::default())
+            }
+            _ => None,
         }
-        let player = self.find_player(identity.id)?;
-        let view = player.shape_view()?;
-        (view.identity.object_type == identity.object_type && view.identity.id == identity.id)
-            .then_some(view)
     }
+}
+
+fn shape_view(
+    shape: &crate::gameserver::appserver::shape::CShape,
+    figure: ShapeFigure,
+) -> Option<ShapeView> {
+    Some(ShapeView {
+        identity: shape.identity(),
+        tile_x: shape.get_tile_x().ok()?,
+        tile_y: shape.get_tile_y().ok()?,
+        figure,
+    })
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

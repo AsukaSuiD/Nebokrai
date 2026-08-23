@@ -45,6 +45,9 @@
 //! Message serialization/send остаются явным context-owner-ом; area storage и
 //! deferred queue принадлежат `CServerRegion`. `RefeashBlock` сначала снимает
 //! все block `3`, затем возвращает single-cell block живым `CMoveShape` и NPC.
+//! GM `0x7FC07` использует identity snapshot registry для проверки, что каждый
+//! потенциально более ранний `GetShape` candidate разрешим runtime owner-ом;
+//! неразрешённый goods/other shape блокирует сценарий до ложного player match.
 //! Достигнутые movement commands вызывают здесь именно owner
 //! `CShape::SetTileXY`: region дополняет runtime area facts и передаёт virtual
 //! dispatch, не дублируя tile-center либо `CMoveShape::SetPosXY`.
@@ -1339,6 +1342,44 @@ impl CServerRegion {
         for area in &self.areas {
             self.append_registered_player_ids(area, destination);
         }
+    }
+
+    /// Owned identity snapshot для проверки полноты resolver-а перед
+    /// pointer-sensitive `OnGMMessage 0x7FC07` scan.
+    pub(crate) fn registered_shape_identities(&self) -> Vec<ShapeIdentity> {
+        let mut identities = Vec::with_capacity(
+            self.registry.monsters.len()
+                + self.registry.players.len()
+                + self.registry.npcs.len()
+                + self.registry.goods.len()
+                + self.registry.other_shapes.len(),
+        );
+        identities.extend(self.registry.monsters.iter().map(|id| ShapeIdentity {
+            object_type: MONSTER_TYPE,
+            id: *id,
+            ex_id: CGuid::GUID_INVALID,
+        }));
+        identities.extend(self.registry.players.iter().map(|id| ShapeIdentity {
+            object_type: PLAYER_TYPE,
+            id: *id,
+            ex_id: CGuid::GUID_INVALID,
+        }));
+        identities.extend(self.registry.npcs.iter().map(|id| ShapeIdentity {
+            object_type: NPC_TYPE,
+            id: *id,
+            ex_id: CGuid::GUID_INVALID,
+        }));
+        identities.extend(self.registry.goods.iter().map(|ex_id| ShapeIdentity {
+            object_type: GOODS_TYPE,
+            id: 0,
+            ex_id: *ex_id,
+        }));
+        identities.extend(self.registry.other_shapes.iter().map(|hash| ShapeIdentity {
+            object_type: CBaseObject::calculate_type(*hash),
+            id: CBaseObject::calculate_id(*hash),
+            ex_id: CGuid::GUID_INVALID,
+        }));
+        identities
     }
 
     /// Безопасно заменяет исходный `CArea::m_pFather`: пара принимается только

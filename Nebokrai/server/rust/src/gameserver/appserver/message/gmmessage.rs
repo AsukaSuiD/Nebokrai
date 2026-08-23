@@ -26,6 +26,9 @@
 //! `KickPlayer` только ставит network command и не мутирует region registry.
 //! Named kick `0x7FC06` сохраняет 24-byte GetStr boundary, выполняет kick до
 //! exact World `0x5FF09` response и возвращает исходное имя в обоих outcomes.
+//! Around-kick `0x7FC07` сохраняет 256-byte name, context field, X-major 7×7
+//! scan, consecutive-only unique, ordered kicks и World
+//! `0x5FD02(context,requester,-1,0,GS0030(count))` после side effects.
 //! Presence feedback `0x7FC08` использует signed-char branch, `GS0025/GS0026`
 //! с подтверждённым `%s` и адресный `0xBF806(-1,0,text)`.
 //! Входящий list response `0x5FF15` сохраняет target-player cursor gate и
@@ -36,11 +39,14 @@
 //! расхождение между двумя time-sensitive pass-ами. Непокрытые GM
 //! selectors остаются RAW ниже.
 
-use crate::gameserver::gameserver::game::{CGame, GameKickPlayerReport};
+use crate::gameserver::gameserver::game::{
+    CGame, GameKickAroundOutcome, GameKickAroundReport, GameKickPlayerReport,
+};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const GM_LIST_RESPONSE_MESSAGE: i32 = 0x0005_FF15;
 const GM_KICK_BY_NAME_MESSAGE: i32 = 0x0007_FC06;
+const GM_KICK_AROUND_MESSAGE: i32 = 0x0007_FC07;
 const GM_PRESENCE_FEEDBACK_MESSAGE: i32 = 0x0007_FC08;
 const GM_KICK_OTHERS_MESSAGE: i32 = 0x0007_FC09;
 const GM_KICK_REGION_MESSAGE: i32 = 0x0007_FC0A;
@@ -53,6 +59,7 @@ const GM_COUNTRY_BROADCAST_MESSAGE: i32 = 0x0007_FC13;
 const GM_SET_SILENCE_RESPONSE: i32 = 0x0005_FF0D;
 const GM_QUERY_SILENCE_RESPONSE: i32 = 0x0005_FF10;
 const GM_KICK_BY_NAME_RESPONSE: i32 = 0x0005_FF09;
+const GM_KICK_AROUND_RESPONSE: i32 = 0x0005_FD02;
 const PLAYER_SYSTEM_MESSAGE: i32 = 0x000B_F806;
 const PLAYER_ANNOUNCEMENT_MESSAGE: i32 = 0x000B_F804;
 const GM_LEGACY_TEXT_LIMIT: usize = 0x100;
@@ -71,6 +78,8 @@ pub(crate) enum GmMessageError {
     MissingListReservedField,
     MissingListCount,
     MissingKickPlayerName,
+    MissingKickAroundPlayerName,
+    MissingKickAroundContext,
     MissingPresenceOutcome,
     MissingPresencePlayerName,
     MissingKickRegionId,
@@ -168,6 +177,14 @@ pub(crate) enum GmMessageReport {
         kick: Option<GameKickPlayerReport>,
         delivery: Result<i32, SendMessageError>,
     },
+    KickAround {
+        requester_id: i32,
+        player_name: Vec<u8>,
+        response_context: i32,
+        traversal: GameKickAroundReport,
+        formatted_text: Option<Vec<u8>>,
+        delivery: Option<Result<i32, SendMessageError>>,
+    },
     PresenceFeedback {
         requester_id: i32,
         player_name: Vec<u8>,
@@ -199,6 +216,7 @@ pub(crate) fn dispatch_gm_message(
         message_type,
         GM_LIST_RESPONSE_MESSAGE
             | GM_KICK_BY_NAME_MESSAGE
+            | GM_KICK_AROUND_MESSAGE
             | GM_PRESENCE_FEEDBACK_MESSAGE
             | GM_KICK_OTHERS_MESSAGE
             | GM_KICK_REGION_MESSAGE
@@ -276,6 +294,50 @@ pub(crate) fn dispatch_gm_message(
             player_name,
             kick,
             delivery,
+        }));
+    }
+
+    if message_type == GM_KICK_AROUND_MESSAGE {
+        let Some(player_name) = message.base_mut().get_str_bytes(GM_LEGACY_TEXT_LIMIT) else {
+            return Some(Err(GmMessageError::MissingKickAroundPlayerName));
+        };
+        let Some(response_context) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingKickAroundContext));
+        };
+        let traversal = game.kick_players_around_name(&player_name);
+        if traversal.outcome != GameKickAroundOutcome::Completed {
+            return Some(Ok(GmMessageReport::KickAround {
+                requester_id,
+                player_name,
+                response_context,
+                traversal,
+                formatted_text: None,
+                delivery: None,
+            }));
+        }
+        let formatted_text = match format_gm_template(
+            game.get_string_by_id(b"GS0030"),
+            &[GmFormatArgument::Signed(
+                traversal.matched_player_ids.len() as i32
+            )],
+        ) {
+            Ok(formatted) => formatted,
+            Err(()) => return Some(Err(GmMessageError::UnsupportedFeedbackFormat)),
+        };
+        let mut response = CMessage::new(GM_KICK_AROUND_RESPONSE);
+        response.add_long(response_context);
+        response.add_long(requester_id);
+        response.add_long(-1);
+        response.add_long(0);
+        add_legacy_c_string(&mut response, &formatted_text);
+        let delivery = response.send(game, false);
+        return Some(Ok(GmMessageReport::KickAround {
+            requester_id,
+            player_name,
+            response_context,
+            traversal,
+            formatted_text: Some(formatted_text),
+            delivery: Some(delivery),
         }));
     }
 
