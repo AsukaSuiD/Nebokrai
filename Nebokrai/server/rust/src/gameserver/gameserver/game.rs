@@ -54,6 +54,7 @@ use std::time::Duration;
 
 use rustix::system::uname;
 
+use crate::gameserver::appserver::goods::cbattlefairyproperty::CBattleFairyProperty;
 use crate::gameserver::appserver::goodswarmember::CGoodsWarMember;
 use crate::gameserver::appserver::message::sequencestring::{
     CSequenceRegistry, SequenceRegistryInitializationError,
@@ -719,6 +720,7 @@ pub(crate) struct CGame {
     precious_box_conf: PreciousBoxConf,
     fairy_exp_conf: CFairyExpConf,
     battle_fairy_exp_config: CBattleFairyExpConfig,
+    battle_fairy_property: CBattleFairyProperty,
     synthesis: CSynthesis,
     new_skill_monster_conf: NewSkillMonsterConf,
     goods_destroy_setup: GoodsDestroySetup,
@@ -763,6 +765,7 @@ impl CGame {
             precious_box_conf: PreciousBoxConf::default(),
             fairy_exp_conf: CFairyExpConf::default(),
             battle_fairy_exp_config: CBattleFairyExpConfig::default(),
+            battle_fairy_property: CBattleFairyProperty::default(),
             synthesis: CSynthesis::default(),
             new_skill_monster_conf: NewSkillMonsterConf::default(),
             goods_destroy_setup: GoodsDestroySetup::default(),
@@ -1033,6 +1036,10 @@ impl CGame {
 
     pub(crate) const fn battle_fairy_exp_config_mut(&mut self) -> &mut CBattleFairyExpConfig {
         &mut self.battle_fairy_exp_config
+    }
+
+    pub(crate) const fn battle_fairy_property_mut(&mut self) -> &mut CBattleFairyProperty {
+        &mut self.battle_fairy_property
     }
 
     pub(crate) const fn synthesis_mut(&mut self) -> &mut CSynthesis {

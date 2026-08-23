@@ -13,6 +13,9 @@ pub(crate) mod appserver {
         pub(crate) mod countrywarsys;
     }
     pub(crate) mod goodswarmember;
+    pub(crate) mod goods {
+        pub(crate) mod cbattlefairyproperty;
+    }
     pub(crate) mod message {
         pub(crate) mod countrymessage;
         pub(crate) mod organsysmessage;

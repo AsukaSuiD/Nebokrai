@@ -35,6 +35,7 @@ use super::super::organizingsystem::attackcitysys::{
 use super::super::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarDecodeError, VillageWarRegionContext,
 };
+use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyComposeDecodeError;
 use crate::gameserver::gameserver::game::{CGame, GameNetworkInitializationError};
 use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
 use crate::nets::netserver::message::{CMessage, SendMessageError};
@@ -81,6 +82,7 @@ const CHANGE_BODY_SELECTOR: i32 = 0x24;
 const HONOR_ELIMINATE_SELECTOR: i32 = 0x26;
 const DA_KONG_SELECTOR: i32 = 0x2b;
 const BATTLE_FAIRY_EXP_SELECTOR: i32 = 0x2c;
+const BATTLE_FAIRY_COMBINE_SELECTOR: i32 = 0x2d;
 const THING_SETUP_SELECTOR: i32 = 0x36;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -200,6 +202,9 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     },
     DaKong(DaKongDecodeReport),
     BattleFairyExp(BattleFairyExpDecodeReport),
+    BattleFairyCombine {
+        entries: usize,
+    },
     ThingSetup {
         entries: usize,
     },
@@ -228,6 +233,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     HonorEliminate(HonorEliminateDecodeError),
     DaKong(DaKongDecodeError),
     BattleFairyExp(BattleFairyExpDecodeError),
+    BattleFairyCombine(BattleFairyComposeDecodeError),
     ThingSetup(ThingSetupCodecError),
 }
 
@@ -260,6 +266,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::HonorEliminate(error) => error.fmt(formatter),
             Self::DaKong(error) => error.fmt(formatter),
             Self::BattleFairyExp(error) => error.fmt(formatter),
+            Self::BattleFairyCombine(error) => error.fmt(formatter),
             Self::ThingSetup(error) => error.fmt(formatter),
         }
     }
@@ -289,6 +296,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::HonorEliminate(error) => Some(error),
             Self::DaKong(error) => Some(error),
             Self::BattleFairyExp(error) => Some(error),
+            Self::BattleFairyCombine(error) => Some(error),
             Self::ThingSetup(error) => Some(error),
         }
     }
@@ -540,6 +548,23 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             };
             add_log_text(b"Initial SI_BATLLE_FAIRY_CONF...ok\xA3\xA1");
             Some(Ok(GameOwnedStartupSnapshotReport::BattleFairyExp(report)))
+        }
+        BATTLE_FAIRY_COMBINE_SELECTOR => {
+            let entries = match game
+                .battle_fairy_property_mut()
+                .decord_byte_array_combine(source, cursor)
+            {
+                Ok(entries) => entries,
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::BattleFairyCombine(
+                        error,
+                    )));
+                }
+            };
+            add_log_text(b"Initial SI_BATLLE_FAIRY_COMBINE...ok!");
+            Some(Ok(GameOwnedStartupSnapshotReport::BattleFairyCombine {
+                entries,
+            }))
         }
         THING_SETUP_SELECTOR => {
             if let Err(error) = game
