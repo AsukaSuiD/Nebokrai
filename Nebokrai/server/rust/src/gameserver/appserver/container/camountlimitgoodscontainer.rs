@@ -1,6 +1,157 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Storage/query/lock core `CAmountLimitGoodsContainer` GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
+//! `server/gameserver/appserver/container/camountlimitgoodscontainer.cpp`.
+//! Legacy `stdext::hash_map` хранит GUID→owned `CGoods`, но его traversal идёт
+//! по внутреннему list в insertion order. `Vec<CGoods>` сохраняет этот порядок;
+//! duplicate GUID заменяет value на прежней позиции. Линейный GUID lookup
+//! заменяет хеш-индекс как зрелая стандартная реализация при том же результате.
+//!
+//! Constructor RVA `0x000FCD60` задаёт limit `1`, пустые goods/locks и
+//! регистрирует собственный listener-subobject. В Rust его OnObjectAdded/
+//! OnObjectRemoved structurally принадлежат concrete owner-у и не требуют
+//! самоссылочного pointer handle. Read-only traversal, lock/unlock и lookup
+//! перенесены буквально; locked goods скрыты от public find/get. Add/remove,
+//! listener messages, player AI tree, codec и mode-dependent release ниже
+//! остаются RAW до замыкания соседних owners.
+
+use super::cgoodscontainer::CGoodsContainer;
+use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::public::guid::CGuid;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CAmountLimitGoodsContainer {
+    base: CGoodsContainer,
+    goods: Vec<CGoods>,
+    locked_goods: Vec<CGuid>,
+    goods_amount_limit: u32,
+}
+
+impl Default for CAmountLimitGoodsContainer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CAmountLimitGoodsContainer {
+    pub(crate) const fn new() -> Self {
+        Self {
+            base: CGoodsContainer::new(),
+            goods: Vec::new(),
+            locked_goods: Vec::new(),
+            goods_amount_limit: 1,
+        }
+    }
+
+    pub(crate) const fn base(&self) -> &CGoodsContainer {
+        &self.base
+    }
+
+    pub(crate) const fn base_mut(&mut self) -> &mut CGoodsContainer {
+        &mut self.base
+    }
+
+    pub(crate) const fn set_owner(&mut self, owner_type: i32, owner_id: i32) {
+        self.base.set_owner(owner_type, owner_id);
+    }
+
+    pub(crate) const fn set_goods_amount_limit(&mut self, limit: u32) {
+        self.goods_amount_limit = limit;
+    }
+
+    pub(crate) const fn goods_amount_limit(&self) -> u32 {
+        self.goods_amount_limit
+    }
+
+    pub(crate) fn goods_amount(&self, factory: &CGoodsFactory) -> u32 {
+        self.goods.iter().fold(0u32, |amount, goods| {
+            amount.wrapping_add(u32::from(
+                factory
+                    .query_goods_base_properties(goods.base_properties_index())
+                    .is_some(),
+            ))
+        })
+    }
+
+    pub(crate) fn is_full(&self, factory: &CGoodsFactory) -> bool {
+        self.goods_amount_limit <= self.goods_amount(factory)
+    }
+
+    pub(crate) fn is_locked(&self, ex_id: CGuid) -> bool {
+        self.locked_goods.contains(&ex_id)
+    }
+
+    pub(crate) fn lock(&mut self, ex_id: CGuid) -> bool {
+        if self.locked_goods.contains(&ex_id) {
+            return false;
+        }
+        self.locked_goods.push(ex_id);
+        true
+    }
+
+    pub(crate) fn unlock(&mut self, ex_id: CGuid) -> bool {
+        let Some(index) = self.locked_goods.iter().position(|locked| *locked == ex_id) else {
+            return false;
+        };
+        self.locked_goods.remove(index);
+        true
+    }
+
+    pub(crate) fn find(&self, ex_id: CGuid) -> Option<&CGoods> {
+        if self.locked_goods.contains(&ex_id) {
+            return None;
+        }
+        self.goods
+            .iter()
+            .find(|goods| goods.identity().ex_id == ex_id)
+    }
+
+    pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
+        if self.goods_amount_limit <= position {
+            return None;
+        }
+        self.goods
+            .get(position as usize)
+            .filter(|goods| !self.is_locked(goods.identity().ex_id))
+    }
+
+    pub(crate) fn get_first_goods(&self, base_properties_index: u32) -> Option<&CGoods> {
+        self.goods.iter().find(|goods| {
+            goods.base_properties_index() == base_properties_index
+                && !self.is_locked(goods.identity().ex_id)
+        })
+    }
+
+    pub(crate) fn get_goods_by_base_properties(&self, base_properties_index: u32) -> Vec<&CGoods> {
+        self.goods
+            .iter()
+            .filter(|goods| {
+                goods.base_properties_index() == base_properties_index
+                    && !self.is_locked(goods.identity().ex_id)
+            })
+            .collect()
+    }
+
+    pub(crate) fn query_goods_position(&self, ex_id: CGuid) -> Option<u32> {
+        self.goods
+            .iter()
+            .position(|goods| goods.identity().ex_id == ex_id)
+            .map(|position| position as u32)
+    }
+
+    pub(crate) fn is_goods_existed(&self, base_properties_index: u32) -> bool {
+        self.goods
+            .iter()
+            .any(|goods| goods.base_properties_index() == base_properties_index)
+    }
+
+    pub(crate) fn contents_weight(&self, factory: &CGoodsFactory) -> u32 {
+        self.goods.iter().fold(0u32, |weight, goods| {
+            weight.wrapping_add(goods.weight(factory))
+        })
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -37,118 +188,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::IsFull
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:342
-// RVA: 0x000FC5A0
-// ADDRESS: 004fc5a0
-// PROTOTYPE: int __thiscall IsFull(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::SetOwner
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:467
-// RVA: 0x000FC5D0
-// ADDRESS: 004fc5d0
-// PROTOTYPE: void __thiscall SetOwner(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:560
-// RVA: 0x000FC5E0
-// ADDRESS: 004fc5e0
-// PROTOTYPE: CBaseObject * __thiscall Remove(CBaseObject * param_1, void * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:565
-// RVA: 0x000FC5F0
-// ADDRESS: 004fc5f0
-// PROTOTYPE: CBaseObject * __thiscall Remove(long param_1, CGUID * param_2, void * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:570
-// RVA: 0x000FC600
-// ADDRESS: 004fc600
-// PROTOTYPE: CBaseObject * __thiscall Find(CBaseObject * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:575
-// RVA: 0x000FC610
-// ADDRESS: 004fc610
-// PROTOTYPE: CBaseObject * __thiscall Find(long param_1, CGUID * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:619
-// RVA: 0x000FC620
-// ADDRESS: 004fc620
-// PROTOTYPE: CBaseObject * __thiscall Remove(ulong param_1, ulong param_2, void * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::IsLocked
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:417
-// RVA: 0x000FC630
-// ADDRESS: 004fc630
-// PROTOTYPE: int __thiscall IsLocked(CGoods * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::TraversingContainer
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -157,48 +196,6 @@
 // RVA: 0x000FC680
 // ADDRESS: 004fc680
 // PROTOTYPE: void __thiscall TraversingContainer(CContainerListener * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::GetContentsWeight
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:166
-// RVA: 0x000FC6B0
-// ADDRESS: 004fc6b0
-// PROTOTYPE: ulong __thiscall GetContentsWeight(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::GetGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:183
-// RVA: 0x000FC6E0
-// ADDRESS: 004fc6e0
-// PROTOTYPE: CGoods * __thiscall GetGoods(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::GetTheFirstGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:230
-// RVA: 0x000FC730
-// ADDRESS: 004fc730
-// PROTOTYPE: CGoods * __thiscall GetTheFirstGoods(ulong param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -219,20 +216,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::IsGoodsExisted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:277
-// RVA: 0x000FC7D0
-// ADDRESS: 004fc7d0
-// PROTOTYPE: int __thiscall IsGoodsExisted(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::AI
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -241,34 +224,6 @@
 // RVA: 0x000FC820
 // ADDRESS: 004fc820
 // PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::QueryGoodsPosition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:475
-// RVA: 0x000FC850
-// ADDRESS: 004fc850
-// PROTOTYPE: int __thiscall QueryGoodsPosition(CGUID * param_1, ulong * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::GetGoodsAmount
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:540
-// RVA: 0x000FC8A0
-// ADDRESS: 004fc8a0
-// PROTOTYPE: ulong __thiscall GetGoodsAmount(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -289,20 +244,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:370
-// RVA: 0x000FC940
-// ADDRESS: 004fc940
-// PROTOTYPE: CBaseObject * __thiscall Find(CGUID * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::Remove
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -311,62 +252,6 @@
 // RVA: 0x000FC980
 // ADDRESS: 004fc980
 // PROTOTYPE: CBaseObject * __thiscall Remove(CGUID * param_1, void * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::Unlock
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:313
-// RVA: 0x000FCA30
-// ADDRESS: 004fca30
-// PROTOTYPE: int __thiscall Unlock(CGoods * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::GetGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:211
-// RVA: 0x000FCC90
-// ADDRESS: 004fcc90
-// PROTOTYPE: void __thiscall GetGoods(ulong param_1, vector<CGoods*,std::allocator<CGoods*>_> param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::Lock
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:296
-// RVA: 0x000FCD20
-// ADDRESS: 004fcd20
-// PROTOTYPE: int __thiscall Lock(CGoods * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::CAmountLimitGoodsContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:19
-// RVA: 0x000FCD60
-// ADDRESS: 004fcd60
-// PROTOTYPE: undefined __thiscall CAmountLimitGoodsContainer(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -429,20 +314,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CAmountLimitGoodsContainer::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\camountlimitgoodscontainer.cpp:444
-// RVA: 0x000FD130
-// ADDRESS: 004fd130
-// PROTOTYPE: int __thiscall Add(ulong param_1, CGoods * param_2, tagPreviousContainer * param_3, void * param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CAmountLimitGoodsContainer::Unserialize
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -483,6 +354,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // COMPONENT_VARIANT_END: GameServer
