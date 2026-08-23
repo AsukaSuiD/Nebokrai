@@ -118,6 +118,9 @@
 //! Language table проходит тот же server dispatcher как startup `0x2F` и
 //! runtime `0x7F807`: обе ветви очищают один `CGame` owner, сохраняют partial
 //! decode/error, точный cursor и ordered log-effect в process report.
+//! Запросы числа игроков `0x7F809/0x7F80B` читают canonical player map и
+//! публикуют World responses `0x5FA0A/0x5FA0C`; первая ветвь сохраняет ранний
+//! nullable-client guard, вторая доходит до обычной nullable send-семантики.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`

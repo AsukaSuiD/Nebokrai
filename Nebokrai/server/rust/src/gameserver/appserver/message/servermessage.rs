@@ -146,6 +146,10 @@ use crate::setup::tradelist::TradeListDecodeError;
 
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
 const SERVER_STARTUP_MESSAGE: i32 = 0x0007_F801;
+const PLAYER_COUNT_IF_WORLD_CONNECTED_MESSAGE: i32 = 0x0007_F809;
+const PLAYER_COUNT_MESSAGE: i32 = 0x0007_F80B;
+const PLAYER_COUNT_IF_WORLD_CONNECTED_RESPONSE: i32 = 0x0005_FA0A;
+const PLAYER_COUNT_RESPONSE: i32 = 0x0005_FA0C;
 const CLIENT_SERVER_START_SELECTOR: i32 = 0x3b;
 const GOODS_LIST_SELECTOR: i32 = 0x00;
 const PLAYER_LIST_SELECTOR: i32 = 0x01;
@@ -249,10 +253,30 @@ pub(crate) struct GameStringTableMessageReport {
     pub(crate) log_effects: Vec<Vec<u8>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GamePlayerCountResponseKind {
+    WorldConnected,
+    Unconditional,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GamePlayerCountResponseOutcome {
+    MissingWorldClient,
+    Sent(Result<i32, SendMessageError>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerCountResponseReport {
+    pub(crate) kind: GamePlayerCountResponseKind,
+    pub(crate) player_count: Option<u32>,
+    pub(crate) outcome: GamePlayerCountResponseOutcome,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageReport {
     ClientServerStart(GameClientServerStartReport),
     StringTable(GameStringTableMessageReport),
+    PlayerCount(GamePlayerCountResponseReport),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -275,6 +299,9 @@ pub(crate) fn dispatch_server_message(
             game,
             GameStringTableSource::RuntimeRefresh,
         ));
+    }
+    if let Some(report) = dispatch_player_count_message(message.message_type(), game) {
+        return Some(Ok(GameServerMessageReport::PlayerCount(report)));
     }
     if message.message_type() != SERVER_STARTUP_MESSAGE {
         return None;
@@ -314,6 +341,41 @@ pub(crate) fn dispatch_server_message(
         }
         _ => None,
     }
+}
+
+fn dispatch_player_count_message(
+    message_type: i32,
+    game: &CGame,
+) -> Option<GamePlayerCountResponseReport> {
+    let (kind, response_type, requires_world_client) = match message_type {
+        PLAYER_COUNT_IF_WORLD_CONNECTED_MESSAGE => (
+            GamePlayerCountResponseKind::WorldConnected,
+            PLAYER_COUNT_IF_WORLD_CONNECTED_RESPONSE,
+            true,
+        ),
+        PLAYER_COUNT_MESSAGE => (
+            GamePlayerCountResponseKind::Unconditional,
+            PLAYER_COUNT_RESPONSE,
+            false,
+        ),
+        _ => return None,
+    };
+    if requires_world_client && game.world_client().is_none() {
+        return Some(GamePlayerCountResponseReport {
+            kind,
+            player_count: None,
+            outcome: GamePlayerCountResponseOutcome::MissingWorldClient,
+        });
+    }
+
+    let player_count = game.player_count();
+    let mut response = CMessage::new(response_type);
+    response.add_ulong(player_count);
+    Some(GamePlayerCountResponseReport {
+        kind,
+        player_count: Some(player_count),
+        outcome: GamePlayerCountResponseOutcome::Sent(response.send(game, false)),
+    })
 }
 
 fn dispatch_string_table_message(
