@@ -161,6 +161,12 @@ impl CGoods {
         self.addon_properties.push(property);
     }
 
+    /// Prefix `CopyAddonProperties`; fairy reload остаётся у незамкнутого
+    /// suffix-owner-а и потому не скрывается этим именем.
+    pub(crate) fn copy_addon_properties_core_from(&mut self, source: &Self) {
+        self.addon_properties.clone_from(&source.addon_properties);
+    }
+
     pub(crate) fn query_attribute(&self, property_type: i32) -> bool {
         self.addon_properties
             .iter()
