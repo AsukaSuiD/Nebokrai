@@ -96,6 +96,8 @@
 //! ставит тот же close side effect и только затем отвечает WorldServer.
 //! Presence feedback `0x7FC08` сохраняет signed-char outcome, локализует
 //! `GS0025/GS0026` с одним byte-string аргументом и отвечает requester-у.
+//! Region-kick `0x7FC0A` связывает `FindRegion`, physical row-major area
+//! registry и ordered `QuitClientByMapID`, исключая requester без дедупликации.
 //! Входящий `0x5FF15` проверяет target player до чтения остатка payload и
 //! публикует каждую list-строку отдельным адресным system message.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
@@ -2536,6 +2538,25 @@ impl CGame {
         self.players
             .keys()
             .copied()
+            .filter(|player_id| *player_id != preserved_player_id)
+            .map(|player_id| self.kick_player(player_id))
+            .collect()
+    }
+
+    /// Exact `OnGMMessage 0x7FC0A`: region последовательно обходит все area,
+    /// а найденные `CPlayer` передаются в `KickPlayer` в исходном порядке.
+    pub(crate) fn kick_players_in_region_except(
+        &self,
+        region_id: i32,
+        preserved_player_id: i32,
+    ) -> Vec<GameKickPlayerReport> {
+        let Some(region) = self.regions.get(&region_id) else {
+            return Vec::new();
+        };
+        let mut player_ids = Vec::new();
+        region.base().find_all_player_ids(&mut player_ids);
+        player_ids
+            .into_iter()
             .filter(|player_id| *player_id != preserved_player_id)
             .map(|player_id| self.kick_player(player_id))
             .collect()

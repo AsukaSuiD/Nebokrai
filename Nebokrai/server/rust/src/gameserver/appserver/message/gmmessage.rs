@@ -2,8 +2,8 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/gmmessage.cpp` подтверждают
-//! ветви `0x5FF15`, `0x7FC06`, `0x7FC08`, `0x7FC09`, `0x7FC0B..0x7FC0F` и
-//! `0x7FC13`: requester ID читается до switch,
+//! ветви `0x5FF15`, `0x7FC06`, `0x7FC08..0x7FC0F` и `0x7FC13`: requester ID
+//! читается до switch,
 //! silence duration нормализуется к минимуму `1`, player map
 //! обходится дважды в signed ID-order, а ответы `0x5FF0D/0x5FF10`
 //! уходят WorldServer. Адресный `0x7FC0F` сохраняет length guards,
@@ -19,6 +19,11 @@
 //! signed player ID-order и отдельный `SendToPlayer` для каждого адресата.
 //! Mass-kick `0x7FC09` оставляет requester и ставит `QuitClientByMapID` всем
 //! остальным canonical player ID в исходном ordered map-pass.
+//! Region-kick `0x7FC0A` обходит physical row-major area storage, сохраняет
+//! порядок и повторы `FindShapes(400)`, оставляет requester и ставит тот же
+//! `QuitClientByMapID` каждому найденному player ID. Owned `Vec` снимает общий
+//! ID-snapshot перед queue pass; это не меняет наблюдаемый порядок, потому что
+//! `KickPlayer` только ставит network command и не мутирует region registry.
 //! Named kick `0x7FC06` сохраняет 24-byte GetStr boundary, выполняет kick до
 //! exact World `0x5FF09` response и возвращает исходное имя в обоих outcomes.
 //! Presence feedback `0x7FC08` использует signed-char branch, `GS0025/GS0026`
@@ -38,6 +43,7 @@ const GM_LIST_RESPONSE_MESSAGE: i32 = 0x0005_FF15;
 const GM_KICK_BY_NAME_MESSAGE: i32 = 0x0007_FC06;
 const GM_PRESENCE_FEEDBACK_MESSAGE: i32 = 0x0007_FC08;
 const GM_KICK_OTHERS_MESSAGE: i32 = 0x0007_FC09;
+const GM_KICK_REGION_MESSAGE: i32 = 0x0007_FC0A;
 const GM_SET_SILENCE_MESSAGE: i32 = 0x0007_FC0B;
 const GM_REQUESTER_FEEDBACK_MESSAGE: i32 = 0x0007_FC0C;
 const GM_BROADCAST_MESSAGE: i32 = 0x0007_FC0D;
@@ -67,6 +73,7 @@ pub(crate) enum GmMessageError {
     MissingKickPlayerName,
     MissingPresenceOutcome,
     MissingPresencePlayerName,
+    MissingKickRegionId,
     MissingPlayerName,
     MissingDuration,
     MissingFeedbackPlayerName,
@@ -149,6 +156,12 @@ pub(crate) enum GmMessageReport {
         requester_id: i32,
         kicks: Vec<GameKickPlayerReport>,
     },
+    KickRegion {
+        requester_id: i32,
+        region_id: i32,
+        region_found: bool,
+        kicks: Vec<GameKickPlayerReport>,
+    },
     KickByName {
         requester_id: i32,
         player_name: Vec<u8>,
@@ -188,6 +201,7 @@ pub(crate) fn dispatch_gm_message(
             | GM_KICK_BY_NAME_MESSAGE
             | GM_PRESENCE_FEEDBACK_MESSAGE
             | GM_KICK_OTHERS_MESSAGE
+            | GM_KICK_REGION_MESSAGE
             | GM_SET_SILENCE_MESSAGE
             | GM_REQUESTER_FEEDBACK_MESSAGE
             | GM_BROADCAST_MESSAGE
@@ -303,6 +317,19 @@ pub(crate) fn dispatch_gm_message(
         return Some(Ok(GmMessageReport::KickOthers {
             requester_id,
             kicks: game.kick_players_except(requester_id),
+        }));
+    }
+
+    if message_type == GM_KICK_REGION_MESSAGE {
+        let Some(region_id) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingKickRegionId));
+        };
+        let region_found = game.find_region(region_id).is_some();
+        return Some(Ok(GmMessageReport::KickRegion {
+            requester_id,
+            region_id,
+            region_found,
+            kicks: game.kick_players_in_region_except(region_id, requester_id),
         }));
     }
 
