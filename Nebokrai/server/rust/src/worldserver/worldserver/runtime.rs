@@ -18,7 +18,7 @@ use chrono::{Datelike, Timelike};
 
 use crate::dbaccess::worlddb::dbgoods::TiberiusDbGoods;
 use crate::dbaccess::worlddb::dbcountry::TiberiusDbCountry;
-use crate::dbaccess::worlddb::dbmisc::TiberiusDbMiscDatabase;
+use crate::dbaccess::worlddb::dbmisc::{CDbMisc, TiberiusDbMiscDatabase};
 use crate::dbaccess::worlddb::largess::TiberiusLargess;
 use crate::dbaccess::worlddb::rsenemyfactions::TiberiusRsEnemyFactions;
 use crate::dbaccess::worlddb::rsfaction::TiberiusRsFaction;
@@ -229,6 +229,8 @@ pub(crate) struct WorldProcessDomainOwners {
     pub(crate) honor_ranks: CHonorRanks,
     pub(crate) increment_log: CIncrementLog,
     pub(crate) auction_log: CAuctionLog,
+    /// Единственные входная/выходная FIFO аукционного DB-конвейера.
+    pub(crate) db_misc: CDbMisc,
     pub(crate) log: WorldLogTextOwner,
 }
 
@@ -257,6 +259,7 @@ impl WorldProcessDomainOwners {
             honor_ranks: Default::default(),
             increment_log: CIncrementLog::new(),
             auction_log: Default::default(),
+            db_misc: CDbMisc::with_empty_queues(),
             log: Default::default(),
         }
     }
@@ -610,7 +613,16 @@ impl WorldGameInitContext for WorldProcessInitContext {
                 self.region = Some(TiberiusRsRegion::new(settings));
             }
             WorldGameDatabaseOwner::DbMisc => {
-                self.db_misc = Some(TiberiusDbMiscDatabase::new(&settings));
+                let mut database = TiberiusDbMiscDatabase::new(&settings);
+                if let Err(error) = database.initialize_normal_connection().await {
+                    // Конструктор старого CDbMisc также сохранял owner после
+                    // неуспешного CreateNormalCn: следующий MainLoop batch
+                    // повторял reconnect через тот же контекст.
+                    eprintln!(
+                        "WorldServer: начальное соединение аукционного DB-owner-а не открыто: {error:?}"
+                    );
+                }
+                self.db_misc = Some(database);
             }
             WorldGameDatabaseOwner::DbCountry => {
                 self.country = Some(TiberiusDbCountry::default());

@@ -1871,6 +1871,18 @@ impl TiberiusDbMiscDatabase {
             normal_connection: None,
         }
     }
+
+    /// Открывает исходное `m_NormalCn` в позиции создания process-owner-а.
+    ///
+    /// `CDbMisc` не владеет TDS-клиентом: очередь остаётся доменным owner-ом,
+    /// а соединение живёт в process DB-контексте и затем переиспользуется всеми
+    /// последовательными MainLoop batch-ами.
+    pub(crate) async fn initialize_normal_connection(
+        &mut self,
+    ) -> Result<(), AuctionWriteFailure> {
+        self.normal_connection = Some(self.writer.create_normal_connection().await?);
+        Ok(())
+    }
 }
 
 /// Диагностика concrete Tiberius bridge без потери типа отказавшей операции.
