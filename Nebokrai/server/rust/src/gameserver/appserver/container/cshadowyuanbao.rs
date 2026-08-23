@@ -1,6 +1,20 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! YuanBao-специализация однослотовой currency shadow GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
+//! `server/gameserver/appserver/container/cshadowyuanbao.cpp`. Собственные
+//! executable отличия от `CShadowWallet` ограничены catalog
+//! `YUANBAO` и source extend `5`; storage, partial-mutation order и listener
+//! callbacks переиспользуют общий typed adapter. Нижний pseudocode
+//! оставлен как первичная документация.
+
+use super::cshadowwallet::{CShadowCurrencyContainer, ShadowCurrencyKind};
+use super::cyuanbao::YuanBaoCurrency;
+
+impl ShadowCurrencyKind for YuanBaoCurrency {
+    const SOURCE_CONTAINER_EXTEND_ID: i32 = 5;
+}
+
+pub(crate) type CShadowYuanBao = CShadowCurrencyContainer<YuanBaoCurrency>;
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -63,8 +77,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer
