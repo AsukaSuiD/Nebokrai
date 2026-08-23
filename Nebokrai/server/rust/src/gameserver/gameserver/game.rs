@@ -66,6 +66,13 @@
 //! reads, refresh/watch gates и wrapping pacing. Ещё не материализованные
 //! concrete owner-ы подключаются через обязательный runtime trait; message
 //! dispatch уже исполняется живым `CGame`.
+//! `Release` сохраняет player-save/catch, city-save, registry/script/factory,
+//! network и singleton teardown order; Rust `clear/take/Drop` заменяет manual
+//! delete, а ещё внешние process-global owners вызываются typed runtime-ом.
+//! Неопределённый security-cookie-derived int не объявляется результатом.
+//! `GameThreadFunc` связан с достигнутыми `Init`, повторным `MainLoop` и
+//! безусловным `Release`; COM, exit-event и window-close заменены platform
+//! callbacks до появления конкретного Linux process runtime.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
@@ -184,6 +191,7 @@ const PLAYER_TYPE: i32 = 400;
 const DEFAULT_SOCKET_TYPE: i32 = 1;
 const WORLD_REGISTRATION: i32 = 0x0005_FA01;
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
+const GAME_RELEASE_PLAYER_SAVE_MESSAGE: i32 = 0x0005_FB02;
 const RECONNECT_RETRY_DELAY: Duration = Duration::from_millis(8_000);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -898,6 +906,128 @@ pub(crate) trait GameMainLoopRuntime: GameMessageHandlers {
     fn run_auction(&mut self, game: &mut CGame);
     fn wait(&mut self, duration_ms: u32);
     fn output_debug(&mut self, message: &'static str);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameReleaseExternalOwner {
+    ScriptFunctions,
+    GeneralVariables,
+    SocketRuntime,
+    NetSessions,
+    PkSystem,
+    BaseMessageRuntime,
+    AttackCitySystem,
+    VillageWarSystem,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameReleaseDebug {
+    ServerExiting,
+    PlayerSaveFailed {
+        player_id: i32,
+        processed: usize,
+        total: usize,
+    },
+    PlayersSaved {
+        processed: usize,
+        total: usize,
+    },
+    CityRegionSaved,
+    PlayersAndRegionsCleared,
+    ProxyRegionsCleared,
+    ScriptDataCleared,
+    ServerExited,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameReleaseEvent {
+    Debug(GameReleaseDebug),
+    ReconnectTasksStopped,
+    PlayerSave {
+        player_id: i32,
+        saved: bool,
+    },
+    CityRegionSaved,
+    PlayersCleared {
+        count: usize,
+    },
+    RegionsCleared {
+        count: usize,
+    },
+    ProxyRegionsCleared {
+        count: usize,
+    },
+    ScriptDataCleared {
+        function_list: bool,
+        variable_list: bool,
+        files: usize,
+    },
+    ExternalOwner(GameReleaseExternalOwner),
+    SkillFactoryCleared,
+    GoodsFactoryReleased,
+    NetworkServerWorkerStopped {
+        present: bool,
+    },
+    WorldClientReleased {
+        present: bool,
+    },
+    BillingClientReleased {
+        present: bool,
+    },
+    NetworkServerReleased {
+        present: bool,
+    },
+    IncrementShopReleased,
+    QuestSystemReleased,
+    SequenceRegistryCleared {
+        count: usize,
+    },
+    PlayerRanksReleased {
+        present: bool,
+    },
+    WordsFilterReleased,
+    HonorRanksReleased,
+    GoodsWarReleased {
+        present: bool,
+    },
+    CountryHandlerReleased,
+    CountryParamReleased,
+}
+
+#[must_use = "Release report сохраняет полный достигнутый teardown ordering"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameReleaseReport {
+    pub(crate) events: Vec<GameReleaseEvent>,
+    /// `Release` объявлен как int, но достигнутый tail возвращает результат
+    /// security-cookie thunk; gameplay caller значение игнорирует.
+    pub(crate) legacy_return: Option<i32>,
+}
+
+pub(crate) trait GameReleaseRuntime {
+    fn put_debug_string(&mut self, message: GameReleaseDebug);
+    fn save_player(&mut self, player: &CPlayer, message_type: i32, save_flag: i32) -> bool;
+    fn save_city_region(&mut self, game: &CGame, region_id: i32);
+    fn release_external_owner(&mut self, owner: GameReleaseExternalOwner);
+    fn exit_network_server_worker(&mut self, server: &mut CMyNetServer);
+}
+
+pub(crate) trait GameThreadRuntime: GameMainLoopRuntime + GameReleaseRuntime {
+    fn runtime_paths(&self) -> GameRuntimePaths;
+    fn wall_time_seconds(&mut self) -> u32;
+    fn sequence_seed_ms(&mut self) -> u32;
+    fn initialize_com(&mut self);
+    fn signal_game_thread_exit(&mut self);
+    fn post_process_close(&mut self);
+    fn uninitialize_com(&mut self);
+}
+
+#[must_use = "GameThread report сохраняет Init/MainLoop/Release lifecycle"]
+#[derive(Debug)]
+pub(crate) struct GameThreadReport {
+    pub(crate) initialization:
+        Result<GameInitializationReport, GameInitializationThroughBillingError>,
+    pub(crate) main_loop_calls: usize,
+    pub(crate) release: GameReleaseReport,
 }
 
 impl ServerRegionOwner {
@@ -2034,6 +2164,190 @@ impl CGame {
         stop_reconnect_task(&mut self.billing_reconnect_task).await;
     }
 
+    /// Полный достигнутый `Release` teardown. Manual deletes заменены Drop и
+    /// `take/clear`, а отсутствующие process-global owners вызываются строго в
+    /// исходной позиции через runtime; неизвестный legacy int не выдумывается.
+    pub(crate) async fn release<Runtime: GameReleaseRuntime>(
+        &mut self,
+        runtime: &mut Runtime,
+    ) -> GameReleaseReport {
+        let mut events = Vec::new();
+
+        let debug = GameReleaseDebug::ServerExiting;
+        runtime.put_debug_string(debug.clone());
+        events.push(GameReleaseEvent::Debug(debug));
+
+        self.stop_reconnect_tasks().await;
+        events.push(GameReleaseEvent::ReconnectTasksStopped);
+
+        let player_ids: Vec<i32> = self.players.keys().copied().collect();
+        let total_players = player_ids.len();
+        for (index, player_id) in player_ids.into_iter().enumerate() {
+            let saved = self.players.get(&player_id).is_some_and(|player| {
+                runtime.save_player(player, GAME_RELEASE_PLAYER_SAVE_MESSAGE, 1)
+            });
+            if !saved {
+                let debug = GameReleaseDebug::PlayerSaveFailed {
+                    player_id,
+                    processed: index,
+                    total: total_players,
+                };
+                runtime.put_debug_string(debug.clone());
+                events.push(GameReleaseEvent::Debug(debug));
+                // Safe Result-граница заменяет native exception catch, который
+                // немедленно erase-ил проблемный map node и продолжал обход.
+                self.players.remove(&player_id);
+            }
+            events.push(GameReleaseEvent::PlayerSave { player_id, saved });
+        }
+        let debug = GameReleaseDebug::PlayersSaved {
+            processed: total_players,
+            total: total_players,
+        };
+        runtime.put_debug_string(debug.clone());
+        events.push(GameReleaseEvent::Debug(debug));
+
+        runtime.save_city_region(self, 0);
+        events.push(GameReleaseEvent::CityRegionSaved);
+        let debug = GameReleaseDebug::CityRegionSaved;
+        runtime.put_debug_string(debug.clone());
+        events.push(GameReleaseEvent::Debug(debug));
+
+        let players = self.players.len();
+        self.players.clear();
+        events.push(GameReleaseEvent::PlayersCleared { count: players });
+        let regions = self.regions.len();
+        self.regions.clear();
+        events.push(GameReleaseEvent::RegionsCleared { count: regions });
+        let debug = GameReleaseDebug::PlayersAndRegionsCleared;
+        runtime.put_debug_string(debug.clone());
+        events.push(GameReleaseEvent::Debug(debug));
+
+        let proxy_regions = self.proxy_regions.len();
+        self.proxy_regions.clear();
+        events.push(GameReleaseEvent::ProxyRegionsCleared {
+            count: proxy_regions,
+        });
+        let debug = GameReleaseDebug::ProxyRegionsCleared;
+        runtime.put_debug_string(debug.clone());
+        events.push(GameReleaseEvent::Debug(debug));
+
+        let function_list = self.function_list_file_data.take().is_some();
+        let variable_list = self.variable_list_file_data.take().is_some();
+        let script_files = self.script_file_data.len();
+        self.script_file_data.clear();
+        events.push(GameReleaseEvent::ScriptDataCleared {
+            function_list,
+            variable_list,
+            files: script_files,
+        });
+        for owner in [
+            GameReleaseExternalOwner::ScriptFunctions,
+            GameReleaseExternalOwner::GeneralVariables,
+        ] {
+            runtime.release_external_owner(owner);
+            events.push(GameReleaseEvent::ExternalOwner(owner));
+        }
+        let debug = GameReleaseDebug::ScriptDataCleared;
+        runtime.put_debug_string(debug.clone());
+        events.push(GameReleaseEvent::Debug(debug));
+
+        self.skill_factory.clear_skill_cache();
+        events.push(GameReleaseEvent::SkillFactoryCleared);
+        self.goods_factory.release();
+        events.push(GameReleaseEvent::GoodsFactoryReleased);
+
+        let network_server_present = self.net_server.is_some();
+        if let Some(server) = self.net_server.as_mut() {
+            runtime.exit_network_server_worker(server);
+        }
+        events.push(GameReleaseEvent::NetworkServerWorkerStopped {
+            present: network_server_present,
+        });
+
+        let world_client_present = self.world_client.is_some();
+        if let Some(client) = self.world_client.as_mut() {
+            client.disable_control_send();
+            let _legacy_result = client.close();
+        }
+        let billing_client_present = self.billing_client.is_some();
+        if let Some(client) = self.billing_client.as_mut() {
+            client.disable_control_send();
+            let _legacy_result = client.close();
+        }
+        self.world_client = None;
+        events.push(GameReleaseEvent::WorldClientReleased {
+            present: world_client_present,
+        });
+        self.billing_client = None;
+        events.push(GameReleaseEvent::BillingClientReleased {
+            present: billing_client_present,
+        });
+        let network_server_present = self.net_server.take().is_some();
+        events.push(GameReleaseEvent::NetworkServerReleased {
+            present: network_server_present,
+        });
+
+        for owner in [
+            GameReleaseExternalOwner::SocketRuntime,
+            GameReleaseExternalOwner::NetSessions,
+        ] {
+            runtime.release_external_owner(owner);
+            events.push(GameReleaseEvent::ExternalOwner(owner));
+        }
+
+        self.increment_shop_list.release();
+        events.push(GameReleaseEvent::IncrementShopReleased);
+        runtime.release_external_owner(GameReleaseExternalOwner::PkSystem);
+        events.push(GameReleaseEvent::ExternalOwner(
+            GameReleaseExternalOwner::PkSystem,
+        ));
+        self.quest_system = CQuestSystem::default();
+        events.push(GameReleaseEvent::QuestSystemReleased);
+        runtime.release_external_owner(GameReleaseExternalOwner::BaseMessageRuntime);
+        events.push(GameReleaseEvent::ExternalOwner(
+            GameReleaseExternalOwner::BaseMessageRuntime,
+        ));
+
+        let sequence_count = self.sequence_registry.len();
+        self.sequence_registry.clear();
+        events.push(GameReleaseEvent::SequenceRegistryCleared {
+            count: sequence_count,
+        });
+        let player_ranks_present = self.player_ranks.take().is_some();
+        events.push(GameReleaseEvent::PlayerRanksReleased {
+            present: player_ranks_present,
+        });
+        self.words_filter.clear();
+        events.push(GameReleaseEvent::WordsFilterReleased);
+        self.honor_ranks = CHonorRanks::default();
+        events.push(GameReleaseEvent::HonorRanksReleased);
+        let goods_war_present = self.goods_war.take().is_some();
+        events.push(GameReleaseEvent::GoodsWarReleased {
+            present: goods_war_present,
+        });
+        self.country_handler = CCountryHandler::default();
+        events.push(GameReleaseEvent::CountryHandlerReleased);
+        self.country_param = CCountryParam::default();
+        events.push(GameReleaseEvent::CountryParamReleased);
+
+        for owner in [
+            GameReleaseExternalOwner::AttackCitySystem,
+            GameReleaseExternalOwner::VillageWarSystem,
+        ] {
+            runtime.release_external_owner(owner);
+            events.push(GameReleaseEvent::ExternalOwner(owner));
+        }
+
+        let debug = GameReleaseDebug::ServerExited;
+        runtime.put_debug_string(debug.clone());
+        events.push(GameReleaseEvent::Debug(debug));
+        GameReleaseReport {
+            events,
+            legacy_return: None,
+        }
+    }
+
     /// Выполняет один awaitable I/O шаг текущего World направления.
     pub(crate) async fn run_world_io_once(
         &mut self,
@@ -2632,6 +2946,41 @@ impl CGame {
             }
         }
         1
+    }
+}
+
+/// Safe process-owned замена `GameThreadFunc`: COM/platform notifications
+/// остаются runtime callbacks, а `CGame` всегда проходит Release даже после
+/// неуспешного Init, как исходный ненулевой singleton `GetGame`.
+pub(crate) async fn game_thread_func<Runtime: GameThreadRuntime>(
+    game: &mut CGame,
+    runtime: &mut Runtime,
+) -> GameThreadReport {
+    runtime.initialize_com();
+    let paths = runtime.runtime_paths();
+    let wall_time_seconds = runtime.wall_time_seconds();
+    let sequence_seed_ms = runtime.sequence_seed_ms();
+    let initialization = game.init(&paths, wall_time_seconds, sequence_seed_ms).await;
+
+    let mut main_loop_calls = 0usize;
+    if initialization.is_ok() {
+        loop {
+            let turn = game.main_loop(runtime);
+            main_loop_calls = main_loop_calls.wrapping_add(1);
+            if turn.return_value == 0 {
+                break;
+            }
+        }
+    }
+
+    let release = game.release(runtime).await;
+    runtime.signal_game_thread_exit();
+    runtime.post_process_close();
+    runtime.uninitialize_com();
+    GameThreadReport {
+        initialization,
+        main_loop_calls,
+        release,
     }
 }
 
@@ -3258,6 +3607,11 @@ impl ShapeResolver for CGame {
 //
 //
 
+// IMPLEMENTED: достигнутый `Release` teardown материализован выше. Широкий
+// RAW-блок и split funclets ниже сохранены как доказательство ещё не
+// материализованных player serializer-а, SaveCityRegion, validate-time map и
+// exception-specific debug paths; он не считается полностью заменённым.
+
 // ============================================================================
 // FUNCTION: CGame::Release
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -3449,20 +3803,6 @@ impl ShapeResolver for CGame {
 // IMPLEMENTED: `CreateConnectWorldThread` RVA `0x0000BDA0` и
 // `CreateConnectBillingThread` RVA `0x0000BE10` материализованы выше как owned
 // Tokio tasks; начальный stop/join обеих задач из `Release` также перенесён.
-
-// ============================================================================
-// FUNCTION: GameThreadFunc
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:1151
-// RVA: 0x0000C130
-// ADDRESS: 0040c130
-// PROTOTYPE: uint __cdecl GameThreadFunc(void * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // IMPLEMENTED: `GetTeamSessionID` и `FindPlayer` материализованы выше;
 // покрытые raw-блоки удалены.
