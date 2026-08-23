@@ -89,6 +89,9 @@
 //! `GS0033/GS0034` `%s/%d/%s` contract и адресный `0xBF806` результат.
 //! Country-filtered `0x7FC13` обходит ту же canonical player map в signed
 //! ID-order и адресно публикует `0xBF806` каждому совпавшему country byte.
+//! Mass-kick `0x7FC09` сохраняет requester, обходит остальные player ID в том
+//! же порядке и ставит exact `QuitClientByMapID`; legacy `KickPlayer` при этом
+//! всегда возвращает `false` независимо от queue result.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
@@ -935,6 +938,13 @@ pub(crate) struct GameProcessMessagesReport {
     pub(crate) auction_states:
         Vec<Result<WorldAuctionStateMessageReport, WorldAuctionStateMessageError>>,
     pub(crate) gm_messages: Vec<Result<GmMessageReport, GmMessageError>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GameKickPlayerReport {
+    pub(crate) player_id: i32,
+    pub(crate) command_result: i32,
+    pub(crate) legacy_return: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -2500,6 +2510,31 @@ impl CGame {
         self.players.get(&player_id)
     }
 
+    /// Exact `CGame::KickPlayer`: queue side effect сохраняется, публичный
+    /// bool исходника всегда остаётся `false`.
+    pub(crate) fn kick_player(&self, player_id: i32) -> GameKickPlayerReport {
+        let command_result = self.net_server().command_handle().quit_by_map_id(player_id);
+        GameKickPlayerReport {
+            player_id,
+            command_result,
+            legacy_return: false,
+        }
+    }
+
+    /// Exact `OnGMMessage 0x7FC09` recipient pass: requester остаётся,
+    /// остальные canonical player ID закрываются в signed map-order.
+    pub(crate) fn kick_players_except(
+        &self,
+        preserved_player_id: i32,
+    ) -> Vec<GameKickPlayerReport> {
+        self.players
+            .keys()
+            .copied()
+            .filter(|player_id| *player_id != preserved_player_id)
+            .map(|player_id| self.kick_player(player_id))
+            .collect()
+    }
+
     /// Exact recipient pass `OnGMMessage 0x7FC13`: unsigned `long` country
     /// сравнивается с promoted player byte, обход сохраняет signed ID-order.
     pub(crate) fn player_ids_in_country(&self, country: u32) -> Vec<i32> {
@@ -3588,19 +3623,9 @@ impl ShapeResolver for CGame {
 // IMPLEMENTED, VERIFIED_DISASSEMBLY: `InitNetServer` материализован выше;
 // exact эпилог возвращает `0` после Host-error и `1` после setup-записей.
 
-// ============================================================================
-// FUNCTION: CGame::KickPlayer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:980
-// RVA: 0x000022F0
-// ADDRESS: 004022f0
-// PROTOTYPE: bool __thiscall KickPlayer(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED, VERIFIED_DISASSEMBLY: `CGame::KickPlayer` RVA `0x000022F0`
+// материализован выше с exact `QuitClientByMapID` side effect и постоянным
+// `false` return; покрытый raw удалён.
 
 // `SetFunctionFileData`, `SetVariableFileData` и `SetGeneralVariableFileData`
 // материализованы выше с подтверждённой семантикой владения и повторной публикации.

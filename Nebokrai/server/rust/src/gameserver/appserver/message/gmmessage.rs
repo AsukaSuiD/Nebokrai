@@ -2,8 +2,8 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/gmmessage.cpp` подтверждают
-//! ветви `0x7FC0B/0x7FC0C/0x7FC0D/0x7FC0E/0x7FC0F/0x7FC13`: requester ID
-//! читается до switch,
+//! ветви `0x7FC09/0x7FC0B/0x7FC0C/0x7FC0D/0x7FC0E/0x7FC0F/0x7FC13`:
+//! requester ID читается до switch,
 //! silence duration нормализуется к минимуму `1`, player map
 //! обходится дважды в signed ID-order, а ответы `0x5FF0D/0x5FF10`
 //! уходят WorldServer. Адресный `0x7FC0F` сохраняет length guards,
@@ -17,15 +17,18 @@
 //! specifier не воспроизводит vararg/buffer UB, а остаётся typed boundary.
 //! Country broadcast `0x7FC13` сохраняет unsigned-long/byte compare,
 //! signed player ID-order и отдельный `SendToPlayer` для каждого адресата.
+//! Mass-kick `0x7FC09` оставляет requester и ставит `QuitClientByMapID` всем
+//! остальным canonical player ID в исходном ordered map-pass.
 //! Эти цепочки имеют статус `IMPLEMENTED`.
 //! `Vec` заменяет raw allocation; поле declared capacity сохраняет
 //! исходные `sum(name_len + 2) + 0x40`, включая возможное
 //! расхождение между двумя time-sensitive pass-ами. Непокрытые GM
 //! selectors остаются RAW ниже.
 
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::gameserver::game::{CGame, GameKickPlayerReport};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
+const GM_KICK_OTHERS_MESSAGE: i32 = 0x0007_FC09;
 const GM_SET_SILENCE_MESSAGE: i32 = 0x0007_FC0B;
 const GM_REQUESTER_FEEDBACK_MESSAGE: i32 = 0x0007_FC0C;
 const GM_BROADCAST_MESSAGE: i32 = 0x0007_FC0D;
@@ -125,6 +128,10 @@ pub(crate) enum GmMessageReport {
         text: Vec<u8>,
         deliveries: Vec<(i32, i32)>,
     },
+    KickOthers {
+        requester_id: i32,
+        kicks: Vec<GameKickPlayerReport>,
+    },
 }
 
 /// Материализует связанные silence, broadcast и direct-notice ветви `OnGMMessage`.
@@ -137,7 +144,8 @@ pub(crate) fn dispatch_gm_message(
     let message_type = message.message_type();
     if !matches!(
         message_type,
-        GM_SET_SILENCE_MESSAGE
+        GM_KICK_OTHERS_MESSAGE
+            | GM_SET_SILENCE_MESSAGE
             | GM_REQUESTER_FEEDBACK_MESSAGE
             | GM_BROADCAST_MESSAGE
             | GM_QUERY_SILENCE_MESSAGE
@@ -149,6 +157,13 @@ pub(crate) fn dispatch_gm_message(
     let Some(requester_id) = message.base_mut().get_long() else {
         return Some(Err(GmMessageError::MissingRequesterId));
     };
+
+    if message_type == GM_KICK_OTHERS_MESSAGE {
+        return Some(Ok(GmMessageReport::KickOthers {
+            requester_id,
+            kicks: game.kick_players_except(requester_id),
+        }));
+    }
 
     if message_type == GM_SET_SILENCE_MESSAGE {
         let Some(player_name) = message.base_mut().get_str_bytes(GM_LEGACY_TEXT_LIMIT) else {
