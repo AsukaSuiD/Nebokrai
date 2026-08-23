@@ -73,6 +73,10 @@
 //! `GameThreadFunc` связан с достигнутыми `Init`, повторным `MainLoop` и
 //! безусловным `Release`; COM, exit-event и window-close заменены platform
 //! callbacks до появления конкретного Linux process runtime.
+//! `RunAuction` хранит process-static tick, auction state/time и primary
+//! ordered goods owner в `CGame`; exact World `0x80403` caller мутирует
+//! его из живого message FIFO, а `MainLoop` публикует `0x60807/0x60808`
+//! с исходными strict/wrapping time gates без внешнего auction hook-а.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
@@ -111,6 +115,9 @@ use crate::gameserver::appserver::goods::cbattlefairyproperty::CBattleFairyPrope
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::goodswarmember::CGoodsWarMember;
+use crate::gameserver::appserver::message::onmsg_w2s_auction::{
+    WorldAuctionStateMessageError, WorldAuctionStateMessageReport, dispatch_world_auction_state,
+};
 use crate::gameserver::appserver::message::sequencestring::{
     CSequenceRegistry, SequenceRegistryInitializationError,
 };
@@ -148,6 +155,8 @@ use crate::nets::netserver::mynetserver::{
     CMyNetServer, GameServerEvent, GameServerEventPublisher,
 };
 use crate::nets::servers::ServerHostError;
+use crate::public::aucitionroom::CAuctionRoom;
+use crate::public::auctionnode::CGoodsNode;
 use crate::public::ciqing::CCiQingSetup;
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
@@ -192,6 +201,8 @@ const DEFAULT_SOCKET_TYPE: i32 = 1;
 const WORLD_REGISTRATION: i32 = 0x0005_FA01;
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
 const GAME_RELEASE_PLAYER_SAVE_MESSAGE: i32 = 0x0005_FB02;
+const GAME_AUCTION_GOODS_SYNC_MESSAGE: i32 = 0x0006_0807;
+const GAME_AUCTION_STATE_REQUEST_MESSAGE: i32 = 0x0006_0808;
 const RECONNECT_RETRY_DELAY: Duration = Duration::from_millis(8_000);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -876,6 +887,34 @@ pub(crate) struct GameMainLoopReport {
     pub(crate) stages: Vec<GameMainLoopStage>,
     pub(crate) next_deadline_ms: Option<u32>,
     pub(crate) signed_lag_ms: Option<i32>,
+    pub(crate) messages: Option<GameProcessMessagesReport>,
+    pub(crate) auction: Option<GameAuctionRunReport>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameAuctionRunOutcome {
+    FeatureDisabled,
+    TickNotDue { elapsed_ms: u32 },
+    Processed { state_expired: bool },
+}
+
+#[must_use = "RunAuction report сохраняет time gates и оба World effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameAuctionRunReport {
+    pub(crate) outcome: GameAuctionRunOutcome,
+    pub(crate) sampled_tick_ms: Option<u32>,
+    pub(crate) sampled_wall_time_seconds: Option<u32>,
+    pub(crate) synchronized_goods: Vec<CGuid>,
+    pub(crate) goods_sync: Option<Result<i32, SendMessageError>>,
+    pub(crate) state_request: Option<Result<i32, SendMessageError>>,
+}
+
+#[must_use = "ProcessMessage report сохраняет достигнутые auction-state effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameProcessMessagesReport {
+    pub(crate) legacy_return: i32,
+    pub(crate) auction_states:
+        Vec<Result<WorldAuctionStateMessageReport, WorldAuctionStateMessageError>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -891,19 +930,19 @@ struct GameMainLoopState {
     pacing_deadline_ms: u32,
 }
 
-/// Concrete Script/AI/session/net/auction owners подключаются сюда по мере их
+/// Concrete Script/AI/session/net owners подключаются сюда по мере их
 /// материализации; message routing уже исполняется самим `CGame`.
 pub(crate) trait GameMainLoopRuntime: GameMessageHandlers {
     fn exit_requested(&self) -> bool;
     fn tick_interval_ms(&self) -> u32;
     fn get_tick_ms(&mut self) -> u32;
+    fn wall_time_seconds(&mut self) -> u32;
     fn refresh_info_text(&mut self, game: &CGame);
     fn add_runtime_log(&mut self, log: GameMainLoopRuntimeLog);
     fn script_loop(&mut self, game: &mut CGame);
     fn ai(&mut self, game: &mut CGame);
     fn session_factory_ai(&mut self, game: &mut CGame);
     fn run_net_sessions(&mut self, game: &mut CGame);
-    fn run_auction(&mut self, game: &mut CGame);
     fn wait(&mut self, duration_ms: u32);
     fn output_debug(&mut self, message: &'static str);
 }
@@ -1013,7 +1052,6 @@ pub(crate) trait GameReleaseRuntime {
 
 pub(crate) trait GameThreadRuntime: GameMainLoopRuntime + GameReleaseRuntime {
     fn runtime_paths(&self) -> GameRuntimePaths;
-    fn wall_time_seconds(&mut self) -> u32;
     fn sequence_seed_ms(&mut self) -> u32;
     fn initialize_com(&mut self);
     fn signal_game_thread_exit(&mut self);
@@ -1087,7 +1125,10 @@ pub(crate) struct CGame {
     region_router: RegionRouter,
     area_width: i32,
     area_height: i32,
+    auction_room: CAuctionRoom<CGoodsNode>,
     auction_now: bool,
+    auction_last_check_seconds: u32,
+    auction_tick_ms: u32,
     function_list_file_data: Option<Vec<u8>>,
     variable_list_file_data: Option<Vec<u8>>,
     script_file_data: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -1166,7 +1207,10 @@ impl CGame {
             region_router: RegionRouter::default(),
             area_width: 15,
             area_height: 15,
+            auction_room: CAuctionRoom::new(),
             auction_now: false,
+            auction_last_check_seconds: 0,
+            auction_tick_ms: 0,
             function_list_file_data: None,
             variable_list_file_data: None,
             script_file_data: BTreeMap::new(),
@@ -1272,6 +1316,11 @@ impl CGame {
         wall_time_seconds: u32,
         sequence_seed_ms: u32,
     ) -> Result<GameInitializationThroughBillingReport, GameInitializationThroughBillingError> {
+        // C++ constructor запоминал `_time` при создании process singleton-а.
+        // Safe owner получает первый доказанный wall-clock на входе `Init`;
+        // пока state=false, эта разница ненаблюдаема, а true-ветвь всегда
+        // перезаписывает timestamp через exact `SetAuctionState`.
+        self.auction_last_check_seconds = wall_time_seconds;
         self.random_state = wall_time_seconds;
         let _discarded_roll = game_legacy_random(&mut self.random_state, 100);
 
@@ -1606,10 +1655,30 @@ impl CGame {
         self.auction_now
     }
 
-    /// Точный false-only effect Globe decoder-а. Полный `SetAuctionState(true)`
-    /// с обновлением wall-clock остаётся у ещё не связанного auction owner-а.
+    pub(crate) const fn auction_last_check_seconds(&self) -> u32 {
+        self.auction_last_check_seconds
+    }
+
+    pub(crate) const fn auction_room(&self) -> &CAuctionRoom<CGoodsNode> {
+        &self.auction_room
+    }
+
+    pub(crate) const fn auction_room_mut(&mut self) -> &mut CAuctionRoom<CGoodsNode> {
+        &mut self.auction_room
+    }
+
+    /// Exact `CGame::SetAuctionState`: false не меняет saved wall-clock,
+    /// true публикует полученный caller-ом `_time` sample.
+    pub(crate) const fn set_auction_state(&mut self, enabled: bool, wall_time_seconds: u32) {
+        self.auction_now = enabled;
+        if enabled {
+            self.auction_last_check_seconds = wall_time_seconds;
+        }
+    }
+
+    /// Точный false-only effect Globe decoder-а без обновления timestamp.
     pub(crate) const fn force_auction_disabled(&mut self) {
-        self.auction_now = false;
+        self.set_auction_state(false, self.auction_last_check_seconds);
     }
 
     pub(crate) fn set_function_file_data<Context: GameScriptResourceContext>(
@@ -2756,6 +2825,72 @@ impl CGame {
             .map(|player| player.refresh_battle_fairy_death(factory))
     }
 
+    /// Один exact `CGame::RunAuction` pass. Feature gate не читает часы;
+    /// strict 999-ms gate читает wall-clock только при срабатывании.
+    /// Goods snapshot и оба World sends сохраняют исходный порядок.
+    pub(crate) fn run_auction<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        runtime: &mut Runtime,
+    ) -> GameAuctionRunReport {
+        if !self.globe_setup.auction_enabled() {
+            return GameAuctionRunReport {
+                outcome: GameAuctionRunOutcome::FeatureDisabled,
+                sampled_tick_ms: None,
+                sampled_wall_time_seconds: None,
+                synchronized_goods: Vec::new(),
+                goods_sync: None,
+                state_request: None,
+            };
+        }
+
+        let sampled_tick_ms = runtime.get_tick_ms();
+        let elapsed_ms = sampled_tick_ms.wrapping_sub(self.auction_tick_ms);
+        if elapsed_ms <= 999 {
+            return GameAuctionRunReport {
+                outcome: GameAuctionRunOutcome::TickNotDue { elapsed_ms },
+                sampled_tick_ms: Some(sampled_tick_ms),
+                sampled_wall_time_seconds: None,
+                synchronized_goods: Vec::new(),
+                goods_sync: None,
+                state_request: None,
+            };
+        }
+        self.auction_tick_ms = sampled_tick_ms;
+
+        let synchronized_goods = if self.auction_now {
+            self.auction_room.count_goods()
+        } else {
+            Vec::new()
+        };
+        let goods_sync = if self.auction_now {
+            let mut message = CMessage::new(GAME_AUCTION_GOODS_SYNC_MESSAGE);
+            message.add_ulong(synchronized_goods.len() as u32);
+            for guid in &synchronized_goods {
+                message.base_mut().add_guid(*guid);
+            }
+            Some(message.send(self, false))
+        } else {
+            None
+        };
+
+        let sampled_wall_time_seconds = runtime.wall_time_seconds();
+        let state_expired =
+            self.auction_last_check_seconds.wrapping_add(4) < sampled_wall_time_seconds;
+        if state_expired {
+            self.auction_now = false;
+        }
+        let state_request = CMessage::new(GAME_AUCTION_STATE_REQUEST_MESSAGE).send(self, false);
+
+        GameAuctionRunReport {
+            outcome: GameAuctionRunOutcome::Processed { state_expired },
+            sampled_tick_ms: Some(sampled_tick_ms),
+            sampled_wall_time_seconds: Some(sampled_wall_time_seconds),
+            synchronized_goods,
+            goods_sync,
+            state_request: Some(state_request),
+        }
+    }
+
     /// Один exact `CGame::MainLoop` turn. Wrapping DWORD clocks, strict
     /// interval comparisons, profiling reads и pacing deadline сохраняют
     /// наблюдаемый Win32 порядок; wait заменён platform callback-ом.
@@ -2818,10 +2953,13 @@ impl CGame {
                 stages,
                 next_deadline_ms: state.pacing_initialized.then_some(state.pacing_deadline_ms),
                 signed_lag_ms: None,
+                messages: None,
+                auction: None,
             };
         }
 
         state.ai_tick = state.ai_tick.wrapping_add(1);
+        let messages;
         if self.setup.watch_runtime_info {
             let started = runtime.get_tick_ms();
             runtime.script_loop(self);
@@ -2840,7 +2978,7 @@ impl CGame {
             stages.push(GameMainLoopStage::Ai);
 
             let started = runtime.get_tick_ms();
-            let _legacy_result = self.process_messages(runtime);
+            messages = self.process_messages(runtime);
             state.profile.message_ms = state
                 .profile
                 .message_ms
@@ -2867,7 +3005,7 @@ impl CGame {
             stages.push(GameMainLoopStage::Script);
             runtime.ai(self);
             stages.push(GameMainLoopStage::Ai);
-            let _legacy_result = self.process_messages(runtime);
+            messages = self.process_messages(runtime);
             stages.push(GameMainLoopStage::Message);
             runtime.session_factory_ai(self);
             stages.push(GameMainLoopStage::Session);
@@ -2875,7 +3013,7 @@ impl CGame {
             stages.push(GameMainLoopStage::NetSession);
         }
 
-        runtime.run_auction(self);
+        let auction = self.run_auction(runtime);
         stages.push(GameMainLoopStage::Auction);
 
         if !state.pacing_initialized {
@@ -2912,20 +3050,32 @@ impl CGame {
             stages,
             next_deadline_ms: Some(state.pacing_deadline_ms),
             signed_lag_ms: Some(signed_lag_ms),
+            messages: Some(messages),
+            auction: Some(auction),
         }
     }
 
     /// Исполняет один исходный snapshot входящих FIFO в порядке WS, BS, GS.
-    pub(crate) fn process_messages(&mut self, handlers: &mut dyn GameMessageHandlers) -> i32 {
-        if let Some(client) = &self.world_client {
-            for mut message in client.take_all_messages() {
-                message.run(self, handlers);
-            }
+    pub(crate) fn process_messages<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        runtime: &mut Runtime,
+    ) -> GameProcessMessagesReport {
+        let mut auction_states = Vec::new();
+        let world_messages = self
+            .world_client
+            .as_ref()
+            .map(CMyNetClient::take_all_messages)
+            .unwrap_or_default();
+        for mut message in world_messages {
+            self.run_incoming_message(&mut message, runtime, &mut auction_states);
         }
-        if let Some(client) = &self.billing_client {
-            for mut message in client.take_all_messages() {
-                message.run(self, handlers);
-            }
+        let billing_messages = self
+            .billing_client
+            .as_ref()
+            .map(CMyNetClient::take_all_messages)
+            .unwrap_or_default();
+        for mut message in billing_messages {
+            self.run_incoming_message(&mut message, runtime, &mut auction_states);
         }
         let server_events = self
             .net_server
@@ -2935,17 +3085,37 @@ impl CGame {
         for event in server_events {
             match event {
                 GameServerEvent::Message(mut message) => {
-                    message.run(self, handlers);
+                    self.run_incoming_message(&mut message, runtime, &mut auction_states);
                 }
                 GameServerEvent::WorldClientReconnected(client) => {
-                    handlers.handle_world_client_reconnected(self, client);
+                    runtime.handle_world_client_reconnected(self, client);
                 }
                 GameServerEvent::BillingClientReconnected(client) => {
                     let _legacy_ignored = on_billing_client_reconnected(self, client);
                 }
             }
         }
-        1
+        GameProcessMessagesReport {
+            legacy_return: 1,
+            auction_states,
+        }
+    }
+
+    fn run_incoming_message<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        message: &mut CMessage,
+        runtime: &mut Runtime,
+        auction_states: &mut Vec<
+            Result<WorldAuctionStateMessageReport, WorldAuctionStateMessageError>,
+        >,
+    ) {
+        if let Some(report) =
+            dispatch_world_auction_state(message, self, || runtime.wall_time_seconds())
+        {
+            auction_states.push(report);
+        } else {
+            message.run(self, runtime);
+        }
     }
 }
 
@@ -3333,19 +3503,8 @@ impl ShapeResolver for CGame {
 // `SetFunctionFileData`, `SetVariableFileData` и `SetGeneralVariableFileData`
 // материализованы выше с подтверждённой семантикой владения и повторной публикации.
 
-// ============================================================================
-// FUNCTION: CGame::SetAuctionState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:1439
-// RVA: 0x00002390
-// ADDRESS: 00402390
-// PROTOTYPE: void __thiscall SetAuctionState(bool param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `SetAuctionState` RVA `0x00002390` материализован выше
+// и связан с exact World `0x80403` caller-ом; покрытый raw удалён.
 
 // IMPLEMENTED: `InitNetClientOfWS/BS` материализованы выше с исходными
 // registration packets и master -> backup Billing порядком.
@@ -3786,19 +3945,8 @@ impl ShapeResolver for CGame {
 // IMPLEMENTED: обе `ReConnect*` функции и retry thread-entry материализованы
 // выше; C++ exception funclets заменены typed outcomes Rust.
 
-// ============================================================================
-// FUNCTION: CGame::RunAuction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:1397
-// RVA: 0x0000BC30
-// ADDRESS: 0040bc30
-// PROTOTYPE: void __thiscall RunAuction(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `RunAuction` RVA `0x0000BC30` материализован выше и вызывается
+// напрямую из `MainLoop`; покрытый raw удалён.
 
 // IMPLEMENTED: `CreateConnectWorldThread` RVA `0x0000BDA0` и
 // `CreateConnectBillingThread` RVA `0x0000BE10` материализованы выше как owned

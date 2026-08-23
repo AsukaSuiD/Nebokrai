@@ -1,6 +1,6 @@
-//! Комната аукциона `CAuctionRoom` MiscServer.
-//! Источник контракта — точная пара MiscServer EXE/PDB; общий goods wire
-//! согласован с GameServer/WorldServer owners.
+//! Комната аукциона `CAuctionRoom` MiscServer и GameServer.
+//! Источник контракта — точные пары MiscServer/GameServer EXE/PDB;
+//! общий goods wire согласован с WorldServer owner-ом.
 //!
 //! Owner хранит основные и вторичные ordered списки, player search state,
 //! opt/del/success/back queues и выполняет `AI` в исходном порядке. Add/delete
@@ -48,9 +48,9 @@ pub(crate) enum DoneDelListError {
 /// Результат сериализации и исходно игнорировавшейся отправки terminal-узла.
 #[derive(Debug)]
 pub(crate) enum TerminalGoodsDelivery {
- /// Safe-сериализация остановилась на недоказанном старом поле или размере.
+    /// Safe-сериализация остановилась на недоказанном старом поле или размере.
     SerializeBlocked(GoodsNodeSerializeError),
- /// Пакет построен; результат nullable client/send сохранён для владельца.
+    /// Пакет построен; результат nullable client/send сохранён для владельца.
     Sent(Result<i32, SendMessageError>),
 }
 
@@ -63,11 +63,11 @@ pub(crate) struct TerminalGoodsDispatch {
 
 /// Итог одного полного прохода исходного `CAuctionRoom::AI`.
 pub(crate) struct AuctionAiOutcome {
- /// Результат полного deletion drain после уже выполненного `DoneAuction`.
+    /// Результат полного deletion drain после уже выполненного `DoneAuction`.
     pub(crate) deletion: Result<(), DoneDelListError>,
- /// Все sucessed-узлы, снятые текущим проходом в GUID-порядке.
+    /// Все sucessed-узлы, снятые текущим проходом в GUID-порядке.
     pub(crate) sucessed: Vec<TerminalGoodsDispatch>,
- /// Не более одного минимального back-узла текущего прохода.
+    /// Не более одного минимального back-узла текущего прохода.
     pub(crate) back: Option<TerminalGoodsDispatch>,
 }
 
@@ -96,8 +96,8 @@ pub(crate) enum AuctionPageBuildError {
 /// Owned-состояние исходного `CAuctionRoom`.
 ///
 /// Параметр сохраняет действующие constructor/clear call sites. Доменное
-/// добавление определено только для доказанного Misc `CGoodsNode`; GameServer
-/// с `CGUID -> owner_id` этой специализацией не представлен.
+/// добавление и индексы определены для доказанного `CGoodsNode`;
+/// GameServer использует тот же primary ordered map для `CountGoods`.
 pub(crate) struct CAuctionRoom<GoodsNode> {
     auction_goods_list: BTreeMap<CGuid, Box<GoodsNode>>,
     time_ticket: BTreeMap<u32, Vec<CGuid>>,
@@ -117,7 +117,7 @@ impl<GoodsNode> Default for CAuctionRoom<GoodsNode> {
 }
 
 impl<GoodsNode> CAuctionRoom<GoodsNode> {
- /// Создаёт все исходные ordered-контейнеры и очередь пустыми.
+    /// Создаёт все исходные ordered-контейнеры и очередь пустыми.
     pub(crate) fn new() -> Self {
         Self {
             auction_goods_list: BTreeMap::new(),
@@ -132,10 +132,16 @@ impl<GoodsNode> CAuctionRoom<GoodsNode> {
         }
     }
 
- /// Очищает семь owned-контейнеров в точном порядке `Clear`.
- ///
- /// Незавершённые операции и поиски игроков сохраняются: исходный `Clear`
- /// оставлял `m_mapOptList` и `m_mapPlayerSearchList` нетронутыми.
+    /// Копирует GUID primary map в исходном `std::map`-порядке.
+    /// Это exact `CAuctionRoom::CountGoods`, вызываемый `CGame::RunAuction`.
+    pub(crate) fn count_goods(&self) -> Vec<CGuid> {
+        self.auction_goods_list.keys().copied().collect()
+    }
+
+    /// Очищает семь owned-контейнеров в точном порядке `Clear`.
+    ///
+    /// Незавершённые операции и поиски игроков сохраняются: исходный `Clear`
+    /// оставлял `m_mapOptList` и `m_mapPlayerSearchList` нетронутыми.
     pub(crate) fn clear(&mut self) {
         self.clear_auction_list();
         self.clear_del_list();
@@ -145,9 +151,9 @@ impl<GoodsNode> CAuctionRoom<GoodsNode> {
         self.clear_owner_list();
         self.clear_type_list();
 
- // MiscServer не очищает `m_mapOptList`: его пары
- // `CGUID -> unsigned long operation` сохраняются буквально до
- // `DoneOptList` либо destructor комнаты.
+        // MiscServer не очищает `m_mapOptList`: его пары
+        // `CGUID -> unsigned long operation` сохраняются буквально до
+        // `DoneOptList` либо destructor комнаты.
     }
 
     fn clear_auction_list(&mut self) {
@@ -180,12 +186,12 @@ impl<GoodsNode> CAuctionRoom<GoodsNode> {
 }
 
 impl CAuctionRoom<CGoodsNode> {
- /// Добавляет owned MiscServer-узел и обновляет три вторичных индекса.
- ///
- /// Invalid либо уже существующий GUID дают исходный `false`, уничтожают
- /// новый узел и wrapping увеличивают `m_dwDelNewCount`. Ошибка означает
- /// только старое неинициализированное поле типа: main/time/owner эффекты к
- /// этой границе уже совершены, как требует доказанный порядок оригинала.
+    /// Добавляет owned MiscServer-узел и обновляет три вторичных индекса.
+    ///
+    /// Invalid либо уже существующий GUID дают исходный `false`, уничтожают
+    /// новый узел и wrapping увеличивают `m_dwDelNewCount`. Ошибка означает
+    /// только старое неинициализированное поле типа: main/time/owner эффекты к
+    /// этой границе уже совершены, как требует доказанный порядок оригинала.
     pub(crate) fn add_item_to_auction_room(
         &mut self,
         item: Box<CGoodsNode>,
@@ -210,17 +216,17 @@ impl CAuctionRoom<CGoodsNode> {
         self.time_ticket.entry(add_ticket).or_default().push(guid);
         self.owner_list.entry(owner_id).or_default().push(guid);
         let Some(goods_type) = goods_type else {
- // typed boundary: MiscServer читал
- // `m_btGoodsType`, который constructor и `Clear` не задавали:
- // Тип товара берётся из m_btGoodsType и передаётся в PushItemToTypeList.
- // Какой byte наблюдался для такого не-UnSerialize узла, неизвестно.
+            // typed boundary: MiscServer читал
+            // `m_btGoodsType`, который constructor и `Clear` не задавали:
+            // Тип товара берётся из m_btGoodsType и передаётся в PushItemToTypeList.
+            // Какой byte наблюдался для такого не-UnSerialize узла, неизвестно.
             return Err(AddAuctionItemMissingGoodsType { guid });
         };
         self.type_list.entry(goods_type).or_default().push(guid);
         Ok(true)
     }
 
- /// Возвращает Misc-узел primary auction map либо `None`.
+    /// Возвращает Misc-узел primary auction map либо `None`.
     pub(crate) fn query_goods_node_info(&self, guid: CGuid) -> Option<&CGoodsNode> {
         if guid == CGuid::GUID_INVALID {
             return None;
@@ -228,15 +234,15 @@ impl CAuctionRoom<CGoodsNode> {
         self.auction_goods_list.get(&guid).map(Box::as_ref)
     }
 
- /// Возвращает 32-битный `_Mysize` primary map для Misc diagnostic-owner.
+    /// Возвращает 32-битный `_Mysize` primary map для Misc diagnostic-owner.
     pub(crate) fn legacy_auction_goods_count(&self) -> u32 {
         self.auction_goods_list.len() as u32
     }
 
- /// Ставит GUID в очередь операции и обновляет buyer исходного узла.
- ///
- /// Возвращаемое значение всегда `false`, включая успешную мутацию: это
- /// доказанный контракт оригинал MiscServer, на который опирается handler.
+    /// Ставит GUID в очередь операции и обновляет buyer исходного узла.
+    ///
+    /// Возвращаемое значение всегда `false`, включая успешную мутацию: это
+    /// доказанный контракт оригинал MiscServer, на который опирается handler.
     pub(crate) fn push_item_to_opt_list(
         &mut self,
         guid: CGuid,
@@ -265,12 +271,12 @@ impl CAuctionRoom<CGoodsNode> {
         item.set_auction_buyer_id(buyer_id);
         self.opt_list.insert(guid, operation);
 
- // Контракт: Misc выполняет мутации выше,
- // но по завершает все пути `xor al, al; ret 0x18`.
+        // Контракт: Misc выполняет мутации выше,
+        // но по завершает все пути `xor al, al; ret 0x18`.
         false
     }
 
- /// Добавляет живой GUID в первый batch очереди удаления.
+    /// Добавляет живой GUID в первый batch очереди удаления.
     fn add_item_to_del_list(&mut self, guid: CGuid) -> bool {
         if guid == CGuid::GUID_INVALID {
             return false;
@@ -284,7 +290,7 @@ impl CAuctionRoom<CGoodsNode> {
         true
     }
 
- /// Ставит auction-товар в обычную очередь отмены.
+    /// Ставит auction-товар в обычную очередь отмены.
     fn del_item_from_auction_room(&mut self, guid: CGuid) -> bool {
         if guid == CGuid::GUID_INVALID {
             return false;
@@ -301,7 +307,7 @@ impl CAuctionRoom<CGoodsNode> {
         true
     }
 
- /// Ставит auction-товар в очередь успешной покупки.
+    /// Ставит auction-товар в очередь успешной покупки.
     fn del_item_from_auction_room_for_sucessed(&mut self, guid: CGuid) -> bool {
         if guid == CGuid::GUID_INVALID {
             return false;
@@ -318,7 +324,7 @@ impl CAuctionRoom<CGoodsNode> {
         true
     }
 
- /// Ставит auction-товар в очередь предварительной покупки.
+    /// Ставит auction-товар в очередь предварительной покупки.
     fn del_item_from_auction_room_by_pre_buy(&mut self, guid: CGuid) -> bool {
         if guid == CGuid::GUID_INVALID {
             return false;
@@ -335,7 +341,7 @@ impl CAuctionRoom<CGoodsNode> {
         true
     }
 
- /// Полностью обрабатывает текущий ordered opt-list от минимального GUID.
+    /// Полностью обрабатывает текущий ordered opt-list от минимального GUID.
     pub(crate) fn done_opt_list(&mut self) {
         while let Some((&guid, &operation)) = self.opt_list.first_key_value() {
             match operation {
@@ -354,7 +360,7 @@ impl CAuctionRoom<CGoodsNode> {
         }
     }
 
- /// Обрабатывает opt-list и переносит истёкший time-prefix в очередь удаления.
+    /// Обрабатывает opt-list и переносит истёкший time-prefix в очередь удаления.
     pub(crate) fn done_auction(&mut self) {
         self.done_opt_list();
         let now = clock_gettime(ClockId::Realtime).tv_sec as u32;
@@ -376,7 +382,7 @@ impl CAuctionRoom<CGoodsNode> {
         }
     }
 
- /// Удаляет первое совпадение из временного индекса и удаляет пустой key.
+    /// Удаляет первое совпадение из временного индекса и удаляет пустой key.
     fn del_item_from_time_list(&mut self, ticket: u32, guid: CGuid) -> bool {
         let (removed, became_empty) = {
             let Some(items) = self.time_ticket.get_mut(&ticket) else {
@@ -396,7 +402,7 @@ impl CAuctionRoom<CGoodsNode> {
         removed
     }
 
- /// Удаляет первое совпадение из owner-индекса и удаляет пустой key.
+    /// Удаляет первое совпадение из owner-индекса и удаляет пустой key.
     fn del_item_from_owner_list(&mut self, owner_id: i32, guid: CGuid) -> bool {
         let (removed, became_empty) = {
             let Some(items) = self.owner_list.get_mut(&owner_id) else {
@@ -416,7 +422,7 @@ impl CAuctionRoom<CGoodsNode> {
         removed
     }
 
- /// Удаляет первое совпадение из type-индекса, сохраняя существующий key.
+    /// Удаляет первое совпадение из type-индекса, сохраняя существующий key.
     fn del_item_from_type_list(&mut self, goods_type: u8, guid: CGuid) -> bool {
         let Some(items) = self.type_list.get_mut(&goods_type) else {
             return false;
@@ -427,10 +433,10 @@ impl CAuctionRoom<CGoodsNode> {
         true
     }
 
- /// Удаляет GUID живого primary-узла из трёх вторичных индексов.
- ///
- /// Ошибка означает неинициализированный старый goods type: time и owner к
- /// этой границе уже обработаны в исходном порядке.
+    /// Удаляет GUID живого primary-узла из трёх вторичных индексов.
+    ///
+    /// Ошибка означает неинициализированный старый goods type: time и owner к
+    /// этой границе уже обработаны в исходном порядке.
     fn clear_recond(&mut self, guid: CGuid) -> Result<(), ClearRecondMissingGoodsType> {
         let Some(item) = self.auction_goods_list.get(&guid).map(Box::as_ref) else {
             return Ok(());
@@ -442,19 +448,19 @@ impl CAuctionRoom<CGoodsNode> {
         let _ = self.del_item_from_time_list(add_ticket, guid);
         let _ = self.del_item_from_owner_list(owner_id, guid);
         let Some(goods_type) = goods_type else {
- // typed boundary: MiscServer читал byte
- // `m_btGoodsType` до вызовов, хотя constructor/`Clear` его не
- // задавали. Какой type-key удалялся для такого узла, неизвестно.
+            // typed boundary: MiscServer читал byte
+            // `m_btGoodsType` до вызовов, хотя constructor/`Clear` его не
+            // задавали. Какой type-key удалялся для такого узла, неизвестно.
             return Err(ClearRecondMissingGoodsType { guid });
         };
         let _ = self.del_item_from_type_list(goods_type, guid);
         Ok(())
     }
 
- /// Извлекает живой primary-узел после очистки его вторичных индексов.
- ///
- /// Ошибка сохраняет узел в primary map; time/owner эффекты `ClearRecond` к
- /// этой границе уже могли быть выполнены.
+    /// Извлекает живой primary-узел после очистки его вторичных индексов.
+    ///
+    /// Ошибка сохраняет узел в primary map; time/owner эффекты `ClearRecond` к
+    /// этой границе уже могли быть выполнены.
     fn pop_item_from_goods_list(
         &mut self,
         guid: CGuid,
@@ -467,10 +473,10 @@ impl CAuctionRoom<CGoodsNode> {
         Ok(self.auction_goods_list.remove(&guid))
     }
 
- /// Передаёт owned-узел в список успешно завершённых аукционов.
- ///
- /// При duplicate key существующая запись сохраняется, а входной узел
- /// возвращается внутри ошибки: старую утечку safe Rust не воспроизводит.
+    /// Передаёт owned-узел в список успешно завершённых аукционов.
+    ///
+    /// При duplicate key существующая запись сохраняется, а входной узел
+    /// возвращается внутри ошибки: старую утечку safe Rust не воспроизводит.
     fn add_item_to_sucessed_list(
         &mut self,
         item: Box<CGoodsNode>,
@@ -482,18 +488,18 @@ impl CAuctionRoom<CGoodsNode> {
                 Ok(true)
             }
             std::collections::btree_map::Entry::Occupied(_) => {
- // typed boundary: MiscServer игнорировал
- // result `std::map::insert`, возвращал `true` по non-null
- // pointer и оставлял новый узел без доказанного владельца.
+                // typed boundary: MiscServer игнорировал
+                // result `std::map::insert`, возвращал `true` по non-null
+                // pointer и оставлял новый узел без доказанного владельца.
                 Err(AddTerminalGoodsDuplicate { guid, item })
             }
         }
     }
 
- /// Передаёт owned-узел в список возврата продавцу.
- ///
- /// При duplicate key существующая запись сохраняется, а входной узел
- /// возвращается внутри ошибки: старую утечку safe Rust не воспроизводит.
+    /// Передаёт owned-узел в список возврата продавцу.
+    ///
+    /// При duplicate key существующая запись сохраняется, а входной узел
+    /// возвращается внутри ошибки: старую утечку safe Rust не воспроизводит.
     fn add_item_to_back_list(
         &mut self,
         item: Box<CGoodsNode>,
@@ -505,19 +511,19 @@ impl CAuctionRoom<CGoodsNode> {
                 Ok(true)
             }
             std::collections::btree_map::Entry::Occupied(_) => {
- // typed boundary: MiscServer имеет ту же
- // unchecked insert-ветвь, поэтому duplicate ownership не
- // получает придуманного уничтожения, замены либо leak.
+                // typed boundary: MiscServer имеет ту же
+                // unchecked insert-ветвь, поэтому duplicate ownership не
+                // получает придуманного уничтожения, замены либо leak.
                 Err(AddTerminalGoodsDuplicate { guid, item })
             }
         }
     }
 
- /// Полностью дренирует очередь удаления до первой safe-границы.
- ///
- /// Missing goods type сохраняет текущий GUID в начале batch. Ошибки
- /// duplicate/default-state возникают уже после доказанного удаления этого
- /// GUID; содержащийся в ошибке owned-узел не теряется.
+    /// Полностью дренирует очередь удаления до первой safe-границы.
+    ///
+    /// Missing goods type сохраняет текущий GUID в начале batch. Ошибки
+    /// duplicate/default-state возникают уже после доказанного удаления этого
+    /// GUID; содержащийся в ошибке owned-узел не теряется.
     pub(crate) fn done_del_list(&mut self) -> Result<(), DoneDelListError> {
         loop {
             while self.del_from_goods_list.front().is_some_and(Vec::is_empty) {
@@ -544,10 +550,10 @@ impl CAuctionRoom<CGoodsNode> {
         }
     }
 
- /// Полностью дренирует sucessed-map и отправляет по одному `0x15EB01`.
- ///
- /// Любой результат сериализации или отправки относится к уже удалённому
- /// узлу и не останавливает последующие GUID текущего прохода.
+    /// Полностью дренирует sucessed-map и отправляет по одному `0x15EB01`.
+    ///
+    /// Любой результат сериализации или отправки относится к уже удалённому
+    /// узлу и не останавливает последующие GUID текущего прохода.
     pub(crate) fn done_sucessed_goods_list(
         &mut self,
         sender: Option<&dyn MessageSender>,
@@ -565,10 +571,10 @@ impl CAuctionRoom<CGoodsNode> {
         outcomes
     }
 
- /// Обрабатывает только один минимальный back-key через `0x15EB02`.
- ///
- /// Следующие записи намеренно остаются внешнему вызову `AI`; результат
- /// сериализации либо отправки не возвращает уже снятый узел в map.
+    /// Обрабатывает только один минимальный back-key через `0x15EB02`.
+    ///
+    /// Следующие записи намеренно остаются внешнему вызову `AI`; результат
+    /// сериализации либо отправки не возвращает уже снятый узел в map.
     pub(crate) fn done_back_list(
         &mut self,
         sender: Option<&dyn MessageSender>,
@@ -597,10 +603,10 @@ impl CAuctionRoom<CGoodsNode> {
         TerminalGoodsDelivery::Sent(message.send(sender, false))
     }
 
- /// Выполняет четыре стадии аукционной обработки в исходном порядке.
- ///
- /// Safe-ошибка deletion drain сохраняется в отчёте и не отменяет две
- /// следующие независимые terminal-стадии текущего прохода.
+    /// Выполняет четыре стадии аукционной обработки в исходном порядке.
+    ///
+    /// Safe-ошибка deletion drain сохраняется в отчёте и не отменяет две
+    /// следующие независимые terminal-стадии текущего прохода.
     pub(crate) fn ai(&mut self, sender: Option<&dyn MessageSender>) -> AuctionAiOutcome {
         self.done_auction();
         let deletion = self.done_del_list();
@@ -665,12 +671,12 @@ impl CAuctionRoom<CGoodsNode> {
             unsupported => {
                 self.clear_recond(guid)
                     .map_err(DoneDelListError::MissingGoodsType)?;
- // Контракт: Misc по
- //.. выполнял
- // `ClearRecond(guid); item->~CGoodsNode(); delete item;`
- // без `m_mapAuctionGoodsList.erase`, после чего удалял GUID из
- // batch. Достижимость dangling pointer неизвестна, поэтому
- // Box остаётся в primary map, а внешний выбор не выдумывается.
+                // Контракт: Misc по
+                //.. выполнял
+                // `ClearRecond(guid); item->~CGoodsNode(); delete item;`
+                // без `m_mapAuctionGoodsList.erase`, после чего удалял GUID из
+                // batch. Достижимость dangling pointer неизвестна, поэтому
+                // Box остаётся в primary map, а внешний выбор не выдумывается.
                 return Err(DoneDelListError::DefaultStateDanglingPointer {
                     guid,
                     state: unsupported.raw(),
@@ -694,7 +700,7 @@ impl CAuctionRoom<CGoodsNode> {
         }
     }
 
- /// Копирует не более первых ста GUID signed owner-а в переданный список.
+    /// Копирует не более первых ста GUID signed owner-а в переданный список.
     fn query_item_from_owner_list(&self, player_id: i32, items: &mut Vec<CGuid>) -> bool {
         if let Some(owner_items) = self.owner_list.get(&player_id) {
             for guid in owner_items {
@@ -707,7 +713,7 @@ impl CAuctionRoom<CGoodsNode> {
         !items.is_empty()
     }
 
- /// Дописывает в сообщение self-auction список указанного игрока.
+    /// Дописывает в сообщение self-auction список указанного игрока.
     pub(crate) fn add_byte_auction_self_to_client(
         &self,
         message: &mut CMessage,
@@ -730,13 +736,13 @@ impl CAuctionRoom<CGoodsNode> {
         Ok(())
     }
 
- /// Вставляет либо целиком заменяет поисковое условие по его player ID.
+    /// Вставляет либо целиком заменяет поисковое условие по его player ID.
     pub(crate) fn modify_player_seach_condition(&mut self, condition: PlayerOptNode) {
         let player_id = condition.player_id();
         let _ = self.player_search_list.insert(player_id, condition);
     }
 
- /// Изменяет сохранённую страницу игрока по старой операции `0/1/2`.
+    /// Изменяет сохранённую страницу игрока по старой операции `0/1/2`.
     pub(crate) fn compute_player_page(
         &mut self,
         player_id: u32,
@@ -770,7 +776,7 @@ impl CAuctionRoom<CGoodsNode> {
         Ok(())
     }
 
- /// Дописывает страницу временного индекса в исходном wire-порядке.
+    /// Дописывает страницу временного индекса в исходном wire-порядке.
     pub(crate) fn add_byte_at_page_by_time(
         &self,
         player_id: u32,
@@ -882,7 +888,7 @@ impl CAuctionRoom<CGoodsNode> {
         Ok(name_matches && level_matches && money_matches && weapon_matches)
     }
 
- /// Строит исходный ordered batch синхронизации одного GameServer map.
+    /// Строит исходный ordered batch синхронизации одного GameServer map.
     pub(crate) fn unity_goods(
         &self,
         existing: &BTreeMap<CGuid, bool>,

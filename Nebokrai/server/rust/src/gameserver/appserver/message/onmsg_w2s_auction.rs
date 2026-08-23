@@ -1,6 +1,54 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! World→Game auction handler.
+//!
+//! Точная пара GameServer EXE/PDB и owner
+//! `server/gameserver/appserver/message/onmsg_w2s_auction.cpp` подтверждают
+//! selector `0x80403`: чтение Windows `long`, bool-проекцию и
+//! вызов `CGame::SetAuctionState`; эта ветвь имеет статус `IMPLEMENTED`.
+//! Для enabled-state время берётся только после чтения payload, как в
+//! оригинале. Обрезанный payload заменяет небезопасное чтение за буфером
+//! typed error-ом без мутации. Остальные auction selectors остаются RAW ниже.
+
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
+
+const WORLD_AUCTION_STATE_MESSAGE: i32 = 0x0008_0403;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldAuctionStateMessageError {
+    MissingEnabledLong,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldAuctionStateMessageReport {
+    pub(crate) enabled: bool,
+    pub(crate) last_check_seconds: u32,
+}
+
+/// Материализует только exact `0x80403`-ветвь большого handler-а.
+/// `None` означает, что сообщение должен идти в оставшийся auction owner.
+pub(crate) fn dispatch_world_auction_state(
+    message: &mut CMessage,
+    game: &mut CGame,
+    wall_time_seconds: impl FnOnce() -> u32,
+) -> Option<Result<WorldAuctionStateMessageReport, WorldAuctionStateMessageError>> {
+    if message.message_type() != WORLD_AUCTION_STATE_MESSAGE {
+        return None;
+    }
+    let Some(enabled) = message.base_mut().get_long() else {
+        return Some(Err(WorldAuctionStateMessageError::MissingEnabledLong));
+    };
+    let enabled = enabled != 0;
+    let last_check_seconds = if enabled {
+        wall_time_seconds()
+    } else {
+        game.auction_last_check_seconds()
+    };
+    game.set_auction_state(enabled, last_check_seconds);
+    Some(Ok(WorldAuctionStateMessageReport {
+        enabled,
+        last_check_seconds,
+    }))
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -21,32 +69,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer
