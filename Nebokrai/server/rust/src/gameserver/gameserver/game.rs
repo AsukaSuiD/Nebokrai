@@ -87,6 +87,9 @@
 //! Honor configuration/ranks `0x26..0x2A` проходят полный FIFO pass; total
 //! snapshot сбрасывает counters canonical player map и возвращает точные
 //! AdjustHonorRank script-effects для внешнего script runtime.
+//! Function/variable/general/script-file resources `0x0A..0x0D` получают
+//! parser callbacks от того же `GameMainLoopRuntime`, который исполняет Script
+//! stage, и публикуются из живого FIFO с duplicate-owner семантикой.
 //! Battle-fairy combine теперь замыкает game player-map с GlobeSetup gate и
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные
@@ -1065,7 +1068,9 @@ struct GameMainLoopState {
 
 /// Concrete Script/AI/session owners подключаются сюда по мере их
 /// материализации; message routing уже исполняется самим `CGame`.
-pub(crate) trait GameMainLoopRuntime: GameMessageHandlers {
+pub(crate) trait GameMainLoopRuntime:
+    GameMessageHandlers + GameScriptResourceContext
+{
     fn exit_requested(&self) -> bool;
     fn tick_interval_ms(&self) -> u32;
     fn get_tick_ms(&mut self) -> u32;
@@ -3528,7 +3533,9 @@ impl CGame {
         depot_messages: &mut Vec<DepotMessageReport>,
         server_messages: &mut Vec<Result<GameServerMessageReport, GameServerMessageError>>,
     ) {
-        if let Some(report) = dispatch_server_message(message, self, || runtime.get_tick_ms()) {
+        if let Some(report) =
+            dispatch_server_message(message, self, runtime, |runtime| runtime.get_tick_ms())
+        {
             server_messages.push(report);
         } else if let Some(report) =
             dispatch_world_auction_state(message, self, || runtime.wall_time_seconds())

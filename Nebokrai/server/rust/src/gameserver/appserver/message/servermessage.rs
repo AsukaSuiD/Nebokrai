@@ -85,6 +85,8 @@
 //! затем проецирует war state и relive rectangles в доступные nation regions.
 //! Script resources `0x0A..0x0D` сохраняют signed lengths, bounded path,
 //! function/general parser callbacks и разные duplicate-owner контракты.
+//! Они проходят реальный FIFO через `GameMainLoopRuntime`, уже владеющий
+//! Script stage; function/general callbacks исполняются в исходных позициях.
 //! Game ID selector `0x12` сохраняет raw byte для старшего байта team ID.
 //! Language table selector `0x2F` и runtime refresh `0x7F807` используют один
 //! clear/decode/log/cursor контракт `CGame::CreateStringTable`.
@@ -876,6 +878,35 @@ pub(crate) struct GameHonorStartupMessageReport {
     pub(crate) file_effects: Vec<(String, Vec<u8>)>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameScriptStartupReport {
+    FunctionList {
+        declared_length: i32,
+        publication: GameSingleFilePublication,
+    },
+    VariableList {
+        declared_length: i32,
+        publication: GameSingleFilePublication,
+    },
+    GeneralVariables {
+        start_offset: usize,
+    },
+    ScriptFile {
+        path_bytes: usize,
+        declared_length: i32,
+        replaced: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GameScriptStartupError(pub(crate) GameScriptResourceDecodeError);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameScriptStartupMessageReport {
+    pub(crate) decoded: GameScriptStartupReport,
+    pub(crate) log_effects: Vec<Vec<u8>>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum GamePlayerRanksStartupError {
     OwnerUnavailable { selector: i32 },
@@ -952,6 +983,7 @@ pub(crate) enum GameServerMessageReport {
     WorldEventStartup(GameWorldEventStartupMessageReport),
     PlayerRanksStartup(GamePlayerRanksStartupReport),
     HonorStartup(GameHonorStartupMessageReport),
+    ScriptStartup(GameScriptStartupMessageReport),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -972,15 +1004,17 @@ pub(crate) enum GameServerMessageError {
     WorldEventStartup(GameWorldEventStartupError),
     PlayerRanksStartup(GamePlayerRanksStartupError),
     HonorStartup(GameHonorStartupError),
+    ScriptStartup(GameScriptStartupError),
 }
 
 /// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
 /// startup selector читается один раз, неизвестные selector-ы не двигают
 /// cursor, а обе language-table точки входят в один `CGame` owner.
-pub(crate) fn dispatch_server_message(
+pub(crate) fn dispatch_server_message<Context: GameScriptResourceContext>(
     message: &mut CMessage,
     game: &mut CGame,
-    mut now_ms: impl FnMut() -> u32,
+    script_context: &mut Context,
+    mut now_ms: impl FnMut(&mut Context) -> u32,
 ) -> Option<Result<GameServerMessageReport, GameServerMessageError>> {
     if message.message_type() == STRING_TABLE_REFRESH_MESSAGE {
         return Some(dispatch_string_table_message(
@@ -1012,8 +1046,13 @@ pub(crate) fn dispatch_server_message(
                 .get_long()
                 .expect("terminal selector проверен без изменения cursor");
             Some(Ok(GameServerMessageReport::ClientServerStart(
-                dispatch_client_server_start(consumed_selector, message, game, now_ms())
-                    .expect("selector 0x3B проверен outer dispatcher-ом"),
+                dispatch_client_server_start(
+                    consumed_selector,
+                    message,
+                    game,
+                    now_ms(script_context),
+                )
+                .expect("selector 0x3B проверен outer dispatcher-ом"),
             )))
         }
         STRING_TABLE_SELECTOR => {
@@ -1399,6 +1438,121 @@ pub(crate) fn dispatch_server_message(
                     file_effects,
                 },
             )))
+        }
+        FUNCTION_LIST_SELECTOR
+        | VARIABLE_LIST_SELECTOR
+        | GENERAL_VARIABLE_SELECTOR
+        | SCRIPT_FILE_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("script-resource selector проверен без изменения cursor");
+            let mut log_effects = Vec::new();
+            let decoded = match {
+                let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                decode_script_startup(
+                    consumed_selector,
+                    wire,
+                    cursor,
+                    game,
+                    script_context,
+                    |text| log_effects.push(text.to_vec()),
+                )
+                .expect("script-resource selector проверен outer dispatcher-ом")
+                .map_err(GameServerMessageError::ScriptStartup)
+            } {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(Ok(GameServerMessageReport::ScriptStartup(
+                GameScriptStartupMessageReport {
+                    decoded,
+                    log_effects,
+                },
+            )))
+        }
+        _ => None,
+    }
+}
+
+fn decode_script_startup<Context: GameScriptResourceContext>(
+    selector: i32,
+    source: &[u8],
+    cursor: &mut usize,
+    game: &mut CGame,
+    script_context: &mut Context,
+    mut add_log_text: impl FnMut(&[u8]),
+) -> Option<Result<GameScriptStartupReport, GameScriptStartupError>> {
+    match selector {
+        FUNCTION_LIST_SELECTOR | VARIABLE_LIST_SELECTOR => {
+            let resource = if selector == FUNCTION_LIST_SELECTOR {
+                "FunctionList"
+            } else {
+                "VariableList"
+            };
+            let declared_length = match read_script_resource_length(source, cursor, resource) {
+                Ok(length) => length,
+                Err(error) => return Some(Err(GameScriptStartupError(error))),
+            };
+            let data = match take_script_resource_bytes(
+                source,
+                cursor,
+                declared_length as usize,
+                if selector == FUNCTION_LIST_SELECTOR {
+                    "FunctionList data"
+                } else {
+                    "VariableList data"
+                },
+            ) {
+                Ok(data) => data.to_vec(),
+                Err(error) => return Some(Err(GameScriptStartupError(error))),
+            };
+            if selector == FUNCTION_LIST_SELECTOR {
+                let publication = game.set_function_file_data(data, script_context);
+                add_log_text(b"FunctionList...OK!");
+                Some(Ok(GameScriptStartupReport::FunctionList {
+                    declared_length,
+                    publication,
+                }))
+            } else {
+                let publication = game.set_variable_file_data(data);
+                add_log_text(b"VariableList...OK!");
+                Some(Ok(GameScriptStartupReport::VariableList {
+                    declared_length,
+                    publication,
+                }))
+            }
+        }
+        GENERAL_VARIABLE_SELECTOR => {
+            let start_offset = *cursor;
+            game.set_general_variable_file_data(source, start_offset, script_context);
+            add_log_text(b"GeneralVariableList...OK!");
+            Some(Ok(GameScriptStartupReport::GeneralVariables {
+                start_offset,
+            }))
+        }
+        SCRIPT_FILE_SELECTOR => {
+            let path = read_script_resource_path(source, cursor, 0x104);
+            let declared_length = match read_script_resource_length(source, cursor, "ScriptFile") {
+                Ok(length) => length,
+                Err(error) => return Some(Err(GameScriptStartupError(error))),
+            };
+            let data = match take_script_resource_bytes(
+                source,
+                cursor,
+                declared_length as usize,
+                "ScriptFile data",
+            ) {
+                Ok(data) => data.to_vec(),
+                Err(error) => return Some(Err(GameScriptStartupError(error))),
+            };
+            let path_bytes = path.len();
+            let replaced = game.set_script_file_data(path, data);
+            Some(Ok(GameScriptStartupReport::ScriptFile {
+                path_bytes,
+                declared_length,
+                replaced,
+            }))
         }
         _ => None,
     }
@@ -2824,6 +2978,46 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
     mut put_string_to_file: impl FnMut(&str, &[u8]),
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    if let Some(result) = decode_script_startup(
+        selector,
+        source,
+        cursor,
+        game,
+        script_context,
+        &mut add_log_text,
+    ) {
+        return Some(match result {
+            Ok(GameScriptStartupReport::FunctionList {
+                declared_length,
+                publication,
+            }) => Ok(GameOwnedStartupSnapshotReport::FunctionList {
+                declared_length,
+                publication,
+            }),
+            Ok(GameScriptStartupReport::VariableList {
+                declared_length,
+                publication,
+            }) => Ok(GameOwnedStartupSnapshotReport::VariableList {
+                declared_length,
+                publication,
+            }),
+            Ok(GameScriptStartupReport::GeneralVariables { start_offset }) => {
+                Ok(GameOwnedStartupSnapshotReport::GeneralVariable { start_offset })
+            }
+            Ok(GameScriptStartupReport::ScriptFile {
+                path_bytes,
+                declared_length,
+                replaced,
+            }) => Ok(GameOwnedStartupSnapshotReport::ScriptFile {
+                path_bytes,
+                declared_length,
+                replaced,
+            }),
+            Err(GameScriptStartupError(error)) => {
+                Err(GameOwnedStartupSnapshotError::ScriptResource(error))
+            }
+        });
+    }
     if selector == HONOR_ELIMINATE_SELECTOR
         && let Some(result) = decode_honor_startup(
             selector,
@@ -3222,93 +3416,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
         });
     }
     match selector {
-        FUNCTION_LIST_SELECTOR => {
-            let declared_length = match read_script_resource_length(source, cursor, "FunctionList")
-            {
-                Ok(length) => length,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::ScriptResource(error)));
-                }
-            };
-            let data = match take_script_resource_bytes(
-                source,
-                cursor,
-                declared_length as usize,
-                "FunctionList data",
-            ) {
-                Ok(data) => data.to_vec(),
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::ScriptResource(error)));
-                }
-            };
-            let publication = game.set_function_file_data(data, script_context);
-            add_log_text(b"FunctionList...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::FunctionList {
-                declared_length,
-                publication,
-            }))
-        }
-        VARIABLE_LIST_SELECTOR => {
-            let declared_length = match read_script_resource_length(source, cursor, "VariableList")
-            {
-                Ok(length) => length,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::ScriptResource(error)));
-                }
-            };
-            let data = match take_script_resource_bytes(
-                source,
-                cursor,
-                declared_length as usize,
-                "VariableList data",
-            ) {
-                Ok(data) => data.to_vec(),
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::ScriptResource(error)));
-                }
-            };
-            let publication = game.set_variable_file_data(data);
-            add_log_text(b"VariableList...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::VariableList {
-                declared_length,
-                publication,
-            }))
-        }
-        GENERAL_VARIABLE_SELECTOR => {
-            let start_offset = *cursor;
-            game.set_general_variable_file_data(source, start_offset, script_context);
-            add_log_text(b"GeneralVariableList...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::GeneralVariable {
-                start_offset,
-            }))
-        }
-        SCRIPT_FILE_SELECTOR => {
-            let path = read_script_resource_path(source, cursor, 0x104);
-            let declared_length = match read_script_resource_length(source, cursor, "ScriptFile") {
-                Ok(length) => length,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::ScriptResource(error)));
-                }
-            };
-            let data = match take_script_resource_bytes(
-                source,
-                cursor,
-                declared_length as usize,
-                "ScriptFile data",
-            ) {
-                Ok(data) => data.to_vec(),
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::ScriptResource(error)));
-                }
-            };
-            let path_bytes = path.len();
-            let replaced = game.set_script_file_data(path, data);
-            Some(Ok(GameOwnedStartupSnapshotReport::ScriptFile {
-                path_bytes,
-                declared_length,
-                replaced,
-            }))
-        }
         STRING_TABLE_SELECTOR => {
             let report = match game.create_string_table(source, cursor, &mut add_log_text) {
                 Ok(report) => report,
