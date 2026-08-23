@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use chrono::{Datelike, Timelike};
 
 use crate::dbaccess::worlddb::dbgoods::TiberiusDbGoods;
@@ -108,15 +108,22 @@ use crate::worldserver::appworld::worldregion::WorldRegionResourceContext;
 use super::game::{
     CGame, WorldGameDatabaseInitialization, WorldGameDatabaseOwner, WorldGameInitContext,
     WorldGameInitCallbacks, WorldGameInitOperatorNotice, WorldGameInitResult,
-    WorldGameInitWorkerKind, WorldPlayerDataLoadOwner, WorldPlayerLoadDataAdapter,
-    WorldJjcRuntimeContext, WorldLeiTingRuntimeContext, WorldReloadContext,
+    WorldCollectPlayerDataRequestState, WorldGameInitWorkerKind, WorldJjcRuntimeContext,
+    WorldLeiTingRuntimeContext, WorldMainLoopClockState, WorldMainLoopInitializationState,
+    WorldMainLoopLargessState, WorldMainLoopLoginReleaseState, WorldMainLoopProfileState,
+    WorldMainLoopStateOwners, WorldMainLoopTailClockState, WorldPlayerDataLoadOwner,
+    WorldPlayerLoadDataAdapter, WorldPlayerRanksRequestState, WorldProcessMessageStageState,
+    WorldReloadContext, WorldReloadProfileFlags, WorldRunSaveTriggerState,
     WorldSaveRuntimeContext, WorldSaveThreadHandleState,
     WorldSaveThreadJob, WorldSaveThreadLaunchRequest, WorldSaveThreadReport, save_thread_func,
 };
 use super::honorranks::CHonorRanks;
 use super::playerranks::CPlayerRanks;
-use super::worldserver::{WorldLogLocalTime, WorldLogTextOwner};
-use super::savedb::{SaveDataLogPublisher, SaveDataMonitoringSnapshot};
+use super::worldserver::{WorldLogLocalTime, WorldLogTextOwner, WorldRefreshInfoHighWater};
+use super::savedb::{
+    SaveDataLifecycleState, SaveDataLocalTime, SaveDataLogPublisher,
+    SaveDataMonitoringSnapshot,
+};
 use super::jjcmaintenanceworker::{
     WorldJjcWeekClearWorker, WorldJjcWeekClearWorkerEvent,
 };
@@ -365,6 +372,98 @@ impl WorldProcessDomainOwners {
             &mut callbacks,
         )
         .await
+    }
+}
+
+/// Единственный набор process-global accumulators полного World MainLoop.
+pub(crate) struct WorldProcessMainLoopState {
+    initialization: WorldMainLoopInitializationState,
+    clocks: WorldMainLoopClockState,
+    tail_clocks: WorldMainLoopTailClockState,
+    login_release: WorldMainLoopLoginReleaseState,
+    largess: WorldMainLoopLargessState,
+    profile: WorldMainLoopProfileState,
+    process_message: WorldProcessMessageStageState,
+    refresh_high_water: WorldRefreshInfoHighWater,
+    collect_player_data: WorldCollectPlayerDataRequestState,
+    save_trigger: WorldRunSaveTriggerState,
+    save_lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
+    reload_flags: WorldReloadProfileFlags,
+    player_ranks_request: WorldPlayerRanksRequestState,
+    save_thread_handle: WorldSaveThreadHandleState,
+}
+
+impl WorldProcessMainLoopState {
+    pub(crate) fn new() -> Self {
+        Self {
+            initialization: Default::default(),
+            clocks: Default::default(),
+            tail_clocks: Default::default(),
+            login_release: Default::default(),
+            largess: Default::default(),
+            profile: WorldMainLoopProfileState {
+                last_published_at_ms: 0,
+                ai_calls: 0,
+                ai_time_ms: 0,
+                refresh_text_time_ms: 0,
+                net_session_time_ms: 0,
+                faction_war_time_ms: 0,
+                timer_time_ms: 0,
+                process_player_data_queue_time_ms: 0,
+                session_factory_time_ms: 0,
+                save_point_time_ms: 0,
+            },
+            process_message: Default::default(),
+            refresh_high_water: Default::default(),
+            collect_player_data: Default::default(),
+            save_trigger: WorldRunSaveTriggerState {
+                send_save_message_now: false,
+                save_all_organizations: false,
+                save_now_data: false,
+                last_save_point_time_ms: 0,
+            },
+            save_lifecycle: Arc::new(Mutex::new(SaveDataLifecycleState {
+                this_save_start_tick_ms: 0,
+                last_save_tick_ms: 0,
+                last_save_time: SaveDataLocalTime {
+                    year: 0,
+                    month: 0,
+                    day_of_week: 0,
+                    day: 0,
+                    hour: 0,
+                    minute: 0,
+                    second: 0,
+                    milliseconds: 0,
+                },
+                is_saving_data: false,
+            })),
+            reload_flags: Default::default(),
+            player_ranks_request: Default::default(),
+            save_thread_handle: WorldSaveThreadHandleState::Empty,
+        }
+    }
+
+    pub(crate) fn owners<'a>(
+        &'a mut self,
+        copy_number_timer: &'a mut CopyNumberTimerState,
+    ) -> WorldMainLoopStateOwners<'a> {
+        WorldMainLoopStateOwners {
+            initialization: &mut self.initialization,
+            clocks: &mut self.clocks,
+            tail_clocks: &mut self.tail_clocks,
+            login_release: &mut self.login_release,
+            largess: &mut self.largess,
+            profile: &mut self.profile,
+            copy_number_timer,
+            process_message: &mut self.process_message,
+            refresh_high_water: &mut self.refresh_high_water,
+            collect_player_data: &mut self.collect_player_data,
+            save_trigger: &mut self.save_trigger,
+            save_lifecycle: &self.save_lifecycle,
+            reload_flags: &self.reload_flags,
+            player_ranks_request: &self.player_ranks_request,
+            save_thread_handle: &mut self.save_thread_handle,
+        }
     }
 }
 
