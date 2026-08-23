@@ -89,6 +89,17 @@ pub(crate) const GAP_BF_BRAVE_BASE: i32 = 196;
 pub(crate) const GAP_BF_AGILITY_BASE: i32 = 197;
 pub(crate) const GAP_BF_SPRITUALISM_BASE: i32 = 198;
 pub(crate) const GAP_BF_STRENGH_BASE: i32 = 199;
+// Live battle-fairy equipment range из того же wire enum; значения являются
+// catalog keys и потому не заменяются отдельным Rust enum discriminant-ом.
+pub(crate) const GAP_BF_LIFE_ADDON: i32 = 200;
+pub(crate) const GAP_BF_MP_ADDON: i32 = 201;
+pub(crate) const GAP_BF_ATTACK_ADDON: i32 = 202;
+pub(crate) const GAP_BF_SPRITE_ADDON: i32 = 203;
+pub(crate) const GAP_BF_ABRAVE_ADDON: i32 = 204;
+pub(crate) const GAP_BF_AGILITY_ADDON: i32 = 205;
+pub(crate) const GAP_BF_SPRITUALISE_ADDON: i32 = 206;
+pub(crate) const GAP_BF_STRENGH_ADDON: i32 = 207;
+pub(crate) const GAP_BF_BLAST_ADDON: i32 = 208;
 pub(crate) const GAP_BF_MAX_LEVEL: i32 = 217;
 pub(crate) const GAP_BF_CUT_HURT_SCALE: i32 = 218;
 pub(crate) const GAP_BF_GLOVE: i32 = 220;

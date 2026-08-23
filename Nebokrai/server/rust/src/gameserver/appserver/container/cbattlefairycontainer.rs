@@ -14,11 +14,16 @@
 //! порядок remove `body → stone → material`, RNG-result и ownership
 //! созданного товара выполняются в `CPlayer`; этот owner даёт recipe,
 //! positional storage и `LoadBFDefualtProperty` callback в том же порядке.
+//! Gear add/remove теперь замкнуты через `CPlayer`: ранний `BFPropertyAdd`
+//! остаётся partial effect даже при отказе base Add, а Remove применяет `-1`
+//! только после успешного отделения goods. Сам контейнер публикует typed
+//! storage/result state; GlobeSetup-формулы и client update принадлежат
+//! player/game owner-ам.
 //!
 //! Автоматический overload читает неинициализированный `m_eBFEquipPlace` у
 //! catalog owner-а. Rust выражает этот UB как typed block, а не выбирает
-//! логичную ячейку из позднего C++-донора. Upgrade/summon и остальные
-//! player-integrated методы ниже остаются RAW.
+//! логичную ячейку из позднего C++-донора. Upgrade, potential/skill reset и
+//! остальные ещё не подключённые player-integrated методы ниже остаются RAW.
 
 use super::camountlimitgoodscontainer::{
     AmountLimitGoodsCleared, AmountLimitGoodsRelease, AmountLimitGoodsTaken,
@@ -313,11 +318,44 @@ impl CBattleFairyContainer {
                 BattleFairyContainerAddBlock::MissingGoods,
             );
         };
+        let applies_property = match self.validate_add_at(cell, goods, factory) {
+            Ok(applies_property) => applies_property,
+            Err(block) => return BattleFairyContainerAddOutcome::Rejected(block),
+        };
+        let property_effect =
+            applies_property.then_some(BattleFairyPropertyAddEffect { cell, delta: 1 });
+        BattleFairyContainerAddOutcome::Stored {
+            base: self
+                .base
+                .add_goods_at(cell.position(), incoming, factory, owner_progress_allows),
+            property_effect,
+        }
+    }
+
+    /// Позволяет player owner-у исполнить подтверждённый ранний
+    /// `BFPropertyAdd(+1)` до base storage mutation, сохраняя единый validator
+    /// positional add и его exact rejection mapping.
+    pub(crate) fn property_effect_before_add(
+        &self,
+        cell: BattleFairyCell,
+        goods: &CGoods,
+        factory: &CGoodsFactory,
+    ) -> Option<BattleFairyPropertyAddEffect> {
+        self.validate_add_at(cell, goods, factory)
+            .ok()
+            .filter(|applies_property| *applies_property)
+            .map(|_| BattleFairyPropertyAddEffect { cell, delta: 1 })
+    }
+
+    fn validate_add_at(
+        &self,
+        cell: BattleFairyCell,
+        goods: &CGoods,
+        factory: &CGoodsFactory,
+    ) -> Result<bool, BattleFairyContainerAddBlock> {
         let index = goods.base_properties_index();
         let Some(properties) = factory.query_goods_base_properties(index) else {
-            return BattleFairyContainerAddOutcome::Rejected(
-                BattleFairyContainerAddBlock::MissingBaseProperties { index },
-            );
+            return Err(BattleFairyContainerAddBlock::MissingBaseProperties { index });
         };
         let value =
             |property_type, value_id| goods.addon_property_value(factory, property_type, value_id);
@@ -351,18 +389,9 @@ impl CBattleFairyContainer {
             _ => (false, false),
         };
         if !allowed {
-            return BattleFairyContainerAddOutcome::Rejected(
-                BattleFairyContainerAddBlock::GoodsRejected { cell },
-            );
+            return Err(BattleFairyContainerAddBlock::GoodsRejected { cell });
         }
-        let property_effect =
-            applies_property.then_some(BattleFairyPropertyAddEffect { cell, delta: 1 });
-        BattleFairyContainerAddOutcome::Stored {
-            base: self
-                .base
-                .add_goods_at(cell.position(), incoming, factory, owner_progress_allows),
-            property_effect,
-        }
+        Ok(applies_property)
     }
 
     /// Gem-base (13) задаёт начальный result без roll-а; улучшения из `14..16`
@@ -853,20 +882,6 @@ fn x87_fistp_truncating(value: f32) -> i32 {
 //
 
 // ============================================================================
-// FUNCTION: CBattleFairyContainer::CheckBattleFairyCombine
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:495
-// RVA: 0x000FE780
-// ADDRESS: 004fe780
-// PROTOTYPE: eCombineResult __thiscall CheckBattleFairyCombine(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CBattleFairyContainer::DeleteGoods
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -945,90 +960,6 @@ fn x87_fistp_truncating(value: f32) -> i32 {
 // RVA: 0x00101530
 // ADDRESS: 00501530
 // PROTOTYPE: void __thiscall ResetSkill(int param_1, int param_2, int param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyContainer::SummonBF
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:2096
-// RVA: 0x00101CB0
-// ADDRESS: 00501cb0
-// PROTOTYPE: void __thiscall SummonBF(int param_1, int param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyContainer::BFPropertyAdd
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:2286
-// RVA: 0x001020E0
-// ADDRESS: 005020e0
-// PROTOTYPE: void __thiscall BFPropertyAdd(eBattleFairy_Place_Cell param_1, CGoods * param_2, int param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyContainer::LoadBFDefualtProperty
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:2475
-// RVA: 0x00102BC0
-// ADDRESS: 00502bc0
-// PROTOTYPE: void __thiscall LoadBFDefualtProperty(int param_1, CGoods * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyContainer::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:157
-// RVA: 0x00103080
-// ADDRESS: 00503080
-// PROTOTYPE: int __thiscall Add(ulong param_1, CGoods * param_2, tagPreviousContainer * param_3, void * param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:290
-// RVA: 0x00103310
-// ADDRESS: 00503310
-// PROTOTYPE: CBaseObject * __thiscall Remove(CBaseObject * param_1, void * param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBattleFairyContainer::BatllteFairyCombine
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:577
-// RVA: 0x001034C0
-// ADDRESS: 005034c0
-// PROTOTYPE: bool __thiscall BatllteFairyCombine(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

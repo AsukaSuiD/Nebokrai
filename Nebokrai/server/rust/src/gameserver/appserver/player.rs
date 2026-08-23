@@ -41,21 +41,36 @@
 //! проходом: guards, summon/recall state, ordered around effects и area-map
 //! action. Active pet пока count-derived fact; codec и goods-message decoder
 //! остаются явной границей и report не подменяет исторические packet bytes.
+//! `BFPropertyAdd` соединяет восемь gear-ячеек с headgear battle fairy,
+//! `GlobeSetup` occupation coefficients и player combat state. Сохранены
+//! ранний effect до результата Add, post-remove `-1`, clamp текущих HP/MP,
+//! двойное применение MaxHP/Str/Int/Dex и двойной `0xBF918` в Remove.
 
 use super::area::WarSoulPoint;
 use super::container::cbattlefairycontainer::{
-    BattleFairyCombineCheck, BattleFairyCombineRemovedInput, BattleFairyContainerAddOutcome,
-    BattleFairyDefaultGoodsUpdate, BattleFairyDefaultSkill, CBattleFairyContainer,
+    BattleFairyCell, BattleFairyCombineCheck, BattleFairyCombineRemovedInput,
+    BattleFairyContainerAddOutcome, BattleFairyDefaultGoodsUpdate, BattleFairyDefaultSkill,
+    BattleFairyPropertyAddEffect, CBattleFairyContainer,
 };
 use super::container::cequipmentcontainer::CEquipmentContainer;
-use super::container::cvolumelimitgoodscontainer::VolumeGoodsAddOutcome;
+use super::container::cvolumelimitgoodscontainer::{
+    VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome,
+};
 use super::goods::cbattlefairyproperty::BattleFairyCompose;
 use super::goods::cgoods::CGoods;
-use super::goods::cgoodsbaseproperties::{GAP_BF_BATTLE_FAIRY, GAP_BF_HP};
+use super::goods::cgoodsbaseproperties::{
+    GAP_BF_ABRAVE_ADDON, GAP_BF_AGILITY, GAP_BF_AGILITY_ADDON, GAP_BF_ATTACK, GAP_BF_ATTACK_ADDON,
+    GAP_BF_BATTLE_FAIRY, GAP_BF_BLAST, GAP_BF_BLAST_ADDON, GAP_BF_BRAVE, GAP_BF_CUT_HURT_ADDON,
+    GAP_BF_CUT_HURT_SCALE, GAP_BF_HP, GAP_BF_LIFE_ADDON, GAP_BF_MAX_HP, GAP_BF_MAX_MP, GAP_BF_MP,
+    GAP_BF_MP_ADDON, GAP_BF_SPRITE, GAP_BF_SPRITE_ADDON, GAP_BF_SPRITUALISE_ADDON,
+    GAP_BF_SPRITUALISM, GAP_BF_STRENGH, GAP_BF_STRENGH_ADDON,
+};
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::moveshape::CMoveShape;
 use super::shape::{CShape, ShapeCoordinateBlock, ShapeFigure, ShapeView};
 use super::skills::skillfactory::CSkillFactory;
+use crate::public::guid::CGuid;
+use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
 
 const PLAYER_TYPE: i32 = 400;
 const LEGACY_COMBAT_MAXIMUM: u32 = i32::MAX as u32;
@@ -198,8 +213,65 @@ pub(crate) struct BattleFairySummonReport {
     pub(crate) effects: Vec<BattleFairySummonEffect>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyEquipmentMutationOutcome {
+    Added(BattleFairyContainerAddOutcome),
+    Removed(VolumeGoodsRemoveOutcome),
+    MissingGoods,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyEquipmentMutationEffect {
+    PropertiesChanged { player_id: i32 },
+    BattleFairyUpdated(BattleFairyDefaultGoodsUpdate),
+}
+
+#[must_use = "equipment report сохраняет container ownership и ранние property effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyEquipmentMutationReport {
+    pub(crate) player_id: i32,
+    pub(crate) cell: Option<BattleFairyCell>,
+    pub(crate) delta: i32,
+    pub(crate) property_applied: bool,
+    pub(crate) outcome: BattleFairyEquipmentMutationOutcome,
+    pub(crate) effects: Vec<BattleFairyEquipmentMutationEffect>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct BattleFairyGearAddons {
+    attack: i32,
+    sprite: i32,
+    strength: i32,
+    brave: i32,
+    agility: i32,
+    spiritualism: i32,
+    blast: i32,
+    cut_hurt: i32,
+    life: i32,
+    mana: i32,
+}
+
+impl BattleFairyGearAddons {
+    fn read(goods: &CGoods, factory: &CGoodsFactory) -> Self {
+        let value = |property_type| goods.addon_property_value(factory, property_type, 1);
+        Self {
+            attack: value(GAP_BF_ATTACK_ADDON),
+            sprite: value(GAP_BF_SPRITE_ADDON),
+            strength: value(GAP_BF_STRENGH_ADDON),
+            brave: value(GAP_BF_ABRAVE_ADDON),
+            agility: value(GAP_BF_AGILITY_ADDON),
+            spiritualism: value(GAP_BF_SPRITUALISE_ADDON),
+            blast: value(GAP_BF_BLAST_ADDON),
+            cut_hurt: value(GAP_BF_CUT_HURT_ADDON),
+            life: value(GAP_BF_LIFE_ADDON),
+            mana: value(GAP_BF_MP_ADDON),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerBaseProperties {
+    pub(crate) occupation: u8,
     pub(crate) pk_count: u16,
     pub(crate) experience: u32,
     pub(crate) health: u32,
@@ -221,6 +293,9 @@ pub(crate) struct PlayerCombatProperties {
     pub(crate) maximum_attack: u32,
     pub(crate) defense: u32,
     pub(crate) element_resistance: u32,
+    pub(crate) burden: u16,
+    pub(crate) reank: u16,
+    pub(crate) element_modify: i32,
     pub(crate) blast_defense_scale_bits: u32,
     pub(crate) full_miss_scale_bits: u32,
     pub(crate) critical_rate_bits: u32,
@@ -548,6 +623,232 @@ impl CPlayer {
         }
     }
 
+    fn apply_battle_fairy_property(
+        &mut self,
+        cell: BattleFairyCell,
+        addons: BattleFairyGearAddons,
+        delta: i32,
+        factory: &CGoodsFactory,
+        coefficients: GlobePlayerPropertyCoefficients,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> Option<BattleFairyDefaultGoodsUpdate> {
+        if delta == 0 || !is_battle_fairy_property_cell(cell) {
+            return None;
+        }
+        let occupation = usize::from(self.base_properties.occupation).min(2);
+        let player_id = self.player_id();
+        let battle_fairy = self.equipment.get_goods_mut(10)?;
+        if battle_fairy.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
+            return None;
+        }
+
+        for (source, target) in [
+            (addons.attack, GAP_BF_ATTACK),
+            (addons.sprite, GAP_BF_SPRITE),
+            (addons.strength, GAP_BF_STRENGH),
+            (addons.brave, GAP_BF_BRAVE),
+            (addons.agility, GAP_BF_AGILITY),
+            (addons.spiritualism, GAP_BF_SPRITUALISM),
+            (addons.blast, GAP_BF_BLAST),
+            (addons.cut_hurt, GAP_BF_CUT_HURT_SCALE),
+        ] {
+            add_battle_fairy_addon(battle_fairy, factory, target, source.wrapping_mul(delta));
+        }
+        add_battle_fairy_addon(
+            battle_fairy,
+            factory,
+            GAP_BF_MAX_HP,
+            addons
+                .strength
+                .wrapping_add(addons.life)
+                .wrapping_mul(delta),
+        );
+        add_battle_fairy_addon(
+            battle_fairy,
+            factory,
+            GAP_BF_MAX_MP,
+            addons
+                .spiritualism
+                .wrapping_add(addons.mana)
+                .wrapping_mul(delta),
+        );
+        clamp_battle_fairy_current(battle_fairy, factory, GAP_BF_HP, GAP_BF_MAX_HP);
+        clamp_battle_fairy_current(battle_fairy, factory, GAP_BF_MP, GAP_BF_MAX_MP);
+
+        let strength = f64::from(addons.strength) * f64::from(delta) * 0.00001;
+        let brave = f64::from(addons.brave) * f64::from(delta) * 0.00001;
+        let agility = f64::from(addons.agility) * f64::from(delta) * 0.00001;
+        let spiritualism = f64::from(addons.spiritualism) * f64::from(delta) * 0.00001;
+        let combat = &mut self.combat_properties;
+        combat.maximum_hp = add_battle_fairy_u32(combat.maximum_hp, strength);
+        combat.strength = add_battle_fairy_u32(combat.strength, brave);
+        combat.maximum_attack = add_battle_fairy_u32(
+            combat.maximum_attack,
+            brave * f64::from(coefficients.str_to_max_attack[occupation]),
+        );
+        combat.burden = add_battle_fairy_u16(
+            combat.burden,
+            brave * f64::from(coefficients.str_to_burden[occupation]),
+        );
+        combat.dexterity = add_battle_fairy_u32(combat.dexterity, agility);
+        combat.minimum_attack = add_battle_fairy_u32(
+            combat.minimum_attack,
+            agility * f64::from(coefficients.dex_to_min_attack[occupation]),
+        );
+        combat.reank = add_battle_fairy_u16(
+            combat.reank,
+            agility * f64::from(coefficients.dex_to_stiff[occupation]),
+        );
+        combat.intelligence = add_battle_fairy_u32(combat.intelligence, spiritualism);
+        combat.element_modify = add_battle_fairy_i32(
+            combat.element_modify,
+            spiritualism * f64::from(coefficients.int_to_element[occupation]),
+        );
+        combat.maximum_mp = add_battle_fairy_u32(
+            combat.maximum_mp,
+            spiritualism * f64::from(coefficients.int_to_max_mp[occupation]),
+        );
+        combat.element_resistance = add_battle_fairy_u32(
+            combat.element_resistance,
+            spiritualism * f64::from(coefficients.int_to_resistant[occupation]),
+        );
+
+        // Подтверждённый RU quirk: четыре основных значения применяются
+        // повторно после производных коэффициентов.
+        combat.maximum_hp = add_battle_fairy_u32(combat.maximum_hp, strength);
+        combat.strength = add_battle_fairy_u32(combat.strength, brave);
+        combat.intelligence = add_battle_fairy_u32(combat.intelligence, spiritualism);
+        combat.dexterity = add_battle_fairy_u32(combat.dexterity, agility);
+
+        Some(BattleFairyDefaultGoodsUpdate {
+            message_type: 0x0b_f918,
+            player_id,
+            goods: battle_fairy.identity(),
+            old_client_payload: encode_old_client(battle_fairy),
+        })
+    }
+
+    /// Exact positional `CBattleFairyContainer::Add`: для gear-ячеек
+    /// `BFPropertyAdd(+1)` является ранним partial effect и сохраняется даже
+    /// если base storage затем отвергнет товар.
+    pub(crate) fn add_battle_fairy_goods(
+        &mut self,
+        cell: BattleFairyCell,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        coefficients: GlobePlayerPropertyCoefficients,
+        owner_progress_allows: bool,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> BattleFairyEquipmentMutationReport {
+        let player_id = self.player_id();
+        let early_property = incoming.as_ref().and_then(|goods| {
+            self.battle_fairy_container
+                .property_effect_before_add(cell, goods, factory)
+                .map(|effect| (effect, BattleFairyGearAddons::read(goods, factory)))
+        });
+        let mut property_applied = false;
+        let mut effects = Vec::new();
+        if let Some((BattleFairyPropertyAddEffect { cell, delta }, addons)) = early_property
+            && let Some(update) = self.apply_battle_fairy_property(
+                cell,
+                addons,
+                delta,
+                factory,
+                coefficients,
+                encode_old_client,
+            )
+        {
+            property_applied = true;
+            effects.push(BattleFairyEquipmentMutationEffect::PropertiesChanged { player_id });
+            effects.push(BattleFairyEquipmentMutationEffect::BattleFairyUpdated(
+                update,
+            ));
+        }
+        let outcome =
+            self.battle_fairy_container
+                .add_at(cell, incoming, factory, owner_progress_allows);
+        BattleFairyEquipmentMutationReport {
+            player_id,
+            cell: Some(cell),
+            delta: 1,
+            property_applied,
+            outcome: BattleFairyEquipmentMutationOutcome::Added(outcome),
+            effects,
+        }
+    }
+
+    /// Exact `Remove`: base container отделяет goods до `BFPropertyAdd(-1)`;
+    /// успешный property path сериализует battle fairy дважды — один раз в
+    /// `BFPropertyAdd`, затем ещё раз в override `Remove`.
+    pub(crate) fn remove_battle_fairy_goods(
+        &mut self,
+        ex_id: CGuid,
+        factory: &CGoodsFactory,
+        coefficients: GlobePlayerPropertyCoefficients,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> BattleFairyEquipmentMutationReport {
+        let player_id = self.player_id();
+        let position = self
+            .battle_fairy_container
+            .base()
+            .query_goods_position(ex_id);
+        let cell = position.and_then(BattleFairyCell::from_position);
+        let addons = position
+            .and_then(|position| self.battle_fairy_container.base().get_goods(position))
+            .map(|goods| BattleFairyGearAddons::read(goods, factory));
+        let Some(outcome) = self.battle_fairy_container.base_mut().remove_goods(ex_id) else {
+            return BattleFairyEquipmentMutationReport {
+                player_id,
+                cell,
+                delta: -1,
+                property_applied: false,
+                outcome: BattleFairyEquipmentMutationOutcome::MissingGoods,
+                effects: Vec::new(),
+            };
+        };
+        let mut report = BattleFairyEquipmentMutationReport {
+            player_id,
+            cell,
+            delta: -1,
+            property_applied: false,
+            outcome: BattleFairyEquipmentMutationOutcome::Removed(outcome),
+            effects: Vec::new(),
+        };
+        if let (Some(cell), Some(addons)) = (cell, addons)
+            && let Some(first_update) = self.apply_battle_fairy_property(
+                cell,
+                addons,
+                -1,
+                factory,
+                coefficients,
+                encode_old_client,
+            )
+        {
+            report.property_applied = true;
+            report
+                .effects
+                .push(BattleFairyEquipmentMutationEffect::PropertiesChanged { player_id });
+            report
+                .effects
+                .push(BattleFairyEquipmentMutationEffect::BattleFairyUpdated(
+                    first_update,
+                ));
+            if let Some(battle_fairy) = self.war_soul_goods(factory) {
+                report
+                    .effects
+                    .push(BattleFairyEquipmentMutationEffect::BattleFairyUpdated(
+                        BattleFairyDefaultGoodsUpdate {
+                            message_type: 0x0b_f918,
+                            player_id,
+                            goods: battle_fairy.identity(),
+                            old_client_payload: encode_old_client(battle_fairy),
+                        },
+                    ));
+            }
+        }
+        report
+    }
+
     /// Достигнутая часть exact `RefreshContainerOwners`: owner ID должен быть
     /// перепривязан после создания player identity или его восстановления.
     pub(crate) const fn refresh_reached_container_owners(&mut self, player_id: i32) {
@@ -561,6 +862,10 @@ impl CPlayer {
 
     pub(crate) const fn set_pk_count(&mut self, value: u16) {
         self.base_properties.pk_count = value;
+    }
+
+    pub(crate) const fn set_occupation(&mut self, occupation: u8) {
+        self.base_properties.occupation = occupation;
     }
 
     pub(crate) const fn set_ci_qing_open(&mut self, value: bool) {
@@ -972,6 +1277,63 @@ fn push_battle_fairy_summon_notification(
         string_id,
         color,
     });
+}
+
+const fn is_battle_fairy_property_cell(cell: BattleFairyCell) -> bool {
+    matches!(
+        cell,
+        BattleFairyCell::Weapon
+            | BattleFairyCell::Body
+            | BattleFairyCell::Huxinjing
+            | BattleFairyCell::Jewelry
+            | BattleFairyCell::Glove
+            | BattleFairyCell::Pifeng
+            | BattleFairyCell::Yaodai
+            | BattleFairyCell::Xiezi
+    )
+}
+
+fn add_battle_fairy_addon(
+    goods: &mut CGoods,
+    factory: &CGoodsFactory,
+    property_type: i32,
+    delta: i32,
+) {
+    let value = goods
+        .addon_property_value(factory, property_type, 1)
+        .wrapping_add(delta);
+    let _stored = goods.set_addon_property_value_core(property_type, 1, value);
+}
+
+fn clamp_battle_fairy_current(
+    goods: &mut CGoods,
+    factory: &CGoodsFactory,
+    current_property: i32,
+    maximum_property: i32,
+) {
+    let maximum = goods.addon_property_value(factory, maximum_property, 1);
+    if maximum < goods.addon_property_value(factory, current_property, 1) {
+        let _stored = goods.set_addon_property_value_core(current_property, 1, maximum);
+    }
+}
+
+fn add_battle_fairy_u32(current: u32, delta: f64) -> u32 {
+    let next = f64::from(current) + delta;
+    if next < 0.0 {
+        0
+    } else {
+        clamp_combat_scalar(next.round() as u32)
+    }
+}
+
+fn add_battle_fairy_u16(current: u16, delta: f64) -> u16 {
+    let next = f64::from(current) + delta;
+    if next < 0.0 { 0 } else { next.round() as u16 }
+}
+
+fn add_battle_fairy_i32(current: i32, delta: f64) -> i32 {
+    let next = f64::from(current) + delta;
+    if next < 0.0 { 0 } else { next.round() as i32 }
 }
 
 const fn clamp_combat_scalar(value: u32) -> u32 {
@@ -5520,20 +5882,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x000FAA40
 // ADDRESS: 004faa40
 // PROTOTYPE: void __thiscall AddInt(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::bHasPet
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.h:1281
-// RVA: 0x000FD7D0
-// ADDRESS: 004fd7d0
-// PROTOTYPE: bool __thiscall bHasPet(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -510,50 +510,6 @@ impl CSession {
 //
 
 // ============================================================================
-// FUNCTION: CArea::DelWarSoul
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\area.cpp:1129
-// RVA: 0x000710D0
-// ADDRESS: 004710d0
-// PROTOTYPE: int __thiscall DelWarSoul(ulong param_1, tagPOINT param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: `CArea::RemoveObject` материализован выше; покрытый raw-блок удалён.
-
-// ============================================================================
-// FUNCTION: CArea::FindWarSoul
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\area.cpp:1087
-// RVA: 0x00072EA0
-// ADDRESS: 00472ea0
-// PROTOTYPE: void __thiscall FindWarSoul(map<unsigned_long,tagPOINT,std::less<unsigned_long>,std::allocator<std::pair<unsigned_long_const_,tagPOINT>_>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CArea::AddWarSoul
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\area.cpp:1104
-// RVA: 0x00072F60
-// ADDRESS: 00472f60
-// PROTOTYPE: int __thiscall AddWarSoul(ulong param_1, tagPOINT param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CArea::~CArea
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer

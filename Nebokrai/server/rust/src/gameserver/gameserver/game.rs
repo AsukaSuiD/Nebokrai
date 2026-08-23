@@ -86,7 +86,9 @@ use std::time::Duration;
 
 use rustix::system::uname;
 
-use crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyCombineCheck;
+use crate::gameserver::appserver::container::cbattlefairycontainer::{
+    BattleFairyCell, BattleFairyCombineCheck,
+};
 use crate::gameserver::appserver::country::countryhandler::CCountryHandler;
 use crate::gameserver::appserver::country::countryparam::CCountryParam;
 use crate::gameserver::appserver::country::countrywarsys::CountryWarSys;
@@ -100,7 +102,8 @@ use crate::gameserver::appserver::message::sequencestring::{
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::organizingsystem::fournationwarsys::CFourNationWarSys;
 use crate::gameserver::appserver::player::{
-    BattleFairyCombineReport, BattleFairySummonReport, BattleFairyWarSoulAction, CPlayer,
+    BattleFairyCombineReport, BattleFairyEquipmentMutationReport, BattleFairySummonReport,
+    BattleFairyWarSoulAction, CPlayer,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::servercityregion::CServerCityRegion;
@@ -2088,6 +2091,49 @@ impl CGame {
             player.apply_war_soul_action(action, spatial_applied);
         }
         Some(report)
+    }
+
+    /// Замыкает positional add battle-fairy container-а с player property и
+    /// загруженными GlobeSetup coefficients. Old-client codec остаётся
+    /// transport boundary и вызывается только на подтверждённом update path.
+    pub(crate) fn add_battle_fairy_goods(
+        &mut self,
+        player_id: i32,
+        cell: BattleFairyCell,
+        incoming: &mut Option<CGoods>,
+        owner_progress_allows: bool,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> Option<BattleFairyEquipmentMutationReport> {
+        let coefficients = self.globe_setup.player_property_coefficients();
+        self.players.get_mut(&player_id).map(|player| {
+            player.add_battle_fairy_goods(
+                cell,
+                incoming,
+                &self.goods_factory,
+                coefficients,
+                owner_progress_allows,
+                encode_old_client,
+            )
+        })
+    }
+
+    /// Замыкает remove по GUID с тем же player/equipment state и сохраняет
+    /// подтверждённую двойную публикацию `0xBF918` после property removal.
+    pub(crate) fn remove_battle_fairy_goods(
+        &mut self,
+        player_id: i32,
+        ex_id: CGuid,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> Option<BattleFairyEquipmentMutationReport> {
+        let coefficients = self.globe_setup.player_property_coefficients();
+        self.players.get_mut(&player_id).map(|player| {
+            player.remove_battle_fairy_goods(
+                ex_id,
+                &self.goods_factory,
+                coefficients,
+                encode_old_client,
+            )
+        })
     }
 
     /// Исполняет один исходный snapshot входящих FIFO в порядке WS, BS, GS.
