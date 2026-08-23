@@ -273,6 +273,10 @@ impl GlobeSetupSnapshot {
         self.read_u32(0x80c)
     }
 
+    pub(crate) fn use_appellation_function(&self) -> bool {
+        self.bytes[0xcd1] != 0
+    }
+
     pub(crate) fn player_property_coefficients(&self) -> GlobePlayerPropertyCoefficients {
         let triplet = |offset| std::array::from_fn(|index| self.read_f32(offset + index * 4));
         GlobePlayerPropertyCoefficients {

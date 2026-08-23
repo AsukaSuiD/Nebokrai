@@ -2058,7 +2058,7 @@ pub(crate) type WorldGameInitResult<ContextBlock> =
     Result<WorldGameInitReport, Box<WorldGameInitBlock<ContextBlock>>>;
 
 /// Прямые ещё сырые owners, достигнутые полным `CGame::Init`.
-pub(crate) trait WorldGameInitContext: WorldReloadContext {
+pub(crate) trait WorldGameInitContext {
     type Block;
     type PlayerDatabase: RsPlayerOwner;
     type EnemyFactionsDatabase: RsEnemyFactionsOwner;
@@ -2089,9 +2089,6 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     async fn create_rs_setup_owner(&mut self) -> Result<LoadedSetupIds, Self::Block>;
 
     async fn load_region_parameters(&mut self, game: &mut CGame) -> bool;
-    fn country_parameter_source(&mut self) -> Option<Vec<u8>>;
-    fn country_war_source(&mut self) -> Option<Vec<u8>>;
-    fn use_appellation_function(&mut self) -> bool;
     /// Возвращает достигнутый player DB-owner и его текущий caller-connection.
     fn player_database(
         &mut self,
@@ -2106,8 +2103,6 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
     fn increment_log_database(&mut self) -> Option<&mut WorldTdsClient>;
     /// Возвращает уже открытый Log DB connection техническому auction-owner-у.
     fn auction_log_database(&mut self) -> Option<&mut WorldTdsClient>;
-    /// Exact `CGlobeSetup::m_stSetup.dwIncrementLogDays` для обеих history query.
-    fn increment_log_days(&mut self) -> u32;
     /// Даёт каждому concrete worker-у собственные Send-owner-ы; handle остаётся
     /// внутри единственного `CGame` и освобождается его Release.
     fn player_load_worker_runtime(
@@ -4898,7 +4893,14 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn ling_bao_setup(&mut self) -> &mut CLingBaoSetup;
     /// Публикует immutable snapshot фоновой DB-load очереди после изменения
     /// любого входящего setup-owner-а.
-    fn publish_player_load_snapshot(&mut self, thing_setup: &CThingSetup);
+    fn publish_player_load_snapshot(
+        &mut self,
+        thing_setup: &CThingSetup,
+        gold_coin_index: u32,
+        gold_coin_limit: u32,
+        use_log_system: bool,
+        write_log_queue: WorldWriteLogQueue,
+    );
     /// Concrete lookup уже загруженного World `CGoodsFactory`.
     fn query_goods_id_by_original_name(&mut self, original_name: &[u8]) -> u32;
     /// Concrete display-name lookup того же `CGoodsFactory`.
@@ -7730,6 +7732,22 @@ impl CGame {
         })
     }
 
+    fn publish_player_load_snapshot(
+        &self,
+        context: &mut (impl WorldReloadContext + ?Sized),
+    ) {
+        let gold_coin_name = self.get_string_by_id(b"WS0108").to_vec();
+        let gold_coin_index = context.query_goods_id_by_original_name(&gold_coin_name);
+        let gold_coin_limit = context.globe_setup().gold_coin_limit();
+        context.publish_player_load_snapshot(
+            &self.thing_setup,
+            gold_coin_index,
+            gold_coin_limit,
+            self.setup.use_log_system,
+            self.write_log_queue.clone(),
+        );
+    }
+
     /// Выполняет доменную выдачу и сразу публикует её optional log в общий FIFO.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn load_player_largess<Random, Upgrade>(
@@ -8861,7 +8879,7 @@ impl CGame {
                     legacy_result = payload.len() as u32 as i32;
                     self.send_reload_payload(0x15, &payload);
                 }
-                context.publish_player_load_snapshot(&self.thing_setup);
+                self.publish_player_load_snapshot(context);
             }
             WorldReloadProfile::GoodsList => {
                 let loaded = match context.read_resource(b"data/goodslist.dat") {
@@ -8901,7 +8919,7 @@ impl CGame {
                     legacy_result = payload.len() as u32 as i32;
                     self.send_reload_payload(0, &payload);
                 }
-                context.publish_player_load_snapshot(&self.thing_setup);
+                self.publish_player_load_snapshot(context);
             }
             WorldReloadProfile::MonsterList => {
                 let monsters = match context.read_resource(b"data/monsterlist.ini") {
@@ -9178,7 +9196,7 @@ impl CGame {
                     legacy_result = payload.len() as u32 as i32;
                     self.send_reload_payload(7, &payload);
                 }
-                context.publish_player_load_snapshot(&self.thing_setup);
+                self.publish_player_load_snapshot(context);
             }
             WorldReloadProfile::StringTable => {
                 let _ = self.update_string_table(context, profile_name);
@@ -9952,7 +9970,7 @@ impl CGame {
                         .map_err(WorldReloadBlock::ThingSetupCodec)?;
                     self.send_reload_payload(0x36, &bytes);
                 }
-                context.publish_player_load_snapshot(&self.thing_setup);
+                self.publish_player_load_snapshot(context);
             }
             WorldReloadProfile::GodsBattle => {
                 let string_table = self.string_table.table();
@@ -11092,6 +11110,7 @@ impl CGame {
     )]
     pub(crate) async fn init<
         Context,
+        ReloadContext,
         TimerCallback,
         FactionEnemyContext,
         CountryDatabase,
@@ -11100,6 +11119,7 @@ impl CGame {
         &mut self,
         runtime_directory: &Path,
         context: &mut Context,
+        reload_context: &mut ReloadContext,
         jjc: &mut CJJcSystem,
         gods_battle: &mut CGodsBattleConf,
         skills: &mut CSkillFactory,
@@ -11140,6 +11160,7 @@ impl CGame {
     ) -> WorldGameInitResult<<Context as WorldGameInitContext>::Block>
     where
         Context: WorldGameInitContext,
+        ReloadContext: WorldReloadContext,
         TimerCallback: Copy,
         FactionEnemyContext: FactionEnemyMutationContext,
         CountryDatabase: DbCountryOwner,
@@ -11171,7 +11192,7 @@ impl CGame {
         events.push(WorldGameInitEvent::RustLocksReady);
         context.put_debug_string(b"WorldServer start!");
         events.push(WorldGameInitEvent::DebugStartPublished);
-        let _ = self.load_server_resource_from_context(context);
+        let _ = self.load_server_resource_from_context(reload_context);
         events.push(WorldGameInitEvent::ServerResourcesLoaded);
 
         let setup = match self.load_setup(runtime_directory, |title| {
@@ -11220,7 +11241,7 @@ impl CGame {
         self.clear_string_table();
         events.push(WorldGameInitEvent::StringTablesCleared);
         const DEFAULT_LANGUAGE: &[u8] = b"data/Language.lag";
-        let default_language_source = context.read_resource(DEFAULT_LANGUAGE);
+        let default_language_source = reload_context.read_resource(DEFAULT_LANGUAGE);
         let default_language = self.load_string_table_resource(
             DEFAULT_LANGUAGE,
             default_language_source.as_deref(),
@@ -11244,7 +11265,7 @@ impl CGame {
             package: DEFAULT_LANGUAGE.to_vec(),
         });
         let configured_language = self.setup.language_package.clone();
-        let configured_language_source = context.read_resource(&configured_language);
+        let configured_language_source = reload_context.read_resource(&configured_language);
         let configured_language_load = self.load_string_table_resource(
             &configured_language,
             configured_language_source.as_deref(),
@@ -11274,7 +11295,7 @@ impl CGame {
 
         const DUPLI_REGION_SETUP_PATH: &[u8] = b"setup/DupliRegionsSetup.ini";
         self.dupli_region_setup = Some(CDupliRegionSetup::default());
-        let dupli_region_source = context.read_resource(DUPLI_REGION_SETUP_PATH);
+        let dupli_region_source = reload_context.read_resource(DUPLI_REGION_SETUP_PATH);
         let dupli_region_loaded = self
             .dupli_region_setup
             .as_mut()
@@ -11297,7 +11318,8 @@ impl CGame {
             stop!(WorldGameInitBlockReason::Context(block));
         }
         events.push(WorldGameInitEvent::DatabaseLayerInitialized);
-        let jjc_configuration = Self::load_jjc_configuration_from_resources(jjc, context);
+        let jjc_configuration =
+            Self::load_jjc_configuration_from_resources(jjc, reload_context);
         if let Some(path) = jjc_configuration.missing_path() {
             Self::record_game_init_notice(
                 &mut events,
@@ -11395,7 +11417,7 @@ impl CGame {
         for &profile in INITIAL_RELOADS {
             let legacy_result = match self
                 .reload(
-                    context,
+                    reload_context,
                     jjc,
                     gods_battle,
                     skills,
@@ -11441,7 +11463,7 @@ impl CGame {
         for &profile in SECONDARY_RELOADS {
             let legacy_result = match self
                 .reload(
-                    context,
+                    reload_context,
                     jjc,
                     gods_battle,
                     skills,
@@ -11461,7 +11483,7 @@ impl CGame {
             });
         }
 
-        let time_to_return_source = context.read_resource(b"setup/TimeToReturn.ini");
+        let time_to_return_source = reload_context.read_resource(b"setup/TimeToReturn.ini");
         let time_to_return_initialization = match time_to_return.initialize(
             time_to_return_source.as_deref(),
             (callbacks.get_timer_local_time)(),
@@ -11503,10 +11525,10 @@ impl CGame {
 
         const INVALID_STRINGS: &[u8] = b"setup/InvalidStr.ini";
         const CHAR_CODES: &[u8] = b"setup/charcode.ini";
-        let invalid_strings = context.read_resource(INVALID_STRINGS);
+        let invalid_strings = reload_context.read_resource(INVALID_STRINGS);
         let char_codes = invalid_strings
             .as_ref()
-            .and_then(|_| context.read_resource(CHAR_CODES));
+            .and_then(|_| reload_context.read_resource(CHAR_CODES));
         let _ = self.words_filter.initial(
             INVALID_STRINGS,
             CHAR_CODES,
@@ -11520,7 +11542,7 @@ impl CGame {
         ] {
             let legacy_result = match self
                 .reload(
-                    context,
+                    reload_context,
                     jjc,
                     gods_battle,
                     skills,
@@ -11572,7 +11594,7 @@ impl CGame {
 
         let legacy_result = match self
             .reload(
-                context,
+                reload_context,
                 jjc,
                 gods_battle,
                 skills,
@@ -11597,7 +11619,7 @@ impl CGame {
         events.push(WorldGameInitEvent::GodsBattleFactionXydLoaded { succeeded });
 
         let attack_city_now = (callbacks.get_timer_local_time)();
-        let attack_city_source = context.read_resource(b"setup/CityWarSys.ini");
+        let attack_city_source = reload_context.read_resource(b"setup/CityWarSys.ini");
         let attack_city_initialization = match attack_city.initialize(
             attack_city_source.as_deref(),
             attack_city_now,
@@ -11642,8 +11664,8 @@ impl CGame {
         ));
 
         const FOUR_NATION_WAR_PATH: &[u8] = b"setup/FourNationWarSys.ini";
-        let four_nation_country_names = context.four_nation_country_names();
-        let four_nation_source = context.read_resource(FOUR_NATION_WAR_PATH);
+        let four_nation_country_names = reload_context.four_nation_country_names();
+        let four_nation_source = reload_context.read_resource(FOUR_NATION_WAR_PATH);
         let four_nation_initialization = match four_nation_war.initialize(
             four_nation_country_names,
             four_nation_source.as_deref(),
@@ -11652,7 +11674,7 @@ impl CGame {
             four_nation_war_callbacks,
             |region_id| {
                 let path = format!("regions/{region_id}.nation");
-                context.read_resource(path.as_bytes())
+                reload_context.read_resource(path.as_bytes())
             },
             |payload| self.record_game_init_log(&mut events, log, callbacks, payload),
         ) {
@@ -11676,7 +11698,7 @@ impl CGame {
             four_nation_initialization,
         ));
 
-        let village_war_source = context.read_resource(b"setup/villageWarSys.ini");
+        let village_war_source = reload_context.read_resource(b"setup/villageWarSys.ini");
         let village_war_initialization = match village_war.initialize(
             village_war_source.as_deref(),
             (callbacks.get_timer_local_time)(),
@@ -11783,7 +11805,7 @@ impl CGame {
             callbacks,
             b"Load FactionWarSys:EnemyFactions SUCCESS...",
         );
-        let faction_war_ini_source = context.read_resource(b"data/FactionWarSys.ini");
+        let faction_war_ini_source = reload_context.read_resource(b"data/FactionWarSys.ini");
         let faction_war_initialization = faction_war.initialize_from_loaded_relations(
             faction_war_load,
             faction_war_ini_source.as_deref(),
@@ -11815,7 +11837,7 @@ impl CGame {
         events.push(WorldGameInitEvent::FactionWarInitialized(
             faction_war_initialization,
         ));
-        let quest_system = self.initialize_quest_system(context);
+        let quest_system = self.initialize_quest_system(reload_context);
         events.push(WorldGameInitEvent::QuestSystemInitialized(quest_system));
 
         let player_ranks_configuration = PlayerRanksInitializationConfig {
@@ -11855,7 +11877,7 @@ impl CGame {
         };
         events.push(WorldGameInitEvent::PlayerRanksLoaded(player_ranks_stat));
 
-        let country_parameter_source = context.country_parameter_source();
+        let country_parameter_source = reload_context.read_resource(b"data/CountryParam.ini");
         let country_parameter_report = match country_parameters
             .initialize(country_parameter_source.as_deref())
         {
@@ -11866,7 +11888,7 @@ impl CGame {
             country_parameter_report,
         ));
 
-        if context.use_appellation_function() {
+        if reload_context.globe_setup().use_appellation_function() {
             let _unused_system_time = (callbacks.get_log_local_time)();
             let started_at_ms = (callbacks.get_tick)();
             self.record_game_init_log(&mut events, log, callbacks, b"Start total HonorRankks!");
@@ -11911,7 +11933,7 @@ impl CGame {
         }
         self.record_game_init_log(&mut events, log, callbacks, b"Load Country SUCCESS...");
 
-        let country_war_source = context.country_war_source();
+        let country_war_source = reload_context.read_resource(b"setup/CountryWarSys.ini");
         let country_war_now = (callbacks.get_timer_local_time)();
         let country_war_initialization = country_war_system.initialize(
             country_war_source.as_deref(),
@@ -11950,7 +11972,7 @@ impl CGame {
         events.push(WorldGameInitEvent::VoidOwner(
             WorldGameInitVoidOwner::CreateGeneralVariableList,
         ));
-        let general_variable_source = context.read_resource(b"data/general_variable.ini");
+        let general_variable_source = reload_context.read_resource(b"data/general_variable.ini");
         let general_variable_load = general_variables
             .as_mut()
             .expect("owner опубликован перед LoadVarList")
@@ -11968,7 +11990,7 @@ impl CGame {
             general_variable_data_load,
         ));
 
-        let increment_log_days = context.increment_log_days();
+        let increment_log_days = reload_context.globe_setup().increment_log_days();
         let outcome = increment_log
             .load(context.increment_log_database(), increment_log_days)
             .await;
