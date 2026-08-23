@@ -10,6 +10,7 @@ pub(crate) mod appserver {
     pub(crate) mod citygate;
     pub(crate) mod container {
         pub(crate) mod camountlimitgoodscontainer;
+        pub(crate) mod camountlimitgoodsshadowcontainer;
         pub(crate) mod cbank;
         pub(crate) mod ccontainer;
         pub(crate) mod cdepot;
