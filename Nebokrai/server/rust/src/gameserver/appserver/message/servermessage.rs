@@ -1,8 +1,7 @@
 //! Владелец входного GameServer dispatcher-а `OnServerMessage`.
 //!
 //! Весь dispatcher RVA `0x0009D300` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме цепочек
-//! сообщения `0x7F801` для Player/Trade/Thing, economy/admin setup,
-//! PlayerRanks/DupliRegion,
+//! сообщения `0x7F801` для достигнутых typed startup snapshots,
 //! AttackCity/Village и terminal selector `0x3B`, а также полной typed Billing
 //! reconnect ветви `0x6F904`; они имеют статус `IMPLEMENTED`. Точная пара
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходник
@@ -18,6 +17,9 @@
 //! handoff закрывает старый owner, публикует новый, приоритетно ставит
 //! регистрацию и только затем включает control-send. Парная World-ветвь
 //! остаётся RAW до материализации полного player snapshot.
+//! HonorEliminate `0x26` отдельно сохраняет оба подтверждённых sink-а:
+//! `AddLogText` и `PutStringToFile("HonorCompositior", ...)`; payload проверен
+//! по exact EXE и runtime-логам.
 //!
 //! Terminal selector сначала вызывает `InitNetServer`, затем читает login и
 //! world ID и присваивает их даже после ошибки Host. Rust сохраняет этот
@@ -44,6 +46,7 @@ use crate::setup::contributesetup::ContributeSetupDecodeError;
 use crate::setup::gmlist::{GmListDecodeError, GmListDecodeReport};
 use crate::setup::goodsdestructionconfig::{GoodsDestroyDecodeError, GoodsDestroyDecodeReport};
 use crate::setup::hitlevelsetup::HitLevelDecodeError;
+use crate::setup::honorelimilateconfig::HonorEliminateDecodeError;
 use crate::setup::incrementshoplist::IncrementShopDecodeError;
 use crate::setup::leitingsetup::ThingSetupCodecError;
 use crate::setup::logsystem::LogSystemDecodeError;
@@ -74,6 +77,7 @@ const SYNTHESIS_SELECTOR: i32 = 0x21;
 const NEW_SKILL_MONSTER_SELECTOR: i32 = 0x22;
 const GOODS_DESTROY_SELECTOR: i32 = 0x23;
 const CHANGE_BODY_SELECTOR: i32 = 0x24;
+const HONOR_ELIMINATE_SELECTOR: i32 = 0x26;
 const THING_SETUP_SELECTOR: i32 = 0x36;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -148,23 +152,52 @@ fn read_start_long(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameOwnedStartupSnapshotReport {
     PlayerList(PlayerListDecodeReport),
-    TradeList { entries: usize },
-    IncrementShop { entries: usize },
-    ContributeSetup { entries: usize },
-    LogSystem { entries: usize, da_kong_log: bool },
+    TradeList {
+        entries: usize,
+    },
+    IncrementShop {
+        entries: usize,
+    },
+    ContributeSetup {
+        entries: usize,
+    },
+    LogSystem {
+        entries: usize,
+        da_kong_log: bool,
+    },
     GmList(GmListDecodeReport),
-    RegionSetup { entries: usize },
-    HitLevel { entries: usize },
-    PlayerRanks { entries: usize },
-    DupliRegions { entries: usize },
-    PrisonConf { entries: usize },
-    PreciousBoxConf { entries: usize },
+    RegionSetup {
+        entries: usize,
+    },
+    HitLevel {
+        entries: usize,
+    },
+    PlayerRanks {
+        entries: usize,
+    },
+    DupliRegions {
+        entries: usize,
+    },
+    PrisonConf {
+        entries: usize,
+    },
+    PreciousBoxConf {
+        entries: usize,
+    },
     FairyExp(BattleFairyExpDecodeReport),
     Synthesis(SynthesisDecodeReport),
     NewSkillMonster(NewSkillMonsterDecodeReport),
     GoodsDestroy(GoodsDestroyDecodeReport),
-    ChangeBody { entries: usize },
-    ThingSetup { entries: usize },
+    ChangeBody {
+        entries: usize,
+    },
+    HonorEliminate {
+        level_difference: i32,
+        minimum_level: i32,
+    },
+    ThingSetup {
+        entries: usize,
+    },
 }
 
 #[derive(Debug)]
@@ -187,6 +220,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     NewSkillMonster(NewSkillMonsterDecodeError),
     GoodsDestroy(GoodsDestroyDecodeError),
     ChangeBody(ChangeBodyDecodeError),
+    HonorEliminate(HonorEliminateDecodeError),
     ThingSetup(ThingSetupCodecError),
 }
 
@@ -216,6 +250,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::NewSkillMonster(error) => error.fmt(formatter),
             Self::GoodsDestroy(error) => error.fmt(formatter),
             Self::ChangeBody(error) => error.fmt(formatter),
+            Self::HonorEliminate(error) => error.fmt(formatter),
             Self::ThingSetup(error) => error.fmt(formatter),
         }
     }
@@ -242,6 +277,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::NewSkillMonster(error) => Some(error),
             Self::GoodsDestroy(error) => Some(error),
             Self::ChangeBody(error) => Some(error),
+            Self::HonorEliminate(error) => Some(error),
             Self::ThingSetup(error) => Some(error),
         }
     }
@@ -253,6 +289,7 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
     message: &mut CMessage,
     game: &mut CGame,
     mut add_log_text: impl FnMut(&str),
+    mut put_string_to_file: impl FnMut(&str, &[u8]),
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
     match selector {
@@ -452,6 +489,23 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             };
             add_log_text("Initial SI_CHANGE_BODY...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::ChangeBody { entries }))
+        }
+        HONOR_ELIMINATE_SELECTOR => {
+            let config = game.honor_eliminate_config_mut();
+            if let Err(error) = config.decord_from_byte_array(source, cursor) {
+                return Some(Err(GameOwnedStartupSnapshotError::HonorEliminate(error)));
+            }
+            let level_difference = config.level_difference;
+            let minimum_level = config.minimum_level;
+            add_log_text("Inital SI_HONOR_ELIMILATE_CONF...ok!");
+            put_string_to_file(
+                "HonorCompositior",
+                b"Inital SI_HONOR_ELIMILATE_CONF...ok\xA3\xA1",
+            );
+            Some(Ok(GameOwnedStartupSnapshotReport::HonorEliminate {
+                level_difference,
+                minimum_level,
+            }))
         }
         THING_SETUP_SELECTOR => {
             if let Err(error) = game

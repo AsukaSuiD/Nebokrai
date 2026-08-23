@@ -82,6 +82,7 @@ use crate::setup::fairyexpconf::CFairyExpConf;
 use crate::setup::gmlist::CGMList;
 use crate::setup::goodsdestructionconfig::GoodsDestroySetup;
 use crate::setup::hitlevelsetup::CHitLevelSetup;
+use crate::setup::honorelimilateconfig::HonorElimilateConfig;
 use crate::setup::incrementshoplist::CIncrementShopList;
 use crate::setup::leitingsetup::CThingSetup;
 use crate::setup::logsystem::CLogSystem;
@@ -720,6 +721,7 @@ pub(crate) struct CGame {
     new_skill_monster_conf: NewSkillMonsterConf,
     goods_destroy_setup: GoodsDestroySetup,
     change_body_conf: CChangeBodyConf,
+    honor_eliminate_config: HonorElimilateConfig,
     dupli_region_setup: Option<CDupliRegionSetup>,
     move_check_cells: MoveCheckCellRegistry,
     player_ranks: Option<CPlayerRanks>,
@@ -762,6 +764,7 @@ impl CGame {
             new_skill_monster_conf: NewSkillMonsterConf::default(),
             goods_destroy_setup: GoodsDestroySetup::default(),
             change_body_conf: CChangeBodyConf::default(),
+            honor_eliminate_config: HonorElimilateConfig::default(),
             dupli_region_setup: None,
             move_check_cells: MoveCheckCellRegistry::new(),
             player_ranks: None,
@@ -1039,6 +1042,10 @@ impl CGame {
 
     pub(crate) const fn change_body_conf_mut(&mut self) -> &mut CChangeBodyConf {
         &mut self.change_body_conf
+    }
+
+    pub(crate) const fn honor_eliminate_config_mut(&mut self) -> &mut HonorElimilateConfig {
+        &mut self.honor_eliminate_config
     }
 
     pub(crate) const fn dupli_region_setup(&self) -> Option<&CDupliRegionSetup> {
