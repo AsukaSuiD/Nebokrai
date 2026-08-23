@@ -94,6 +94,10 @@ impl CGoods {
         self.shape.base_object_mut().set_name(name);
     }
 
+    pub(crate) fn name(&self) -> &[u8] {
+        self.shape.base_object().get_name()
+    }
+
     pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
         self.shape.base_object_mut().set_graphics_id(graphics_id);
     }
@@ -272,6 +276,39 @@ impl CGoods {
             }
         }
         changed
+    }
+
+    /// Safe replacement pointer-а `lCurrentExp`: первый instance value
+    /// возвращает именно modifier, не сумму base+modifier.
+    pub(crate) fn instance_addon_modifier(&self, property_type: i32, value_id: u32) -> Option<i32> {
+        self.addon_properties
+            .iter()
+            .find(|property| property.property_type == property_type)
+            .and_then(|property| property.values.iter().find(|value| value.id == value_id))
+            .map(|value| value.modifier)
+    }
+
+    pub(crate) fn set_instance_addon_modifier(
+        &mut self,
+        property_type: i32,
+        value_id: u32,
+        modifier: i32,
+    ) -> bool {
+        let Some(value) = self
+            .addon_properties
+            .iter_mut()
+            .find(|property| property.property_type == property_type)
+            .and_then(|property| {
+                property
+                    .values
+                    .iter_mut()
+                    .find(|value| value.id == value_id)
+            })
+        else {
+            return false;
+        };
+        value.modifier = modifier;
+        true
     }
 
     pub(crate) fn goods_time_type(&self, factory: &CGoodsFactory) -> u32 {
