@@ -2378,10 +2378,12 @@ impl AttackCityEnemyRelationContext for WorldGameInitAttackCityContext<'_> {
 }
 
 /// Локальная safe-граница `SaveCityRegion(0)` до virtual save-вызова.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WorldSaveCityRegionBlock {
-    UninitializedRegionType { region_id: i32 },
-    NullCityRegion { region_id: i32 },
+    Serialization {
+        region_id: i32,
+        source: WorldRegionOwnerSerializationBlock,
+    },
 }
 
 /// Один live list, который `CGame::Release` очищал до player-map-а.
@@ -2514,7 +2516,6 @@ pub(crate) type WorldGameReleaseResult = Result<WorldGameReleaseReport, Box<Worl
 /// Ещё сырые domain/platform owners, непосредственно достигнутые Release.
 pub(crate) trait WorldGameReleaseContext {
     fn put_debug_string(&mut self, payload: &'static [u8]);
-    fn save_city_region(&mut self, region_id: i32, region: &mut WorldRegionOwner);
     fn exit_network_server_worker(&mut self, server: &mut CMyNetServer);
     fn exit_network_client_worker(&mut self, client: &mut CMyNetClient);
     fn release_void_owner(&mut self, owner: WorldGameReleaseVoidOwner);
@@ -13004,43 +13005,46 @@ impl CGame {
         })
     }
 
-    /// Вызывает city-region save только при selector `0` и `REGION_TYPE == 2`.
-    fn save_city_region<SaveRegion>(
+    /// Публикует exact `0x5FA07` snapshot каждого materialized region owner-а.
+    ///
+    /// Несмотря на имя `SaveCityRegion`, EXE `0x004051B0` не проверяет
+    /// `RegionType`: при selector `0` он обходит весь ordered map, пропускает
+    /// только null `pRegion`, добавляет inherited ID, вызывает virtual
+    /// `AddToByteArray(..., true)` и отправляет сообщение LoginServer.
+    fn save_city_region(
         &mut self,
         selector: i32,
-        mut save_region: SaveRegion,
-    ) -> Result<Vec<i32>, (Vec<i32>, WorldSaveCityRegionBlock)>
-    where
-        SaveRegion: FnMut(i32, &mut WorldRegionOwner),
-    {
+    ) -> Result<Vec<i32>, (Vec<i32>, WorldSaveCityRegionBlock)> {
         if selector != 0 {
             return Ok(Vec::new());
         }
 
+        let login_sender = self
+            .net_client
+            .as_ref()
+            .map(CMyNetClient::send_queue_handle);
         let region_ids = self.regions.keys().copied().collect::<Vec<_>>();
         let mut saved = Vec::new();
-        for region_id in region_ids {
+        for map_region_id in region_ids {
             let assignment = self
                 .regions
-                .get_mut(&region_id)
+                .get(&map_region_id)
                 .expect("region ID взят из текущего map");
-            let Some(region_type) = assignment.region_type else {
-                return Err((
-                    saved,
-                    WorldSaveCityRegionBlock::UninitializedRegionType { region_id },
-                ));
-            };
-            if region_type != 2 {
+            let Some(region) = assignment.region.as_ref() else {
                 continue;
-            }
-            let Some(region) = assignment.region.as_mut() else {
-                // WorldServer RVA 0x00008750 разыменовывал `pRegion` без null-check.
+            };
+            let region_id = region.base().get_id();
+            let mut message = CMessage::new(0x0005_FA07);
+            message.base_mut().add_long(region_id);
+            let mut snapshot = Vec::new();
+            if let Err(source) = region.add_full_initial_snapshot(&mut snapshot) {
                 return Err((
                     saved,
-                    WorldSaveCityRegionBlock::NullCityRegion { region_id },
+                    WorldSaveCityRegionBlock::Serialization { region_id, source },
                 ));
-            };
-            save_region(region_id, region);
+            }
+            message.base_mut().add(&snapshot);
+            let _ = message.send(login_sender.as_deref(), false);
             saved.push(region_id);
         }
         Ok(saved)
@@ -13074,9 +13078,7 @@ impl CGame {
         self.player_data_queue.clear();
         events.push(WorldGameReleaseEvent::PlayerDataQueueCleared);
 
-        let saved_city_regions = match self.save_city_region(0, |region_id, region| {
-            context.save_city_region(region_id, region);
-        }) {
+        let saved_city_regions = match self.save_city_region(0) {
             Ok(saved) => saved,
             Err((saved, block)) => {
                 for region_id in saved {
