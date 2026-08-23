@@ -178,16 +178,18 @@ impl WorldCountryWarRegion {
         &mut self.base
     }
 
-    pub(crate) fn load_from_context<Context>(
+    pub(crate) fn load_from_context<Context, ResolveName>(
         &mut self,
         context: &mut Context,
+        resolve_name: &mut ResolveName,
     ) -> Result<WorldCountryWarRegionLoadOutcome, WorldCountryWarRegionLoadError>
     where
         Context: WorldRegionResourceContext + ?Sized,
+        ResolveName: FnMut(&[u8]) -> Vec<u8> + ?Sized,
     {
         let counts = self
             .base
-            .load_from_context(context)
+            .load_from_context(context, resolve_name)
             .map_err(WorldCountryWarRegionLoadError::Base)?;
         let path = format!("regions/{}.country", self.base.get_id()).into_bytes();
         let country = context.read_resource(&path);

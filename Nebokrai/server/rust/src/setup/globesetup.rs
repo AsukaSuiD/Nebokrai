@@ -67,6 +67,7 @@ const BASE_RP_LEVEL_2_OFFSET: usize = 0x3F2;
 const BASE_MAX_RP_LEVEL_1_OFFSET: usize = 0x3F4;
 const BASE_MAX_RP_LEVEL_2_OFFSET: usize = 0x3F6;
 const PLAYER_SPEED_OFFSET: usize = 0x7F8;
+const MONSTER_NUMBER_SCALE_OFFSET: usize = 0x508;
 const AUCTION_ENABLED_OFFSET: usize = 0xC87;
 const AUCTION_FEE_MAXIMUM_OFFSET: usize = 0xC98;
 const AUCTION_FEE_MINIMUM_OFFSET: usize = 0xCA0;
@@ -243,6 +244,11 @@ impl GlobeSetupSnapshot {
     /// Возвращает bit-exact `fPlayerSpeed` по PDB-offset `+0x7F8`.
     pub(crate) fn player_speed(&self) -> f32 {
         self.read_f32(PLAYER_SPEED_OFFSET)
+    }
+
+    /// Масштаб количества монстров, передаваемый всем region-loader-ам.
+    pub(crate) fn monster_number_scale(&self) -> f32 {
+        self.read_f32(MONSTER_NUMBER_SCALE_OFFSET)
     }
 
     /// Возвращает `m_stSetup.bAuction` из подтверждённого raw snapshot-а.

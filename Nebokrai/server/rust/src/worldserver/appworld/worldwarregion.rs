@@ -70,16 +70,18 @@ impl CWorldWarRegion {
     }
 
     /// Выполняет base Load, затем optional war override, сохраняя base-result.
-    pub(crate) fn load_from_context<Context>(
+    pub(crate) fn load_from_context<Context, ResolveName>(
         &mut self,
         context: &mut Context,
+        resolve_name: &mut ResolveName,
     ) -> Result<WorldRegionLoadedCounts, WorldWarRegionLoadError>
     where
         Context: WorldRegionResourceContext + ?Sized,
+        ResolveName: FnMut(&[u8]) -> Vec<u8> + ?Sized,
     {
         let loaded = self
             .base
-            .load_from_context(context)
+            .load_from_context(context, resolve_name)
             .map_err(WorldWarRegionLoadError::Base)?;
         let path = format!("regions/{}.war", self.base.get_id()).into_bytes();
         let war = context.read_resource(&path);

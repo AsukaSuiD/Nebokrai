@@ -159,16 +159,18 @@ impl CWorldCityRegion {
         &mut self.war
     }
 
-    pub(crate) fn load_from_context<Context>(
+    pub(crate) fn load_from_context<Context, ResolveName>(
         &mut self,
         context: &mut Context,
+        resolve_name: &mut ResolveName,
     ) -> Result<WorldCityRegionLoadOutcome, WorldCityRegionLoadError>
     where
         Context: WorldRegionResourceContext + ?Sized,
+        ResolveName: FnMut(&[u8]) -> Vec<u8> + ?Sized,
     {
         let counts = self
             .war
-            .load_from_context(context)
+            .load_from_context(context, resolve_name)
             .map_err(WorldCityRegionLoadError::War)?;
         if counts.base_failure.is_some() {
             return Ok(WorldCityRegionLoadOutcome {
@@ -179,9 +181,7 @@ impl CWorldCityRegion {
         let path = format!("regions/{}.city", self.war.base().get_id()).into_bytes();
         let city = context.read_resource(&path);
         if !self
-            .load_city_bytes(city.as_deref(), |string_id| {
-                context.reload_world_string_by_id(string_id)
-            })
+            .load_city_bytes(city.as_deref(), &mut *resolve_name)
             .map_err(WorldCityRegionLoadError::City)?
         {
             return Ok(WorldCityRegionLoadOutcome {

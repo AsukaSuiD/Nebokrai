@@ -38,14 +38,16 @@ impl CWorldVillageRegion {
 
     /// Выполняет прямой base Load; caller для Village не проверяет
     /// `loaded.base_failure`, воспроизводя unconditional legacy success.
-    pub(crate) fn load_from_context<Context>(
+    pub(crate) fn load_from_context<Context, ResolveName>(
         &mut self,
         context: &mut Context,
+        resolve_name: &mut ResolveName,
     ) -> Result<WorldRegionLoadedCounts, WorldRegionLoadError>
     where
         Context: WorldRegionResourceContext + ?Sized,
+        ResolveName: FnMut(&[u8]) -> Vec<u8> + ?Sized,
     {
-        self.war.base_mut().load_from_context(context)
+        self.war.base_mut().load_from_context(context, resolve_name)
     }
 
     pub(crate) fn add_to_byte_array(

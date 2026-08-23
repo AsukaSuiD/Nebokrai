@@ -257,7 +257,6 @@ pub(crate) trait WorldRegionResourceContext {
     fn read_resource(&mut self, path: &[u8]) -> Option<Vec<u8>> {
         self.default_client_resource().read_resource(path)
     }
-    fn reload_world_string_by_id(&mut self, string_id: &[u8]) -> Vec<u8>;
     fn region_monster_num_scale(&mut self) -> f32;
 }
 
@@ -866,12 +865,14 @@ impl CWorldRegion {
 
     /// Выполняет точный ordered `CWorldRegion::Load` и возвращает приращения
     /// двух исходных process-global counters.
-    pub(crate) fn load_from_context<Context>(
+    pub(crate) fn load_from_context<Context, ResolveName>(
         &mut self,
         context: &mut Context,
+        resolve_name: &mut ResolveName,
     ) -> Result<WorldRegionLoadedCounts, WorldRegionLoadError>
     where
         Context: WorldRegionResourceContext + ?Sized,
+        ResolveName: FnMut(&[u8]) -> Vec<u8> + ?Sized,
     {
         let region_id = self.get_id();
         let region_path = format!("regions/{region_id}.rgn").into_bytes();
@@ -897,9 +898,7 @@ impl CWorldRegion {
         let npc_path = format!("regions/{region_id}.npc").into_bytes();
         let npcs = match context.read_resource(&npc_path) {
             Some(bytes) => self
-                .load_npc_bytes(&bytes, |string_id| {
-                    context.reload_world_string_by_id(string_id)
-                })
+                .load_npc_bytes(&bytes, &mut *resolve_name)
                 .map_err(|source| WorldRegionLoadError::Text {
                     owner: "CWorldRegion::LoadNpcList",
                     source,

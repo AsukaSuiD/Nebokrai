@@ -454,22 +454,19 @@
 //! startup/reload, initial-config serializer и daily LeiTing читают один
 //! owner; `VecDeque`, resource-context и safe codec заменяют лишь static STL,
 //! `CRFile` и безразмерный byte buffer.
-//! CountryWar-ветвь внешнего main-loop dispatcher-а теперь передаёт прямо
-//! живые `CountryWarSys`, `CTimer`, девять callback-ключей, local time,
-//! resource-context и текущий GameServer sender. Старый
-//! `WorldReloadBooleanOwner::CountryWar` удалён. Обычный `CGame::ReLoad` без
-//! этих owners возвращает явный `CountryWarOwnerRequired`, а единственный
-//! достигнутый flag-dispatcher вызывает concrete overload в той же позиции;
+//! CountryWar-ветвь внешнего main-loop dispatcher-а передаёт прямо живые
+//! `CountryWarSys`, `CTimer`, девять callback-ключей, local time,
+//! resource-context и текущий GameServer sender. Единственный достигнутый
+//! flag-dispatcher направляет профиль concrete owner-у в той же позиции;
 //! reload-server-resources, внутренние логи, `end_war`, повторная загрузка и
 //! итоговый `0/1` сохраняют исходный порядок. Exact
 //! `0x004176D5..0x0041771D` кладёт zero-extended bool reload-owner-а в общий
 //! return slot `CGame::ReLoad`, что исправляет прежний потерянный Rust-result.
 //! FourNationWar следует той же concrete main-loop границе: она передаёт
 //! живые `CFourNationWarSys`, `CTimer`, девять callback-ключей, country-name
-//! snapshot и resource-context. Обычный dispatcher без этих owner-ов сообщает
-//! `FourNationWarOwnerRequired`; при success exact payload `0x25` строится из
-//! того же live owner-а, а legacy failure-log остаётся после active-war gate
-//! либо запрета отправки.
+//! snapshot и resource-context. При success payload `0x25` строится из того
+//! же live owner-а, а legacy failure-log остаётся после active-war gate либо
+//! запрета отправки.
 //! `TimeToReturn` также получает concrete main-loop границу: тот же live
 //! owner отменяет map-ordered event IDs и загружает `setup/TimeToReturn.ini`.
 //! Как в EXE, его bool влияет только на success/failure log, а общий legacy
@@ -1295,7 +1292,9 @@ use crate::setup::incrementshoplist::{
     IncrementShopSerializeError,
 };
 use crate::setup::prisonconf::{PrisonConf, PrisonConfFormatError, PrisonConfSerializeError};
-use crate::setup::questsystem::{CQuestSystem, QuestSystemLoadReport};
+use crate::setup::questsystem::{
+    CQuestSystem, QuestSystemLoadReport, QuestSystemSerializationBlock,
+};
 use crate::setup::tradelist::{CTradeList, TradeListFormatError, TradeListSerializeError};
 use crate::public::mystringtable::MyStringTable;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
@@ -1315,19 +1314,25 @@ use crate::setup::lingbao::{CLingBaoSetup, LingBaoSerializationBlock};
 use crate::setup::newskillmonsterlist::{
     NewSkillMonsterConf, NewSkillMonsterSerializeError,
 };
-use crate::setup::gmlist::{CGMList, GmListCollection, GmListLoadError};
-use crate::setup::logsystem::{CLogSystem, LogSystemLoadError};
-use crate::setup::monsterlist::{
-    MonsterDropRegistry, MonsterListLoadError, MonsterRegistry, load_drop_goods_list,
-    load_monster_list,
+use crate::setup::gmlist::{
+    CGMList, GmListCollection, GmListLoadError, GmListSerializationBlock,
 };
-use crate::setup::regionsetup::{CRegionSetup, RegionSetupLoadError};
+use crate::setup::logsystem::{CLogSystem, LogSystemLoadError, LogSystemSerializeError};
+use crate::setup::monsterlist::{
+    MonsterDropRegistry, MonsterListLoadError, MonsterListSerializeError, MonsterRegistry,
+    load_drop_goods_list, load_monster_list, serialize_monster_list,
+};
+use crate::setup::regionsetup::{
+    CRegionSetup, RegionSetupLoadError, RegionSetupSerializeError,
+};
 use crate::setup::playerlist::{CPlayerList, PlayerListFormatError, PlayerListSerializeError};
 use crate::setup::preciousboxconf::{
     PreciousBoxConf, PreciousBoxSerializeError,
 };
 use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};
-use crate::setup::regionrouter::{RegionRouter, RegionRouterLoadError};
+use crate::setup::regionrouter::{
+    RegionRouter, RegionRouterLoadError, RegionRouterSerializeError,
+};
 use crate::setup::timetoreturn::{
     TimeToReturn, TimeToReturnCallbacks, TimeToReturnLoadError, TimeToReturnLoadReport,
 };
@@ -1362,7 +1367,9 @@ use crate::worldserver::appworld::country::countrywarsys::{
 };
 use crate::worldserver::appworld::goods::cgoods::CGoods;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
-    GoodsBasePropertiesRegistry, GoodsOriginalNameIndex,
+    GoodsBasePropertiesRegistry, GoodsNameIndex, GoodsOriginalNameIndex,
+    GoodsRegistryLoadError, GoodsRegistrySerializeError, load_goods_registry,
+    serialize_goods_registry,
 };
 use crate::worldserver::appworld::goodswarmember::{
     CGoodsWarMember, GoodsWarDatabaseLoadReport, GoodsWarDeliveryContext,
@@ -1567,7 +1574,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingUnionApplicationCallbackReport, OrganizingUnionApplyForJoinDispatchBlock,
     OrganizingUnionInvitationCallbackBlock, OrganizingUnionInvitationCallbackReport,
     FreeFactionLookup, FreePlayerLookup, PlayerEnterGameOutcome, PlayerExitGameOutcome,
-    PlayerInviteFactionBlock,
+    PlayerInviteFactionBlock, FactionReinitializationBlock,
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::{
     COrganizingParam, OrganizingParamLoadError, OrganizingParamLoadReport,
@@ -4412,6 +4419,7 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) four_nation_war_context: &'a mut dyn FourNationWarCallbackContext,
     pub(crate) honor_ranks: &'a mut CHonorRanks,
     pub(crate) organizing_parameters: &'a mut COrganizingParam,
+    pub(crate) organizing_tax_callback: TimerCallback,
     pub(crate) player_ranks: &'a mut CPlayerRanks,
     pub(crate) rs_player: &'a mut TiberiusRsPlayer,
     pub(crate) player_database: Option<&'a mut WorldTdsClient>,
@@ -4694,48 +4702,6 @@ pub(crate) struct WorldReloadProfileFlags {
     high: AtomicU32,
 }
 
-/// Прямой соседний owner, который `CGame::ReLoad` вызывал с boolean-result.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldReloadBooleanOwner {
-    GoodsList,
-    MonsterList,
-    DropGoodsList,
-    SkillUsageCache,
-    SkillCache,
-    GlobeSetup,
-    GameSetup,
-    LogSystem,
-    GmList,
-    PlayerGmList,
-    RegionLevelSetup,
-    AttackCity,
-}
-
-/// Прямой соседний owner без наблюдаемого return в исходном dispatcher-е.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldReloadVoidOwner {
-    LoadOrganizingParameters,
-    ReinitializeFactionsByLevel,
-    AttackCityUnchecked,
-    FactionWarParameters,
-    Quest,
-    CountryParameters,
-}
-
-/// Владелец точного payload, который следует за успешной reload-операцией.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldReloadSerializationOwner {
-    GoodsList,
-    MonsterList,
-    SkillList,
-    GlobeSetup,
-    LogSystem,
-    GmList,
-    RegionLevelSetup,
-    AttackCity,
-    Quest,
-}
-
 /// Доказанный positional record `setup/regionlist.ini` до virtual region-owner-а.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct WorldRegionLoadSpec {
@@ -4761,6 +4727,17 @@ pub(crate) type WorldReloadOneScriptResult = Result<bool, WorldReloadOneScriptBl
 
 /// Resource/domain границы, непосредственно вызываемые готовым `CGame::ReLoad`.
 pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
+    /// Каталог исходных loose setup-файлов процесса.
+    fn runtime_directory(&self) -> &Path;
+    /// Три карты единственного World `CGoodsFactory`; loader, lookup и wire
+    /// работают с одним опубликованным состоянием.
+    fn goods_registries(
+        &mut self,
+    ) -> (
+        &mut GoodsBasePropertiesRegistry,
+        &mut GoodsOriginalNameIndex,
+        &mut GoodsNameIndex,
+    );
     /// Общие setup owners, читаемые и reload-ом, и initial-config `0x5FA01`.
     fn monster_registries(&mut self) -> (&mut MonsterRegistry, &mut MonsterDropRegistry);
     fn log_system(&mut self) -> &mut CLogSystem;
@@ -4770,6 +4747,8 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn globe_setup(&mut self) -> &mut GlobeSetupSnapshot;
     /// Тот же router-owner, который следует за blob в общем wire.
     fn region_router(&mut self) -> &mut RegionRouter;
+    /// Совместное заимствование той же пары для единого Globe wire.
+    fn globe_setup_and_router(&mut self) -> (&GlobeSetupSnapshot, &RegionRouter);
     /// Отдельный mutable owner исторических static `CPlayerList` data.
     ///
     /// Он остаётся вне `CGame`, поскольку тот же экземпляр участвует в
@@ -4797,10 +4776,6 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn precious_box_conf(&mut self) -> &mut PreciousBoxConf;
     /// Token-stream LingBao, идущий следом за CiQing в combined payload `0x35`.
     fn ling_bao_setup(&mut self) -> &mut CLingBaoSetup;
-    /// Возвращает исходный 32-битный result; bool owners обязаны дать `0/1`.
-    fn call_boolean_owner(&mut self, owner: WorldReloadBooleanOwner) -> u32;
-    fn call_void_owner(&mut self, owner: WorldReloadVoidOwner);
-    fn serialize_owner(&mut self, owner: WorldReloadSerializationOwner) -> Vec<u8>;
     /// Concrete lookup уже загруженного World `CGoodsFactory`.
     fn query_goods_id_by_original_name(&mut self, original_name: &[u8]) -> u32;
     /// Concrete display-name lookup того же `CGoodsFactory`.
@@ -4818,10 +4793,6 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn script_files(&mut self, pattern: &[u8], extension: &[u8]) -> Vec<Vec<u8>> {
         find_script_files(pattern, extension)
     }
-    /// Выполняет оставшийся inline-parser `setup/sysboardcast.ini`, включая
-    /// operator notice, random/tick и единственный success log.
-    fn reload_broadcast_list(&mut self, game: &mut CGame);
-
     /// Сохраняет два process-global счётчика после прямого region-owner load.
     fn add_region_object_counts(&mut self, monsters: i32, npcs: i32) -> (i32, i32);
     fn region_object_counts(&mut self) -> (i32, i32);
@@ -6371,10 +6342,17 @@ pub(crate) enum WorldReloadBlock {
     RegionSnapshot(WorldReloadRegionSnapshotBlock),
     GlobeSetup(GlobeSetupLoadError),
     RegionRouter(RegionRouterLoadError),
+    RegionRouterSerialization(RegionRouterSerializeError),
     LogSystem(LogSystemLoadError),
     GmList(GmListLoadError),
+    GmListSerialization(GmListSerializationBlock),
     RegionSetup(RegionSetupLoadError),
+    RegionSetupSerialization(RegionSetupSerializeError),
     MonsterList(MonsterListLoadError),
+    MonsterListSerialization(MonsterListSerializeError),
+    GoodsList(GoodsRegistryLoadError),
+    GoodsListSerialization(GoodsRegistrySerializeError),
+    LogSystemSerialization(LogSystemSerializeError),
     ThingSetupCodec(ThingSetupCodecError),
     EmotionFormat(EmotionFormatError),
     EmotionSerialization(EmotionSerializeError),
@@ -6400,19 +6378,17 @@ pub(crate) enum WorldReloadBlock {
     HitLevelSerialization(HitLevelSerializeError),
     TradeListFormat(TradeListFormatError),
     TradeListSerialization(TradeListSerializeError),
+    QuestSerialization(QuestSystemSerializationBlock),
+    FactionReinitialization(FactionReinitializationBlock),
     SkillListSerialization(SkillFactorySerializeError),
     IncrementShopSerialization(IncrementShopSerializeError),
     PrisonFormat(PrisonConfFormatError),
     PrisonSerialization(PrisonConfSerializeError),
     ContributeFormat(ContributeSetupFormatError),
     ContributeSerialization(ContributeSetupSerializeError),
-    CountryWarOwnerRequired,
     CountryWar(CountryWarReloadBlock),
-    FourNationWarOwnerRequired,
     FourNationWarSerialization(FourNationWarSerializationBlock),
-    TimeToReturnOwnerRequired,
     TimeToReturnLoad(TimeToReturnLoadError),
-    VillageWarOwnerRequired,
     VillageWar(VillageWarReloadBlock),
     AttackCity(AttackCityReloadBlock<OrganizingCityWarResultContextBlock>),
 }
@@ -7891,10 +7867,15 @@ impl CGame {
         region.set_world_region_list_fields(spec.region_type, spec.no_pk, spec.no_contribute);
     }
 
-    fn materialize_region_owner<Context: WorldReloadContext + ?Sized>(
+    fn materialize_region_owner<Context, ResolveName>(
         context: &mut Context,
         spec: &WorldRegionLoadSpec,
-    ) -> Result<WorldRegionMaterialization, WorldRegionListBlock> {
+        resolve_name: &mut ResolveName,
+    ) -> Result<WorldRegionMaterialization, WorldRegionListBlock>
+    where
+        Context: WorldReloadContext + ?Sized,
+        ResolveName: FnMut(&[u8]) -> Vec<u8> + ?Sized,
+    {
         if !matches!(spec.region_type, 0..=5) {
             return Ok(WorldRegionMaterialization::MissingSubtype);
         }
@@ -7905,7 +7886,7 @@ impl CGame {
                 Self::configure_region_owner(&mut region, spec);
                 let counts =
                     region
-                        .load_from_context(context)
+                        .load_from_context(context, resolve_name)
                         .map_err(|source| WorldRegionListBlock {
                             region_id: spec.region_id,
                             source: WorldRegionOwnerLoadBlock::Base(source),
@@ -7922,7 +7903,7 @@ impl CGame {
                 Self::configure_region_owner(region.war_mut().base_mut(), spec);
                 let counts =
                     region
-                        .load_from_context(context)
+                        .load_from_context(context, resolve_name)
                         .map_err(|source| WorldRegionListBlock {
                             region_id: spec.region_id,
                             source: WorldRegionOwnerLoadBlock::Village(source),
@@ -7939,7 +7920,7 @@ impl CGame {
                 Self::configure_region_owner(region.war_mut().base_mut(), spec);
                 let outcome =
                     region
-                        .load_from_context(context)
+                        .load_from_context(context, resolve_name)
                         .map_err(|source| WorldRegionListBlock {
                             region_id: spec.region_id,
                             source: WorldRegionOwnerLoadBlock::City(source),
@@ -7955,7 +7936,7 @@ impl CGame {
                 Self::configure_region_owner(region.base_mut(), spec);
                 let outcome =
                     region
-                        .load_from_context(context)
+                        .load_from_context(context, resolve_name)
                         .map_err(|source| WorldRegionListBlock {
                             region_id: spec.region_id,
                             source: WorldRegionOwnerLoadBlock::Country(source),
@@ -7998,7 +7979,11 @@ impl CGame {
             let game_server_index = tokens.next_ascii().unwrap_or(0);
             let country = tokens.next_ascii::<i32>().unwrap_or(0) as u8;
             let notify = tokens.next_ascii().unwrap_or(0);
-            let name = context.reload_world_string_by_id(&string_id);
+            let name = self
+                .string_table
+                .table()
+                .get_string_by_id(&string_id)
+                .map_or_else(Vec::new, ToOwned::to_owned);
             let spec = WorldRegionLoadSpec {
                 region_id,
                 resource_id,
@@ -8013,7 +7998,12 @@ impl CGame {
             };
 
             let (owner, total_monster_count, total_npc_count, loaded) =
-                match Self::materialize_region_owner(context, &spec)? {
+                match Self::materialize_region_owner(context, &spec, &mut |string_id| {
+                    self.string_table
+                        .table()
+                        .get_string_by_id(string_id)
+                        .map_or_else(Vec::new, ToOwned::to_owned)
+                })? {
                     WorldRegionMaterialization::MissingSubtype => {
                         let mut log = format!("Region ({region_id}) ").into_bytes();
                         log.extend_from_slice(&spec.name);
@@ -8142,32 +8132,6 @@ impl CGame {
         message.base_mut().add(bytes);
         let sender = self.current_game_server_sender();
         let _ = message.send_all(sender.as_ref());
-    }
-
-    fn reload_boolean_with_log<Context: WorldReloadContext + ?Sized>(
-        context: &mut Context,
-        owner: WorldReloadBooleanOwner,
-        success_log: &[u8],
-        failure_log: &[u8],
-    ) -> bool {
-        let succeeded = context.call_boolean_owner(owner) != 0;
-        context.add_log_text(if succeeded { success_log } else { failure_log });
-        succeeded
-    }
-
-    fn serialize_reload_owner<Context: WorldReloadContext + ?Sized>(
-        &self,
-        context: &mut Context,
-        owner: WorldReloadSerializationOwner,
-        subcode: i32,
-        update_legacy_result: bool,
-        legacy_result: &mut i32,
-    ) {
-        let bytes = context.serialize_owner(owner);
-        if update_legacy_result {
-            *legacy_result = bytes.len() as u32 as i32;
-        }
-        self.send_reload_payload(subcode, &bytes);
     }
 
     /// Выполняет concrete `CountryWarSys::reload` для main-loop профиля.
@@ -8776,20 +8740,42 @@ impl CGame {
                 }
             }
             WorldReloadProfile::GoodsList => {
-                if Self::reload_boolean_with_log(
-                    context,
-                    WorldReloadBooleanOwner::GoodsList,
-                    b"Load goodslist.dat...OK!",
-                    b"Load goodslist.dat...FAILED!",
-                ) && send_to_game_servers
-                {
-                    self.serialize_reload_owner(
-                        context,
-                        WorldReloadSerializationOwner::GoodsList,
-                        0,
-                        true,
-                        &mut legacy_result,
-                    );
+                let loaded = match context.read_resource(b"data/goodslist.dat") {
+                    Some(source) => {
+                        let string_table = self.string_table.table();
+                        let (registry, original_name_index, name_index) =
+                            context.goods_registries();
+                        load_goods_registry(
+                            &source,
+                            registry,
+                            original_name_index,
+                            name_index,
+                            &mut |key| string_table.get_string_by_id(key).map(ToOwned::to_owned),
+                        )
+                        .map_err(WorldReloadBlock::GoodsList)?;
+                        true
+                    }
+                    None => {
+                        let (registry, original_name_index, name_index) =
+                            context.goods_registries();
+                        registry.clear();
+                        original_name_index.clear();
+                        name_index.clear();
+                        false
+                    }
+                };
+                context.add_log_text(if loaded {
+                    b"Load goodslist.dat...OK!"
+                } else {
+                    b"Load goodslist.dat...FAILED!"
+                });
+                if loaded && send_to_game_servers {
+                    let mut payload = Vec::new();
+                    let (registry, _, _) = context.goods_registries();
+                    serialize_goods_registry(registry, &mut payload)
+                        .map_err(WorldReloadBlock::GoodsListSerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(0, &payload);
                 }
             }
             WorldReloadProfile::MonsterList => {
@@ -8843,13 +8829,12 @@ impl CGame {
                     b"Load dropgoodslist.ini...FAILED!"
                 });
                 if monsters && drops && send_to_game_servers {
-                    self.serialize_reload_owner(
-                        context,
-                        WorldReloadSerializationOwner::MonsterList,
-                        2,
-                        true,
-                        &mut legacy_result,
-                    );
+                    let mut payload = Vec::new();
+                    let (monsters, drops) = context.monster_registries();
+                    serialize_monster_list(monsters, drops, &mut payload)
+                        .map_err(WorldReloadBlock::MonsterListSerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(2, &payload);
                 }
             }
             WorldReloadProfile::TradeList => {
@@ -9060,13 +9045,13 @@ impl CGame {
                 }
                 let complete = succeeded && game_setup_loaded && auction_loaded;
                 if complete && send_to_game_servers {
-                    self.serialize_reload_owner(
-                        context,
-                        WorldReloadSerializationOwner::GlobeSetup,
-                        7,
-                        true,
-                        &mut legacy_result,
-                    );
+                    let mut payload = Vec::new();
+                    let (globe_setup, region_router) = context.globe_setup_and_router();
+                    globe_setup
+                        .add_to_byte_array(region_router, &mut payload)
+                        .map_err(WorldReloadBlock::RegionRouterSerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(7, &payload);
                 }
             }
             WorldReloadProfile::StringTable => {
@@ -9105,13 +9090,13 @@ impl CGame {
                     b"Load LogSystem.ini...FAILED!"
                 });
                 if loaded && send_to_game_servers {
-                    self.serialize_reload_owner(
-                        context,
-                        WorldReloadSerializationOwner::LogSystem,
-                        8,
-                        true,
-                        &mut legacy_result,
-                    );
+                    let mut payload = Vec::new();
+                    context
+                        .log_system()
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::LogSystemSerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(8, &payload);
                 }
             }
             WorldReloadProfile::GmList => {
@@ -9155,13 +9140,13 @@ impl CGame {
                     b"Load playerGMList.ini...FAILED!"
                 });
                 if gm && player_gm && send_to_game_servers {
-                    self.serialize_reload_owner(
-                        context,
-                        WorldReloadSerializationOwner::GmList,
-                        9,
-                        true,
-                        &mut legacy_result,
-                    );
+                    let mut payload = Vec::new();
+                    context
+                        .gm_list()
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::GmListSerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(9, &payload);
                 }
             }
             WorldReloadProfile::ScriptFile => {
@@ -9212,13 +9197,13 @@ impl CGame {
                     b"Load regionlevelsetup.ini...FAILED!"
                 });
                 if loaded && send_to_game_servers {
-                    self.serialize_reload_owner(
-                        context,
-                        WorldReloadSerializationOwner::RegionLevelSetup,
-                        0x11,
-                        true,
-                        &mut legacy_result,
-                    );
+                    let mut payload = Vec::new();
+                    context
+                        .region_setup()
+                        .add_to_byte_array(&mut payload)
+                        .map_err(WorldReloadBlock::RegionSetupSerialization)?;
+                    legacy_result = payload.len() as u32 as i32;
+                    self.send_reload_payload(0x11, &payload);
                 }
             }
             WorldReloadProfile::HitLevelSetup => {
@@ -9252,21 +9237,18 @@ impl CGame {
                     self.send_reload_payload(0x14, &payload);
                 }
             }
-            WorldReloadProfile::Broadcast => {
-                context.reload_broadcast_list(self);
-            }
-            WorldReloadProfile::AttackCity => {
-                if context.call_boolean_owner(WorldReloadBooleanOwner::AttackCity) != 0 {
-                    self.serialize_reload_owner(
-                        context,
-                        WorldReloadSerializationOwner::AttackCity,
-                        0x1B,
-                        true,
-                        &mut legacy_result,
-                    );
-                    context.add_log_text(b"Load AttackCitySys List...OK!");
-                }
-            }
+            WorldReloadProfile::AttackCity
+            | WorldReloadProfile::Broadcast
+            | WorldReloadProfile::FactionParameters
+            | WorldReloadProfile::VillageWar
+            | WorldReloadProfile::FourNationWar
+            | WorldReloadProfile::TimeToReturn
+            | WorldReloadProfile::CountryWar
+            | WorldReloadProfile::CityWar
+            | WorldReloadProfile::FactionWar
+            | WorldReloadProfile::CountryParameters => unreachable!(
+                "reload_profiles направляет profile владельцу с его timer/domain context"
+            ),
             WorldReloadProfile::InvalidStrings => {
                 let filter_path = self.words_filter.filter_file_name().to_vec();
                 let char_code_path = self.words_filter.char_code_file_name().to_vec();
@@ -9282,50 +9264,22 @@ impl CGame {
                 }
             }
             WorldReloadProfile::GeneralVariableList => {}
-            WorldReloadProfile::FactionParameters => {
-                context.call_void_owner(WorldReloadVoidOwner::LoadOrganizingParameters);
-                context.call_void_owner(WorldReloadVoidOwner::ReinitializeFactionsByLevel);
-                context.add_log_text(b"Load FactionPara...OK!");
-            }
-            WorldReloadProfile::VillageWar => {
-                return Err(WorldReloadBlock::VillageWarOwnerRequired);
-            }
-            WorldReloadProfile::FourNationWar => {
-                return Err(WorldReloadBlock::FourNationWarOwnerRequired);
-            }
-            WorldReloadProfile::CityWar => {
-                context.call_void_owner(WorldReloadVoidOwner::AttackCityUnchecked);
-                self.serialize_reload_owner(
-                    context,
-                    WorldReloadSerializationOwner::AttackCity,
-                    0x1B,
-                    true,
-                    &mut legacy_result,
-                );
-                context.add_log_text(b"Load CityWarPara...OK!");
-            }
-            WorldReloadProfile::FactionWar => {
-                context.call_void_owner(WorldReloadVoidOwner::FactionWarParameters);
-                context.add_log_text(b"Load FactionWarPara...OK!");
-            }
             WorldReloadProfile::Quest => {
-                context.call_void_owner(WorldReloadVoidOwner::Quest);
-                context.add_log_text(b"Load QuestData...OK!");
-                self.serialize_reload_owner(
-                    context,
-                    WorldReloadSerializationOwner::Quest,
-                    0x16,
-                    true,
-                    &mut legacy_result,
+                let quest_source = context.read_resource(b"Data/Quest.ini");
+                let quest_ex_source = context.read_resource(b"Data/QuestEx.ini");
+                let string_table = self.string_table.table();
+                let _ = self.quest_system.load_from_resources(
+                    quest_source.as_deref(),
+                    quest_ex_source.as_deref(),
+                    &mut |key| string_table.get_string_by_id(key).map(ToOwned::to_owned),
                 );
-            }
-            WorldReloadProfile::CountryParameters => {
-                context.call_void_owner(WorldReloadVoidOwner::CountryParameters);
-                context.add_log_text(if profile_name.eq_ignore_ascii_case(b"CountryParam") {
-                    b"Load CountryParam...OK!"
-                } else {
-                    b"Load CountryPara...OK!"
-                });
+                context.add_log_text(b"Load QuestData...OK!");
+                let mut payload = Vec::new();
+                self.quest_system
+                    .add_to_byte_array(&mut payload)
+                    .map_err(WorldReloadBlock::QuestSerialization)?;
+                legacy_result = payload.len() as u32 as i32;
+                self.send_reload_payload(0x16, &payload);
             }
             WorldReloadProfile::IncrementShop => {
                 const PATH: &[u8] = b"setup/incrementshoplist.ini";
@@ -9447,9 +9401,6 @@ impl CGame {
                     self.send_reload_payload(0x1D, &payload);
                 }
             }
-            WorldReloadProfile::TimeToReturn => {
-                return Err(WorldReloadBlock::TimeToReturnOwnerRequired);
-            }
             WorldReloadProfile::PreciousBox => {
                 const PATH: &[u8] = b"data/preciousboxconf.xml";
                 let source = context.read_resource(PATH);
@@ -9553,9 +9504,6 @@ impl CGame {
                     legacy_result = payload.len() as u32 as i32;
                     self.send_reload_payload(0x24, &payload);
                 }
-            }
-            WorldReloadProfile::CountryWar => {
-                return Err(WorldReloadBlock::CountryWarOwnerRequired);
             }
             WorldReloadProfile::BattleFairyExp => {
                 const PATH: &[u8] = b"BattleFairyReleate/BattleFairyExp.xml";
@@ -9912,32 +9860,6 @@ impl CGame {
             }
         }
         Ok(legacy_result)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn reload_simple_serialized<Context: WorldReloadContext + ?Sized>(
-        &self,
-        context: &mut Context,
-        load_owner: WorldReloadBooleanOwner,
-        serialization_owner: WorldReloadSerializationOwner,
-        subcode: i32,
-        success_log: &[u8],
-        failure_log: &[u8],
-        send_to_game_servers: bool,
-        update_legacy_result: bool,
-        legacy_result: &mut i32,
-    ) {
-        if Self::reload_boolean_with_log(context, load_owner, success_log, failure_log)
-            && send_to_game_servers
-        {
-            self.serialize_reload_owner(
-                context,
-                serialization_owner,
-                subcode,
-                update_legacy_result,
-                legacy_result,
-            );
-        }
     }
 
     fn send_script_reload_data(&self) {
@@ -12662,6 +12584,83 @@ impl CGame {
         }))
     }
 
+    /// Перечитывает `setup/sysboardcast.ini` в тот же live список, который
+    /// обслуживает AI. Отсутствующий resource сохраняет прежний список;
+    /// открытый источник очищает его до разбора и оставляет подтверждённый
+    /// prefix при повреждённой записи.
+    pub(crate) fn reload_system_broadcasts<Random, GetTick>(
+        &mut self,
+        source: Option<&[u8]>,
+        random: &mut Random,
+        get_tick: &mut GetTick,
+    ) -> bool
+    where
+        Random: FnMut(i32) -> i32 + ?Sized,
+        GetTick: FnMut() -> u32 + ?Sized,
+    {
+        let Some(source) = source else {
+            return false;
+        };
+        self.system_broadcasts.clear();
+        let mut tokens = source
+            .split(u8::is_ascii_whitespace)
+            .filter(|token| !token.is_empty());
+        let parse_i32 = |token: &[u8]| {
+            std::str::from_utf8(token).ok()?.parse::<i32>().ok()
+        };
+        while tokens.any(|token| token == b"#") {
+            let Some(import_level) = tokens.next().and_then(parse_i32) else {
+                return false;
+            };
+            let Some(region_id) = tokens.next().and_then(parse_i32) else {
+                return false;
+            };
+            let Some(min_time_seconds) = tokens.next().and_then(parse_i32) else {
+                return false;
+            };
+            let Some(max_time_seconds) = tokens.next().and_then(parse_i32) else {
+                return false;
+            };
+            let Some(odds) = tokens.next().and_then(parse_i32) else {
+                return false;
+            };
+            let mut colors = [0_i32; 8];
+            for color in &mut colors {
+                let Some(value) = tokens.next().and_then(parse_i32) else {
+                    return false;
+                };
+                *color = value;
+            }
+            let Some(message_id) = tokens.next() else {
+                return false;
+            };
+            let argb = |values: &[i32]| {
+                ((values[0] as u32 & 0xff) << 24)
+                    | ((values[1] as u32 & 0xff) << 16)
+                    | ((values[2] as u32 & 0xff) << 8)
+                    | (values[3] as u32 & 0xff)
+            };
+            let random_range = max_time_seconds.wrapping_sub(min_time_seconds);
+            self.system_broadcasts.push_back(WorldSystemBroadcast {
+                import_level,
+                region_id,
+                min_time_seconds: min_time_seconds as u32,
+                max_time_seconds: max_time_seconds as u32,
+                odds: odds as u32,
+                text_color: argb(&colors[..4]),
+                back_color: argb(&colors[4..]),
+                message: self
+                    .string_table
+                    .table()
+                    .get_string_by_id(message_id)
+                    .map_or_else(Vec::new, ToOwned::to_owned),
+                interval_seconds: random(random_range).wrapping_add(min_time_seconds) as u32,
+                last_notify_time_seconds: get_tick() / 1000,
+            });
+        }
+        true
+    }
+
     /// Выполняет полный `CGame::AI` в исходном порядке RVA `0x000148A0`.
     ///
     /// Ordered region map вызывает отдельного virtual owner-а только для
@@ -14656,10 +14655,13 @@ impl CGame {
             owners.attack_city,
             owners.attack_city_callbacks,
             owners.organizing,
+            owners.faction_war,
             owners.country,
             owners.country_parameters,
             owners.organizing_parameters,
+            owners.organizing_tax_callback,
             owners.globe_setup,
+            &mut *callbacks.get_tick,
             &mut reload_union_application_callbacks,
             &mut *callbacks.update_union_player,
             &mut *callbacks.get_timer_local_time,
@@ -22101,10 +22103,13 @@ pub(crate) async fn reload_profiles<Context, GetLocalTime, GetTimerLocalTime, Ti
     attack_city: &mut CAttackCitySys,
     attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
     organizing: &mut COrganizingCtrl,
+    faction_war: &mut CFactionWarSys,
     country_handler: &mut CCountryHandler,
-    country_parameters: &CCountryParam,
-    organizing_parameters: &COrganizingParam,
+    country_parameters: &mut CCountryParam,
+    organizing_parameters: &mut COrganizingParam,
+    organizing_tax_callback: TimerCallback,
     globe_setup: &GlobeSetupSnapshot,
+    get_tick: &mut dyn FnMut() -> u32,
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     update_player: &mut dyn FnMut(i32),
     mut get_timer_local_time: GetTimerLocalTime,
@@ -22200,6 +22205,50 @@ where
                     get_timer_local_time(),
                     action.second_option,
                 )
+            } else if action.reload_profile == b"FactionPara" {
+                let runtime_directory = context.runtime_directory().to_path_buf();
+                let _legacy_result = organizing_parameters.load(
+                    &runtime_directory,
+                    get_timer_local_time(),
+                    timer,
+                    organizing_tax_callback,
+                );
+                match organizing.reinitialize_factions_by_level(game, organizing_parameters) {
+                    Ok(_) => {
+                        context.add_log_text(b"Load FactionPara...OK!");
+                        Ok(0)
+                    }
+                    Err(source) => Err(WorldReloadBlock::FactionReinitialization(source)),
+                }
+            } else if action.reload_profile == b"FactionWarPara" {
+                let source = context.read_resource(b"data/FactionWarSys.ini");
+                let _ = faction_war.load_ini_from_resource(source.as_deref());
+                context.add_log_text(b"Load FactionWarPara...OK!");
+                Ok(0)
+            } else if action.reload_profile == b"CountryParam"
+                || action.reload_profile == b"CountryPara"
+            {
+                let source = context.read_resource(b"data/CountryParam.ini");
+                let _legacy_result = country_parameters.load(source.as_deref());
+                context.add_log_text(if action.reload_profile == b"CountryParam" {
+                    b"Load CountryParam...OK!"
+                } else {
+                    b"Load CountryPara...OK!"
+                });
+                Ok(0)
+            } else if action.reload_profile == b"Broadcast" {
+                let source = context.read_resource(b"setup/sysboardcast.ini");
+                let loaded = game.reload_system_broadcasts(
+                    source.as_deref(),
+                    &mut *application_callbacks.random,
+                    &mut *get_tick,
+                );
+                context.add_log_text(if loaded {
+                    b"Load sysboardcast.ini...OK!"
+                } else {
+                    b"Load sysboardcast.ini...FAILED!"
+                });
+                Ok(i32::from(loaded))
             } else {
                 game.reload(
                     context,
