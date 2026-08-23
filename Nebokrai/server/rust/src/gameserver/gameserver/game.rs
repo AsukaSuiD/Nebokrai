@@ -93,6 +93,9 @@
 //! OrganSys war opcodes `0x7FE1F..0x7FE36` тем же FIFO меняют owned
 //! AttackCity/Village schedules, concrete local/proxy region phases и
 //! contender state с сохранением City/Village message/log side effects.
+//! CountryWar `0x7FF17..0x7FF22` продолжает тот же lifecycle: мутирует
+//! country-region phases/results, выполняет clear через concrete runtime и
+//! переиспользует входной message для all/country-filtered client broadcast.
 //! Battle-fairy combine теперь замыкает game player-map с GlobeSetup gate и
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные
@@ -201,6 +204,10 @@ use crate::gameserver::appserver::goods::cbattlefairyproperty::CBattleFairyPrope
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::goodswarmember::CGoodsWarMember;
+use crate::gameserver::appserver::message::countrymessage::{
+    CountryWarMessageDispatchError, GameCountryWarMessageReport, GameCountryWarRuntime,
+    dispatch_game_country_war_message,
+};
 use crate::gameserver::appserver::message::depotmessage::{
     DepotMessageReport, dispatch_depot_message,
 };
@@ -242,6 +249,7 @@ use crate::gameserver::appserver::player::{
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::servercityregion::CServerCityRegion;
 use crate::gameserver::appserver::servercountryregion::CServerCountryRegion;
+use crate::gameserver::appserver::servercountryregion::CountryBattleStateBlock;
 use crate::gameserver::appserver::servergodsbattleregion::{
     CGodsBattleMgr, CServerGodsBattleRegion,
 };
@@ -1049,6 +1057,12 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
     pub(crate) depot_messages: Vec<DepotMessageReport>,
     pub(crate) organizing_war_messages:
         Vec<Result<GameOrganizingWarMessageReport, GameOrganizingWarMessageError>>,
+    pub(crate) country_war_messages: Vec<
+        Result<
+            GameCountryWarMessageReport,
+            CountryWarMessageDispatchError<CountryBattleStateBlock>,
+        >,
+    >,
     pub(crate) server_messages:
         Vec<Result<GameServerMessageReport, GameServerMessageError<RegionRuntimeError>>>,
 }
@@ -1102,6 +1116,7 @@ pub(crate) trait GameMainLoopRuntime:
     + GameScriptResourceContext
     + InitialRegionStartupContext
     + GameOrganizingWarRuntime
+    + GameCountryWarRuntime
 {
     fn exit_requested(&self) -> bool;
     fn tick_interval_ms(&self) -> u32;
@@ -2992,6 +3007,17 @@ impl CGame {
             .collect()
     }
 
+    /// CountryWar start обходит canonical player map один раз и выбирает обе
+    /// участвующие страны, не группируя получателей по стране.
+    pub(crate) fn player_ids_in_countries(&self, countries: [u8; 2]) -> Vec<i32> {
+        self.players
+            .iter()
+            .filter_map(|(player_id, player)| {
+                countries.contains(&player.country()).then_some(*player_id)
+            })
+            .collect()
+    }
+
     /// Exact `FindPlayer(char const*)`: обходит canonical player map по
     /// signed ID-order и сравнивает byte-exact C-string имя.
     pub(crate) fn find_player_by_name(&self, name: &[u8]) -> Option<&CPlayer> {
@@ -3638,6 +3664,7 @@ impl CGame {
         let mut gma_messages = Vec::new();
         let mut depot_messages = Vec::new();
         let mut organizing_war_messages = Vec::new();
+        let mut country_war_messages = Vec::new();
         let mut server_messages = Vec::new();
         let world_messages = self
             .world_client
@@ -3653,6 +3680,7 @@ impl CGame {
                 &mut gma_messages,
                 &mut depot_messages,
                 &mut organizing_war_messages,
+                &mut country_war_messages,
                 &mut server_messages,
             );
         }
@@ -3670,6 +3698,7 @@ impl CGame {
                 &mut gma_messages,
                 &mut depot_messages,
                 &mut organizing_war_messages,
+                &mut country_war_messages,
                 &mut server_messages,
             );
         }
@@ -3689,6 +3718,7 @@ impl CGame {
                         &mut gma_messages,
                         &mut depot_messages,
                         &mut organizing_war_messages,
+                        &mut country_war_messages,
                         &mut server_messages,
                     );
                 }
@@ -3707,6 +3737,7 @@ impl CGame {
             gma_messages,
             depot_messages,
             organizing_war_messages,
+            country_war_messages,
             server_messages,
         }
     }
@@ -3723,6 +3754,12 @@ impl CGame {
         depot_messages: &mut Vec<DepotMessageReport>,
         organizing_war_messages: &mut Vec<
             Result<GameOrganizingWarMessageReport, GameOrganizingWarMessageError>,
+        >,
+        country_war_messages: &mut Vec<
+            Result<
+                GameCountryWarMessageReport,
+                CountryWarMessageDispatchError<CountryBattleStateBlock>,
+            >,
         >,
         server_messages: &mut Vec<
             Result<GameServerMessageReport, GameServerMessageError<Runtime::RuntimeError>>,
@@ -3744,6 +3781,8 @@ impl CGame {
             depot_messages.push(report);
         } else if let Some(report) = dispatch_game_organizing_war_message(message, self, runtime) {
             organizing_war_messages.push(report);
+        } else if let Some(report) = dispatch_game_country_war_message(message, self, runtime) {
+            country_war_messages.push(report);
         } else {
             message.run(self, runtime);
         }

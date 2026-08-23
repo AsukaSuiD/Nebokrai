@@ -393,6 +393,10 @@ impl CMessage {
         )
     }
 
+    pub(crate) fn set_message_type(&mut self, message_type: i32) {
+        self.base.set_message_type(message_type);
+    }
+
     /// RLE-отправка одному transport socket; возвращает exact queue result.
     pub(crate) fn send_to_socket(&self, net_server: &CMyNetServer, socket_id: i32) -> i32 {
         let frame = self.rle_send_frame();
