@@ -54,6 +54,9 @@
 //! Equipment enhancements `0x33/0x34` тем же FIFO pass публикуют TaoZhuang и
 //! парные CiQing/LingBao owners, повторно сериализуют client payload и
 //! сохраняют исходный broadcast/log ordering.
+//! World-event setup `0x38/0x39` публикует Leiting things и GodsBattle manager
+//! одним FIFO pass; dynamic log, decoder-local warning, file audit и финальный
+//! startup log остаются на исходных позициях.
 //! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
 //! публикует runtime repeated-emotion lookup до финального startup log.
 //! Goods list `0x00` заменяет ID/original-name/name registry из парного
@@ -820,6 +823,25 @@ pub(crate) struct GameEquipmentEnhancementStartupMessageReport {
     pub(crate) log_effects: Vec<Vec<u8>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameWorldEventStartupReport {
+    Things { entries: usize },
+    GodsBattle(GodsBattleDecodeReport),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameWorldEventStartupError {
+    Things(ThingSetupCodecError),
+    GodsBattle(GodsBattleDecodeError),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameWorldEventStartupMessageReport {
+    pub(crate) decoded: GameWorldEventStartupReport,
+    pub(crate) log_effects: Vec<Vec<u8>>,
+    pub(crate) file_effects: Vec<(String, Vec<u8>)>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageReport {
     ClientServerStart(GameClientServerStartReport),
@@ -836,6 +858,7 @@ pub(crate) enum GameServerMessageReport {
     MutationRulesStartup(GameMutationRulesStartupMessageReport),
     LookupFilterStartup(GameLookupFilterStartupMessageReport),
     EquipmentEnhancementStartup(GameEquipmentEnhancementStartupMessageReport),
+    WorldEventStartup(GameWorldEventStartupMessageReport),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -853,6 +876,7 @@ pub(crate) enum GameServerMessageError {
     MutationRulesStartup(GameMutationRulesStartupError),
     LookupFilterStartup(GameLookupFilterStartupError),
     EquipmentEnhancementStartup(GameEquipmentEnhancementStartupError),
+    WorldEventStartup(GameWorldEventStartupError),
 }
 
 /// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
@@ -1198,6 +1222,76 @@ pub(crate) fn dispatch_server_message(
                     log_effects,
                 },
             )))
+        }
+        THING_SETUP_SELECTOR | GODS_BATTLE_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("world-event selector проверен без изменения cursor");
+            let mut log_effects = Vec::new();
+            let mut file_effects = Vec::new();
+            let decoded = match {
+                let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                decode_world_event_startup(
+                    consumed_selector,
+                    wire,
+                    cursor,
+                    game,
+                    |text| log_effects.push(text.to_vec()),
+                    |path, text| file_effects.push((path.to_owned(), text.to_vec())),
+                )
+                .expect("world-event selector проверен outer dispatcher-ом")
+                .map_err(GameServerMessageError::WorldEventStartup)
+            } {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(Ok(GameServerMessageReport::WorldEventStartup(
+                GameWorldEventStartupMessageReport {
+                    decoded,
+                    log_effects,
+                    file_effects,
+                },
+            )))
+        }
+        _ => None,
+    }
+}
+
+fn decode_world_event_startup(
+    selector: i32,
+    source: &[u8],
+    cursor: &mut usize,
+    game: &mut CGame,
+    mut add_log_text: impl FnMut(&[u8]),
+    mut put_string_to_file: impl FnMut(&str, &[u8]),
+) -> Option<Result<GameWorldEventStartupReport, GameWorldEventStartupError>> {
+    match selector {
+        THING_SETUP_SELECTOR => {
+            if let Err(error) = game
+                .thing_setup_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                return Some(Err(GameWorldEventStartupError::Things(error)));
+            }
+            let entries = game.thing_setup().all_things().len();
+            let decoded_line = format!("GS Leiting Decord:line {entries}");
+            add_log_text(decoded_line.as_bytes());
+            add_log_text(b"Initial Strictest Enforcement...ok!");
+            Some(Ok(GameWorldEventStartupReport::Things { entries }))
+        }
+        GODS_BATTLE_SELECTOR => {
+            let report = match game.gods_battle_mgr_mut().decord_from_byte_array(
+                source,
+                cursor,
+                &mut add_log_text,
+                &mut put_string_to_file,
+            ) {
+                Ok(report) => report,
+                Err(error) => return Some(Err(GameWorldEventStartupError::GodsBattle(error))),
+            };
+            add_log_text(b"Initial SI_GODSBATTLE_SETUP...OK!");
+            Some(Ok(GameWorldEventStartupReport::GodsBattle(report)))
         }
         _ => None,
     }
@@ -2482,6 +2576,29 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
     mut put_string_to_file: impl FnMut(&str, &[u8]),
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    if let Some(result) = decode_world_event_startup(
+        selector,
+        source,
+        cursor,
+        game,
+        &mut add_log_text,
+        &mut put_string_to_file,
+    ) {
+        return Some(match result {
+            Ok(GameWorldEventStartupReport::Things { entries }) => {
+                Ok(GameOwnedStartupSnapshotReport::ThingSetup { entries })
+            }
+            Ok(GameWorldEventStartupReport::GodsBattle(report)) => {
+                Ok(GameOwnedStartupSnapshotReport::GodsBattle(report))
+            }
+            Err(GameWorldEventStartupError::Things(error)) => {
+                Err(GameOwnedStartupSnapshotError::ThingSetup(error))
+            }
+            Err(GameWorldEventStartupError::GodsBattle(error)) => {
+                Err(GameOwnedStartupSnapshotError::GodsBattle(error))
+            }
+        });
+    }
     if let Some(result) =
         decode_equipment_enhancement_startup(selector, source, cursor, game, &mut add_log_text)
     {
@@ -2940,34 +3057,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
                 }
             };
             Some(Ok(GameOwnedStartupSnapshotReport::StringTable(report)))
-        }
-        THING_SETUP_SELECTOR => {
-            if let Err(error) = game
-                .thing_setup_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                return Some(Err(GameOwnedStartupSnapshotError::ThingSetup(error)));
-            }
-            let entries = game.thing_setup().all_things().len();
-            let decoded_line = format!("GS Leiting Decord:line {entries}");
-            add_log_text(decoded_line.as_bytes());
-            add_log_text(b"Initial Strictest Enforcement...ok!");
-            Some(Ok(GameOwnedStartupSnapshotReport::ThingSetup { entries }))
-        }
-        GODS_BATTLE_SELECTOR => {
-            let report = match game.gods_battle_mgr_mut().decord_from_byte_array(
-                source,
-                cursor,
-                &mut add_log_text,
-                &mut put_string_to_file,
-            ) {
-                Ok(report) => report,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::GodsBattle(error)));
-                }
-            };
-            add_log_text(b"Initial SI_GODSBATTLE_SETUP...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::GodsBattle(report)))
         }
         _ => None,
     }

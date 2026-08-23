@@ -81,6 +81,8 @@
 //! FIFO pass с исходными clear/append, partial publication и success logs.
 //! TaoZhuang и CiQing/LingBao `0x33/0x34` проходят общий enhancement FIFO pass:
 //! owners сериализуются в client wire, broadcast-ятся и логируются в exact order.
+//! Leiting/GodsBattle `0x38/0x39` проходят общий world-event FIFO pass с
+//! dynamic/internal/final logs и typed file-audit effects в исходном порядке.
 //! Battle-fairy combine теперь замыкает game player-map с GlobeSetup gate и
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные
