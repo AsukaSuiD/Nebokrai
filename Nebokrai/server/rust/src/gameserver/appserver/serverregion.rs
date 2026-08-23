@@ -53,8 +53,10 @@
 //! `GetReturnPoint` сохраняет null-player zero result, local `m_stSetup`
 //! priority и fallback в три mutating country-default карты. Constructor
 //! `0x000852B0` не инициализирует `m_stSetup`; prefix
-//! `DecordSetupFromByteArray` `0x0007EAC0` материализует его как точные `0x20`
-//! байт. До вызова этого writer-а состояние остаётся отдельной typed-границей.
+//! `DecordSetupFromByteArray` `0x0007EAC0` материализует точные `0x20` байт,
+//! затем полностью заменяет ordered set запрещённых для производства товаров;
+//! `FindForbidGood` `0x0007D6A0` выполняет точный lookup C-string в этом set.
+//! До вызова decoder-а setup остаётся отдельной typed-границей.
 //! Достигнутый player-leave call из `RemoveObject` попадает в тот же exact
 //! `ret 4` RVA `0x00201A70`, поэтому отдельного наблюдаемого эффекта не имеет.
 //! Оставшиеся отдельные `std::basic_streambuf`/`Unwind@` экспорты сняты общей
@@ -138,6 +140,17 @@ pub(crate) struct ServerReturnSetupInputBlock {
     pub(crate) offset: usize,
     pub(crate) required: usize,
     pub(crate) available: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ServerRegionSetupDecodeError {
+    Setup(ServerReturnSetupInputBlock),
+    UnexpectedEnd {
+        field: &'static str,
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -314,6 +327,7 @@ pub(crate) struct CServerRegion {
     change_area_shapes: Vec<ShapeIdentity>,
     pub(crate) param: RegionParamState,
     pub(crate) return_setup: Option<ServerReturnSetup>,
+    forbidden_make_goods: BTreeSet<Vec<u8>>,
     pub(crate) war_number: i32,
     pub(crate) city_state: i32,
     pub(crate) kick_out_player: bool,
@@ -1012,6 +1026,38 @@ impl CServerRegion {
         Ok(())
     }
 
+    /// Читает полный startup/reload snapshot `regions/{id}.rs`: восемь
+    /// signed DWORD setup-а, count и C-string set запрещённых товаров.
+    pub(crate) fn decord_setup_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        _include_child: bool,
+    ) -> Result<bool, ServerRegionSetupDecodeError> {
+        self.decode_return_setup_prefix(source, cursor)
+            .map_err(ServerRegionSetupDecodeError::Setup)?;
+
+        // RVA 0x0007EAC0 очищает tree до чтения count и повторяет clear после
+        // него. Второй clear не наблюдаем для owned BTreeSet.
+        self.forbidden_make_goods.clear();
+        let count = read_setup_i32(source, cursor, "m_ForbidMakeGoods.size")?;
+        for _ in 0..count.max(0) {
+            let value = read_setup_c_string(source, cursor, "m_ForbidMakeGoods[]")?;
+            self.forbidden_make_goods.insert(value);
+        }
+        Ok(true)
+    }
+
+    /// Сохраняет `std::set<std::string>::find`: вход рассматривается как
+    /// C-string, поэтому байты после первого NUL не участвуют в lookup.
+    pub(crate) fn find_forbid_good(&self, name: &[u8]) -> bool {
+        let end = name
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(name.len());
+        self.forbidden_make_goods.contains(&name[..end])
+    }
+
     pub(crate) fn get_return_point(
         &self,
         player: Option<ServerReturnPlayer>,
@@ -1111,6 +1157,59 @@ impl CServerRegion {
         self.kick_out_player = true;
         self.kick_out_player_time = delay_ms;
         self.last_time_ms = now_ms;
+    }
+}
+
+fn read_setup_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<i32, ServerRegionSetupDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(end) = offset.checked_add(4) else {
+        return Err(ServerRegionSetupDecodeError::UnexpectedEnd {
+            field,
+            offset,
+            needed: 4,
+            available,
+        });
+    };
+    let Some(bytes) = source.get(offset..end) else {
+        return Err(ServerRegionSetupDecodeError::UnexpectedEnd {
+            field,
+            offset,
+            needed: 4,
+            available,
+        });
+    };
+    *cursor = end;
+    Ok(i32::from_le_bytes(
+        bytes.try_into().expect("проверены четыре байта"),
+    ))
+}
+
+fn read_setup_c_string(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<Vec<u8>, ServerRegionSetupDecodeError> {
+    let mut value = Vec::new();
+    loop {
+        let offset = *cursor;
+        let Some(byte) = source.get(offset).copied() else {
+            return Err(ServerRegionSetupDecodeError::UnexpectedEnd {
+                field,
+                offset,
+                needed: 1,
+                available: 0,
+            });
+        };
+        *cursor = offset + 1;
+        if byte == 0 {
+            return Ok(value);
+        }
+        value.push(byte);
     }
 }
 
@@ -1478,20 +1577,6 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 //
 
 // ============================================================================
-// FUNCTION: CServerRegion::FindForbidGood
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:2251
-// RVA: 0x0007D6A0
-// ADDRESS: 0047d6a0
-// PROTOTYPE: bool __thiscall FindForbidGood(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: `public:_virtual_void___thiscall_CServerRegion::AdjustTaxRate(CPlayer*)'::__l6::PlayerAdjustTaxRate::OnAsyncCallback
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -1528,21 +1613,6 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 // RVA: 0x0007DAF0
 // ADDRESS: 0047daf0
 // PROTOTYPE: void __thiscall OnAsyncCallback(tagAsyncResult * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CServerRegion::DecordSetupFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:640
-// RVA: 0x0007EAC0
-// IMPLEMENTED prefix m_stSetup; forbid-goods tail остаётся RAW.
-// ADDRESS: 0047eac0
-// PROTOTYPE: bool __thiscall DecordSetupFromByteArray(uchar * param_1, long * param_2, bool param_3)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -2129,6 +2199,5 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // COMPONENT_VARIANT_END: GameServer
