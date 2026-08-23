@@ -1,5 +1,6 @@
-//! Реестр `CMonsterList` из WorldServer, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Общий wire-реестр `CMonsterList`, подтверждённый парными World/Game
+//! owners: World serializer — `worldserver.exe/.pdb`, Game decoder —
+//! `gameserver.exe/.pdb`; исходник `server/setup/monsterlist.h/.cpp`.
 //!
 //! Wire пишет ordered monster map: 160-байтный scalar prefix, две C-строки и
 //! шестибайтные skills; затем ordered drop map с именами и 32-байтными records.
@@ -7,6 +8,8 @@
 //!
 //! `BTreeMap<Vec<u8>, _>` сохраняет byte-лексикографический порядок, `Vec` —
 //! порядок skills/drops. Первый внутренний NUL завершает legacy-строку.
+//! Game decode очищает оба registry до count и публикует только полностью
+//! прочитанные records; generic STL/SSO storage заменён owned Rust containers.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -88,6 +91,226 @@ pub(crate) struct MonsterDropList {
 
 pub(crate) type MonsterRegistry = BTreeMap<Vec<u8>, MonsterProperties>;
 pub(crate) type MonsterDropRegistry = BTreeMap<Vec<u8>, MonsterDropList>;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct MonsterListDecodeReport {
+    pub(crate) monsters: usize,
+    pub(crate) drop_groups: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MonsterListDecodeError {
+    UnexpectedEnd {
+        field: &'static str,
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    MissingStringTerminator {
+        field: &'static str,
+        offset: usize,
+    },
+}
+
+/// Декодирует парный World wire в Game-owned registries. Оба map очищаются
+/// до чтения count; уже опубликованные полные records и cursor не откатываются
+/// при safe short-buffer, сохраняя порядок мутаций старого pointer-reader-а.
+pub(crate) fn decode_monster_list(
+    monsters: &mut MonsterRegistry,
+    drop_goods: &mut MonsterDropRegistry,
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<MonsterListDecodeReport, MonsterListDecodeError> {
+    monsters.clear();
+    drop_goods.clear();
+
+    let monster_count = read_decode_i32(source, cursor, "monster count")?;
+    let mut monster_index = 0;
+    while monster_index < monster_count {
+        let mut scalar = [0_u32; 39];
+        for value in &mut scalar {
+            *value = read_decode_u32(source, cursor, "monster scalar prefix")?;
+        }
+        let attack_avoid = read_decode_u16(source, cursor, "monster attack avoid")?;
+        let element_avoid = read_decode_u16(source, cursor, "monster element avoid")?;
+        let original_name = read_decode_string(source, cursor, "monster original name")?;
+        let name = read_decode_string(source, cursor, "monster display name")?;
+        let skill_count = read_decode_i32(source, cursor, "monster skill count")?;
+        let mut skills = Vec::new();
+        let mut skill_index = 0;
+        while skill_index < skill_count {
+            skills.push(MonsterSkill {
+                id: read_decode_u16(source, cursor, "monster skill ID")?,
+                level: read_decode_u16(source, cursor, "monster skill level")?,
+                odds: read_decode_u16(source, cursor, "monster skill odds")?,
+            });
+            skill_index = skill_index.wrapping_add(1);
+        }
+        let monster = MonsterProperties {
+            index: scalar[0],
+            picture_id: scalar[1],
+            picture_level: scalar[2],
+            name_color: scalar[3],
+            hp_bar_color: scalar[4],
+            sound_id: scalar[5],
+            tamable: scalar[6],
+            maximum_tame_attempt_count: scalar[7],
+            figure: scalar[8],
+            level: scalar[9],
+            experience: scalar[10],
+            yp: scalar[11],
+            maximum_hp: scalar[12],
+            minimum_attack: scalar[13],
+            maximum_attack: scalar[14],
+            yao_attack: scalar[15],
+            minimum_element: scalar[16],
+            maximum_element: scalar[17],
+            hit: scalar[18],
+            defence: scalar[19],
+            dodge: scalar[20],
+            attack_speed: scalar[21],
+            strike_out_time: scalar[22],
+            move_speed: scalar[23],
+            element_resistant: scalar[24],
+            soul_resistant: scalar[25],
+            hp_recover_speed: scalar[26],
+            farthest: scalar[27],
+            nearest: scalar[28],
+            fight_range: scalar[29],
+            guard_range: scalar[30],
+            chase_range: scalar[31],
+            ai: scalar[32],
+            race: scalar[33],
+            kind: scalar[34],
+            move_timer: scalar[35],
+            stop_frame: scalar[36],
+            ai_interval: scalar[37],
+            re_ank: scalar[38],
+            attack_avoid,
+            element_avoid,
+            original_name: original_name.clone(),
+            name,
+            skills,
+        };
+        monsters.insert(original_name, monster);
+        monster_index = monster_index.wrapping_add(1);
+    }
+
+    let drop_group_count = read_decode_i32(source, cursor, "drop group count")?;
+    let mut group_index = 0;
+    while group_index < drop_group_count {
+        let monster_original_name = read_decode_string(source, cursor, "drop monster name")?;
+        let drop_count = read_decode_i32(source, cursor, "drop count")?;
+        let mut drops = Vec::new();
+        let mut drop_index = 0;
+        while drop_index < drop_count {
+            let name = read_decode_string(source, cursor, "drop goods name")?;
+            drops.push(MonsterDrop {
+                goods_index: read_decode_i32(source, cursor, "drop goods index")?,
+                odds: read_decode_i32(source, cursor, "drop odds")?,
+                maximum_odds: read_decode_i32(source, cursor, "drop maximum odds")?,
+                minimum_money: read_decode_i32(source, cursor, "drop minimum money")?,
+                maximum_money: read_decode_i32(source, cursor, "drop maximum money")?,
+                level: read_decode_i32(source, cursor, "drop level")?,
+                level_attenuation: f32::from_bits(read_decode_u32(
+                    source,
+                    cursor,
+                    "drop level attenuation",
+                )?),
+                level_attenuation_limit: f32::from_bits(read_decode_u32(
+                    source,
+                    cursor,
+                    "drop attenuation limit",
+                )?),
+                name,
+            });
+            drop_index = drop_index.wrapping_add(1);
+        }
+        drop_goods.insert(
+            monster_original_name.clone(),
+            MonsterDropList {
+                monster_original_name,
+                drops,
+            },
+        );
+        group_index = group_index.wrapping_add(1);
+    }
+
+    Ok(MonsterListDecodeReport {
+        monsters: monsters.len(),
+        drop_groups: drop_goods.len(),
+    })
+}
+
+fn read_decode_string(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<Vec<u8>, MonsterListDecodeError> {
+    let offset = *cursor;
+    let Some(relative_end) = source
+        .get(offset..)
+        .and_then(|tail| tail.iter().position(|byte| *byte == 0))
+    else {
+        return Err(MonsterListDecodeError::MissingStringTerminator { field, offset });
+    };
+    let end = offset + relative_end;
+    *cursor = end + 1;
+    Ok(source[offset..end].to_vec())
+}
+
+fn read_decode_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<i32, MonsterListDecodeError> {
+    Ok(read_decode_u32(source, cursor, field)? as i32)
+}
+
+fn read_decode_u32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<u32, MonsterListDecodeError> {
+    let bytes = read_decode_bytes::<4>(source, cursor, field)?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn read_decode_u16(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<u16, MonsterListDecodeError> {
+    let bytes = read_decode_bytes::<2>(source, cursor, field)?;
+    Ok(u16::from_le_bytes(bytes))
+}
+
+fn read_decode_bytes<const SIZE: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<[u8; SIZE], MonsterListDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(end) = offset.checked_add(SIZE) else {
+        return Err(MonsterListDecodeError::UnexpectedEnd {
+            field,
+            offset,
+            needed: SIZE,
+            available,
+        });
+    };
+    let Some(bytes) = source.get(offset..end) else {
+        return Err(MonsterListDecodeError::UnexpectedEnd {
+            field,
+            offset,
+            needed: SIZE,
+            available,
+        });
+    };
+    *cursor = end;
+    Ok(bytes.try_into().expect("размер wire scalar проверен"))
+}
 
 /// Читает World `data/monsterlist.ini`: поиск `*`, 160-byte scalar prefix,
 /// string-table ID и variable skill tail. Registry очищается до чтения, как

@@ -35,6 +35,8 @@
 //! публикует runtime repeated-emotion lookup до финального startup log.
 //! Goods list `0x00` заменяет ID/original-name/name registry из парного
 //! WorldServer wire и только после полного decode пишет точный startup log.
+//! Monster list `0x02` аналогично заменяет monster/drop registries, пишет log
+//! и лишь затем запускает refresh уже живых monster base-property ссылок.
 //! Skill list `0x06` очищает и заново публикует composite-key registry из
 //! парного WorldServer wire, затем пишет точный startup log.
 //! Proxy region `0x0F` создаёт отдельный owner, полностью декодирует короткий
@@ -131,6 +133,7 @@ use crate::setup::incrementshoplist::IncrementShopDecodeError;
 use crate::setup::leitingsetup::ThingSetupCodecError;
 use crate::setup::lingbao::{LingBaoDecodeError, LingBaoDecodeReport};
 use crate::setup::logsystem::LogSystemDecodeError;
+use crate::setup::monsterlist::{MonsterListDecodeError, MonsterListDecodeReport};
 use crate::setup::newskillmonsterlist::{NewSkillMonsterDecodeError, NewSkillMonsterDecodeReport};
 use crate::setup::playerlist::{PlayerListDecodeError, PlayerListDecodeReport};
 use crate::setup::preciousboxconf::PreciousBoxDecodeError;
@@ -144,6 +147,7 @@ const BILLING_REGISTRATION: i32 = 0x000E_F101;
 const CLIENT_SERVER_START_SELECTOR: i32 = 0x3b;
 const GOODS_LIST_SELECTOR: i32 = 0x00;
 const PLAYER_LIST_SELECTOR: i32 = 0x01;
+const MONSTER_LIST_SELECTOR: i32 = 0x02;
 const TRADE_LIST_SELECTOR: i32 = 0x03;
 const INCREMENT_SHOP_SELECTOR: i32 = 0x04;
 const CONTRIBUTE_SETUP_SELECTOR: i32 = 0x05;
@@ -464,6 +468,27 @@ pub(crate) fn dispatch_region_setup_reload(
         region_id,
         found: true,
     }))
+}
+
+pub(crate) fn dispatch_monster_list_startup(
+    selector: i32,
+    message: &mut CMessage,
+    game: &mut CGame,
+    mut add_log_text: impl FnMut(&[u8]),
+    mut refresh_all_monster_base_property: impl FnMut(&mut CGame),
+) -> Option<Result<MonsterListDecodeReport, MonsterListDecodeError>> {
+    if selector != MONSTER_LIST_SELECTOR {
+        return None;
+    }
+
+    let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    let report = match game.decode_monster_list(source, cursor) {
+        Ok(report) => report,
+        Err(error) => return Some(Err(error)),
+    };
+    add_log_text(b"Initial SI_MONSTERLIST...OK!");
+    refresh_all_monster_base_property(game);
+    Some(Ok(report))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

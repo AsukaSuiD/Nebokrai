@@ -54,6 +54,8 @@
 //! lookup-ы без process-global raw pointers.
 //! `CGoodsFactory` аналогично хранит startup selector `0x00`, включая оба
 //! byte-name index-а для последующего container/goods lifecycle.
+//! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
+//! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
 //! `0x0000AD10` сохраняет map-assignment, а `FindProxyRegion` `0x0000AD30` —
 //! lookup/null. Proxy snapshot `0x0F` публикуется целиком до startup log.
@@ -140,6 +142,10 @@ use crate::setup::incrementshoplist::CIncrementShopList;
 use crate::setup::leitingsetup::CThingSetup;
 use crate::setup::lingbao::CLingBaoSetup;
 use crate::setup::logsystem::CLogSystem;
+use crate::setup::monsterlist::{
+    MonsterDropRegistry, MonsterListDecodeError, MonsterListDecodeReport, MonsterProperties,
+    MonsterRegistry, decode_monster_list, get_monster_property_by_origin_name,
+};
 use crate::setup::newskillmonsterlist::NewSkillMonsterConf;
 use crate::setup::playerlist::CPlayerList;
 use crate::setup::preciousboxconf::PreciousBoxConf;
@@ -825,6 +831,8 @@ pub(crate) struct CGame {
     trade_list: CTradeList,
     goods_factory: CGoodsFactory,
     skill_factory: CSkillFactory,
+    monster_registry: MonsterRegistry,
+    monster_drop_registry: MonsterDropRegistry,
     thing_setup: CThingSetup,
     increment_shop_list: CIncrementShopList,
     contribute_setup: CContributeSetup,
@@ -901,6 +909,8 @@ impl CGame {
             trade_list: CTradeList::default(),
             goods_factory: CGoodsFactory::default(),
             skill_factory: CSkillFactory::default(),
+            monster_registry: MonsterRegistry::new(),
+            monster_drop_registry: MonsterDropRegistry::new(),
             thing_setup: CThingSetup::default(),
             increment_shop_list: CIncrementShopList::default(),
             contribute_setup: CContributeSetup::default(),
@@ -1204,6 +1214,26 @@ impl CGame {
 
     pub(crate) const fn skill_factory_mut(&mut self) -> &mut CSkillFactory {
         &mut self.skill_factory
+    }
+
+    pub(crate) fn decode_monster_list(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<MonsterListDecodeReport, MonsterListDecodeError> {
+        decode_monster_list(
+            &mut self.monster_registry,
+            &mut self.monster_drop_registry,
+            source,
+            cursor,
+        )
+    }
+
+    pub(crate) fn find_monster_property_by_origin_name(
+        &self,
+        origin_name: &[u8],
+    ) -> Option<&MonsterProperties> {
+        get_monster_property_by_origin_name(&self.monster_registry, origin_name)
     }
 
     /// Сохраняет исходный `std::map::operator[] = pointer`: повторный ID
