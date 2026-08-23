@@ -7,9 +7,10 @@
 //! используют last-write-wins. Lookup miss и null name возвращают ноль/`None`.
 //!
 //! Парный WorldServer serializer подтверждает wire. `BTreeMap` и owned values
-//! заменяют MSVC tree/raw pointers без изменения порядка. Создание предметов,
-//! upgrade и addon mutation ниже остаются RAW до materialization `CGoods` и
-//! container lifecycle; startup registry и его runtime lookup-ы уже исполняемы.
+//! заменяют MSVC tree/raw pointers без изменения порядка. Одиночное создание
+//! предмета замкнуто вместе с обязательной загрузкой ordinary/battle-fairy
+//! свойств; массовое создание, upgrade и прочая addon mutation ниже остаются
+//! RAW до materialization связанного gameplay.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -132,6 +133,32 @@ impl CGoodsFactory {
             });
         }
         goods.set_ex_id(create_guid());
+        Some(goods)
+    }
+
+    /// Полный exact overload `CreateGoods(goods_index)`: оба loader-а идут
+    /// после GUID и вызываются даже для headgear без профильных addon-ов.
+    pub(crate) fn create_goods<Random, Guid, FairyThreshold, BattleFairyThreshold>(
+        &self,
+        goods_index: u32,
+        random: Random,
+        create_guid: Guid,
+        fairy_threshold_for_level: FairyThreshold,
+        battle_fairy_threshold_for_level: BattleFairyThreshold,
+    ) -> Option<CGoods>
+    where
+        Random: FnMut(i32) -> i32,
+        Guid: FnMut() -> CGuid,
+        FairyThreshold: FnMut(u32, u32) -> u32,
+        BattleFairyThreshold: FnMut(u32, u32) -> u32,
+    {
+        let mut goods = self.create_goods_core(goods_index, random, create_guid)?;
+        goods
+            .load_fairy_properties(self, fairy_threshold_for_level)
+            .expect("catalog entry проверена create_goods_core");
+        goods
+            .load_battle_fairy_property(self, battle_fairy_threshold_for_level)
+            .expect("catalog entry проверена create_goods_core");
         Some(goods)
     }
 
