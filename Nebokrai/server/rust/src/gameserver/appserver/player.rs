@@ -67,6 +67,10 @@
 //! thresholds, общий area-map tail и последующий `0xBF605`; restored-state
 //! concrete skill остаётся входным фактом. Non-finite повреждённый float-state
 //! блокируется typed outcome до старого x87 integer conversion.
+//! Periodic HP-death prefix `CPlayer::AI` повторно нормализует summon/state и
+//! recall/died флаги нулевой по HP equipped fairy, затем вызывает
+//! `PropertiesChanged`. Оригинал в этой ветви не чистит stale area-map entry и
+//! не посылает status broadcast; оба отсутствующих side effect сохранены.
 
 use super::area::WarSoulPoint;
 use super::container::cbattlefairycontainer::{
@@ -282,6 +286,27 @@ pub(crate) struct BattleFairyFollowReport {
     pub(crate) spatial_action: Option<BattleFairyWarSoulAction>,
     pub(crate) spatial_applied: bool,
     pub(crate) effects: Vec<BattleFairyFollowEffect>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyDeathOutcome {
+    MissingHeadgear,
+    NotBattleFairy,
+    Alive,
+    Died,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyDeathEffect {
+    PropertiesChanged { player_id: i32 },
+}
+
+#[must_use = "death report сохраняет periodic state transition и property effect"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyDeathReport {
+    pub(crate) player_id: i32,
+    pub(crate) outcome: BattleFairyDeathOutcome,
+    pub(crate) effects: Vec<BattleFairyDeathEffect>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1108,6 +1133,41 @@ impl CPlayer {
             x: legacy_f32_to_u32(visual_x),
             y: legacy_f32_to_u32(visual_y),
         });
+        report
+    }
+
+    /// Periodic prefix `CPlayer::AI`: нулевой HP equipped battle fairy каждый
+    /// tick повторно нормализует четыре state-поля и вызывает PropertiesChanged.
+    /// Исходник не удаляет stale area-map entry и не посылает status broadcast.
+    pub(crate) fn refresh_battle_fairy_death(
+        &mut self,
+        factory: &CGoodsFactory,
+    ) -> BattleFairyDeathReport {
+        let player_id = self.player_id();
+        let mut report = BattleFairyDeathReport {
+            player_id,
+            outcome: BattleFairyDeathOutcome::MissingHeadgear,
+            effects: Vec::new(),
+        };
+        let Some(goods) = self.equipment.get_goods(10) else {
+            return report;
+        };
+        if goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
+            report.outcome = BattleFairyDeathOutcome::NotBattleFairy;
+            return report;
+        }
+        if goods.addon_property_value(factory, GAP_BF_HP, 1) != 0 {
+            report.outcome = BattleFairyDeathOutcome::Alive;
+            return report;
+        }
+        self.battle_fairy_summoned = false;
+        self.war_soul_state = 0;
+        self.set_battle_fairy_recall(true);
+        self.set_battle_fairy_died(true);
+        report.outcome = BattleFairyDeathOutcome::Died;
+        report
+            .effects
+            .push(BattleFairyDeathEffect::PropertiesChanged { player_id });
         report
     }
 
@@ -3196,34 +3256,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::SetBFRecall
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.h:1303
-// RVA: 0x0002AF40
-// ADDRESS: 0042af40
-// PROTOTYPE: void __thiscall SetBFRecall(bool param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SetBFDied
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.h:1305
-// RVA: 0x0002AF50
-// ADDRESS: 0042af50
-// PROTOTYPE: void __thiscall SetBFDied(bool param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::SetPersonalShopFlag
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -4072,20 +4104,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x0002DD20
 // ADDRESS: 0042dd20
 // PROTOTYPE: int __thiscall DeleteSkillItem(ulong param_1, ulong param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::GetWarSoulGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13040
-// RVA: 0x0002DF10
-// ADDRESS: 0042df10
-// PROTOTYPE: CGoods * __thiscall GetWarSoulGoods(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

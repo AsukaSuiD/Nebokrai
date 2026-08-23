@@ -102,9 +102,10 @@ use crate::gameserver::appserver::message::sequencestring::{
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::organizingsystem::fournationwarsys::CFourNationWarSys;
 use crate::gameserver::appserver::player::{
-    BattleFairyCombineReport, BattleFairyEquipmentMutationReport, BattleFairyFollowReport,
-    BattleFairySkillRequest, BattleFairySkillRequestFacts, BattleFairySkillRequestReport,
-    BattleFairySkillResetReport, BattleFairySummonReport, BattleFairyWarSoulAction, CPlayer,
+    BattleFairyCombineReport, BattleFairyDeathReport, BattleFairyEquipmentMutationReport,
+    BattleFairyFollowReport, BattleFairySkillRequest, BattleFairySkillRequestFacts,
+    BattleFairySkillRequestReport, BattleFairySkillResetReport, BattleFairySummonReport,
+    BattleFairyWarSoulAction, CPlayer,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::servercityregion::CServerCityRegion;
@@ -2282,6 +2283,19 @@ impl CGame {
             player.apply_war_soul_action(action, spatial_applied);
         }
         Some(report)
+    }
+
+    /// Выполняет periodic HP-death prefix `CPlayer::AI` над игроком из
+    /// canonical ordered registry. Возвращаемый effect оставляет virtual
+    /// `PropertiesChanged` явной границей до полного property owner-а.
+    pub(crate) fn refresh_battle_fairy_death(
+        &mut self,
+        player_id: i32,
+    ) -> Option<BattleFairyDeathReport> {
+        let factory = &self.goods_factory;
+        self.players
+            .get_mut(&player_id)
+            .map(|player| player.refresh_battle_fairy_death(factory))
     }
 
     /// Исполняет один исходный snapshot входящих FIFO в порядке WS, BS, GS.
