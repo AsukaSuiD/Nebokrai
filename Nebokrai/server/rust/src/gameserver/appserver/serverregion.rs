@@ -392,9 +392,6 @@ pub(crate) trait ServerRegionMonsterContext: ServerRegionMembershipContext {
 
     /// Virtual `OnRefreshRegion(refreshIndex)` для guard AI 10/11.
     fn refresh_guard_region(&mut self, refresh_index: i32);
-
-    /// Ветка `bMoveMonsterWhenRefeash`: точный area/AI owner ещё не замкнут.
-    fn move_existing_monsters_for_refresh(&mut self, refresh_index: i32);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -612,7 +609,11 @@ impl CServerRegion {
         for (setup_index, refresh_index) in due {
             report.due_groups.push(refresh_index);
             if move_existing {
-                context.move_existing_monsters_for_refresh(refresh_index);
+                for area in &mut self.areas {
+                    if area.plug_list().is_empty() {
+                        area.on_refresh_monster(refresh_index);
+                    }
+                }
             }
             let amount = self.monster_setups[setup_index]
                 .count

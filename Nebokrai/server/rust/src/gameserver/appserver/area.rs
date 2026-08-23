@@ -20,6 +20,10 @@
 //! `CServerRegion::FindChildObject`; pointer ownership в `CArea` не вводится.
 //! `PlayerEnter` RVA `0x00075580` сохраняет точный девяти-area traversal, а
 //! сам `WakeUpMonsters` остаётся явным AI callback.
+//! `OnRefreshMonster` RVA `0x00101A70`, вызываемый region AI только для area
+//! без plug-ов, в точном EXE является намеренным no-op (`ret 4`). Метод
+//! оставлен явным, чтобы не потерять подтверждённую границу owner-а и аргумент
+//! refresh index при последующей реконструкции другой версии.
 //! Inline `CSession::GetPlugList` RVA `0x00070910`, скомпилированный из этого
 //! же source-owner, также `IMPLEMENTED`: он возвращает ordered plug-list без
 //! копии; Rust slice сохраняет порядок и запрещает чужую мутацию во время
@@ -157,6 +161,14 @@ impl CArea {
     pub(crate) const fn id(&self) -> i32 {
         self.base_object.get_id()
     }
+
+    /// Типизированный вид inherited `CSession::GetPlugList` для region AI.
+    pub(crate) fn plug_list(&self) -> &[i32] {
+        &self.players
+    }
+
+    /// Сохраняет пустой контракт `CArea::OnRefreshMonster(long)` exact EXE.
+    pub(crate) const fn on_refresh_monster(&mut self, _refresh_index: i32) {}
 
     pub(crate) fn get_num_shapes(&self) -> u32 {
         [
@@ -620,6 +632,5 @@ impl CSession {
 //
 
 // IMPLEMENTED: `CArea::PlayerEnter` материализован выше; покрытый raw-блок удалён.
-
 
 // COMPONENT_VARIANT_END: GameServer
