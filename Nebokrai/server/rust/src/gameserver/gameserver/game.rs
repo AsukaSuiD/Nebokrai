@@ -77,6 +77,9 @@
 //! ordered goods owner в `CGame`; exact World `0x80403` caller мутирует
 //! его из живого message FIFO, а `MainLoop` публикует `0x60807/0x60808`
 //! с исходными strict/wrapping time gates без внешнего auction hook-а.
+//! Game-variant `CNetSessionManager` также принадлежит `CGame`: `MainLoop`
+//! напрямую выполняет ordered timeout/callback pass, а `Release` очищает
+//! его после socket cleanup в исходной lifecycle-позиции.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
@@ -164,6 +167,9 @@ use crate::public::equipmentcomposelist::EquipmentComposeList;
 use crate::public::guid::CGuid;
 use crate::public::mystringtable::{
     MyStringTable, MyStringTableDecodeError, MyStringTableDecodeReport,
+};
+use crate::public::netsessionmanager::{
+    CNetSessionManager, NetSessionManagerVariant, NetSessionRunReport,
 };
 use crate::public::taozhuangsetup::CTaoZhuangSetup;
 use crate::public::wordsfilter::CWordsFilter;
@@ -888,6 +894,7 @@ pub(crate) struct GameMainLoopReport {
     pub(crate) next_deadline_ms: Option<u32>,
     pub(crate) signed_lag_ms: Option<i32>,
     pub(crate) messages: Option<GameProcessMessagesReport>,
+    pub(crate) net_sessions: Option<NetSessionRunReport>,
     pub(crate) auction: Option<GameAuctionRunReport>,
 }
 
@@ -930,7 +937,7 @@ struct GameMainLoopState {
     pacing_deadline_ms: u32,
 }
 
-/// Concrete Script/AI/session/net owners подключаются сюда по мере их
+/// Concrete Script/AI/session owners подключаются сюда по мере их
 /// материализации; message routing уже исполняется самим `CGame`.
 pub(crate) trait GameMainLoopRuntime: GameMessageHandlers {
     fn exit_requested(&self) -> bool;
@@ -942,7 +949,6 @@ pub(crate) trait GameMainLoopRuntime: GameMessageHandlers {
     fn script_loop(&mut self, game: &mut CGame);
     fn ai(&mut self, game: &mut CGame);
     fn session_factory_ai(&mut self, game: &mut CGame);
-    fn run_net_sessions(&mut self, game: &mut CGame);
     fn wait(&mut self, duration_ms: u32);
     fn output_debug(&mut self, message: &'static str);
 }
@@ -952,7 +958,6 @@ pub(crate) enum GameReleaseExternalOwner {
     ScriptFunctions,
     GeneralVariables,
     SocketRuntime,
-    NetSessions,
     PkSystem,
     BaseMessageRuntime,
     AttackCitySystem,
@@ -1015,6 +1020,9 @@ pub(crate) enum GameReleaseEvent {
     },
     NetworkServerReleased {
         present: bool,
+    },
+    NetSessionsReleased {
+        count: usize,
     },
     IncrementShopReleased,
     QuestSystemReleased,
@@ -1173,6 +1181,7 @@ pub(crate) struct CGame {
     net_server: Option<CMyNetServer>,
     world_reconnect_task: Option<GameReconnectTask>,
     billing_reconnect_task: Option<GameReconnectTask>,
+    net_session_manager: CNetSessionManager,
     players: BTreeMap<i32, CPlayer>,
     regions: BTreeMap<i32, ServerRegionOwner>,
     proxy_regions: BTreeMap<i32, CProxyServerRegion>,
@@ -1255,6 +1264,7 @@ impl CGame {
             net_server: None,
             world_reconnect_task: None,
             billing_reconnect_task: None,
+            net_session_manager: CNetSessionManager::new(NetSessionManagerVariant::GameServer),
             players: BTreeMap::new(),
             regions: BTreeMap::new(),
             proxy_regions: BTreeMap::new(),
@@ -1665,6 +1675,11 @@ impl CGame {
 
     pub(crate) const fn auction_room_mut(&mut self) -> &mut CAuctionRoom<CGoodsNode> {
         &mut self.auction_room
+    }
+
+    /// Возвращает process-owned Game variant для async producer-ов.
+    pub(crate) const fn net_session_manager(&self) -> &CNetSessionManager {
+        &self.net_session_manager
     }
 
     /// Exact `CGame::SetAuctionState`: false не меняет saved wall-clock,
@@ -2357,13 +2372,14 @@ impl CGame {
             present: network_server_present,
         });
 
-        for owner in [
+        runtime.release_external_owner(GameReleaseExternalOwner::SocketRuntime);
+        events.push(GameReleaseEvent::ExternalOwner(
             GameReleaseExternalOwner::SocketRuntime,
-            GameReleaseExternalOwner::NetSessions,
-        ] {
-            runtime.release_external_owner(owner);
-            events.push(GameReleaseEvent::ExternalOwner(owner));
-        }
+        ));
+        let released_net_sessions = self.net_session_manager.release();
+        events.push(GameReleaseEvent::NetSessionsReleased {
+            count: released_net_sessions,
+        });
 
         self.increment_shop_list.release();
         events.push(GameReleaseEvent::IncrementShopReleased);
@@ -2954,12 +2970,14 @@ impl CGame {
                 next_deadline_ms: state.pacing_initialized.then_some(state.pacing_deadline_ms),
                 signed_lag_ms: None,
                 messages: None,
+                net_sessions: None,
                 auction: None,
             };
         }
 
         state.ai_tick = state.ai_tick.wrapping_add(1);
         let messages;
+        let net_sessions;
         if self.setup.watch_runtime_info {
             let started = runtime.get_tick_ms();
             runtime.script_loop(self);
@@ -2994,7 +3012,7 @@ impl CGame {
             stages.push(GameMainLoopStage::Session);
 
             let started = runtime.get_tick_ms();
-            runtime.run_net_sessions(self);
+            net_sessions = self.net_session_manager.run();
             state.profile.net_session_ms = state
                 .profile
                 .net_session_ms
@@ -3009,7 +3027,7 @@ impl CGame {
             stages.push(GameMainLoopStage::Message);
             runtime.session_factory_ai(self);
             stages.push(GameMainLoopStage::Session);
-            runtime.run_net_sessions(self);
+            net_sessions = self.net_session_manager.run();
             stages.push(GameMainLoopStage::NetSession);
         }
 
@@ -3051,6 +3069,7 @@ impl CGame {
             next_deadline_ms: Some(state.pacing_deadline_ms),
             signed_lag_ms: Some(signed_lag_ms),
             messages: Some(messages),
+            net_sessions: Some(net_sessions),
             auction: Some(auction),
         }
     }

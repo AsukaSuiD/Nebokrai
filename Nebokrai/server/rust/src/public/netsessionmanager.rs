@@ -50,7 +50,7 @@ pub(crate) enum NetSessionCallbackOutcome {
 }
 
 /// Итог полного ordered timeout pass.
-#[derive(Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct NetSessionRunReport {
     pub(crate) decremented: usize,
     pub(crate) timed_out: Vec<i64>,
@@ -65,7 +65,7 @@ pub(crate) struct CNetSessionManager {
 }
 
 impl CNetSessionManager {
- /// Создаёт пустой manager конкретного подтверждённого процесса.
+    /// Создаёт пустой manager конкретного подтверждённого процесса.
     pub(crate) const fn new(variant: NetSessionManagerVariant) -> Self {
         Self {
             variant,
@@ -74,12 +74,12 @@ impl CNetSessionManager {
         }
     }
 
- /// Возвращает выбранную компонентную поверхность без смешения процессов.
+    /// Возвращает выбранную компонентную поверхность без смешения процессов.
     pub(crate) const fn variant(&self) -> NetSessionManagerVariant {
         self.variant
     }
 
- /// Создаёт session и вставляет её по оригинал signed 64-bit key.
+    /// Создаёт session и вставляет её по оригинал signed 64-bit key.
     pub(crate) fn create_session(
         &self,
         first: i32,
@@ -110,7 +110,7 @@ impl CNetSessionManager {
         Ok(CreatedNetSession { id, cookie })
     }
 
- /// Передаёт callback-owner созданной session либо возвращает его caller-у.
+    /// Передаёт callback-owner созданной session либо возвращает его caller-у.
     pub(crate) fn set_callback_handle(
         &self,
         session_id: i64,
@@ -125,7 +125,7 @@ impl CNetSessionManager {
             .map_err(NetSessionSetCallbackBlock::AlreadyAssigned)
     }
 
- /// Выполняет `Beging` для stable key под исходной map lifetime.
+    /// Выполняет `Beging` для stable key под исходной map lifetime.
     pub(crate) fn beging(
         &self,
         session_id: i64,
@@ -145,7 +145,7 @@ impl CNetSessionManager {
         Ok(())
     }
 
- /// Доставляет GameServer-only nonterminal callback и сохраняет session.
+    /// Доставляет GameServer-only nonterminal callback и сохраняет session.
     pub(crate) fn on_do(
         &self,
         session_id: i64,
@@ -177,7 +177,7 @@ impl CNetSessionManager {
         NetSessionCallbackOutcome::Delivered
     }
 
- /// Доставляет terminal result и только после callback удаляет map-owner.
+    /// Доставляет terminal result и только после callback удаляет map-owner.
     pub(crate) fn on_sync_callback_result(
         &self,
         session_id: i64,
@@ -211,7 +211,7 @@ impl CNetSessionManager {
         NetSessionCallbackOutcome::Delivered
     }
 
- /// Обходит все sessions по signed key-order и удаляет каждый zero-timeout.
+    /// Обходит все sessions по signed key-order и удаляет каждый zero-timeout.
     pub(crate) fn run(&self) -> NetSessionRunReport {
         let mut sessions = self.sessions.lock();
         let keys: Vec<i64> = sessions.keys().copied().collect();
@@ -235,7 +235,7 @@ impl CNetSessionManager {
         report
     }
 
- /// Освобождает все callbacks/sessions в map-order и оставляет manager пустым.
+    /// Освобождает все callbacks/sessions в map-order и оставляет manager пустым.
     pub(crate) fn release(&self) -> usize {
         let mut sessions = self.sessions.lock();
         let released = sessions.len();
@@ -245,7 +245,7 @@ impl CNetSessionManager {
         released
     }
 
- /// Возвращает текущее число session records под map lock.
+    /// Возвращает текущее число session records под map lock.
     pub(crate) fn len(&self) -> usize {
         self.sessions.lock().len()
     }

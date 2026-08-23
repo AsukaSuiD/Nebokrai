@@ -26,6 +26,12 @@ pub(crate) mod guid;
 pub(crate) mod aucitionroom;
 #[allow(
     dead_code,
+    reason = "CAuctionLog materialized before its World auction handler and LogDB loader"
+)]
+#[path = "auctionroom/auctionlog.rs"]
+pub(crate) mod auctionlog;
+#[allow(
+    dead_code,
     reason = "CGoodsNode подключён к AddItemToAuctionRoom и auction-handler 0x14ED01"
 )]
 #[path = "auctionroom/auctionnode.rs"]
@@ -36,21 +42,15 @@ pub(crate) mod auctionnode;
 )]
 #[path = "auctionroom/auctionroom.rs"]
 pub(crate) mod auctionroom;
-#[allow(
-    dead_code,
-    reason = "CAuctionLog materialized before its World auction handler and LogDB loader"
-)]
-#[path = "auctionroom/auctionlog.rs"]
-pub(crate) mod auctionlog;
 
-pub(crate) mod md5;
-pub(crate) mod mystringtable;
-pub(crate) mod stringtable;
 #[allow(
     dead_code,
     reason = "CharCodeFilter materialized for World name filtering before its snapshot serializer"
 )]
 pub(crate) mod char_code_filter;
+pub(crate) mod md5;
+pub(crate) mod mystringtable;
+pub(crate) mod stringtable;
 #[allow(
     dead_code,
     reason = "CWordsFilter подключён к CGame до reload и initial-config consumers"
@@ -64,7 +64,7 @@ pub(crate) mod wordsfilter;
 pub(crate) mod netsession;
 #[allow(
     dead_code,
-    reason = "CNetSessionManager подключён к World MainLoop; Game call sites остаются в сыром компоненте"
+    reason = "CNetSessionManager подключён к World/Game MainLoop; доменные async producers ещё достигаются"
 )]
 pub(crate) mod netsessionmanager;
 
@@ -104,13 +104,11 @@ pub(crate) mod taozhuangsetup;
 )]
 pub(crate) mod timer;
 
-pub(crate) mod readwrite;
-pub(crate) mod tools;
 #[allow(
     dead_code,
-    reason = "CRFile подключён перед восстановлением CClientResource/package-opening"
+    reason = "CClientResource read-side подключён перед exact LoadEx disk owner-ом"
 )]
-pub(crate) mod rfile;
+pub(crate) mod clientresource;
 #[allow(
     dead_code,
     reason = "FilesInfo подключён перед materialization CClientResource и package-opening"
@@ -121,8 +119,10 @@ pub(crate) mod filesinfo;
     reason = "read-side CPackage подключён перед CClientResource и rfOpen package-ветвью"
 )]
 pub(crate) mod package;
+pub(crate) mod readwrite;
 #[allow(
     dead_code,
-    reason = "CClientResource read-side подключён перед exact LoadEx disk owner-ом"
+    reason = "CRFile подключён перед восстановлением CClientResource/package-opening"
 )]
-pub(crate) mod clientresource;
+pub(crate) mod rfile;
+pub(crate) mod tools;
