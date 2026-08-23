@@ -622,6 +622,8 @@ pub(crate) enum GameNetworkInitializationError {
 pub(crate) struct CGame {
     setup: GameSetup,
     setup_ex: GameSetupEx,
+    login_server_id: i32,
+    world_server_id: i32,
     network_setup: Option<GameNetworkSetup>,
     world_client: Option<CMyNetClient>,
     billing_client: Option<CMyNetClient>,
@@ -639,6 +641,8 @@ impl CGame {
         Self {
             setup: GameSetup::default(),
             setup_ex: GameSetupEx::default(),
+            login_server_id: 0,
+            world_server_id: 0,
             network_setup: None,
             world_client: None,
             billing_client: None,
@@ -745,6 +749,16 @@ impl CGame {
 
     pub(crate) fn current_billing_client_mut(&mut self) -> Option<&mut CMyNetClient> {
         self.billing_client.as_mut()
+    }
+
+    /// Сохраняет обе identity из terminal startup-пакета после попытки Host.
+    pub(crate) const fn set_server_ids(&mut self, login_server_id: i32, world_server_id: i32) {
+        self.login_server_id = login_server_id;
+        self.world_server_id = world_server_id;
+    }
+
+    pub(crate) const fn server_ids(&self) -> (i32, i32) {
+        (self.login_server_id, self.world_server_id)
     }
 
     /// Публикует listener-owner до `Host`, затем сохраняет setup-порядок.

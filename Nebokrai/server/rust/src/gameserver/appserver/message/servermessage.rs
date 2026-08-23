@@ -1,8 +1,9 @@
 //! Владелец входного GameServer dispatcher-а `OnServerMessage`.
 //!
-//! Весь dispatcher RVA `0x0009D300` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме цепочки
-//! сообщения `0x7F801` для AttackCity/Village и полной typed Billing reconnect
-//! ветви `0x6F904`; они имеют статус `IMPLEMENTED`. Точная пара
+//! Весь dispatcher RVA `0x0009D300` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме цепочек
+//! сообщения `0x7F801` для AttackCity/Village и terminal selector `0x3B`, а
+//! также полной typed Billing reconnect ветви `0x6F904`; они имеют статус
+//! `IMPLEMENTED`. Точная пара
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходник
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\servermessage.cpp`.
 //!
@@ -16,6 +17,11 @@
 //! handoff закрывает старый owner, публикует новый, приоритетно ставит
 //! регистрацию и только затем включает control-send. Парная World-ветвь
 //! остаётся RAW до материализации полного player snapshot.
+//!
+//! Terminal selector сначала вызывает `InitNetServer`, затем читает login и
+//! world ID и присваивает их даже после ошибки Host. Rust сохраняет этот
+//! partial-effect порядок: malformed хвост возвращается отдельно, не откатывая
+//! уже выполненный network init и не подставляя нулевые identity.
 
 use std::error::Error;
 use std::fmt;
@@ -26,11 +32,81 @@ use super::super::organizingsystem::attackcitysys::{
 use super::super::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarDecodeError, VillageWarRegionContext,
 };
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::gameserver::game::{CGame, GameNetworkInitializationError};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::nets::netserver::mynetclient::CMyNetClient;
 
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
+const CLIENT_SERVER_START_SELECTOR: i32 = 0x3b;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GameServerIds {
+    pub(crate) login: i32,
+    pub(crate) world: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GameClientServerStartPayloadError {
+    pub(crate) offset: usize,
+    pub(crate) needed: usize,
+    pub(crate) available: usize,
+}
+
+#[derive(Debug)]
+pub(crate) struct GameClientServerStartReport {
+    pub(crate) network: Result<(), GameNetworkInitializationError>,
+    pub(crate) server_ids: Result<GameServerIds, GameClientServerStartPayloadError>,
+}
+
+/// Выполняет terminal startup selector `0x3B` в исходном порядке side effects.
+pub(crate) fn dispatch_client_server_start(
+    selector: i32,
+    message: &mut CMessage,
+    game: &mut CGame,
+    now_ms: u32,
+) -> Option<GameClientServerStartReport> {
+    if selector != CLIENT_SERVER_START_SELECTOR {
+        return None;
+    }
+
+    let network = game.init_net_server(now_ms);
+    let server_ids = read_server_ids(message);
+    if let Ok(server_ids) = server_ids {
+        game.set_server_ids(server_ids.login, server_ids.world);
+    }
+    Some(GameClientServerStartReport {
+        network,
+        server_ids,
+    })
+}
+
+fn read_server_ids(
+    message: &mut CMessage,
+) -> Result<GameServerIds, GameClientServerStartPayloadError> {
+    let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    let login = read_start_long(wire, cursor)?;
+    let world = read_start_long(wire, cursor)?;
+    Ok(GameServerIds { login, world })
+}
+
+fn read_start_long(
+    wire: &[u8],
+    cursor: &mut usize,
+) -> Result<i32, GameClientServerStartPayloadError> {
+    let offset = *cursor;
+    let available = wire.len().saturating_sub(offset);
+    let Some(bytes) = wire.get(offset..offset.saturating_add(4)) else {
+        return Err(GameClientServerStartPayloadError {
+            offset,
+            needed: 4,
+            available,
+        });
+    };
+    *cursor += 4;
+    Ok(i32::from_le_bytes(
+        bytes.try_into().expect("server ID содержит четыре байта"),
+    ))
+}
 
 /// Наблюдаемый итог reconnect-ветви Billing `0x6F904`.
 #[derive(Debug)]
@@ -191,9 +267,5 @@ impl<Context: WarScheduleSetupContext> VillageWarRegionContext
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer
