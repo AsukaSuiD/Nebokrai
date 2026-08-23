@@ -962,10 +962,6 @@ impl CityTransferSessionRuntime for WorldCityTransferEndpointRuntime {
 /// Живые callback-и универсальной инфраструктуры, не принадлежащие union state.
 pub(crate) struct WorldUnionApplicationEffectCallbacks<'a> {
     pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
-    pub(crate) world_string: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
-    pub(crate) format_world_string:
-        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
-    pub(crate) put_war_log: &'a mut dyn FnMut(&[u8]),
     pub(crate) refresh_owned_city: &'a mut dyn FnMut(i32, i32, i32),
     pub(crate) faction_level_log_enabled: bool,
     pub(crate) write_faction_level_log:

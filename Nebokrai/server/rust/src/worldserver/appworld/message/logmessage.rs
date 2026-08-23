@@ -513,8 +513,6 @@ pub(crate) async fn on_log_message(
     globe_setup: &GlobeSetupSnapshot,
     rs_player: &mut TiberiusRsPlayer,
     player_database: Option<&mut WorldTdsClient>,
-    format_world_string:
-        &mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
     delete_log_enabled: bool,
     add_error_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     random: &mut dyn FnMut(i32) -> i32,
@@ -543,7 +541,6 @@ pub(crate) async fn on_log_message(
                 globe_setup,
                 rs_player,
                 player_database,
-                format_world_string,
                 delete_log_enabled,
                 message,
             )
@@ -1239,9 +1236,8 @@ fn remaining_deletion_days(deletion_days: u32, deletion_time: i32) -> i8 {
 }
 
 struct DeleteRoleCountryEffects<'a> {
+    game: &'a CGame,
     globe_setup: &'a GlobeSetupSnapshot,
-    format_world_string:
-        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
 }
 
 impl CountryHasJobContext for DeleteRoleCountryEffects<'_> {
@@ -1264,7 +1260,7 @@ impl CountryHasJobContext for DeleteRoleCountryEffects<'_> {
                 CountryExileTextArgument::Signed(value) => UnionFormatArgument::Signed(*value),
             })
             .collect::<Vec<_>>();
-        (self.format_world_string)(string_id, &arguments)
+        self.game.format_world_string(string_id, &arguments)
     }
 
     fn put_king_log(&mut self, text: &[u8]) {
@@ -1284,7 +1280,6 @@ async fn delete_role(
     globe_setup: &GlobeSetupSnapshot,
     rs_player: &mut TiberiusRsPlayer,
     mut player_database: Option<&mut WorldTdsClient>,
-    format_world_string: &mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
     delete_log_enabled: bool,
     mut request: CMessage,
 ) -> WorldLogMessageDispatch {
@@ -1313,8 +1308,8 @@ async fn delete_role(
         false
     } else if let Some(country_state) = country_handler.get_country(country) {
         let mut effects = DeleteRoleCountryEffects {
+            game: &*game,
             globe_setup,
-            format_world_string,
         };
         country_state.has_job(player_id as i32, &mut effects) != 0
     } else {

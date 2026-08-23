@@ -5290,10 +5290,6 @@ pub(crate) struct WorldMainLoopCallbacks<'a> {
         &'a mut dyn FnMut(&WorldSaveThreadLaunchRequest) -> WorldSaveThreadHandleState,
     pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
     pub(crate) get_timer_local_time: &'a mut dyn FnMut() -> TagTime,
-    pub(crate) world_string_by_id: &'a mut dyn FnMut(&[u8]) -> Vec<u8>,
-    pub(crate) format_union_world_string:
-        &'a mut dyn FnMut(&[u8], &[UnionFormatArgument<'_>]) -> Vec<u8>,
-    pub(crate) put_union_war_log: &'a mut dyn FnMut(&[u8]),
     pub(crate) refresh_union_owned_city: &'a mut dyn FnMut(i32, i32, i32),
     pub(crate) update_union_player: &'a mut dyn FnMut(i32),
     /// Внешние feature-gates exact `CLogSystem::bFactionChat/bPrivateChat`.
@@ -14946,9 +14942,6 @@ impl CGame {
         let sessions = manager.run();
         let callbacks = WorldUnionApplicationEffectCallbacks {
             random: &mut *application_callbacks.random,
-            world_string: &mut *application_callbacks.world_string,
-            format_world_string: &mut *application_callbacks.format_world_string,
-            put_war_log: &mut *application_callbacks.put_war_log,
             refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
             faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
             write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -15557,9 +15550,6 @@ impl CGame {
 
         let mut reload_union_application_callbacks = WorldUnionApplicationEffectCallbacks {
             random: &mut *callbacks.random,
-            world_string: &mut *callbacks.world_string_by_id,
-            format_world_string: &mut *callbacks.format_union_world_string,
-            put_war_log: &mut *callbacks.put_union_war_log,
             refresh_owned_city: &mut *callbacks.refresh_union_owned_city,
             faction_level_log_enabled: callbacks.faction_level_log_enabled,
             write_faction_level_log: &mut *callbacks.write_faction_level_log,
@@ -15719,9 +15709,6 @@ impl CGame {
         );
         let mut union_application_callbacks = WorldUnionApplicationEffectCallbacks {
             random: &mut *callbacks.random,
-            world_string: &mut *callbacks.world_string_by_id,
-            format_world_string: &mut *callbacks.format_union_world_string,
-            put_war_log: &mut *callbacks.put_union_war_log,
             refresh_owned_city: &mut *callbacks.refresh_union_owned_city,
             faction_level_log_enabled: callbacks.faction_level_log_enabled,
             write_faction_level_log: &mut *callbacks.write_faction_level_log,
@@ -15906,9 +15893,6 @@ impl CGame {
         };
         let mut union_application_callbacks = WorldUnionApplicationEffectCallbacks {
             random: &mut *callbacks.random,
-            world_string: &mut *callbacks.world_string_by_id,
-            format_world_string: &mut *callbacks.format_union_world_string,
-            put_war_log: &mut *callbacks.put_union_war_log,
             refresh_owned_city: &mut *callbacks.refresh_union_owned_city,
             faction_level_log_enabled: callbacks.faction_level_log_enabled,
             write_faction_level_log: &mut *callbacks.write_faction_level_log,
@@ -19949,7 +19933,6 @@ where
             globe_setup,
             rs_player,
             player_database.as_deref_mut(),
-            &mut *application_callbacks.format_world_string,
             delete_log_enabled,
             add_log_text,
             &mut *application_callbacks.random,
@@ -20037,7 +20020,6 @@ where
             rs_player,
             player_database.as_deref_mut(),
             reload_context,
-            &mut *application_callbacks.world_string,
             message,
         )
         .await
@@ -20562,9 +20544,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -20613,9 +20592,6 @@ where
         if let Some(outcome) = faction_create {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -20650,9 +20626,6 @@ where
         {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -20685,9 +20658,6 @@ where
         if let Some(outcome) = dispatch_leave_word(&mut message, game, organizing) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -20720,9 +20690,6 @@ where
         if let Some(outcome) = dispatch_leave_word_edit(&mut message, game, organizing) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -20755,9 +20722,6 @@ where
         if let Some(outcome) = dispatch_pronounce(&mut message, game, organizing) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -20800,9 +20764,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -20833,17 +20794,15 @@ where
             };
         }
         let game_server_sender = game.current_game_server_sender();
+        let mut world_string = |string_id: &[u8]| game.get_string_by_id(string_id).to_vec();
         if let Some(outcome) = dispatch_faction_billboard(
             &mut message,
             organizing,
-            &mut *application_callbacks.world_string,
+            &mut world_string,
             game_server_sender.as_ref(),
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -20888,9 +20847,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -20929,9 +20885,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -20971,9 +20924,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21012,9 +20962,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21051,9 +20998,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21091,9 +21035,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21128,9 +21069,6 @@ where
         {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21165,9 +21103,6 @@ where
         {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21204,9 +21139,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21243,9 +21175,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21285,9 +21214,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21324,9 +21250,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21368,9 +21291,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21412,9 +21332,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21458,9 +21375,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21505,9 +21419,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21553,9 +21464,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21601,9 +21509,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21649,9 +21554,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21691,9 +21593,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21738,9 +21637,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21779,9 +21675,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21841,9 +21734,6 @@ where
             });
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21883,9 +21773,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21927,9 +21814,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -21971,9 +21855,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -22013,9 +21894,6 @@ where
         ) {
             let callbacks = WorldUnionApplicationEffectCallbacks {
                 random: &mut *application_callbacks.random,
-                world_string: &mut *application_callbacks.world_string,
-                format_world_string: &mut *application_callbacks.format_world_string,
-                put_war_log: &mut *application_callbacks.put_war_log,
                 refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
                 faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
                 write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -22047,9 +21925,6 @@ where
         }
         let callbacks = WorldUnionApplicationEffectCallbacks {
             random: &mut *application_callbacks.random,
-            world_string: &mut *application_callbacks.world_string,
-            format_world_string: &mut *application_callbacks.format_world_string,
-            put_war_log: &mut *application_callbacks.put_war_log,
             refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
             faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
             write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
@@ -22369,9 +22244,6 @@ where
 
         let callbacks = WorldUnionApplicationEffectCallbacks {
             random: &mut *application_callbacks.random,
-            world_string: &mut *application_callbacks.world_string,
-            format_world_string: &mut *application_callbacks.format_world_string,
-            put_war_log: &mut *application_callbacks.put_war_log,
             refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
             faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
             write_faction_level_log: &mut *application_callbacks.write_faction_level_log,

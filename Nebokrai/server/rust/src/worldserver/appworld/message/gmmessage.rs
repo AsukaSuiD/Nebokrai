@@ -272,7 +272,6 @@ pub(crate) async fn on_gm_message(
     rs_player: &mut TiberiusRsPlayer,
     player_database: Option<&mut WorldTdsClient>,
     reload_context: &mut dyn WorldReloadContext,
-    world_string_by_id: &mut dyn FnMut(&[u8]) -> Vec<u8>,
     mut message: CMessage,
 ) -> WorldGmMessageDispatch {
     let decoded_request_id = message.base_mut().get_long();
@@ -634,7 +633,7 @@ pub(crate) async fn on_gm_message(
                 if requester_game_server_id == 0 {
                     WorldGmSilienceDisposition::RequesterUnroutable
                 } else {
-                    let notice = world_string_by_id(b"WS0114");
+                    let notice = game.get_string_by_id(b"WS0114").to_vec();
                     let mut response = CMessage::new(0x0007_FC0C);
                     response.base_mut().add_long(request_id);
                     add_c_string(&mut response, &player_name);
