@@ -62,6 +62,10 @@ impl CContainer {
         &self.listeners
     }
 
+    pub(crate) fn release(&mut self) {
+        self.listeners.clear();
+    }
+
     pub(crate) fn add_listener(&mut self, listener: Option<ContainerListenerHandle>) -> bool {
         let Some(listener) = listener else {
             return false;

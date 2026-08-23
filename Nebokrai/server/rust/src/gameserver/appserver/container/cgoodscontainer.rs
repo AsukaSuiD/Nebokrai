@@ -1,6 +1,83 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Базовый derived lifecycle `CGoodsContainer` исторического GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
+//! `server/gameserver/appserver/container/cgoodscontainer.cpp`. Constructor,
+//! destructor и `Release` RVA `0x001DB840/0x001DB860/0x001DB8C0` сохраняют
+//! owner type/id и mode в нуле, причём `Release` также освобождает listener
+//! vector base `CContainer`. `Set/GetOwner` и `Set/GetContainerMode` перенесены
+//! буквально. PDB подтверждает, что ошибочно названный декомпилятором адрес
+//! `0x001DB8F0` — именно `CGoodsContainer::SetContainerMode`.
+//!
+//! Default `Add(CBaseObject*)` и `Clear` являются намеренными no-op virtual
+//! slots (`xor eax,eax; ret 0xC` и `ret 4`). Rust derived owners не вызывают
+//! искусственную base-заглушку: они реализуют typed storage напрямую. Четыре
+//! `Find/Remove` overload-а были только переходами в `CContainer` thunks и
+//! аналогично поглощены typed API concrete container-ов. Сложные stack merge/
+//! split `Add(position, CGoods*)` и `Remove(position, amount)` ниже остаются
+//! RAW до materialization `CGoods` и listener callbacks.
+
+use super::ccontainer::CContainer;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum GoodsContainerMode {
+    #[default]
+    Normal,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CGoodsContainer {
+    base: CContainer,
+    owner_type: i32,
+    owner_id: i32,
+    mode: GoodsContainerMode,
+}
+
+impl CGoodsContainer {
+    pub(crate) const fn new() -> Self {
+        Self {
+            base: CContainer::new(),
+            owner_type: 0,
+            owner_id: 0,
+            mode: GoodsContainerMode::Normal,
+        }
+    }
+
+    pub(crate) const fn base(&self) -> &CContainer {
+        &self.base
+    }
+
+    pub(crate) const fn base_mut(&mut self) -> &mut CContainer {
+        &mut self.base
+    }
+
+    pub(crate) const fn owner_type(&self) -> i32 {
+        self.owner_type
+    }
+
+    pub(crate) const fn owner_id(&self) -> i32 {
+        self.owner_id
+    }
+
+    pub(crate) const fn set_owner(&mut self, owner_type: i32, owner_id: i32) {
+        self.owner_type = owner_type;
+        self.owner_id = owner_id;
+    }
+
+    pub(crate) const fn container_mode(&self) -> GoodsContainerMode {
+        self.mode
+    }
+
+    pub(crate) const fn set_container_mode(&mut self, mode: GoodsContainerMode) {
+        self.mode = mode;
+    }
+
+    pub(crate) fn release(&mut self) {
+        self.owner_type = 0;
+        self.owner_id = 0;
+        self.mode = GoodsContainerMode::Normal;
+        self.base.release();
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -17,202 +94,6 @@
 // RVA: 0x000DF630
 // ADDRESS: 004df630
 // PROTOTYPE: tagGoodsShadow * __thiscall operator=(tagGoodsShadow * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsContainer::CGoodsContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp:19
-// RVA: 0x001DB840
-// ADDRESS: 005db840
-// PROTOTYPE: undefined __thiscall CGoodsContainer(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsContainer::~CGoodsContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp:36
-// RVA: 0x001DB860
-// ADDRESS: 005db860
-// PROTOTYPE: void __thiscall ~CGoodsContainer(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsContainer::GetOwnerType
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp:44
-// RVA: 0x001DB880
-// ADDRESS: 005db880
-// PROTOTYPE: long __thiscall GetOwnerType(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsContainer::GetOwnerID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp:49
-// RVA: 0x001DB890
-// ADDRESS: 005db890
-// PROTOTYPE: long __thiscall GetOwnerID(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsContainer::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp:55
-// RVA: 0x001DB8A0
-// ADDRESS: 005db8a0
-// PROTOTYPE: int __thiscall Add(CBaseObject * param_1, tagPreviousContainer * param_2, void * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsContainer::Clear
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp:137
-// RVA: 0x001DB8B0
-// ADDRESS: 005db8b0
-// PROTOTYPE: void __thiscall Clear(void * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsContainer::Release
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp:145
-// RVA: 0x001DB8C0
-// ADDRESS: 005db8c0
-// PROTOTYPE: void __thiscall Release(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsContainer::SetOwner
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp:247
-// RVA: 0x001DB8D0
-// ADDRESS: 005db8d0
-// PROTOTYPE: void __thiscall SetOwner(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::SetDestinationContainerExtendID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp:257
-// RVA: 0x001DB8F0
-// ADDRESS: 005db8f0
-// PROTOTYPE: void __thiscall SetDestinationContainerExtendID(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsContainer::GetContainerMode
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp:265
-// RVA: 0x001DB900
-// ADDRESS: 005db900
-// PROTOTYPE: GOODS_CONTAINER_MODE __thiscall GetContainerMode(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp:270
-// RVA: 0x001DB910
-// ADDRESS: 005db910
-// PROTOTYPE: CBaseObject * __thiscall Remove(CBaseObject * param_1, void * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp:275
-// RVA: 0x001DB920
-// ADDRESS: 005db920
-// PROTOTYPE: CBaseObject * __thiscall Remove(long param_1, CGUID * param_2, void * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsContainer::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp:280
-// RVA: 0x001DB930
-// ADDRESS: 005db930
-// PROTOTYPE: CBaseObject * __thiscall Find(CBaseObject * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsContainer::Find
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp:285
-// RVA: 0x001DB940
-// ADDRESS: 005db940
-// PROTOTYPE: CBaseObject * __thiscall Find(long param_1, CGUID * param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -245,15 +126,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

@@ -10,6 +10,7 @@ pub(crate) mod appserver {
     pub(crate) mod citygate;
     pub(crate) mod container {
         pub(crate) mod ccontainer;
+        pub(crate) mod cgoodscontainer;
     }
     pub(crate) mod country {
         pub(crate) mod country;
