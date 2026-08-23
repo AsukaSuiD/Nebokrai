@@ -9,24 +9,30 @@
 //!
 //! `CVolumeLimitGoodsContainer` и owned `CGoods` заменяют vtable dispatch/raw
 //! pointers, не меняя lock/stack/listener semantics base-owner-а. Пять hatch
-//! timer-ов codec suffix сохранены с partial decode; state change, hatch/exp
-//! traversal и syncretize ниже пока остаются RAW.
+//! timer-ов codec suffix сохранены с partial decode, а state change — с
+//! необратимым remove/add и detached replacement на отказе. Hatch/exp traversal
+//! и syncretize ниже пока остаются RAW.
 
-use super::camountlimitgoodscontainer::AmountLimitGoodsCleared;
+use super::camountlimitgoodscontainer::{
+    AmountLimitGoodsAdded, AmountLimitGoodsCleared, AmountLimitGoodsTaken,
+};
+use super::ccontainer::ContainerListenerHandle;
 use super::cvolumelimitgoodscontainer::{
     CVolumeLimitGoodsContainer, VolumeGoodsAddBlock, VolumeGoodsAddOutcome,
     VolumeGoodsRemoveOutcome,
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
-    EQUIP_PLACE_HEADGEAR, GAP_BF_BATTLE_FAIRY,
+    EQUIP_PLACE_HEADGEAR, GAP_BF_BATTLE_FAIRY, GAP_PARTICULAR_ATTRIBUTE,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
 
 const FAIRY_SPECIAL_POSITION: u32 = 13;
 const FAIRY_SPECIAL_ORIGINAL_NAME: &[u8] = b"FZ0885";
 const HATCHER_POSITIONS: std::ops::Range<u32> = 5..10;
+const FAIRY_CONTAINER_EXTEND_ID: u32 = 0x0b;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FairyContainerAddBlock {
@@ -75,6 +81,76 @@ pub(crate) struct FairyContainerUnserializeReport {
 pub(crate) struct FairyContainerUnserializeFailure {
     pub(crate) error: FairyContainerCodecError,
     pub(crate) report: FairyContainerUnserializeReport,
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FairyState {
+    Egg = 0,
+    Young = 1,
+    Ripe = 2,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FairyContainerMoveOperation {
+    DeleteObject,
+    NewObject,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FairyContainerObjectMove {
+    pub(crate) operation: FairyContainerMoveOperation,
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) position: Option<u32>,
+    pub(crate) container_extend_id: u32,
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) amount: u32,
+    pub(crate) old_client_payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FairyStateChangeEffect {
+    ObjectMove(FairyContainerObjectMove),
+    GarbageCollected(ShapeIdentity),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FairyContainerRemovedEvent {
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) position: Option<u32>,
+    pub(crate) amount: u32,
+    pub(crate) listeners: Vec<ContainerListenerHandle>,
+}
+
+#[must_use = "state change может оставить detached replacement после partial mutation"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FairyStateChangeOutcome {
+    MissingGoods,
+    MissingProperties,
+    ReplacementCreationFailed {
+        goods_index: u32,
+    },
+    ReplacementPropertiesMissing {
+        replacement: CGoods,
+    },
+    RemovalFailed {
+        removal: FairyContainerRemoveOutcome,
+        replacement: CGoods,
+    },
+    ReplacementRejected {
+        removed: FairyContainerRemovedEvent,
+        add: FairyContainerAddOutcome,
+        replacement: Option<CGoods>,
+        effects: Vec<FairyStateChangeEffect>,
+    },
+    Changed {
+        removed: FairyContainerRemovedEvent,
+        added: AmountLimitGoodsAdded,
+        goods: ShapeIdentity,
+        effects: Vec<FairyStateChangeEffect>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -180,6 +256,148 @@ impl CFairyContainer {
             .unwrap_or(FairyContainerRemoveOutcome::Missing)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn fairy_change_state(
+        &mut self,
+        goods_id: CGuid,
+        state: FairyState,
+        destination_position: u32,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+        fairy_threshold_for_level: &mut dyn FnMut(u32, u32) -> u32,
+        create_goods: &mut dyn FnMut(u32) -> Option<CGoods>,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> FairyStateChangeOutcome {
+        let Some(old_goods) = self.base.base().find(goods_id) else {
+            return FairyStateChangeOutcome::MissingGoods;
+        };
+        let Some(old_fairy) = old_goods.fairy_properties() else {
+            return FairyStateChangeOutcome::MissingProperties;
+        };
+        let replacement_index = match state {
+            FairyState::Egg => old_fairy.young_id,
+            FairyState::Young => old_fairy.ripe_id,
+            FairyState::Ripe => old_fairy.egg_id,
+        };
+        let Some(mut replacement) = create_goods(replacement_index) else {
+            return FairyStateChangeOutcome::ReplacementCreationFailed {
+                goods_index: replacement_index,
+            };
+        };
+        if replacement
+            .copy_fairy_addon_properties_from(old_goods, factory, &mut *fairy_threshold_for_level)
+            .is_err()
+        {
+            return FairyStateChangeOutcome::ReplacementPropertiesMissing { replacement };
+        }
+        let Some(replacement_fairy) = replacement.fairy_properties_mut() else {
+            return FairyStateChangeOutcome::ReplacementPropertiesMissing { replacement };
+        };
+        match state {
+            FairyState::Egg => {
+                replacement_fairy.fairy_state = FairyState::Young as u32;
+                replacement_fairy.strength =
+                    hatch_stat(replacement_fairy.strength, replacement_fairy.base_strength);
+                replacement_fairy.agility =
+                    hatch_stat(replacement_fairy.agility, replacement_fairy.base_agility);
+                replacement_fairy.wakan =
+                    hatch_stat(replacement_fairy.wakan, replacement_fairy.base_wakan);
+                replacement_fairy.hp = hatch_stat(replacement_fairy.hp, replacement_fairy.base_hp);
+            }
+            FairyState::Young => replacement_fairy.fairy_state = FairyState::Ripe as u32,
+            FairyState::Ripe => replacement_fairy.fairy_state = FairyState::Egg as u32,
+        }
+        if replacement.save_fairy_properties(factory).ok() != Some(true) {
+            return FairyStateChangeOutcome::ReplacementPropertiesMissing { replacement };
+        }
+        if state == FairyState::Ripe {
+            let _ = replacement.set_addon_property_value_core(GAP_PARTICULAR_ATTRIBUTE, 1, 0x122);
+        }
+
+        let old_position = self.base.query_goods_position(goods_id);
+        self.base
+            .base_mut()
+            .find_mut(goods_id)
+            .and_then(CGoods::fairy_properties_mut)
+            .expect("old fairy проверена до создания replacement")
+            .hatch_start_time = 0;
+        let removal = self.remove(goods_id);
+        let FairyContainerRemoveOutcome::Removed(removed) = removal else {
+            return FairyStateChangeOutcome::RemovalFailed {
+                removal,
+                replacement,
+            };
+        };
+        let taken = match removed {
+            VolumeGoodsRemoveOutcome::Removed(taken)
+            | VolumeGoodsRemoveOutcome::RemovedButCellMissing(taken) => taken,
+        };
+        let AmountLimitGoodsTaken::Removed(removed) = taken else {
+            unreachable!("full remove by GUID cannot split goods")
+        };
+        let removed_identity = removed.goods.identity();
+        let removed_event = FairyContainerRemovedEvent {
+            owner_type: removed.owner_type,
+            owner_id: removed.owner_id,
+            position: removed.position,
+            amount: removed.amount,
+            listeners: removed.listeners,
+        };
+        let mut effects = vec![
+            FairyStateChangeEffect::ObjectMove(FairyContainerObjectMove {
+                operation: FairyContainerMoveOperation::DeleteObject,
+                owner_type: removed_event.owner_type,
+                owner_id: removed_event.owner_id,
+                position: old_position,
+                container_extend_id: FAIRY_CONTAINER_EXTEND_ID,
+                goods: removed_identity,
+                amount: removed_event.amount,
+                old_client_payload: Vec::new(),
+            }),
+            FairyStateChangeEffect::GarbageCollected(removed_identity),
+        ];
+        drop(removed.goods);
+
+        let mut incoming = Some(replacement);
+        let add = self.add_at(
+            destination_position,
+            &mut incoming,
+            factory,
+            owner_progress_allows,
+        );
+        let FairyContainerAddOutcome::Base(VolumeGoodsAddOutcome::Added(added)) = add else {
+            return FairyStateChangeOutcome::ReplacementRejected {
+                removed: removed_event,
+                add,
+                replacement: incoming,
+                effects,
+            };
+        };
+        let added_goods = self
+            .base
+            .get_goods(destination_position)
+            .expect("successful fairy Add публикует destination goods");
+        let added_identity = added_goods.identity();
+        effects.push(FairyStateChangeEffect::ObjectMove(
+            FairyContainerObjectMove {
+                operation: FairyContainerMoveOperation::NewObject,
+                owner_type: added.owner_type,
+                owner_id: added.owner_id,
+                position: Some(destination_position),
+                container_extend_id: FAIRY_CONTAINER_EXTEND_ID,
+                goods: added_identity,
+                amount: added_goods.amount(),
+                old_client_payload: encode_old_client(added_goods),
+            },
+        ));
+        FairyStateChangeOutcome::Changed {
+            removed: removed_event,
+            added,
+            goods: added_identity,
+            effects,
+        }
+    }
+
     /// Base payload сохраняет собственного owner-а; fairy suffix всегда
     /// дописывает пять little-endian hatch значений для ячеек `5..9`, даже
     /// когда base serializer вернул `false`.
@@ -267,6 +485,10 @@ impl CFairyContainer {
         }
         Ok(report)
     }
+}
+
+fn hatch_stat(value: u32, base: u32) -> u32 {
+    ((value as f64 + base as f64 * 0.0001_f64).round() as i64 as i32) as u32
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
