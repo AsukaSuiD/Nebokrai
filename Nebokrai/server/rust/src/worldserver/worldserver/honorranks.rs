@@ -241,6 +241,18 @@ impl CHonorRanks {
         self.db_data.as_mut()
     }
 
+    /// Передаёт только уже сформированную DB-копию фоновому save-owner-у.
+    /// Live history/current списки остаются у MainLoop и продолжают принимать
+    /// новые результаты, пока прежний snapshot сохраняется в отдельном потоке.
+    pub(crate) fn take_save_owner(&mut self) -> Self {
+        Self {
+            history: Default::default(),
+            current: Default::default(),
+            db_data: self.db_data.take(),
+            sort_day: self.sort_day,
+        }
+    }
+
     /// Даёт loader/runtime-owner-у одну доказанную history-секцию.
     pub(crate) fn history_mut(
         &mut self,

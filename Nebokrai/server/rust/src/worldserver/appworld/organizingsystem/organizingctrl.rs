@@ -4021,7 +4021,7 @@ impl COrganizingCtrl {
                 .clone_save_data()
                 .map_err(|reason| OrganizingSaveDataBlock::FactionClone { map_key, reason })?;
             if let Some(save_copy) = save_copy {
-                game.append_save_faction(Box::new(save_copy));
+                game.append_save_faction(Box::new(save_copy), faction.goods_war_count());
                 faction.set_change_data(0);
                 saved_factions += 1;
             }

@@ -530,11 +530,10 @@ use crate::dbaccess::worlddb::rsunion::{
     RsUnionOwner, UnionSaveBlock, UnionSaveOutcome, UnionSaveSnapshot,
 };
 use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
-use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
 use crate::worldserver::appworld::player::{CPlayer, PlayerDbProjectionBlock};
 use crate::worldserver::appworld::script::variablelist::{VariableListSaveSource, save_var_data};
 use crate::worldserver::worldserver::game::{
-    CGame, DeletionPlayerSnapshot, ShowSaveInfoDisposition,
+    DeletionPlayerSnapshot, ShowSaveInfoDisposition,
     WorldDbDataSaveSession, show_save_info,
 };
 use crate::worldserver::worldserver::honorranks::CHonorRanks;
@@ -2320,7 +2319,6 @@ where
 /// Выполняет Save Faction над frozen owner-ами; final log предшествует clear.
 pub(crate) async fn save_factions_from_world_snapshot<F: RsFactionOwner>(
     world: &mut WorldDbDataSaveSession<'_>,
-    organizing: &COrganizingCtrl,
     faction_database: &mut F,
     connection: &mut WorldTdsClient,
     log_sink: &mut impl SaveDataLogSink,
@@ -2329,13 +2327,9 @@ pub(crate) async fn save_factions_from_world_snapshot<F: RsFactionOwner>(
     let mut entries = Vec::with_capacity(world.save_factions_len());
     let mut log_events = vec![add_log_event(b"Save Faction Data Start...".to_vec())];
 
-    while let Some(faction_id) = world
-        .first_saved_faction_mut()
-        .map(|faction| faction.faction_id())
-    {
+    while world.first_saved_faction_mut().is_some() {
         let entry_index = entries.len();
-        let canonical_goods_war_count = CGame::get_faction_by_id(organizing, faction_id)
-            .map(|faction| faction.goods_war_count());
+        let canonical_goods_war_count = world.first_saved_faction_goods_war_count();
         let projection = match world.first_saved_faction_mut() {
             Some(faction) => FactionSaveSnapshot::from_faction(faction, canonical_goods_war_count),
             None => unreachable!("faction front исчез между двумя эксклюзивными borrow"),
@@ -2921,7 +2915,6 @@ pub(crate) async fn do_save_data_through_unions<S, O, V, P, J, G, U, F>(
     world: &mut WorldDbDataSaveSession<'_>,
     variables: &S,
     registry: &GoodsBasePropertiesRegistry,
-    organizing: &COrganizingCtrl,
     setup_database: &mut O,
     variable_database: &mut V,
     player_database: &mut P,
@@ -3291,7 +3284,6 @@ where
 
     let save_factions = match save_factions_from_world_snapshot(
         world,
-        organizing,
         faction_database,
         connection,
         log_sink,
@@ -4659,7 +4651,6 @@ pub(crate) async fn do_save_data_phases<S, O, V, P, J, G, U, F, R, B, E, C, L, L
     world: &mut WorldDbDataSaveSession<'_>,
     variables: &S,
     registry: &GoodsBasePropertiesRegistry,
-    organizing: &COrganizingCtrl,
     honor_ranks: &mut CHonorRanks,
     gods_battle_faction_xyd: GodsBattleFactionXydSnapshot,
     gods_battle_npc_factions: &[GodsBattleNpcFactionSnapshot],
@@ -4699,7 +4690,6 @@ where
         world,
         variables,
         registry,
-        organizing,
         setup_database,
         variable_database,
         player_database,
@@ -4873,7 +4863,6 @@ pub(crate) async fn do_save_data_lifecycle<
     world: &mut WorldDbDataSaveSession<'_>,
     variables: &S,
     registry: &GoodsBasePropertiesRegistry,
-    organizing: &COrganizingCtrl,
     honor_ranks: &mut CHonorRanks,
     gods_battle_faction_xyd: GodsBattleFactionXydSnapshot,
     gods_battle_npc_factions: &[GodsBattleNpcFactionSnapshot],
@@ -4921,7 +4910,6 @@ where
                 world,
                 variables,
                 registry,
-                organizing,
                 honor_ranks,
                 gods_battle_faction_xyd,
                 gods_battle_npc_factions,

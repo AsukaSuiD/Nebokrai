@@ -1200,6 +1200,7 @@ use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -7669,6 +7670,7 @@ struct WorldDbData {
     deletion_players: VecDeque<DeletionPlayerSnapshot>,
     players: BTreeMap<u32, Box<CPlayer>>,
     save_factions: VecDeque<Box<CFaction>>,
+    faction_goods_war_counts: BTreeMap<i32, i32>,
     save_unions: VecDeque<Box<CUnion>>,
     delete_factions: VecDeque<i32>,
     delete_unions: VecDeque<i32>,
@@ -7687,6 +7689,7 @@ impl WorldDbData {
             deletion_players: VecDeque::new(),
             players: BTreeMap::new(),
             save_factions: VecDeque::new(),
+            faction_goods_war_counts: BTreeMap::new(),
             save_unions: VecDeque::new(),
             delete_factions: VecDeque::new(),
             delete_unions: VecDeque::new(),
@@ -7697,14 +7700,22 @@ impl WorldDbData {
     }
 }
 
-/// Эксклюзивный доступ `DoSaveData` к уже сформированному `tagDBData`.
+/// Эксклюзивный доступ `DoSaveData` к одному сформированному `tagDBData`.
 ///
-/// `CGame::Run` и `SaveThreadFunc` сериализовали generation/save одним
-/// `g_CriticalSectionSaveThread`. Заимствование `&mut CGame` выражает эту
-/// внешнюю границу, а внутренний mutex больше не удерживается во время DB I/O.
-/// Создание самой save-thread остаётся у ещё сырого caller-а.
+/// Trigger сначала заканчивает generation под save-барьером, затем передаёт
+/// весь batch отдельному owner-у. DB I/O поэтому не удерживает ни game-owner,
+/// ни mutex нового accumulator-а, куда MainLoop складывает следующие данные.
 pub(crate) struct WorldDbDataSaveSession<'game> {
     data: &'game mut WorldDbData,
+}
+
+/// Полностью отделённый batch одного фонового `SaveThreadFunc`.
+///
+/// После handoff MainLoop сразу получает новый пустой `WorldDbData`; старые
+/// списки и Login sender остаются живы до terminal исхода именно этого save.
+pub(crate) struct WorldSaveDataOwner {
+    data: WorldDbData,
+    login_sender: Option<Arc<ClientSendQueue>>,
 }
 
 impl WorldDbDataSaveSession<'_> {
@@ -7787,11 +7798,21 @@ impl WorldDbDataSaveSession<'_> {
 
     /// Удаляет текущий faction node и уничтожает его non-null save-копию.
     pub(crate) fn remove_first_saved_faction(&mut self) {
-        drop(self.data.save_factions.pop_front());
+        if let Some(faction) = self.data.save_factions.pop_front() {
+            self.data
+                .faction_goods_war_counts
+                .remove(&faction.faction_id());
+        }
     }
 
     pub(crate) fn clear_saved_faction_nodes(&mut self) {
         self.data.save_factions.clear();
+        self.data.faction_goods_war_counts.clear();
+    }
+
+    pub(crate) fn first_saved_faction_goods_war_count(&self) -> Option<i32> {
+        let faction_id = self.data.save_factions.front()?.faction_id();
+        self.data.faction_goods_war_counts.get(&faction_id).copied()
     }
 
     pub(crate) fn save_unions_len(&self) -> usize {
@@ -10788,6 +10809,17 @@ impl CGame {
         }
     }
 
+    /// Передаёт сформированный DB batch фоновому worker-у и публикует пустой
+    /// accumulator для событий, пришедших уже после save-trigger-а.
+    pub(crate) fn take_save_data_owner(&mut self) -> WorldSaveDataOwner {
+        WorldSaveDataOwner {
+            data: std::mem::replace(self.db_data.get_mut(), WorldDbData::new()),
+            login_sender: self
+                .current_login_client()
+                .map(CMyNetClient::send_queue_handle),
+        }
+    }
+
     /// Применяет два constructor-load результата `CRsSetup` к live `CGame`.
     pub(crate) const fn apply_loaded_setup_ids(&mut self, loaded: LoadedSetupIds) {
         self.player_id = loaded.player_id;
@@ -11304,7 +11336,7 @@ impl CGame {
         LaunchSaveThread: FnMut(&WorldSaveThreadLaunchRequest) -> WorldSaveThreadHandleState,
     {
         let save_info_time_ms = self.setup.save_info_time_ms;
-        let guard = WorldSaveThreadGuard { game: self };
+        let guard = WorldRunSaveGuard { game: self };
 
         if state.save_all_organizations {
             state.save_all_organizations = false;
@@ -11456,8 +11488,13 @@ impl CGame {
     }
 
     /// Дописывает non-null save-копию в `m_stDBData.listSaveFactions`.
-    pub(crate) fn append_save_faction(&self, faction: Box<CFaction>) {
-        self.db_data.lock().save_factions.push_back(faction);
+    pub(crate) fn append_save_faction(&self, faction: Box<CFaction>, goods_war_count: i32) {
+        let faction_id = faction.faction_id();
+        let mut db_data = self.db_data.lock();
+        db_data.save_factions.push_back(faction);
+        db_data
+            .faction_goods_war_counts
+            .insert(faction_id, goods_war_count);
     }
 
     /// Дописывает non-null save-копию в `m_stDBData.listSaveUnions`.
@@ -22642,19 +22679,25 @@ impl WorldMessageHandlers for WorldOwnerSelector {
     }
 }
 
-/// Внешняя сериализация исходного `g_CriticalSectionSaveThread`.
-///
-/// Guard возвращается только на границе, где старый `SaveThreadFunc` не дошёл
-/// до `LeaveCriticalSection`. Сам mutex не удерживается через async DB I/O:
-/// эксклюзивный borrow всего `CGame` даёт ту же единственность owner-а.
-pub(crate) struct WorldSaveThreadGuard<'game> {
+/// Внешняя сериализация одного frozen batch исходного save-thread.
+pub(crate) struct WorldSaveThreadGuard<'save> {
+    save: &'save mut WorldSaveDataOwner,
+}
+
+/// Короткий save-trigger guard живого `CGame` до frozen handoff.
+pub(crate) struct WorldRunSaveGuard<'game> {
     game: &'game mut CGame,
 }
 
-impl<'game> WorldSaveThreadGuard<'game> {
+impl WorldRunSaveGuard<'_> {
+    fn release(self) {}
+    fn stop_outer_owner(self) {}
+}
+
+impl<'save> WorldSaveThreadGuard<'save> {
     /// Явно завершает заблокированный typed owner после решения его границы.
-    pub(crate) fn into_game(self) -> &'game mut CGame {
-        self.game
+    pub(crate) fn into_save_owner(self) -> &'save mut WorldSaveDataOwner {
+        self.save
     }
 
     /// Завершает normal-path сериализацию перед отдельным end-log.
@@ -22665,15 +22708,15 @@ impl<'game> WorldSaveThreadGuard<'game> {
 }
 
 /// Доказанный результат тела `SaveThreadFunc` без создания системного потока.
-pub(crate) enum WorldSaveThreadReport<'game> {
+pub(crate) enum WorldSaveThreadReport<'save> {
     /// Start-log остановился после входа в save-сериализацию.
     BlockedStartLog {
-        guard: WorldSaveThreadGuard<'game>,
+        guard: WorldSaveThreadGuard<'save>,
         block: SaveDataLogPublishBlock,
     },
     /// `DoSaveData` не вернулся; COM-uninit/unlock/end-log не назначены.
     BlockedLifecycle {
-        guard: WorldSaveThreadGuard<'game>,
+        guard: WorldSaveThreadGuard<'save>,
         start_log: SaveDataLogPublishDisposition,
         lifecycle: DoSaveDataLifecycleReport,
     },
@@ -22818,11 +22861,11 @@ pub(crate) enum WorldRunSaveTriggerDisposition {
 /// Результат участка Run с точной судьбой внешнего save-guard.
 pub(crate) enum WorldRunSaveTriggerReport<'game> {
     BlockedSaveAllOrganizations {
-        guard: WorldSaveThreadGuard<'game>,
+        guard: WorldRunSaveGuard<'game>,
         block: OrganizingSaveDataBlock,
     },
     BlockedImmediateSave {
-        guard: WorldSaveThreadGuard<'game>,
+        guard: WorldRunSaveGuard<'game>,
         log: AddLogTextDisposition,
         block: WorldGenerateDbDataBlock,
     },
@@ -22875,7 +22918,7 @@ fn save_thread_log_event(payload: &'static [u8]) -> SaveDataLogEvent {
     reason = "SaveThreadFunc передаёт прежние process-global owner-ы явно"
 )]
 pub(crate) async fn save_thread_func<
-    'game,
+    'save,
     S,
     O,
     V,
@@ -22892,12 +22935,11 @@ pub(crate) async fn save_thread_func<
     Log,
     GetMonitoring,
 >(
-    game: &'game mut CGame,
+    save: &'save mut WorldSaveDataOwner,
     settings: &WorldDatabaseSettings,
     state: &mut SaveDataLifecycleState,
     variables: &S,
     registry: &GoodsBasePropertiesRegistry,
-    organizing_ctrl: &mut COrganizingCtrl,
     honor_ranks: &mut CHonorRanks,
     gods_battle_faction_xyd: GodsBattleFactionXydSnapshot,
     gods_battle_npc_factions: &[GodsBattleNpcFactionSnapshot],
@@ -22916,7 +22958,7 @@ pub(crate) async fn save_thread_func<
     largess: &mut L,
     log_sink: &mut Log,
     get_monitoring: GetMonitoring,
-) -> WorldSaveThreadReport<'game>
+) -> WorldSaveThreadReport<'save>
 where
     S: VariableListSaveSource,
     O: RsSetupOwner,
@@ -22934,7 +22976,7 @@ where
     Log: SaveDataLogSink,
     GetMonitoring: FnOnce() -> SaveDataMonitoringSnapshot,
 {
-    let guard = WorldSaveThreadGuard { game };
+    let guard = WorldSaveThreadGuard { save };
     let start_log = match log_sink.publish(&save_thread_log_event(b"SaveThread Starting...")) {
         SaveDataLogPublishDisposition::BlockedMissingFact(block) => {
             return WorldSaveThreadReport::BlockedStartLog { guard, block };
@@ -22942,13 +22984,12 @@ where
         disposition => disposition,
     };
 
-    // `DoSaveData` держит только m_DBData, тогда как SendErrLog читает
-    // независимый Login FIFO. Раздельные заимствования заменяют исходный
-    // process-global без ослабления внешнего save-barrier.
-    let login_sender = guard.game.net_client.as_ref().map(CMyNetClient::send_queue);
+    // DB batch и cloneable Login FIFO были сняты атомарно в trigger-позиции;
+    // дальнейший MainLoop уже не разделяет с worker-ом mutable game-owner.
+    let login_sender = guard.save.login_sender.as_deref();
     let lifecycle = {
         let mut session = WorldDbDataSaveSession {
-            data: guard.game.db_data.get_mut(),
+            data: &mut guard.save.data,
         };
         do_save_data_lifecycle(
             settings,
@@ -22956,7 +22997,6 @@ where
             &mut session,
             variables,
             registry,
-            organizing_ctrl,
             honor_ranks,
             gods_battle_faction_xyd,
             gods_battle_npc_factions,

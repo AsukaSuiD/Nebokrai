@@ -67,6 +67,7 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 use std::net::SocketAddrV4;
+use std::sync::Arc;
 
 use tokio::net::{TcpSocket, TcpStream};
 
@@ -156,7 +157,7 @@ pub(crate) struct CMyNetClient {
     connection: Option<TcpStream>,
     connected_endpoint: Option<SocketAddrV4>,
     control_send: bool,
-    send_queue: ClientSendQueue,
+    send_queue: Arc<ClientSendQueue>,
     receive_buffer: Vec<u8>,
     received_messages: CMsgQueue<CMessage>,
 }
@@ -168,7 +169,7 @@ impl CMyNetClient {
             connection: None,
             connected_endpoint: None,
             control_send: false,
-            send_queue: ClientSendQueue::new(),
+            send_queue: Arc::new(ClientSendQueue::new()),
             receive_buffer: Vec::with_capacity(INITIAL_RECEIVE_CAPACITY),
             received_messages: CMsgQueue::new(),
         }
@@ -218,7 +219,13 @@ impl CMyNetClient {
 
     /// Возвращает очередь, в которую `CMessage::Send` копирует envelope.
     pub(crate) fn send_queue(&self) -> &ClientSendQueue {
-        &self.send_queue
+        self.send_queue.as_ref()
+    }
+
+    /// Передаёт фоновому owner-у producer той же исходящей FIFO, не передавая
+    /// transport connection либо mutable client lifecycle.
+    pub(crate) fn send_queue_handle(&self) -> Arc<ClientSendQueue> {
+        Arc::clone(&self.send_queue)
     }
 
     /// Пытается отправить текущий снимок LoginServer send-очереди.
