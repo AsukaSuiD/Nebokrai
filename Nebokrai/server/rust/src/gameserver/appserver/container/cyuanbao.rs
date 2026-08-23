@@ -13,6 +13,8 @@ use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 pub(crate) struct YuanBaoCurrency;
 
 impl CurrencyKind for YuanBaoCurrency {
+    const VALIDATE_EMPTY_GOODS: bool = true;
+
     fn goods_index(factory: &CGoodsFactory) -> u32 {
         factory.get_yuan_bao_index()
     }

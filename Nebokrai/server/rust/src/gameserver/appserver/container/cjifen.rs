@@ -1,6 +1,28 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! JiFen-вариант однослотового currency container GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
+//! `server/gameserver/appserver/container/cjifen.cpp`. Общие query, GUID,
+//! listener и lifecycle функции code-folded с `CWallet`; catalog selector —
+//! `JIFEN`. Отличающийся exact `Add` при пустом контейнере принимает первый
+//! `CGoods` без проверки catalog id, а после заполнения разрешает stack только
+//! для `JIFEN`. Этот legacy quirk выражен marker-policy общего core, а не
+//! исправлен молча. Codec/message границы ниже остаются RAW.
+
+use super::cwallet::{CSingleCurrencyContainer, CurrencyKind};
+use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct JiFenCurrency;
+
+impl CurrencyKind for JiFenCurrency {
+    const VALIDATE_EMPTY_GOODS: bool = false;
+
+    fn goods_index(factory: &CGoodsFactory) -> u32 {
+        factory.get_ji_fen_index()
+    }
+}
+
+pub(crate) type CJiFen = CSingleCurrencyContainer<JiFenCurrency>;
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -273,7 +295,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
 
 // COMPONENT_VARIANT_END: GameServer

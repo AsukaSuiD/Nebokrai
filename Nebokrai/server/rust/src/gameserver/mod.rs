@@ -10,8 +10,10 @@ pub(crate) mod appserver {
     pub(crate) mod citygate;
     pub(crate) mod container {
         pub(crate) mod camountlimitgoodscontainer;
+        pub(crate) mod cbank;
         pub(crate) mod ccontainer;
         pub(crate) mod cgoodscontainer;
+        pub(crate) mod cjifen;
         pub(crate) mod cvolumelimitgoodscontainer;
         pub(crate) mod cwallet;
         pub(crate) mod cyuanbao;

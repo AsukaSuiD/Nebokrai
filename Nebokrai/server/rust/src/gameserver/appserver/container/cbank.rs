@@ -1,6 +1,116 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Lock-gate `CBank` поверх однослотового `CWallet` GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
+//! `server/gameserver/appserver/container/cbank.cpp`. Constructor, clear и
+//! release оставляют bank locked; locked gate скрывает `Find`, `Remove` и обе
+//! `Add` перегрузки. Сам password lookup принадлежит player/game owner-у и
+//! передаётся сюда уже как результат аутентификации: container сохраняет только
+//! подтверждённый state transition. Codec restore ниже остаётся RAW.
+
+use super::cgoodscontainer::CGoodsContainer;
+use super::cwallet::{
+    CWallet, CurrencyGoodsAddOutcome, CurrencyGoodsCollected, CurrencyGoodsRemoved,
+};
+use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::public::guid::CGuid;
+
+#[must_use = "locked bank и wallet add имеют разные последующие эффекты"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BankGoodsAddOutcome {
+    Locked,
+    Wallet(CurrencyGoodsAddOutcome),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CBank {
+    wallet: CWallet,
+    locked: bool,
+}
+
+impl Default for CBank {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CBank {
+    pub(crate) const fn new() -> Self {
+        Self {
+            wallet: CWallet::new(),
+            locked: true,
+        }
+    }
+
+    pub(crate) const fn base(&self) -> &CGoodsContainer {
+        self.wallet.base()
+    }
+
+    pub(crate) const fn base_mut(&mut self) -> &mut CGoodsContainer {
+        self.wallet.base_mut()
+    }
+
+    pub(crate) const fn is_locked(&self) -> bool {
+        self.locked
+    }
+
+    pub(crate) fn find(&self, ex_id: CGuid) -> Option<&CGoods> {
+        if self.locked {
+            return None;
+        }
+        self.wallet.find(ex_id)
+    }
+
+    pub(crate) fn add_goods(
+        &mut self,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> BankGoodsAddOutcome {
+        if self.locked {
+            return BankGoodsAddOutcome::Locked;
+        }
+        BankGoodsAddOutcome::Wallet(self.wallet.add_goods(
+            position,
+            incoming,
+            factory,
+            owner_progress_allows,
+        ))
+    }
+
+    pub(crate) fn remove_goods(&mut self, ex_id: CGuid) -> Option<CurrencyGoodsRemoved> {
+        if self.locked {
+            return None;
+        }
+        self.wallet.remove_goods(ex_id)
+    }
+
+    pub(crate) fn lock(&mut self) -> bool {
+        self.locked = true;
+        true
+    }
+
+    /// Player/game owner выполняет exact owner-id lookup и byte-exact password
+    /// comparison; неуспех не меняет уже существующее lock-состояние.
+    pub(crate) fn unlock_if_authenticated(&mut self, authenticated: bool) -> bool {
+        if !authenticated {
+            return false;
+        }
+        self.locked = false;
+        true
+    }
+
+    pub(crate) fn clear_goods(&mut self) -> CurrencyGoodsCollected {
+        self.locked = true;
+        self.wallet.clear_goods()
+    }
+
+    pub(crate) fn release(&mut self) -> CurrencyGoodsCollected {
+        self.locked = true;
+        self.wallet.release()
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -175,98 +285,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

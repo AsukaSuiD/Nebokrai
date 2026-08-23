@@ -24,6 +24,8 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
 
 pub(crate) trait CurrencyKind {
+    const VALIDATE_EMPTY_GOODS: bool;
+
     fn goods_index(factory: &CGoodsFactory) -> u32;
 }
 
@@ -31,6 +33,8 @@ pub(crate) trait CurrencyKind {
 pub(crate) struct GoldCoinCurrency;
 
 impl CurrencyKind for GoldCoinCurrency {
+    const VALIDATE_EMPTY_GOODS: bool = true;
+
     fn goods_index(factory: &CGoodsFactory) -> u32 {
         factory.get_gold_coin_index()
     }
@@ -244,7 +248,7 @@ impl<K: CurrencyKind> CSingleCurrencyContainer<K> {
         };
         let expected = K::goods_index(factory);
         let actual = goods.base_properties_index();
-        if actual != expected {
+        if actual != expected && (K::VALIDATE_EMPTY_GOODS || self.goods.is_some()) {
             return CurrencyGoodsAddOutcome::Rejected(CurrencyGoodsAddBlock::InvalidCurrency {
                 expected,
                 actual,
