@@ -4,15 +4,19 @@
 //!
 //! Startup inheritance подтверждён constructor-ом: `ServerNationRegion`
 //! начинается с `CServerWarRegion` и не имеет собственного wire decoder-а.
-//! Поэтому typed startup owner делегирует exact War -> ServerRegion chain;
-//! nation gameplay state ниже остаётся RAW до отдельного прохода.
+//! Поэтому typed startup owner делегирует exact War -> ServerRegion chain.
+//! FourNation startup дополнительно материализует подтверждённый
+//! `GetReliveRect`: пять прямоугольников копируются в nation owner; остальное
+//! nation gameplay state ниже остаётся RAW до отдельных проходов.
 
+use super::organizingsystem::fournationwarsys::FourNationRect;
 use super::serverregion::ServerRegionDecodeError;
 use super::serverwarregion::{CServerWarRegion, WarRegionDecodeContext, WarRegionDecodeError};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ServerNationRegion {
     pub(crate) war: CServerWarRegion,
+    relive_rects: [FourNationRect; 5],
 }
 
 impl ServerNationRegion {
@@ -25,6 +29,15 @@ impl ServerNationRegion {
     ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>> {
         self.war
             .decord_from_byte_array(source, cursor, include_child, context)
+    }
+
+    /// Exact `GetReliveRect` копирует все пять country rectangles в owner.
+    pub(crate) const fn set_relive_rects(&mut self, rects: [FourNationRect; 5]) {
+        self.relive_rects = rects;
+    }
+
+    pub(crate) const fn relive_rects(&self) -> &[FourNationRect; 5] {
+        &self.relive_rects
     }
 }
 
@@ -915,57 +928,5 @@ impl ServerNationRegion {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

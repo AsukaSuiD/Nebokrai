@@ -108,13 +108,14 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::super::organizingsystem::attackcitysys::{
-    AttackCityDecodeError, AttackCityRegionContext, CAttackCitySys,
+    AttackCityDecodeError, AttackCityInitReport, AttackCityRegionContext, CAttackCitySys,
 };
 use super::super::organizingsystem::fournationwarsys::{
-    CFourNationWarSys, FourNationGameDecodeError, FourNationGameStartupContext, FourNationRect,
+    CFourNationWarSys, FourNationGameDecodeError, FourNationGameDecodeReport,
+    FourNationGameInitReport, FourNationGameStartupContext, FourNationRect,
 };
 use super::super::organizingsystem::villagewarsys::{
-    CVillageWarSys, VillageWarDecodeError, VillageWarRegionContext,
+    CVillageWarSys, VillageWarDecodeError, VillageWarInitReport, VillageWarRegionContext,
 };
 use crate::gameserver::appserver::country::countryhandler::{
     CountryHandlerDecodeError, CountryHandlerDecodeReport,
@@ -123,7 +124,7 @@ use crate::gameserver::appserver::country::countryparam::{
     CountryParamDecodeReport, CountryParamInputBlock,
 };
 use crate::gameserver::appserver::country::countrywarsys::{
-    CountryWarDecodeError, CountryWarStartupContext, CountryWarSys,
+    CountryWarDecodeError, CountryWarInitReport, CountryWarStartupContext, CountryWarSys,
 };
 use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyComposeDecodeError;
 use crate::gameserver::appserver::goods::cgoodsfactory::{
@@ -220,13 +221,17 @@ const PLAYER_RANKS_SELECTOR: i32 = 0x17;
 const COUNTRY_PARAM_SELECTOR: i32 = 0x18;
 const COUNTRY_HANDLER_SELECTOR: i32 = 0x19;
 const DUPLI_REGION_SELECTOR: i32 = 0x1a;
+const ATTACK_CITY_SELECTOR: i32 = 0x1b;
+const VILLAGE_WAR_SELECTOR: i32 = 0x1c;
 const PRISON_CONF_SELECTOR: i32 = 0x1d;
 const PRECIOUS_BOX_CONF_SELECTOR: i32 = 0x1e;
+const COUNTRY_WAR_SELECTOR: i32 = 0x1f;
 const FAIRY_EXP_SELECTOR: i32 = 0x20;
 const SYNTHESIS_SELECTOR: i32 = 0x21;
 const NEW_SKILL_MONSTER_SELECTOR: i32 = 0x22;
 const GOODS_DESTROY_SELECTOR: i32 = 0x23;
 const CHANGE_BODY_SELECTOR: i32 = 0x24;
+const FOUR_NATION_WAR_SELECTOR: i32 = 0x25;
 const HONOR_ELIMINATE_SELECTOR: i32 = 0x26;
 const DAYS_HONOR_RANK_SELECTOR: i32 = 0x27;
 const WEEKS_HONOR_RANK_SELECTOR: i32 = 0x28;
@@ -921,6 +926,12 @@ pub(crate) struct GameInitialRegionStartupMessageReport {
     pub(crate) log_effects: Vec<Vec<u8>>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameWarStartupMessageReport {
+    pub(crate) decoded: WarScheduleSetupReport,
+    pub(crate) log_effects: Vec<Vec<u8>>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum GamePlayerRanksStartupError {
     OwnerUnavailable { selector: i32 },
@@ -999,6 +1010,7 @@ pub(crate) enum GameServerMessageReport {
     HonorStartup(GameHonorStartupMessageReport),
     ScriptStartup(GameScriptStartupMessageReport),
     InitialRegionStartup(GameInitialRegionStartupMessageReport),
+    WarStartup(GameWarStartupMessageReport),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1021,6 +1033,7 @@ pub(crate) enum GameServerMessageError<RegionRuntimeError> {
     HonorStartup(GameHonorStartupError),
     ScriptStartup(GameScriptStartupError),
     InitialRegionStartup(InitialRegionStartupError<RegionRuntimeError>),
+    WarStartup(WarScheduleSetupError),
 }
 
 /// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
@@ -1273,6 +1286,42 @@ where
                     log_effects,
                 },
             )))
+        }
+        ATTACK_CITY_SELECTOR
+        | VILLAGE_WAR_SELECTOR
+        | COUNTRY_WAR_SELECTOR
+        | FOUR_NATION_WAR_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("war selector проверен без изменения cursor");
+            let mut owners = game.take_war_startup_owners();
+            let mut log_effects = Vec::new();
+            let decoded = {
+                let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                dispatch_war_startup_setup(
+                    consumed_selector,
+                    wire,
+                    cursor,
+                    &mut owners.attack_city,
+                    &mut owners.village,
+                    &mut owners.country,
+                    &mut owners.four_nation,
+                    game,
+                    |text| log_effects.push(text.as_bytes().to_vec()),
+                )
+                .expect("war selector проверен outer dispatcher-ом")
+            };
+            game.restore_war_startup_owners(owners);
+            match decoded {
+                Ok(decoded) => Some(Ok(GameServerMessageReport::WarStartup(
+                    GameWarStartupMessageReport {
+                        decoded,
+                        log_effects,
+                    },
+                ))),
+                Err(error) => Some(Err(GameServerMessageError::WarStartup(error))),
+            }
         }
         PROXY_REGION_SELECTOR
         | REGION_RELOAD_SELECTOR
@@ -3736,8 +3785,17 @@ pub(crate) trait WarScheduleSetupContext {
     fn reset_nation_war_state(&mut self, region: Self::Region, index: i32, state: i32);
 
     fn set_nation_relive_rects(&mut self, region: Self::Region, rects: [FourNationRect; 5]);
+}
 
-    fn add_log_text(&mut self, text: &'static str);
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WarScheduleSetupReport {
+    AttackCity(AttackCityInitReport),
+    Village(VillageWarInitReport),
+    Country(CountryWarInitReport),
+    FourNation {
+        decoded: FourNationGameDecodeReport,
+        initialized: FourNationGameInitReport,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3780,53 +3838,58 @@ pub(crate) fn dispatch_war_startup_setup<Context: WarScheduleSetupContext>(
     country_war_sys: &mut CountryWarSys,
     four_nation_war_sys: &mut CFourNationWarSys,
     context: &mut Context,
-) -> Result<bool, WarScheduleSetupError> {
+    mut add_log_text: impl FnMut(&'static str),
+) -> Option<Result<WarScheduleSetupReport, WarScheduleSetupError>> {
     match selector {
-        0x1b => {
-            attack_city_sys
-                .decord_from_byte_array(payload, cursor)
-                .map_err(WarScheduleSetupError::AttackCity)?;
-            {
+        ATTACK_CITY_SELECTOR => {
+            if let Err(error) = attack_city_sys.decord_from_byte_array(payload, cursor) {
+                return Some(Err(WarScheduleSetupError::AttackCity(error)));
+            }
+            let initialized = {
                 let mut adapter = AttackCityContextAdapter(context);
-                attack_city_sys.init_city_region_state(&mut adapter);
-            }
-            context.add_log_text("Initial SI_ATTACKCITYSYS_SETUP...OK!");
-            Ok(true)
+                attack_city_sys.init_city_region_state(&mut adapter)
+            };
+            add_log_text("Initial SI_ATTACKCITYSYS_SETUP...OK!");
+            Some(Ok(WarScheduleSetupReport::AttackCity(initialized)))
         }
-        0x1c => {
-            village_war_sys
-                .decord_from_byte_array(payload, cursor)
-                .map_err(WarScheduleSetupError::Village)?;
-            {
+        VILLAGE_WAR_SELECTOR => {
+            if let Err(error) = village_war_sys.decord_from_byte_array(payload, cursor) {
+                return Some(Err(WarScheduleSetupError::Village(error)));
+            }
+            let initialized = {
                 let mut adapter = VillageWarContextAdapter(context);
-                village_war_sys.init_village_region_state(&mut adapter);
-            }
-            context.add_log_text("Initial SI_VILLAGEWARSYS_SETUP...OK!");
-            Ok(true)
+                village_war_sys.init_village_region_state(&mut adapter)
+            };
+            add_log_text("Initial SI_VILLAGEWARSYS_SETUP...OK!");
+            Some(Ok(WarScheduleSetupReport::Village(initialized)))
         }
-        0x1f => {
-            country_war_sys
-                .decord_from_byte_array(payload, cursor)
-                .map_err(WarScheduleSetupError::Country)?;
-            {
+        COUNTRY_WAR_SELECTOR => {
+            if let Err(error) = country_war_sys.decord_from_byte_array(payload, cursor) {
+                return Some(Err(WarScheduleSetupError::Country(error)));
+            }
+            let initialized = {
                 let mut adapter = CountryWarContextAdapter(context);
-                country_war_sys.init_country_region_state(&mut adapter);
-            }
-            context.add_log_text("Initial SI_COUNTRYWAR...OK!");
-            Ok(true)
+                country_war_sys.init_country_region_state(&mut adapter)
+            };
+            add_log_text("Initial SI_COUNTRYWAR...OK!");
+            Some(Ok(WarScheduleSetupReport::Country(initialized)))
         }
-        0x25 => {
-            four_nation_war_sys
-                .decord_from_byte_array(payload, cursor)
-                .map_err(WarScheduleSetupError::FourNation)?;
-            {
+        FOUR_NATION_WAR_SELECTOR => {
+            let decoded = match four_nation_war_sys.decord_from_byte_array(payload, cursor) {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(WarScheduleSetupError::FourNation(error))),
+            };
+            let initialized = {
                 let mut adapter = FourNationWarContextAdapter(context);
-                let _ = four_nation_war_sys.init_war_state(&mut adapter);
-            }
-            context.add_log_text("Initial SI_FOURNATIONWARSYS_SETUP..OK!!");
-            Ok(true)
+                four_nation_war_sys.init_war_state(&mut adapter)
+            };
+            add_log_text("Initial SI_FOURNATIONWARSYS_SETUP..OK!!");
+            Some(Ok(WarScheduleSetupReport::FourNation {
+                decoded,
+                initialized,
+            }))
         }
-        _ => Ok(false),
+        _ => None,
     }
 }
 

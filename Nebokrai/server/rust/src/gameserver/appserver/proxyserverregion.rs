@@ -50,6 +50,8 @@ pub(crate) struct CProxyServerRegion {
     country: u8,
     war_region_type: i32,
     param: RegionParamState,
+    war_number: i32,
+    city_state: i32,
 }
 
 impl Default for CProxyServerRegion {
@@ -61,6 +63,8 @@ impl Default for CProxyServerRegion {
             country: 0,
             war_region_type: 0,
             param: RegionParamState::default(),
+            war_number: 0,
+            city_state: 0,
         }
     }
 }
@@ -76,6 +80,21 @@ impl CProxyServerRegion {
 
     pub(crate) const fn country(&self) -> u8 {
         self.country
+    }
+
+    pub(crate) const fn set_country(&mut self, country: u8) {
+        self.country = country;
+    }
+
+    /// Proxy наследует virtual `CServerRegion::ReSetWarState`; короткий wire
+    /// эти runtime-поля не заменяет.
+    pub(crate) const fn reset_war_state(&mut self, war_number: i32, state: i32) {
+        self.war_number = war_number;
+        self.city_state = state;
+    }
+
+    pub(crate) const fn war_state(&self) -> (i32, i32) {
+        (self.war_number, self.city_state)
     }
 
     pub(crate) const fn war_region_type(&self) -> i32 {

@@ -37,10 +37,10 @@
 //! сохраняет немедленный World request. Tokio/socket types заменяют ненаблюдаемые
 //! `CBaseMessage::Initial` и `CMySocket::MySocketInit`; следующий незакрытый
 //! шаг — resource/runtime owners после завершённого `Init`.
-//! QuestSystem, CountryParam, CountryHandler, CountryWarSys,
-//! CFourNationWarSys и CEmotion process singletons хранятся owned-полями
-//! `CGame`, сохраняя exact startup wire и runtime lookup-контракты без
-//! отдельных global allocations.
+//! QuestSystem, CountryParam, CountryHandler, AttackCity, VillageWar,
+//! CountryWarSys, CFourNationWarSys и CEmotion process singletons хранятся
+//! owned-полями `CGame`, сохраняя exact startup wire и runtime lookup-
+//! контракты без отдельных global allocations.
 //! Function/variable/script file buffers принадлежат `CGame`; script parser
 //! globals остаются явной context-границей. Повторный function/variable setter
 //! безопасно материализует исходный freed-owner контракт как `None`; старый
@@ -216,10 +216,14 @@ use crate::gameserver::appserver::message::sequencestring::{
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::message::servermessage::{
     GameServerMessageError, GameServerMessageReport, InitialRegionStartupContext,
-    dispatch_server_message,
+    WarScheduleSetupContext, dispatch_server_message,
 };
 use crate::gameserver::appserver::monster::CMonster;
-use crate::gameserver::appserver::organizingsystem::fournationwarsys::CFourNationWarSys;
+use crate::gameserver::appserver::organizingsystem::attackcitysys::CAttackCitySys;
+use crate::gameserver::appserver::organizingsystem::fournationwarsys::{
+    CFourNationWarSys, FourNationRect,
+};
+use crate::gameserver::appserver::organizingsystem::villagewarsys::CVillageWarSys;
 use crate::gameserver::appserver::player::{
     BattleFairyCombineReport, BattleFairyDeathReport, BattleFairyEquipmentMutationReport,
     BattleFairyFollowReport, BattleFairySkillRequest, BattleFairySkillRequestFacts,
@@ -939,6 +943,19 @@ pub(crate) enum ServerRegionOwner {
     GodsBattle(CServerGodsBattleRegion),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameWarRegionHandle {
+    Local(i32),
+    Proxy(i32),
+}
+
+pub(crate) struct GameWarStartupOwners {
+    pub(crate) attack_city: CAttackCitySys,
+    pub(crate) village: CVillageWarSys,
+    pub(crate) country: CountryWarSys,
+    pub(crate) four_nation: CFourNationWarSys,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GameMainLoopProfile {
     pub(crate) script_ms: u32,
@@ -1094,8 +1111,6 @@ pub(crate) enum GameReleaseExternalOwner {
     SocketRuntime,
     PkSystem,
     BaseMessageRuntime,
-    AttackCitySystem,
-    VillageWarSystem,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1173,6 +1188,12 @@ pub(crate) enum GameReleaseEvent {
     },
     CountryHandlerReleased,
     CountryParamReleased,
+    AttackCitySystemReleased {
+        schedules: usize,
+    },
+    VillageWarSystemReleased {
+        schedules: usize,
+    },
 }
 
 #[must_use = "Release report сохраняет полный достигнутый teardown ordering"]
@@ -1244,6 +1265,109 @@ impl ServerRegionOwner {
     pub(crate) const fn is_gods_battle(&self) -> bool {
         matches!(self, Self::GodsBattle(_))
     }
+
+    /// Сохраняет virtual dispatch: war-derived owners дополнительно сбрасывают
+    /// symbol state, base/country используют `CServerRegion` реализацию.
+    pub(crate) fn reset_war_state(&mut self, war_number: i32, state: i32) {
+        match self {
+            Self::Base(region) => region.reset_war_state(war_number, state),
+            Self::Village(region) => region.war.reset_war_state(war_number, state),
+            Self::City(region) => region.war.reset_war_state(war_number, state),
+            Self::Country(region) => region.base.reset_war_state(war_number, state),
+            Self::Nation(region) => region.war.reset_war_state(war_number, state),
+            Self::GodsBattle(region) => region.war.reset_war_state(war_number, state),
+        }
+    }
+}
+
+impl WarScheduleSetupContext for CGame {
+    type Region = GameWarRegionHandle;
+
+    fn find_region_then_proxy(&mut self, region_id: i32) -> Option<Self::Region> {
+        if self.find_region(region_id).is_some() {
+            Some(GameWarRegionHandle::Local(region_id))
+        } else {
+            self.find_proxy_region(region_id)
+                .map(|_| GameWarRegionHandle::Proxy(region_id))
+        }
+    }
+
+    fn reset_war_state(&mut self, region: Self::Region, war_number: i32, state: i32) {
+        match region {
+            GameWarRegionHandle::Local(region_id) => {
+                if let Some(region) = self.find_region_mut(region_id) {
+                    region.reset_war_state(war_number, state);
+                }
+            }
+            GameWarRegionHandle::Proxy(region_id) => {
+                if let Some(region) = self.find_proxy_region_mut(region_id) {
+                    region.reset_war_state(war_number, state);
+                }
+            }
+        }
+    }
+
+    fn region_country(&self, region: Self::Region) -> u8 {
+        match region {
+            GameWarRegionHandle::Local(region_id) => self
+                .find_region(region_id)
+                .map(|region| region.base().country)
+                .unwrap_or(0),
+            GameWarRegionHandle::Proxy(region_id) => self
+                .find_proxy_region(region_id)
+                .map(CProxyServerRegion::country)
+                .unwrap_or(0),
+        }
+    }
+
+    fn set_region_country(&mut self, region: Self::Region, country: u8) {
+        match region {
+            GameWarRegionHandle::Local(region_id) => {
+                if let Some(region) = self.find_region_mut(region_id) {
+                    region.base_mut().country = country;
+                }
+            }
+            GameWarRegionHandle::Proxy(region_id) => {
+                if let Some(region) = self.find_proxy_region_mut(region_id) {
+                    region.set_country(country);
+                }
+            }
+        }
+    }
+
+    fn find_country_region(&mut self, region_id: i32) -> Option<Self::Region> {
+        matches!(
+            self.find_region(region_id),
+            Some(ServerRegionOwner::Country(_))
+        )
+        .then_some(GameWarRegionHandle::Local(region_id))
+    }
+
+    fn find_nation_region_then_proxy(&mut self, region_id: i32) -> Option<Self::Region> {
+        matches!(
+            self.find_region(region_id),
+            Some(ServerRegionOwner::Nation(_))
+        )
+        .then_some(GameWarRegionHandle::Local(region_id))
+    }
+
+    fn reset_nation_war_state(&mut self, region: Self::Region, index: i32, state: i32) {
+        let GameWarRegionHandle::Local(region_id) = region else {
+            return;
+        };
+        if let Some(ServerRegionOwner::Nation(region)) = self.find_region_mut(region_id) {
+            region.war.reset_war_state(index, state);
+        }
+    }
+
+    fn set_nation_relive_rects(&mut self, region: Self::Region, rects: [FourNationRect; 5]) {
+        let GameWarRegionHandle::Local(region_id) = region else {
+            return;
+        };
+        if let Some(ServerRegionOwner::Nation(region)) = self.find_region_mut(region_id) {
+            region.set_relive_rects(rects);
+        }
+    }
 }
 
 pub(crate) struct CGame {
@@ -1278,6 +1402,8 @@ pub(crate) struct CGame {
     quest_system: CQuestSystem,
     country_param: CCountryParam,
     country_handler: CCountryHandler,
+    attack_city_sys: CAttackCitySys,
+    village_war_sys: CVillageWarSys,
     country_war_sys: CountryWarSys,
     four_nation_war_sys: CFourNationWarSys,
     emotion: CEmotion,
@@ -1361,6 +1487,8 @@ impl CGame {
             quest_system: CQuestSystem::default(),
             country_param: CCountryParam::default(),
             country_handler: CCountryHandler::default(),
+            attack_city_sys: CAttackCitySys::default(),
+            village_war_sys: CVillageWarSys::default(),
             country_war_sys: CountryWarSys::default(),
             four_nation_war_sys: CFourNationWarSys::default(),
             emotion: CEmotion::default(),
@@ -1717,6 +1845,29 @@ impl CGame {
         self.proxy_regions.get(&region_id)
     }
 
+    pub(crate) fn find_proxy_region_mut(
+        &mut self,
+        region_id: i32,
+    ) -> Option<&mut CProxyServerRegion> {
+        self.proxy_regions.get_mut(&region_id)
+    }
+
+    pub(crate) fn take_war_startup_owners(&mut self) -> GameWarStartupOwners {
+        GameWarStartupOwners {
+            attack_city: std::mem::take(&mut self.attack_city_sys),
+            village: std::mem::take(&mut self.village_war_sys),
+            country: std::mem::take(&mut self.country_war_sys),
+            four_nation: std::mem::take(&mut self.four_nation_war_sys),
+        }
+    }
+
+    pub(crate) fn restore_war_startup_owners(&mut self, owners: GameWarStartupOwners) {
+        self.attack_city_sys = owners.attack_city;
+        self.village_war_sys = owners.village;
+        self.country_war_sys = owners.country;
+        self.four_nation_war_sys = owners.four_nation;
+    }
+
     pub(crate) fn add_region(&mut self, region: ServerRegionOwner) -> bool {
         self.regions.insert(region.region_id(), region).is_some()
     }
@@ -1947,6 +2098,22 @@ impl CGame {
 
     pub(crate) const fn country_handler_mut(&mut self) -> &mut CCountryHandler {
         &mut self.country_handler
+    }
+
+    pub(crate) const fn attack_city_sys(&self) -> &CAttackCitySys {
+        &self.attack_city_sys
+    }
+
+    pub(crate) const fn attack_city_sys_mut(&mut self) -> &mut CAttackCitySys {
+        &mut self.attack_city_sys
+    }
+
+    pub(crate) const fn village_war_sys(&self) -> &CVillageWarSys {
+        &self.village_war_sys
+    }
+
+    pub(crate) const fn village_war_sys_mut(&mut self) -> &mut CVillageWarSys {
+        &mut self.village_war_sys
     }
 
     pub(crate) const fn country_war_sys(&self) -> &CountryWarSys {
@@ -2558,13 +2725,16 @@ impl CGame {
         self.country_param = CCountryParam::default();
         events.push(GameReleaseEvent::CountryParamReleased);
 
-        for owner in [
-            GameReleaseExternalOwner::AttackCitySystem,
-            GameReleaseExternalOwner::VillageWarSystem,
-        ] {
-            runtime.release_external_owner(owner);
-            events.push(GameReleaseEvent::ExternalOwner(owner));
-        }
+        let attack_city_schedules = self.attack_city_sys.attacks.len();
+        self.attack_city_sys = CAttackCitySys::default();
+        events.push(GameReleaseEvent::AttackCitySystemReleased {
+            schedules: attack_city_schedules,
+        });
+        let village_war_schedules = self.village_war_sys.village_wars.len();
+        self.village_war_sys = CVillageWarSys::default();
+        events.push(GameReleaseEvent::VillageWarSystemReleased {
+            schedules: village_war_schedules,
+        });
 
         let debug = GameReleaseDebug::ServerExited;
         runtime.put_debug_string(debug.clone());

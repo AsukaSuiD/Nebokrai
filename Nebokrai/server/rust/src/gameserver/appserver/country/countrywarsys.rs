@@ -101,6 +101,12 @@ pub(crate) trait CountryWarStartupContext {
     fn find_country_region(&mut self, region_id: i32) -> Option<Self::Region>;
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CountryWarInitReport {
+    pub(crate) scheduled_regions: usize,
+    pub(crate) resolved_regions: usize,
+}
+
 pub(crate) trait CountryWarPhaseContext {
     type Region: Copy;
     type SideError;
@@ -224,12 +230,19 @@ impl CountryWarSys {
     pub(crate) fn init_country_region_state<Context: CountryWarStartupContext>(
         &self,
         context: &mut Context,
-    ) {
+    ) -> CountryWarInitReport {
+        let mut report = CountryWarInitReport {
+            scheduled_regions: self.war_regions.len(),
+            ..CountryWarInitReport::default()
+        };
         for &region_id in self.war_regions.keys() {
             // Успешный `find` сопровождает `operator[]`, но result
             // отбрасывается и region не мутируется.
-            let _ = context.find_country_region(region_id);
+            if context.find_country_region(region_id).is_some() {
+                report.resolved_regions += 1;
+            }
         }
+        report
     }
 
     pub(crate) fn update_apply_war<Context: CountryWarRegionContext>(

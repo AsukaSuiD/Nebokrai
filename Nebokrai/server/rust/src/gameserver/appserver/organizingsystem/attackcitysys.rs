@@ -136,6 +136,13 @@ pub(crate) struct CAttackCitySys {
     pub(crate) attacks: BTreeMap<i32, AttackCityTime>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct AttackCityInitReport {
+    pub(crate) schedules: usize,
+    pub(crate) active_schedules: usize,
+    pub(crate) projected_regions: usize,
+}
+
 pub(crate) trait AttackCityRegionContext {
     type Region: Copy;
 
@@ -202,24 +209,31 @@ impl CAttackCitySys {
     pub(crate) fn init_city_region_state<Context: AttackCityRegionContext>(
         &self,
         context: &mut Context,
-    ) {
-        self.init_city_region_state_at(TagTime::local_now(), context);
+    ) -> AttackCityInitReport {
+        self.init_city_region_state_at(TagTime::local_now(), context)
     }
 
     pub(crate) fn init_city_region_state_at<Context: AttackCityRegionContext>(
         &self,
         now: TagTime,
         context: &mut Context,
-    ) {
+    ) -> AttackCityInitReport {
+        let mut report = AttackCityInitReport {
+            schedules: self.attacks.len(),
+            ..AttackCityInitReport::default()
+        };
         for (&war_number, setup) in &self.attacks {
             if !now.legacy_ge(setup.declare_time) || !now.legacy_le(setup.end_time) {
                 continue;
             }
+            report.active_schedules += 1;
 
             if let Some(region) = context.find_region_then_proxy(setup.city_region_id) {
                 context.reset_war_state(region, war_number, setup.region_state);
+                report.projected_regions += 1;
             }
         }
+        report
     }
 
     /// Заменяет ordered faction list одного schedule и обновляет contenders региона.
@@ -789,9 +803,5 @@ fn read_exact<const N: usize>(
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer
